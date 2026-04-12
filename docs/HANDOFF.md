@@ -25,7 +25,9 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - `[editor] vim_mode = true` in `config.toml`
   - current subset: insert/normal modes, hjkl, w/b, 0/$, gg/G, x, dd, u, Ctrl+r, o/O, i/a/I/A
   - count prefixes supported for movement/actions (examples: `4k`, `2j`, `3w`, `5x`, `3dd`)
-  - cursor style differs by mode (insert bar cursor vs normal block cursor)
+  - cursor style differs by mode (insert bar cursor vs normal/visual block cursor)
+  - visual selections: `v`, `V`, `Ctrl+v` (block)
+  - yanking to system clipboard: `y` in visual modes, `yy` in normal mode (with counts like `3yy`)
 - Added markdown-style rich editing decorations:
   - headings, quotes, lists, horizontal rules
   - inline bold/italic/strikethrough/code/link highlighting

@@ -24,6 +24,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Insert/normal modes (`Esc` to normal, `i` to insert)
 - Cursor changes by mode (insert: bar cursor, normal: block cursor + `NORMAL` badge)
 - Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
+- Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
+- Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 
 **Inline calculations**
