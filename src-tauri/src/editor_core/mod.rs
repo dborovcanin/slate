@@ -28,3 +28,4 @@ mod tests {
         assert_eq!(operation.changes[0].insert, "3");
     }
 }
+pub mod tests_list;

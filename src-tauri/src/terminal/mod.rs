@@ -23,6 +23,7 @@ pub struct TerminalOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum UiMode {
     Editor,
+    Normal,
     Switcher,
     CommandBar,
     DatePicker,
@@ -35,6 +36,7 @@ enum Key {
     Backspace,
     Delete,
     Tab,
+    BackTab,
     Esc,
     ArrowUp,
     ArrowDown,
@@ -76,7 +78,10 @@ struct TerminalApp {
     // Date picker state
     date_year: i32,
     date_month: u32,  // 1-12
-    date_day: u32,    // 1-31
+    date_day: u32,
+    // Vim state
+    vim_buffer: String,
+    clipboard: Vec<String>,
 }
 
 impl TerminalApp {
@@ -105,6 +110,8 @@ impl TerminalApp {
             date_year: 0,
             date_month: 0,
             date_day: 0,
+            vim_buffer: String::new(),
+            clipboard: Vec::new(),
         })
     }
 
@@ -142,6 +149,7 @@ impl TerminalApp {
         match self.mode {
             UiMode::DatePicker => self.handle_date_picker_key(key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,
+            UiMode::Normal => self.handle_normal_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(key)?,
         }
@@ -208,6 +216,9 @@ impl TerminalApp {
                     }
                 }
             }
+            Key::BackTab => {
+                self.try_tab_rule(true);
+            }
             Key::Char(':') => {
                 self.command_input.clear();
                 self.mode = UiMode::CommandBar;
@@ -215,12 +226,197 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::Char(ch) => self.insert_char(ch),
-            Key::Esc | Key::Ctrl(_) => {}
+            Key::Esc => {
+                self.mode = UiMode::Normal;
+                self.status = "-- NORMAL --".to_string();
+            }
+            Key::Ctrl(_) => {}
         }
 
         self.adjust_cursor();
         self.adjust_scroll();
+
+        // Run autoformat rules on doc edits (e.g., dynamically renumbering lists)
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TextRuleOptions {
+            markdown_autoformat: true,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
+            self.apply_edit_operation(&op);
+        }
+
         Ok(())
+    }
+
+    fn handle_normal_key(&mut self, _db: &Db, key: Key) -> Result<(), String> {
+        match key {
+            Key::Char('i') => {
+                self.mode = UiMode::Editor;
+                self.vim_buffer.clear();
+                self.status = "-- INSERT --".to_string();
+            }
+            Key::Char('I') => {
+                self.cursor_col = 0;
+                self.mode = UiMode::Editor;
+                self.vim_buffer.clear();
+                self.status = "-- INSERT --".to_string();
+            }
+            Key::Char('a') => {
+                self.move_cursor_right();
+                self.mode = UiMode::Editor;
+                self.vim_buffer.clear();
+                self.status = "-- INSERT --".to_string();
+            }
+            Key::Char('A') => {
+                self.cursor_col = line_char_len(self.current_line());
+                self.mode = UiMode::Editor;
+                self.vim_buffer.clear();
+                self.status = "-- INSERT --".to_string();
+            }
+            Key::Char('o') => {
+                self.cursor_col = line_char_len(self.current_line());
+                self.insert_newline();
+                self.mode = UiMode::Editor;
+                self.vim_buffer.clear();
+                self.status = "-- INSERT --".to_string();
+            }
+            Key::Char('O') => {
+                self.cursor_col = 0;
+                let current = self.cursor_line;
+                self.lines.insert(current, String::new());
+                self.mode = UiMode::Editor;
+                self.vim_buffer.clear();
+                self.status = "-- INSERT --".to_string();
+            }
+            Key::Char(':') => {
+                self.command_input.clear();
+                self.mode = UiMode::CommandBar;
+                self.status = ":".to_string();
+                self.vim_buffer.clear();
+            }
+            Key::Char(c) => {
+                self.handle_normal_char(c);
+            }
+            Key::Esc => {
+                self.vim_buffer.clear();
+                self.status = "-- NORMAL --".to_string();
+            }
+            Key::ArrowUp => self.move_cursor_up(1),
+            Key::ArrowDown => self.move_cursor_down(1),
+            Key::ArrowLeft => self.move_cursor_left(),
+            Key::ArrowRight => self.move_cursor_right(),
+            _ => {}
+        }
+        self.adjust_cursor();
+        self.adjust_scroll();
+
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TextRuleOptions {
+            markdown_autoformat: true,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
+            self.apply_edit_operation(&op);
+        }
+
+        Ok(())
+    }
+
+    fn handle_normal_char(&mut self, c: char) {
+        if c.is_ascii_digit() {
+            if c == '0' && self.vim_buffer.is_empty() {
+                self.cursor_col = 0;
+                return;
+            }
+            self.vim_buffer.push(c);
+            return;
+        }
+
+        // Parse any leading numbers as repeat count
+        let mut count_str = String::new();
+        let mut rest_str = String::new();
+        for val in self.vim_buffer.chars() {
+            if val.is_ascii_digit() && rest_str.is_empty() {
+                count_str.push(val);
+            } else {
+                rest_str.push(val);
+            }
+        }
+        let count: usize = count_str.parse().unwrap_or(1).max(1);
+
+        match c {
+            'h' => { for _ in 0..count { self.move_cursor_left(); } self.vim_buffer.clear(); }
+            'j' => { self.move_cursor_down(count); self.vim_buffer.clear(); }
+            'k' => { self.move_cursor_up(count); self.vim_buffer.clear(); }
+            'l' => { for _ in 0..count { self.move_cursor_right(); } self.vim_buffer.clear(); }
+            'w' => { for _ in 0..count { self.move_cursor_right_word(); } self.vim_buffer.clear(); }
+            'b' => { for _ in 0..count { self.move_cursor_left_word(); } self.vim_buffer.clear(); }
+            '$' => { self.cursor_col = line_char_len(self.current_line()); self.vim_buffer.clear(); }
+            'G' => { 
+                self.cursor_line = self.lines.len().saturating_sub(1);
+                self.vim_buffer.clear(); 
+            }
+            'g' => {
+                if rest_str == "g" {
+                    self.cursor_line = 0;
+                    self.vim_buffer.clear();
+                } else {
+                    self.vim_buffer.push('g');
+                }
+            }
+            'y' => {
+                if rest_str == "y" {
+                    let mut yanked = Vec::new();
+                    for i in 0..count {
+                        if self.cursor_line + i < self.lines.len() {
+                            yanked.push(self.lines[self.cursor_line + i].clone());
+                        }
+                    }
+                    self.clipboard = yanked;
+                    self.status = format!("yanked {} lines", count);
+                    self.vim_buffer.clear();
+                } else {
+                    self.vim_buffer.push('y');
+                }
+            }
+            'd' => {
+                if rest_str == "d" {
+                    let mut deleted = Vec::new();
+                    for _ in 0..count {
+                        if self.cursor_line < self.lines.len() {
+                            deleted.push(self.lines.remove(self.cursor_line));
+                        }
+                    }
+                    if self.lines.is_empty() {
+                        self.lines.push(String::new());
+                    }
+                    self.clipboard = deleted;
+                    self.status = format!("deleted {} lines", count);
+                    self.vim_buffer.clear();
+                    self.mark_edited();
+                    self.adjust_cursor();
+                } else {
+                    self.vim_buffer.push('d');
+                }
+            }
+            'p' => {
+                if !self.clipboard.is_empty() {
+                    for _ in 0..count {
+                        let mut insert_at = self.cursor_line;
+                        if !self.lines[self.cursor_line].is_empty() {
+                            insert_at += 1;
+                        }
+                        for (i, line) in self.clipboard.iter().enumerate() {
+                            self.lines.insert(insert_at + i, line.clone());
+                        }
+                        self.cursor_line = insert_at + self.clipboard.len().saturating_sub(1);
+                        self.cursor_col = 0;
+                    }
+                    self.mark_edited();
+                    self.vim_buffer.clear();
+                }
+            }
+            _ => { self.vim_buffer.clear(); }
+        }
     }
 
     fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -278,6 +474,7 @@ impl TerminalApp {
             }
             Key::Tab
             | Key::Delete
+            | Key::BackTab
             | Key::ArrowLeft
             | Key::ArrowRight
             | Key::CtrlArrowLeft
@@ -712,27 +909,52 @@ impl TerminalApp {
 
     fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
         let mut text = join_lines(&self.lines);
+        
+        // Track initial cursor byte offset
+        let mut mapped_anchor = 0;
+        for (i, line) in self.lines.iter().enumerate() {
+            if i == self.cursor_line {
+                mapped_anchor += byte_index(line, self.cursor_col);
+                break;
+            }
+            mapped_anchor += line.len() + 1;
+        }
+
         let mut changes = op.changes.clone();
         changes.sort_by(|a, b| b.from.cmp(&a.from));
         for change in &changes {
             let from = change.from.min(text.len());
             let to = change.to.min(text.len());
             text.replace_range(from..to, &change.insert);
+            
+            // Map cursor through change
+            if from <= mapped_anchor {
+                if to <= mapped_anchor {
+                    let removed = to - from;
+                    let added = change.insert.len();
+                    mapped_anchor = mapped_anchor + added - removed;
+                } else {
+                    mapped_anchor = from + change.insert.len();
+                }
+            }
         }
         self.lines = split_lines(&text);
 
-        if let Some(sel) = &op.selection {
-            let anchor = sel.anchor.min(text.len());
-            let mut offset = 0;
-            for (i, line) in self.lines.iter().enumerate() {
-                let line_end = offset + line.len();
-                if anchor <= line_end {
-                    self.cursor_line = i;
-                    self.cursor_col = line[..anchor.saturating_sub(offset)].chars().count();
-                    break;
-                }
-                offset = line_end + 1;
+        let final_anchor = if let Some(sel) = &op.selection {
+            sel.anchor
+        } else {
+            mapped_anchor
+        }.min(text.len());
+
+        let mut offset = 0;
+        for (i, line) in self.lines.iter().enumerate() {
+            let line_end = offset + line.len();
+            if final_anchor <= line_end {
+                self.cursor_line = i;
+                self.cursor_col = line[..final_anchor.saturating_sub(offset)].chars().count();
+                break;
             }
+            offset = line_end + 1;
         }
         self.mark_edited();
         self.adjust_cursor();
@@ -879,7 +1101,7 @@ impl TerminalApp {
         }
 
         let status = match self.mode {
-            UiMode::Editor | UiMode::CommandBar => &self.status,
+            UiMode::Editor | UiMode::Normal | UiMode::CommandBar => &self.status,
             UiMode::Switcher => "Switcher: type to filter, Enter open, Esc close",
             UiMode::DatePicker => "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel",
         };
@@ -913,7 +1135,7 @@ impl TerminalApp {
                 // Hide cursor inside the date picker
                 (1, 1)
             }
-            UiMode::Editor => {
+            UiMode::Editor | UiMode::Normal => {
                 let row = EDITOR_TOP_ROW
                     + self
                         .cursor_line
@@ -1419,6 +1641,7 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
             b'D' => return Ok(Some(Key::ArrowLeft)),
             b'H' => return Ok(Some(Key::Home)),
             b'F' => return Ok(Some(Key::End)),
+            b'Z' => return Ok(Some(Key::BackTab)),
             _ => return Ok(Some(Key::Esc)),
         }
     } else {

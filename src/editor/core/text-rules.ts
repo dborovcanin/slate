@@ -249,6 +249,84 @@ export interface TextRuleOptions {
   markdownAutoformat?: boolean;
 }
 
+function listAutoformatRule(ctx: ResolvedContext): EditOperation | null {
+  const line = ctx.currentLine();
+  const block = ctx.listRangeAtLine(line.number);
+  if (!block) return null;
+
+  const lines: string[] = [];
+  for (let n = block.startLine; n <= block.endLine; n++) {
+    lines.push(ctx.lineText(n));
+  }
+
+  const formatted: string[] = [];
+  const expectedHierarchy: number[] = [];
+
+  let initialized = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const text = lines[i];
+    const match = text.match(listRe);
+    if (!match) {
+      formatted.push(text);
+      continue;
+    }
+
+    const indent = match[1];
+    const marker = match[2];
+    const content = match[3];
+
+    const depth = markerDepth(indent);
+    const parts = parseOrderedMarker(marker);
+
+    if (parts) {
+      if (!initialized) {
+        initialized = true;
+        for (let j = 0; j <= depth; j++) {
+          expectedHierarchy[j] = parts[j] ?? 1;
+        }
+        expectedHierarchy[depth] = Math.max(0, expectedHierarchy[depth] - 1);
+      }
+
+      expectedHierarchy[depth] = (expectedHierarchy[depth] || 0) + 1;
+      expectedHierarchy.length = depth + 1;
+
+      for (let j = 0; j < depth; j++) {
+        if (expectedHierarchy[j] === undefined || expectedHierarchy[j] === 0) {
+          expectedHierarchy[j] = 1;
+        }
+      }
+
+      const nextMarker = formatOrderedMarker(expectedHierarchy);
+      formatted.push(`${indent}${nextMarker} ${content}`);
+    } else {
+      formatted.push(text);
+    }
+  }
+
+  if (formatted.every((entry, idx) => entry === lines[idx])) {
+    return null;
+  }
+
+  const head = ctx.selection().head;
+  const headLine = ctx.lineAt(head).number;
+  const headCol = head - ctx.line(headLine).from;
+  const relativeLine = clamp(headLine - block.startLine, 0, formatted.length - 1);
+
+  const startLine = ctx.line(block.startLine);
+  const endLine = ctx.line(block.endLine);
+
+  let newHead = startLine.from;
+  for (let i = 0; i < relativeLine; i++) {
+    newHead += formatted[i].length + 1;
+  }
+  newHead += Math.min(headCol, formatted[relativeLine].length);
+
+  return replaceRange(startLine.from, endLine.to, formatted.join("\n"), {
+    anchor: newHead,
+  });
+}
+
 export function runDocChangeRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
@@ -259,7 +337,11 @@ export function runDocChangeRules(
   if (checklistOp) return checklistOp;
 
   if (!(options.markdownAutoformat ?? true)) return null;
-  return tableAutoformatRule(ctx);
+  
+  const tableOp = tableAutoformatRule(ctx);
+  if (tableOp) return tableOp;
+
+  return listAutoformatRule(ctx);
 }
 
 export function runEnterRules(

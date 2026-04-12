@@ -304,48 +304,50 @@ pub fn execute_command(
             };
 
             if let Some(r) = range {
-                let engine = CalcEngine::new();
                 let mut sum = 0.0;
-                let mut has_values = false;
+                let mut count = 0;
                 
                 for i in r.start_line..=r.end_line {
                     let text = ctx.line_text(i);
-                    if let Some(res) = engine.evaluate(&text) {
-                        if let Ok(val) = res.parse::<f64>() {
-                            sum += val;
-                            has_values = true;
-                        }
-                    } else {
-                        let mut parts = text.split(" = ");
-                        let mut last = parts.next().unwrap_or("");
-                        if let Some(res) = parts.next() {
-                            last = res;
-                        }
-                        
-                        if let Ok(val) = last.trim().parse::<f64>() {
-                            sum += val;
-                            has_values = true;
+                    let cleaned = text.replace(",", "");
+                    let words = cleaned.split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+' && c != 'e' && c != 'E');
+                    
+                    for word in words {
+                        let w = word.trim();
+                        if !w.is_empty() && w != "-" && w != "+" && w != "." && w != "e" && w != "E" {
+                            if let Ok(val) = w.parse::<f64>() {
+                                if val.is_finite() {
+                                    sum += val;
+                                    count += 1;
+                                }
+                            }
                         }
                     }
                 }
                 
-                if has_values {
-                    let res_str = format!("\n**Total:** {}", sum);
-                    let target_line = ctx.line(r.end_line);
+                if count > 0 {
+                    let formatted = format!("{}", sum);
+                    let scope_str = command.value.split(' ').nth(1).unwrap_or("paragraph");
+                    let msg = format!("sum({scope_str}) = {formatted} ({count} values, inserted at cursor + copied)");
+                    
+                    let selection = ctx.selection();
                     let op = replace_range(
-                        target_line.to, 
-                        target_line.to,
-                        res_str.clone(),
+                        selection.from, 
+                        selection.to,
+                        formatted.clone(),
                         Some(OperationSelection {
-                            anchor: target_line.to + res_str.len(),
+                            anchor: selection.from + formatted.len(),
                             head: None,
                         })
                     );
-                    let mut result = result_with_message("Sum calculated");
+                    
+                    let mut result = result_with_message(msg);
                     result.operations.push(op);
+                    result.clipboard_text = Some(formatted);
                     result
                 } else {
-                    result_with_message("No numeric values found to sum")
+                    let scope_str = command.value.split(' ').nth(1).unwrap_or("paragraph");
+                    result_with_message(format!("sum({scope_str}): no numbers"))
                 }
             } else {
                 result_with_message("Could not resolve block bounds for sum")

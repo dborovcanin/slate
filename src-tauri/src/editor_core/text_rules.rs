@@ -263,6 +263,86 @@ fn checklist_toggle_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     ))
 }
 
+fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+    let line = ctx.current_line();
+    let block = ctx.list_range_at_line(line.number)?;
+
+    let mut lines = Vec::new();
+    for n in block.start_line..=block.end_line {
+        lines.push(ctx.line_text(n));
+    }
+
+    let mut formatted = Vec::new();
+    let mut expected_hierarchy: Vec<u32> = Vec::new();
+    let mut initialized = false;
+
+    for text in &lines {
+        if let Some(parts) = parse_list_line_parts(text) {
+            let depth = marker_depth(parts.indent);
+
+            if let Some(mut parsed) = parse_ordered_marker_segments(parts.marker) {
+                if !initialized {
+                    initialized = true;
+                    if expected_hierarchy.len() <= depth {
+                        expected_hierarchy.resize(depth + 1, 1);
+                    }
+                    for (j, &val) in parsed.iter().enumerate().take(depth + 1) {
+                        expected_hierarchy[j] = val;
+                    }
+                    expected_hierarchy[depth] = expected_hierarchy[depth].saturating_sub(1);
+                }
+
+                if expected_hierarchy.len() <= depth {
+                    expected_hierarchy.resize(depth + 1, 0);
+                }
+                expected_hierarchy[depth] += 1;
+                expected_hierarchy.truncate(depth + 1);
+
+                for j in 0..depth {
+                    if expected_hierarchy[j] == 0 {
+                        expected_hierarchy[j] = 1;
+                    }
+                }
+
+                let next_marker = format_ordered_marker(&expected_hierarchy);
+                formatted.push(format!("{}{next_marker} {}", parts.indent, parts.content));
+            } else {
+                formatted.push(text.to_string());
+            }
+        } else {
+            formatted.push(text.to_string());
+        }
+    }
+
+    if formatted.iter().zip(lines.iter()).all(|(a, b)| a == b) {
+        return None;
+    }
+
+    let start_line = ctx.line(block.start_line);
+    let end_line = ctx.line(block.end_line);
+
+    let head = ctx.selection().head;
+    let head_line = ctx.line_at(head).number;
+    let head_col = head.saturating_sub(ctx.line(head_line).from);
+    let relative_line = head_line.saturating_sub(block.start_line).min(formatted.len().saturating_sub(1));
+
+    let mut new_head = start_line.from;
+    for i in 0..relative_line {
+        new_head += formatted[i].len() + 1; // +1 for newline
+    }
+    new_head += head_col.min(formatted[relative_line].len());
+
+    Some(replace_range(
+        start_line.from,
+        end_line.to,
+        formatted.join("\n"),
+        Some(OperationSelection {
+            anchor: new_head,
+            head: None,
+        }),
+    ))
+}
+
 pub fn run_doc_change_rules(
     snapshot: &EditorContextSnapshot,
     options: TextRuleOptions,
@@ -277,8 +357,9 @@ pub fn run_doc_change_rules(
         return None;
     }
 
-    // Table autoformat and other document-change rules are still placeholders.
-    None
+    // if let Some(op) = table_autoformat_rule(&ctx) { return Some(op); }
+
+    list_autoformat_rule(&ctx)
 }
 
 pub fn run_enter_rules(
