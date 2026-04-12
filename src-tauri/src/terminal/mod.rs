@@ -753,8 +753,16 @@ impl TerminalApp {
             Key::Backspace => {
                 self.command_input.pop();
                 if self.command_input.is_empty() {
-                    self.mode = UiMode::Editor;
-                    self.status = format!("editing {}", self.active_note.id);
+                    self.mode = if self.command_bar_from_normal {
+                        UiMode::Normal
+                    } else {
+                        UiMode::Editor
+                    };
+                    self.status = if self.command_bar_from_normal {
+                        "-- NORMAL --".to_string()
+                    } else {
+                        format!("editing {}", self.active_note.id)
+                    };
                 } else {
                     self.update_command_status();
                 }
@@ -1003,7 +1011,7 @@ impl TerminalApp {
         self.last_edit = Instant::now();
         self.search_query.clear();
         self.search_matches.clear();
-        self.recompute_calc();
+        self.recompute_calc_full();
         self.adjust_cursor();
         self.adjust_scroll();
     }
@@ -1025,16 +1033,28 @@ impl TerminalApp {
     fn mark_edited(&mut self) {
         self.dirty = true;
         self.last_edit = Instant::now();
-        self.recompute_calc();
+        self.recompute_calc_around(self.cursor_line);
     }
 
-    fn recompute_calc(&mut self) {
+    fn recompute_calc_full(&mut self) {
         let engine = crate::calc::engine::CalcEngine::new();
         self.calc_results = self
             .lines
             .iter()
             .map(|l| get_calc_ghost_for_line(l, &engine))
             .collect();
+    }
+
+    fn recompute_calc_around(&mut self, center: usize) {
+        let engine = crate::calc::engine::CalcEngine::new();
+        // Resize calc_results if lines changed
+        self.calc_results.resize(self.lines.len(), None);
+        // Recompute a window around the edited line
+        let start = center.saturating_sub(2);
+        let end = (center + 3).min(self.lines.len());
+        for i in start..end {
+            self.calc_results[i] = get_calc_ghost_for_line(&self.lines[i], &engine);
+        }
     }
 
     // --- Search ---
@@ -1539,7 +1559,21 @@ impl TerminalApp {
         buf.push_str("\x1b[?25l\x1b[H\x1b[2J");
 
         let title = derive_title_from_lines(&self.lines);
-        let title_line = format!(" note  [{}]  {}", self.active_note.id, title);
+        let dirty_mark = if self.dirty { " [+]" } else { "" };
+        let mode_label = match self.mode {
+            UiMode::Normal => "",
+            UiMode::Editor => " INSERT",
+            UiMode::Visual => " VISUAL",
+            UiMode::VisualLine => " V-LINE",
+            UiMode::CommandBar => " CMD",
+            UiMode::Search => " SEARCH",
+            UiMode::Switcher => " SWITCH",
+            UiMode::DatePicker => " DATE",
+        };
+        let title_line = format!(
+            " note  {}  {}{}{}",
+            self.active_note.id, title, dirty_mark, mode_label
+        );
         draw_row(&mut buf, TITLE_ROW, cols, &title_line, true);
 
         let mut ctx = render::RenderContext::new();

@@ -280,7 +280,7 @@ fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
         if let Some(parts) = parse_list_line_parts(text) {
             let depth = marker_depth(parts.indent);
 
-            if let Some(mut parsed) = parse_ordered_marker_segments(parts.marker) {
+            if let Some(parsed) = parse_ordered_marker_segments(parts.marker) {
                 if !initialized {
                     initialized = true;
                     if expected_hierarchy.len() <= depth {

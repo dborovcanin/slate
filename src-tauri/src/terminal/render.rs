@@ -56,10 +56,6 @@ impl RenderContext {
         }
     }
 
-    pub fn reset(&mut self) {
-        self.in_code_block = false;
-    }
-
     /// Render a single line with ANSI markdown formatting.
     /// Returns an ANSI string occupying exactly `width` visible characters.
     pub fn render_line(

@@ -75,11 +75,13 @@ fn is_word_byte(byte: u8) -> bool {
 #[derive(Debug, Clone)]
 pub struct ResolvedContext {
     snapshot: EditorContextSnapshot,
+    parsed: ParsedLines,
 }
 
 impl ResolvedContext {
     pub fn new(snapshot: EditorContextSnapshot) -> Self {
-        Self { snapshot }
+        let parsed = parse_lines(&snapshot.text);
+        Self { snapshot, parsed }
     }
 
     pub fn snapshot(&self) -> &EditorContextSnapshot {
@@ -114,27 +116,25 @@ impl ResolvedContext {
     }
 
     pub fn line_count(&self) -> usize {
-        parse_lines(&self.snapshot.text).lines.len()
+        self.parsed.lines.len()
     }
 
     pub fn line(&self, number: usize) -> LineContext {
-        let parsed = parse_lines(&self.snapshot.text);
         let idx = clamp(
             number.saturating_sub(1),
             0,
-            parsed.lines.len().saturating_sub(1),
+            self.parsed.lines.len().saturating_sub(1),
         );
-        Self::line_from_index(&parsed, idx)
+        self.line_from_index(idx)
     }
 
     pub fn line_at(&self, pos: usize) -> LineContext {
-        let parsed = parse_lines(&self.snapshot.text);
         let p = pos.min(self.snapshot.text.len());
-        let idx = match parsed.starts.binary_search(&p) {
+        let idx = match self.parsed.starts.binary_search(&p) {
             Ok(found) => found,
             Err(insert) => insert.saturating_sub(1),
         };
-        Self::line_from_index(&parsed, idx)
+        self.line_from_index(idx)
     }
 
     pub fn current_line(&self) -> LineContext {
@@ -146,16 +146,29 @@ impl ResolvedContext {
         self.cursor_pos() - line.from
     }
 
-    pub fn line_text(&self, number: usize) -> String {
-        self.line(number).text
+    pub fn line_text(&self, number: usize) -> &str {
+        let idx = clamp(
+            number.saturating_sub(1),
+            0,
+            self.parsed.lines.len().saturating_sub(1),
+        );
+        &self.parsed.lines[idx]
     }
 
-    pub fn text_for_line_range(&self, range: BlockLineRange) -> String {
-        let mut lines = Vec::new();
-        for n in range.start_line..=range.end_line {
-            lines.push(self.line_text(n));
-        }
-        lines.join("\n")
+    pub fn text_for_line_range(&self, range: BlockLineRange) -> &str {
+        let start_idx = clamp(
+            range.start_line.saturating_sub(1),
+            0,
+            self.parsed.lines.len().saturating_sub(1),
+        );
+        let end_idx = clamp(
+            range.end_line.saturating_sub(1),
+            0,
+            self.parsed.lines.len().saturating_sub(1),
+        );
+        let from = self.parsed.starts[start_idx];
+        let to = self.parsed.starts[end_idx] + self.parsed.lines[end_idx].len();
+        &self.snapshot.text[from..to]
     }
 
     pub fn paragraph_range_at_line(&self, line_number: usize) -> BlockLineRange {
@@ -180,16 +193,16 @@ impl ResolvedContext {
     pub fn list_range_at_line(&self, line_number: usize) -> Option<BlockLineRange> {
         let line_count = self.line_count();
         let cursor = clamp(line_number, 1, line_count);
-        if !is_list_line(&self.line_text(cursor)) {
+        if !is_list_line(self.line_text(cursor)) {
             return None;
         }
 
         let mut start = cursor;
         let mut end = cursor;
-        while start > 1 && is_list_line(&self.line_text(start - 1)) {
+        while start > 1 && is_list_line(self.line_text(start - 1)) {
             start -= 1;
         }
-        while end < line_count && is_list_line(&self.line_text(end + 1)) {
+        while end < line_count && is_list_line(self.line_text(end + 1)) {
             end += 1;
         }
 
@@ -206,16 +219,16 @@ impl ResolvedContext {
     ) -> Option<BlockLineRange> {
         let line_count = self.line_count();
         let cursor = clamp(line_number, 1, line_count);
-        if !is_table_line(&self.line_text(cursor)) {
+        if !is_table_line(self.line_text(cursor)) {
             return None;
         }
 
         let mut start = cursor;
         let mut end = cursor;
-        while start > 1 && is_table_line(&self.line_text(start - 1)) {
+        while start > 1 && is_table_line(self.line_text(start - 1)) {
             start -= 1;
         }
-        while end < line_count && is_table_line(&self.line_text(end + 1)) {
+        while end < line_count && is_table_line(self.line_text(end + 1)) {
             end += 1;
         }
 
@@ -266,10 +279,10 @@ impl ResolvedContext {
         line.from + column.min(line.text.len())
     }
 
-    fn line_from_index(parsed: &ParsedLines, idx: usize) -> LineContext {
-        let safe_idx = idx.min(parsed.lines.len().saturating_sub(1));
-        let text = parsed.lines[safe_idx].clone();
-        let from = parsed.starts[safe_idx];
+    fn line_from_index(&self, idx: usize) -> LineContext {
+        let safe_idx = idx.min(self.parsed.lines.len().saturating_sub(1));
+        let text = self.parsed.lines[safe_idx].clone();
+        let from = self.parsed.starts[safe_idx];
         LineContext {
             number: safe_idx + 1,
             from,

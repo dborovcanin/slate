@@ -23,19 +23,15 @@ release:
 	# Linux
 	-cargo tauri build --target x86_64-unknown-linux-gnu
 	-cp src-tauri/target/x86_64-unknown-linux-gnu/release/note build/note-linux
-	-cp src-tauri/target/x86_64-unknown-linux-gnu/release/note-msg build/note-msg-linux
 	
 	# Windows
 	-cargo tauri build --target x86_64-pc-windows-gnu
 	-cp src-tauri/target/x86_64-pc-windows-gnu/release/note.exe build/note-windows.exe
-	-cp src-tauri/target/x86_64-pc-windows-gnu/release/note-msg.exe build/note-msg-windows.exe
 	
 	# macOS Intel
 	-cargo tauri build --target x86_64-apple-darwin
 	-cp src-tauri/target/x86_64-apple-darwin/release/note build/note-mac-intel
-	-cp src-tauri/target/x86_64-apple-darwin/release/note-msg build/note-msg-mac-intel
 
 	# macOS Silicon
 	-cargo tauri build --target aarch64-apple-darwin
 	-cp src-tauri/target/aarch64-apple-darwin/release/note build/note-mac-arm
-	-cp src-tauri/target/aarch64-apple-darwin/release/note-msg build/note-msg-mac-arm

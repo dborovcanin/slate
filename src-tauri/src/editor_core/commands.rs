@@ -291,9 +291,6 @@ fn format_markdown(text: &str) -> String {
             }
         }
         
-        // Bold, Italic, Strike
-        *line = line.replace("** ", "**").replace(" **", "**");
-        *line = line.replace("~~ ", "~~").replace(" ~~", "~~");
     }
     
     lines.join("\n")
@@ -459,5 +456,40 @@ mod tests {
                 head: None
             })
         );
+    }
+
+    #[test]
+    fn parse_sum_numbers_extracts_values() {
+        assert_eq!(parse_sum_numbers("a 10 b -2.5 c 1,200 d +0.75"), vec![10.0, -2.5, 1200.0, 0.75]);
+        assert_eq!(parse_sum_numbers("no numbers here"), Vec::<f64>::new());
+        assert_eq!(parse_sum_numbers("3"), vec![3.0]);
+    }
+
+    #[test]
+    fn format_sum_result_clean_output() {
+        assert_eq!(format_sum_result(4.0), "4");
+        assert_eq!(format_sum_result(3.5), "3.5");
+        assert_eq!(format_sum_result(0.0), "0");
+        assert_eq!(format_sum_result(1234.0), "1234");
+    }
+
+    #[test]
+    fn sum_command_inserts_after_range() {
+        let doc = snapshot("item 10\nitem 20\nitem 30", 0, 0);
+        let result = execute_command(&doc, "sum", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        let op = &result.operations[0];
+        assert_eq!(op.changes[0].insert, "\n60");
+        assert!(result.message.contains("60"));
+        assert!(result.message.contains("3 values"));
+        assert_eq!(result.clipboard_text, Some("60".to_string()));
+    }
+
+    #[test]
+    fn sum_doc_sums_entire_document() {
+        let doc = snapshot("1\n2\n3", 0, 0);
+        let result = execute_command(&doc, "sum doc", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("6"));
     }
 }
