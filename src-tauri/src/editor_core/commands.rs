@@ -1,4 +1,3 @@
-use crate::calc::engine::CalcEngine;
 use super::context::ResolvedContext;
 use super::operations::replace_range;
 use super::types::{
@@ -93,6 +92,42 @@ fn available_commands(mode: CommandMode) -> Vec<&'static CommandDefinition> {
         .iter()
         .filter(|def| def.modes.contains(&mode))
         .collect()
+}
+
+fn parse_sum_numbers(text: &str) -> Vec<f64> {
+    let cleaned = text.replace(',', "");
+    cleaned
+        .split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+')
+        .filter_map(|w| {
+            let w = w.trim();
+            if w.is_empty() || matches!(w, "-" | "+" | ".") {
+                return None;
+            }
+            w.parse::<f64>().ok().filter(|v| v.is_finite())
+        })
+        .collect()
+}
+
+fn format_sum_result(value: f64) -> String {
+    if !value.is_finite() {
+        return "0".to_string();
+    }
+    if (value - value.round()).abs() < 1e-9 {
+        return format!("{}", value.round() as i64);
+    }
+    format!("{:.10}", value)
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+fn sum_scope_label(command_value: &str) -> &str {
+    let rest = command_value.strip_prefix("sum").unwrap_or("").trim();
+    if rest.is_empty() {
+        "paragraph"
+    } else {
+        rest
+    }
 }
 
 fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
@@ -291,66 +326,52 @@ pub fn execute_command(
         CommandBehavior::Sum => {
             let ctx = ResolvedContext::new(snapshot.clone());
             let current_line = ctx.current_line().number;
-            
+
             let range = match command.value {
                 "sum doc" => Some(crate::editor_core::types::BlockLineRange {
                     start_line: 1,
-                    end_line: ctx.line_count()
+                    end_line: ctx.line_count(),
                 }),
-                "sum paragraph" => Some(ctx.paragraph_range_at_line(current_line)),
+                "sum" => Some(ctx.paragraph_range_at_line(current_line)),
                 "sum list" => ctx.list_range_at_line(current_line),
                 "sum table" => ctx.table_range_at_line(current_line, 1),
                 _ => None,
             };
 
+            let scope = sum_scope_label(command.value);
+
             if let Some(r) = range {
-                let mut sum = 0.0;
-                let mut count = 0;
-                
-                for i in r.start_line..=r.end_line {
-                    let text = ctx.line_text(i);
-                    let cleaned = text.replace(",", "");
-                    let words = cleaned.split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+' && c != 'e' && c != 'E');
-                    
-                    for word in words {
-                        let w = word.trim();
-                        if !w.is_empty() && w != "-" && w != "+" && w != "." && w != "e" && w != "E" {
-                            if let Ok(val) = w.parse::<f64>() {
-                                if val.is_finite() {
-                                    sum += val;
-                                    count += 1;
-                                }
-                            }
-                        }
-                    }
+                let text = ctx.text_for_line_range(r);
+                let numbers = parse_sum_numbers(&text);
+                if numbers.is_empty() {
+                    return result_with_message(format!("sum({scope}): no numbers"));
                 }
-                
-                if count > 0 {
-                    let formatted = format!("{}", sum);
-                    let scope_str = command.value.split(' ').nth(1).unwrap_or("paragraph");
-                    let msg = format!("sum({scope_str}) = {formatted} ({count} values, inserted at cursor + copied)");
-                    
-                    let selection = ctx.selection();
-                    let op = replace_range(
-                        selection.from, 
-                        selection.to,
-                        formatted.clone(),
-                        Some(OperationSelection {
-                            anchor: selection.from + formatted.len(),
-                            head: None,
-                        })
-                    );
-                    
-                    let mut result = result_with_message(msg);
-                    result.operations.push(op);
-                    result.clipboard_text = Some(formatted);
-                    result
-                } else {
-                    let scope_str = command.value.split(' ').nth(1).unwrap_or("paragraph");
-                    result_with_message(format!("sum({scope_str}): no numbers"))
-                }
+                let sum: f64 = numbers.iter().sum();
+                let formatted = format_sum_result(sum);
+                let msg = format!(
+                    "sum({scope}) = {formatted} ({} values, inserted + copied)",
+                    numbers.len()
+                );
+
+                let end_pos = ctx.line(r.end_line).to;
+                let insert = format!("\n{formatted}");
+                let new_anchor = end_pos + insert.len();
+                let op = replace_range(
+                    end_pos,
+                    end_pos,
+                    insert,
+                    Some(OperationSelection {
+                        anchor: new_anchor,
+                        head: None,
+                    }),
+                );
+
+                let mut result = result_with_message(msg);
+                result.operations.push(op);
+                result.clipboard_text = Some(formatted);
+                result
             } else {
-                result_with_message("Could not resolve block bounds for sum")
+                result_with_message(format!("sum({scope}): no block at cursor"))
             }
         },
         CommandBehavior::Date => {

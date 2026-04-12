@@ -28,6 +28,7 @@ enum UiMode {
     VisualLine,
     Switcher,
     CommandBar,
+    Search,
     DatePicker,
 }
 
@@ -85,6 +86,17 @@ struct TerminalApp {
     vim_buffer: String,
     clipboard: Vec<String>,
     selection_anchor: Option<(usize, usize)>, // (line, col)
+    // Calc ghost cache
+    calc_results: Vec<Option<String>>,
+    // Search state
+    search_query: String,
+    search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
+    search_current: usize,
+    search_orig_line: usize,
+    search_orig_col: usize,
+    search_orig_scroll: usize,
+    // Track which mode entered command bar from
+    command_bar_from_normal: bool,
 }
 
 impl TerminalApp {
@@ -92,6 +104,11 @@ impl TerminalApp {
         let active_note = select_note(db, opts)?;
         let lines = split_lines(&active_note.body);
         let switcher_items = load_note_meta(db)?;
+        let engine = crate::calc::engine::CalcEngine::new();
+        let calc_results = lines
+            .iter()
+            .map(|l| get_calc_ghost_for_line(l, &engine))
+            .collect();
 
         Ok(Self {
             active_note,
@@ -106,7 +123,8 @@ impl TerminalApp {
             switcher_selected: 0,
             dirty: false,
             last_edit: Instant::now(),
-            status: "-- NORMAL --  |  Ctrl+N new  Ctrl+P switch  Ctrl+S save  Ctrl+Q quit".to_string(),
+            status: "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit"
+                .to_string(),
             command_input: String::new(),
             quit: false,
             force_quit: false,
@@ -116,6 +134,14 @@ impl TerminalApp {
             vim_buffer: String::new(),
             clipboard: Vec::new(),
             selection_anchor: None,
+            calc_results,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_current: 0,
+            search_orig_line: 0,
+            search_orig_col: 0,
+            search_orig_scroll: 0,
+            command_bar_from_normal: false,
         })
     }
 
@@ -157,6 +183,7 @@ impl TerminalApp {
             UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(key)?,
+            UiMode::Search => self.handle_search_key(key)?,
         }
         Ok(())
     }
@@ -224,10 +251,15 @@ impl TerminalApp {
             Key::BackTab => {
                 self.try_tab_rule(true);
             }
-            Key::Char(':') => {
+            Key::Ctrl('e') => {
                 self.command_input.clear();
+                self.command_bar_from_normal = false;
                 self.mode = UiMode::CommandBar;
                 self.status = ":".to_string();
+                return Ok(());
+            }
+            Key::Ctrl('f') => {
+                self.open_search();
                 return Ok(());
             }
             Key::Char(ch) => self.insert_char(ch),
@@ -295,15 +327,37 @@ impl TerminalApp {
             }
             Key::Char(':') => {
                 self.command_input.clear();
+                self.command_bar_from_normal = true;
                 self.mode = UiMode::CommandBar;
                 self.status = ":".to_string();
                 self.vim_buffer.clear();
             }
+            Key::Char('/') => {
+                self.open_search();
+                self.vim_buffer.clear();
+            }
+            Key::Char('n') if self.vim_buffer.is_empty() && !self.search_matches.is_empty() => {
+                self.search_next();
+            }
+            Key::Char('N') if self.vim_buffer.is_empty() && !self.search_matches.is_empty() => {
+                self.search_prev();
+            }
             Key::Char(c) => {
                 self.handle_normal_char(c);
             }
+            Key::Ctrl('f') => {
+                self.open_search();
+            }
+            Key::Ctrl('e') => {
+                self.command_input.clear();
+                self.command_bar_from_normal = true;
+                self.mode = UiMode::CommandBar;
+                self.status = ":".to_string();
+            }
             Key::Esc => {
                 self.vim_buffer.clear();
+                self.search_matches.clear();
+                self.search_query.clear();
                 self.status = "-- NORMAL --".to_string();
             }
             Key::ArrowUp => self.move_cursor_up(1),
@@ -652,22 +706,43 @@ impl TerminalApp {
         Ok(())
     }
 
+    fn command_mode(&self) -> crate::editor_core::types::CommandMode {
+        if self.command_bar_from_normal {
+            crate::editor_core::types::CommandMode::Vim
+        } else {
+            crate::editor_core::types::CommandMode::Editor
+        }
+    }
+
     fn handle_command_bar_key(&mut self, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
-                self.mode = UiMode::Editor;
+                self.mode = if self.command_bar_from_normal {
+                    UiMode::Normal
+                } else {
+                    UiMode::Editor
+                };
                 self.command_input.clear();
-                self.status = format!("editing {}", self.active_note.id);
+                self.status = if self.command_bar_from_normal {
+                    "-- NORMAL --".to_string()
+                } else {
+                    format!("editing {}", self.active_note.id)
+                };
             }
             Key::Enter => {
                 let cmd = self.command_input.trim().to_string();
-                self.mode = UiMode::Editor;
+                let return_to = if self.command_bar_from_normal {
+                    UiMode::Normal
+                } else {
+                    UiMode::Editor
+                };
+                self.mode = return_to;
                 self.command_input.clear();
                 self.execute_terminal_command(&cmd);
             }
             Key::Tab => {
                 let suggestions = crate::editor_core::commands::list_command_suggestions(
-                    crate::editor_core::types::CommandMode::Editor,
+                    self.command_mode(),
                     &self.command_input,
                 );
                 if let Some(top) = suggestions.first() {
@@ -695,7 +770,7 @@ impl TerminalApp {
 
     fn update_command_status(&mut self) {
         let suggestions = crate::editor_core::commands::list_command_suggestions(
-            crate::editor_core::types::CommandMode::Editor,
+            self.command_mode(),
             &self.command_input,
         );
         let hint = suggestions
@@ -727,7 +802,7 @@ impl TerminalApp {
         let result = crate::editor_core::commands::execute_command(
             &snapshot,
             cmd,
-            crate::editor_core::types::CommandMode::Editor,
+            self.command_mode(),
         );
 
         if result.quit_requested {
@@ -926,6 +1001,9 @@ impl TerminalApp {
         self.scroll_line = 0;
         self.dirty = false;
         self.last_edit = Instant::now();
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.recompute_calc();
         self.adjust_cursor();
         self.adjust_scroll();
     }
@@ -947,6 +1025,229 @@ impl TerminalApp {
     fn mark_edited(&mut self) {
         self.dirty = true;
         self.last_edit = Instant::now();
+        self.recompute_calc();
+    }
+
+    fn recompute_calc(&mut self) {
+        let engine = crate::calc::engine::CalcEngine::new();
+        self.calc_results = self
+            .lines
+            .iter()
+            .map(|l| get_calc_ghost_for_line(l, &engine))
+            .collect();
+    }
+
+    // --- Search ---
+
+    fn open_search(&mut self) {
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.search_current = 0;
+        self.search_orig_line = self.cursor_line;
+        self.search_orig_col = self.cursor_col;
+        self.search_orig_scroll = self.scroll_line;
+        self.mode = UiMode::Search;
+        self.status = "/".to_string();
+    }
+
+    fn handle_search_key(&mut self, key: Key) -> Result<(), String> {
+        match key {
+            Key::Esc => {
+                self.cursor_line = self.search_orig_line;
+                self.cursor_col = self.search_orig_col;
+                self.scroll_line = self.search_orig_scroll;
+                self.mode = UiMode::Normal;
+                self.search_query.clear();
+                self.search_matches.clear();
+                self.status = "-- NORMAL --".to_string();
+            }
+            Key::Enter => {
+                self.mode = UiMode::Normal;
+                self.status = if self.search_matches.is_empty() {
+                    "no matches".to_string()
+                } else {
+                    format!(
+                        "/{} ({}/{})",
+                        self.search_query,
+                        self.search_current + 1,
+                        self.search_matches.len()
+                    )
+                };
+            }
+            Key::ArrowDown | Key::Ctrl('n') | Key::Tab => {
+                self.search_next();
+            }
+            Key::ArrowUp | Key::Ctrl('p') | Key::BackTab => {
+                self.search_prev();
+            }
+            Key::Backspace => {
+                self.search_query.pop();
+                self.recompute_search();
+            }
+            Key::Ctrl('w') => {
+                while self
+                    .search_query
+                    .chars()
+                    .last()
+                    .is_some_and(|c| !c.is_alphanumeric())
+                {
+                    self.search_query.pop();
+                }
+                while self
+                    .search_query
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.is_alphanumeric())
+                {
+                    self.search_query.pop();
+                }
+                self.recompute_search();
+            }
+            Key::Char(ch) => {
+                self.search_query.push(ch);
+                self.recompute_search();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn recompute_search(&mut self) {
+        self.search_matches.clear();
+        self.search_current = 0;
+
+        let query = self.search_query.to_lowercase();
+        if query.is_empty() {
+            self.status = "/".to_string();
+            return;
+        }
+
+        let query_chars = query.chars().count();
+        for (line_idx, line) in self.lines.iter().enumerate() {
+            let lower = line.to_lowercase();
+            let mut byte_start = 0;
+            while let Some(pos) = lower[byte_start..].find(&query) {
+                let abs_byte = byte_start + pos;
+                let char_start = line[..abs_byte].chars().count();
+                self.search_matches
+                    .push((line_idx, char_start, char_start + query_chars));
+                byte_start = abs_byte + query.len();
+            }
+        }
+
+        if !self.search_matches.is_empty() {
+            self.jump_to_nearest_match();
+        }
+        self.update_search_status();
+    }
+
+    fn update_search_status(&mut self) {
+        if self.search_matches.is_empty() {
+            self.status = format!("/{} (no matches)", self.search_query);
+        } else {
+            self.status = format!(
+                "/{} ({}/{})",
+                self.search_query,
+                self.search_current + 1,
+                self.search_matches.len()
+            );
+        }
+    }
+
+    fn jump_to_nearest_match(&mut self) {
+        for (i, &(line, _, _)) in self.search_matches.iter().enumerate() {
+            if line >= self.search_orig_line {
+                self.search_current = i;
+                self.jump_to_current_match();
+                return;
+            }
+        }
+        self.search_current = 0;
+        self.jump_to_current_match();
+    }
+
+    fn jump_to_current_match(&mut self) {
+        if let Some(&(line, col, _)) = self.search_matches.get(self.search_current) {
+            self.cursor_line = line;
+            self.cursor_col = col;
+            self.adjust_scroll();
+        }
+    }
+
+    fn search_next(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_current = (self.search_current + 1) % self.search_matches.len();
+        self.jump_to_current_match();
+        self.update_search_status();
+    }
+
+    fn search_prev(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.search_current = (self.search_current + self.search_matches.len() - 1)
+            % self.search_matches.len();
+        self.jump_to_current_match();
+        self.update_search_status();
+    }
+
+    fn search_highlights_for_line(&self, line_idx: usize) -> Vec<(usize, usize)> {
+        self.search_matches
+            .iter()
+            .filter(|&&(l, _, _)| l == line_idx)
+            .map(|&(_, s, e)| (s, e))
+            .collect()
+    }
+
+    fn append_visual_highlights(
+        &self,
+        line_idx: usize,
+        ranges: &mut Vec<(usize, usize)>,
+    ) {
+        let Some(anchor) = self.selection_anchor else {
+            return;
+        };
+        if self.mode != UiMode::Visual && self.mode != UiMode::VisualLine {
+            return;
+        }
+
+        let start_line = min(anchor.0, self.cursor_line);
+        let end_line = std::cmp::max(anchor.0, self.cursor_line);
+
+        if line_idx < start_line || line_idx > end_line {
+            return;
+        }
+
+        if self.mode == UiMode::VisualLine {
+            let line_len = self.lines[line_idx].chars().count();
+            ranges.push((0, line_len.max(1)));
+            return;
+        }
+
+        let (start_col, end_col) = if anchor.0 == self.cursor_line {
+            (
+                min(anchor.1, self.cursor_col),
+                std::cmp::max(anchor.1, self.cursor_col),
+            )
+        } else if anchor.0 < self.cursor_line {
+            (anchor.1, self.cursor_col)
+        } else {
+            (self.cursor_col, anchor.1)
+        };
+
+        if start_line == end_line {
+            ranges.push((start_col, end_col + 1));
+        } else if line_idx == start_line {
+            let line_len = self.lines[line_idx].chars().count();
+            ranges.push((start_col, line_len.max(start_col + 1)));
+        } else if line_idx == end_line {
+            ranges.push((0, end_col + 1));
+        } else {
+            let line_len = self.lines[line_idx].chars().count();
+            ranges.push((0, line_len.max(1)));
+        }
     }
 
     fn move_cursor_left_word(&mut self) {
@@ -1251,57 +1552,51 @@ impl TerminalApp {
             let line_idx = self.scroll_line + i;
             if line_idx < self.lines.len() {
                 let line_no = line_idx + 1;
-                let gutter = format!("{line_no:>4}  ");
                 let available = cols.saturating_sub(GUTTER_WIDTH);
-                let engine = crate::calc::engine::CalcEngine::new();
-                let calc_ghost = get_calc_ghost_for_line(&self.lines[line_idx], &engine);
-                let mut highlight_ranges = Vec::new();
-                if let Some(anchor) = self.selection_anchor {
-                    if self.mode == UiMode::Visual || self.mode == UiMode::VisualLine {
-                        let start_line = min(anchor.0, self.cursor_line);
-                        let end_line = std::cmp::max(anchor.0, self.cursor_line);
-                        
-                        if line_idx >= start_line && line_idx <= end_line {
-                            if self.mode == UiMode::VisualLine {
-                                let line_len = self.lines[line_idx].chars().count();
-                                highlight_ranges.push((0, line_len.max(1)));
-                            } else {
-                                let (start_col, end_col) = if anchor.0 == self.cursor_line {
-                                    (min(anchor.1, self.cursor_col), std::cmp::max(anchor.1, self.cursor_col))
-                                } else if anchor.0 < self.cursor_line {
-                                    (anchor.1, self.cursor_col)
-                                } else {
-                                    (self.cursor_col, anchor.1)
-                                };
-                                
-                                if start_line == end_line {
-                                    highlight_ranges.push((start_col, end_col + 1));
-                                } else if line_idx == start_line {
-                                    let line_len = self.lines[line_idx].chars().count();
-                                    highlight_ranges.push((start_col, line_len.max(start_col + 1)));
-                                } else if line_idx == end_line {
-                                    highlight_ranges.push((0, end_col + 1));
-                                } else {
-                                    let line_len = self.lines[line_idx].chars().count();
-                                    highlight_ranges.push((0, line_len.max(1)));
-                                }
-                            }
-                        }
-                    }
-                }
-                let rendered_text = ctx.render_line(&self.lines[line_idx], available, calc_ghost.as_deref(), &highlight_ranges);
+                let calc_ghost = self
+                    .calc_results
+                    .get(line_idx)
+                    .and_then(|r| r.as_deref());
+
+                let mut highlight_ranges = self.search_highlights_for_line(line_idx);
+                self.append_visual_highlights(line_idx, &mut highlight_ranges);
+
+                let rendered_text = ctx.render_line(
+                    &self.lines[line_idx],
+                    available,
+                    calc_ghost,
+                    &highlight_ranges,
+                );
                 buf.push_str(&goto(row, 1));
-                buf.push_str(&gutter);
+                // Dim gutter
+                let is_cursor_line = line_idx == self.cursor_line;
+                if is_cursor_line {
+                    buf.push_str(render::BOLD);
+                } else {
+                    buf.push_str(render::DIM);
+                }
+                buf.push_str(&format!("{line_no:>4}  "));
+                buf.push_str(render::RESET);
                 buf.push_str(&rendered_text);
             } else {
-                draw_row(&mut buf, row, cols, "~", false);
+                buf.push_str(&goto(row, 1));
+                buf.push_str(render::DIM);
+                buf.push_str(&pad_right("~", cols));
+                buf.push_str(render::RESET);
             }
         }
 
         let status = match self.mode {
-            UiMode::Editor | UiMode::Normal | UiMode::CommandBar | UiMode::Visual | UiMode::VisualLine => &self.status,
+            UiMode::Editor
+            | UiMode::Normal
+            | UiMode::CommandBar
+            | UiMode::Search
+            | UiMode::Visual
+            | UiMode::VisualLine => &self.status,
             UiMode::Switcher => "Switcher: type to filter, Enter open, Esc close",
-            UiMode::DatePicker => "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel",
+            UiMode::DatePicker => {
+                "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
+            }
         };
         draw_row(&mut buf, rows, cols, status, true);
 
@@ -1317,7 +1612,9 @@ impl TerminalApp {
         buf.push_str(&goto(cursor_row, cursor_col));
         
         let cursor_style = match self.mode {
-            UiMode::Editor | UiMode::CommandBar | UiMode::Switcher | UiMode::DatePicker => "\x1b[5 q", // Blinking Bar
+            UiMode::Editor | UiMode::CommandBar | UiMode::Search | UiMode::Switcher | UiMode::DatePicker => {
+                "\x1b[5 q" // Blinking Bar
+            }
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine => "\x1b[1 q", // Blinking Block
         };
         buf.push_str(cursor_style);
@@ -1333,6 +1630,10 @@ impl TerminalApp {
         match self.mode {
             UiMode::CommandBar => {
                 let col = (1 + 1 + self.command_input.chars().count()).min(cols.max(1));
+                (rows, col.max(1))
+            }
+            UiMode::Search => {
+                let col = (1 + 1 + self.search_query.chars().count()).min(cols.max(1));
                 (rows, col.max(1))
             }
             UiMode::DatePicker => {
