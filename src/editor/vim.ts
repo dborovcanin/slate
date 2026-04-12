@@ -411,6 +411,9 @@ export function vimModeExtension(options: VimOptions = {}) {
       return false;
     },
     keydown: (event, view) => {
+      if (view.dom.querySelector(".command-picker-bar")) {
+        return false;
+      }
       if (commandBarEl) {
         return false;
       }

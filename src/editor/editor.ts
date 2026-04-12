@@ -10,6 +10,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
+import { commandModeExtension } from "./command-picker";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
 import { vimModeExtension } from "./vim";
@@ -63,6 +64,10 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     markdownRichTextExtensions(),
     markdownEditingExtensions({ autoformat: options.markdownAutoformat ?? true }),
     calcExtensions(),
+    commandModeExtension({
+      dateFormat: options.dateFormat,
+      vimMode: !!options.vimMode,
+    }),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,
     EditorView.lineWrapping,

@@ -205,6 +205,104 @@
   padding-left: 16px;
 }
 
+.command-picker-bar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  z-index: 32;
+}
+
+.command-picker-prefix {
+  color: var(--accent);
+  font-weight: 700;
+  user-select: none;
+  align-self: center;
+}
+
+.command-picker-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.command-picker-list {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 170px;
+  overflow: auto;
+  margin-top: 2px;
+}
+
+.command-picker-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-picker-item:hover,
+.command-picker-item--active {
+  background: var(--bg-overlay);
+  border-color: var(--border);
+}
+
+.command-picker-item-title {
+  color: var(--fg);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.command-picker-item-hint {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
+.command-picker-empty {
+  color: var(--fg-dim);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.command-picker-status {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--fg-dim);
+  padding: 4px 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.command-picker-status.visible {
+  opacity: 1;
+}
+
 .vim-command-bar {
   position: absolute;
   left: 10px;

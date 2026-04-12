@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseNumbers, parseScope, resolveScopeRange } from "./ex-commands.ts";
+import { parseNumbers, parseScope, resolveScopeRange, suggestExCommands } from "./ex-commands.ts";
 
 test("parseScope defaults to paragraph", () => {
   assert.equal(parseScope(undefined), "paragraph");
@@ -38,4 +38,14 @@ test("resolveScopeRange requires cursor on list/table for those scopes", () => {
 test("resolveScopeRange for doc spans entire file", () => {
   const lines = ["x", "y", "z"];
   assert.deepEqual(resolveScopeRange(lines, 2, "doc"), { startLine: 1, endLine: 3 });
+});
+
+test("suggestExCommands returns defaults and prefix matches", () => {
+  assert.deepEqual(suggestExCommands(""), [
+    "sum",
+    "sum_all",
+    "date",
+  ]);
+  assert.deepEqual(suggestExCommands("su"), ["sum", "sum_all"]);
+  assert.deepEqual(suggestExCommands(":dat"), ["date"]);
 });

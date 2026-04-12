@@ -38,7 +38,11 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - `:sum` (paragraph default)
   - `:sum list`, `:sum table`, `:sum doc`
   - `:sum_all` (full document)
-  - results are inserted after the scoped block as `sum = <value>`, copied to clipboard, and shown in command status
+  - results are inserted after the scoped block as `<value>` (value-only), copied to clipboard, and shown in command status
+- Added command picker outside Vim mode:
+  - pressing `:` now opens command mode even when `[editor] vim_mode = false`
+  - command suggestions include `sum`, `sum_all`, `date`
+  - `Esc` closes the picker; when cancelled with literal colons only, the typed colons are inserted back into the document
 - Added date insertion with calendar picker:
   - shortcut: `Ctrl+Shift+D`
   - Vim ex command: `:date`
@@ -70,6 +74,7 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - Switcher list refreshes while open as notes change
   - Active edited note moves to top in local state
 - Fixed calc annotation race condition (stale async results are dropped and re-evaluated)
+- Reduced calc false positives by ignoring date-like lines in calc detection (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`)
 - Added IPC socket parent directory creation before bind (more robust fallback path behavior)
 - Fixed a critical SQLite deadlock in `save_note` caused by nested mutex locking
 
@@ -88,12 +93,16 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - table alignment formatting
   - missing-cell normalization
   - empty input behavior
+- `src/editor/ex-commands.test.ts`
+  - command suggestion filtering/order
+  - scope and number parsing coverage
 
 ### Rust (`cargo test`)
 
 - `src-tauri/src/calc/engine.rs`
   - arithmetic evaluation
   - non-expression skipping
+  - date-like line skipping for ghost calc suppression
   - re-evaluation of lines already containing ` = result`
   - batch line evaluation
 - `src-tauri/src/storage/sqlite.rs`

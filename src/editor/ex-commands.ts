@@ -5,6 +5,15 @@ export interface LineRange {
   startLine: number;
   endLine: number;
 }
+export const EX_COMMAND_CANDIDATES = [
+  "sum",
+  "sum list",
+  "sum table",
+  "sum doc",
+  "sum_all",
+  "date",
+] as const;
+export type ExCommandCandidate = (typeof EX_COMMAND_CANDIDATES)[number];
 
 const listLineRe = /^\s*(?:[-*+]|\d+\.)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;
@@ -97,11 +106,11 @@ function linesFromView(view: EditorView): string[] {
   return out;
 }
 
-function insertSumAfterRange(view: EditorView, range: LineRange, formatted: string) {
+function insertValueAfterRange(view: EditorView, range: LineRange, value: string) {
   const line = view.state.doc.line(range.endLine);
   const from = line.to;
   const prefix = view.state.doc.length === 0 ? "" : "\n";
-  const insert = `${prefix}sum = ${formatted}`;
+  const insert = `${prefix}${value}`;
 
   view.dispatch({
     changes: { from, to: from, insert },
@@ -116,6 +125,23 @@ export function parseScope(raw: string | undefined): SumScope {
   if (arg === "list") return "list";
   if (arg === "table") return "table";
   return "paragraph";
+}
+
+export function suggestExCommands(rawInput: string): ExCommandCandidate[] {
+  const query = rawInput.trim().toLowerCase().replace(/^:/, "");
+  if (!query) return [...EX_COMMAND_CANDIDATES];
+
+  return [...EX_COMMAND_CANDIDATES]
+    .map((command) => {
+      const c = command.toLowerCase();
+      const starts = c.startsWith(query);
+      const includes = c.includes(query);
+      const score = starts ? 0 : includes ? 1 : 2;
+      return { command, score };
+    })
+    .filter((entry) => entry.score < 2)
+    .sort((a, b) => a.score - b.score || a.command.localeCompare(b.command))
+    .map((entry) => entry.command);
 }
 
 async function copyText(text: string) {
@@ -145,9 +171,9 @@ export async function executeExCommand(
     if (numbers.length === 0) return `sum(${scope}): no numbers`;
     const sum = numbers.reduce((acc, n) => acc + n, 0);
     const formatted = formatNumber(sum);
-    insertSumAfterRange(view, range ?? docRange(lines), formatted);
+    insertValueAfterRange(view, range ?? docRange(lines), formatted);
     await copyText(formatted);
-    return `sum(${scope}) = ${formatted} (${numbers.length} values, inserted + copied)`;
+    return `sum(${scope}) = ${formatted} (${numbers.length} values, inserted value + copied)`;
   }
 
   return `unknown command: ${trimmed}`;
