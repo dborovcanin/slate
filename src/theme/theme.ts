@@ -1,4 +1,4 @@
-import { getThemeConfig, type ThemeConfig } from "../api";
+import { getThemeConfigOrDefault, type ThemeConfig } from "../api";
 import {
   BACKGROUND_PRESETS,
   clampFontSize,
@@ -87,7 +87,7 @@ function sameSelection(a: ThemeSelection | null, b: ThemeSelection): boolean {
 }
 
 async function fetchSelection() {
-  const config = await getThemeConfig();
+  const config = await getThemeConfigOrDefault();
   return resolveThemeSelection(config);
 }
 
@@ -149,12 +149,7 @@ export function cycleFont(direction: -1 | 1): ThemeSelection {
 }
 
 export async function loadAndApplyTheme() {
-  try {
-    const selection = await fetchSelection();
-    return applyTheme(selection);
-  } catch (err) {
-    console.error("Failed to load theme config:", err);
-    const fallback = resolveThemeSelection({});
-    return applyTheme(fallback);
-  }
+  const config = await getThemeConfigOrDefault();
+  applyTheme(resolveThemeSelection(config));
+  return config;
 }

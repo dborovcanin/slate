@@ -4,7 +4,8 @@ import {
   createNote,
   deleteNote,
   exportToFile,
-  getThemeConfig,
+  getThemeConfigOrDefault,
+  type ThemeConfig,
 } from "./api";
 import {
   mountEditor,
@@ -137,14 +138,7 @@ async function handleHideWindow() {
 }
 
 async function handleInsertDate() {
-  const cfg = await getThemeConfig().catch(() => ({
-    color_scheme: "catppuccin-mocha",
-    background: "plain",
-    font: "jetbrains-mono",
-    font_size: 14,
-    vim_mode: false,
-    date_format: "%Y-%m-%d",
-  }));
+  const cfg = await getThemeConfigOrDefault();
   const value = await openDatePicker(cfg.date_format);
   if (!value) return;
   insertTextAtCursor(value);
@@ -299,6 +293,13 @@ function showToast(message: string) {
 
 let statusTitleEl: HTMLElement;
 let statusMetaEl: HTMLElement;
+let terminalModeEnabled = false;
+
+function applyTerminalMode(enabled: boolean) {
+  terminalModeEnabled = enabled;
+  document.body.classList.toggle("terminal-mode", enabled);
+  document.documentElement.classList.toggle("terminal-mode", enabled);
+}
 
 function createStatusBar(container: HTMLElement) {
   const bar = document.createElement("div");
@@ -312,7 +313,7 @@ function createStatusBar(container: HTMLElement) {
 
   const hint = document.createElement("span");
   hint.className = "status-bar-hint";
-  hint.textContent = "Ctrl+P search";
+  hint.textContent = terminalModeEnabled ? "Vim markdown mode" : "Ctrl+P search";
 
   statusMetaEl.appendChild(hint);
   bar.appendChild(statusTitleEl);
@@ -340,7 +341,7 @@ function updateStatusBar() {
   }
 }
 
-export async function initApp() {
+export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>) {
   const container = document.getElementById("app");
   if (!container) throw new Error("Missing #app element");
 
@@ -353,23 +354,24 @@ export async function initApp() {
   const [note, notes, config] = await Promise.all([
     getOrCreateNote(),
     listNotes(),
-    getThemeConfig().catch(() => ({
-      color_scheme: "catppuccin-mocha",
-      background: "plain",
-      font: "jetbrains-mono",
-      font_size: 14,
-      vim_mode: false,
-      date_format: "%Y-%m-%d",
-    })),
+    Promise.resolve(configSource ?? getThemeConfigOrDefault()),
   ]);
   state.setActiveNote(note);
   state.setNotes(notes);
+  applyTerminalMode(!!config.terminal_mode);
 
   createStatusBar(container);
-  mountEditor(editorEl, { vimMode: !!config.vim_mode, dateFormat: config.date_format });
+  mountEditor(editorEl, {
+    markdownAutoformat: config.markdown_autoformat,
+    terminalMode: !!config.terminal_mode,
+    vimMode: !!config.vim_mode || !!config.terminal_mode,
+    dateFormat: config.date_format,
+  });
   setupKeyboardShortcuts();
 
-  if (config.vim_mode) {
+  if (config.terminal_mode) {
+    showToast("Terminal mode: Vim markdown");
+  } else if (config.vim_mode) {
     showToast("Vim mode: :sum, :sum_all, :date");
   }
 

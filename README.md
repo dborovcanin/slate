@@ -12,6 +12,11 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Restores last-open note on startup
 - Dark theme with Catppuccin-inspired colors
 - Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
+- Markdown editing helpers:
+  - `Ctrl/Cmd+B` bold, `Ctrl/Cmd+I` italic, `Ctrl/Cmd+Shift+X` strikethrough, `Ctrl/Cmd+K` link
+  - List continuation on Enter
+  - Markdown table autoformat/alignment while editing
+  - Controlled by `[editor] markdown_autoformat` (defaults to `true`)
 
 **Themes and backgrounds**
 - 12 built-in color schemes: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
@@ -27,7 +32,14 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Ex commands: `:sum` (paragraph default), `:sum list`, `:sum table`, `:sum doc`, `:sum_all`, `:date`
+- `:sum`/`:sum_all` now insert `sum = <value>` after the scoped block and copy the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
+
+**Optional terminal mode**
+- Enable with `[editor] terminal_mode = true`
+- Uses terminal-like chrome and monospaced status bar styling
+- Shows editor line numbers/gutter for a Vim-like editing feel
+- Automatically enables Vim mode behavior when terminal mode is on
 
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
@@ -68,6 +80,10 @@ sqrt(144) + 3^2         → 21
 | Ctrl+E                  | Copy note to clipboard        |
 | Ctrl+Shift+E            | Export note to file           |
 | Ctrl+Shift+D            | Open calendar date picker     |
+| Ctrl+B                  | Toggle bold (`**...**`)       |
+| Ctrl+I                  | Toggle italic (`*...*`)       |
+| Ctrl+Shift+X            | Toggle strikethrough          |
+| Ctrl+K                  | Insert/wrap markdown link     |
 | Ctrl++ / Ctrl+-         | Increase / decrease font size |
 | Ctrl+Alt++ / Ctrl+Alt+- | Next / previous font family   |
 | Ctrl+W                  | Hide window                   |
@@ -192,6 +208,8 @@ font = "jetbrains-mono"
 font_size = 14
 
 [editor]
+markdown_autoformat = true
+terminal_mode = false
 vim_mode = false
 date_format = "%Y-%m-%d"
 ```
@@ -229,6 +247,8 @@ Available `font` values:
 - `11` to `28`
 
 Editor options:
+- `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
+- `terminal_mode = true` enables terminal-like UI and line-number gutter, and turns on Vim behavior
 - `vim_mode = true` enables modal Vim-style key mappings (applies on app start)
 - `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
 

@@ -2,8 +2,8 @@ import { initApp } from "./app";
 import { loadAndApplyTheme, startThemeLiveReload } from "./theme/theme";
 
 async function bootstrap() {
-  await loadAndApplyTheme();
-  await initApp();
+  const configPromise = loadAndApplyTheme();
+  await initApp(configPromise);
   startThemeLiveReload();
 }
 

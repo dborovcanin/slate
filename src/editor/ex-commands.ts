@@ -1,6 +1,10 @@
 import { EditorView } from "@codemirror/view";
 
-type SumScope = "paragraph" | "list" | "table" | "doc";
+export type SumScope = "paragraph" | "list" | "table" | "doc";
+export interface LineRange {
+  startLine: number;
+  endLine: number;
+}
 
 const listLineRe = /^\s*(?:[-*+]|\d+\.)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;
@@ -31,58 +35,79 @@ function lineText(view: EditorView, lineNo: number): string {
   return view.state.doc.line(lineNo).text;
 }
 
-function scopeParagraph(view: EditorView): string {
-  const cursor = currentLineNo(view);
+function paragraphRange(lines: string[], cursor: number): LineRange {
   let start = cursor;
   let end = cursor;
-  while (start > 1 && lineText(view, start - 1).trim().length > 0) start--;
-  while (end < view.state.doc.lines && lineText(view, end + 1).trim().length > 0) end++;
-  const out: string[] = [];
-  for (let n = start; n <= end; n++) out.push(lineText(view, n));
-  return out.join("\n");
+  while (start > 1 && lines[start - 2].trim().length > 0) start--;
+  while (end < lines.length && lines[end].trim().length > 0) end++;
+  return { startLine: start, endLine: end };
 }
 
-function scopeList(view: EditorView): string {
-  const cursor = currentLineNo(view);
-  if (!listLineRe.test(lineText(view, cursor))) return "";
+function listRange(lines: string[], cursor: number): LineRange | null {
+  if (!listLineRe.test(lines[cursor - 1] ?? "")) return null;
 
   let start = cursor;
   let end = cursor;
-  while (start > 1 && listLineRe.test(lineText(view, start - 1))) start--;
-  while (end < view.state.doc.lines && listLineRe.test(lineText(view, end + 1))) end++;
-  const out: string[] = [];
-  for (let n = start; n <= end; n++) out.push(lineText(view, n));
-  return out.join("\n");
+  while (start > 1 && listLineRe.test(lines[start - 2] ?? "")) start--;
+  while (end < lines.length && listLineRe.test(lines[end] ?? "")) end++;
+  return { startLine: start, endLine: end };
 }
 
-function scopeTable(view: EditorView): string {
-  const cursor = currentLineNo(view);
-  if (!tableLineRe.test(lineText(view, cursor))) return "";
+function tableRange(lines: string[], cursor: number): LineRange | null {
+  if (!tableLineRe.test(lines[cursor - 1] ?? "")) return null;
 
   let start = cursor;
   let end = cursor;
-  while (start > 1 && tableLineRe.test(lineText(view, start - 1))) start--;
-  while (end < view.state.doc.lines && tableLineRe.test(lineText(view, end + 1))) end++;
-  const out: string[] = [];
-  for (let n = start; n <= end; n++) out.push(lineText(view, n));
-  return out.join("\n");
+  while (start > 1 && tableLineRe.test(lines[start - 2] ?? "")) start--;
+  while (end < lines.length && tableLineRe.test(lines[end] ?? "")) end++;
+  return { startLine: start, endLine: end };
 }
 
-function scopeDoc(view: EditorView): string {
-  return view.state.doc.toString();
+function docRange(lines: string[]): LineRange {
+  return { startLine: 1, endLine: Math.max(1, lines.length) };
 }
 
-function textForScope(view: EditorView, scope: SumScope): string {
+export function resolveScopeRange(
+  lines: string[],
+  cursorLine: number,
+  scope: SumScope,
+): LineRange | null {
+  const cursor = Math.min(Math.max(1, cursorLine), Math.max(1, lines.length));
   switch (scope) {
     case "paragraph":
-      return scopeParagraph(view);
+      return paragraphRange(lines, cursor);
     case "list":
-      return scopeList(view);
+      return listRange(lines, cursor);
     case "table":
-      return scopeTable(view);
+      return tableRange(lines, cursor);
     case "doc":
-      return scopeDoc(view);
+      return docRange(lines);
   }
+}
+
+function textForRange(lines: string[], range: LineRange): string {
+  const out: string[] = [];
+  for (let n = range.startLine; n <= range.endLine; n++) out.push(lines[n - 1] ?? "");
+  return out.join("\n");
+}
+
+function linesFromView(view: EditorView): string[] {
+  const out: string[] = [];
+  for (let n = 1; n <= view.state.doc.lines; n++) out.push(lineText(view, n));
+  return out;
+}
+
+function insertSumAfterRange(view: EditorView, range: LineRange, formatted: string) {
+  const line = view.state.doc.line(range.endLine);
+  const from = line.to;
+  const prefix = view.state.doc.length === 0 ? "" : "\n";
+  const insert = `${prefix}sum = ${formatted}`;
+
+  view.dispatch({
+    changes: { from, to: from, insert },
+    selection: { anchor: from + insert.length },
+    scrollIntoView: true,
+  });
 }
 
 export function parseScope(raw: string | undefined): SumScope {
@@ -109,25 +134,20 @@ export async function executeExCommand(
   const trimmed = rawCommand.trim().replace(/^:/, "");
   if (!trimmed) return "";
 
-  if (trimmed === "sum_all") {
-    const text = textForScope(view, "doc");
-    const numbers = parseNumbers(text);
-    if (numbers.length === 0) return "sum(doc): no numbers";
-    const sum = numbers.reduce((acc, n) => acc + n, 0);
-    const formatted = formatNumber(sum);
-    await copyText(formatted);
-    return `sum(doc) = ${formatted} (${numbers.length} values, copied)`;
-  }
+  const scope: SumScope | null =
+    trimmed === "sum_all" ? "doc" : trimmed.startsWith("sum") ? parseScope(trimmed.slice(3)) : null;
 
-  if (trimmed.startsWith("sum")) {
-    const scope = parseScope(trimmed.slice(3));
-    const text = textForScope(view, scope);
+  if (scope) {
+    const lines = linesFromView(view);
+    const range = resolveScopeRange(lines, currentLineNo(view), scope);
+    const text = range ? textForRange(lines, range) : "";
     const numbers = parseNumbers(text);
     if (numbers.length === 0) return `sum(${scope}): no numbers`;
     const sum = numbers.reduce((acc, n) => acc + n, 0);
     const formatted = formatNumber(sum);
+    insertSumAfterRange(view, range ?? docRange(lines), formatted);
     await copyText(formatted);
-    return `sum(${scope}) = ${formatted} (${numbers.length} values, copied)`;
+    return `sum(${scope}) = ${formatted} (${numbers.length} values, inserted + copied)`;
   }
 
   return `unknown command: ${trimmed}`;

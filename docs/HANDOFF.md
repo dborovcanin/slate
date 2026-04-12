@@ -28,11 +28,16 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - cursor style differs by mode (insert bar cursor vs normal/visual block cursor)
   - visual selections: `v`, `V`, `Ctrl+v` (block)
   - yanking to system clipboard: `y` in visual modes, `yy` in normal mode (with counts like `3yy`)
+- Added optional terminal mode:
+  - `[editor] terminal_mode = true` in `config.toml`
+  - terminal-like app chrome + monospaced status/switcher styling
+  - line-number gutter enabled in CodeMirror
+  - implies Vim behavior in editor mount path
 - Added ex command support in Vim mode:
   - `:sum` (paragraph default)
   - `:sum list`, `:sum table`, `:sum doc`
   - `:sum_all` (full document)
-  - results are copied to clipboard and shown in command status
+  - results are inserted after the scoped block as `sum = <value>`, copied to clipboard, and shown in command status
 - Added date insertion with calendar picker:
   - shortcut: `Ctrl+Shift+D`
   - Vim ex command: `:date`
@@ -42,6 +47,11 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - inline bold/italic/strikethrough/code/link highlighting
   - fenced code block styling
   - implemented as lightweight CodeMirror decorations in `src/editor/markdown-decoration.ts`
+- Added markdown editing helpers:
+  - configurable autoformat flag: `[editor] markdown_autoformat` (default `true`)
+  - keymaps: `Ctrl/Cmd+B`, `Ctrl/Cmd+I`, `Ctrl/Cmd+Shift+X`, `Ctrl/Cmd+K`
+  - Enter list continuation behavior
+  - table autoformat/alignment on edit in markdown table blocks
 - Added theme tests:
   - Rust parser/normalization tests in config module
   - TypeScript preset inventory tests
@@ -51,6 +61,9 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 - Added confirmation prompt before note deletion (`Ctrl+Backspace`)
 - Added safe async action wrapper for keyboard-triggered commands to avoid unhandled promise rejections
 - Made shortcuts case-robust (`Ctrl+Shift+E`, etc.)
+- Startup optimization:
+  - removed duplicate frontend config fetch during bootstrap
+  - app init now consumes the same in-flight config promise used for first theme application
 - Improved live UI updates:
   - Status/title updates while typing
   - Switcher list refreshes while open as notes change
@@ -70,6 +83,10 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 - `src/switcher/fuzzy.test.ts`
   - fuzzy match success/failure behavior
   - fuzzy sort ordering
+- `src/editor/markdown-editing.test.ts`
+  - table alignment formatting
+  - missing-cell normalization
+  - empty input behavior
 
 ### Rust (`cargo test`)
 

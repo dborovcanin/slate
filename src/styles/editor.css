@@ -193,6 +193,32 @@
   display: none;
 }
 
+body.terminal-mode .cm-editor .cm-gutters {
+  display: block;
+  background: transparent;
+  color: var(--fg-muted);
+  border: none;
+  padding-right: 8px;
+  font-family: var(--font-mono);
+}
+
+body.terminal-mode .cm-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 4ch;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.9;
+}
+
+body.terminal-mode .cm-editor .cm-activeLineGutter {
+  color: var(--fg);
+  background: transparent;
+  opacity: 1;
+}
+
+body.terminal-mode .cm-editor .cm-scroller {
+  padding: 10px 12px;
+}
+
 .cm-editor.cm-focused {
   outline: none;
 }
@@ -218,6 +244,11 @@
   border-radius: 6px;
   background: var(--bg-surface);
   z-index: 30;
+}
+
+body.terminal-mode .vim-command-bar {
+  border-radius: 0;
+  border-color: var(--accent);
 }
 
 .vim-command-prefix {

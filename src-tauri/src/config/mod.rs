@@ -10,6 +10,8 @@ const DEFAULT_FONT_SIZE: u8 = 14;
 const MIN_FONT_SIZE: u8 = 11;
 const MAX_FONT_SIZE: u8 = 28;
 const DEFAULT_VIM_MODE: bool = false;
+const DEFAULT_TERMINAL_MODE: bool = false;
+const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
@@ -34,6 +36,8 @@ font = "jetbrains-mono"
 font_size = 14
 
 [editor]
+markdown_autoformat = true
+terminal_mode = false
 vim_mode = false
 date_format = "%Y-%m-%d"
 "#;
@@ -44,6 +48,8 @@ pub struct ThemeConfig {
     pub background: String,
     pub font: String,
     pub font_size: u8,
+    pub markdown_autoformat: bool,
+    pub terminal_mode: bool,
     pub vim_mode: bool,
     pub date_format: String,
 }
@@ -55,6 +61,8 @@ impl Default for ThemeConfig {
             background: DEFAULT_BACKGROUND.to_string(),
             font: DEFAULT_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
+            markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
+            terminal_mode: DEFAULT_TERMINAL_MODE,
             vim_mode: DEFAULT_VIM_MODE,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
         }
@@ -79,6 +87,8 @@ struct ThemeSection {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EditorSection {
+    markdown_autoformat: Option<bool>,
+    terminal_mode: Option<bool>,
     vim_mode: Option<bool>,
     date_format: Option<String>,
 }
@@ -130,6 +140,11 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         background: normalize_name(raw.theme.background, DEFAULT_BACKGROUND),
         font: normalize_name(raw.theme.font, DEFAULT_FONT),
         font_size: normalize_font_size(raw.theme.font_size),
+        markdown_autoformat: raw
+            .editor
+            .markdown_autoformat
+            .unwrap_or(DEFAULT_MARKDOWN_AUTOFORMAT),
+        terminal_mode: raw.editor.terminal_mode.unwrap_or(DEFAULT_TERMINAL_MODE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
         date_format: normalize_date_format(raw.editor.date_format),
     })
@@ -190,6 +205,8 @@ mod tests {
             font_size = 18
 
             [editor]
+            markdown_autoformat = false
+            terminal_mode = true
             vim_mode = true
             date_format = "%d.%m.%Y"
             "#,
@@ -200,6 +217,8 @@ mod tests {
         assert_eq!(cfg.background, "squares");
         assert_eq!(cfg.font, "fira-code");
         assert_eq!(cfg.font_size, 18);
+        assert!(!cfg.markdown_autoformat);
+        assert!(cfg.terminal_mode);
         assert!(cfg.vim_mode);
         assert_eq!(cfg.date_format, "%d.%m.%Y");
     }
@@ -227,8 +246,22 @@ mod tests {
     #[test]
     fn defaults_vim_mode_to_false() {
         let cfg = parse_theme_config("[theme]\ncolor_scheme = 'dark'").expect("config parsed");
+        assert!(cfg.markdown_autoformat);
+        assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
         assert_eq!(cfg.date_format, "%Y-%m-%d");
+    }
+
+    #[test]
+    fn parses_markdown_autoformat_override() {
+        let cfg = parse_theme_config("[editor]\nmarkdown_autoformat = false").expect("config");
+        assert!(!cfg.markdown_autoformat);
+    }
+
+    #[test]
+    fn parses_terminal_mode_override() {
+        let cfg = parse_theme_config("[editor]\nterminal_mode = true").expect("config");
+        assert!(cfg.terminal_mode);
     }
 
     #[test]

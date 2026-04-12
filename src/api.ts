@@ -12,9 +12,22 @@ export interface ThemeConfig {
   background: string;
   font: string;
   font_size: number;
+  markdown_autoformat: boolean;
+  terminal_mode: boolean;
   vim_mode: boolean;
   date_format: string;
 }
+
+export const DEFAULT_THEME_CONFIG: ThemeConfig = {
+  color_scheme: "catppuccin-mocha",
+  background: "plain",
+  font: "jetbrains-mono",
+  font_size: 14,
+  markdown_autoformat: true,
+  terminal_mode: false,
+  vim_mode: false,
+  date_format: "%Y-%m-%d",
+};
 
 export function getOrCreateNote(): Promise<Note> {
   return invoke<Note>("get_or_create_note");
@@ -46,4 +59,12 @@ export function exportToFile(path: string, content: string): Promise<void> {
 
 export function getThemeConfig(): Promise<ThemeConfig> {
   return invoke<ThemeConfig>("get_theme_config");
+}
+
+export async function getThemeConfigOrDefault(): Promise<ThemeConfig> {
+  try {
+    return await getThemeConfig();
+  } catch {
+    return { ...DEFAULT_THEME_CONFIG };
+  }
 }

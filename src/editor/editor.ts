@@ -4,6 +4,8 @@ import {
   keymap,
   drawSelection,
   highlightActiveLine,
+  highlightActiveLineGutter,
+  lineNumbers,
   placeholder,
 } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
@@ -11,6 +13,7 @@ import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { markdownRichTextExtensions } from "./markdown-decoration";
+import { markdownEditingExtensions } from "./markdown-editing";
 import { vimModeExtension } from "./vim";
 
 let view: EditorView | null = null;
@@ -45,6 +48,8 @@ const onUpdate = EditorView.updateListener.of((update) => {
 });
 
 interface EditorMountOptions {
+  markdownAutoformat?: boolean;
+  terminalMode?: boolean;
   vimMode?: boolean;
   dateFormat?: string;
 }
@@ -59,12 +64,17 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     highlightActiveLine(),
     placeholder("Start typing..."),
     markdownRichTextExtensions(),
+    markdownEditingExtensions({ autoformat: options.markdownAutoformat ?? true }),
     calcExtensions(),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({ "aria-label": "Note editor" }),
   ];
+
+  if (options.terminalMode) {
+    extensions.push(lineNumbers(), highlightActiveLineGutter());
+  }
 
   if (options.vimMode) {
     extensions.push(vimModeExtension({ dateFormat: options.dateFormat }));
