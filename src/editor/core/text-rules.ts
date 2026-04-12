@@ -62,7 +62,10 @@ function outdentOrderedMarker(marker: string): string {
   const parts = parseOrderedMarker(marker);
   if (!parts) return marker;
   if (parts.length === 1) return formatOrderedMarker(parts);
-  return formatOrderedMarker(parts.slice(0, -1));
+  const next = parts.slice(0, -1);
+  // Reverse of indent's decrement: 2.1 outdents to 3.
+  next[next.length - 1] = next[next.length - 1] + 1;
+  return formatOrderedMarker(next);
 }
 
 function markerDepth(indent: string): number {

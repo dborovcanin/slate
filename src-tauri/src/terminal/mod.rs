@@ -188,18 +188,24 @@ impl TerminalApp {
             Key::End => self.cursor_col = line_char_len(self.current_line()),
             Key::Backspace => self.backspace(),
             Key::Delete => self.delete_forward(),
-            Key::Enter => self.insert_newline(),
+            Key::Enter => {
+                if !self.try_enter_rule() {
+                    self.insert_newline();
+                }
+            }
             Key::Tab => {
-                let text = self.current_line().to_string();
-                let engine = crate::calc::engine::CalcEngine::new();
-                if let Some((from_byte, to_byte, result)) = find_calc_segment(&text, &engine) {
-                    self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
-                    self.cursor_col = line_char_len(&self.lines[self.cursor_line]);
-                    self.mark_edited();
-                } else if let Some(ghost) = get_calc_ghost_for_line(&text, &engine) {
-                    self.insert_text(&format!(" = {ghost}"));
-                } else {
-                    self.insert_text("  ");
+                if !self.try_tab_rule(false) {
+                    let text = self.current_line().to_string();
+                    let engine = crate::calc::engine::CalcEngine::new();
+                    if let Some((from_byte, to_byte, result)) = find_calc_segment(&text, &engine) {
+                        self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
+                        self.cursor_col = line_char_len(&self.lines[self.cursor_line]);
+                        self.mark_edited();
+                    } else if let Some(ghost) = get_calc_ghost_for_line(&text, &engine) {
+                        self.insert_text(&format!(" = {ghost}"));
+                    } else {
+                        self.insert_text("  ");
+                    }
                 }
             }
             Key::Char(':') => {
@@ -368,39 +374,10 @@ impl TerminalApp {
             return;
         }
 
-        // Apply operations to the text buffer
         for op in &result.operations {
-            let mut text = join_lines(&self.lines);
-            // Apply changes in reverse order to preserve offsets
-            let mut changes = op.changes.clone();
-            changes.sort_by(|a, b| b.from.cmp(&a.from));
-            for change in &changes {
-                let from = change.from.min(text.len());
-                let to = change.to.min(text.len());
-                text.replace_range(from..to, &change.insert);
-            }
-            self.lines = split_lines(&text);
-
-            // Update cursor from operation selection
-            if let Some(sel) = &op.selection {
-                let anchor = sel.anchor.min(text.len());
-                // Convert byte offset to line/col
-                let mut offset = 0;
-                for (i, line) in self.lines.iter().enumerate() {
-                    let line_end = offset + line.len();
-                    if anchor <= line_end {
-                        self.cursor_line = i;
-                        self.cursor_col = line[..anchor.saturating_sub(offset)].chars().count();
-                        break;
-                    }
-                    offset = line_end + 1; // +1 for \n
-                }
-            }
+            self.apply_edit_operation(op);
         }
 
-        if !result.operations.is_empty() {
-            self.mark_edited();
-        }
         self.status = if result.message.is_empty() {
             format!("editing {}", self.active_note.id)
         } else {
@@ -706,6 +683,60 @@ impl TerminalApp {
         self.cursor_line += 1;
         self.cursor_col = 0;
         self.mark_edited();
+    }
+
+    fn try_enter_rule(&mut self) -> bool {
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TextRuleOptions {
+            markdown_autoformat: true,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&snapshot, options) {
+            self.apply_edit_operation(&op);
+            return true;
+        }
+        false
+    }
+
+    fn try_tab_rule(&mut self, outdent: bool) -> bool {
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TabRuleOptions {
+            markdown_autoformat: true,
+            outdent,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&snapshot, options) {
+            self.apply_edit_operation(&op);
+            return true;
+        }
+        false
+    }
+
+    fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
+        let mut text = join_lines(&self.lines);
+        let mut changes = op.changes.clone();
+        changes.sort_by(|a, b| b.from.cmp(&a.from));
+        for change in &changes {
+            let from = change.from.min(text.len());
+            let to = change.to.min(text.len());
+            text.replace_range(from..to, &change.insert);
+        }
+        self.lines = split_lines(&text);
+
+        if let Some(sel) = &op.selection {
+            let anchor = sel.anchor.min(text.len());
+            let mut offset = 0;
+            for (i, line) in self.lines.iter().enumerate() {
+                let line_end = offset + line.len();
+                if anchor <= line_end {
+                    self.cursor_line = i;
+                    self.cursor_col = line[..anchor.saturating_sub(offset)].chars().count();
+                    break;
+                }
+                offset = line_end + 1;
+            }
+        }
+        self.mark_edited();
+        self.adjust_cursor();
+        self.adjust_scroll();
     }
 
     fn backspace(&mut self) {

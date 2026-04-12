@@ -96,6 +96,9 @@ fn outdent_ordered_marker(marker: &str) -> String {
     };
     if parts.len() > 1 {
         parts.pop();
+        // Reverse of indent's decrement: 2.1 outdents to 3.
+        let last = parts.len() - 1;
+        parts[last] = parts[last].saturating_add(1);
     }
     format_ordered_marker(&parts)
 }
@@ -511,7 +514,7 @@ mod tests {
             },
         )
         .expect("outdent op");
-        assert_eq!(apply_operation(&outdent_doc.text, &outdent_op), "1.1 child");
+        assert_eq!(apply_operation(&outdent_doc.text, &outdent_op), "1.2 child");
     }
 
     #[test]
