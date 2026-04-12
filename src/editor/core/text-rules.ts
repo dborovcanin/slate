@@ -50,7 +50,12 @@ function incrementOrderedMarker(marker: string): string {
 function indentOrderedMarker(marker: string): string {
   const parts = parseOrderedMarker(marker);
   if (!parts) return marker;
-  return formatOrderedMarker([...parts, 1]);
+  const next = [...parts];
+  // When indenting 3. into a child, it becomes 2.1 (child of parent 2)
+  if (next[next.length - 1] > 1) {
+    next[next.length - 1] = next[next.length - 1] - 1;
+  }
+  return formatOrderedMarker([...next, 1]);
 }
 
 function outdentOrderedMarker(marker: string): string {

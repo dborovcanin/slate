@@ -81,6 +81,11 @@ fn indent_ordered_marker(marker: &str) -> String {
     let Some(mut parts) = parse_ordered_marker_segments(marker) else {
         return marker.to_string();
     };
+    // When indenting 3. into a child, it becomes 2.1 (child of parent 2)
+    let last = parts.len() - 1;
+    if parts[last] > 1 {
+        parts[last] = parts[last].saturating_sub(1);
+    }
     parts.push(1);
     format_ordered_marker(&parts)
 }
