@@ -1,6 +1,8 @@
 import { EditorView } from "@codemirror/view";
 import { executeExCommand, suggestExCommands } from "./ex-commands";
 import { openDatePicker } from "./date-picker";
+import { insertAtSelection } from "./editor-utils";
+import { forceQuit } from "../app";
 
 interface CommandPickerOptions {
   dateFormat?: string;
@@ -14,18 +16,13 @@ const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
 
 const commandHint: Record<string, string> = {
   sum: "sum current scope",
+  "sum list": "sum current list",
+  "sum table": "sum current table",
+  "sum doc": "sum whole document",
   sum_all: "sum whole document",
   date: "insert picked date",
+  "q!": "quit without saving",
 };
-
-function insertAtSelection(view: EditorView, text: string) {
-  const main = view.state.selection.main;
-  view.dispatch({
-    changes: { from: main.from, to: main.to, insert: text },
-    selection: { anchor: main.from + text.length },
-    scrollIntoView: true,
-  });
-}
 
 function normalizeCommand(rawInput: string): string {
   return rawInput.trim().replace(/^:/, "").toLowerCase();
@@ -77,7 +74,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   input.spellcheck = false;
   input.autocapitalize = "off";
   input.autocomplete = "off";
-  input.autocorrect = false;
+  input.setAttribute("autocorrect", "off");
   input.placeholder = "command";
 
   const list = document.createElement("div");
@@ -157,6 +154,11 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
     const command = pickCommand();
     close();
     if (!command) return;
+
+    if (command === "q!") {
+      forceQuit();
+      return;
+    }
 
     if (command === "date") {
       try {
@@ -242,7 +244,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
     keydown: (event, view) => {
       if (isInsideCommandPicker(event.target)) return false;
       if (event.key !== ":" || event.ctrlKey || event.altKey || event.metaKey) return false;
-      if (options.vimMode && view.dom.dataset.vimMode === "insert") return false;
+      if (options.vimMode && view.dom.dataset.vimMode !== "insert") return false;
       event.preventDefault();
       openCommandPicker(view, options);
       return true;

@@ -12,6 +12,7 @@ export const EX_COMMAND_CANDIDATES = [
   "sum doc",
   "sum_all",
   "date",
+  "q!",
 ] as const;
 export type ExCommandCandidate = (typeof EX_COMMAND_CANDIDATES)[number];
 

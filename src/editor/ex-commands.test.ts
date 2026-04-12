@@ -43,9 +43,13 @@ test("resolveScopeRange for doc spans entire file", () => {
 test("suggestExCommands returns defaults and prefix matches", () => {
   assert.deepEqual(suggestExCommands(""), [
     "sum",
+    "sum list",
+    "sum table",
+    "sum doc",
     "sum_all",
     "date",
+    "q!",
   ]);
-  assert.deepEqual(suggestExCommands("su"), ["sum", "sum_all"]);
+  assert.deepEqual(suggestExCommands("su"), ["sum", "sum doc", "sum list", "sum table", "sum_all"]);
   assert.deepEqual(suggestExCommands(":dat"), ["date"]);
 });

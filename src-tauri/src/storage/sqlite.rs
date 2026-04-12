@@ -39,25 +39,12 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let now = now_iso();
 
-        let exists: bool = conn
-            .query_row("SELECT 1 FROM notes WHERE id = ?1", [id], |_| Ok(true))
-            .optional()
-            .map_err(|e| e.to_string())?
-            .unwrap_or(false);
-
-        if exists {
-            conn.execute(
-                "UPDATE notes SET body = ?1, updated_at = ?2 WHERE id = ?3",
-                rusqlite::params![body, now, id],
-            )
-            .map_err(|e| e.to_string())?;
-        } else {
-            conn.execute(
-                "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![id, body, now, now],
-            )
-            .map_err(|e| e.to_string())?;
-        }
+        conn.execute(
+            "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
+            rusqlite::params![id, body, now, now],
+        )
+        .map_err(|e| e.to_string())?;
 
         load_note(&conn, id)?.ok_or_else(|| "Note not found after save".to_string())
     }

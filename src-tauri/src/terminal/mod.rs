@@ -22,6 +22,7 @@ pub struct TerminalOptions {
 enum UiMode {
     Editor,
     Switcher,
+    CommandBar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,7 +65,9 @@ struct TerminalApp {
     dirty: bool,
     last_edit: Instant,
     status: String,
+    command_input: String,
     quit: bool,
+    force_quit: bool,
 }
 
 impl TerminalApp {
@@ -87,7 +90,9 @@ impl TerminalApp {
             dirty: false,
             last_edit: Instant::now(),
             status: "Ctrl+N new  Ctrl+P switch  Ctrl+S save  Ctrl+Q quit".to_string(),
+            command_input: String::new(),
             quit: false,
+            force_quit: false,
         })
     }
 
@@ -107,7 +112,9 @@ impl TerminalApp {
             }
         }
 
-        self.save(db)?;
+        if !self.force_quit {
+            self.save(db)?;
+        }
         Ok(())
     }
 
@@ -123,6 +130,7 @@ impl TerminalApp {
         match self.mode {
             UiMode::Editor => self.handle_editor_key(db, key),
             UiMode::Switcher => self.handle_switcher_key(db, key),
+            UiMode::CommandBar => self.handle_command_bar_key(key),
         }
     }
 
@@ -162,6 +170,12 @@ impl TerminalApp {
             Key::Delete => self.delete_forward(),
             Key::Enter => self.insert_newline(),
             Key::Tab => self.insert_text("  "),
+            Key::Char(':') => {
+                self.command_input.clear();
+                self.mode = UiMode::CommandBar;
+                self.status = ":".to_string();
+                return Ok(());
+            }
             Key::Char(ch) => self.insert_char(ch),
             Key::Esc | Key::Ctrl(_) => {}
         }
@@ -223,6 +237,42 @@ impl TerminalApp {
             | Key::PageUp
             | Key::PageDown
             | Key::Ctrl(_) => {}
+        }
+        Ok(())
+    }
+
+    fn handle_command_bar_key(&mut self, key: Key) -> Result<(), String> {
+        match key {
+            Key::Esc => {
+                self.mode = UiMode::Editor;
+                self.command_input.clear();
+                self.status = format!("editing {}", self.active_note.id);
+            }
+            Key::Enter => {
+                let cmd = self.command_input.trim().to_string();
+                self.mode = UiMode::Editor;
+                self.command_input.clear();
+                if cmd == "q!" {
+                    self.force_quit = true;
+                    self.quit = true;
+                } else {
+                    self.status = format!("unknown command: {cmd}");
+                }
+            }
+            Key::Backspace => {
+                self.command_input.pop();
+                if self.command_input.is_empty() {
+                    self.mode = UiMode::Editor;
+                    self.status = format!("editing {}", self.active_note.id);
+                } else {
+                    self.status = format!(":{}", self.command_input);
+                }
+            }
+            Key::Char(ch) => {
+                self.command_input.push(ch);
+                self.status = format!(":{}", self.command_input);
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -479,7 +529,7 @@ impl TerminalApp {
         }
 
         let status = match self.mode {
-            UiMode::Editor => &self.status,
+            UiMode::Editor | UiMode::CommandBar => &self.status,
             UiMode::Switcher => "Switcher: type to filter, Enter open, Esc close",
         };
         draw_row(&mut buf, rows, cols, status, true);
@@ -500,6 +550,10 @@ impl TerminalApp {
 
     fn cursor_position(&self, rows: usize, cols: usize) -> (usize, usize) {
         match self.mode {
+            UiMode::CommandBar => {
+                let col = (1 + 1 + self.command_input.chars().count()).min(cols.max(1));
+                (rows, col.max(1))
+            }
             UiMode::Editor => {
                 let row = EDITOR_TOP_ROW
                     + self
@@ -608,8 +662,9 @@ fn derive_title_from_lines(lines: &[String]) -> String {
         .find(|l| !l.trim().is_empty())
         .map(|s| s.trim())
         .unwrap_or("Untitled");
-    if line.len() > 70 {
-        format!("{}...", &line[..70])
+    if line.chars().count() > 70 {
+        let truncated: String = line.chars().take(70).collect();
+        format!("{truncated}...")
     } else {
         line.to_string()
     }
@@ -633,8 +688,9 @@ fn note_title(note: &Note) -> String {
         .find(|l| !l.trim().is_empty())
         .unwrap_or("Untitled")
         .trim();
-    if first.len() > 60 {
-        format!("{}...", &first[..60])
+    if first.chars().count() > 60 {
+        let truncated: String = first.chars().take(60).collect();
+        format!("{truncated}...")
     } else {
         first.to_string()
     }

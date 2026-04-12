@@ -137,6 +137,15 @@ async function handleHideWindow() {
   await win.hide();
 }
 
+async function handleForceQuit() {
+  const win = getCurrentWindow();
+  await win.hide();
+}
+
+export function forceQuit() {
+  void handleForceQuit();
+}
+
 async function handleInsertDate() {
   const cfg = await getThemeConfigOrDefault();
   const value = await openDatePicker(cfg.date_format);
@@ -243,8 +252,8 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl+Backspace — delete note
-    if (e.ctrlKey && e.key === "Backspace" && !isSwitcherOpen()) {
+    // Ctrl+Shift+Backspace — delete note
+    if (e.ctrlKey && e.shiftKey && e.key === "Backspace" && !isSwitcherOpen()) {
       e.preventDefault();
       runAction(handleDeleteNote);
       return;
@@ -361,7 +370,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum_all, :date");
+    showToast("Vim mode: :sum, :sum list/table/doc, :sum_all, :date");
   }
 
   state.on(() => {

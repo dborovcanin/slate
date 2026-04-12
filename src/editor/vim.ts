@@ -17,6 +17,8 @@ import { EditorView } from "@codemirror/view";
 import { computeBlockSpans } from "./vim-utils";
 import { executeExCommand } from "./ex-commands";
 import { openDatePicker } from "./date-picker";
+import { insertAtSelection } from "./editor-utils";
+import { forceQuit } from "../app";
 
 type VimMode = "insert" | "normal" | "visual" | "visual-line" | "visual-block";
 
@@ -156,7 +158,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     input.spellcheck = false;
     input.autocapitalize = "off";
     input.autocomplete = "off";
-    input.autocorrect = false;
+    input.setAttribute("autocorrect", "off");
 
     bar.appendChild(prefix);
     bar.appendChild(input);
@@ -177,7 +179,12 @@ export function vimModeExtension(options: VimOptions = {}) {
         closeCommandBar(view);
         if (!command) return;
 
-        if (command.toLowerCase().replace(/^:/, "") === "date") {
+        const normalized = command.toLowerCase().replace(/^:/, "");
+        if (normalized === "q!") {
+          forceQuit();
+          return;
+        }
+        if (normalized === "date") {
           void openDatePicker(options.dateFormat ?? "%Y-%m-%d")
             .then((value) => {
               if (!value) {
@@ -394,15 +401,6 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
     copyToClipboard(parts.join("\n"));
     return true;
-  };
-
-  const insertAtSelection = (view: EditorView, text: string) => {
-    const main = view.state.selection.main;
-    view.dispatch({
-      changes: { from: main.from, to: main.to, insert: text },
-      selection: { anchor: main.from + text.length },
-      scrollIntoView: true,
-    });
   };
 
   return EditorView.domEventHandlers({
