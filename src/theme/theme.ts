@@ -99,29 +99,6 @@ async function reloadThemeIfChanged() {
   return applyTheme(selection);
 }
 
-function scheduleReloadCheck() {
-  if (reloadInFlight) return;
-  reloadInFlight = true;
-  void reloadThemeIfChanged()
-    .catch((err) => {
-      console.error("Theme live reload failed:", err);
-    })
-    .finally(() => {
-      reloadInFlight = false;
-    });
-}
-
-export function startThemeLiveReload(intervalMs = LIVE_RELOAD_INTERVAL_MS) {
-  if (reloadTimer !== null) return;
-  reloadTimer = window.setInterval(scheduleReloadCheck, intervalMs);
-
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      scheduleReloadCheck();
-    }
-  });
-}
-
 export function getCurrentThemeSelection(): ThemeSelection | null {
   return currentSelection;
 }
