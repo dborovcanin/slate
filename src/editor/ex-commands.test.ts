@@ -2,7 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EditorState } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import { executeExCommand, parseNumbers, parseScope, resolveScopeRange } from "./ex-commands.ts";
+import {
+  executeExCommand,
+  parseNumbers,
+  parseScope,
+  resolveScopeRange,
+  resolveScopeRangeInView,
+} from "./ex-commands.ts";
 
 test("parseScope defaults to paragraph", () => {
   assert.equal(parseScope(undefined), "paragraph");
@@ -40,6 +46,30 @@ test("resolveScopeRange requires cursor on list/table for those scopes", () => {
 test("resolveScopeRange for doc spans entire file", () => {
   const lines = ["x", "y", "z"];
   assert.deepEqual(resolveScopeRange(lines, 2, "doc"), { startLine: 1, endLine: 3 });
+});
+
+test("resolveScopeRangeInView resolves around active cursor line", () => {
+  const stateList = EditorState.create({
+    doc: "- a\n- b\n\nx",
+    selection: { anchor: 3 },
+  });
+  const listView = { state: stateList } as unknown as EditorView;
+  assert.deepEqual(resolveScopeRangeInView(listView, "list"), { startLine: 1, endLine: 2 });
+
+  const statePara = EditorState.create({
+    doc: "a\nb\n\nc\nd",
+    selection: { anchor: 6 },
+  });
+  const paraView = { state: statePara } as unknown as EditorView;
+  assert.deepEqual(resolveScopeRangeInView(paraView, "paragraph"), { startLine: 4, endLine: 5 });
+
+  const stateTable = EditorState.create({
+    doc: "x\n| a | 1 |\n| b | 2 |\n\nz",
+    selection: { anchor: 7 },
+  });
+  const tableView = { state: stateTable } as unknown as EditorView;
+  assert.deepEqual(resolveScopeRangeInView(tableView, "table"), { startLine: 2, endLine: 3 });
+  assert.equal(resolveScopeRangeInView(tableView, "list"), null);
 });
 
 test("executeExCommand inserts sum value at cursor and moves cursor to inserted end", async () => {

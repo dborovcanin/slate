@@ -17,41 +17,54 @@ export interface CommandExecutionOptions {
   onExitCommand?: () => Promise<void> | void;
 }
 
+export interface CommandLineContext {
+  number: number;
+  from: number;
+  to: number;
+  column: number;
+  text: string;
+}
+
+interface CommandContext {
+  view: EditorView;
+  options: CommandExecutionOptions;
+  line: CommandLineContext;
+}
+
 interface CommandDefinition {
   value: string;
   aliases?: string[];
   description: string;
   modes: CommandMode[];
-  execute: (view: EditorView, options: CommandExecutionOptions) => Promise<string>;
+  execute: (ctx: CommandContext) => Promise<string>;
 }
 
 function normalizeCommand(input: string): string {
   return input.trim().replace(/^:/, "").toLowerCase();
 }
 
-async function runDateCommand(view: EditorView, options: CommandExecutionOptions): Promise<string> {
-  const value = await openDatePicker(options.dateFormat ?? "%Y-%m-%d");
+async function runDateCommand(ctx: CommandContext): Promise<string> {
+  const value = await openDatePicker(ctx.options.dateFormat ?? "%Y-%m-%d");
   if (!value) return "date cancelled";
-  insertAtSelection(view, value);
+  insertAtSelection(ctx.view, value);
   return `inserted ${value}`;
 }
 
 async function runSumCommand(
-  view: EditorView,
-  _options: CommandExecutionOptions,
+  ctx: CommandContext,
   command: string,
 ): Promise<string> {
-  return executeExCommand(view, command);
+  return executeExCommand(ctx.view, command);
 }
 
-async function runFormatCommand(view: EditorView): Promise<string> {
-  const changed = applyMarkdownFormat(view);
+async function runFormatCommand(ctx: CommandContext): Promise<string> {
+  const changed = applyMarkdownFormat(ctx.view);
   return changed ? "markdown formatted" : "already formatted";
 }
 
-async function runQuitCommand(_view: EditorView, options: CommandExecutionOptions): Promise<string> {
-  if (!options.onExitCommand) return "quit unavailable";
-  await options.onExitCommand();
+async function runQuitCommand(ctx: CommandContext): Promise<string> {
+  if (!ctx.options.onExitCommand) return "quit unavailable";
+  await ctx.options.onExitCommand();
   return "quit";
 }
 
@@ -60,26 +73,26 @@ const COMMAND_DEFINITIONS: CommandDefinition[] = [
     value: "sum",
     description: "sum paragraph (default scope)",
     modes: ["vim", "editor"],
-    execute: (view, options) => runSumCommand(view, options, "sum"),
+    execute: (ctx) => runSumCommand(ctx, "sum"),
   },
   {
     value: "sum list",
     description: "sum list at cursor",
     modes: ["vim", "editor"],
-    execute: (view, options) => runSumCommand(view, options, "sum list"),
+    execute: (ctx) => runSumCommand(ctx, "sum list"),
   },
   {
     value: "sum table",
     description: "sum markdown table at cursor",
     modes: ["vim", "editor"],
-    execute: (view, options) => runSumCommand(view, options, "sum table"),
+    execute: (ctx) => runSumCommand(ctx, "sum table"),
   },
   {
     value: "sum doc",
     description: "sum whole document",
     aliases: ["sum_all", "sum all"],
     modes: ["vim", "editor"],
-    execute: (view, options) => runSumCommand(view, options, "sum doc"),
+    execute: (ctx) => runSumCommand(ctx, "sum doc"),
   },
   {
     value: "date",
@@ -92,14 +105,14 @@ const COMMAND_DEFINITIONS: CommandDefinition[] = [
     description: "format markdown document",
     aliases: ["fmt"],
     modes: ["vim", "editor"],
-    execute: (view) => runFormatCommand(view),
+    execute: (ctx) => runFormatCommand(ctx),
   },
   {
     value: "q",
     description: "hide window",
     aliases: ["q!"],
     modes: ["vim"],
-    execute: runQuitCommand,
+    execute: (ctx) => runQuitCommand(ctx),
   },
 ];
 
@@ -161,5 +174,17 @@ export async function executeCommand(
     commandMatches(def, normalizedInput),
   );
   if (!command) return `unknown command: ${normalizedInput}`;
-  return command.execute(view, options);
+  const line = view.state.doc.lineAt(view.state.selection.main.head);
+  const context: CommandContext = {
+    view,
+    options,
+    line: {
+      number: line.number,
+      from: line.from,
+      to: line.to,
+      column: view.state.selection.main.head - line.from,
+      text: line.text,
+    },
+  };
+  return command.execute(context);
 }

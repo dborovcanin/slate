@@ -5,8 +5,10 @@ import type { EditorView, ViewUpdate } from "@codemirror/view";
 type Align = "left" | "center" | "right" | "none";
 
 const listRe = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
+const checklistRe = /^(\s*(?:[-*+]|\d+\.)\s+)\[( |x|X)\]\s+(.*)$/;
 const tableRowRe = /^\s*\|.*\|\s*$/;
 const delimiterCellRe = /^:?-{3,}:?$/;
+const checklistToggleSuffixRe = /\/x$/i;
 
 function repeat(char: string, count: number): string {
   return new Array(Math.max(0, count) + 1).join(char);
@@ -168,6 +170,53 @@ function wrapLink(view: EditorView): boolean {
   return true;
 }
 
+function stripChecklistToggleSuffix(content: string): string | null {
+  const trimmedEnd = content.replace(/\s+$/g, "");
+  if (!checklistToggleSuffixRe.test(trimmedEnd)) return null;
+  const slashPos = trimmedEnd.length - 2;
+  if (slashPos > 0 && !/\s/.test(trimmedEnd[slashPos - 1] ?? "")) return null;
+  return trimmedEnd.slice(0, slashPos).replace(/\s+$/g, "");
+}
+
+export function rewriteLineWithChecklistToggleSuffix(lineText: string): string | null {
+  const checklistMatch = lineText.match(checklistRe);
+  if (checklistMatch) {
+    const prefix = checklistMatch[1];
+    const marker = checklistMatch[2];
+    const content = checklistMatch[3];
+    const nextContent = stripChecklistToggleSuffix(content);
+    if (nextContent === null) return null;
+    const nextMarker = marker.toLowerCase() === "x" ? " " : "x";
+    return `${prefix}[${nextMarker}] ${nextContent}`;
+  }
+
+  const listMatch = lineText.match(listRe);
+  if (!listMatch) return null;
+  const indent = listMatch[1];
+  const marker = listMatch[2];
+  const content = listMatch[3];
+  const nextContent = stripChecklistToggleSuffix(content);
+  if (nextContent === null) return null;
+  return `${indent}${marker} [x] ${nextContent}`;
+}
+
+function maybeToggleChecklistSuffix(view: EditorView): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (main.head !== line.to) return false;
+
+  const replacement = rewriteLineWithChecklistToggleSuffix(line.text);
+  if (replacement === null || replacement === line.text) return false;
+
+  view.dispatch({
+    changes: { from: line.from, to: line.to, insert: replacement },
+    selection: { anchor: line.from + replacement.length },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
 function continueListOnEnter(view: EditorView): boolean {
   const main = view.state.selection.main;
   if (!main.empty) return false;
@@ -266,10 +315,13 @@ function tableAutoformatPlugin(enabled: boolean) {
     let applying = false;
     return {
       update(update: ViewUpdate) {
-        if (!enabled || applying || !update.docChanged) return;
+        if (applying || !update.docChanged) return;
         applying = true;
         try {
-          maybeFormatTable(update.view);
+          if (maybeToggleChecklistSuffix(update.view)) return;
+          if (enabled) {
+            maybeFormatTable(update.view);
+          }
         } finally {
           applying = false;
         }

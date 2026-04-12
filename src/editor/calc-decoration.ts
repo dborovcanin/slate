@@ -9,6 +9,8 @@ import {
 } from "@codemirror/view";
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
 import { evaluateLines } from "../api";
+import { planIncrementalCalc } from "./calc-incremental";
+import { findCalcSegment, lineForCalcEvaluation } from "./calc-line-utils";
 
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
@@ -75,6 +77,8 @@ const calcPlugin = ViewPlugin.define((view) => {
   let inFlight = false;
   let rerunRequested = false;
   let destroyed = false;
+  let prevEvalLines: string[] = [];
+  let prevResults = new Map<number, string>();
 
   function scheduleEval() {
     if (timer !== null) clearTimeout(timer);
@@ -95,12 +99,17 @@ const calcPlugin = ViewPlugin.define((view) => {
       try {
         const doc = view.state.doc;
         const snapshot = doc.toString();
-        const lines: string[] = [];
+        const evalLines: string[] = [];
         for (let i = 1; i <= doc.lines; i++) {
-          lines.push(doc.line(i).text);
+          evalLines.push(lineForCalcEvaluation(doc.line(i).text));
         }
 
-        const results = await evaluateLines(lines);
+        const plan = planIncrementalCalc(prevEvalLines, prevResults, evalLines);
+        const nextMap = new Map(plan.baseResults);
+        let evaluated: (string | null)[] = [];
+        if (plan.evalLines.length > 0) {
+          evaluated = await evaluateLines(plan.evalLines);
+        }
         if (destroyed) break;
 
         // If the document changed during async evaluation, drop stale results and rerun.
@@ -109,11 +118,12 @@ const calcPlugin = ViewPlugin.define((view) => {
           continue;
         }
 
-        const map = new Map<number, string>();
-        results.forEach((r, i) => {
-          if (r !== null) map.set(i, r);
+        evaluated.forEach((r, i) => {
+          if (r !== null) nextMap.set(plan.evalFrom + i, r);
         });
-        view.dispatch({ effects: setCalcResults.of(map) });
+        prevEvalLines = evalLines;
+        prevResults = nextMap;
+        view.dispatch({ effects: setCalcResults.of(nextMap) });
       } catch (e) {
         console.error("Calc evaluation failed:", e);
       }
@@ -151,6 +161,22 @@ const calcTabKeymap = keymap.of([
 
       // check if line already has " = <result>" at the end
       const lineText = line.text;
+      const segment = findCalcSegment(lineText);
+      if (segment) {
+        const replaceFrom = line.from + segment.fromCol;
+        const replaceTo = line.from + segment.toCol;
+        const nextResults = new Map(results);
+        nextResults.delete(lineIndex);
+
+        view.dispatch({
+          changes: { from: replaceFrom, to: replaceTo, insert: result },
+          selection: { anchor: replaceFrom + result.length },
+          effects: setCalcResults.of(nextResults),
+          scrollIntoView: true,
+        });
+        return true;
+      }
+
       const suffix = ` = ${result}`;
       if (lineText.endsWith(suffix)) return false;
 

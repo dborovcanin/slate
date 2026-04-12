@@ -189,6 +189,36 @@
   font-size: 0.95em;
 }
 
+.cm-editor .cm-line.md-checklist-item {
+  color: var(--fg);
+}
+
+.md-checklist-box {
+  display: inline-block;
+  min-width: 2.2ch;
+  text-align: center;
+  border-radius: 4px;
+  font-weight: 700;
+  color: var(--accent);
+  font-size: 0.95em;
+  line-height: 1;
+  vertical-align: text-bottom;
+}
+
+.md-checklist-box-unchecked {
+  color: var(--accent);
+}
+
+.md-checklist-box-checked {
+  color: var(--accent);
+}
+
+.md-checklist-content-done {
+  color: var(--fg-dim);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
 .cm-editor .cm-gutters {
   display: none;
 }

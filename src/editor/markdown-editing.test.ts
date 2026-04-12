@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatTableLines } from "./markdown-editing.ts";
+import { formatTableLines, rewriteLineWithChecklistToggleSuffix } from "./markdown-editing.ts";
 
 test("formatTableLines aligns columns and preserves delimiter alignment markers", () => {
   const input = ["| col | value |", "| :--- | ---: |", "| x | 10 |"];
@@ -22,4 +22,25 @@ test("formatTableLines fills missing cells in shorter rows", () => {
 
 test("formatTableLines returns empty input unchanged", () => {
   assert.deepEqual(formatTableLines([]), []);
+});
+
+test("rewriteLineWithChecklistToggleSuffix toggles checklist checked state", () => {
+  assert.equal(
+    rewriteLineWithChecklistToggleSuffix("- [ ] ship docs /x"),
+    "- [x] ship docs",
+  );
+  assert.equal(
+    rewriteLineWithChecklistToggleSuffix("- [x] ship docs /x"),
+    "- [ ] ship docs",
+  );
+});
+
+test("rewriteLineWithChecklistToggleSuffix converts list items to checked checklist", () => {
+  assert.equal(rewriteLineWithChecklistToggleSuffix("- ship docs /x"), "- [x] ship docs");
+  assert.equal(rewriteLineWithChecklistToggleSuffix("1. ship docs /x"), "1. [x] ship docs");
+});
+
+test("rewriteLineWithChecklistToggleSuffix ignores non-suffix /x usage", () => {
+  assert.equal(rewriteLineWithChecklistToggleSuffix("- path/x"), null);
+  assert.equal(rewriteLineWithChecklistToggleSuffix("- item /x now"), null);
 });

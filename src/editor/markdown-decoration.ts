@@ -1,5 +1,5 @@
 import { RangeSetBuilder } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 
 type InlineTokenType =
@@ -28,6 +28,10 @@ export interface MarkdownLineInfo {
   headingMarkerEnd: number | null;
   quoteMarkerEnd: number | null;
   listMarkerEnd: number | null;
+  checklistMarkerStart: number | null;
+  checklistMarkerEnd: number | null;
+  checklistContentStart: number | null;
+  checklistChecked: boolean;
   isHorizontalRule: boolean;
   isCodeFence: boolean;
 }
@@ -35,6 +39,7 @@ export interface MarkdownLineInfo {
 const headingRe = /^(#{1,6})\s+/;
 const quoteRe = /^(\s*>+)\s+/;
 const listRe = /^(\s*)([-*+]|\d+\.)\s+/;
+const checklistRe = /^(\s*(?:[-*+]|\d+\.)\s+)(\[(?: |x|X)\])(\s+)/;
 const hrRe = /^\s*(([-*_])\s*){3,}$/;
 const fenceRe = /^\s*```/;
 
@@ -51,6 +56,36 @@ const decListToken = Decoration.mark({ class: "md-token md-token-list" });
 const decRuleToken = Decoration.mark({ class: "md-token md-token-rule" });
 const decFenceToken = Decoration.mark({ class: "md-token md-token-code-fence" });
 const decHeadingContent = Decoration.mark({ class: "md-heading-content" });
+class ChecklistBoxWidget extends WidgetType {
+  private readonly checked: boolean;
+
+  constructor(checked: boolean) {
+    super();
+    this.checked = checked;
+  }
+
+  eq(other: ChecklistBoxWidget): boolean {
+    return this.checked === other.checked;
+  }
+
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = this.checked
+      ? "md-checklist-box md-checklist-box-checked"
+      : "md-checklist-box md-checklist-box-unchecked";
+    span.textContent = this.checked ? "☒" : "☐";
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  }
+}
+
+const decChecklistBoxUnchecked = Decoration.replace({
+  widget: new ChecklistBoxWidget(false),
+});
+const decChecklistBoxChecked = Decoration.replace({
+  widget: new ChecklistBoxWidget(true),
+});
+const decChecklistDoneContent = Decoration.mark({ class: "md-checklist-content-done" });
 const decStrong = Decoration.mark({ class: "md-strong" });
 const decEmphasis = Decoration.mark({ class: "md-emphasis" });
 const decStrike = Decoration.mark({ class: "md-strike" });
@@ -72,6 +107,7 @@ const decHeadingLine = [
 ];
 const decQuoteLine = lineClass("md-line md-quote");
 const decListLine = lineClass("md-line md-list-item");
+const decChecklistLine = lineClass("md-line md-checklist-item");
 const decRuleLine = lineClass("md-line md-hr");
 const decCodeFenceLine = lineClass("md-line md-code-fence");
 const decCodeBlockLine = lineClass("md-line md-code-block-line");
@@ -96,11 +132,26 @@ export function classifyMarkdownLine(text: string): MarkdownLineInfo {
   const headingMatch = text.match(headingRe);
   const quoteMatch = text.match(quoteRe);
   const listMatch = text.match(listRe);
+  const checklistMatch = text.match(checklistRe);
+  const checklistPrefix = checklistMatch?.[1] ?? "";
+  const checklistBox = checklistMatch?.[2] ?? "";
+  const checklistSpacer = checklistMatch?.[3] ?? "";
+  const checklistMarkerStart = checklistMatch ? checklistPrefix.length : null;
+  const checklistMarkerEnd = checklistMatch
+    ? checklistPrefix.length + checklistBox.length
+    : null;
+  const checklistContentStart = checklistMatch
+    ? checklistPrefix.length + checklistBox.length + checklistSpacer.length
+    : null;
   return {
     headingLevel: headingMatch ? headingMatch[1].length : null,
     headingMarkerEnd: headingMatch ? headingMatch[0].length : null,
     quoteMarkerEnd: quoteMatch ? quoteMatch[0].length : null,
     listMarkerEnd: listMatch ? listMatch[0].length : null,
+    checklistMarkerStart,
+    checklistMarkerEnd,
+    checklistContentStart,
+    checklistChecked: checklistMatch ? checklistBox.toLowerCase() === "[x]" : false,
     isHorizontalRule: hrRe.test(text),
     isCodeFence: fenceRe.test(text),
   };
@@ -256,6 +307,23 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
     if (info.listMarkerEnd) {
       builder.add(line.from, line.from, decListLine);
       builder.add(line.from, line.from + info.listMarkerEnd, decListToken);
+    }
+
+    if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
+      builder.add(line.from, line.from, decChecklistLine);
+      const markerFrom = line.from + info.checklistMarkerStart;
+      const markerTo = line.from + info.checklistMarkerEnd;
+      builder.add(
+        markerFrom,
+        markerTo,
+        info.checklistChecked ? decChecklistBoxChecked : decChecklistBoxUnchecked,
+      );
+      if (info.checklistChecked && info.checklistContentStart !== null) {
+        const contentFrom = line.from + info.checklistContentStart;
+        if (contentFrom < line.to) {
+          builder.add(contentFrom, line.to, decChecklistDoneContent);
+        }
+      }
     }
 
     if (info.isHorizontalRule) {

@@ -49,12 +49,14 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 - Added markdown-style rich editing decorations:
   - headings, quotes, lists, horizontal rules
   - inline bold/italic/strikethrough/code/link highlighting
+  - checklist rendering polish for `- [ ]` and `- [x]` lines
   - fenced code block styling
   - implemented as lightweight CodeMirror decorations in `src/editor/markdown-decoration.ts`
 - Added markdown editing helpers:
   - configurable autoformat flag: `[editor] markdown_autoformat` (default `true`)
   - keymaps: `Ctrl/Cmd+B`, `Ctrl/Cmd+I`, `Ctrl/Cmd+Shift+X`, `Ctrl/Cmd+K`
   - Enter list continuation behavior
+  - ` /x` suffix toggles checklist state on the active line (`- item /x` -> `- [x] item`, `- [x] item /x` -> `- [ ] item`)
   - table autoformat/alignment on edit in markdown table blocks
 - Added theme tests:
   - Rust parser/normalization tests in config module
@@ -75,6 +77,16 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - Active edited note moves to top in local state
 - Fixed calc annotation race condition (stale async results are dropped and re-evaluated)
 - Reduced calc false positives by ignoring date-like lines in calc detection (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`)
+- Extended calc inline apply for markdown structures:
+  - table cell expressions (`| ... | 4+2 |`) now evaluate and `Tab` replaces the cell value in place
+  - ordered/unordered/checklist item expressions now evaluate and `Tab` replaces item expression in place
+- Improved calc performance:
+  - frontend calc decoration now uses incremental diff planning and evaluates only changed lines
+  - unchanged prefix/suffix results are reused and remapped across insert/delete edits
+  - backend calc evaluation is line-local (fresh fend context per line), matching inline-per-line behavior
+- Command/rule context polish:
+  - command-engine now builds per-command active-line context (`line number/from/to/column/text`) for current and future commands
+  - sum scope resolution now runs against `EditorView` line context instead of pre-building whole-document line arrays (except explicit `sum doc`)
 - Added IPC socket parent directory creation before bind (more robust fallback path behavior)
 - Fixed a critical SQLite deadlock in `save_note` caused by nested mutex locking
 

@@ -1,8 +1,4 @@
-use std::sync::Mutex;
-
-pub struct CalcEngine {
-    context: Mutex<fend_core::Context>,
-}
+pub struct CalcEngine;
 
 struct NoInterrupt;
 impl fend_core::Interrupt for NoInterrupt {
@@ -13,15 +9,7 @@ impl fend_core::Interrupt for NoInterrupt {
 
 impl CalcEngine {
     pub fn new() -> Self {
-        let mut ctx = fend_core::Context::new();
-        ctx.set_random_u32_fn(|| {
-            use std::collections::hash_map::RandomState;
-            use std::hash::{BuildHasher, Hasher};
-            RandomState::new().build_hasher().finish() as u32
-        });
-        Self {
-            context: Mutex::new(ctx),
-        }
+        Self
     }
 
     pub fn evaluate(&self, input: &str) -> Option<String> {
@@ -34,7 +22,7 @@ impl CalcEngine {
         }
         // strip trailing " = <result>" so re-evaluation works on applied lines
         let (expr, applied_result) = split_applied_result(trimmed);
-        let mut ctx = self.context.lock().unwrap();
+        let mut ctx = new_context();
         match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NoInterrupt) {
             Ok(result) => {
                 let text = result.get_main_result().to_string();
@@ -56,6 +44,16 @@ impl CalcEngine {
     pub fn evaluate_lines(&self, lines: &[String]) -> Vec<Option<String>> {
         lines.iter().map(|line| self.evaluate(line)).collect()
     }
+}
+
+fn new_context() -> fend_core::Context {
+    let mut ctx = fend_core::Context::new();
+    ctx.set_random_u32_fn(|| {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        RandomState::new().build_hasher().finish() as u32
+    });
+    ctx
 }
 
 fn has_calc_signal(s: &str) -> bool {
@@ -200,5 +198,13 @@ mod tests {
         assert!(looks_like_date("07/03/2026"));
         assert!(!looks_like_date("2026-07-03 + 2"));
         assert!(!looks_like_date("2 + 2"));
+    }
+
+    #[test]
+    fn eval_is_line_local_without_cross_line_state() {
+        let engine = CalcEngine::new();
+        // Setting a variable in one line should not impact another line evaluation call.
+        let _ = engine.evaluate("x = 10");
+        assert_eq!(engine.evaluate("x + 2"), None);
     }
 }

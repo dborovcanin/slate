@@ -16,9 +16,11 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
   - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
   - Built-in commands: `sum`, `sum list`, `sum table`, `sum doc`, `date`, `format`
 - Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
+- Checklist markdown (`- [ ]`, `- [x]`) gets dedicated visual styling (`☐` / crossed `☒` + done-item strike style)
 - Markdown editing helpers:
   - `Ctrl/Cmd+B` bold, `Ctrl/Cmd+I` italic, `Ctrl/Cmd+Shift+X` strikethrough, `Ctrl/Cmd+K` link
   - List continuation on Enter
+  - End a list/checklist line with ` /x` to toggle checkbox state (`- item /x` -> `- [x] item`, `- [x] item /x` -> `- [ ] item`)
   - Markdown table autoformat/alignment while editing
   - Controlled by `[editor] markdown_autoformat` (defaults to `true`)
 
@@ -51,6 +53,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
 - Press Tab to apply the result inline
+- Uses incremental line-based evaluation (only changed lines are recalculated after edits)
+- In markdown tables, lists, and checklists, calc applies to the expression part and `Tab` replaces that expression in place
 - Supports arithmetic, unit conversions (`50 kg to lbs`), percentages, and everything [fend](https://github.com/printfn/fend) can evaluate
 - Non-math lines are ignored — no noise
 - Date-like lines (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`) are ignored to avoid false numeric ghost suggestions
