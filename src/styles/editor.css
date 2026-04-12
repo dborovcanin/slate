@@ -68,6 +68,98 @@
   background: var(--active-line-bg);
 }
 
+.cm-editor .cm-line.md-heading-1 {
+  font-size: 1.75em;
+  font-weight: 750;
+  line-height: 1.3;
+}
+
+.cm-editor .cm-line.md-heading-2 {
+  font-size: 1.5em;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.cm-editor .cm-line.md-heading-3 {
+  font-size: 1.3em;
+  font-weight: 680;
+}
+
+.cm-editor .cm-line.md-heading-4 {
+  font-size: 1.15em;
+  font-weight: 650;
+}
+
+.cm-editor .cm-line.md-heading-5 {
+  font-size: 1.05em;
+  font-weight: 640;
+}
+
+.cm-editor .cm-line.md-heading-6 {
+  font-size: 1em;
+  font-weight: 620;
+  letter-spacing: 0.03em;
+}
+
+.cm-editor .cm-line.md-quote {
+  border-left: 2px solid var(--border);
+  padding-left: 10px;
+  color: var(--fg-dim);
+}
+
+.cm-editor .cm-line.md-code-block-line {
+  font-family: var(--font-mono);
+  background: rgba(127, 132, 156, 0.08);
+}
+
+.cm-editor .cm-line.md-code-fence {
+  color: var(--fg-dim);
+}
+
+.cm-editor .cm-line.md-hr {
+  letter-spacing: 0.12em;
+}
+
+.md-token {
+  opacity: 0.5;
+}
+
+.md-heading-content {
+  color: var(--fg);
+}
+
+.md-strong {
+  font-weight: 700;
+}
+
+.md-emphasis {
+  font-style: italic;
+}
+
+.md-strike {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.md-inline-code-content {
+  font-family: var(--font-mono);
+  background: var(--bg-overlay);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.md-link-text {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md-link-url {
+  color: var(--fg-dim);
+  font-size: 0.95em;
+}
+
 .cm-editor .cm-gutters {
   display: none;
 }

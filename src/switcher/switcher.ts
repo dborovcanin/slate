@@ -21,6 +21,7 @@ export function openSwitcher(selectCallback: (id: string) => void) {
   }
 
   overlay!.hidden = false;
+  overlay!.setAttribute("aria-hidden", "false");
   input!.value = "";
   currentQuery = "";
   selectedIndex = 0;
@@ -29,7 +30,9 @@ export function openSwitcher(selectCallback: (id: string) => void) {
 }
 
 export function closeSwitcher() {
-  if (overlay) overlay.hidden = true;
+  if (!overlay) return;
+  overlay.hidden = true;
+  overlay.setAttribute("aria-hidden", "true");
 }
 
 export function refreshSwitcher() {
@@ -41,6 +44,7 @@ export function refreshSwitcher() {
 function createDOM() {
   overlay = document.createElement("div");
   overlay.className = "switcher-overlay";
+  overlay.setAttribute("aria-hidden", "true");
   overlay.addEventListener("mousedown", (e) => {
     if (e.target === overlay) closeSwitcher();
   });

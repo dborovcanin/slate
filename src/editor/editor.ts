@@ -10,6 +10,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
+import { markdownRichTextExtensions } from "./markdown-decoration";
 import { vimModeExtension } from "./vim";
 
 let view: EditorView | null = null;
@@ -56,6 +57,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     drawSelection(),
     highlightActiveLine(),
     placeholder("Start typing..."),
+    markdownRichTextExtensions(),
     calcExtensions(),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,

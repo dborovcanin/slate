@@ -32,13 +32,19 @@ impl CalcEngine {
         if !has_calc_signal(trimmed) {
             return None;
         }
-        // strip trailing " =" or " = <result>" so re-evaluation works on applied lines
-        let expr = strip_applied_result(trimmed);
+        // strip trailing " = <result>" so re-evaluation works on applied lines
+        let (expr, applied_result) = split_applied_result(trimmed);
         let mut ctx = self.context.lock().unwrap();
         match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NoInterrupt) {
             Ok(result) => {
                 let text = result.get_main_result().to_string();
                 if text == expr {
+                    return None;
+                }
+                if applied_result
+                    .map(|applied| applied.trim() == text)
+                    .unwrap_or(false)
+                {
                     return None;
                 }
                 Some(text)
@@ -62,15 +68,19 @@ fn has_calc_signal(s: &str) -> bool {
         || s.contains(" in ")
 }
 
-fn strip_applied_result(s: &str) -> &str {
+fn split_applied_result(s: &str) -> (&str, Option<&str>) {
     // if line ends with " = <something>", evaluate just the left side
     if let Some(idx) = s.rfind(" = ") {
         let left = s[..idx].trim();
         if !left.is_empty() {
-            return left;
+            let right = s[idx + 3..].trim();
+            if !right.is_empty() {
+                return (left, Some(right));
+            }
+            return (left, None);
         }
     }
-    s
+    (s, None)
 }
 
 #[cfg(test)]
@@ -93,8 +103,9 @@ mod tests {
     #[test]
     fn reevaluates_lines_with_applied_result() {
         let engine = CalcEngine::new();
-        assert_eq!(engine.evaluate("2 + 2 = 4"), Some("4".to_string()));
-        assert_eq!(strip_applied_result("2 + 2 = 4"), "2 + 2");
+        assert_eq!(engine.evaluate("2 + 2 = 4"), None);
+        assert_eq!(engine.evaluate("2 + 2 = 5"), Some("4".to_string()));
+        assert_eq!(split_applied_result("2 + 2 = 4"), ("2 + 2", Some("4")));
     }
 
     #[test]

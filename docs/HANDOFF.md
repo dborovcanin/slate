@@ -26,6 +26,11 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - current subset: insert/normal modes, hjkl, w/b, 0/$, gg/G, x, dd, u, Ctrl+r, o/O, i/a/I/A
   - count prefixes supported for movement/actions (examples: `4k`, `2j`, `3w`, `5x`, `3dd`)
   - cursor style differs by mode (insert bar cursor vs normal block cursor)
+- Added markdown-style rich editing decorations:
+  - headings, quotes, lists, horizontal rules
+  - inline bold/italic/strikethrough/code/link highlighting
+  - fenced code block styling
+  - implemented as lightweight CodeMirror decorations in `src/editor/markdown-decoration.ts`
 - Added theme tests:
   - Rust parser/normalization tests in config module
   - TypeScript preset inventory tests

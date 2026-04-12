@@ -157,9 +157,15 @@ const calcTabKeymap = keymap.of([
       // if line has a previous " = ...", replace it
       const eqIdx = lineText.lastIndexOf(" = ");
       const insertFrom = eqIdx >= 0 ? line.from + eqIdx : line.to;
+      const nextResults = new Map(results);
+      nextResults.delete(lineIndex);
+      const cursorAt = insertFrom + suffix.length;
 
       view.dispatch({
         changes: { from: insertFrom, to: line.to, insert: suffix },
+        selection: { anchor: cursorAt },
+        effects: setCalcResults.of(nextResults),
+        scrollIntoView: true,
       });
       return true;
     },

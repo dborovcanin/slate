@@ -11,6 +11,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Autosave with 500ms debounce + flush on blur and close
 - Restores last-open note on startup
 - Dark theme with Catppuccin-inspired colors
+- Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
 
 **Themes and backgrounds**
 - 12 built-in color schemes: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`

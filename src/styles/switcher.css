@@ -8,6 +8,10 @@
   z-index: 100;
 }
 
+.switcher-overlay[hidden] {
+  display: none !important;
+}
+
 .switcher-panel {
   background: var(--bg-surface);
   border: 1px solid var(--border);
