@@ -349,12 +349,48 @@ export function runDocChangeRules(
   return listAutoformatRule(ctx);
 }
 
+const tableLineRe = /^\s*\|.*\|\s*$/;
+const tableSeparatorRe = /^\s*\|[\s:|-]+\|\s*$/;
+
+function tableContinuationRule(ctx: ResolvedContext): EditOperation | null {
+  const selection = ctx.selection();
+  if (!selection.empty) return null;
+
+  const line = ctx.currentLine();
+  if (!tableLineRe.test(line.text)) return null;
+  if (selection.head !== line.to) return null;
+
+  // Count columns by splitting on |
+  const cells = line.text.split("|");
+  // First and last are outside the pipes, inner ones are cells
+  const columnCount = Math.max(cells.length - 2, 1);
+
+  // Check if this is a separator row — skip continuation
+  if (tableSeparatorRe.test(line.text)) return null;
+
+  // Check if the row is "empty" (only pipes and whitespace) — exit table
+  const innerContent = cells.slice(1, -1).join("").trim();
+  if (innerContent.length === 0) {
+    // Remove the empty row and place cursor on next line
+    return replaceRange(line.from, line.to, "", { anchor: line.from });
+  }
+
+  // Build an empty row with matching column count
+  const emptyRow = "|" + " |".repeat(columnCount);
+  const insert = `\n${emptyRow}`;
+  // Place cursor after first pipe + space in new row
+  const anchor = selection.head + 1 + 2; // \n + | + space
+  return replaceRange(selection.head, selection.head, insert, { anchor });
+}
+
 export function runEnterRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
 ): EditOperation | null {
   if (!(options.markdownAutoformat ?? true)) return null;
   const ctx = new ResolvedContext(snapshot);
+  const tableOp = tableContinuationRule(ctx);
+  if (tableOp) return tableOp;
   return listContinuationRule(ctx);
 }
 

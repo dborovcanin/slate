@@ -377,6 +377,71 @@ pub fn run_enter_rules(
         return None;
     }
 
+    // Try table continuation first
+    if let Some(op) = table_continuation_rule(&line) {
+        return Some(op);
+    }
+
+    // Then list continuation
+    list_continuation_rule(&ctx, &line, &selection)
+}
+
+fn is_table_line(text: &str) -> bool {
+    let trimmed = text.trim();
+    trimmed.starts_with('|') && trimmed.ends_with('|')
+}
+
+fn is_table_separator(text: &str) -> bool {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return false;
+    }
+    // A separator contains only |, -, :, and whitespace
+    trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c == ' ')
+}
+
+fn table_continuation_rule(line: &crate::editor_core::types::LineContext) -> Option<EditOperation> {
+    if !is_table_line(&line.text) {
+        return None;
+    }
+    if is_table_separator(&line.text) {
+        return None;
+    }
+
+    let column_count = line.text.matches('|').count().saturating_sub(1).max(1);
+
+    // Check if the row is empty (only pipes and whitespace)
+    let inner: String = line.text.split('|')
+        .skip(1)
+        .take(column_count)
+        .collect::<Vec<_>>()
+        .join("");
+    if inner.trim().is_empty() {
+        return Some(replace_range(
+            line.from,
+            line.to,
+            "",
+            Some(OperationSelection { anchor: line.from, head: None }),
+        ));
+    }
+
+    // Build empty row with matching column count
+    let empty_row = format!("|{}", " |".repeat(column_count));
+    let insert = format!("\n{}", empty_row);
+    let anchor = line.to + 1 + 2; // \n + | + space
+    Some(replace_range(
+        line.to,
+        line.to,
+        insert,
+        Some(OperationSelection { anchor, head: None }),
+    ))
+}
+
+fn list_continuation_rule(
+    _ctx: &ResolvedContext,
+    line: &crate::editor_core::types::LineContext,
+    _selection: &crate::editor_core::types::SelectionContext,
+) -> Option<EditOperation> {
     let parts = parse_list_line_parts(&line.text)?;
 
     if parts.content.trim().is_empty() {
