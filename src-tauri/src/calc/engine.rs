@@ -53,9 +53,12 @@ impl CalcEngine {
 }
 
 fn has_calc_signal(s: &str) -> bool {
-    s.bytes()
-        .any(|b| matches!(b, b'+' | b'-' | b'*' | b'/' | b'^' | b'%' | b'(' | b'0'..=b'9'))
-        || s.contains(" to ")
+    s.bytes().any(|b| {
+        matches!(
+            b,
+            b'+' | b'-' | b'*' | b'/' | b'^' | b'%' | b'(' | b'0'..=b'9'
+        )
+    }) || s.contains(" to ")
         || s.contains(" in ")
 }
 
@@ -68,4 +71,44 @@ fn strip_applied_result(s: &str) -> &str {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluates_basic_arithmetic() {
+        let engine = CalcEngine::new();
+        assert_eq!(engine.evaluate("200 * 1.19"), Some("238".to_string()));
+    }
+
+    #[test]
+    fn ignores_non_expression_lines() {
+        let engine = CalcEngine::new();
+        assert_eq!(engine.evaluate("todo buy milk"), None);
+        assert_eq!(engine.evaluate(""), None);
+    }
+
+    #[test]
+    fn reevaluates_lines_with_applied_result() {
+        let engine = CalcEngine::new();
+        assert_eq!(engine.evaluate("2 + 2 = 4"), Some("4".to_string()));
+        assert_eq!(strip_applied_result("2 + 2 = 4"), "2 + 2");
+    }
+
+    #[test]
+    fn evaluates_multiple_lines() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "2+2".to_string(),
+            "not calc".to_string(),
+            "10/2".to_string(),
+        ];
+        let results = engine.evaluate_lines(&lines);
+        assert_eq!(
+            results,
+            vec![Some("4".to_string()), None, Some("5".to_string())]
+        );
+    }
 }

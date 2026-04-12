@@ -11,7 +11,12 @@ import {
   focusEditor,
   flushSave,
 } from "./editor/editor";
-import { openSwitcher, closeSwitcher, isSwitcherOpen } from "./switcher/switcher";
+import {
+  openSwitcher,
+  closeSwitcher,
+  isSwitcherOpen,
+  refreshSwitcher,
+} from "./switcher/switcher";
 import { state } from "./state";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -39,6 +44,10 @@ async function handleCreateNote() {
 async function handleDeleteNote() {
   const active = state.activeNote;
   if (!active) return;
+  const activeTitle = state.notes.find((n) => n.id === active.id)?.title ?? "Untitled";
+  if (!window.confirm(`Delete "${activeTitle}"? This cannot be undone.`)) {
+    return;
+  }
   const adjacentId = state.getAdjacentNoteId(1) ?? state.getAdjacentNoteId(-1);
   await flushSave();
   await deleteNote(active.id);
@@ -84,6 +93,7 @@ async function handleExportClipboard() {
     showToast("Copied to clipboard");
   } catch (e) {
     console.error("Clipboard write failed:", e);
+    showToast("Clipboard export failed");
   }
 }
 
@@ -95,6 +105,7 @@ async function handleExportFileResult(path: string | null) {
     showToast("Exported to " + path.split("/").pop());
   } catch (e) {
     console.error("File export failed:", e);
+    showToast("File export failed");
   }
 }
 
@@ -121,10 +132,21 @@ async function handleHideWindow() {
   await win.hide();
 }
 
+function runAction(action: () => Promise<void> | void) {
+  void Promise.resolve()
+    .then(action)
+    .catch((e) => {
+      console.error("Action failed:", e);
+      showToast("Action failed");
+    });
+}
+
 function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
+    const key = e.key.toLowerCase();
+
     // Ctrl+P — toggle switcher
-    if (e.ctrlKey && !e.shiftKey && e.key === "p") {
+    if (e.ctrlKey && !e.shiftKey && key === "p") {
       e.preventDefault();
       if (isSwitcherOpen()) {
         closeSwitcher();
@@ -136,51 +158,51 @@ function setupKeyboardShortcuts() {
     }
 
     // Ctrl+N — new note
-    if (e.ctrlKey && !e.shiftKey && e.key === "n") {
+    if (e.ctrlKey && !e.shiftKey && key === "n") {
       e.preventDefault();
-      handleCreateNote();
+      runAction(handleCreateNote);
       return;
     }
 
     // Ctrl+Shift+E — export to file
-    if (e.ctrlKey && e.shiftKey && e.key === "E") {
+    if (e.ctrlKey && e.shiftKey && key === "e") {
       e.preventDefault();
-      handleExportFile();
+      runAction(handleExportFile);
       return;
     }
 
     // Ctrl+E — export to clipboard
-    if (e.ctrlKey && !e.shiftKey && e.key === "e") {
+    if (e.ctrlKey && !e.shiftKey && key === "e") {
       e.preventDefault();
-      handleExportClipboard();
+      runAction(handleExportClipboard);
       return;
     }
 
     // Ctrl+W — hide window
-    if (e.ctrlKey && !e.shiftKey && e.key === "w") {
+    if (e.ctrlKey && !e.shiftKey && key === "w") {
       e.preventDefault();
-      handleHideWindow();
+      runAction(handleHideWindow);
       return;
     }
 
     // Ctrl+Backspace — delete note
     if (e.ctrlKey && e.key === "Backspace" && !isSwitcherOpen()) {
       e.preventDefault();
-      handleDeleteNote();
+      runAction(handleDeleteNote);
       return;
     }
 
     // Ctrl+↑ — previous note
     if (e.ctrlKey && e.key === "ArrowUp" && !isSwitcherOpen()) {
       e.preventDefault();
-      handlePrevNote();
+      runAction(handlePrevNote);
       return;
     }
 
     // Ctrl+↓ — next note
     if (e.ctrlKey && e.key === "ArrowDown" && !isSwitcherOpen()) {
       e.preventDefault();
-      handleNextNote();
+      runAction(handleNextNote);
       return;
     }
 
@@ -273,5 +295,8 @@ export async function initApp() {
   mountEditor(editorEl);
   setupKeyboardShortcuts();
 
-  state.on(() => updateStatusBar());
+  state.on(() => {
+    updateStatusBar();
+    refreshSwitcher();
+  });
 }

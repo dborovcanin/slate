@@ -6,12 +6,12 @@ mod storage;
 use calc::engine::CalcEngine;
 use directories::ProjectDirs;
 use ipc::server;
-use storage::Db;
 use std::fs;
+use storage::Db;
 
 pub fn run() {
-    let project_dirs = ProjectDirs::from("io", "github", "note")
-        .expect("Failed to determine app data directory");
+    let project_dirs =
+        ProjectDirs::from("io", "github", "note").expect("Failed to determine app data directory");
     let data_dir = project_dirs.data_dir();
     fs::create_dir_all(data_dir).expect("Failed to create data directory");
 

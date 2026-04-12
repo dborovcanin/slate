@@ -5,6 +5,7 @@ let overlay: HTMLElement | null = null;
 let input: HTMLInputElement | null = null;
 let listEl: HTMLElement | null = null;
 let selectedIndex = 0;
+let currentQuery = "";
 let filteredItems: { item: NoteEntry; positions: number[] }[] = [];
 let onSelect: ((id: string) => void) | null = null;
 
@@ -21,13 +22,20 @@ export function openSwitcher(selectCallback: (id: string) => void) {
 
   overlay!.hidden = false;
   input!.value = "";
+  currentQuery = "";
   selectedIndex = 0;
-  updateList("");
+  updateList(currentQuery);
   input!.focus();
 }
 
 export function closeSwitcher() {
   if (overlay) overlay.hidden = true;
+}
+
+export function refreshSwitcher() {
+  if (!isSwitcherOpen()) return;
+  currentQuery = input?.value ?? currentQuery;
+  updateList(currentQuery);
 }
 
 function createDOM() {
@@ -46,7 +54,8 @@ function createDOM() {
   input.placeholder = "Search notes...";
   input.addEventListener("input", () => {
     selectedIndex = 0;
-    updateList(input!.value);
+    currentQuery = input!.value;
+    updateList(currentQuery);
   });
   input.addEventListener("keydown", handleKeydown);
 
@@ -63,11 +72,13 @@ function handleKeydown(e: KeyboardEvent) {
   switch (e.key) {
     case "ArrowDown":
       e.preventDefault();
+      if (filteredItems.length === 0) break;
       selectedIndex = Math.min(selectedIndex + 1, filteredItems.length - 1);
       renderList();
       break;
     case "ArrowUp":
       e.preventDefault();
+      if (filteredItems.length === 0) break;
       selectedIndex = Math.max(selectedIndex - 1, 0);
       renderList();
       break;
@@ -102,6 +113,7 @@ function updateList(query: string) {
     : notes;
 
   filteredItems = fuzzyFilter(query, allNotes, (n) => n.title);
+  selectedIndex = Math.min(selectedIndex, Math.max(filteredItems.length - 1, 0));
   renderList();
 }
 

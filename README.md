@@ -46,7 +46,7 @@ sqrt(144) + 3^2         → 21
 | Ctrl+N          | New note               |
 | Ctrl+P          | Fuzzy note switcher    |
 | Ctrl+↑ / Ctrl+↓ | Previous / next note   |
-| Ctrl+Backspace  | Delete current note    |
+| Ctrl+Backspace  | Delete current note (confirm) |
 | Tab             | Apply calc result      |
 | Ctrl+E          | Copy note to clipboard |
 | Ctrl+Shift+E    | Export note to file    |
@@ -126,6 +126,31 @@ cargo tauri build --debug
 Debug binary: `src-tauri/target/debug/note`
 
 To see WebView devtools, right-click inside the app window during `cargo tauri dev`.
+
+## Testing
+
+Run all tests:
+
+```sh
+npm run test
+```
+
+Run frontend-only tests:
+
+```sh
+npm run test:ts
+```
+
+Run backend-only tests:
+
+```sh
+npm run test:rust
+```
+
+Current automated coverage:
+- TypeScript unit tests for fuzzy search scoring and app state updates
+- Rust unit tests for calc evaluation behavior
+- Rust integration-style unit tests for SQLite CRUD + ordering logic
 
 ## Sway integration
 

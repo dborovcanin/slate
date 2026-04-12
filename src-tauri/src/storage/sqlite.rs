@@ -29,25 +29,10 @@ impl Db {
         })
     }
 
+    #[allow(dead_code)]
     pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT id, body, created_at, updated_at FROM notes WHERE id = ?1")
-            .map_err(|e| e.to_string())?;
-
-        let note = stmt
-            .query_row([id], |row| {
-                Ok(Note {
-                    id: row.get(0)?,
-                    body: row.get(1)?,
-                    created_at: row.get(2)?,
-                    updated_at: row.get(3)?,
-                })
-            })
-            .optional()
-            .map_err(|e| e.to_string())?;
-
-        Ok(note)
+        load_note(&conn, id)
     }
 
     pub fn save_note(&self, id: &str, body: &str) -> Result<Note, String> {
@@ -74,8 +59,7 @@ impl Db {
             .map_err(|e| e.to_string())?;
         }
 
-        self.get_note(id)?
-            .ok_or_else(|| "Note not found after save".to_string())
+        load_note(&conn, id)?.ok_or_else(|| "Note not found after save".to_string())
     }
 
     pub fn get_most_recent_note(&self) -> Result<Option<Note>, String> {
@@ -132,8 +116,94 @@ impl Db {
     }
 }
 
+fn load_note(conn: &Connection, id: &str) -> Result<Option<Note>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, body, created_at, updated_at FROM notes WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+
+    let note = stmt
+        .query_row([id], |row| {
+            Ok(Note {
+                id: row.get(0)?,
+                body: row.get(1)?,
+                created_at: row.get(2)?,
+                updated_at: row.get(3)?,
+            })
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    Ok(note)
+}
+
 fn now_iso() -> String {
     let now = OffsetDateTime::now_utc();
     now.format(&time::format_description::well_known::Rfc3339)
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::thread;
+    use std::time::Duration;
+
+    fn temp_db_path() -> PathBuf {
+        std::env::temp_dir().join(format!("note-test-{}.db", ulid::Ulid::new()))
+    }
+
+    #[test]
+    fn save_update_and_delete_note() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let note = db.save_note("n1", "hello").expect("note saved");
+        assert_eq!(note.id, "n1");
+        assert_eq!(note.body, "hello");
+
+        let updated = db.save_note("n1", "updated").expect("note updated");
+        assert_eq!(updated.id, "n1");
+        assert_eq!(updated.body, "updated");
+        assert!(updated.updated_at >= note.updated_at);
+
+        assert_eq!(
+            db.get_note("n1").expect("lookup succeeds").map(|n| n.body),
+            Some("updated".to_string())
+        );
+
+        assert!(db.delete_note("n1").expect("delete succeeds"));
+        assert!(!db.delete_note("n1").expect("second delete succeeds"));
+        assert!(db.get_note("n1").expect("lookup succeeds").is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn list_notes_and_most_recent_follow_updated_at() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("a", "first").expect("save first");
+        thread::sleep(Duration::from_millis(5));
+        db.save_note("b", "second").expect("save second");
+        thread::sleep(Duration::from_millis(5));
+        db.save_note("a", "first updated").expect("update first");
+
+        let listed = db.list_notes().expect("list succeeds");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, "a");
+        assert_eq!(listed[1].id, "b");
+
+        let most_recent = db
+            .get_most_recent_note()
+            .expect("most recent succeeds")
+            .expect("note exists");
+        assert_eq!(most_recent.id, "a");
+        assert_eq!(most_recent.body, "first updated");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
 }

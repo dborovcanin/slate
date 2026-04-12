@@ -1,7 +1,7 @@
 use std::path::PathBuf;
+use tauri::{AppHandle, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
-use tauri::{AppHandle, Manager};
 
 pub fn socket_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
@@ -11,6 +11,9 @@ pub fn socket_path() -> PathBuf {
 
 pub fn start_ipc_server(app: AppHandle) {
     let path = socket_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
 
     // remove stale socket
     let _ = std::fs::remove_file(&path);

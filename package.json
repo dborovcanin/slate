@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "npm run test:ts && npm run test:rust",
+    "test:ts": "node --test --experimental-strip-types src/state.test.ts src/switcher/fuzzy.test.ts",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",

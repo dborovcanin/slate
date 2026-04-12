@@ -72,33 +72,54 @@ class CalcResultWidget extends WidgetType {
 // ViewPlugin that debounces doc changes and fetches calc results
 const calcPlugin = ViewPlugin.define((view) => {
   let timer: number | null = null;
-  let pending = false;
+  let inFlight = false;
+  let rerunRequested = false;
+  let destroyed = false;
 
   function scheduleEval() {
     if (timer !== null) clearTimeout(timer);
-    timer = window.setTimeout(() => runEval(view), 150);
+    timer = window.setTimeout(() => {
+      void runEval(view);
+    }, 150);
   }
 
   async function runEval(view: EditorView) {
-    if (pending) return;
-    pending = true;
-    try {
-      const doc = view.state.doc;
-      const lines: string[] = [];
-      for (let i = 1; i <= doc.lines; i++) {
-        lines.push(doc.line(i).text);
-      }
-      const results = await evaluateLines(lines);
-      const map = new Map<number, string>();
-      results.forEach((r, i) => {
-        if (r !== null) map.set(i, r);
-      });
-      view.dispatch({ effects: setCalcResults.of(map) });
-    } catch (e) {
-      console.error("Calc evaluation failed:", e);
-    } finally {
-      pending = false;
+    if (inFlight) {
+      rerunRequested = true;
+      return;
     }
+
+    inFlight = true;
+    do {
+      rerunRequested = false;
+      try {
+        const doc = view.state.doc;
+        const snapshot = doc.toString();
+        const lines: string[] = [];
+        for (let i = 1; i <= doc.lines; i++) {
+          lines.push(doc.line(i).text);
+        }
+
+        const results = await evaluateLines(lines);
+        if (destroyed) break;
+
+        // If the document changed during async evaluation, drop stale results and rerun.
+        if (view.state.doc.toString() !== snapshot) {
+          rerunRequested = true;
+          continue;
+        }
+
+        const map = new Map<number, string>();
+        results.forEach((r, i) => {
+          if (r !== null) map.set(i, r);
+        });
+        view.dispatch({ effects: setCalcResults.of(map) });
+      } catch (e) {
+        console.error("Calc evaluation failed:", e);
+      }
+    } while (rerunRequested && !destroyed);
+
+    inFlight = false;
   }
 
   // initial evaluation
@@ -109,6 +130,7 @@ const calcPlugin = ViewPlugin.define((view) => {
       if (update.docChanged) scheduleEval();
     },
     destroy() {
+      destroyed = true;
       if (timer !== null) clearTimeout(timer);
     },
   };

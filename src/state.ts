@@ -3,7 +3,7 @@ import type { Note } from "./api";
 export type EventType = "note-changed" | "notes-updated";
 type Listener = (event: EventType) => void;
 
-function deriveTitle(body: string): string {
+export function deriveTitle(body: string): string {
   const line = body.split("\n").find((l) => l.trim().length > 0);
   if (!line) return "Untitled";
   const trimmed = line.trim();
@@ -16,7 +16,7 @@ export interface NoteEntry {
   updatedAt: string;
 }
 
-class AppState {
+export class AppState {
   private _activeNote: Note | null = null;
   private _notes: NoteEntry[] = [];
   private listeners: Listener[] = [];
@@ -35,16 +35,25 @@ class AppState {
   }
 
   updateBody(body: string) {
-    if (this._activeNote) {
-      this._activeNote = { ...this._activeNote, body };
-      const idx = this._notes.findIndex((n) => n.id === this._activeNote!.id);
-      if (idx >= 0) {
-        this._notes[idx] = {
-          ...this._notes[idx],
-          title: deriveTitle(body),
-        };
-      }
+    const active = this._activeNote;
+    if (!active) return;
+
+    const updatedAt = new Date().toISOString();
+    const updated = { ...active, body, updated_at: updatedAt };
+    this._activeNote = updated;
+    const idx = this._notes.findIndex((n) => n.id === updated.id);
+
+    if (idx >= 0) {
+      const entry: NoteEntry = {
+        ...this._notes[idx],
+        title: deriveTitle(body),
+        updatedAt,
+      };
+      this._notes.splice(idx, 1);
+      this._notes.unshift(entry);
     }
+
+    this.emit("note-changed");
   }
 
   setNotes(notes: Note[]) {
