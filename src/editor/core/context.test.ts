@@ -25,6 +25,12 @@ test("ResolvedContext resolves paragraph, list, and table ranges", () => {
   assert.equal(resolved.tableRangeAtLine(4), null);
 });
 
+test("ResolvedContext recognizes arrow and hierarchical ordered list markers", () => {
+  const text = "1.1 parent\n  -> child\nplain";
+  const resolved = ctx(text, 1);
+  assert.deepEqual(resolved.listRangeAtLine(1), { startLine: 1, endLine: 2 });
+});
+
 test("ResolvedContext finds words around cursor", () => {
   const text = "hello world";
   assert.equal(ctx(text, 1).wordAt()?.text, "hello");

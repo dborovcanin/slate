@@ -21,12 +21,18 @@ test("classifyMarkdownLine detects heading, list, quote and fences", () => {
   assert.equal(list.listMarkerEnd, 2);
   assert.equal(list.checklistMarkerStart, null);
 
+  const nestedList = classifyMarkdownLine("  -> item");
+  assert.equal(nestedList.listMarkerEnd, 5);
+
   const checklist = classifyMarkdownLine("- [x] done");
   assert.equal(checklist.listMarkerEnd, 2);
   assert.equal(checklist.checklistMarkerStart, 2);
   assert.equal(checklist.checklistMarkerEnd, 5);
   assert.equal(checklist.checklistChecked, true);
   assert.equal(checklist.checklistContentStart, 6);
+
+  const orderedNested = classifyMarkdownLine("1.2 item");
+  assert.equal(orderedNested.listMarkerEnd, 4);
 
   const fence = classifyMarkdownLine("```ts");
   assert.equal(fence.isCodeFence, true);

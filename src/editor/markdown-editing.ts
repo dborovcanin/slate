@@ -1,8 +1,9 @@
 import { Prec } from "@codemirror/state";
 import { keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
+import { getCalcResultAtCursor } from "./calc-decoration.ts";
 import { applyEditOperation, snapshotFromUpdate, snapshotFromView } from "./core/codemirror-adapter.ts";
-import { runDocChangeRules, runEnterRules } from "./core/text-rules.ts";
+import { runDocChangeRules, runEnterRules, runTabRules } from "./core/text-rules.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix } from "./core/text-rules.ts";
@@ -81,6 +82,21 @@ function continueListOnEnter(view: EditorView, autoformat: boolean): boolean {
   return true;
 }
 
+function indentListOnTab(view: EditorView, autoformat: boolean, outdent = false): boolean {
+  if (!autoformat) return false;
+
+  // Prefer calc Tab-apply behavior when a ghost result is available.
+  if (!outdent && getCalcResultAtCursor(view) !== null) return false;
+
+  const operation = runTabRules(snapshotFromView(view), {
+    markdownAutoformat: autoformat,
+    outdent,
+  });
+  if (!operation) return false;
+  applyEditOperation(view, operation);
+  return true;
+}
+
 function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
   const keys: KeyBinding[] = [
     { key: "Mod-b", preventDefault: true, run: (view) => toggleWrap(view, "**") },
@@ -98,6 +114,21 @@ function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
   }
 
   return keys;
+}
+
+function markdownTabKeymap(autoformat: boolean): KeyBinding[] {
+  return [
+    {
+      key: "Tab",
+      preventDefault: true,
+      run: (view) => indentListOnTab(view, autoformat, false),
+    },
+    {
+      key: "Shift-Tab",
+      preventDefault: true,
+      run: (view) => indentListOnTab(view, autoformat, true),
+    },
+  ];
 }
 
 function textRulesPlugin(enabled: boolean) {
@@ -135,6 +166,7 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   const autoformat = options.autoformat ?? true;
   return [
     Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
+    Prec.low(keymap.of(markdownTabKeymap(autoformat))),
     textRulesPlugin(autoformat),
   ];
 }

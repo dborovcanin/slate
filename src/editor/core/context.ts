@@ -6,7 +6,7 @@ import type {
   WordContext,
 } from "./types.ts";
 
-const listLineRe = /^\s*(?:[-*+]|\d+\.)\s+/;
+const listLineRe = /^\s*(?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;
 
 interface ParsedLines {

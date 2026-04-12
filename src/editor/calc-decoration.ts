@@ -1,16 +1,15 @@
 import {
   EditorView,
   Decoration,
-  DecorationSet,
   ViewPlugin,
   ViewUpdate,
   WidgetType,
   keymap,
 } from "@codemirror/view";
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
-import { evaluateLines } from "../api";
-import { planIncrementalCalc } from "./calc-incremental";
-import { findCalcSegment, lineForCalcEvaluation } from "./calc-line-utils";
+import { evaluateLines } from "../api.ts";
+import { planIncrementalCalc } from "./calc-incremental.ts";
+import { findCalcSegment, lineForCalcEvaluation } from "./calc-line-utils.ts";
 
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
@@ -55,8 +54,11 @@ const calcDecorations = EditorView.decorations.compute(
 );
 
 class CalcResultWidget extends WidgetType {
-  constructor(readonly result: string) {
+  readonly result: string;
+
+  constructor(result: string) {
     super();
+    this.result = result;
   }
 
   toDOM(): HTMLElement {
@@ -146,6 +148,14 @@ const calcPlugin = ViewPlugin.define((view) => {
   };
 });
 
+export function getCalcResultAtCursor(view: EditorView): string | null {
+  const results = view.state.field(calcResultsField, false);
+  if (!results) return null;
+  const cursor = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(cursor);
+  return results.get(line.number - 1) ?? null;
+}
+
 // Tab keymap: if cursor line has a calc result, apply it
 const calcTabKeymap = keymap.of([
   {
@@ -155,7 +165,7 @@ const calcTabKeymap = keymap.of([
       const cursor = view.state.selection.main.head;
       const line = view.state.doc.lineAt(cursor);
       const lineIndex = line.number - 1; // 0-based
-      const result = results.get(lineIndex);
+      const result = getCalcResultAtCursor(view);
 
       if (!result) return false;
 

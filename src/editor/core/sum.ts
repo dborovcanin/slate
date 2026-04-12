@@ -15,7 +15,7 @@ export interface SumExecutionResult {
   clipboardText?: string;
 }
 
-const listLineRe = /^\s*(?:[-*+]|\d+\.)\s+/;
+const listLineRe = /^\s*(?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;
 const numberRe = /[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+/g;
 

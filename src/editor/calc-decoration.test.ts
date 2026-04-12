@@ -28,6 +28,14 @@ test("findListCalcSegment extracts calc body for unordered and ordered items", (
   const ordered = findListCalcSegment("1. 10/2");
   assert.ok(ordered);
   assert.equal(ordered!.expr, "10/2");
+
+  const orderedNested = findListCalcSegment("1.1 10/2");
+  assert.ok(orderedNested);
+  assert.equal(orderedNested!.expr, "10/2");
+
+  const arrow = findListCalcSegment("  -> 9-3");
+  assert.ok(arrow);
+  assert.equal(arrow!.expr, "9-3");
 });
 
 test("findListCalcSegment extracts calc body for checklists", () => {
@@ -38,12 +46,19 @@ test("findListCalcSegment extracts calc body for checklists", () => {
   const checked = findListCalcSegment("- [x] 7+1");
   assert.ok(checked);
   assert.equal(checked!.expr, "7+1");
+
+  const nested = findListCalcSegment("  - [ ] 4+2");
+  assert.ok(nested);
+  assert.equal(nested!.expr, "4+2");
 });
 
 test("lineForCalcEvaluation uses cell expression for table rows", () => {
   assert.equal(lineForCalcEvaluation("| total | 50 kg to lbs |"), "50 kg to lbs");
   assert.equal(lineForCalcEvaluation("- [ ] 4+2"), "4+2");
+  assert.equal(lineForCalcEvaluation("  - [ ] 4+2"), "4+2");
+  assert.equal(lineForCalcEvaluation("  -> 4+2"), "4+2");
   assert.equal(lineForCalcEvaluation("1. 10/2"), "10/2");
+  assert.equal(lineForCalcEvaluation("1.1 10/2"), "10/2");
   assert.equal(lineForCalcEvaluation("- [x] 6"), "");
   assert.equal(lineForCalcEvaluation("- 6"), "");
   assert.equal(lineForCalcEvaluation("| label | 6 |"), "");

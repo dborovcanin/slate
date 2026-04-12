@@ -3,12 +3,75 @@ import { formatTableLines } from "./markdown-table.ts";
 import { replaceRange } from "./operations.ts";
 import type { EditOperation, EditorContextSnapshot } from "./types.ts";
 
-const listRe = /^(\s*)([-*+]|\d+\.)\s+(.*)$/;
-const checklistRe = /^(\s*(?:[-*+]|\d+\.)\s+)\[( |x|X)\]\s+(.*)$/;
+const orderedMarkerPattern = "(?:\\d+\\.|\\d+(?:\\.\\d+)+)";
+const unorderedMarkerPattern = "(?:->|[-*+])";
+const listMarkerPattern = `(?:${unorderedMarkerPattern}|${orderedMarkerPattern})`;
+
+const listRe = new RegExp(`^(\\s*)(${listMarkerPattern})\\s+(.*)$`);
+const checklistRe = new RegExp(`^(\\s*${listMarkerPattern}\\s+)\\[( |x|X)\\]\\s+(.*)$`);
 const checklistToggleSuffixRe = /\/x$/i;
+
+const orderedTopLevelRe = /^\d+\.$/;
+const orderedNestedRe = /^\d+(?:\.\d+)+$/;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseOrderedMarker(marker: string): number[] | null {
+  if (orderedTopLevelRe.test(marker)) {
+    const value = Number.parseInt(marker.slice(0, -1), 10);
+    return Number.isFinite(value) ? [value] : null;
+  }
+  if (!orderedNestedRe.test(marker)) return null;
+  const parts = marker
+    .split(".")
+    .map((entry) => Number.parseInt(entry, 10))
+    .filter((entry) => Number.isFinite(entry));
+  return parts.length > 1 ? parts : null;
+}
+
+function formatOrderedMarker(parts: number[]): string {
+  if (parts.length <= 1) {
+    const first = parts[0] ?? 1;
+    return `${first}.`;
+  }
+  return parts.join(".");
+}
+
+function incrementOrderedMarker(marker: string): string {
+  const parts = parseOrderedMarker(marker);
+  if (!parts) return marker;
+  const next = [...parts];
+  next[next.length - 1] = (next[next.length - 1] ?? 0) + 1;
+  return formatOrderedMarker(next);
+}
+
+function indentOrderedMarker(marker: string): string {
+  const parts = parseOrderedMarker(marker);
+  if (!parts) return marker;
+  return formatOrderedMarker([...parts, 1]);
+}
+
+function outdentOrderedMarker(marker: string): string {
+  const parts = parseOrderedMarker(marker);
+  if (!parts) return marker;
+  if (parts.length === 1) return formatOrderedMarker(parts);
+  return formatOrderedMarker(parts.slice(0, -1));
+}
+
+function markerDepth(indent: string): number {
+  return Math.floor(indent.length / 2);
+}
+
+function unorderedMarkerForDepth(depth: number): string {
+  if (depth <= 0) return "-";
+  if (depth === 1) return "*";
+  return "->";
+}
+
+function isUnorderedMarker(marker: string): boolean {
+  return marker === "-" || marker === "*" || marker === "+" || marker === "->";
 }
 
 function stripChecklistToggleSuffix(content: string): string | null {
@@ -109,15 +172,69 @@ function listContinuationRule(ctx: ResolvedContext): EditOperation | null {
   }
 
   let nextMarker = marker;
-  if (/^\d+\.$/.test(marker)) {
-    const value = Number.parseInt(marker.slice(0, -1), 10);
-    if (Number.isFinite(value)) nextMarker = `${value + 1}.`;
+  if (parseOrderedMarker(marker)) {
+    nextMarker = incrementOrderedMarker(marker);
   }
 
   const insert = `\n${indent}${nextMarker} `;
   return replaceRange(selection.head, selection.head, insert, {
     anchor: selection.head + insert.length,
   });
+}
+
+export interface TabRuleOptions {
+  outdent?: boolean;
+}
+
+function lineRangeForSelection(ctx: ResolvedContext): { startLine: number; endLine: number } {
+  const selection = ctx.selection();
+  const startLine = ctx.lineAt(selection.from).number;
+  let endLine = ctx.lineAt(selection.to).number;
+
+  if (!selection.empty) {
+    const endLineCtx = ctx.lineAt(selection.to);
+    if (selection.to === endLineCtx.from && endLineCtx.number > startLine) {
+      endLine = endLineCtx.number - 1;
+    }
+  } else {
+    endLine = startLine;
+  }
+
+  return { startLine, endLine };
+}
+
+function listTabRule(ctx: ResolvedContext, options: TabRuleOptions): EditOperation | null {
+  const outdent = options.outdent ?? false;
+  const { startLine, endLine } = lineRangeForSelection(ctx);
+  const changes: EditOperation["changes"] = [];
+
+  for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
+    const line = ctx.line(lineNo);
+    const match = line.text.match(listRe);
+    if (!match) continue;
+
+    const indent = match[1];
+    const marker = match[2];
+    const content = match[3];
+
+    const currentDepth = markerDepth(indent);
+    const nextDepth = outdent ? Math.max(0, currentDepth - 1) : currentDepth + 1;
+    const nextIndent = " ".repeat(nextDepth * 2);
+
+    let nextMarker = marker;
+    if (parseOrderedMarker(marker)) {
+      nextMarker = outdent ? outdentOrderedMarker(marker) : indentOrderedMarker(marker);
+    } else if (isUnorderedMarker(marker)) {
+      nextMarker = unorderedMarkerForDepth(nextDepth);
+    }
+
+    const replacement = `${nextIndent}${nextMarker} ${content}`;
+    if (replacement === line.text) continue;
+    changes.push({ from: line.from, to: line.to, insert: replacement });
+  }
+
+  if (changes.length === 0) return null;
+  return { changes };
 }
 
 export interface TextRuleOptions {
@@ -144,4 +261,13 @@ export function runEnterRules(
   if (!(options.markdownAutoformat ?? true)) return null;
   const ctx = new ResolvedContext(snapshot);
   return listContinuationRule(ctx);
+}
+
+export function runTabRules(
+  snapshot: EditorContextSnapshot,
+  options: TextRuleOptions & TabRuleOptions = {},
+): EditOperation | null {
+  if (!(options.markdownAutoformat ?? true)) return null;
+  const ctx = new ResolvedContext(snapshot);
+  return listTabRule(ctx, options);
 }

@@ -38,20 +38,29 @@ fn parse_lines(text: &str) -> ParsedLines {
 
 fn is_list_line(line: &str) -> bool {
     let trimmed = line.trim_start();
-    let bytes = trimmed.as_bytes();
-    if bytes.len() < 2 {
+    if trimmed.is_empty() {
         return false;
     }
 
-    if matches!(bytes[0], b'-' | b'*' | b'+') {
-        return bytes[1] == b' ';
+    let Some(space_idx) = trimmed.find(char::is_whitespace) else {
+        return false;
+    };
+    let marker = &trimmed[..space_idx];
+
+    if matches!(marker, "-" | "*" | "+" | "->") {
+        return true;
     }
 
-    let mut i = 0;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
+    let is_digits = |segment: &str| {
+        !segment.is_empty() && segment.as_bytes().iter().all(|b| b.is_ascii_digit())
+    };
+
+    if let Some(stripped) = marker.strip_suffix('.') {
+        return is_digits(stripped)
+            || (stripped.contains('.') && stripped.split('.').all(is_digits));
     }
-    i > 0 && i + 1 < bytes.len() && bytes[i] == b'.' && bytes[i + 1] == b' '
+
+    marker.contains('.') && marker.split('.').all(is_digits)
 }
 
 fn is_table_line(line: &str) -> bool {
@@ -318,6 +327,19 @@ mod tests {
             })
         );
         assert_eq!(resolved.table_range_at_line(4, 2), None);
+    }
+
+    #[test]
+    fn recognizes_arrow_and_hierarchical_ordered_lists() {
+        let text = "1.1 parent\n  -> child\nplain";
+        let resolved = ctx(text, 2, 2);
+        assert_eq!(
+            resolved.list_range_at_line(1),
+            Some(BlockLineRange {
+                start_line: 1,
+                end_line: 2
+            })
+        );
     }
 
     #[test]

@@ -38,8 +38,8 @@ export interface MarkdownLineInfo {
 
 const headingRe = /^(\s*)(#{1,6})\s+/;
 const quoteRe = /^(\s*>+)\s*/;
-const listRe = /^(\s*)([-*+]|\d+\.)\s+/;
-const checklistRe = /^(\s*(?:[-*+]|\d+\.)\s+)(\[(?: |x|X)\])(\s+)/;
+const listRe = /^(\s*)(->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+/;
+const checklistRe = /^(\s*(?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(\[(?: |x|X)\])(\s+)/;
 const hrRe = /^\s*(([-*_])\s*){3,}$/;
 const fenceRe = /^\s*```/;
 
@@ -73,7 +73,7 @@ class ChecklistBoxWidget extends WidgetType {
     span.className = this.checked
       ? "md-checklist-box md-checklist-box-checked"
       : "md-checklist-box md-checklist-box-unchecked";
-    span.textContent = this.checked ? "☒" : "☐";
+    span.textContent = this.checked ? "✅" : "☐";
     span.setAttribute("aria-hidden", "true");
     return span;
   }

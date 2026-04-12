@@ -197,25 +197,32 @@ fn list_marker_end(text: &str) -> Option<usize> {
     if i >= bytes.len() {
         return None;
     }
-    if matches!(bytes[i], b'-' | b'*' | b'+') {
-        if i + 1 < bytes.len() && bytes[i + 1] == b' ' {
-            return Some(i + 2);
-        }
+
+    let mut marker_end = i;
+    while marker_end < bytes.len() && !bytes[marker_end].is_ascii_whitespace() {
+        marker_end += 1;
+    }
+    if marker_end == i || marker_end >= bytes.len() || !bytes[marker_end].is_ascii_whitespace() {
         return None;
     }
-    let num_start = i;
-    while i < bytes.len() && bytes[i].is_ascii_digit() {
-        i += 1;
+
+    let marker = &text[i..marker_end];
+    let is_digits = |segment: &str| {
+        !segment.is_empty() && segment.as_bytes().iter().all(|b| b.is_ascii_digit())
+    };
+    let is_ordered = if let Some(stripped) = marker.strip_suffix('.') {
+        is_digits(stripped) || (stripped.contains('.') && stripped.split('.').all(is_digits))
+    } else {
+        marker.contains('.') && marker.split('.').all(is_digits)
+    };
+    if !matches!(marker, "-" | "*" | "+" | "->") && !is_ordered {
+        return None;
     }
-    if i > num_start
-        && i < bytes.len()
-        && bytes[i] == b'.'
-        && i + 1 < bytes.len()
-        && bytes[i + 1] == b' '
-    {
-        return Some(i + 2);
+
+    while marker_end < bytes.len() && bytes[marker_end].is_ascii_whitespace() {
+        marker_end += 1;
     }
-    None
+    Some(marker_end)
 }
 
 // --- Inline markdown scanning ---
@@ -486,6 +493,8 @@ mod tests {
         assert_eq!(list_marker_end("- item"), Some(2));
         assert_eq!(list_marker_end("  * item"), Some(4));
         assert_eq!(list_marker_end("1. item"), Some(3));
+        assert_eq!(list_marker_end("1.1 item"), Some(4));
+        assert_eq!(list_marker_end("  -> item"), Some(5));
         assert_eq!(list_marker_end("10. item"), Some(4));
         assert_eq!(list_marker_end("plain text"), None);
     }

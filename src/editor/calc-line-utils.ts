@@ -1,7 +1,7 @@
 const tableRowRe = /^\s*\|.*\|\s*$/;
-const unorderedListRe = /^(\s*)([-*+])\s+/;
-const orderedListRe = /^(\s*)(\d+\.)\s+/;
-const checklistRe = /^(\s*)([-*+])\s+\[(?: |x|X)\]\s+/;
+const unorderedListRe = /^(\s*)(->|[-*+])\s+/;
+const orderedListRe = /^(\s*)(\d+\.|\d+(?:\.\d+)+)\s+/;
+const checklistRe = /^(\s*)(?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+\[(?: |x|X)\]\s+/;
 
 interface TableCalcCell {
   expr: string;

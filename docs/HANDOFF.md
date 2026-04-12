@@ -56,6 +56,9 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - configurable autoformat flag: `[editor] markdown_autoformat` (default `true`)
   - keymaps: `Ctrl/Cmd+B`, `Ctrl/Cmd+I`, `Ctrl/Cmd+Shift+X`, `Ctrl/Cmd+K`
   - Enter list continuation behavior
+  - Tab/Shift+Tab list nesting behavior with marker progression:
+    - unordered: `-` -> `*` -> `->` (and reverse on outdent)
+    - ordered: hierarchical markers (`1.` -> `1.1` -> `1.1.1`, reverse on outdent)
   - ` /x` suffix toggles checklist state on the active line (`- item /x` -> `- [x] item`, `- [x] item /x` -> `- [ ] item`)
   - table autoformat/alignment on edit in markdown table blocks
 - Added theme tests:
@@ -92,6 +95,12 @@ This document captures what was implemented after milestones M1-M4, plus what sh
     checklist `/x` toggle first, then table autoformat when enabled
   - command engine moved to core pipeline with operation-based results and mode-gated command catalog
   - sum scope resolution now runs via context-layer line/block resolvers (except explicit `sum doc`)
+- Added Rust-side `editor_core` placeholders for future terminal/UI parity work:
+  - module scaffold: `src-tauri/src/editor_core/{types,operations,context,commands,text_rules}.rs`
+  - mode-aware command catalog and suggestion matching
+  - insertion operation helper (`insert_value_at_selection`) with cursor-at-end semantics
+  - context resolver contracts (`ResolvedContext`) for line/selection/block lookup
+  - rule execution stubs (`run_doc_change_rules`, `run_enter_rules`) intentionally no-op for now
 - Added IPC socket parent directory creation before bind (more robust fallback path behavior)
 - Fixed a critical SQLite deadlock in `save_note` caused by nested mutex locking
 
@@ -140,6 +149,17 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - CRUD lifecycle
   - most-recent/list ordering by `updated_at`
   - delete idempotency behavior
+- `src-tauri/src/editor_core/context.rs`
+  - line/word lookup and paragraph/list/table range contract tests
+  - selection clamping behavior
+- `src-tauri/src/editor_core/commands.rs`
+  - mode-aware command suggestion tests
+  - unknown/mode-gated command execution tests
+  - insertion helper selection/cursor behavior tests
+- `src-tauri/src/editor_core/text_rules.rs`
+  - no-op placeholder rule behavior tests
+- `src-tauri/src/editor_core/mod.rs`
+  - module smoke test linking context, commands, and operations
 
 ## Commands
 
