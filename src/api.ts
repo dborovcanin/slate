@@ -30,3 +30,7 @@ export function deleteNote(id: string): Promise<boolean> {
 export function evaluateLines(lines: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("evaluate_lines", { lines });
 }
+
+export function exportToFile(path: string, content: string): Promise<void> {
+  return invoke<void>("export_to_file", { path, content });
+}

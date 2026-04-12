@@ -11,6 +11,10 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "note"
 path = "src/main.rs"
 
+[[bin]]
+name = "note-msg"
+path = "src/bin/note-msg.rs"
+
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
@@ -21,6 +25,9 @@ ulid = "1"
 directories = "6"
 time = { version = "0.3", features = ["formatting"] }
 fend-core = "1"
+tauri-plugin-dialog = "2"
+tokio = { version = "1", features = ["net", "io-util", "sync", "rt"] }
+libc = "0.2"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

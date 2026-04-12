@@ -10,6 +10,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Plain-text editing powered by CodeMirror 6 (undo/redo, IME, clipboard — all browser-grade)
 - Autosave with 500ms debounce + flush on blur and close
 - Restores last-open note on startup
+- Dark theme with Catppuccin-inspired colors
 
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
@@ -28,16 +29,30 @@ sqrt(144) + 3^2         → 21
 - Fuzzy search switcher (Ctrl+P) with match highlighting
 - Titles derived from the first non-empty line — no extra fields to fill
 
+**Export**
+- Ctrl+E copies the current note to clipboard
+- Ctrl+Shift+E opens a native file dialog to save as `.md` or `.txt`
+- Toast feedback on export
+
+**IPC / Sway integration**
+- `note-msg` CLI binary communicates with the running app over a Unix socket
+- Commands: `ping`, `show`, `hide`, `toggle`
+- Bind to a Sway keybind for instant toggle from any workspace
+
 **Keyboard shortcuts**
 
-| Shortcut         | Action                  |
-|------------------|-------------------------|
-| Ctrl+N           | New note                |
-| Ctrl+P           | Fuzzy note switcher     |
-| Ctrl+↑ / Ctrl+↓ | Previous / next note    |
-| Ctrl+Backspace   | Delete current note     |
-| Tab              | Apply calc result       |
-| Ctrl+Z / Ctrl+Y | Undo / redo             |
+| Shortcut        | Action                 |
+| --------------- | ---------------------- |
+| Ctrl+N          | New note               |
+| Ctrl+P          | Fuzzy note switcher    |
+| Ctrl+↑ / Ctrl+↓ | Previous / next note   |
+| Ctrl+Backspace  | Delete current note    |
+| Tab             | Apply calc result      |
+| Ctrl+E          | Copy note to clipboard |
+| Ctrl+Shift+E    | Export note to file    |
+| Ctrl+W          | Hide window            |
+| Ctrl+Z / Ctrl+Y | Undo / redo            |
+| Escape          | Close switcher         |
 
 **Storage**
 - SQLite with WAL mode in `~/.local/share/note/notes.db`
@@ -75,12 +90,15 @@ npm install
 cargo tauri build
 ```
 
-Binary output: `src-tauri/target/release/note` (≈13MB, self-contained).
+Outputs two binaries:
+- `src-tauri/target/release/note` (14MB) — the app
+- `src-tauri/target/release/note-msg` (471KB) — the IPC client
 
-Install it wherever you like:
+Install them:
 
 ```sh
 cp src-tauri/target/release/note ~/.local/bin/
+cp src-tauri/target/release/note-msg ~/.local/bin/
 ```
 
 ### Development
@@ -109,7 +127,7 @@ Debug binary: `src-tauri/target/debug/note`
 
 To see WebView devtools, right-click inside the app window during `cargo tauri dev`.
 
-### Sway integration
+## Sway integration
 
 Add to your Sway config:
 
@@ -117,27 +135,44 @@ Add to your Sway config:
 # Float the window
 for_window [app_id="note"] floating enable
 
-# Toggle with a keybind (launches if not running, toggles visibility if running)
-# Requires note-msg CLI (coming in a future milestone)
-# bindsym $mod+n exec note-msg toggle || note
+# Toggle with a keybind
+bindsym $mod+n exec note-msg toggle || note
 ```
+
+The `||` fallback launches `note` if `note-msg` can't connect (app not running).
+
+### IPC commands
+
+```sh
+note-msg ping     # Check if the app is running
+note-msg show     # Show and focus the window
+note-msg hide     # Hide the window
+note-msg toggle   # Toggle visibility
+```
+
+The socket lives at `$XDG_RUNTIME_DIR/note.sock` and is cleaned up on exit.
 
 ## Architecture
 
 Tauri v2 app: Rust backend + vanilla TypeScript frontend.
 
-- **Frontend:** CodeMirror 6 editor, fuzzy switcher overlay, zero-framework vanilla TS. ~92KB gzipped.
-- **Backend:** Rust with rusqlite (bundled SQLite, WAL mode), fend-core (calc engine), Tauri IPC commands.
-- **Storage:** Single SQLite database, ULID-keyed notes, ISO 8601 timestamps.
+- **Frontend:** CodeMirror 6 editor, fuzzy switcher overlay, zero-framework vanilla TS
+- **Backend:** Rust with rusqlite (bundled SQLite, WAL mode), fend-core (calc engine), Tauri IPC commands, Unix socket IPC server
+- **Storage:** Single SQLite database, ULID-keyed notes, ISO 8601 timestamps
 
 ```
-Frontend (WebView)              Backend (Rust)
-┌────────────────────┐          ┌─────────────────┐
-│ CodeMirror editor  │──invoke──│ Note CRUD        │
-│ Calc decorations   │          │ SQLite + WAL     │
-│ Fuzzy switcher     │          │ fend-core calc   │
-│ Keyboard shortcuts │          │ Tauri commands   │
-└────────────────────┘          └─────────────────┘
+                    Unix socket IPC
+┌─────────────┐  ping|show|hide|toggle   ┌─────────────────────────────────┐
+│  note-msg   │ ───────────────────────> │           note (Tauri v2)       │
+│  (471KB)    │                          │                                 │
+└─────────────┘                          │  Frontend        Backend        │
+                                         │  ┌───────────┐  ┌────────────┐ │
+                                         │  │ CodeMirror │  │ SQLite+WAL │ │
+                                         │  │ Calc ghost │  │ fend-core  │ │
+                                         │  │ Switcher   │  │ IPC server │ │
+                                         │  │ Export     │  │ Export I/O │ │
+                                         │  └───────────┘  └────────────┘ │
+                                         └─────────────────────────────────┘
 ```
 
 ## Project structure
@@ -145,7 +180,7 @@ Frontend (WebView)              Backend (Rust)
 ```
 src/                          # Frontend (TypeScript)
   main.ts                     # Entry point
-  app.ts                      # App shell, shortcuts, note switching
+  app.ts                      # App shell, shortcuts, status bar, toast
   api.ts                      # Typed Tauri invoke wrappers
   state.ts                    # App state, note list, events
   editor/
@@ -154,19 +189,25 @@ src/                          # Frontend (TypeScript)
   switcher/
     switcher.ts               # Fuzzy search overlay
     fuzzy.ts                  # Fuzzy match scoring
-  styles/                     # CSS
+  styles/                     # CSS (theme, editor, switcher, app)
 
 src-tauri/                    # Backend (Rust)
   src/
-    lib.rs                    # Tauri app setup
-    commands/                 # Tauri IPC commands
+    lib.rs                    # Tauri app setup, plugin registration
+    main.rs                   # Binary entry point
+    commands/
       notes.rs                # Note CRUD
-      calc.rs                 # Line evaluation
-    storage/                  # SQLite layer
-      sqlite.rs               # Connection, migrations, queries
+      calc.rs                 # Batch line evaluation
+      export.rs               # File export
+    storage/
+      sqlite.rs               # Connection, migrations, WAL, queries
       models.rs               # Note struct
     calc/
-      engine.rs               # fend-core wrapper
+      engine.rs               # fend-core wrapper + heuristics
+    ipc/
+      server.rs               # Unix socket listener
+  src/bin/
+    note-msg.rs               # CLI client binary
   migrations/
     0001_init.sql             # Schema
 ```

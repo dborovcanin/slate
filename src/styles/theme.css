@@ -13,3 +13,24 @@
   --font-size: 14px;
   --line-height: 1.65;
 }
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-muted);
+}
+
+::selection {
+  background: rgba(137, 180, 250, 0.25);
+}
