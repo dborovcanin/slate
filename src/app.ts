@@ -293,13 +293,6 @@ function showToast(message: string) {
 
 let statusTitleEl: HTMLElement;
 let statusMetaEl: HTMLElement;
-let terminalModeEnabled = false;
-
-function applyTerminalMode(enabled: boolean) {
-  terminalModeEnabled = enabled;
-  document.body.classList.toggle("terminal-mode", enabled);
-  document.documentElement.classList.toggle("terminal-mode", enabled);
-}
 
 function createStatusBar(container: HTMLElement) {
   const bar = document.createElement("div");
@@ -313,7 +306,7 @@ function createStatusBar(container: HTMLElement) {
 
   const hint = document.createElement("span");
   hint.className = "status-bar-hint";
-  hint.textContent = terminalModeEnabled ? "Vim markdown mode" : "Ctrl+P search";
+  hint.textContent = "Ctrl+P search";
 
   statusMetaEl.appendChild(hint);
   bar.appendChild(statusTitleEl);
@@ -358,20 +351,16 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   ]);
   state.setActiveNote(note);
   state.setNotes(notes);
-  applyTerminalMode(!!config.terminal_mode);
 
   createStatusBar(container);
   mountEditor(editorEl, {
     markdownAutoformat: config.markdown_autoformat,
-    terminalMode: !!config.terminal_mode,
-    vimMode: !!config.vim_mode || !!config.terminal_mode,
+    vimMode: !!config.vim_mode,
     dateFormat: config.date_format,
   });
   setupKeyboardShortcuts();
 
-  if (config.terminal_mode) {
-    showToast("Terminal mode: Vim markdown");
-  } else if (config.vim_mode) {
+  if (config.vim_mode) {
     showToast("Vim mode: :sum, :sum_all, :date");
   }
 

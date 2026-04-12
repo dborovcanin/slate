@@ -37,9 +37,12 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 
 **Optional terminal mode**
 - Enable with `[editor] terminal_mode = true`
-- Uses terminal-like chrome and monospaced status bar styling
-- Shows editor line numbers/gutter for a Vim-like editing feel
-- Automatically enables Vim mode behavior when terminal mode is on
+- Or run explicitly with `note --terminal`
+- Runs as a standalone full-screen terminal app (no Tauri window)
+- Built-in editor with note list/switcher and status bar
+- Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
+- Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save, `Ctrl+Q`/`Ctrl+W` quit
+- `vim_mode` is optional and independent (GUI-only behavior)
 
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
@@ -248,8 +251,8 @@ Available `font` values:
 
 Editor options:
 - `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
-- `terminal_mode = true` enables terminal-like UI and line-number gutter, and turns on Vim behavior
-- `vim_mode = true` enables modal Vim-style key mappings (applies on app start)
+- `terminal_mode = true` makes `note` default to terminal runtime (when launched from a TTY)
+- `vim_mode = true` enables modal Vim-style key mappings in GUI
 - `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
 
 Supported `date_format` tokens:

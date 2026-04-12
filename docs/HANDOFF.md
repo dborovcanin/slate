@@ -30,9 +30,10 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - yanking to system clipboard: `y` in visual modes, `yy` in normal mode (with counts like `3yy`)
 - Added optional terminal mode:
   - `[editor] terminal_mode = true` in `config.toml`
-  - terminal-like app chrome + monospaced status/switcher styling
-  - line-number gutter enabled in CodeMirror
-  - implies Vim behavior in editor mount path
+  - `note --terminal` runs standalone terminal UI (no Tauri window)
+  - default mode follows config when launched from a TTY
+  - built-in full-screen editor with switcher and status bar
+  - `vim_mode` remains independent/optional and applies to GUI mode only
 - Added ex command support in Vim mode:
   - `:sum` (paragraph default)
   - `:sum list`, `:sum table`, `:sum doc`

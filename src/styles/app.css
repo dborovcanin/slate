@@ -14,11 +14,6 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-html.terminal-mode,
-body.terminal-mode {
-  font-family: var(--font-mono);
-}
-
 #app {
   display: flex;
   flex-direction: column;
@@ -43,23 +38,12 @@ body.terminal-mode {
   min-height: 28px;
 }
 
-body.terminal-mode .status-bar {
-  font-family: var(--font-mono);
-  background: var(--bg-overlay);
-  border-top-color: var(--accent);
-  letter-spacing: 0.01em;
-}
-
 .status-bar-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
   min-width: 0;
-}
-
-body.terminal-mode .status-bar-hint {
-  opacity: 0.8;
 }
 
 .status-bar-meta {
