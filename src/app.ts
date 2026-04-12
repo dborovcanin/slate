@@ -137,15 +137,6 @@ async function handleHideWindow() {
   await win.hide();
 }
 
-async function handleForceQuit() {
-  const win = getCurrentWindow();
-  await win.hide();
-}
-
-export function forceQuit() {
-  void handleForceQuit();
-}
-
 async function handleInsertDate() {
   const cfg = await getThemeConfigOrDefault();
   const value = await openDatePicker(cfg.date_format);
@@ -366,11 +357,12 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     markdownAutoformat: config.markdown_autoformat,
     vimMode: !!config.vim_mode,
     dateFormat: config.date_format,
+    onExitCommand: handleHideWindow,
   });
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/table/doc, :sum_all, :date");
+    showToast("Vim mode: :sum, :sum list/table/doc, :date, :format, :q");
   }
 
   state.on(() => {

@@ -1,28 +1,21 @@
 import { EditorView } from "@codemirror/view";
-import { executeExCommand, suggestExCommands } from "./ex-commands";
-import { openDatePicker } from "./date-picker";
+import { executeCommand, listCommandSuggestions, type CommandMode } from "./command-engine";
 import { insertAtSelection } from "./editor-utils";
-import { forceQuit } from "../app";
 
 interface CommandPickerOptions {
+  mode: CommandMode;
   dateFormat?: string;
+  onExitCommand?: () => Promise<void> | void;
+  source?: "vim-colon" | "shortcut";
 }
 
-interface CommandModeExtensionOptions extends CommandPickerOptions {
+interface CommandModeExtensionOptions {
   vimMode?: boolean;
+  dateFormat?: string;
+  onExitCommand?: () => Promise<void> | void;
 }
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
-
-const commandHint: Record<string, string> = {
-  sum: "sum current scope",
-  "sum list": "sum current list",
-  "sum table": "sum current table",
-  "sum doc": "sum whole document",
-  sum_all: "sum whole document",
-  date: "insert picked date",
-  "q!": "quit without saving",
-};
 
 function normalizeCommand(rawInput: string): string {
   return rawInput.trim().replace(/^:/, "").toLowerCase();
@@ -49,16 +42,21 @@ function showStatus(view: EditorView, message: string) {
   statusEl.dataset.hideTimer = `${timer}`;
 }
 
-export function shouldReinsertLiteralOnCancel(rawInput: string): boolean {
-  const trimmed = rawInput.trim();
-  return trimmed.length === 0 || /^:+$/.test(trimmed);
+function shouldReinsertLiteralOnCancel(rawInput: string): boolean {
+  return /^:+$/.test(rawInput.trim());
+}
+
+function isCtrlColon(event: KeyboardEvent): boolean {
+  if (!event.ctrlKey || event.altKey || event.metaKey) return false;
+  if (event.key === ":") return true;
+  return event.code === "Semicolon" && event.shiftKey;
 }
 
 export function isCommandPickerOpen(view: EditorView): boolean {
   return view.dom.querySelector(COMMAND_PICKER_SELECTOR) !== null;
 }
 
-export function openCommandPicker(view: EditorView, options: CommandPickerOptions = {}) {
+export function openCommandPicker(view: EditorView, options: CommandPickerOptions) {
   if (isCommandPickerOpen(view)) return;
 
   const bar = document.createElement("div");
@@ -85,7 +83,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   bar.appendChild(list);
   view.dom.appendChild(bar);
 
-  let suggestions = suggestExCommands("");
+  let suggestions = listCommandSuggestions(options.mode, "");
   let selectedIndex = suggestions.length > 0 ? 0 : -1;
 
   const close = () => {
@@ -95,8 +93,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
 
   const renderSuggestions = () => {
     list.replaceChildren();
-    const query = input.value;
-    suggestions = suggestExCommands(query);
+    suggestions = listCommandSuggestions(options.mode, input.value);
     if (suggestions.length === 0) {
       selectedIndex = -1;
       const empty = document.createElement("div");
@@ -107,8 +104,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
     }
 
     if (selectedIndex < 0 || selectedIndex >= suggestions.length) selectedIndex = 0;
-
-    suggestions.forEach((command, idx) => {
+    suggestions.forEach((suggestion, idx) => {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "command-picker-item";
@@ -116,11 +112,11 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
 
       const title = document.createElement("span");
       title.className = "command-picker-item-title";
-      title.textContent = command;
+      title.textContent = suggestion.value;
 
       const hint = document.createElement("span");
       hint.className = "command-picker-item-hint";
-      hint.textContent = commandHint[command] ?? "";
+      hint.textContent = suggestion.description;
 
       item.appendChild(title);
       item.appendChild(hint);
@@ -132,7 +128,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         event.preventDefault();
       });
       item.addEventListener("click", () => {
-        input.value = command;
+        input.value = suggestion.value;
         void submit();
       });
       list.appendChild(item);
@@ -142,12 +138,11 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   const pickCommand = (): string => {
     const normalized = normalizeCommand(input.value);
     if (!normalized && suggestions.length > 0) {
-      return suggestions[Math.max(selectedIndex, 0)] ?? "";
+      return suggestions[Math.max(selectedIndex, 0)]?.value ?? "";
     }
     if (!normalized) return "";
-    if (suggestions.includes(normalized as (typeof suggestions)[number])) return normalized;
-    if (suggestions.length > 0) return suggestions[Math.max(selectedIndex, 0)] ?? normalized;
-    return normalized;
+    if (suggestions.some((suggestion) => suggestion.value === normalized)) return normalized;
+    return suggestions[Math.max(selectedIndex, 0)]?.value ?? normalized;
   };
 
   const submit = async () => {
@@ -155,29 +150,12 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
     close();
     if (!command) return;
 
-    if (command === "q!") {
-      forceQuit();
-      return;
-    }
-
-    if (command === "date") {
-      try {
-        const value = await openDatePicker(options.dateFormat ?? "%Y-%m-%d");
-        if (!value) {
-          showStatus(view, "date cancelled");
-          return;
-        }
-        insertAtSelection(view, value);
-        showStatus(view, `inserted ${value}`);
-      } catch (err) {
-        console.error("Date command failed:", err);
-        showStatus(view, "date command failed");
-      }
-      return;
-    }
-
     try {
-      const message = await executeExCommand(view, command);
+      const message = await executeCommand(view, command, {
+        mode: options.mode,
+        dateFormat: options.dateFormat,
+        onExitCommand: options.onExitCommand,
+      });
       if (message) showStatus(view, message);
     } catch (err) {
       console.error("Command failed:", err);
@@ -195,7 +173,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
       event.stopPropagation();
       const rawInput = input.value;
       close();
-      if (shouldReinsertLiteralOnCancel(rawInput)) {
+      if (options.source === "vim-colon" && shouldReinsertLiteralOnCancel(rawInput)) {
         insertAtSelection(view, `:${rawInput}`);
       }
       return;
@@ -212,7 +190,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
       if (suggestions.length === 0) return;
       event.preventDefault();
       event.stopPropagation();
-      input.value = suggestions[Math.max(selectedIndex, 0)] ?? input.value;
+      input.value = suggestions[Math.max(selectedIndex, 0)]?.value ?? input.value;
       renderSuggestions();
       return;
     }
@@ -242,11 +220,16 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
 export function commandModeExtension(options: CommandModeExtensionOptions = {}) {
   return EditorView.domEventHandlers({
     keydown: (event, view) => {
+      if (options.vimMode) return false;
       if (isInsideCommandPicker(event.target)) return false;
-      if (event.key !== ":" || event.ctrlKey || event.altKey || event.metaKey) return false;
-      if (options.vimMode && view.dom.dataset.vimMode !== "insert") return false;
+      if (!isCtrlColon(event)) return false;
       event.preventDefault();
-      openCommandPicker(view, options);
+      openCommandPicker(view, {
+        mode: "editor",
+        dateFormat: options.dateFormat,
+        onExitCommand: options.onExitCommand,
+        source: "shortcut",
+      });
       return true;
     },
   });

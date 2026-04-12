@@ -5,16 +5,6 @@ export interface LineRange {
   startLine: number;
   endLine: number;
 }
-export const EX_COMMAND_CANDIDATES = [
-  "sum",
-  "sum list",
-  "sum table",
-  "sum doc",
-  "sum_all",
-  "date",
-  "q!",
-] as const;
-export type ExCommandCandidate = (typeof EX_COMMAND_CANDIDATES)[number];
 
 const listLineRe = /^\s*(?:[-*+]|\d+\.)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;
@@ -126,23 +116,6 @@ export function parseScope(raw: string | undefined): SumScope {
   if (arg === "list") return "list";
   if (arg === "table") return "table";
   return "paragraph";
-}
-
-export function suggestExCommands(rawInput: string): ExCommandCandidate[] {
-  const query = rawInput.trim().toLowerCase().replace(/^:/, "");
-  if (!query) return [...EX_COMMAND_CANDIDATES];
-
-  return [...EX_COMMAND_CANDIDATES]
-    .map((command) => {
-      const c = command.toLowerCase();
-      const starts = c.startsWith(query);
-      const includes = c.includes(query);
-      const score = starts ? 0 : includes ? 1 : 2;
-      return { command, score };
-    })
-    .filter((entry) => entry.score < 2)
-    .sort((a, b) => a.score - b.score || a.command.localeCompare(b.command))
-    .map((entry) => entry.command);
 }
 
 async function copyText(text: string) {

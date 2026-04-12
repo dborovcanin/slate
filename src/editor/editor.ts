@@ -6,7 +6,7 @@ import {
   highlightActiveLine,
   placeholder,
 } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, deleteGroupBackward, history, historyKeymap } from "@codemirror/commands";
 import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
@@ -50,6 +50,7 @@ interface EditorMountOptions {
   markdownAutoformat?: boolean;
   vimMode?: boolean;
   dateFormat?: string;
+  onExitCommand?: () => Promise<void> | void;
 }
 
 export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
@@ -67,7 +68,9 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     commandModeExtension({
       dateFormat: options.dateFormat,
       vimMode: !!options.vimMode,
+      onExitCommand: options.onExitCommand,
     }),
+    keymap.of([{ key: "Ctrl-Backspace", run: deleteGroupBackward }]),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,
     EditorView.lineWrapping,
@@ -75,7 +78,12 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   ];
 
   if (options.vimMode) {
-    extensions.push(vimModeExtension({ dateFormat: options.dateFormat }));
+    extensions.push(
+      vimModeExtension({
+        dateFormat: options.dateFormat,
+        onExitCommand: options.onExitCommand,
+      }),
+    );
   }
 
   const startState = EditorState.create({ doc, extensions });

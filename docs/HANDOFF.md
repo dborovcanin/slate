@@ -34,15 +34,14 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - default mode follows config when launched from a TTY
   - built-in full-screen editor with switcher and status bar
   - `vim_mode` remains independent/optional and applies to GUI mode only
-- Added ex command support in Vim mode:
-  - `:sum` (paragraph default)
-  - `:sum list`, `:sum table`, `:sum doc`
-  - `:sum_all` (full document)
-  - results are inserted after the scoped block as `<value>` (value-only), copied to clipboard, and shown in command status
-- Added command picker outside Vim mode:
-  - pressing `:` now opens command mode even when `[editor] vim_mode = false`
-  - command suggestions include `sum`, `sum_all`, `date`
-  - `Esc` closes the picker; when cancelled with literal colons only, the typed colons are inserted back into the document
+- Added unified command system (single command engine + shared command panel UI):
+  - command engine lives in `src/editor/command-engine.ts`
+  - command panel UI lives in `src/editor/command-picker.ts`
+  - Vim mode opens panel with `:` and enables Vim-only commands such as `:q`
+  - non-Vim mode opens panel with `Ctrl+Shift+;` and exposes edit-only commands
+  - current shared commands: `sum`, `sum list`, `sum table`, `sum doc`, `date`, `format`
+  - `:sum` results are inserted after the scoped block as `<value>` (value-only), copied to clipboard, and shown in command status
+  - new `:format` command applies document-wide markdown formatting (table alignment, heading/list normalization, trailing-space cleanup)
 - Added date insertion with calendar picker:
   - shortcut: `Ctrl+Shift+D`
   - Vim ex command: `:date`
@@ -63,7 +62,8 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 
 ## What was polished in this pass
 
-- Added confirmation prompt before note deletion (`Ctrl+Backspace`)
+- Added confirmation prompt before note deletion (`Ctrl+Shift+Backspace`)
+- Restored `Ctrl+Backspace` to word-delete behavior in the editor
 - Added safe async action wrapper for keyboard-triggered commands to avoid unhandled promise rejections
 - Made shortcuts case-robust (`Ctrl+Shift+E`, etc.)
 - Startup optimization:
@@ -94,8 +94,12 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - missing-cell normalization
   - empty input behavior
 - `src/editor/ex-commands.test.ts`
-  - command suggestion filtering/order
-  - scope and number parsing coverage
+  - sum scope and number parsing coverage
+- `src/editor/command-engine.test.ts`
+  - mode-gated command availability (`vim` vs `editor`)
+  - suggestion filtering behavior
+- `src/editor/markdown-format.test.ts`
+  - markdown normalization and table formatting coverage
 
 ### Rust (`cargo test`)
 

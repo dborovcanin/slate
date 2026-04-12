@@ -11,8 +11,10 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Autosave with 500ms debounce + flush on blur and close
 - Restores last-open note on startup
 - Dark theme with Catppuccin-inspired colors
-- Command picker with `:` even when `vim_mode = false` (suggests `sum`, `sum all`, `date`)
-- `Esc` closes command picker; if cancelled with only literal colons (`:` / `::`), those colons are inserted into the note
+- Shared command panel in both Vim and non-Vim modes
+  - Vim mode: open with `:`
+  - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
+  - Built-in commands: `sum`, `sum list`, `sum table`, `sum doc`, `date`, `format`
 - Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
 - Markdown editing helpers:
   - `Ctrl/Cmd+B` bold, `Ctrl/Cmd+I` italic, `Ctrl/Cmd+Shift+X` strikethrough, `Ctrl/Cmd+K` link
@@ -33,8 +35,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
-- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum table`, `:sum doc`, `:sum_all`, `:date`
-- `:sum`/`:sum_all` insert only `<value>` after the scoped block and copy the value to clipboard
+- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum table`, `:sum doc`, `:date`, `:format`, `:q`
+- `:sum` inserts only `<value>` after the scoped block and copies the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 
 **Optional terminal mode**
@@ -81,8 +83,9 @@ sqrt(144) + 3^2         → 21
 | Ctrl+N                  | New note                      |
 | Ctrl+P                  | Fuzzy note switcher           |
 | Ctrl+↑ / Ctrl+↓         | Previous / next note          |
-| Ctrl+Backspace          | Delete current note (confirm) |
-| :                       | Open command picker            |
+| Ctrl+Backspace          | Delete previous word           |
+| Ctrl+Shift+Backspace    | Delete current note (confirm) |
+| Ctrl+Shift+;            | Open command picker            |
 | Tab                     | Apply calc result             |
 | Ctrl+E                  | Copy note to clipboard        |
 | Ctrl+Shift+E            | Export note to file           |
