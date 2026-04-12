@@ -1,6 +1,7 @@
 mod calc;
 mod commands;
 mod config;
+pub mod editor_core;
 mod ipc;
 mod storage;
 mod terminal;
