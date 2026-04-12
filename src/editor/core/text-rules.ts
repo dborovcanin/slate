@@ -50,22 +50,14 @@ function incrementOrderedMarker(marker: string): string {
 function indentOrderedMarker(marker: string): string {
   const parts = parseOrderedMarker(marker);
   if (!parts) return marker;
-  const next = [...parts];
-  // When indenting 3. into a child, it becomes 2.1 (child of parent 2)
-  if (next[next.length - 1] > 1) {
-    next[next.length - 1] = next[next.length - 1] - 1;
-  }
-  return formatOrderedMarker([...next, 1]);
+  return formatOrderedMarker([...parts, 1]);
 }
 
 function outdentOrderedMarker(marker: string): string {
   const parts = parseOrderedMarker(marker);
   if (!parts) return marker;
   if (parts.length === 1) return formatOrderedMarker(parts);
-  const next = parts.slice(0, -1);
-  // Reverse of indent's decrement: 2.1 outdents to 3.
-  next[next.length - 1] = next[next.length - 1] + 1;
-  return formatOrderedMarker(next);
+  return formatOrderedMarker(parts.slice(0, -1));
 }
 
 function markerDepth(indent: string): number {

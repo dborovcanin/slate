@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyMarkdownLine, findInlineMarkdownTokens } from "./markdown-decoration.ts";
+import {
+  classifyMarkdownLine,
+  findInlineMarkdownTokens,
+  tokenizeCodeLine,
+} from "./markdown-decoration.ts";
 
 test("classifyMarkdownLine detects heading, list, quote and fences", () => {
   const heading = classifyMarkdownLine("### Title");
@@ -53,4 +57,20 @@ test("findInlineMarkdownTokens finds rich markdown spans", () => {
   assert.ok(types.has("code"));
   assert.ok(types.has("link-text"));
   assert.ok(types.has("link-url"));
+});
+
+test("tokenizeCodeLine marks keywords, numbers, strings, comments and symbols in fenced code", () => {
+  const rust = tokenizeCodeLine('let total: Result = parse_value(42); let s = "ok" // note', "rust");
+  const rustTypes = new Set(rust.map((token) => token.type));
+  assert.ok(rustTypes.has("keyword"));
+  assert.ok(rustTypes.has("string"));
+  assert.ok(rustTypes.has("comment"));
+  assert.ok(rustTypes.has("number"));
+  assert.ok(rustTypes.has("function"));
+  assert.ok(rustTypes.has("type"));
+
+  const sh = tokenizeCodeLine("if [ $x -eq 1 ]; then # done", "sh");
+  const shTypes = new Set(sh.map((token) => token.type));
+  assert.ok(shTypes.has("keyword"));
+  assert.ok(shTypes.has("comment"));
 });

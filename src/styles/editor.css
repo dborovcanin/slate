@@ -138,7 +138,35 @@
 
 .cm-editor .cm-line.md-code-block-line {
   font-family: var(--font-mono);
-  background: rgba(127, 132, 156, 0.08);
+  background: var(--code-bg);
+  border-left: 2px solid var(--code-border);
+  color: var(--code-fg);
+}
+
+.md-code-token-keyword {
+  color: var(--code-token-keyword);
+  font-weight: 650;
+}
+
+.md-code-token-string {
+  color: var(--code-token-string);
+}
+
+.md-code-token-number {
+  color: var(--code-token-number);
+}
+
+.md-code-token-comment {
+  color: var(--code-token-comment);
+  font-style: italic;
+}
+
+.md-code-token-function {
+  color: var(--code-token-function);
+}
+
+.md-code-token-type {
+  color: var(--code-token-type);
 }
 
 .cm-editor .cm-line.md-code-fence {

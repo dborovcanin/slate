@@ -12,10 +12,18 @@ type InlineTokenType =
   | "link-url"
   | "link-marker";
 
+type CodeTokenType = "keyword" | "string" | "number" | "comment" | "function" | "type";
+
 interface InlineToken {
   from: number;
   to: number;
   type: InlineTokenType;
+}
+
+interface CodeToken {
+  from: number;
+  to: number;
+  type: CodeTokenType;
 }
 
 interface ProtectedRange {
@@ -65,6 +73,12 @@ const decEmphasis = Decoration.mark({ class: "md-emphasis" });
 const decStrike = Decoration.mark({ class: "md-strike" });
 const decCode = Decoration.mark({ class: "md-inline-code-content" });
 const decCodeMarker = Decoration.mark({ class: "md-token md-token-code" });
+const decCodeKeyword = Decoration.mark({ class: "md-code-token-keyword" });
+const decCodeString = Decoration.mark({ class: "md-code-token-string" });
+const decCodeNumber = Decoration.mark({ class: "md-code-token-number" });
+const decCodeComment = Decoration.mark({ class: "md-code-token-comment" });
+const decCodeFunction = Decoration.mark({ class: "md-code-token-function" });
+const decCodeType = Decoration.mark({ class: "md-code-token-type" });
 const decLinkText = Decoration.mark({ class: "md-link-text" });
 const decLinkUrl = Decoration.mark({ class: "md-link-url" });
 const decLinkMarker = Decoration.mark({ class: "md-token md-token-link" });
@@ -212,6 +226,296 @@ export function findInlineMarkdownTokens(text: string): InlineToken[] {
   return tokens;
 }
 
+const jsKeywords = new Set([
+  "const",
+  "let",
+  "var",
+  "function",
+  "return",
+  "if",
+  "else",
+  "for",
+  "while",
+  "switch",
+  "case",
+  "break",
+  "continue",
+  "import",
+  "export",
+  "from",
+  "class",
+  "extends",
+  "new",
+  "async",
+  "await",
+  "try",
+  "catch",
+  "finally",
+  "throw",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "true",
+  "false",
+  "null",
+  "undefined",
+]);
+
+const rustKeywords = new Set([
+  "fn",
+  "let",
+  "mut",
+  "pub",
+  "struct",
+  "enum",
+  "impl",
+  "trait",
+  "use",
+  "mod",
+  "match",
+  "if",
+  "else",
+  "for",
+  "while",
+  "loop",
+  "return",
+  "self",
+  "Self",
+  "crate",
+  "super",
+  "as",
+  "where",
+  "const",
+  "static",
+  "true",
+  "false",
+]);
+
+const pythonKeywords = new Set([
+  "def",
+  "class",
+  "return",
+  "if",
+  "elif",
+  "else",
+  "for",
+  "while",
+  "try",
+  "except",
+  "finally",
+  "with",
+  "import",
+  "from",
+  "as",
+  "pass",
+  "break",
+  "continue",
+  "yield",
+  "lambda",
+  "True",
+  "False",
+  "None",
+]);
+
+const shellKeywords = new Set([
+  "if",
+  "then",
+  "else",
+  "fi",
+  "for",
+  "in",
+  "do",
+  "done",
+  "case",
+  "esac",
+  "while",
+  "function",
+  "export",
+  "local",
+]);
+
+const hashCommentLangs = new Set(["py", "python", "sh", "bash", "zsh", "yaml", "yml", "toml"]);
+const noCommentLangs = new Set(["json"]);
+
+function normalizeFenceLang(raw: string | null): string | null {
+  if (!raw) return null;
+  const value = raw.trim().toLowerCase();
+  if (!value) return null;
+  if (value === "typescript") return "ts";
+  if (value === "javascript") return "js";
+  if (value === "shell") return "sh";
+  if (value === "py") return "python";
+  if (value === "rs") return "rust";
+  if (value === "tsx") return "ts";
+  if (value === "jsx") return "js";
+  return value;
+}
+
+function parseFenceLanguage(lineText: string): string | null {
+  const match = lineText.match(/^\s*```([A-Za-z0-9_+-]+)/);
+  return normalizeFenceLang(match?.[1] ?? null);
+}
+
+function keywordSetForLang(lang: string | null): Set<string> {
+  if (!lang) return jsKeywords;
+  if (lang === "ts" || lang === "js" || lang === "go" || lang === "java" || lang === "c") {
+    return jsKeywords;
+  }
+  if (lang === "rust") return rustKeywords;
+  if (lang === "python") return pythonKeywords;
+  if (lang === "sh" || lang === "bash" || lang === "zsh") return shellKeywords;
+  return jsKeywords;
+}
+
+function isIdentifierChar(ch: string): boolean {
+  return /[A-Za-z0-9_]/.test(ch);
+}
+
+function nextNonWhitespaceChar(text: string, from: number): string | null {
+  let i = from;
+  while (i < text.length && /\s/.test(text[i] ?? "")) i++;
+  return i < text.length ? (text[i] ?? null) : null;
+}
+
+function pushCodeToken(tokens: CodeToken[], from: number, to: number, type: CodeTokenType): void {
+  if (to > from) {
+    tokens.push({ from, to, type });
+  }
+}
+
+function scanStringTokens(text: string, tokens: CodeToken[], protectedRanges: ProtectedRange[]) {
+  const quoteSet = new Set(["'", '"', "`"]);
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] ?? "";
+    if (!quoteSet.has(ch)) {
+      i++;
+      continue;
+    }
+
+    const quote = ch;
+    const start = i;
+    i++;
+    let escaped = false;
+    while (i < text.length) {
+      const next = text[i] ?? "";
+      if (escaped) {
+        escaped = false;
+        i++;
+        continue;
+      }
+      if (next === "\\") {
+        escaped = true;
+        i++;
+        continue;
+      }
+      if (next === quote) {
+        i++;
+        break;
+      }
+      i++;
+    }
+
+    pushCodeToken(tokens, start, i, "string");
+    protect(protectedRanges, start, i);
+  }
+}
+
+function findCommentStart(text: string, lang: string | null, protectedRanges: ProtectedRange[]): number {
+  if (lang && noCommentLangs.has(lang)) return -1;
+  if (lang && hashCommentLangs.has(lang)) {
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === "#" && !overlaps(protectedRanges, i, i + 1)) return i;
+    }
+    return -1;
+  }
+
+  for (let i = 0; i < text.length - 1; i++) {
+    if (text[i] === "/" && text[i + 1] === "/" && !overlaps(protectedRanges, i, i + 2)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+export function tokenizeCodeLine(text: string, lang: string | null): CodeToken[] {
+  const normalizedLang = normalizeFenceLang(lang);
+  const keywords = keywordSetForLang(normalizedLang);
+  const tokens: CodeToken[] = [];
+  const protectedRanges: ProtectedRange[] = [];
+
+  scanStringTokens(text, tokens, protectedRanges);
+
+  const commentStart = findCommentStart(text, normalizedLang, protectedRanges);
+  if (commentStart >= 0) {
+    pushCodeToken(tokens, commentStart, text.length, "comment");
+    protect(protectedRanges, commentStart, text.length);
+  }
+
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i] ?? "";
+    if (overlaps(protectedRanges, i, i + 1)) {
+      i++;
+      continue;
+    }
+
+    if (/[A-Za-z_]/.test(ch)) {
+      const start = i;
+      i++;
+      while (i < text.length && isIdentifierChar(text[i] ?? "")) i++;
+      const word = text.slice(start, i);
+      if (keywords.has(word)) {
+        pushCodeToken(tokens, start, i, "keyword");
+      } else {
+        const next = nextNonWhitespaceChar(text, i);
+        if (next === "(" || next === "!") {
+          pushCodeToken(tokens, start, i, "function");
+        } else if (/^[A-Z][A-Za-z0-9_]*$/.test(word)) {
+          pushCodeToken(tokens, start, i, "type");
+        }
+      }
+      continue;
+    }
+
+    if (/[0-9]/.test(ch)) {
+      const start = i;
+      i++;
+      while (i < text.length && /[0-9_]/.test(text[i] ?? "")) i++;
+      if (text[i] === "." && /[0-9]/.test(text[i + 1] ?? "")) {
+        i++;
+        while (i < text.length && /[0-9_]/.test(text[i] ?? "")) i++;
+      }
+      pushCodeToken(tokens, start, i, "number");
+      continue;
+    }
+
+    i++;
+  }
+
+  tokens.sort((a, b) => (a.from === b.from ? a.to - b.to : a.from - b.from));
+  return tokens;
+}
+
+function addCodeSyntaxDecorations(
+  builder: RangeSetBuilder<Decoration>,
+  lineFrom: number,
+  text: string,
+  lang: string | null,
+) {
+  for (const token of tokenizeCodeLine(text, lang)) {
+    const from = lineFrom + token.from;
+    const to = lineFrom + token.to;
+    if (token.type === "keyword") builder.add(from, to, decCodeKeyword);
+    if (token.type === "string") builder.add(from, to, decCodeString);
+    if (token.type === "number") builder.add(from, to, decCodeNumber);
+    if (token.type === "comment") builder.add(from, to, decCodeComment);
+    if (token.type === "function") builder.add(from, to, decCodeFunction);
+    if (token.type === "type") builder.add(from, to, decCodeType);
+  }
+}
+
 function addInlineDecorations(builder: RangeSetBuilder<Decoration>, lineFrom: number, text: string) {
   for (const token of findInlineMarkdownTokens(text)) {
     const from = lineFrom + token.from;
@@ -248,20 +552,28 @@ function addInlineDecorations(builder: RangeSetBuilder<Decoration>, lineFrom: nu
 function buildMarkdownDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   let inCodeBlock = false;
+  let codeFenceLang: string | null = null;
 
   for (let lineNo = 1; lineNo <= view.state.doc.lines; lineNo++) {
     const line = view.state.doc.line(lineNo);
     const info = classifyMarkdownLine(line.text);
 
     if (info.isCodeFence) {
+      if (!inCodeBlock) {
+        codeFenceLang = parseFenceLanguage(line.text);
+      }
       builder.add(line.from, line.from, decCodeFenceLine);
       builder.add(line.from, line.to, decFenceToken);
       inCodeBlock = !inCodeBlock;
+      if (!inCodeBlock) {
+        codeFenceLang = null;
+      }
       continue;
     }
 
     if (inCodeBlock) {
       builder.add(line.from, line.from, decCodeBlockLine);
+      addCodeSyntaxDecorations(builder, line.from, line.text, codeFenceLang);
       continue;
     }
 

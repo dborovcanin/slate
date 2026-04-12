@@ -1,6 +1,14 @@
+use std::fmt::Write as _;
+
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
+const FG_CODE_KEYWORD: u8 = 81;
+const FG_CODE_STRING: u8 = 114;
+const FG_CODE_NUMBER: u8 = 215;
+const FG_CODE_COMMENT: u8 = 244;
+const FG_CODE_FUNCTION: u8 = 74;
+const FG_CODE_TYPE: u8 = 183;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct CharStyle {
@@ -9,6 +17,7 @@ struct CharStyle {
     dim: bool,
     strikethrough: bool,
     reverse: bool,
+    fg: Option<u8>,
 }
 
 impl CharStyle {
@@ -30,22 +39,32 @@ impl CharStyle {
         if self.strikethrough {
             buf.push_str(";9");
         }
+        if let Some(color) = self.fg {
+            let _ = write!(buf, ";38;5;{color}");
+        }
         buf.push('m');
     }
 
     fn is_plain(&self) -> bool {
-        !self.bold && !self.italic && !self.dim && !self.strikethrough && !self.reverse
+        !self.bold
+            && !self.italic
+            && !self.dim
+            && !self.strikethrough
+            && !self.reverse
+            && self.fg.is_none()
     }
 }
 
 pub struct RenderContext {
     in_code_block: bool,
+    code_fence_lang: Option<String>,
 }
 
 impl RenderContext {
     pub fn new() -> Self {
         Self {
             in_code_block: false,
+            code_fence_lang: None,
         }
     }
 
@@ -53,14 +72,27 @@ impl RenderContext {
     pub fn advance_lines(&mut self, lines: &[String]) {
         for line in lines {
             if is_code_fence(line) {
-                self.in_code_block = !self.in_code_block;
+                if self.in_code_block {
+                    self.in_code_block = false;
+                    self.code_fence_lang = None;
+                } else {
+                    self.in_code_block = true;
+                    self.code_fence_lang = fence_language(line);
+                }
             }
         }
     }
 
+    #[cfg(test)]
     pub fn advance_line(&mut self, text: &str) {
         if is_code_fence(text) {
-            self.in_code_block = !self.in_code_block;
+            if self.in_code_block {
+                self.in_code_block = false;
+                self.code_fence_lang = None;
+            } else {
+                self.in_code_block = true;
+                self.code_fence_lang = fence_language(text);
+            }
         }
     }
 
@@ -83,11 +115,15 @@ impl RenderContext {
             for s in &mut styles {
                 s.dim = true;
             }
-            self.in_code_block = !self.in_code_block;
-        } else if self.in_code_block {
-            for s in &mut styles {
-                s.dim = true;
+            if self.in_code_block {
+                self.in_code_block = false;
+                self.code_fence_lang = None;
+            } else {
+                self.in_code_block = true;
+                self.code_fence_lang = fence_language(text);
             }
+        } else if self.in_code_block {
+            apply_code_block_styles(&chars, &mut styles, self.code_fence_lang.as_deref());
         } else {
             apply_line_styles(&chars, &mut styles);
             apply_inline_styles(&chars, &mut styles);
@@ -105,6 +141,263 @@ impl RenderContext {
 
 fn is_code_fence(text: &str) -> bool {
     text.trim_start().starts_with("```")
+}
+
+fn normalize_fence_lang(raw: &str) -> Option<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return None;
+    }
+    let normalized = match value.as_str() {
+        "typescript" | "tsx" => "ts",
+        "javascript" | "jsx" => "js",
+        "shell" | "bash" | "zsh" => "sh",
+        "py" => "python",
+        "rs" => "rust",
+        other => other,
+    };
+    Some(normalized.to_string())
+}
+
+fn fence_language(text: &str) -> Option<String> {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("```") {
+        return None;
+    }
+    let rest = trimmed[3..].trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    let lang: String = rest
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '+' | '-'))
+        .collect();
+    if lang.is_empty() {
+        return None;
+    }
+    normalize_fence_lang(&lang)
+}
+
+fn is_ident_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_'
+}
+
+fn next_non_whitespace_char(chars: &[char], from: usize) -> Option<char> {
+    let mut idx = from;
+    while idx < chars.len() && chars[idx].is_ascii_whitespace() {
+        idx += 1;
+    }
+    chars.get(idx).copied()
+}
+
+fn keyword_list(lang: Option<&str>) -> &'static [&'static str] {
+    const JS: &[&str] = &[
+        "const", "let", "var", "function", "return", "if", "else", "for", "while", "switch",
+        "case", "break", "continue", "import", "export", "from", "class", "extends", "new",
+        "async", "await", "try", "catch", "finally", "throw", "true", "false", "null",
+        "undefined",
+    ];
+    const RUST: &[&str] = &[
+        "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "match",
+        "if", "else", "for", "while", "loop", "return", "self", "Self", "crate", "super",
+        "where", "const", "static", "true", "false",
+    ];
+    const PY: &[&str] = &[
+        "def", "class", "return", "if", "elif", "else", "for", "while", "try", "except",
+        "finally", "with", "import", "from", "as", "break", "continue", "yield", "lambda",
+        "True", "False", "None",
+    ];
+    const SH: &[&str] = &[
+        "if", "then", "else", "fi", "for", "in", "do", "done", "case", "esac", "while",
+        "function", "export", "local",
+    ];
+
+    match lang {
+        Some("rust") => RUST,
+        Some("python") => PY,
+        Some("sh") => SH,
+        Some("ts") | Some("js") | Some("go") | Some("java") | Some("c") => JS,
+        _ => JS,
+    }
+}
+
+fn comment_mode(lang: Option<&str>) -> &'static str {
+    match lang {
+        Some("json") => "none",
+        Some("python") | Some("sh") | Some("yaml") | Some("yml") | Some("toml") => "hash",
+        _ => "slash",
+    }
+}
+
+fn apply_style_range(
+    styles: &mut [CharStyle],
+    protected: &mut [bool],
+    from: usize,
+    to: usize,
+    fg: u8,
+    dim: bool,
+) {
+    let end = to.min(styles.len());
+    for i in from.min(end)..end {
+        styles[i].fg = Some(fg);
+        styles[i].dim = dim;
+        protected[i] = true;
+    }
+}
+
+fn apply_code_block_styles(chars: &[char], styles: &mut [CharStyle], lang: Option<&str>) {
+    for style in styles.iter_mut() {
+        style.dim = true;
+        style.fg = None;
+    }
+    if chars.is_empty() {
+        return;
+    }
+
+    let mut protected = vec![false; chars.len()];
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if !matches!(ch, '"' | '\'' | '`') {
+            i += 1;
+            continue;
+        }
+        let quote = ch;
+        let start = i;
+        i += 1;
+        let mut escaped = false;
+        while i < chars.len() {
+            let current = chars[i];
+            if escaped {
+                escaped = false;
+                i += 1;
+                continue;
+            }
+            if current == '\\' {
+                escaped = true;
+                i += 1;
+                continue;
+            }
+            if current == quote {
+                i += 1;
+                break;
+            }
+            i += 1;
+        }
+        apply_style_range(
+            styles,
+            &mut protected,
+            start,
+            i,
+            FG_CODE_STRING,
+            false,
+        );
+    }
+
+    match comment_mode(lang) {
+        "hash" => {
+            for idx in 0..chars.len() {
+                if chars[idx] == '#' && !protected[idx] {
+                    apply_style_range(
+                        styles,
+                        &mut protected,
+                        idx,
+                        chars.len(),
+                        FG_CODE_COMMENT,
+                        true,
+                    );
+                    break;
+                }
+            }
+        }
+        "slash" => {
+            for idx in 0..chars.len().saturating_sub(1) {
+                if chars[idx] == '/' && chars[idx + 1] == '/' && !protected[idx] && !protected[idx + 1]
+                {
+                    apply_style_range(
+                        styles,
+                        &mut protected,
+                        idx,
+                        chars.len(),
+                        FG_CODE_COMMENT,
+                        true,
+                    );
+                    break;
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let keywords = keyword_list(lang);
+    let mut pos = 0;
+    while pos < chars.len() {
+        if protected[pos] {
+            pos += 1;
+            continue;
+        }
+
+        let ch = chars[pos];
+        if ch.is_ascii_alphabetic() || ch == '_' {
+            let start = pos;
+            pos += 1;
+            while pos < chars.len() && is_ident_char(chars[pos]) {
+                pos += 1;
+            }
+            if !protected[start..pos].iter().any(|&v| v) {
+                let word: String = chars[start..pos].iter().collect();
+                let color = if keywords.contains(&word.as_str()) {
+                    Some(FG_CODE_KEYWORD)
+                } else if next_non_whitespace_char(chars, pos).is_some_and(|ch| ch == '(' || ch == '!')
+                {
+                    Some(FG_CODE_FUNCTION)
+                } else if word
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_uppercase())
+                {
+                    Some(FG_CODE_TYPE)
+                } else {
+                    None
+                };
+                if let Some(color) = color {
+                    for idx in start..pos {
+                        styles[idx].fg = Some(color);
+                        styles[idx].dim = false;
+                    }
+                }
+            }
+            continue;
+        }
+
+        if ch.is_ascii_digit() {
+            let prev_is_ident = pos > 0 && is_ident_char(chars[pos - 1]);
+            if prev_is_ident {
+                pos += 1;
+                continue;
+            }
+            let start = pos;
+            pos += 1;
+            while pos < chars.len() && (chars[pos].is_ascii_digit() || chars[pos] == '_') {
+                pos += 1;
+            }
+            if pos + 1 < chars.len() && chars[pos] == '.' && chars[pos + 1].is_ascii_digit() {
+                pos += 1;
+                while pos < chars.len() && (chars[pos].is_ascii_digit() || chars[pos] == '_') {
+                    pos += 1;
+                }
+            }
+            if !protected[start..pos].iter().any(|&v| v) {
+                for idx in start..pos {
+                    styles[idx].fg = Some(FG_CODE_NUMBER);
+                    styles[idx].dim = false;
+                }
+            }
+            continue;
+        }
+
+        pos += 1;
+    }
 }
 
 fn apply_line_styles(chars: &[char], styles: &mut [CharStyle]) {
@@ -555,6 +848,8 @@ mod tests {
         assert!(is_code_fence("```"));
         assert!(is_code_fence("  ```rust"));
         assert!(!is_code_fence("hello"));
+        assert_eq!(fence_language("```rust"), Some("rust".to_string()));
+        assert_eq!(fence_language("```typescript"), Some("ts".to_string()));
     }
 
     #[test]
@@ -562,12 +857,14 @@ mod tests {
         let mut ctx = RenderContext::new();
         ctx.advance_line("normal line");
         assert!(!ctx.in_code_block);
-        ctx.advance_line("```");
+        ctx.advance_line("```rust");
         assert!(ctx.in_code_block);
+        assert_eq!(ctx.code_fence_lang.as_deref(), Some("rust"));
         ctx.advance_line("code line");
         assert!(ctx.in_code_block);
         ctx.advance_line("```");
         assert!(!ctx.in_code_block);
+        assert_eq!(ctx.code_fence_lang, None);
     }
 
     #[test]
@@ -586,6 +883,16 @@ mod tests {
         let out = ctx.render_line("2+2", 30, Some("4"), &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains("→ 4"));
+    }
+
+    #[test]
+    fn render_code_block_adds_syntax_color_sequences() {
+        let mut ctx = RenderContext::new();
+        let _ = ctx.render_line("```rust", 60, None, &[]);
+        let out = ctx.render_line("let total = 42 // note", 60, None, &[]);
+        assert!(out.contains("38;5;81"));
+        assert!(out.contains("38;5;215"));
+        assert!(out.contains("38;5;244"));
     }
 
     fn strip_ansi(s: &str) -> String {

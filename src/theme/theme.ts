@@ -23,6 +23,167 @@ let reloadTimer: number | null = null;
 let reloadInFlight = false;
 const LIVE_RELOAD_INTERVAL_MS = 1200;
 
+interface Rgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
+const FALLBACK_BG: Rgb = { r: 30, g: 30, b: 46 };
+const FALLBACK_FG: Rgb = { r: 205, g: 214, b: 244 };
+const FALLBACK_ACCENT: Rgb = { r: 137, g: 180, b: 250 };
+const FALLBACK_FG_DIM: Rgb = { r: 127, g: 132, b: 156 };
+
+function clampChannel(value: number): number {
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function parseCssColor(value: string | undefined): Rgb | null {
+  if (!value) return null;
+  const text = value.trim();
+  const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const raw = hex[1];
+    if (raw.length === 3) {
+      return {
+        r: Number.parseInt(raw[0] + raw[0], 16),
+        g: Number.parseInt(raw[1] + raw[1], 16),
+        b: Number.parseInt(raw[2] + raw[2], 16),
+      };
+    }
+    return {
+      r: Number.parseInt(raw.slice(0, 2), 16),
+      g: Number.parseInt(raw.slice(2, 4), 16),
+      b: Number.parseInt(raw.slice(4, 6), 16),
+    };
+  }
+
+  const rgb = text.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgb) {
+    const parts = rgb[1]?.split(",").map((entry) => Number.parseFloat(entry.trim())) ?? [];
+    if (parts.length >= 3 && parts.every((entry, idx) => idx < 3 && Number.isFinite(entry))) {
+      return {
+        r: clampChannel(parts[0] ?? 0),
+        g: clampChannel(parts[1] ?? 0),
+        b: clampChannel(parts[2] ?? 0),
+      };
+    }
+  }
+
+  return null;
+}
+
+function toHex(color: Rgb): string {
+  const asHex = (value: number) => clampChannel(value).toString(16).padStart(2, "0");
+  return `#${asHex(color.r)}${asHex(color.g)}${asHex(color.b)}`;
+}
+
+function mix(a: Rgb, b: Rgb, t: number): Rgb {
+  return {
+    r: a.r + (b.r - a.r) * t,
+    g: a.g + (b.g - a.g) * t,
+    b: a.b + (b.b - a.b) * t,
+  };
+}
+
+function luminance(rgb: Rgb): number {
+  const channel = (v: number) => {
+    const n = v / 255;
+    return n <= 0.03928 ? n / 12.92 : ((n + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+function rgbToHsl(rgb: Rgb): { h: number; s: number; l: number } {
+  const r = rgb.r / 255;
+  const g = rgb.g / 255;
+  const b = rgb.b / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  const d = max - min;
+  if (d === 0) return { h: 0, s: 0, l };
+
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  switch (max) {
+    case r:
+      h = (g - b) / d + (g < b ? 6 : 0);
+      break;
+    case g:
+      h = (b - r) / d + 2;
+      break;
+    case b:
+      h = (r - g) / d + 4;
+      break;
+  }
+  h /= 6;
+  return { h: h * 360, s, l };
+}
+
+function hslToRgb(h: number, s: number, l: number): Rgb {
+  const hue = (((h % 360) + 360) % 360) / 360;
+  if (s === 0) {
+    const v = l * 255;
+    return { r: v, g: v, b: v };
+  }
+
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const hueToChannel = (t: number) => {
+    let value = t;
+    if (value < 0) value += 1;
+    if (value > 1) value -= 1;
+    if (value < 1 / 6) return p + (q - p) * 6 * value;
+    if (value < 1 / 2) return q;
+    if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6;
+    return p;
+  };
+
+  return {
+    r: hueToChannel(hue + 1 / 3) * 255,
+    g: hueToChannel(hue) * 255,
+    b: hueToChannel(hue - 1 / 3) * 255,
+  };
+}
+
+function shiftHue(rgb: Rgb, degrees: number): Rgb {
+  const hsl = rgbToHsl(rgb);
+  return hslToRgb(hsl.h + degrees, hsl.s, hsl.l);
+}
+
+function deriveCodePalette(vars: Record<string, string>): Record<string, string> {
+  const bg = parseCssColor(vars["--bg"]) ?? FALLBACK_BG;
+  const bgSurface = parseCssColor(vars["--bg-surface"]) ?? mix(bg, FALLBACK_FG, 0.06);
+  const fg = parseCssColor(vars["--fg"]) ?? FALLBACK_FG;
+  const fgDim = parseCssColor(vars["--fg-dim"]) ?? FALLBACK_FG_DIM;
+  const accent = parseCssColor(vars["--accent"]) ?? FALLBACK_ACCENT;
+  const dark = luminance(bg) < 0.45;
+  const pole: Rgb = dark ? { r: 255, g: 255, b: 255 } : { r: 0, g: 0, b: 0 };
+
+  const adapt = (color: Rgb, amount: number) => mix(color, pole, amount);
+  const keyword = adapt(accent, dark ? 0.12 : 0.28);
+  const string = adapt(shiftHue(accent, dark ? 96 : 84), dark ? 0.08 : 0.32);
+  const number = adapt(shiftHue(accent, dark ? -84 : -72), dark ? 0.05 : 0.28);
+  const func = adapt(shiftHue(accent, dark ? 42 : 30), dark ? 0.08 : 0.25);
+  const type = adapt(shiftHue(accent, dark ? -38 : -25), dark ? 0.08 : 0.26);
+  const comment = mix(fgDim, bg, dark ? 0.12 : 0.04);
+  const codeBg = mix(bgSurface, bg, dark ? 0.4 : 0.12);
+  const codeBorder = mix(accent, bg, dark ? 0.7 : 0.58);
+
+  return {
+    "--code-token-keyword": vars["--code-token-keyword"] ?? toHex(keyword),
+    "--code-token-string": vars["--code-token-string"] ?? toHex(string),
+    "--code-token-number": vars["--code-token-number"] ?? toHex(number),
+    "--code-token-function": vars["--code-token-function"] ?? toHex(func),
+    "--code-token-type": vars["--code-token-type"] ?? toHex(type),
+    "--code-token-comment": vars["--code-token-comment"] ?? toHex(comment),
+    "--code-bg": vars["--code-bg"] ?? toHex(codeBg),
+    "--code-border": vars["--code-border"] ?? toHex(codeBorder),
+    "--code-fg": vars["--code-fg"] ?? toHex(fg),
+  };
+}
+
 function normalizeName(value: string | null | undefined): string {
   return (value ?? "")
     .trim()
@@ -54,6 +215,11 @@ export function applyTheme(selection: ThemeSelection) {
   const root = document.documentElement;
 
   for (const [name, value] of Object.entries(scheme.vars)) {
+    root.style.setProperty(name, value);
+  }
+
+  const codePalette = deriveCodePalette(scheme.vars);
+  for (const [name, value] of Object.entries(codePalette)) {
     root.style.setProperty(name, value);
   }
 

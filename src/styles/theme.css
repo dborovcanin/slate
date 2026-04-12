@@ -10,6 +10,14 @@
   --selection-bg: rgba(137, 180, 250, 0.25);
   --active-line-bg: rgba(255, 255, 255, 0.03);
   --pattern-color: rgba(166, 173, 200, 0.08);
+  --code-bg: rgba(127, 132, 156, 0.08);
+  --code-border: rgba(166, 173, 200, 0.2);
+  --code-token-keyword: #89b4fa;
+  --code-token-string: #a6e3a1;
+  --code-token-number: #fab387;
+  --code-token-comment: #9399b2;
+  --code-token-function: #94e2d5;
+  --code-token-type: #cba6f7;
   --bg-pattern: none;
   --bg-pattern-size: auto;
   --radius: 6px;
