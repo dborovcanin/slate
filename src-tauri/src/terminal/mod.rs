@@ -25,6 +25,7 @@ enum UiMode {
     Editor,
     Switcher,
     CommandBar,
+    DatePicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +73,10 @@ struct TerminalApp {
     command_input: String,
     quit: bool,
     force_quit: bool,
+    // Date picker state
+    date_year: i32,
+    date_month: u32,  // 1-12
+    date_day: u32,    // 1-31
 }
 
 impl TerminalApp {
@@ -97,6 +102,9 @@ impl TerminalApp {
             command_input: String::new(),
             quit: false,
             force_quit: false,
+            date_year: 0,
+            date_month: 0,
+            date_day: 0,
         })
     }
 
@@ -132,10 +140,12 @@ impl TerminalApp {
 
     fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match self.mode {
-            UiMode::Editor => self.handle_editor_key(db, key),
-            UiMode::Switcher => self.handle_switcher_key(db, key),
-            UiMode::CommandBar => self.handle_command_bar_key(key),
+            UiMode::DatePicker => self.handle_date_picker_key(key)?,
+            UiMode::Editor => self.handle_editor_key(db, key)?,
+            UiMode::Switcher => self.handle_switcher_key(db, key)?,
+            UiMode::CommandBar => self.handle_command_bar_key(key)?,
         }
+        Ok(())
     }
 
     fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -341,6 +351,11 @@ impl TerminalApp {
             return;
         }
 
+        if cmd == "date" {
+            self.open_date_picker();
+            return;
+        }
+
         let snapshot = self.build_snapshot();
         let result = crate::editor_core::commands::execute_command(
             &snapshot,
@@ -414,6 +429,99 @@ impl TerminalApp {
             },
             changed_range: None,
         }
+    }
+
+    fn open_date_picker(&mut self) {
+        let now = time::OffsetDateTime::now_utc().date();
+        self.date_year = now.year();
+        self.date_month = now.month() as u32;
+        self.date_day = now.day() as u32;
+        self.mode = UiMode::DatePicker;
+        self.status = "Date picker: arrows navigate, Enter insert, Esc cancel".to_string();
+    }
+
+    fn handle_date_picker_key(&mut self, key: Key) -> Result<(), String> {
+        match key {
+            Key::Esc => {
+                self.mode = UiMode::Editor;
+                self.status = format!("editing {}", self.active_note.id);
+            }
+            Key::Enter => {
+                let date_str = format!(
+                    "{:04}-{:02}-{:02}",
+                    self.date_year, self.date_month, self.date_day
+                );
+                self.mode = UiMode::Editor;
+                self.insert_text(&date_str);
+                self.status = "Date inserted".to_string();
+            }
+            Key::ArrowLeft => {
+                if self.date_day > 1 {
+                    self.date_day -= 1;
+                }
+            }
+            Key::ArrowRight => {
+                let max = days_in_month(self.date_year, self.date_month);
+                if self.date_day < max {
+                    self.date_day += 1;
+                }
+            }
+            Key::ArrowUp => {
+                if self.date_day > 7 {
+                    self.date_day -= 7;
+                } else {
+                    // Go to previous month
+                    if self.date_month == 1 {
+                        self.date_month = 12;
+                        self.date_year -= 1;
+                    } else {
+                        self.date_month -= 1;
+                    }
+                    let max = days_in_month(self.date_year, self.date_month);
+                    self.date_day = max.min(self.date_day);
+                }
+            }
+            Key::ArrowDown => {
+                let max = days_in_month(self.date_year, self.date_month);
+                if self.date_day + 7 <= max {
+                    self.date_day += 7;
+                } else {
+                    // Go to next month
+                    if self.date_month == 12 {
+                        self.date_month = 1;
+                        self.date_year += 1;
+                    } else {
+                        self.date_month += 1;
+                    }
+                    let new_max = days_in_month(self.date_year, self.date_month);
+                    self.date_day = new_max.min(self.date_day);
+                }
+            }
+            Key::CtrlArrowLeft => {
+                // Previous month
+                if self.date_month == 1 {
+                    self.date_month = 12;
+                    self.date_year -= 1;
+                } else {
+                    self.date_month -= 1;
+                }
+                let max = days_in_month(self.date_year, self.date_month);
+                self.date_day = self.date_day.min(max);
+            }
+            Key::CtrlArrowRight => {
+                // Next month
+                if self.date_month == 12 {
+                    self.date_month = 1;
+                    self.date_year += 1;
+                } else {
+                    self.date_month += 1;
+                }
+                let max = days_in_month(self.date_year, self.date_month);
+                self.date_day = self.date_day.min(max);
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn open_switcher(&mut self, db: &Db) -> Result<(), String> {
@@ -726,7 +834,7 @@ impl TerminalApp {
             let line_idx = self.scroll_line + i;
             if line_idx < self.lines.len() {
                 let line_no = line_idx + 1;
-                let gutter = format!("{line_no:>4} ");
+                let gutter = format!("{line_no:>4}  ");
                 let available = cols.saturating_sub(GUTTER_WIDTH);
                 let engine = crate::calc::engine::CalcEngine::new();
                 let calc_ghost = get_calc_ghost_for_line(&self.lines[line_idx], &engine);
@@ -742,11 +850,16 @@ impl TerminalApp {
         let status = match self.mode {
             UiMode::Editor | UiMode::CommandBar => &self.status,
             UiMode::Switcher => "Switcher: type to filter, Enter open, Esc close",
+            UiMode::DatePicker => "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel",
         };
         draw_row(&mut buf, rows, cols, status, true);
 
         if self.mode == UiMode::Switcher {
             draw_switcher(self, &mut buf, rows, cols);
+        }
+
+        if self.mode == UiMode::DatePicker {
+            draw_date_picker(self, &mut buf, rows, cols);
         }
 
         let (cursor_row, cursor_col) = self.cursor_position(rows, cols);
@@ -764,6 +877,10 @@ impl TerminalApp {
             UiMode::CommandBar => {
                 let col = (1 + 1 + self.command_input.chars().count()).min(cols.max(1));
                 (rows, col.max(1))
+            }
+            UiMode::DatePicker => {
+                // Hide cursor inside the date picker
+                (1, 1)
             }
             UiMode::Editor => {
                 let row = EDITOR_TOP_ROW
@@ -1046,6 +1163,122 @@ fn draw_switcher(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) 
             draw_row_at(buf, row, x + 1, box_w.saturating_sub(2), "", false);
         }
     }
+}
+
+const MONTH_NAMES: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+];
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+/// Zeller-style day of week: 0=Mon, 1=Tue, ..., 6=Sun
+fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
+    let (y, m) = if month <= 2 {
+        (year - 1, month + 12)
+    } else {
+        (year, month)
+    };
+    let q = day as i32;
+    let k = y % 100;
+    let j = y / 100;
+    let m = m as i32;
+    let h = (q + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j) % 7;
+    // h: 0=Sat, 1=Sun, 2=Mon, ...
+    let dow = ((h + 5) % 7 + 7) % 7;
+    dow as u32
+}
+
+fn draw_date_picker(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) {
+    let box_w: usize = 30;
+    let box_h: usize = 12;
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+
+    // Clear box area
+    for dy in 0..box_h {
+        draw_row_at(buf, y + dy, x, box_w, "", false);
+    }
+
+    // Border
+    for dx in 0..box_w {
+        let ch = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
+        buf.push_str(&goto(y, x + dx));
+        buf.push(ch);
+        buf.push_str(&goto(y + box_h - 1, x + dx));
+        buf.push(ch);
+    }
+    for dy in 1..box_h.saturating_sub(1) {
+        buf.push_str(&goto(y + dy, x));
+        buf.push('|');
+        buf.push_str(&goto(y + dy, x + box_w - 1));
+        buf.push('|');
+    }
+
+    // Title: month + year
+    let month_name = MONTH_NAMES[app.date_month.saturating_sub(1).min(11) as usize];
+    let title = format!("< {} {} >", month_name, app.date_year);
+    let title_x = x + 1 + (box_w.saturating_sub(2).saturating_sub(title.len())) / 2;
+    draw_row_at(buf, y + 1, title_x, title.len(), &title, false);
+
+    // Day headers
+    let header = " Mo Tu We Th Fr Sa Su ";
+    let inner_w = box_w.saturating_sub(2);
+    let hdr_text: String = header.chars().take(inner_w).collect();
+    buf.push_str(&goto(y + 2, x + 1));
+    buf.push_str("\x1b[2m");
+    buf.push_str(&hdr_text);
+    buf.push_str("\x1b[0m");
+
+    // Calendar grid
+    let first_dow = day_of_week(app.date_year, app.date_month, 1);
+    let max_days = days_in_month(app.date_year, app.date_month);
+
+    let mut row_idx = 0;
+    let mut col_idx = first_dow as usize;
+
+    for day in 1..=max_days {
+        let grid_row = y + 3 + row_idx;
+        let grid_col = x + 1 + col_idx * 3;
+
+        if grid_row < y + box_h - 1 {
+            buf.push_str(&goto(grid_row, grid_col));
+            if day == app.date_day {
+                buf.push_str("\x1b[7m"); // reverse
+            }
+            buf.push_str(&format!("{:>2}", day));
+            if day == app.date_day {
+                buf.push_str("\x1b[0m");
+            }
+        }
+
+        col_idx += 1;
+        if col_idx >= 7 {
+            col_idx = 0;
+            row_idx += 1;
+        }
+    }
+
+    // Footer
+    let selected = format!("{:04}-{:02}-{:02}", app.date_year, app.date_month, app.date_day);
+    let footer_x = x + 1 + (inner_w.saturating_sub(selected.len())) / 2;
+    buf.push_str(&goto(y + box_h - 2, footer_x));
+    buf.push_str("\x1b[1m");
+    buf.push_str(&selected);
+    buf.push_str("\x1b[0m");
 }
 
 fn goto(row: usize, col: usize) -> String {
