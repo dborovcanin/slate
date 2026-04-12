@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseNumbers, parseScope, resolveScopeRange } from "./ex-commands.ts";
+import { EditorState } from "@codemirror/state";
+import type { EditorView } from "@codemirror/view";
+import { executeExCommand, parseNumbers, parseScope, resolveScopeRange } from "./ex-commands.ts";
 
 test("parseScope defaults to paragraph", () => {
   assert.equal(parseScope(undefined), "paragraph");
@@ -38,4 +40,26 @@ test("resolveScopeRange requires cursor on list/table for those scopes", () => {
 test("resolveScopeRange for doc spans entire file", () => {
   const lines = ["x", "y", "z"];
   assert.deepEqual(resolveScopeRange(lines, 2, "doc"), { startLine: 1, endLine: 3 });
+});
+
+test("executeExCommand inserts sum value at cursor and moves cursor to inserted end", async () => {
+  const state = EditorState.create({
+    doc: "10\n20",
+    selection: { anchor: 0 },
+  });
+
+  let dispatched: Record<string, unknown> | null = null;
+  const fakeView = {
+    state,
+    dispatch(spec: Record<string, unknown>) {
+      dispatched = spec;
+    },
+  } as unknown as EditorView;
+
+  const message = await executeExCommand(fakeView, "sum");
+
+  assert.equal(message.includes("inserted at cursor"), true);
+  assert.ok(dispatched);
+  assert.deepEqual(dispatched?.changes, { from: 0, to: 0, insert: "30" });
+  assert.deepEqual(dispatched?.selection, { anchor: 2 });
 });

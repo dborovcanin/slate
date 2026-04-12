@@ -97,15 +97,11 @@ function linesFromView(view: EditorView): string[] {
   return out;
 }
 
-function insertValueAfterRange(view: EditorView, range: LineRange, value: string) {
-  const line = view.state.doc.line(range.endLine);
-  const from = line.to;
-  const prefix = view.state.doc.length === 0 ? "" : "\n";
-  const insert = `${prefix}${value}`;
-
+function insertValueAtCursor(view: EditorView, value: string) {
+  const main = view.state.selection.main;
   view.dispatch({
-    changes: { from, to: from, insert },
-    selection: { anchor: from + insert.length },
+    changes: { from: main.from, to: main.to, insert: value },
+    selection: { anchor: main.from + value.length },
     scrollIntoView: true,
   });
 }
@@ -119,7 +115,7 @@ export function parseScope(raw: string | undefined): SumScope {
 }
 
 async function copyText(text: string) {
-  if (!navigator.clipboard) return;
+  if (typeof navigator === "undefined" || !navigator.clipboard) return;
   try {
     await navigator.clipboard.writeText(text);
   } catch (err) {
@@ -145,9 +141,9 @@ export async function executeExCommand(
     if (numbers.length === 0) return `sum(${scope}): no numbers`;
     const sum = numbers.reduce((acc, n) => acc + n, 0);
     const formatted = formatNumber(sum);
-    insertValueAfterRange(view, range ?? docRange(lines), formatted);
+    insertValueAtCursor(view, formatted);
     await copyText(formatted);
-    return `sum(${scope}) = ${formatted} (${numbers.length} values, inserted value + copied)`;
+    return `sum(${scope}) = ${formatted} (${numbers.length} values, inserted at cursor + copied)`;
   }
 
   return `unknown command: ${trimmed}`;

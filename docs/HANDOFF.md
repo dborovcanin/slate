@@ -40,7 +40,7 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - Vim mode opens panel with `:` and enables Vim-only commands such as `:q`
   - non-Vim mode opens panel with `Ctrl+Shift+;` and exposes edit-only commands
   - current shared commands: `sum`, `sum list`, `sum table`, `sum doc`, `date`, `format`
-  - `:sum` results are inserted after the scoped block as `<value>` (value-only), copied to clipboard, and shown in command status
+  - `:sum` results are inserted at cursor/selection as `<value>` (value-only), copied to clipboard, and shown in command status
   - new `:format` command applies document-wide markdown formatting (table alignment, heading/list normalization, trailing-space cleanup)
 - Added date insertion with calendar picker:
   - shortcut: `Ctrl+Shift+D`

@@ -36,7 +36,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Ex commands: `:sum` (paragraph default), `:sum list`, `:sum table`, `:sum doc`, `:date`, `:format`, `:q`
-- `:sum` inserts only `<value>` after the scoped block and copies the value to clipboard
+- `:sum` computes from the selected scope, inserts only `<value>` at cursor/selection, and copies the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 
 **Optional terminal mode**
