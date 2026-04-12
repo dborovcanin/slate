@@ -60,6 +60,15 @@ struct NoteMeta {
     title: String,
 }
 
+const MAX_UNDO_ENTRIES: usize = 500;
+
+#[derive(Debug, Clone)]
+struct UndoEntry {
+    lines: Vec<String>,
+    cursor_line: usize,
+    cursor_col: usize,
+}
+
 #[derive(Debug)]
 struct TerminalApp {
     active_note: Note,
@@ -97,6 +106,9 @@ struct TerminalApp {
     search_orig_scroll: usize,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
+    // Undo/redo
+    undo_stack: Vec<UndoEntry>,
+    redo_stack: Vec<UndoEntry>,
 }
 
 impl TerminalApp {
@@ -142,6 +154,8 @@ impl TerminalApp {
             search_orig_col: 0,
             search_orig_scroll: 0,
             command_bar_from_normal: false,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         })
     }
 
@@ -341,6 +355,9 @@ impl TerminalApp {
             Key::Ctrl('f') => {
                 self.open_search();
             }
+            Key::Ctrl('r') => {
+                self.redo();
+            }
             Key::Ctrl('e') => {
                 self.command_input.clear();
                 self.command_bar_from_normal = true;
@@ -496,6 +513,16 @@ impl TerminalApp {
                 self.mode = UiMode::VisualLine;
                 self.selection_anchor = Some((self.cursor_line, self.cursor_col));
                 self.status = "-- VISUAL LINE --".to_string();
+                self.vim_buffer.clear();
+            }
+            'x' => {
+                for _ in 0..count {
+                    self.delete_forward();
+                }
+                self.vim_buffer.clear();
+            }
+            'u' => {
+                self.undo();
                 self.vim_buffer.clear();
             }
             _ => { self.vim_buffer.clear(); }
@@ -1024,9 +1051,67 @@ impl TerminalApp {
     }
 
     fn mark_edited(&mut self) {
+        // Push undo snapshot if enough time elapsed since last edit (debounce)
+        if self.last_edit.elapsed() >= Duration::from_millis(300) || self.undo_stack.is_empty() {
+            self.push_undo();
+        }
         self.dirty = true;
         self.last_edit = Instant::now();
         self.recompute_calc_around(self.cursor_line);
+    }
+
+    fn push_undo(&mut self) {
+        self.undo_stack.push(UndoEntry {
+            lines: self.lines.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        });
+        if self.undo_stack.len() > MAX_UNDO_ENTRIES {
+            self.undo_stack.remove(0);
+        }
+        self.redo_stack.clear();
+    }
+
+    fn undo(&mut self) {
+        if let Some(entry) = self.undo_stack.pop() {
+            self.redo_stack.push(UndoEntry {
+                lines: self.lines.clone(),
+                cursor_line: self.cursor_line,
+                cursor_col: self.cursor_col,
+            });
+            self.lines = entry.lines;
+            self.cursor_line = entry.cursor_line.min(self.lines.len().saturating_sub(1));
+            self.cursor_col = entry.cursor_col;
+            self.dirty = true;
+            self.last_edit = Instant::now();
+            self.recompute_calc_full();
+            self.adjust_cursor();
+            self.adjust_scroll();
+            self.status = format!("undo ({} left)", self.undo_stack.len());
+        } else {
+            self.status = "already at oldest change".to_string();
+        }
+    }
+
+    fn redo(&mut self) {
+        if let Some(entry) = self.redo_stack.pop() {
+            self.undo_stack.push(UndoEntry {
+                lines: self.lines.clone(),
+                cursor_line: self.cursor_line,
+                cursor_col: self.cursor_col,
+            });
+            self.lines = entry.lines;
+            self.cursor_line = entry.cursor_line.min(self.lines.len().saturating_sub(1));
+            self.cursor_col = entry.cursor_col;
+            self.dirty = true;
+            self.last_edit = Instant::now();
+            self.recompute_calc_full();
+            self.adjust_cursor();
+            self.adjust_scroll();
+            self.status = format!("redo ({} left)", self.redo_stack.len());
+        } else {
+            self.status = "already at newest change".to_string();
+        }
     }
 
     fn recompute_calc_full(&mut self) {

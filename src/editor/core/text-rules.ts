@@ -174,7 +174,9 @@ function listContinuationRule(ctx: ResolvedContext): EditOperation | null {
   const marker = match[2];
   const content = match[3];
 
-  if (content.trim().length === 0 && selection.head === line.to) {
+  // If only the marker remains with no content (or just a checkbox), clear the line
+  const contentAfterCheckbox = content.replace(/^\[[ xX]\]\s*/, "");
+  if (contentAfterCheckbox.trim().length === 0 && selection.head === line.to) {
     const markerFrom = line.from + indent.length;
     return replaceRange(markerFrom, line.to, "", { anchor: markerFrom });
   }
@@ -184,7 +186,10 @@ function listContinuationRule(ctx: ResolvedContext): EditOperation | null {
     nextMarker = incrementOrderedMarker(marker);
   }
 
-  const insert = `\n${indent}${nextMarker} `;
+  // Detect if current line is a checklist item and add unchecked box
+  const checkboxPrefix = /^\[[ xX]\]\s+/.test(content) ? "[ ] " : "";
+
+  const insert = `\n${indent}${nextMarker} ${checkboxPrefix}`;
   return replaceRange(selection.head, selection.head, insert, {
     anchor: selection.head + insert.length,
   });
