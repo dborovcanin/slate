@@ -273,14 +273,7 @@ impl TerminalApp {
         self.adjust_cursor();
         self.adjust_scroll();
 
-        // Run autoformat rules on doc edits (e.g., dynamically renumbering lists)
-        let snapshot = self.build_snapshot();
-        let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: true,
-        };
-        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
-            self.apply_edit_operation(&op);
-        }
+        self.try_autoformat_rules();
 
         Ok(())
     }
@@ -1349,9 +1342,15 @@ impl TerminalApp {
     }
 
     fn insert_text(&mut self, text: &str) {
-        for ch in text.chars() {
-            self.insert_char(ch);
+        if text.is_empty() {
+            return;
         }
+        let col = self.cursor_col;
+        let line = self.current_line_mut();
+        let idx = byte_index(line, col);
+        line.insert_str(idx, text);
+        self.cursor_col += text.chars().count();
+        self.mark_edited();
     }
 
     fn insert_newline(&mut self) {
@@ -1365,6 +1364,32 @@ impl TerminalApp {
         self.cursor_line += 1;
         self.cursor_col = 0;
         self.mark_edited();
+    }
+
+    fn try_autoformat_rules(&mut self) {
+        // Fast path: skip the expensive build_snapshot/parse round trip
+        // when the current line can't trigger any doc-change rules.
+        let line = self.current_line();
+        let trimmed = line.trim_start();
+        let might_be_list = trimmed.starts_with('-')
+            || trimmed.starts_with('*')
+            || trimmed.starts_with('+')
+            || trimmed.starts_with("->")
+            || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let might_be_checklist = might_be_list && line.contains("/x");
+        if !might_be_list && !might_be_checklist {
+            return;
+        }
+
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TextRuleOptions {
+            markdown_autoformat: true,
+        };
+        if let Some(op) =
+            crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options)
+        {
+            self.apply_edit_operation(&op);
+        }
     }
 
     fn try_enter_rule(&mut self) -> bool {
@@ -1556,7 +1581,8 @@ impl TerminalApp {
         let editor_height = rows.saturating_sub(2).max(1);
         let mut buf = String::with_capacity(rows.saturating_mul(cols.saturating_add(8)));
 
-        buf.push_str("\x1b[?25l\x1b[H\x1b[2J");
+        // Hide cursor, move home. No \x1b[2J — we overwrite every row to full width.
+        buf.push_str("\x1b[?25l\x1b[H");
 
         let title = derive_title_from_lines(&self.lines);
         let dirty_mark = if self.dirty { " [+]" } else { "" };
@@ -1577,9 +1603,7 @@ impl TerminalApp {
         draw_row(&mut buf, TITLE_ROW, cols, &title_line, true);
 
         let mut ctx = render::RenderContext::new();
-        for line in self.lines.iter().take(self.scroll_line) {
-            ctx.advance_line(line);
-        }
+        ctx.advance_lines(&self.lines[..self.scroll_line.min(self.lines.len())]);
 
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;

@@ -1,9 +1,6 @@
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
-const ITALIC: &str = "\x1b[3m";
-const STRIKETHROUGH: &str = "\x1b[9m";
-const REVERSE: &str = "\x1b[7m";
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct CharStyle {
@@ -16,22 +13,24 @@ struct CharStyle {
 
 impl CharStyle {
     fn write_ansi(&self, buf: &mut String) {
-        buf.push_str(RESET);
+        // Emit a single combined SGR sequence: \x1b[0;1;2;...m
+        buf.push_str("\x1b[0");
         if self.bold {
-            buf.push_str(BOLD);
+            buf.push_str(";1");
         }
         if self.dim {
-            buf.push_str(DIM);
+            buf.push_str(";2");
         }
         if self.italic {
-            buf.push_str(ITALIC);
-        }
-        if self.strikethrough {
-            buf.push_str(STRIKETHROUGH);
+            buf.push_str(";3");
         }
         if self.reverse {
-            buf.push_str(REVERSE);
+            buf.push_str(";7");
         }
+        if self.strikethrough {
+            buf.push_str(";9");
+        }
+        buf.push('m');
     }
 
     fn is_plain(&self) -> bool {
@@ -50,9 +49,12 @@ impl RenderContext {
         }
     }
 
-    pub fn advance_line(&mut self, text: &str) {
-        if is_code_fence(text) {
-            self.in_code_block = !self.in_code_block;
+    /// Skip ahead through `lines` without rendering — just track code fence state.
+    pub fn advance_lines(&mut self, lines: &[String]) {
+        for line in lines {
+            if is_code_fence(line) {
+                self.in_code_block = !self.in_code_block;
+            }
         }
     }
 
@@ -461,7 +463,7 @@ fn build_ansi_output(
     width: usize,
     calc_ghost: Option<&str>,
 ) -> String {
-    let mut buf = String::with_capacity(width * 3);
+    let mut buf = String::with_capacity(width * 4);
     let mut current = CharStyle::default();
     let mut visible = 0;
 
