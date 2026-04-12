@@ -2,6 +2,34 @@
 
 This document captures what was implemented after milestones M1-M4, plus what should be done next.
 
+## Theme system pass (latest)
+
+- Added config-driven theme loading from TOML:
+  - `src-tauri/src/config/mod.rs`
+  - command: `get_theme_config`
+  - file path: `$XDG_CONFIG_HOME/note/config.toml` (fallback `~/.config/note/config.toml`)
+  - default file is auto-created on first run
+- Added frontend theme engine with presets:
+  - color schemes: 12 built-ins
+  - backgrounds: `plain`, `lines`, `squares`, `dots`, `diagonal`
+  - fonts: `jetbrains-mono`, `fira-code`, `cascadia-code`, `iosevka`, `hack`, `source-code-pro`
+  - startup application happens in `src/main.ts` before app initialization
+- Added live theme reload:
+  - frontend polling watcher in `src/theme/theme.ts`
+  - started during bootstrap in `src/main.ts`
+  - re-applies only when resolved selection changes
+- Added keyboard font controls:
+  - `Ctrl + +` / `Ctrl + -` adjusts font size
+  - `Ctrl + Alt + +` / `Ctrl + Alt + -` cycles font family
+- Added optional Vim key mapping via config:
+  - `[editor] vim_mode = true` in `config.toml`
+  - current subset: insert/normal modes, hjkl, w/b, 0/$, gg/G, x, dd, u, Ctrl+r, o/O, i/a/I/A
+  - count prefixes supported for movement/actions (examples: `4k`, `2j`, `3w`, `5x`, `3dd`)
+  - cursor style differs by mode (insert bar cursor vs normal block cursor)
+- Added theme tests:
+  - Rust parser/normalization tests in config module
+  - TypeScript preset inventory tests
+
 ## What was polished in this pass
 
 - Added confirmation prompt before note deletion (`Ctrl+Backspace`)
@@ -59,6 +87,6 @@ npm run test:rust
 
 1. Add a proper confirmation modal (current implementation uses `window.confirm`).
 2. Add frontend tests around calc decoration apply behavior and switcher keyboard navigation.
-3. Add integration tests for Tauri commands (`notes`, `calc`, `export`) via command layer.
+3. Add integration tests for Tauri commands (`notes`, `calc`, `export`, `get_theme_config`) via command layer.
 4. Consider moving clipboard export from `navigator.clipboard` to a Tauri clipboard plugin for stricter Linux/WebView reliability.
 5. Add CI (`npm run build`, `npm run test`) so regressions are blocked automatically.

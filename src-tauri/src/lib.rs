@@ -1,5 +1,6 @@
 mod calc;
 mod commands;
+mod config;
 mod ipc;
 mod storage;
 
@@ -18,6 +19,9 @@ pub fn run() {
     let db_path = data_dir.join("notes.db");
     let db = Db::open(db_path).expect("Failed to open database");
     let calc_engine = CalcEngine::new();
+    if let Err(err) = config::ensure_config_file() {
+        eprintln!("Config: {err}");
+    }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -30,6 +34,7 @@ pub fn run() {
             commands::notes::list_notes,
             commands::notes::delete_note,
             commands::calc::evaluate_lines,
+            commands::config::get_theme_config,
             commands::export::export_to_file,
         ])
         .setup(|app| {

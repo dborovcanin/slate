@@ -4,6 +4,7 @@ import {
   createNote,
   deleteNote,
   exportToFile,
+  getThemeConfig,
 } from "./api";
 import {
   mountEditor,
@@ -20,6 +21,7 @@ import {
 import { state } from "./state";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 
 async function switchToNote(id: string) {
   await flushSave();
@@ -141,9 +143,47 @@ function runAction(action: () => Promise<void> | void) {
     });
 }
 
+function isPlusKey(e: KeyboardEvent): boolean {
+  return e.key === "+" || e.key === "=" || e.code === "NumpadAdd";
+}
+
+function isMinusKey(e: KeyboardEvent): boolean {
+  return e.key === "-" || e.key === "_" || e.code === "NumpadSubtract";
+}
+
 function setupKeyboardShortcuts() {
   document.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
+
+    // Ctrl+Alt++ / Ctrl+Alt+- — cycle font family
+    if (e.ctrlKey && e.altKey && isPlusKey(e)) {
+      e.preventDefault();
+      const selection = cycleFont(1);
+      showToast(`Font: ${getFontLabel(selection.font)} (${selection.fontSize}px)`);
+      return;
+    }
+
+    if (e.ctrlKey && e.altKey && isMinusKey(e)) {
+      e.preventDefault();
+      const selection = cycleFont(-1);
+      showToast(`Font: ${getFontLabel(selection.font)} (${selection.fontSize}px)`);
+      return;
+    }
+
+    // Ctrl++ / Ctrl+- — increase/decrease editor font size
+    if (e.ctrlKey && !e.altKey && isPlusKey(e)) {
+      e.preventDefault();
+      const selection = changeFontSize(1);
+      showToast(`Font size: ${selection.fontSize}px`);
+      return;
+    }
+
+    if (e.ctrlKey && !e.altKey && isMinusKey(e)) {
+      e.preventDefault();
+      const selection = changeFontSize(-1);
+      showToast(`Font size: ${selection.fontSize}px`);
+      return;
+    }
 
     // Ctrl+P — toggle switcher
     if (e.ctrlKey && !e.shiftKey && key === "p") {
@@ -286,14 +326,27 @@ export async function initApp() {
   editorEl.style.overflow = "hidden";
   container.appendChild(editorEl);
 
-  const note = await getOrCreateNote();
-  const notes = await listNotes();
+  const [note, notes, config] = await Promise.all([
+    getOrCreateNote(),
+    listNotes(),
+    getThemeConfig().catch(() => ({
+      color_scheme: "catppuccin-mocha",
+      background: "plain",
+      font: "jetbrains-mono",
+      font_size: 14,
+      vim_mode: false,
+    })),
+  ]);
   state.setActiveNote(note);
   state.setNotes(notes);
 
   createStatusBar(container);
-  mountEditor(editorEl);
+  mountEditor(editorEl, { vimMode: !!config.vim_mode });
   setupKeyboardShortcuts();
+
+  if (config.vim_mode) {
+    showToast("Vim keys: Esc normal, i insert");
+  }
 
   state.on(() => {
     updateStatusBar();

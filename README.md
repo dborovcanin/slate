@@ -12,6 +12,19 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Restores last-open note on startup
 - Dark theme with Catppuccin-inspired colors
 
+**Themes and backgrounds**
+- 12 built-in color schemes: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
+- 5 background patterns: `plain`, `lines`, `squares`, `dots`, `diagonal`
+- Configurable via TOML (`$XDG_CONFIG_HOME/note/config.toml` or `~/.config/note/config.toml`)
+- Live reload while the app is running (polls config changes automatically)
+
+**Optional Vim mode**
+- Enable with `[editor] vim_mode = true`
+- Insert/normal modes (`Esc` to normal, `i` to insert)
+- Cursor changes by mode (insert: bar cursor, normal: block cursor + `NORMAL` badge)
+- Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
+- Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
+
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
 - Press Tab to apply the result inline
@@ -41,18 +54,20 @@ sqrt(144) + 3^2         → 21
 
 **Keyboard shortcuts**
 
-| Shortcut        | Action                 |
-| --------------- | ---------------------- |
-| Ctrl+N          | New note               |
-| Ctrl+P          | Fuzzy note switcher    |
-| Ctrl+↑ / Ctrl+↓ | Previous / next note   |
-| Ctrl+Backspace  | Delete current note (confirm) |
-| Tab             | Apply calc result      |
-| Ctrl+E          | Copy note to clipboard |
-| Ctrl+Shift+E    | Export note to file    |
-| Ctrl+W          | Hide window            |
-| Ctrl+Z / Ctrl+Y | Undo / redo            |
-| Escape          | Close switcher         |
+| Shortcut                | Action                        |
+| ----------------------- | ----------------------------- |
+| Ctrl+N                  | New note                      |
+| Ctrl+P                  | Fuzzy note switcher           |
+| Ctrl+↑ / Ctrl+↓         | Previous / next note          |
+| Ctrl+Backspace          | Delete current note (confirm) |
+| Tab                     | Apply calc result             |
+| Ctrl+E                  | Copy note to clipboard        |
+| Ctrl+Shift+E            | Export note to file           |
+| Ctrl++ / Ctrl+-         | Increase / decrease font size |
+| Ctrl+Alt++ / Ctrl+Alt+- | Next / previous font family   |
+| Ctrl+W                  | Hide window                   |
+| Ctrl+Z / Ctrl+Y         | Undo / redo                   |
+| Escape                  | Close switcher                |
 
 **Storage**
 - SQLite with WAL mode in `~/.local/share/note/notes.db`
@@ -149,8 +164,66 @@ npm run test:rust
 
 Current automated coverage:
 - TypeScript unit tests for fuzzy search scoring and app state updates
+- TypeScript unit tests for theme preset inventory
 - Rust unit tests for calc evaluation behavior
 - Rust integration-style unit tests for SQLite CRUD + ordering logic
+
+## Configuration (TOML)
+
+Config file location:
+- `$XDG_CONFIG_HOME/note/config.toml`
+- fallback: `~/.config/note/config.toml`
+
+The file is generated automatically on first run.
+Theme changes are picked up live while the app is running (typically within ~1-2 seconds).
+
+Example:
+
+```toml
+[theme]
+color_scheme = "gruvbox-dark"
+background = "squares"
+font = "jetbrains-mono"
+font_size = 14
+
+[editor]
+vim_mode = false
+```
+
+Available `color_scheme` values:
+- `catppuccin-mocha`
+- `catppuccin-latte`
+- `gruvbox-dark`
+- `gruvbox-light`
+- `dracula`
+- `dark`
+- `white`
+- `solarized-dark`
+- `solarized-light`
+- `nord`
+- `tokyo-night`
+- `one-dark`
+
+Available `background` values:
+- `plain`
+- `lines`
+- `squares`
+- `dots`
+- `diagonal`
+
+Available `font` values:
+- `jetbrains-mono`
+- `fira-code`
+- `cascadia-code`
+- `iosevka`
+- `hack`
+- `source-code-pro`
+
+`font_size` range:
+- `11` to `28`
+
+Editor options:
+- `vim_mode = true` enables modal Vim-style key mappings (applies on app start)
 
 ## Sway integration
 
@@ -191,12 +264,12 @@ Tauri v2 app: Rust backend + vanilla TypeScript frontend.
 │  note-msg   │ ───────────────────────> │           note (Tauri v2)       │
 │  (471KB)    │                          │                                 │
 └─────────────┘                          │  Frontend        Backend        │
-                                         │  ┌───────────┐  ┌────────────┐ │
+                                         │  ┌────────────┐  ┌────────────┐ │
                                          │  │ CodeMirror │  │ SQLite+WAL │ │
                                          │  │ Calc ghost │  │ fend-core  │ │
                                          │  │ Switcher   │  │ IPC server │ │
                                          │  │ Export     │  │ Export I/O │ │
-                                         │  └───────────┘  └────────────┘ │
+                                         │  └────────────┘  └────────────┘ │
                                          └─────────────────────────────────┘
 ```
 

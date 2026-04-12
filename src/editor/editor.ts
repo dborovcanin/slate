@@ -10,6 +10,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
+import { vimModeExtension } from "./vim";
 
 let view: EditorView | null = null;
 let saveTimer: number | null = null;
@@ -42,7 +43,11 @@ const onUpdate = EditorView.updateListener.of((update) => {
   }
 });
 
-export function mountEditor(parent: HTMLElement) {
+interface EditorMountOptions {
+  vimMode?: boolean;
+}
+
+export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
   const note = state.activeNote;
   const doc = note?.body ?? "";
 
@@ -57,6 +62,10 @@ export function mountEditor(parent: HTMLElement) {
     EditorView.lineWrapping,
     EditorView.contentAttributes.of({ "aria-label": "Note editor" }),
   ];
+
+  if (options.vimMode) {
+    extensions.push(vimModeExtension());
+  }
 
   const startState = EditorState.create({ doc, extensions });
 

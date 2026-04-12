@@ -7,6 +7,14 @@ export interface Note {
   updated_at: string;
 }
 
+export interface ThemeConfig {
+  color_scheme: string;
+  background: string;
+  font: string;
+  font_size: number;
+  vim_mode: boolean;
+}
+
 export function getOrCreateNote(): Promise<Note> {
   return invoke<Note>("get_or_create_note");
 }
@@ -33,4 +41,8 @@ export function evaluateLines(lines: string[]): Promise<(string | null)[]> {
 
 export function exportToFile(path: string, content: string): Promise<void> {
   return invoke<void>("export_to_file", { path, content });
+}
+
+export function getThemeConfig(): Promise<ThemeConfig> {
+  return invoke<ThemeConfig>("get_theme_config");
 }

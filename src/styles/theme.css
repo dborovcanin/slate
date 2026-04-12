@@ -7,6 +7,11 @@
   --fg-muted: #585b70;
   --accent: #89b4fa;
   --border: #363647;
+  --selection-bg: rgba(137, 180, 250, 0.25);
+  --active-line-bg: rgba(255, 255, 255, 0.03);
+  --pattern-color: rgba(166, 173, 200, 0.08);
+  --bg-pattern: none;
+  --bg-pattern-size: auto;
   --radius: 6px;
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
@@ -32,5 +37,5 @@
 }
 
 ::selection {
-  background: rgba(137, 180, 250, 0.25);
+  background: var(--selection-bg);
 }

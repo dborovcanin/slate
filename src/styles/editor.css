@@ -1,9 +1,10 @@
 .cm-editor {
+  position: relative;
   height: 100%;
   font-family: var(--font-mono);
   font-size: var(--font-size);
   line-height: var(--line-height);
-  background: var(--bg);
+  background: transparent;
 }
 
 .cm-editor .cm-scroller {
@@ -21,13 +22,50 @@
   border-left-width: 2px;
 }
 
+.cm-editor.cm-vim-insert .cm-content {
+  caret-color: var(--accent);
+}
+
+.cm-editor.cm-vim-insert .cm-cursor {
+  border-left-width: 2px;
+  width: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.cm-editor.cm-vim-normal .cm-content {
+  caret-color: transparent;
+}
+
+.cm-editor.cm-vim-normal .cm-cursor {
+  border-left-width: 0;
+  width: 0.65ch;
+  background: var(--selection-bg);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.cm-editor.cm-vim-normal::after {
+  content: "NORMAL";
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--fg-dim);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  border-radius: 4px;
+  padding: 2px 6px;
+  pointer-events: none;
+}
+
 .cm-editor .cm-selectionBackground,
 .cm-editor.cm-focused .cm-selectionBackground {
-  background: rgba(137, 180, 250, 0.2);
+  background: var(--selection-bg);
 }
 
 .cm-editor .cm-activeLine {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--active-line-bg);
 }
 
 .cm-editor .cm-gutters {
