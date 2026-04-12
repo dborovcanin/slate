@@ -13,6 +13,7 @@ import {
   focusEditor,
   flushSave,
   insertTextAtCursor,
+  performFormatAndSave,
 } from "./editor/editor";
 import {
   openSwitcher,
@@ -271,6 +272,13 @@ function setupKeyboardShortcuts() {
       focusEditor();
       return;
     }
+
+    // Ctrl+S - format & save
+    if (e.ctrlKey && !e.shiftKey && key === "s") {
+      e.preventDefault();
+      runAction(performFormatAndSave);
+      return;
+    }
   });
 }
 
@@ -355,8 +363,11 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   createStatusBar(container);
   mountEditor(editorEl, {
     markdownAutoformat: config.markdown_autoformat,
+    formatOnSave: config.format_on_save,
     vimMode: !!config.vim_mode,
     dateFormat: config.date_format,
+    variablesEnabled: config.variables_enabled,
+    variableAutocompleteMinChars: config.variables_autocomplete_min_chars,
     onExitCommand: handleHideWindow,
   });
   setupKeyboardShortcuts();

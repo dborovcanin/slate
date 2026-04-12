@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-const DEFAULT_COLOR_SCHEME: &str = "catppuccin-mocha";
+const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_BACKGROUND: &str = "plain";
 const DEFAULT_FONT: &str = "jetbrains-mono";
 const DEFAULT_FONT_SIZE: u8 = 14;
@@ -13,6 +13,11 @@ const DEFAULT_VIM_MODE: bool = false;
 const DEFAULT_TERMINAL_MODE: bool = false;
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
+const DEFAULT_FORMAT_ON_SAVE: bool = false;
+const DEFAULT_VARIABLES_ENABLED: bool = true;
+const DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 3;
+const MIN_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 1;
+const MAX_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 8;
 const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Color schemes:
@@ -28,18 +33,32 @@ const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Date format tokens:
 #   %Y, %y, %m, %d, %b, %B
+# variables.autocomplete_min_chars range:
+#   1..8
 
 [theme]
-color_scheme = "catppuccin-mocha"
+color_scheme = "gruvbox-light"
 background = "plain"
 font = "jetbrains-mono"
 font_size = 14
 
 [editor]
+# Enable markdown editing helpers (list continuation, table alignment, etc.)
 markdown_autoformat = true
+# Run :format before save (Ctrl+S and save flush path)
+format_on_save = false
+# Start in terminal mode by default when launched from a TTY
 terminal_mode = false
+# Enable Vim keybindings in GUI editor
 vim_mode = false
+# Date format used by :date and date picker insert
 date_format = "%Y-%m-%d"
+
+[editor.variables]
+# Enable note-local reactive variables
+enabled = true
+# Minimum typed characters to show variable completion suggestions
+autocomplete_min_chars = 3
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -49,9 +68,12 @@ pub struct ThemeConfig {
     pub font: String,
     pub font_size: u8,
     pub markdown_autoformat: bool,
+    pub format_on_save: bool,
     pub terminal_mode: bool,
     pub vim_mode: bool,
     pub date_format: String,
+    pub variables_enabled: bool,
+    pub variables_autocomplete_min_chars: u8,
 }
 
 impl Default for ThemeConfig {
@@ -62,9 +84,12 @@ impl Default for ThemeConfig {
             font: DEFAULT_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
+            format_on_save: DEFAULT_FORMAT_ON_SAVE,
             terminal_mode: DEFAULT_TERMINAL_MODE,
             vim_mode: DEFAULT_VIM_MODE,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
+            variables_enabled: DEFAULT_VARIABLES_ENABLED,
+            variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
         }
     }
 }
@@ -88,9 +113,18 @@ struct ThemeSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EditorSection {
     markdown_autoformat: Option<bool>,
+    format_on_save: Option<bool>,
     terminal_mode: Option<bool>,
     vim_mode: Option<bool>,
     date_format: Option<String>,
+    #[serde(default)]
+    variables: VariablesSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct VariablesSection {
+    enabled: Option<bool>,
+    autocomplete_min_chars: Option<u16>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -144,9 +178,18 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             .editor
             .markdown_autoformat
             .unwrap_or(DEFAULT_MARKDOWN_AUTOFORMAT),
+        format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         terminal_mode: raw.editor.terminal_mode.unwrap_or(DEFAULT_TERMINAL_MODE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
         date_format: normalize_date_format(raw.editor.date_format),
+        variables_enabled: raw
+            .editor
+            .variables
+            .enabled
+            .unwrap_or(DEFAULT_VARIABLES_ENABLED),
+        variables_autocomplete_min_chars: normalize_variable_autocomplete_min_chars(
+            raw.editor.variables.autocomplete_min_chars,
+        ),
     })
 }
 
@@ -184,6 +227,17 @@ fn normalize_date_format(value: Option<String>) -> String {
     }
 }
 
+fn normalize_variable_autocomplete_min_chars(value: Option<u16>) -> u8 {
+    value
+        .map(|v| {
+            v.clamp(
+                MIN_VARIABLE_AUTOCOMPLETE_MIN_CHARS as u16,
+                MAX_VARIABLE_AUTOCOMPLETE_MIN_CHARS as u16,
+            ) as u8
+        })
+        .unwrap_or(DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS)
+}
+
 fn config_file_path() -> Result<PathBuf, String> {
     let dirs = ProjectDirs::from("io", "github", "note")
         .ok_or_else(|| "Failed to determine app config directory".to_string())?;
@@ -206,9 +260,14 @@ mod tests {
 
             [editor]
             markdown_autoformat = false
+            format_on_save = true
             terminal_mode = true
             vim_mode = true
             date_format = "%d.%m.%Y"
+
+            [editor.variables]
+            enabled = false
+            autocomplete_min_chars = 5
             "#,
         )
         .expect("config parsed");
@@ -218,9 +277,12 @@ mod tests {
         assert_eq!(cfg.font, "fira-code");
         assert_eq!(cfg.font_size, 18);
         assert!(!cfg.markdown_autoformat);
+        assert!(cfg.format_on_save);
         assert!(cfg.terminal_mode);
         assert!(cfg.vim_mode);
         assert_eq!(cfg.date_format, "%d.%m.%Y");
+        assert!(!cfg.variables_enabled);
+        assert_eq!(cfg.variables_autocomplete_min_chars, 5);
     }
 
     #[test]
@@ -247,9 +309,12 @@ mod tests {
     fn defaults_vim_mode_to_false() {
         let cfg = parse_theme_config("[theme]\ncolor_scheme = 'dark'").expect("config parsed");
         assert!(cfg.markdown_autoformat);
+        assert!(!cfg.format_on_save);
         assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
         assert_eq!(cfg.date_format, "%Y-%m-%d");
+        assert!(cfg.variables_enabled);
+        assert_eq!(cfg.variables_autocomplete_min_chars, 3);
     }
 
     #[test]
@@ -272,5 +337,13 @@ mod tests {
             normalize_date_format(Some("%m/%d/%Y".to_string())),
             "%m/%d/%Y"
         );
+    }
+
+    #[test]
+    fn normalize_variable_autocomplete_min_chars_clamps_value() {
+        assert_eq!(normalize_variable_autocomplete_min_chars(None), 3);
+        assert_eq!(normalize_variable_autocomplete_min_chars(Some(0)), 1);
+        assert_eq!(normalize_variable_autocomplete_min_chars(Some(99)), 8);
+        assert_eq!(normalize_variable_autocomplete_min_chars(Some(4)), 4);
     }
 }

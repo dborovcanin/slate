@@ -89,7 +89,7 @@ struct TerminalApp {
     force_quit: bool,
     // Date picker state
     date_year: i32,
-    date_month: u32,  // 1-12
+    date_month: u32, // 1-12
     date_day: u32,
     // Vim state
     vim_buffer: String,
@@ -104,6 +104,8 @@ struct TerminalApp {
     search_orig_line: usize,
     search_orig_col: usize,
     search_orig_scroll: usize,
+    // Auto format
+    format_on_save: bool,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
     // Undo/redo
@@ -112,7 +114,7 @@ struct TerminalApp {
 }
 
 impl TerminalApp {
-    fn new(db: &Db, opts: &TerminalOptions) -> Result<Self, String> {
+    fn new(db: &Db, opts: &TerminalOptions, format_on_save: bool) -> Result<Self, String> {
         let active_note = select_note(db, opts)?;
         let lines = split_lines(&active_note.body);
         let switcher_items = load_note_meta(db)?;
@@ -153,6 +155,7 @@ impl TerminalApp {
             search_orig_line: 0,
             search_orig_col: 0,
             search_orig_scroll: 0,
+            format_on_save,
             command_bar_from_normal: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -413,16 +416,45 @@ impl TerminalApp {
         let count: usize = count_str.parse().unwrap_or(1).max(1);
 
         match c {
-            'h' => { for _ in 0..count { self.move_cursor_left(); } self.vim_buffer.clear(); }
-            'j' => { self.move_cursor_down(count); self.vim_buffer.clear(); }
-            'k' => { self.move_cursor_up(count); self.vim_buffer.clear(); }
-            'l' => { for _ in 0..count { self.move_cursor_right(); } self.vim_buffer.clear(); }
-            'w' => { for _ in 0..count { self.move_cursor_right_word(); } self.vim_buffer.clear(); }
-            'b' => { for _ in 0..count { self.move_cursor_left_word(); } self.vim_buffer.clear(); }
-            '$' => { self.cursor_col = line_char_len(self.current_line()); self.vim_buffer.clear(); }
-            'G' => { 
+            'h' => {
+                for _ in 0..count {
+                    self.move_cursor_left();
+                }
+                self.vim_buffer.clear();
+            }
+            'j' => {
+                self.move_cursor_down(count);
+                self.vim_buffer.clear();
+            }
+            'k' => {
+                self.move_cursor_up(count);
+                self.vim_buffer.clear();
+            }
+            'l' => {
+                for _ in 0..count {
+                    self.move_cursor_right();
+                }
+                self.vim_buffer.clear();
+            }
+            'w' => {
+                for _ in 0..count {
+                    self.move_cursor_right_word();
+                }
+                self.vim_buffer.clear();
+            }
+            'b' => {
+                for _ in 0..count {
+                    self.move_cursor_left_word();
+                }
+                self.vim_buffer.clear();
+            }
+            '$' => {
+                self.cursor_col = line_char_len(self.current_line());
+                self.vim_buffer.clear();
+            }
+            'G' => {
                 self.cursor_line = self.lines.len().saturating_sub(1);
-                self.vim_buffer.clear(); 
+                self.vim_buffer.clear();
             }
             'g' => {
                 if rest_str == "g" {
@@ -481,12 +513,14 @@ impl TerminalApp {
                 if let Ok(mut ctx) = arboard::Clipboard::new() {
                     if let Ok(text) = ctx.get_text() {
                         let sys_clip = text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
-                        if !sys_clip.is_empty() && (sys_clip != self.clipboard || self.clipboard.is_empty()) {
+                        if !sys_clip.is_empty()
+                            && (sys_clip != self.clipboard || self.clipboard.is_empty())
+                        {
                             self.clipboard = sys_clip;
                         }
                     }
                 }
-                
+
                 if !self.clipboard.is_empty() {
                     for _ in 0..count {
                         let mut insert_at = self.cursor_line;
@@ -525,7 +559,9 @@ impl TerminalApp {
                 self.undo();
                 self.vim_buffer.clear();
             }
-            _ => { self.vim_buffer.clear(); }
+            _ => {
+                self.vim_buffer.clear();
+            }
         }
     }
 
@@ -540,118 +576,125 @@ impl TerminalApp {
             Key::ArrowDown => self.move_cursor_down(1),
             Key::ArrowLeft => self.move_cursor_left(),
             Key::ArrowRight => self.move_cursor_right(),
-            Key::Char(c) => {
-                match c {
-                    'h' => self.move_cursor_left(),
-                    'j' => self.move_cursor_down(1),
-                    'k' => self.move_cursor_up(1),
-                    'l' => self.move_cursor_right(),
-                    'w' => self.move_cursor_right_word(),
-                    'b' => self.move_cursor_left_word(),
-                    '$' => self.cursor_col = line_char_len(self.current_line()),
-                    '0' => self.cursor_col = 0,
-                    'y' | 'd' | 'x' => {
-                        let is_delete = c == 'd' || c == 'x';
-                        let anchor = self.selection_anchor.unwrap_or((self.cursor_line, self.cursor_col));
-                        let start_line = min(anchor.0, self.cursor_line);
-                        let end_line = std::cmp::max(anchor.0, self.cursor_line);
-                        
-                        let mut yanked = Vec::new();
-                        
-                        if self.mode == UiMode::VisualLine {
-                            for i in start_line..=end_line {
+            Key::Char(c) => match c {
+                'h' => self.move_cursor_left(),
+                'j' => self.move_cursor_down(1),
+                'k' => self.move_cursor_up(1),
+                'l' => self.move_cursor_right(),
+                'w' => self.move_cursor_right_word(),
+                'b' => self.move_cursor_left_word(),
+                '$' => self.cursor_col = line_char_len(self.current_line()),
+                '0' => self.cursor_col = 0,
+                'y' | 'd' | 'x' => {
+                    let is_delete = c == 'd' || c == 'x';
+                    let anchor = self
+                        .selection_anchor
+                        .unwrap_or((self.cursor_line, self.cursor_col));
+                    let start_line = min(anchor.0, self.cursor_line);
+                    let end_line = std::cmp::max(anchor.0, self.cursor_line);
+
+                    let mut yanked = Vec::new();
+
+                    if self.mode == UiMode::VisualLine {
+                        for i in start_line..=end_line {
+                            if i < self.lines.len() {
+                                yanked.push(self.lines[i].clone());
+                            }
+                        }
+                        if is_delete {
+                            for _ in start_line..=end_line {
+                                if start_line < self.lines.len() {
+                                    self.lines.remove(start_line);
+                                }
+                            }
+                            if self.lines.is_empty() {
+                                self.lines.push(String::new());
+                            }
+                            self.cursor_line = start_line.min(self.lines.len().saturating_sub(1));
+                            self.cursor_col = 0;
+                        }
+                    } else {
+                        let (start_col, end_col) = if anchor.0 == self.cursor_line {
+                            (
+                                min(anchor.1, self.cursor_col),
+                                std::cmp::max(anchor.1, self.cursor_col),
+                            )
+                        } else if anchor.0 < self.cursor_line {
+                            (anchor.1, self.cursor_col)
+                        } else {
+                            (self.cursor_col, anchor.1)
+                        };
+
+                        if start_line == end_line {
+                            let line = &self.lines[start_line];
+                            let chars: Vec<char> = line.chars().collect();
+                            let c_start = min(start_col, chars.len());
+                            let c_end = min(end_col + 1, chars.len());
+
+                            yanked.push(chars[c_start..c_end].iter().collect::<String>());
+
+                            if is_delete {
+                                let mut new_line: String = chars[..c_start].iter().collect();
+                                let tail: String = chars[c_end..].iter().collect();
+                                new_line.push_str(&tail);
+                                self.lines[start_line] = new_line;
+                                self.cursor_col = c_start;
+                            }
+                        } else {
+                            let l1_chars: Vec<char> = self.lines[start_line].chars().collect();
+                            let l1_start = min(start_col, l1_chars.len());
+                            yanked.push(l1_chars[l1_start..].iter().collect::<String>());
+
+                            for i in (start_line + 1)..end_line {
                                 if i < self.lines.len() {
                                     yanked.push(self.lines[i].clone());
                                 }
                             }
+
+                            let ln_chars: Vec<char> = self.lines[end_line].chars().collect();
+                            let ln_end = min(end_col + 1, ln_chars.len());
+                            yanked.push(ln_chars[..ln_end].iter().collect::<String>());
+
                             if is_delete {
+                                let mut new_l1: String = l1_chars[..l1_start].iter().collect();
+                                let tail: String = ln_chars[ln_end..].iter().collect();
+                                new_l1.push_str(&tail);
+
                                 for _ in start_line..=end_line {
                                     if start_line < self.lines.len() {
                                         self.lines.remove(start_line);
                                     }
                                 }
-                                if self.lines.is_empty() {
-                                    self.lines.push(String::new());
-                                }
-                                self.cursor_line = start_line.min(self.lines.len().saturating_sub(1));
-                                self.cursor_col = 0;
+                                self.lines.insert(start_line, new_l1);
+                                self.cursor_line = start_line;
+                                self.cursor_col = l1_start;
                             }
-                        } else {
-                            let (start_col, end_col) = if anchor.0 == self.cursor_line {
-                                (min(anchor.1, self.cursor_col), std::cmp::max(anchor.1, self.cursor_col))
-                            } else if anchor.0 < self.cursor_line {
-                                (anchor.1, self.cursor_col)
-                            } else {
-                                (self.cursor_col, anchor.1)
-                            };
-                            
-                            if start_line == end_line {
-                                let line = &self.lines[start_line];
-                                let chars: Vec<char> = line.chars().collect();
-                                let c_start = min(start_col, chars.len());
-                                let c_end = min(end_col + 1, chars.len());
-                                
-                                yanked.push(chars[c_start..c_end].iter().collect::<String>());
-                                
-                                if is_delete {
-                                    let mut new_line: String = chars[..c_start].iter().collect();
-                                    let tail: String = chars[c_end..].iter().collect();
-                                    new_line.push_str(&tail);
-                                    self.lines[start_line] = new_line;
-                                    self.cursor_col = c_start;
-                                }
-                            } else {
-                                let l1_chars: Vec<char> = self.lines[start_line].chars().collect();
-                                let l1_start = min(start_col, l1_chars.len());
-                                yanked.push(l1_chars[l1_start..].iter().collect::<String>());
-                                
-                                for i in (start_line + 1)..end_line {
-                                    if i < self.lines.len() {
-                                        yanked.push(self.lines[i].clone());
-                                    }
-                                }
-                                
-                                let ln_chars: Vec<char> = self.lines[end_line].chars().collect();
-                                let ln_end = min(end_col + 1, ln_chars.len());
-                                yanked.push(ln_chars[..ln_end].iter().collect::<String>());
-                                
-                                if is_delete {
-                                    let mut new_l1: String = l1_chars[..l1_start].iter().collect();
-                                    let tail: String = ln_chars[ln_end..].iter().collect();
-                                    new_l1.push_str(&tail);
-                                    
-                                    for _ in start_line..=end_line {
-                                        if start_line < self.lines.len() {
-                                            self.lines.remove(start_line);
-                                        }
-                                    }
-                                    self.lines.insert(start_line, new_l1);
-                                    self.cursor_line = start_line;
-                                    self.cursor_col = l1_start;
-                                }
-                            }
-                        }
-                        
-                        if !yanked.is_empty() {
-                            if let Ok(mut ctx) = arboard::Clipboard::new() {
-                                let _ = ctx.set_text(yanked.join("\n"));
-                            }
-                            self.clipboard = yanked;
-                        }
-                        
-                        self.mode = UiMode::Normal;
-                        self.selection_anchor = None;
-                        self.status = if is_delete { "-- NORMAL --".to_string() } else { "-- NORMAL -- (yanked)".to_string() };
-                        if is_delete {
-                            self.mark_edited();
                         }
                     }
-                    _ => {}
+
+                    if !yanked.is_empty() {
+                        if let Ok(mut ctx) = arboard::Clipboard::new() {
+                            let _ = ctx.set_text(yanked.join("\n"));
+                        }
+                        self.clipboard = yanked;
+                    }
+
+                    self.mode = UiMode::Normal;
+                    self.selection_anchor = None;
+                    self.status = if is_delete {
+                        "-- NORMAL --".to_string()
+                    } else {
+                        "-- NORMAL -- (yanked)".to_string()
+                    };
+                    if is_delete {
+                        self.mark_edited();
+                    }
                 }
-            }
+                _ => {}
+            },
             _ => {}
         }
-        
+
         self.adjust_cursor();
         self.adjust_scroll();
         Ok(())
@@ -668,10 +711,18 @@ impl TerminalApp {
             Key::Ctrl('w') => {
                 // simple word deletion for switcher
                 while let Some(c) = self.switcher_query.chars().last() {
-                    if !c.is_alphanumeric() { self.switcher_query.pop(); } else { break; }
+                    if !c.is_alphanumeric() {
+                        self.switcher_query.pop();
+                    } else {
+                        break;
+                    }
                 }
                 while let Some(c) = self.switcher_query.chars().last() {
-                    if c.is_alphanumeric() { self.switcher_query.pop(); } else { break; }
+                    if c.is_alphanumeric() {
+                        self.switcher_query.pop();
+                    } else {
+                        break;
+                    }
                 }
                 self.recompute_switcher_matches();
             }
@@ -827,11 +878,8 @@ impl TerminalApp {
         }
 
         let snapshot = self.build_snapshot();
-        let result = crate::editor_core::commands::execute_command(
-            &snapshot,
-            cmd,
-            self.command_mode(),
-        );
+        let result =
+            crate::editor_core::commands::execute_command(&snapshot, cmd, self.command_mode());
 
         if result.quit_requested {
             self.quit = true;
@@ -1002,6 +1050,9 @@ impl TerminalApp {
     }
 
     fn save(&mut self, db: &Db) -> Result<(), String> {
+        if self.format_on_save {
+            self.execute_terminal_command("format");
+        }
         if !self.dirty {
             return Ok(());
         }
@@ -1009,6 +1060,8 @@ impl TerminalApp {
         let saved = db.save_note(&self.active_note.id, &body)?;
         self.active_note = saved;
         self.dirty = false;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.refresh_switcher_items(db)?;
         Ok(())
     }
@@ -1285,8 +1338,8 @@ impl TerminalApp {
         if self.search_matches.is_empty() {
             return;
         }
-        self.search_current = (self.search_current + self.search_matches.len() - 1)
-            % self.search_matches.len();
+        self.search_current =
+            (self.search_current + self.search_matches.len() - 1) % self.search_matches.len();
         self.jump_to_current_match();
         self.update_search_status();
     }
@@ -1299,11 +1352,7 @@ impl TerminalApp {
             .collect()
     }
 
-    fn append_visual_highlights(
-        &self,
-        line_idx: usize,
-        ranges: &mut Vec<(usize, usize)>,
-    ) {
+    fn append_visual_highlights(&self, line_idx: usize, ranges: &mut Vec<(usize, usize)>) {
         let Some(anchor) = self.selection_anchor else {
             return;
         };
@@ -1405,7 +1454,7 @@ impl TerminalApp {
         while col > 0 && chars.get(col - 1).map_or(false, |c| c.is_alphanumeric()) {
             col -= 1;
         }
-        
+
         let start_byte = byte_index(self.current_line(), col);
         let end_byte = byte_index(self.current_line(), self.cursor_col);
         let text = self.current_line_mut();
@@ -1470,9 +1519,7 @@ impl TerminalApp {
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: true,
         };
-        if let Some(op) =
-            crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options)
-        {
+        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
             self.apply_edit_operation(&op);
         }
     }
@@ -1504,7 +1551,7 @@ impl TerminalApp {
 
     fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
         let mut text = join_lines(&self.lines);
-        
+
         // Track initial cursor byte offset
         let mut mapped_anchor = 0;
         for (i, line) in self.lines.iter().enumerate() {
@@ -1521,7 +1568,7 @@ impl TerminalApp {
             let from = change.from.min(text.len());
             let to = change.to.min(text.len());
             text.replace_range(from..to, &change.insert);
-            
+
             // Map cursor through change
             if from <= mapped_anchor {
                 if to <= mapped_anchor {
@@ -1539,7 +1586,8 @@ impl TerminalApp {
             sel.anchor
         } else {
             mapped_anchor
-        }.min(text.len());
+        }
+        .min(text.len());
 
         let mut offset = 0;
         for (i, line) in self.lines.iter().enumerate() {
@@ -1696,10 +1744,7 @@ impl TerminalApp {
             if line_idx < self.lines.len() {
                 let line_no = line_idx + 1;
                 let available = cols.saturating_sub(GUTTER_WIDTH);
-                let calc_ghost = self
-                    .calc_results
-                    .get(line_idx)
-                    .and_then(|r| r.as_deref());
+                let calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
 
                 let mut highlight_ranges = self.search_highlights_for_line(line_idx);
                 self.append_visual_highlights(line_idx, &mut highlight_ranges);
@@ -1753,9 +1798,13 @@ impl TerminalApp {
 
         let (cursor_row, cursor_col) = self.cursor_position(rows, cols);
         buf.push_str(&goto(cursor_row, cursor_col));
-        
+
         let cursor_style = match self.mode {
-            UiMode::Editor | UiMode::CommandBar | UiMode::Search | UiMode::Switcher | UiMode::DatePicker => {
+            UiMode::Editor
+            | UiMode::CommandBar
+            | UiMode::Search
+            | UiMode::Switcher
+            | UiMode::DatePicker => {
                 "\x1b[5 q" // Blinking Bar
             }
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine => "\x1b[1 q", // Blinking Block
@@ -1812,7 +1861,7 @@ impl TerminalApp {
 
 pub fn run_terminal_session(
     db: &Db,
-    _config: &ThemeConfig,
+    config: &ThemeConfig,
     opts: &TerminalOptions,
 ) -> Result<(), String> {
     if opts.list_only {
@@ -1820,7 +1869,7 @@ pub fn run_terminal_session(
         return Ok(());
     }
 
-    let mut app = TerminalApp::new(db, opts)?;
+    let mut app = TerminalApp::new(db, opts, config.format_on_save)?;
     app.run(db)
 }
 
@@ -2067,8 +2116,18 @@ fn draw_switcher(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) 
 }
 
 const MONTH_NAMES: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 fn days_in_month(year: i32, month: u32) -> u32 {
@@ -2174,7 +2233,10 @@ fn draw_date_picker(app: &TerminalApp, buf: &mut String, rows: usize, cols: usiz
     }
 
     // Footer
-    let selected = format!("{:04}-{:02}-{:02}", app.date_year, app.date_month, app.date_day);
+    let selected = format!(
+        "{:04}-{:02}-{:02}",
+        app.date_year, app.date_month, app.date_day
+    );
     let footer_x = x + 1 + (inner_w.saturating_sub(selected.len())) / 2;
     buf.push_str(&goto(y + box_h - 2, footer_x));
     buf.push_str("\x1b[1m");
@@ -2270,16 +2332,22 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
     if second != b'[' && second != b'O' {
         return Ok(Some(Key::Esc));
     }
-    
+
     let mut seq = Vec::new();
     loop {
-        let Some(b) = read_byte()? else { break; };
+        let Some(b) = read_byte()? else {
+            break;
+        };
         seq.push(b);
-        if b.is_ascii_alphabetic() || b == b'~' { break; }
+        if b.is_ascii_alphabetic() || b == b'~' {
+            break;
+        }
     }
-    
-    if seq.is_empty() { return Ok(Some(Key::Esc)); }
-    
+
+    if seq.is_empty() {
+        return Ok(Some(Key::Esc));
+    }
+
     let last = seq[seq.len() - 1];
     if seq.len() == 1 {
         match last {
@@ -2294,15 +2362,29 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
         }
     } else {
         let s = std::str::from_utf8(&seq).unwrap_or("");
-        if s == "1;5C" || s == "5C" { return Ok(Some(Key::CtrlArrowRight)); }
-        if s == "1;5D" || s == "5D" { return Ok(Some(Key::CtrlArrowLeft)); }
-        if s == "1~" || s == "7~" { return Ok(Some(Key::Home)); }
-        if s == "4~" || s == "8~" { return Ok(Some(Key::End)); }
-        if s == "3~" { return Ok(Some(Key::Delete)); }
-        if s == "5~" { return Ok(Some(Key::PageUp)); }
-        if s == "6~" { return Ok(Some(Key::PageDown)); }
+        if s == "1;5C" || s == "5C" {
+            return Ok(Some(Key::CtrlArrowRight));
+        }
+        if s == "1;5D" || s == "5D" {
+            return Ok(Some(Key::CtrlArrowLeft));
+        }
+        if s == "1~" || s == "7~" {
+            return Ok(Some(Key::Home));
+        }
+        if s == "4~" || s == "8~" {
+            return Ok(Some(Key::End));
+        }
+        if s == "3~" {
+            return Ok(Some(Key::Delete));
+        }
+        if s == "5~" {
+            return Ok(Some(Key::PageUp));
+        }
+        if s == "6~" {
+            return Ok(Some(Key::PageDown));
+        }
     }
-    
+
     Ok(Some(Key::Esc))
 }
 
@@ -2376,25 +2458,30 @@ fn get_calc_ghost_for_line(text: &str, engine: &crate::calc::engine::CalcEngine)
     if let Some((_, _, ghost)) = find_calc_segment(text, engine) {
         return Some(ghost);
     }
-    
+
     let trimmed = text.trim();
     if trimmed.starts_with('|') && trimmed.ends_with('|') {
         return None;
     }
-    
+
     engine.evaluate(text)
 }
 
-fn find_calc_segment(text: &str, engine: &crate::calc::engine::CalcEngine) -> Option<(usize, usize, String)> {
+fn find_calc_segment(
+    text: &str,
+    engine: &crate::calc::engine::CalcEngine,
+) -> Option<(usize, usize, String)> {
     let trimmed_text = text.trim();
     if trimmed_text.starts_with('|') && trimmed_text.ends_with('|') {
         let pipes: Vec<usize> = text.match_indices('|').map(|(i, _)| i).collect();
         if pipes.len() >= 2 {
             let mut candidates = Vec::new();
-            for i in 0..pipes.len()-1 {
+            for i in 0..pipes.len() - 1 {
                 let start = pipes[i] + 1;
-                let end = pipes[i+1];
-                if start >= end { continue; }
+                let end = pipes[i + 1];
+                if start >= end {
+                    continue;
+                }
                 let raw = &text[start..end];
                 let trimmed = raw.trim();
                 if let Some(ghost) = engine.evaluate(trimmed) {
@@ -2409,14 +2496,14 @@ fn find_calc_segment(text: &str, engine: &crate::calc::engine::CalcEngine) -> Op
         }
         return None;
     }
-    
+
     let mut prefix_end = None;
     if let Some((marker_end, _)) = render::checklist_marker_end(text) {
         prefix_end = Some(marker_end);
     } else if let Some(marker_end) = render::list_marker_end(text) {
         prefix_end = Some(marker_end);
     }
-    
+
     if let Some(start) = prefix_end {
         let raw = &text[start..];
         let trimmed = raw.trim();
@@ -2426,6 +2513,6 @@ fn find_calc_segment(text: &str, engine: &crate::calc::engine::CalcEngine) -> Op
             return Some((start + leading_ws, text.len() - trailing_ws, ghost));
         }
     }
-    
+
     None
 }

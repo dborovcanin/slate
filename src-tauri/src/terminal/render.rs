@@ -192,24 +192,49 @@ fn next_non_whitespace_char(chars: &[char], from: usize) -> Option<char> {
 
 fn keyword_list(lang: Option<&str>) -> &'static [&'static str] {
     const JS: &[&str] = &[
-        "const", "let", "var", "function", "return", "if", "else", "for", "while", "switch",
-        "case", "break", "continue", "import", "export", "from", "class", "extends", "new",
-        "async", "await", "try", "catch", "finally", "throw", "true", "false", "null",
+        "const",
+        "let",
+        "var",
+        "function",
+        "return",
+        "if",
+        "else",
+        "for",
+        "while",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "import",
+        "export",
+        "from",
+        "class",
+        "extends",
+        "new",
+        "async",
+        "await",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "true",
+        "false",
+        "null",
         "undefined",
     ];
     const RUST: &[&str] = &[
-        "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "match",
-        "if", "else", "for", "while", "loop", "return", "self", "Self", "crate", "super",
-        "where", "const", "static", "true", "false",
+        "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "match", "if",
+        "else", "for", "while", "loop", "return", "self", "Self", "crate", "super", "where",
+        "const", "static", "true", "false",
     ];
     const PY: &[&str] = &[
-        "def", "class", "return", "if", "elif", "else", "for", "while", "try", "except",
-        "finally", "with", "import", "from", "as", "break", "continue", "yield", "lambda",
-        "True", "False", "None",
+        "def", "class", "return", "if", "elif", "else", "for", "while", "try", "except", "finally",
+        "with", "import", "from", "as", "break", "continue", "yield", "lambda", "True", "False",
+        "None",
     ];
     const SH: &[&str] = &[
-        "if", "then", "else", "fi", "for", "in", "do", "done", "case", "esac", "while",
-        "function", "export", "local",
+        "if", "then", "else", "fi", "for", "in", "do", "done", "case", "esac", "while", "function",
+        "export", "local",
     ];
 
     match lang {
@@ -284,14 +309,7 @@ fn apply_code_block_styles(chars: &[char], styles: &mut [CharStyle], lang: Optio
             }
             i += 1;
         }
-        apply_style_range(
-            styles,
-            &mut protected,
-            start,
-            i,
-            FG_CODE_STRING,
-            false,
-        );
+        apply_style_range(styles, &mut protected, start, i, FG_CODE_STRING, false);
     }
 
     match comment_mode(lang) {
@@ -312,7 +330,10 @@ fn apply_code_block_styles(chars: &[char], styles: &mut [CharStyle], lang: Optio
         }
         "slash" => {
             for idx in 0..chars.len().saturating_sub(1) {
-                if chars[idx] == '/' && chars[idx + 1] == '/' && !protected[idx] && !protected[idx + 1]
+                if chars[idx] == '/'
+                    && chars[idx + 1] == '/'
+                    && !protected[idx]
+                    && !protected[idx + 1]
                 {
                     apply_style_range(
                         styles,
@@ -348,7 +369,8 @@ fn apply_code_block_styles(chars: &[char], styles: &mut [CharStyle], lang: Optio
                 let word: String = chars[start..pos].iter().collect();
                 let color = if keywords.contains(&word.as_str()) {
                     Some(FG_CODE_KEYWORD)
-                } else if next_non_whitespace_char(chars, pos).is_some_and(|ch| ch == '(' || ch == '!')
+                } else if next_non_whitespace_char(chars, pos)
+                    .is_some_and(|ch| ch == '(' || ch == '!')
                 {
                     Some(FG_CODE_FUNCTION)
                 } else if word

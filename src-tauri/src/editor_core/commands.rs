@@ -208,24 +208,32 @@ pub fn insert_value_at_selection(snapshot: &EditorContextSnapshot, value: &str) 
 
 fn format_markdown(text: &str) -> String {
     let mut lines: Vec<String> = text.lines().map(|s| s.trim_end().to_string()).collect();
-    
+
     // Auto-format tables
     let mut i = 0;
     while i < lines.len() {
         if lines[i].trim().starts_with('|') && lines[i].trim().ends_with('|') {
             let start = i;
-            while i < lines.len() && lines[i].trim().starts_with('|') && lines[i].trim().ends_with('|') {
+            while i < lines.len()
+                && lines[i].trim().starts_with('|')
+                && lines[i].trim().ends_with('|')
+            {
                 i += 1;
             }
             let end = i;
-            
+
             let mut rows: Vec<Vec<String>> = Vec::new();
             for r in start..end {
                 let row = lines[r].trim();
-                let cols: Vec<String> = row.trim_start_matches('|').trim_end_matches('|').split('|').map(|s| s.trim().to_string()).collect();
+                let cols: Vec<String> = row
+                    .trim_start_matches('|')
+                    .trim_end_matches('|')
+                    .split('|')
+                    .map(|s| s.trim().to_string())
+                    .collect();
                 rows.push(cols);
             }
-            
+
             if !rows.is_empty() {
                 let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
                 let mut widths = vec![0; max_cols];
@@ -236,13 +244,16 @@ fn format_markdown(text: &str) -> String {
                         }
                     }
                 }
-                
+
                 for r in start..end {
                     let mut new_row = String::from("|");
                     for c in 0..max_cols {
                         let col = rows[r - start].get(c).unwrap_or(&String::new()).clone();
-                        let is_separator = rows[r - start].iter().all(|x| x.chars().all(|ch| ch == '-' || ch == ':' || ch.is_whitespace()));
-                        
+                        let is_separator = rows[r - start].iter().all(|x| {
+                            x.chars()
+                                .all(|ch| ch == '-' || ch == ':' || ch.is_whitespace())
+                        });
+
                         let width = widths[c].max(3);
                         if is_separator {
                             new_row.push_str(&format!(" {} |", "-".repeat(width)));
@@ -261,7 +272,7 @@ fn format_markdown(text: &str) -> String {
             i += 1;
         }
     }
-    
+
     // Formatting other elements
     for line in &mut lines {
         // Headings
@@ -274,13 +285,13 @@ fn format_markdown(text: &str) -> String {
                 }
             }
         }
-        
+
         // Block quotes
         if line.starts_with('>') {
             let rest = line[1..].trim_start();
             *line = format!("> {}", rest);
         }
-        
+
         // Lists
         if let Some(ch) = line.chars().next() {
             if ch == '-' || ch == '*' || ch == '+' {
@@ -290,9 +301,8 @@ fn format_markdown(text: &str) -> String {
                 }
             }
         }
-        
     }
-    
+
     lines.join("\n")
 }
 
@@ -370,13 +380,15 @@ pub fn execute_command(
             } else {
                 result_with_message(format!("sum({scope}): no block at cursor"))
             }
-        },
+        }
         CommandBehavior::Date => {
             let date_str = time::OffsetDateTime::now_utc().date().to_string();
             let mut result = result_with_message("Date inserted");
-            result.operations.push(insert_value_at_selection(snapshot, &date_str));
             result
-        },
+                .operations
+                .push(insert_value_at_selection(snapshot, &date_str));
+            result
+        }
         CommandBehavior::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
@@ -394,7 +406,7 @@ pub fn execute_command(
             let mut result = result_with_message("Document formatted");
             result.operations.push(op);
             result
-        },
+        }
     }
 }
 
@@ -463,7 +475,10 @@ mod tests {
 
     #[test]
     fn parse_sum_numbers_extracts_values() {
-        assert_eq!(parse_sum_numbers("a 10 b -2.5 c 1,200 d +0.75"), vec![10.0, -2.5, 1200.0, 0.75]);
+        assert_eq!(
+            parse_sum_numbers("a 10 b -2.5 c 1,200 d +0.75"),
+            vec![10.0, -2.5, 1200.0, 0.75]
+        );
         assert_eq!(parse_sum_numbers("no numbers here"), Vec::<f64>::new());
         assert_eq!(parse_sum_numbers("3"), vec![3.0]);
     }

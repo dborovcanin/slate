@@ -56,6 +56,7 @@ fn run_gui() -> Result<(), String> {
             commands::notes::list_notes,
             commands::notes::delete_note,
             commands::calc::evaluate_lines,
+            commands::calc::evaluate_note_context,
             commands::config::get_theme_config,
             commands::export::export_to_file,
         ])

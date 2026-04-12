@@ -258,6 +258,53 @@
   padding-left: 16px;
 }
 
+.variable-autocomplete {
+  position: absolute;
+  z-index: 34;
+  display: none;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: min(360px, 70vw);
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+  padding: 4px;
+}
+
+.variable-autocomplete-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 5px 7px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.variable-autocomplete-item:hover,
+.variable-autocomplete-item--active {
+  background: var(--bg-overlay);
+  border-color: var(--border);
+}
+
+.variable-autocomplete-item-title {
+  color: var(--fg);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.variable-autocomplete-item-hint {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+
 .command-picker-bar {
   position: absolute;
   left: 10px;

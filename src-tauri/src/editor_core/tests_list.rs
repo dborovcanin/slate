@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 mod tests_list {
     use crate::editor_core::text_rules::{run_doc_change_rules, TextRuleOptions};
@@ -12,11 +11,16 @@ mod tests_list {
             selection: SelectionSnapshot { anchor: 0, head: 0 },
             changed_range: None,
         };
-        let op = run_doc_change_rules(&snap, TextRuleOptions { markdown_autoformat: true });
+        let op = run_doc_change_rules(
+            &snap,
+            TextRuleOptions {
+                markdown_autoformat: true,
+            },
+        );
         if let Some(op) = op {
-             println!("Changes: {:?}", op.changes);
+            println!("Changes: {:?}", op.changes);
         } else {
-             println!("No changes generated!");
+            println!("No changes generated!");
         }
     }
 }

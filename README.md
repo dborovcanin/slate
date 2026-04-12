@@ -54,11 +54,21 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
 - Press Tab to apply the result inline
-- Uses incremental line-based evaluation (only changed lines are recalculated after edits)
+- Uses note-context evaluation with line-aware extraction (normal lines, list bodies, single calc table cell)
 - In markdown tables, lists, and checklists, calc applies to the expression part and `Tab` replaces that expression in place
 - Supports arithmetic, unit conversions (`50 kg to lbs`), percentages, and everything [fend](https://github.com/printfn/fend) can evaluate
 - Non-math lines are ignored — no noise
 - Date-like lines (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`) are ignored to avoid false numeric ghost suggestions
+
+**Variables (Antinote-style, note-local)**
+- Define variables with `:=` assignment syntax: `name := expression`
+- Variable names are case-insensitive and may include spaces (letters/digits/underscore/space)
+- Variables are note-local and reactive: dependent lines recompute as definitions change
+- Conversion assignments are normalized to numeric values for reuse (`len := 3 m to km`, then `len + 2`)
+- Assignment lines do not render calc ghosts
+- Unresolved/cyclic variable expressions fail silently (no ghost noise)
+- Variable autocomplete popup appears while typing (default after 3 chars); `Tab` accepts completion when popup is open, otherwise `Tab` applies calc ghost
+- Full behavior contract: `docs/variables.md`
 
 ```
 200 * 1.19              → 238
@@ -88,9 +98,9 @@ sqrt(144) + 3^2         → 21
 | Ctrl+N                  | New note                      |
 | Ctrl+P                  | Fuzzy note switcher           |
 | Ctrl+↑ / Ctrl+↓         | Previous / next note          |
-| Ctrl+Backspace          | Delete previous word           |
+| Ctrl+Backspace          | Delete previous word          |
 | Ctrl+Shift+Backspace    | Delete current note (confirm) |
-| Ctrl+Shift+;            | Open command picker            |
+| Ctrl+Shift+;            | Open command picker           |
 | Tab                     | Apply calc result             |
 | Ctrl+E                  | Copy note to clipboard        |
 | Ctrl+Shift+E            | Export note to file           |
@@ -107,7 +117,7 @@ sqrt(144) + 3^2         → 21
 
 **Storage**
 - SQLite with WAL mode in `~/.local/share/note/notes.db`
-- No config files, no setup
+- Config file is auto-generated on first run (`~/.config/note/config.toml`)
 
 ## Requirements
 
@@ -217,16 +227,21 @@ Example:
 
 ```toml
 [theme]
-color_scheme = "gruvbox-dark"
-background = "squares"
+color_scheme = "gruvbox-light"
+background = "plain"
 font = "jetbrains-mono"
 font_size = 14
 
 [editor]
 markdown_autoformat = true
+format_on_save = false
 terminal_mode = false
 vim_mode = false
 date_format = "%Y-%m-%d"
+
+[editor.variables]
+enabled = true
+autocomplete_min_chars = 3
 ```
 
 Available `color_scheme` values:
@@ -263,9 +278,14 @@ Available `font` values:
 
 Editor options:
 - `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
+- `format_on_save = false` runs `:format` before save when enabled (Ctrl+S and autosave flush path)
 - `terminal_mode = true` makes `note` default to terminal runtime (when launched from a TTY)
 - `vim_mode = true` enables modal Vim-style key mappings in GUI
 - `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
+
+Variable options:
+- `[editor.variables] enabled = true` turns note-local variable resolution/autocomplete on or off
+- `[editor.variables] autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
 
 Supported `date_format` tokens:
 - `%Y` year (4 digit), `%y` year (2 digit)

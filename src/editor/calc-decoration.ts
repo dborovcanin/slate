@@ -7,12 +7,16 @@ import {
   keymap,
 } from "@codemirror/view";
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
-import { evaluateLines } from "../api.ts";
-import { planIncrementalCalc } from "./calc-incremental.ts";
-import { findCalcSegment, lineForCalcEvaluation } from "./calc-line-utils.ts";
+import { evaluateNoteContext, type VariableIndexEntry } from "../api.ts";
+import { findCalcSegment } from "./calc-line-utils.ts";
+
+export interface CalcExtensionOptions {
+  variablesEnabled?: boolean;
+}
 
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
+const setVariableIndex = StateEffect.define<VariableIndexEntry[]>();
 
 // State field holding current calc results keyed by line number (0-based)
 const calcResultsField = StateField.define<Map<number, string>>({
@@ -22,6 +26,18 @@ const calcResultsField = StateField.define<Map<number, string>>({
   update(value, tr) {
     for (const e of tr.effects) {
       if (e.is(setCalcResults)) return e.value;
+    }
+    return value;
+  },
+});
+
+export const variableIndexField = StateField.define<VariableIndexEntry[]>({
+  create() {
+    return [];
+  },
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setVariableIndex)) return e.value;
     }
     return value;
   },
@@ -73,80 +89,81 @@ class CalcResultWidget extends WidgetType {
   }
 }
 
-// ViewPlugin that debounces doc changes and fetches calc results
-const calcPlugin = ViewPlugin.define((view) => {
-  let timer: number | null = null;
-  let inFlight = false;
-  let rerunRequested = false;
-  let destroyed = false;
-  let prevEvalLines: string[] = [];
-  let prevResults = new Map<number, string>();
+function buildCalcPlugin(options: CalcExtensionOptions) {
+  const variablesEnabled = options.variablesEnabled ?? true;
 
-  function scheduleEval() {
-    if (timer !== null) clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      void runEval(view);
-    }, 150);
-  }
+  return ViewPlugin.define((view) => {
+    let timer: number | null = null;
+    let inFlight = false;
+    let rerunRequested = false;
+    let destroyed = false;
 
-  async function runEval(view: EditorView) {
-    if (inFlight) {
-      rerunRequested = true;
-      return;
+    function scheduleEval() {
+      if (timer !== null) clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        void runEval(view);
+      }, 150);
     }
 
-    inFlight = true;
-    do {
-      rerunRequested = false;
-      try {
-        const doc = view.state.doc;
-        const snapshot = doc.toString();
-        const evalLines: string[] = [];
-        for (let i = 1; i <= doc.lines; i++) {
-          evalLines.push(lineForCalcEvaluation(doc.line(i).text));
-        }
-
-        const plan = planIncrementalCalc(prevEvalLines, prevResults, evalLines);
-        const nextMap = new Map(plan.baseResults);
-        let evaluated: (string | null)[] = [];
-        if (plan.evalLines.length > 0) {
-          evaluated = await evaluateLines(plan.evalLines);
-        }
-        if (destroyed) break;
-
-        // If the document changed during async evaluation, drop stale results and rerun.
-        if (view.state.doc.toString() !== snapshot) {
-          rerunRequested = true;
-          continue;
-        }
-
-        evaluated.forEach((r, i) => {
-          if (r !== null) nextMap.set(plan.evalFrom + i, r);
-        });
-        prevEvalLines = evalLines;
-        prevResults = nextMap;
-        view.dispatch({ effects: setCalcResults.of(nextMap) });
-      } catch (e) {
-        console.error("Calc evaluation failed:", e);
+    async function runEval(view: EditorView) {
+      if (inFlight) {
+        rerunRequested = true;
+        return;
       }
-    } while (rerunRequested && !destroyed);
 
-    inFlight = false;
-  }
+      inFlight = true;
+      do {
+        rerunRequested = false;
+        try {
+          const doc = view.state.doc;
+          const snapshot = doc.toString();
+          const lines: string[] = [];
+          for (let i = 1; i <= doc.lines; i++) {
+            lines.push(doc.line(i).text);
+          }
 
-  // initial evaluation
-  scheduleEval();
+          const evaluated = await evaluateNoteContext(lines, variablesEnabled);
+          if (destroyed) break;
 
-  return {
-    update(update: ViewUpdate) {
-      if (update.docChanged) scheduleEval();
-    },
-    destroy() {
-      destroyed = true;
-      if (timer !== null) clearTimeout(timer);
-    },
-  };
-});
+          // If the document changed during async evaluation, drop stale results and rerun.
+          if (view.state.doc.toString() !== snapshot) {
+            rerunRequested = true;
+            continue;
+          }
+
+          const nextMap = new Map<number, string>();
+          evaluated.line_results.forEach((result, lineIndex) => {
+            if (result !== null) nextMap.set(lineIndex, result);
+          });
+
+          view.dispatch({
+            effects: [
+              setCalcResults.of(nextMap),
+              setVariableIndex.of(evaluated.variables ?? []),
+            ],
+          });
+        } catch (e) {
+          console.error("Calc evaluation failed:", e);
+        }
+      } while (rerunRequested && !destroyed);
+
+      inFlight = false;
+    }
+
+    // initial evaluation
+    scheduleEval();
+
+    return {
+      update(update: ViewUpdate) {
+        if (update.docChanged) scheduleEval();
+      },
+      destroy() {
+        destroyed = true;
+        if (timer !== null) clearTimeout(timer);
+      },
+    };
+  });
+}
 
 export function getCalcResultAtCursor(view: EditorView): string | null {
   const results = view.state.field(calcResultsField, false);
@@ -154,6 +171,10 @@ export function getCalcResultAtCursor(view: EditorView): string | null {
   const cursor = view.state.selection.main.head;
   const line = view.state.doc.lineAt(cursor);
   return results.get(line.number - 1) ?? null;
+}
+
+export function getVariableIndexEntries(view: EditorView): VariableIndexEntry[] {
+  return view.state.field(variableIndexField, false) ?? [];
 }
 
 // Tab keymap: if cursor line has a calc result, apply it
@@ -208,6 +229,12 @@ const calcTabKeymap = keymap.of([
   },
 ]);
 
-export function calcExtensions() {
-  return [calcResultsField, calcDecorations, calcPlugin, calcTabKeymap];
+export function calcExtensions(options: CalcExtensionOptions = {}) {
+  return [
+    calcResultsField,
+    variableIndexField,
+    calcDecorations,
+    buildCalcPlugin(options),
+    calcTabKeymap,
+  ];
 }

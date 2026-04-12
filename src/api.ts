@@ -13,21 +13,45 @@ export interface ThemeConfig {
   font: string;
   font_size: number;
   markdown_autoformat: boolean;
+  format_on_save?: boolean;
   terminal_mode: boolean;
   vim_mode: boolean;
   date_format: string;
+  variables_enabled: boolean;
+  variables_autocomplete_min_chars: number;
 }
 
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
-  color_scheme: "catppuccin-mocha",
+  color_scheme: "gruvbox-light",
   background: "plain",
   font: "jetbrains-mono",
   font_size: 14,
   markdown_autoformat: true,
+  format_on_save: false,
   terminal_mode: false,
   vim_mode: false,
   date_format: "%Y-%m-%d",
+  variables_enabled: true,
+  variables_autocomplete_min_chars: 3,
 };
+
+export interface VariableIndexEntry {
+  name: string;
+  normalized: string;
+  line: number; // 1-based
+}
+
+export interface NoteEvaluationDiagnostic {
+  kind: string;
+  line: number; // 1-based
+  message: string;
+}
+
+export interface NoteEvaluationResult {
+  line_results: (string | null)[];
+  variables: VariableIndexEntry[];
+  diagnostics?: NoteEvaluationDiagnostic[] | null;
+}
 
 export function getOrCreateNote(): Promise<Note> {
   return invoke<Note>("get_or_create_note");
@@ -51,6 +75,16 @@ export function deleteNote(id: string): Promise<boolean> {
 
 export function evaluateLines(lines: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("evaluate_lines", { lines });
+}
+
+export function evaluateNoteContext(
+  lines: string[],
+  variablesEnabled = true,
+): Promise<NoteEvaluationResult> {
+  return invoke<NoteEvaluationResult>("evaluate_note_context", {
+    lines,
+    variables_enabled: variablesEnabled,
+  });
 }
 
 export function exportToFile(path: string, content: string): Promise<void> {

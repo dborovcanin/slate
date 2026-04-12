@@ -13,6 +13,7 @@ import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
+import { variableAutocompleteExtensions } from "./variable-autocomplete";
 import { vimModeExtension } from "./vim";
 
 let view: EditorView | null = null;
@@ -48,14 +49,32 @@ const onUpdate = EditorView.updateListener.of((update) => {
 
 interface EditorMountOptions {
   markdownAutoformat?: boolean;
+  formatOnSave?: boolean;
   vimMode?: boolean;
   dateFormat?: string;
+  variablesEnabled?: boolean;
+  variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
+}
+
+let currentFormatOnSave = false;
+let currentDateFormat = "%Y-%m-%d";
+
+export async function performFormatAndSave() {
+  if (!view) return;
+  if (currentFormatOnSave) {
+    const { executeCommand } = await import("./command-engine");
+    await executeCommand(view, "format", { mode: "editor" });
+  }
+  await flushSave();
 }
 
 export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
   const note = state.activeNote;
   const doc = note?.body ?? "";
+  
+  currentFormatOnSave = !!options.formatOnSave;
+  currentDateFormat = options.dateFormat || "%Y-%m-%d";
 
   const extensions = [
     EditorState.allowMultipleSelections.of(true),
@@ -65,7 +84,11 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     placeholder("Start typing..."),
     markdownRichTextExtensions(),
     markdownEditingExtensions({ autoformat: options.markdownAutoformat ?? true }),
-    calcExtensions(),
+    ...variableAutocompleteExtensions({
+      enabled: options.variablesEnabled ?? true,
+      minChars: options.variableAutocompleteMinChars ?? 3,
+    }),
+    ...calcExtensions({ variablesEnabled: options.variablesEnabled ?? true }),
     commandModeExtension({
       dateFormat: options.dateFormat,
       vimMode: !!options.vimMode,
@@ -76,6 +99,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       { key: "Ctrl-Backspace", run: deleteGroupBackward },
       { key: "Ctrl-ArrowLeft", run: cursorGroupLeft },
       { key: "Ctrl-ArrowRight", run: cursorGroupRight },
+      { key: "Ctrl-s", run: () => { performFormatAndSave(); return true; } },
     ]),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,

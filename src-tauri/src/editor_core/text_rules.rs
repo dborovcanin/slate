@@ -324,7 +324,9 @@ fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     let head = ctx.selection().head;
     let head_line = ctx.line_at(head).number;
     let head_col = head.saturating_sub(ctx.line(head_line).from);
-    let relative_line = head_line.saturating_sub(block.start_line).min(formatted.len().saturating_sub(1));
+    let relative_line = head_line
+        .saturating_sub(block.start_line)
+        .min(formatted.len().saturating_sub(1));
 
     let mut new_head = start_line.from;
     for i in 0..relative_line {
@@ -397,7 +399,9 @@ fn is_table_separator(text: &str) -> bool {
         return false;
     }
     // A separator contains only |, -, :, and whitespace
-    trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c == ' ')
+    trimmed
+        .chars()
+        .all(|c| c == '|' || c == '-' || c == ':' || c == ' ')
 }
 
 fn table_continuation_rule(line: &crate::editor_core::types::LineContext) -> Option<EditOperation> {
@@ -411,7 +415,9 @@ fn table_continuation_rule(line: &crate::editor_core::types::LineContext) -> Opt
     let column_count = line.text.matches('|').count().saturating_sub(1).max(1);
 
     // Check if the row is empty (only pipes and whitespace)
-    let inner: String = line.text.split('|')
+    let inner: String = line
+        .text
+        .split('|')
         .skip(1)
         .take(column_count)
         .collect::<Vec<_>>()
@@ -421,7 +427,10 @@ fn table_continuation_rule(line: &crate::editor_core::types::LineContext) -> Opt
             line.from,
             line.to,
             "",
-            Some(OperationSelection { anchor: line.from, head: None }),
+            Some(OperationSelection {
+                anchor: line.from,
+                head: None,
+            }),
         ));
     }
 
@@ -506,17 +515,16 @@ fn marker_depth(indent: &str) -> usize {
         / 2
 }
 
-fn table_tab_rule(
-    ctx: &ResolvedContext,
-    options: &TabRuleOptions,
-) -> Option<EditOperation> {
+fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
     }
 
     let mut current_line_idx = ctx.current_line().number;
-    let mut head_col = selection.head.saturating_sub(ctx.line(current_line_idx).from);
+    let mut head_col = selection
+        .head
+        .saturating_sub(ctx.line(current_line_idx).from);
     let outdent = options.outdent;
 
     let mut found_target = false;
@@ -555,7 +563,9 @@ fn table_tab_rule(
                 if left > 0 {
                     let target_pipe_index = pipes[left];
                     let mut pos = target_pipe_index;
-                    while pos > pipes[left - 1] + 1 && line.text.as_bytes().get(pos - 1).copied() == Some(b' ') {
+                    while pos > pipes[left - 1] + 1
+                        && line.text.as_bytes().get(pos - 1).copied() == Some(b' ')
+                    {
                         pos -= 1;
                     }
                     target_anchor = line.from + pos;
@@ -584,7 +594,9 @@ fn table_tab_rule(
                 if right + 1 < pipes.len() {
                     let target_pipe_index = pipes[right + 1];
                     let mut pos = target_pipe_index;
-                    while pos > pipes[right] + 1 && line.text.as_bytes().get(pos - 1).copied() == Some(b' ') {
+                    while pos > pipes[right] + 1
+                        && line.text.as_bytes().get(pos - 1).copied() == Some(b' ')
+                    {
                         pos -= 1;
                     }
                     target_anchor = line.from + pos;
@@ -765,7 +777,10 @@ mod tests {
         let text = "1. parent";
         let indent_doc = snapshot(text, text.len(), text.len());
         let indent_op = run_tab_rules(&indent_doc, TabRuleOptions::default()).expect("indent op");
-        assert_eq!(apply_operation(&indent_doc.text, &indent_op), "  1.1 parent");
+        assert_eq!(
+            apply_operation(&indent_doc.text, &indent_op),
+            "  1.1 parent"
+        );
 
         let outdent_doc = snapshot("  1.1.1 child", 13, 0);
         let outdent_op = run_tab_rules(
