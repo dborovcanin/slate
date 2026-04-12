@@ -386,7 +386,10 @@ pub fn execute_command(
                 0,
                 snapshot.text.len(),
                 formatted,
-                None,
+                Some(OperationSelection {
+                    anchor: snapshot.selection.anchor,
+                    head: Some(snapshot.selection.head),
+                }),
             );
             let mut result = result_with_message("Document formatted");
             result.operations.push(op);
