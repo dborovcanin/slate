@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
+pub const TAB_WIDTH: usize = 4;
 const FG_CODE_KEYWORD: u8 = 81;
 const FG_CODE_STRING: u8 = 114;
 const FG_CODE_NUMBER: u8 = 215;
@@ -797,8 +798,19 @@ fn build_ansi_output(
             s.write_ansi(&mut buf);
             current = s;
         }
-        buf.push(ch);
-        visible += 1;
+        if ch == '\t' {
+            let tab_spaces = TAB_WIDTH - (visible % TAB_WIDTH);
+            for _ in 0..tab_spaces {
+                if visible >= width {
+                    break;
+                }
+                buf.push(' ');
+                visible += 1;
+            }
+        } else {
+            buf.push(ch);
+            visible += 1;
+        }
     }
 
     if let Some(ghost) = calc_ghost {
@@ -915,6 +927,15 @@ mod tests {
         assert!(out.contains("38;5;81"));
         assert!(out.contains("38;5;215"));
         assert!(out.contains("38;5;244"));
+    }
+
+    #[test]
+    fn render_expands_tabs_into_spaces() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line("a\tb", 12, None, &[]);
+        let visible = strip_ansi(&out);
+        assert!(visible.starts_with("a   b"));
+        assert_eq!(visible.len(), 12);
     }
 
     fn strip_ansi(s: &str) -> String {

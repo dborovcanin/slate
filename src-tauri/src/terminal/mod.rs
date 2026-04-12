@@ -1843,8 +1843,11 @@ impl TerminalApp {
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
                 let clamped_col = min(self.cursor_col, line_char_len(line_text));
-                let visible = clip_text(line_text, cols.saturating_sub(GUTTER_WIDTH));
-                let visible_col = min(clamped_col, visible.chars().count());
+                let visible_col = visible_display_cols_for_prefix(
+                    line_text,
+                    clamped_col,
+                    cols.saturating_sub(GUTTER_WIDTH),
+                );
                 let col = (GUTTER_WIDTH + visible_col + 1).min(cols.max(1));
                 (row.max(1), col.max(1))
             }
@@ -1917,6 +1920,22 @@ fn join_lines(lines: &[String]) -> String {
 
 fn line_char_len(text: &str) -> usize {
     text.chars().count()
+}
+
+fn visible_display_cols_for_prefix(text: &str, prefix_chars: usize, max_cols: usize) -> usize {
+    let mut visible = 0usize;
+    for ch in text.chars().take(prefix_chars) {
+        if visible >= max_cols {
+            break;
+        }
+        if ch == '\t' {
+            let tab = render::TAB_WIDTH - (visible % render::TAB_WIDTH);
+            visible = (visible + tab).min(max_cols);
+        } else {
+            visible += 1;
+        }
+    }
+    visible.min(max_cols)
 }
 
 fn byte_index(text: &str, char_idx: usize) -> usize {
@@ -2026,10 +2045,6 @@ fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     } else {
         None
     }
-}
-
-fn clip_text(text: &str, width: usize) -> String {
-    text.chars().take(width).collect()
 }
 
 fn pad_right(text: &str, width: usize) -> String {
