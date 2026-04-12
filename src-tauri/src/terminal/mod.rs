@@ -106,6 +106,8 @@ struct TerminalApp {
     search_orig_scroll: usize,
     // Auto format
     format_on_save: bool,
+    // Calc/variables behavior
+    variables_enabled: bool,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
     // Undo/redo
@@ -114,15 +116,16 @@ struct TerminalApp {
 }
 
 impl TerminalApp {
-    fn new(db: &Db, opts: &TerminalOptions, format_on_save: bool) -> Result<Self, String> {
+    fn new(
+        db: &Db,
+        opts: &TerminalOptions,
+        format_on_save: bool,
+        variables_enabled: bool,
+    ) -> Result<Self, String> {
         let active_note = select_note(db, opts)?;
         let lines = split_lines(&active_note.body);
         let switcher_items = load_note_meta(db)?;
-        let engine = crate::calc::engine::CalcEngine::new();
-        let calc_results = lines
-            .iter()
-            .map(|l| get_calc_ghost_for_line(l, &engine))
-            .collect();
+        let calc_results = compute_calc_results(&lines, variables_enabled);
 
         Ok(Self {
             active_note,
@@ -156,6 +159,7 @@ impl TerminalApp {
             search_orig_col: 0,
             search_orig_scroll: 0,
             format_on_save,
+            variables_enabled,
             command_bar_from_normal: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -251,18 +255,10 @@ impl TerminalApp {
                 }
             }
             Key::Tab => {
-                if !self.try_tab_rule(false) {
-                    let text = self.current_line().to_string();
-                    let engine = crate::calc::engine::CalcEngine::new();
-                    if let Some((from_byte, to_byte, result)) = find_calc_segment(&text, &engine) {
-                        self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
-                        self.cursor_col = line_char_len(&self.lines[self.cursor_line]);
-                        self.mark_edited();
-                    } else if let Some(ghost) = get_calc_ghost_for_line(&text, &engine) {
-                        self.insert_text(&format!(" = {ghost}"));
-                    } else {
-                        self.insert_text("  ");
-                    }
+                if self.apply_calc_tab() {
+                    // handled
+                } else if !self.try_tab_rule(false) {
+                    self.insert_text("  ");
                 }
             }
             Key::BackTab => {
@@ -1110,7 +1106,7 @@ impl TerminalApp {
         }
         self.dirty = true;
         self.last_edit = Instant::now();
-        self.recompute_calc_around(self.cursor_line);
+        self.recompute_calc_full();
     }
 
     fn push_undo(&mut self) {
@@ -1168,24 +1164,7 @@ impl TerminalApp {
     }
 
     fn recompute_calc_full(&mut self) {
-        let engine = crate::calc::engine::CalcEngine::new();
-        self.calc_results = self
-            .lines
-            .iter()
-            .map(|l| get_calc_ghost_for_line(l, &engine))
-            .collect();
-    }
-
-    fn recompute_calc_around(&mut self, center: usize) {
-        let engine = crate::calc::engine::CalcEngine::new();
-        // Resize calc_results if lines changed
-        self.calc_results.resize(self.lines.len(), None);
-        // Recompute a window around the edited line
-        let start = center.saturating_sub(2);
-        let end = (center + 3).min(self.lines.len());
-        for i in start..end {
-            self.calc_results[i] = get_calc_ghost_for_line(&self.lines[i], &engine);
-        }
+        self.calc_results = compute_calc_results(&self.lines, self.variables_enabled);
     }
 
     // --- Search ---
@@ -1498,6 +1477,30 @@ impl TerminalApp {
         self.cursor_line += 1;
         self.cursor_col = 0;
         self.mark_edited();
+    }
+
+    fn apply_calc_tab(&mut self) -> bool {
+        let text = self.current_line().to_string();
+        let Some(result) = self
+            .calc_results
+            .get(self.cursor_line)
+            .and_then(|value| value.clone())
+        else {
+            return false;
+        };
+
+        if let Some((from_byte, to_byte)) = find_calc_segment_range(&text) {
+            self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
+            self.cursor_col = self.lines[self.cursor_line]
+                [..from_byte.saturating_add(result.len())]
+                .chars()
+                .count();
+            self.mark_edited();
+            return true;
+        }
+
+        self.insert_text(&format!(" = {result}"));
+        true
     }
 
     fn try_autoformat_rules(&mut self) {
@@ -1869,7 +1872,7 @@ pub fn run_terminal_session(
         return Ok(());
     }
 
-    let mut app = TerminalApp::new(db, opts, config.format_on_save)?;
+    let mut app = TerminalApp::new(db, opts, config.format_on_save, config.variables_enabled)?;
     app.run(db)
 }
 
@@ -2454,23 +2457,16 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn get_calc_ghost_for_line(text: &str, engine: &crate::calc::engine::CalcEngine) -> Option<String> {
-    if let Some((_, _, ghost)) = find_calc_segment(text, engine) {
-        return Some(ghost);
-    }
-
-    let trimmed = text.trim();
-    if trimmed.starts_with('|') && trimmed.ends_with('|') {
-        return None;
-    }
-
-    engine.evaluate(text)
+fn compute_calc_results(lines: &[String], variables_enabled: bool) -> Vec<Option<String>> {
+    let engine = crate::calc::engine::CalcEngine::new();
+    let result = engine.evaluate_note_context(
+        lines,
+        crate::calc::engine::NoteEvaluationOptions { variables_enabled },
+    );
+    result.line_results
 }
 
-fn find_calc_segment(
-    text: &str,
-    engine: &crate::calc::engine::CalcEngine,
-) -> Option<(usize, usize, String)> {
+fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
     let trimmed_text = text.trim();
     if trimmed_text.starts_with('|') && trimmed_text.ends_with('|') {
         let pipes: Vec<usize> = text.match_indices('|').map(|(i, _)| i).collect();
@@ -2484,11 +2480,12 @@ fn find_calc_segment(
                 }
                 let raw = &text[start..end];
                 let trimmed = raw.trim();
-                if let Some(ghost) = engine.evaluate(trimmed) {
-                    let leading_ws = raw.len() - raw.trim_start().len();
-                    let trailing_ws = raw.len() - raw.trim_end().len();
-                    candidates.push((start + leading_ws, end - trailing_ws, ghost));
+                if trimmed.is_empty() || !has_calc_signal(trimmed) {
+                    continue;
                 }
+                let leading_ws = raw.len() - raw.trim_start().len();
+                let trailing_ws = raw.len() - raw.trim_end().len();
+                candidates.push((start + leading_ws, end - trailing_ws));
             }
             if candidates.len() == 1 {
                 return Some(candidates[0].clone());
@@ -2506,13 +2503,164 @@ fn find_calc_segment(
 
     if let Some(start) = prefix_end {
         let raw = &text[start..];
-        let trimmed = raw.trim();
-        if let Some(ghost) = engine.evaluate(trimmed) {
-            let leading_ws = raw.len() - raw.trim_start().len();
-            let trailing_ws = raw.len() - raw.trim_end().len();
-            return Some((start + leading_ws, text.len() - trailing_ws, ghost));
+        let leading_ws = raw.len() - raw.trim_start().len();
+        let trailing_ws = raw.len() - raw.trim_end().len();
+        let from = start + leading_ws;
+        let to = text.len().saturating_sub(trailing_ws);
+        if from < to {
+            return Some((from, to));
         }
     }
 
     None
+}
+
+fn has_calc_signal(text: &str) -> bool {
+    if looks_like_date(text) {
+        return false;
+    }
+
+    text.bytes().any(|b| {
+        matches!(
+            b,
+            b'+' | b'-' | b'*' | b'/' | b'^' | b'%' | b'(' | b'0'..=b'9'
+        )
+    }) || text.contains(" to ")
+        || text.contains(" in ")
+}
+
+fn looks_like_date_with_delim(text: &str, delim: char) -> bool {
+    let mut parts = text.split(delim);
+    let (Some(a), Some(b), Some(c)) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    if parts.next().is_some() {
+        return false;
+    }
+
+    let parse_len = |part: &str, min_len: usize, max_len: usize| -> Option<u32> {
+        if part.len() < min_len
+            || part.len() > max_len
+            || !part.as_bytes().iter().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        part.parse::<u32>().ok()
+    };
+
+    if parse_len(a, 4, 4).is_some() {
+        if let (Some(month), Some(day)) = (parse_len(b, 1, 2), parse_len(c, 1, 2)) {
+            return (1..=12).contains(&month) && (1..=31).contains(&day);
+        }
+    }
+
+    if let (Some(day), Some(month), Some(year)) =
+        (parse_len(a, 1, 2), parse_len(b, 1, 2), parse_len(c, 2, 4))
+    {
+        return year > 0 && (1..=12).contains(&month) && (1..=31).contains(&day);
+    }
+
+    false
+}
+
+fn looks_like_date(text: &str) -> bool {
+    looks_like_date_with_delim(text, '-')
+        || looks_like_date_with_delim(text, '.')
+        || looks_like_date_with_delim(text, '/')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{compute_calc_results, find_calc_segment_range};
+    use super::{line_char_len, Key, TerminalApp, TerminalOptions, UiMode};
+    use crate::storage::Db;
+    use std::fs;
+    use std::path::PathBuf;
+    use ulid::Ulid;
+
+    fn temp_db_path() -> PathBuf {
+        std::env::temp_dir().join(format!("note-terminal-test-{}.db", Ulid::new()))
+    }
+
+    fn cleanup_db_files(path: &PathBuf) {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(format!("{}-wal", path.display()));
+        let _ = fs::remove_file(format!("{}-shm", path.display()));
+    }
+
+    fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let note_id = "n1";
+        db.save_note(note_id, body).expect("note saved");
+        let opts = TerminalOptions {
+            create_new: false,
+            note_id: Some(note_id.to_string()),
+            list_only: false,
+        };
+        let mut app = TerminalApp::new(&db, &opts, false, true).expect("terminal app");
+        app.mode = UiMode::Editor;
+        (db, app, path)
+    }
+
+    #[test]
+    fn find_calc_segment_range_detects_single_table_expression_cell() {
+        let line = "| name | 4+2 |";
+        let Some((from, to)) = find_calc_segment_range(line) else {
+            panic!("expected table segment");
+        };
+        assert_eq!(&line[from..to], "4+2");
+    }
+
+    #[test]
+    fn find_calc_segment_range_detects_list_body() {
+        let line = "- [ ] subtotal + tax";
+        let Some((from, to)) = find_calc_segment_range(line) else {
+            panic!("expected list segment");
+        };
+        assert_eq!(&line[from..to], "subtotal + tax");
+    }
+
+    #[test]
+    fn compute_calc_results_resolves_reactive_variables() {
+        let lines = vec!["x := 4".to_string(), "x + 2".to_string()];
+        let results = compute_calc_results(&lines, true);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0], None);
+        assert_eq!(results[1].as_deref(), Some("6"));
+    }
+
+    #[test]
+    fn tab_applies_table_calc_with_variables_and_positions_cursor_at_insert_end() {
+        let (db, mut app, path) = app_with_note("x := 4\n| value | x + 2 |");
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+
+        app.handle_editor_key(&db, Key::Tab).expect("tab applies");
+
+        assert_eq!(app.lines[1], "| value | 6 |");
+        let expected_byte = app.lines[1].find("6").expect("result exists") + "6".len();
+        let expected_col = app.lines[1][..expected_byte].chars().count();
+        assert_eq!(app.cursor_col, expected_col);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn tab_applies_checklist_calc_with_variables_and_positions_cursor_at_insert_end() {
+        let (db, mut app, path) = app_with_note("base := 10\n- [ ] base + 5");
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+
+        app.handle_editor_key(&db, Key::Tab).expect("tab applies");
+
+        assert_eq!(app.lines[1], "- [ ] 15");
+        assert_eq!(app.cursor_col, app.lines[1].chars().count());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
 }

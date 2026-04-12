@@ -977,12 +977,10 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(result.line_results[0], None);
         assert_eq!(result.line_results[1], Some("4001".to_string()));
-        assert!(
-            result
-                .variables
-                .iter()
-                .any(|entry| entry.normalized == "len" && entry.line == 1)
-        );
+        assert!(result
+            .variables
+            .iter()
+            .any(|entry| entry.normalized == "len" && entry.line == 1));
     }
 
     #[test]
