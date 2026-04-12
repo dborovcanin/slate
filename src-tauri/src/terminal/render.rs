@@ -58,6 +58,12 @@ impl RenderContext {
         }
     }
 
+    pub fn advance_line(&mut self, text: &str) {
+        if is_code_fence(text) {
+            self.in_code_block = !self.in_code_block;
+        }
+    }
+
     /// Render a single line with ANSI markdown formatting.
     /// Returns an ANSI string occupying exactly `width` visible characters.
     pub fn render_line(

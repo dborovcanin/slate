@@ -1,5 +1,5 @@
 import { RangeSetBuilder } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
+import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 
 type InlineTokenType =
@@ -56,35 +56,9 @@ const decListToken = Decoration.mark({ class: "md-token md-token-list" });
 const decRuleToken = Decoration.mark({ class: "md-token md-token-rule" });
 const decFenceToken = Decoration.mark({ class: "md-token md-token-code-fence" });
 const decHeadingContent = Decoration.mark({ class: "md-heading-content" });
-class ChecklistBoxWidget extends WidgetType {
-  private readonly checked: boolean;
-
-  constructor(checked: boolean) {
-    super();
-    this.checked = checked;
-  }
-
-  eq(other: ChecklistBoxWidget): boolean {
-    return this.checked === other.checked;
-  }
-
-  toDOM() {
-    const span = document.createElement("span");
-    span.className = this.checked
-      ? "md-checklist-box md-checklist-box-checked"
-      : "md-checklist-box md-checklist-box-unchecked";
-    span.textContent = this.checked ? "✅" : "☐";
-    span.setAttribute("aria-hidden", "true");
-    return span;
-  }
-}
-
-const decChecklistBoxUnchecked = Decoration.replace({
-  widget: new ChecklistBoxWidget(false),
-});
-const decChecklistBoxChecked = Decoration.replace({
-  widget: new ChecklistBoxWidget(true),
-});
+const decChecklistToken = Decoration.mark({ class: "md-token md-checklist-token" });
+const decChecklistMark = Decoration.mark({ class: "md-checklist-mark" });
+const decChecklistMarkChecked = Decoration.mark({ class: "md-checklist-mark md-checklist-mark-checked" });
 const decChecklistDoneContent = Decoration.mark({ class: "md-checklist-content-done" });
 const decStrong = Decoration.mark({ class: "md-strong" });
 const decEmphasis = Decoration.mark({ class: "md-emphasis" });
@@ -304,7 +278,7 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
       builder.add(line.from, line.from + info.quoteMarkerEnd, decQuoteToken);
     }
 
-    if (info.listMarkerEnd) {
+    if (info.listMarkerEnd && info.checklistMarkerStart === null) {
       builder.add(line.from, line.from, decListLine);
       builder.add(line.from, line.from + info.listMarkerEnd, decListToken);
     }
@@ -314,11 +288,10 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
         builder.add(line.from, line.from, decChecklistLine);
         const markerFrom = line.from + info.checklistMarkerStart;
         const markerTo = line.from + info.checklistMarkerEnd;
-        builder.add(
-          markerFrom,
-          markerTo,
-          info.checklistChecked ? decChecklistBoxChecked : decChecklistBoxUnchecked,
-        );
+        // Dim the brackets [ ] as tokens, style the inner mark
+        builder.add(markerFrom, markerFrom + 1, decChecklistToken);   // [
+        builder.add(markerFrom + 1, markerTo - 1, info.checklistChecked ? decChecklistMarkChecked : decChecklistMark); // x or space
+        builder.add(markerTo - 1, markerTo, decChecklistToken);       // ]
         if (info.checklistChecked && info.checklistContentStart !== null) {
           const contentFrom = line.from + info.checklistContentStart;
           if (contentFrom < line.to) {

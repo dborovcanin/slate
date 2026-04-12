@@ -11,6 +11,14 @@ import {
   deleteCharForward,
   deleteLine,
   redo,
+  selectCharLeft,
+  selectCharRight,
+  selectGroupBackward,
+  selectGroupForward,
+  selectLineDown,
+  selectLineEnd,
+  selectLineStart,
+  selectLineUp,
   undo,
 } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
@@ -248,13 +256,31 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
+  const selectVariant: Record<string, (view: EditorView) => boolean> = {};
+  const registerSelectPair = (
+    cursorFn: (view: EditorView) => boolean,
+    selectFn: (view: EditorView) => boolean,
+  ) => {
+    selectVariant[cursorFn.name] = selectFn;
+  };
+  registerSelectPair(cursorCharLeft, selectCharLeft);
+  registerSelectPair(cursorCharRight, selectCharRight);
+  registerSelectPair(cursorLineUp, selectLineUp);
+  registerSelectPair(cursorLineDown, selectLineDown);
+  registerSelectPair(cursorGroupForward, selectGroupForward);
+  registerSelectPair(cursorGroupBackward, selectGroupBackward);
+  registerSelectPair(cursorLineStart, selectLineStart);
+  registerSelectPair(cursorLineEnd, selectLineEnd);
+
   const runMove = (
     view: EditorView,
     command: (target: EditorView) => boolean,
     explicitCount?: number,
   ) => {
-    runCounted(view, command, explicitCount);
-    if (mode === "visual" || mode === "visual-line" || mode === "visual-block") {
+    const isVisual = mode === "visual" || mode === "visual-line" || mode === "visual-block";
+    const cmd = isVisual ? (selectVariant[command.name] ?? command) : command;
+    runCounted(view, cmd, explicitCount);
+    if (isVisual) {
       updateVisualSelection(view);
     }
     return true;
@@ -547,6 +573,21 @@ export function vimModeExtension(options: VimOptions = {}) {
       ) {
         event.preventDefault();
         return true;
+      }
+
+      // Intercept arrow keys in visual modes to keep extending the selection
+      if (mode === "visual" || mode === "visual-line" || mode === "visual-block") {
+        const arrowMap: Record<string, (view: EditorView) => boolean> = {
+          ArrowLeft: cursorCharLeft,
+          ArrowRight: cursorCharRight,
+          ArrowUp: cursorLineUp,
+          ArrowDown: cursorLineDown,
+        };
+        const cmd = arrowMap[event.key];
+        if (cmd) {
+          event.preventDefault();
+          return runMove(view, cmd);
+        }
       }
 
       return false;
