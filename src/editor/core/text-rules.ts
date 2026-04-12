@@ -394,11 +394,105 @@ export function runEnterRules(
   return listContinuationRule(ctx);
 }
 
+function tableTabRule(ctx: ResolvedContext, options: TabRuleOptions): EditOperation | null {
+  const selection = ctx.selection();
+  if (!selection.empty) return null;
+
+  let currentLineIdx = ctx.currentLine().number;
+  let headCol = selection.head - ctx.line(currentLineIdx).from;
+  const outdent = options.outdent ?? false;
+
+  let foundTarget = false;
+  let targetAnchor = -1;
+
+  while (currentLineIdx >= 1 && currentLineIdx <= ctx.lineCount()) {
+    const line = ctx.line(currentLineIdx);
+    if (!tableLineRe.test(line.text)) break;
+    
+    // Skip separator lines when wrapping
+    if (tableSeparatorRe.test(line.text) && currentLineIdx !== ctx.currentLine().number) {
+      currentLineIdx += outdent ? -1 : 1;
+      continue;
+    }
+
+    const pipes: number[] = [];
+    for (let i = 0; i < line.text.length; i++) {
+      if (line.text[i] === "|") pipes.push(i);
+    }
+    if (pipes.length < 2) break;
+
+    if (outdent) {
+      let leftPipe = -1;
+      for (let i = pipes.length - 1; i >= 0; i--) {
+        if (pipes[i] < headCol) {
+          leftPipe = i;
+          break;
+        }
+      }
+      if (leftPipe > 0) {
+        const targetPipeIndex = pipes[leftPipe];
+        let pos = targetPipeIndex;
+        while (pos > pipes[leftPipe - 1] + 1 && line.text[pos - 1] === " ") {
+          pos--;
+        }
+        targetAnchor = line.from + pos;
+        foundTarget = true;
+        break;
+      } else {
+        currentLineIdx--;
+        if (currentLineIdx >= 1) {
+          const prevLine = ctx.line(currentLineIdx);
+          if (tableLineRe.test(prevLine.text)) {
+            headCol = prevLine.text.length;
+            continue;
+          }
+        }
+        break;
+      }
+    } else {
+      let rightPipe = -1;
+      for (let i = 0; i < pipes.length; i++) {
+        if (pipes[i] > headCol) {
+          rightPipe = i;
+          break;
+        }
+      }
+      if (rightPipe !== -1 && rightPipe + 1 < pipes.length) {
+        const targetPipeIndex = pipes[rightPipe + 1];
+        let pos = targetPipeIndex;
+        while (pos > pipes[rightPipe] + 1 && line.text[pos - 1] === " ") {
+          pos--;
+        }
+        targetAnchor = line.from + pos;
+        foundTarget = true;
+        break;
+      } else {
+        currentLineIdx++;
+        if (currentLineIdx <= ctx.lineCount()) {
+          const nextLine = ctx.line(currentLineIdx);
+          if (tableLineRe.test(nextLine.text)) {
+            headCol = 0;
+            continue;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  if (foundTarget) {
+    return { changes: [], selection: { anchor: targetAnchor } };
+  }
+  return null;
+}
+
 export function runTabRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions & TabRuleOptions = {},
 ): EditOperation | null {
   if (!(options.markdownAutoformat ?? true)) return null;
   const ctx = new ResolvedContext(snapshot);
+  const tableOp = tableTabRule(ctx, options);
+  if (tableOp) return tableOp;
   return listTabRule(ctx, options);
 }

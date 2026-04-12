@@ -506,6 +506,117 @@ fn marker_depth(indent: &str) -> usize {
         / 2
 }
 
+fn table_tab_rule(
+    ctx: &ResolvedContext,
+    options: &TabRuleOptions,
+) -> Option<EditOperation> {
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+
+    let mut current_line_idx = ctx.current_line().number;
+    let mut head_col = selection.head.saturating_sub(ctx.line(current_line_idx).from);
+    let outdent = options.outdent;
+
+    let mut found_target = false;
+    let mut target_anchor = 0;
+
+    let line_count = ctx.line_count();
+    while current_line_idx >= 1 && current_line_idx <= line_count {
+        let line = ctx.line(current_line_idx);
+        if !is_table_line(&line.text) {
+            break;
+        }
+
+        if is_table_separator(&line.text) && current_line_idx != ctx.current_line().number {
+            if outdent {
+                current_line_idx = current_line_idx.saturating_sub(1);
+            } else {
+                current_line_idx += 1;
+            }
+            continue;
+        }
+
+        let pipes: Vec<usize> = line.text.match_indices('|').map(|(i, _)| i).collect();
+        if pipes.len() < 2 {
+            break;
+        }
+
+        if outdent {
+            let mut left_pipe: Option<usize> = None;
+            for i in (0..pipes.len()).rev() {
+                if pipes[i] < head_col {
+                    left_pipe = Some(i);
+                    break;
+                }
+            }
+            if let Some(left) = left_pipe {
+                if left > 0 {
+                    let target_pipe_index = pipes[left];
+                    let mut pos = target_pipe_index;
+                    while pos > pipes[left - 1] + 1 && line.text.as_bytes().get(pos - 1).copied() == Some(b' ') {
+                        pos -= 1;
+                    }
+                    target_anchor = line.from + pos;
+                    found_target = true;
+                    break;
+                }
+            }
+            current_line_idx = current_line_idx.saturating_sub(1);
+            if current_line_idx >= 1 {
+                let prev_line = ctx.line(current_line_idx);
+                if is_table_line(&prev_line.text) {
+                    head_col = prev_line.text.len();
+                    continue;
+                }
+            }
+            break;
+        } else {
+            let mut right_pipe: Option<usize> = None;
+            for i in 0..pipes.len() {
+                if pipes[i] > head_col {
+                    right_pipe = Some(i);
+                    break;
+                }
+            }
+            if let Some(right) = right_pipe {
+                if right + 1 < pipes.len() {
+                    let target_pipe_index = pipes[right + 1];
+                    let mut pos = target_pipe_index;
+                    while pos > pipes[right] + 1 && line.text.as_bytes().get(pos - 1).copied() == Some(b' ') {
+                        pos -= 1;
+                    }
+                    target_anchor = line.from + pos;
+                    found_target = true;
+                    break;
+                }
+            }
+            current_line_idx += 1;
+            if current_line_idx <= line_count {
+                let next_line = ctx.line(current_line_idx);
+                if is_table_line(&next_line.text) {
+                    head_col = 0;
+                    continue;
+                }
+            }
+            break;
+        }
+    }
+
+    if found_target {
+        return Some(EditOperation {
+            changes: vec![],
+            selection: Some(OperationSelection {
+                anchor: target_anchor,
+                head: None,
+            }),
+        });
+    }
+
+    None
+}
+
 pub fn run_tab_rules(
     snapshot: &EditorContextSnapshot,
     options: TabRuleOptions,
@@ -515,6 +626,11 @@ pub fn run_tab_rules(
     }
 
     let ctx = ResolvedContext::new(snapshot.clone());
+
+    if let Some(op) = table_tab_rule(&ctx, &options) {
+        return Some(op);
+    }
+
     let (start_line, end_line) = selection_line_span(&ctx);
     let mut changes = Vec::new();
 

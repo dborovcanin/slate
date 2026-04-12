@@ -45,7 +45,7 @@ export function formatTableLines(lines: string[]): string[] {
 
   const align: Align[] = new Array(columnCount).fill("none");
   for (const row of normalizedRows) {
-    const isDelimiter = row.every((cell) => delimiterCellRe.test(cell) || cell.length === 0);
+    const isDelimiter = row.some((cell) => delimiterCellRe.test(cell)) && row.every((cell) => delimiterCellRe.test(cell) || cell.length === 0);
     if (!isDelimiter) continue;
     for (let i = 0; i < columnCount; i++) {
       if (delimiterCellRe.test(row[i])) {
@@ -57,7 +57,7 @@ export function formatTableLines(lines: string[]): string[] {
 
   const widths = new Array(columnCount).fill(3);
   for (const row of normalizedRows) {
-    const isDelimiter = row.every((cell) => delimiterCellRe.test(cell) || cell.length === 0);
+    const isDelimiter = row.some((cell) => delimiterCellRe.test(cell)) && row.every((cell) => delimiterCellRe.test(cell) || cell.length === 0);
     if (isDelimiter) continue;
     for (let i = 0; i < columnCount; i++) {
       widths[i] = Math.max(widths[i], row[i].length);
@@ -65,7 +65,7 @@ export function formatTableLines(lines: string[]): string[] {
   }
 
   return normalizedRows.map((row) => {
-    const isDelimiter = row.every((cell) => delimiterCellRe.test(cell) || cell.length === 0);
+    const isDelimiter = row.some((cell) => delimiterCellRe.test(cell)) && row.every((cell) => delimiterCellRe.test(cell) || cell.length === 0);
     const parts = row.map((cell, i) => {
       if (isDelimiter) {
         return delimiterForWidth(widths[i], align[i]);
