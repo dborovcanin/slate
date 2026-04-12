@@ -143,7 +143,7 @@ function textRulesPlugin(enabled: boolean) {
             markdownAutoformat: enabled,
           });
           if (operation) {
-            setTimeout(() => {
+            Promise.resolve().then(() => {
               applying = true;
               try {
                 applyEditOperation(update.view, operation);
@@ -152,7 +152,7 @@ function textRulesPlugin(enabled: boolean) {
               } finally {
                 applying = false;
               }
-            }, 0);
+            });
             return;
           }
         } catch (error) {
