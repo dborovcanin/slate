@@ -1,0 +1,47 @@
+.cm-editor {
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+  background: var(--bg);
+}
+
+.cm-editor .cm-scroller {
+  padding: 16px 20px;
+  overflow: auto;
+}
+
+.cm-editor .cm-content {
+  caret-color: var(--accent);
+  color: var(--fg);
+}
+
+.cm-editor .cm-cursor {
+  border-left-color: var(--accent);
+  border-left-width: 2px;
+}
+
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground {
+  background: rgba(137, 180, 250, 0.2);
+}
+
+.cm-editor .cm-activeLine {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.cm-editor .cm-gutters {
+  display: none;
+}
+
+.cm-editor.cm-focused {
+  outline: none;
+}
+
+.calc-ghost {
+  color: var(--fg-dim);
+  font-style: italic;
+  pointer-events: none;
+  user-select: none;
+  padding-left: 16px;
+}

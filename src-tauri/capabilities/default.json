@@ -1,0 +1,8 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for the note app",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

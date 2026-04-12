@@ -1,0 +1,22 @@
+{
+  "name": "note",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@codemirror/commands": "^6.8.1",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.8",
+    "@tauri-apps/api": "^2.5.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.10.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.3"
+  }
+}

@@ -1,0 +1,88 @@
+.switcher-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  justify-content: center;
+  padding-top: 80px;
+  z-index: 100;
+}
+
+.switcher-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  width: 400px;
+  max-height: 340px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.switcher-input {
+  padding: 12px 16px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  outline: none;
+}
+
+.switcher-input::placeholder {
+  color: var(--fg-muted);
+}
+
+.switcher-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.switcher-item:hover {
+  background: var(--bg-overlay);
+}
+
+.switcher-item--active {
+  background: var(--bg-overlay);
+}
+
+.switcher-item-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.switcher-item-title b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.switcher-item-badge {
+  font-size: 11px;
+  color: var(--fg-dim);
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.switcher-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}

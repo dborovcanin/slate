@@ -1,0 +1,29 @@
+{
+  "productName": "note",
+  "version": "0.1.0",
+  "identifier": "io.github.note",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Note",
+        "width": 600,
+        "height": 500,
+        "minWidth": 300,
+        "minHeight": 200,
+        "resizable": true,
+        "decorations": true,
+        "center": true,
+        "focus": true,
+        "visible": true
+      }
+    ]
+  }
+}

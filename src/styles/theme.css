@@ -1,0 +1,15 @@
+:root {
+  --bg: #1e1e2e;
+  --bg-surface: #252536;
+  --bg-overlay: #2a2a3c;
+  --fg: #cdd6f4;
+  --fg-dim: #6c7086;
+  --fg-muted: #585b70;
+  --accent: #89b4fa;
+  --border: #363647;
+  --radius: 6px;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-size: 14px;
+  --line-height: 1.65;
+}
