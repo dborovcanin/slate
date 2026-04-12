@@ -7,8 +7,15 @@ test("classifyMarkdownLine detects heading, list, quote and fences", () => {
   assert.equal(heading.headingLevel, 3);
   assert.equal(heading.headingMarkerEnd, 4);
 
+  const indentedHeading = classifyMarkdownLine("  ## Title");
+  assert.equal(indentedHeading.headingLevel, 2);
+  assert.equal(indentedHeading.headingMarkerEnd, 5);
+
   const quote = classifyMarkdownLine("> quoted");
   assert.equal(quote.quoteMarkerEnd, 2);
+
+  const tightQuote = classifyMarkdownLine(">quoted");
+  assert.equal(tightQuote.quoteMarkerEnd, 1);
 
   const list = classifyMarkdownLine("- item");
   assert.equal(list.listMarkerEnd, 2);

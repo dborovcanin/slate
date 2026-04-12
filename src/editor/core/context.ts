@@ -4,7 +4,7 @@ import type {
   LineContext,
   SelectionContext,
   WordContext,
-} from "./types";
+} from "./types.ts";
 
 const listLineRe = /^\s*(?:[-*+]|\d+\.)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;

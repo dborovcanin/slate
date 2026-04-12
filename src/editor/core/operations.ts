@@ -1,4 +1,4 @@
-import type { EditOperation, OperationSelection, TextChange } from "./types";
+import type { EditOperation, OperationSelection, TextChange } from "./types.ts";
 
 export function singleChange(change: TextChange, selection?: OperationSelection): EditOperation {
   return { changes: [change], selection };

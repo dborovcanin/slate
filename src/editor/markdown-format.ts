@@ -1,5 +1,5 @@
 import { EditorView } from "@codemirror/view";
-import { formatTableLines } from "./markdown-editing.ts";
+import { formatTableLines } from "./core/markdown-table.ts";
 
 const tableRowRe = /^\s*\|.*\|\s*$/;
 const headingNoSpaceRe = /^(#{1,6})([^\s#])(.*)$/;

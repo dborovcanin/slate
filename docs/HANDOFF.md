@@ -85,8 +85,13 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - unchanged prefix/suffix results are reused and remapped across insert/delete edits
   - backend calc evaluation is line-local (fresh fend context per line), matching inline-per-line behavior
 - Command/rule context polish:
-  - command-engine now builds per-command active-line context (`line number/from/to/column/text`) for current and future commands
-  - sum scope resolution now runs against `EditorView` line context instead of pre-building whole-document line arrays (except explicit `sum doc`)
+  - introduced `src/editor/core` modular editor core for presentation-independent behavior
+  - `EditorContextSnapshot` + lazy `ResolvedContext` now drive command/rule execution
+  - CodeMirror now acts as an adapter (`snapshot -> core -> edit operations`) instead of owning command/rule logic
+  - text rules moved into core pipeline (`doc_change` and `key_enter`) with behavior-preserving order:
+    checklist `/x` toggle first, then table autoformat when enabled
+  - command engine moved to core pipeline with operation-based results and mode-gated command catalog
+  - sum scope resolution now runs via context-layer line/block resolvers (except explicit `sum doc`)
 - Added IPC socket parent directory creation before bind (more robust fallback path behavior)
 - Fixed a critical SQLite deadlock in `save_note` caused by nested mutex locking
 
@@ -105,6 +110,16 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - table alignment formatting
   - missing-cell normalization
   - empty input behavior
+- `src/editor/core/context.test.ts`
+  - line/column and block range resolution (paragraph/list/table)
+  - word resolution around cursor
+- `src/editor/core/text-rules.test.ts`
+  - checklist toggle rule behavior
+  - table autoformat rule behavior
+  - Enter list continuation/exit behavior
+- `src/editor/core/commands.test.ts`
+  - mode-aware command suggestions
+  - core command execution outputs (sum/date/q)
 - `src/editor/ex-commands.test.ts`
   - sum scope and number parsing coverage
 - `src/editor/command-engine.test.ts`

@@ -36,8 +36,8 @@ export interface MarkdownLineInfo {
   isCodeFence: boolean;
 }
 
-const headingRe = /^(#{1,6})\s+/;
-const quoteRe = /^(\s*>+)\s+/;
+const headingRe = /^(\s*)(#{1,6})\s+/;
+const quoteRe = /^(\s*>+)\s*/;
 const listRe = /^(\s*)([-*+]|\d+\.)\s+/;
 const checklistRe = /^(\s*(?:[-*+]|\d+\.)\s+)(\[(?: |x|X)\])(\s+)/;
 const hrRe = /^\s*(([-*_])\s*){3,}$/;
@@ -144,7 +144,7 @@ export function classifyMarkdownLine(text: string): MarkdownLineInfo {
     ? checklistPrefix.length + checklistBox.length + checklistSpacer.length
     : null;
   return {
-    headingLevel: headingMatch ? headingMatch[1].length : null,
+    headingLevel: headingMatch ? headingMatch[2].length : null,
     headingMarkerEnd: headingMatch ? headingMatch[0].length : null,
     quoteMarkerEnd: quoteMatch ? quoteMatch[0].length : null,
     listMarkerEnd: listMatch ? listMatch[0].length : null,
@@ -310,19 +310,23 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
     }
 
     if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
-      builder.add(line.from, line.from, decChecklistLine);
-      const markerFrom = line.from + info.checklistMarkerStart;
-      const markerTo = line.from + info.checklistMarkerEnd;
-      builder.add(
-        markerFrom,
-        markerTo,
-        info.checklistChecked ? decChecklistBoxChecked : decChecklistBoxUnchecked,
-      );
-      if (info.checklistChecked && info.checklistContentStart !== null) {
-        const contentFrom = line.from + info.checklistContentStart;
-        if (contentFrom < line.to) {
-          builder.add(contentFrom, line.to, decChecklistDoneContent);
+      try {
+        builder.add(line.from, line.from, decChecklistLine);
+        const markerFrom = line.from + info.checklistMarkerStart;
+        const markerTo = line.from + info.checklistMarkerEnd;
+        builder.add(
+          markerFrom,
+          markerTo,
+          info.checklistChecked ? decChecklistBoxChecked : decChecklistBoxUnchecked,
+        );
+        if (info.checklistChecked && info.checklistContentStart !== null) {
+          const contentFrom = line.from + info.checklistContentStart;
+          if (contentFrom < line.to) {
+            builder.add(contentFrom, line.to, decChecklistDoneContent);
+          }
         }
+      } catch (error) {
+        console.error("Checklist decoration failed, skipping checklist render for line:", error);
       }
     }
 
@@ -342,12 +346,21 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     decorations: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = buildMarkdownDecorations(view);
+      this.decorations = this.safeBuild(view);
     }
 
     update(update: ViewUpdate) {
       if (update.docChanged || update.viewportChanged) {
-        this.decorations = buildMarkdownDecorations(update.view);
+        this.decorations = this.safeBuild(update.view);
+      }
+    }
+
+    private safeBuild(view: EditorView): DecorationSet {
+      try {
+        return buildMarkdownDecorations(view);
+      } catch (error) {
+        console.error("Markdown decoration build failed:", error);
+        return Decoration.none;
       }
     }
   },

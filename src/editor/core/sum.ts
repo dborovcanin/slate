@@ -1,6 +1,6 @@
-import { ResolvedContext } from "./context";
-import { replaceRange } from "./operations";
-import type { EditOperation } from "./types";
+import { ResolvedContext } from "./context.ts";
+import { replaceRange } from "./operations.ts";
+import type { EditOperation } from "./types.ts";
 
 export type SumScope = "paragraph" | "list" | "table" | "doc";
 

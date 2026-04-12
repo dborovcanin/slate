@@ -15,6 +15,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
   - Vim mode: open with `:`
   - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
   - Built-in commands: `sum`, `sum list`, `sum table`, `sum doc`, `date`, `format`
+- Modular editor core (`src/editor/core`): snapshot-based context + operation-based command/rule engine, designed for GUI/terminal parity
 - Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
 - Checklist markdown (`- [ ]`, `- [x]`) gets dedicated visual styling (`☐` / crossed `☒` + done-item strike style)
 - Markdown editing helpers:

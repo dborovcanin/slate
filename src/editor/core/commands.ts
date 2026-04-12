@@ -1,14 +1,14 @@
-import { ResolvedContext } from "./context";
-import { replaceRange } from "./operations";
-import { executeSumCommand } from "./sum";
+import { ResolvedContext } from "./context.ts";
+import { replaceRange } from "./operations.ts";
+import { executeSumCommand } from "./sum.ts";
 import type {
   CommandMode,
   CommandSuggestion,
   EditOperation,
   EditorContextSnapshot,
-} from "./types";
+} from "./types.ts";
 
-export type { CommandMode, CommandSuggestion } from "./types";
+export type { CommandMode, CommandSuggestion } from "./types.ts";
 
 export interface CommandRuntime {
   mode: CommandMode;
