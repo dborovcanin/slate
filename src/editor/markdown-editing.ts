@@ -139,17 +139,24 @@ function textRulesPlugin(enabled: boolean) {
         if (applying || !update.docChanged) return;
         applying = true;
         try {
-          try {
-            const operation = runDocChangeRules(snapshotFromUpdate(update), {
-              markdownAutoformat: enabled,
-            });
-            if (operation) {
-              applyEditOperation(update.view, operation);
-            }
-          } catch (error) {
-            // Keep editing and markdown rendering alive even if a rule fails.
-            console.error("Markdown text rule failed:", error);
+          const operation = runDocChangeRules(snapshotFromUpdate(update), {
+            markdownAutoformat: enabled,
+          });
+          if (operation) {
+            setTimeout(() => {
+              applying = true;
+              try {
+                applyEditOperation(update.view, operation);
+              } catch (error) {
+                console.error("Markdown text rule dispatch failed:", error);
+              } finally {
+                applying = false;
+              }
+            }, 0);
+            return;
           }
+        } catch (error) {
+          console.error("Markdown text rule failed:", error);
         } finally {
           applying = false;
         }
