@@ -58,6 +58,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   const doc = note?.body ?? "";
 
   const extensions = [
+    EditorState.allowMultipleSelections.of(true),
     history(),
     drawSelection(),
     highlightActiveLine(),

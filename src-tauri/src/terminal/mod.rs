@@ -24,6 +24,8 @@ pub struct TerminalOptions {
 enum UiMode {
     Editor,
     Normal,
+    Visual,
+    VisualLine,
     Switcher,
     CommandBar,
     DatePicker,
@@ -82,6 +84,7 @@ struct TerminalApp {
     // Vim state
     vim_buffer: String,
     clipboard: Vec<String>,
+    selection_anchor: Option<(usize, usize)>, // (line, col)
 }
 
 impl TerminalApp {
@@ -96,14 +99,14 @@ impl TerminalApp {
             cursor_line: 0,
             cursor_col: 0,
             scroll_line: 0,
-            mode: UiMode::Editor,
+            mode: UiMode::Normal,
             switcher_query: String::new(),
             switcher_items,
             switcher_matches: Vec::new(),
             switcher_selected: 0,
             dirty: false,
             last_edit: Instant::now(),
-            status: "Ctrl+N new  Ctrl+P switch  Ctrl+S save  Ctrl+Q quit".to_string(),
+            status: "-- NORMAL --  |  Ctrl+N new  Ctrl+P switch  Ctrl+S save  Ctrl+Q quit".to_string(),
             command_input: String::new(),
             quit: false,
             force_quit: false,
@@ -112,6 +115,7 @@ impl TerminalApp {
             date_day: 0,
             vim_buffer: String::new(),
             clipboard: Vec::new(),
+            selection_anchor: None,
         })
     }
 
@@ -150,6 +154,7 @@ impl TerminalApp {
             UiMode::DatePicker => self.handle_date_picker_key(key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,
             UiMode::Normal => self.handle_normal_key(db, key)?,
+            UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(key)?,
         }
@@ -371,6 +376,11 @@ impl TerminalApp {
                             yanked.push(self.lines[self.cursor_line + i].clone());
                         }
                     }
+                    if !yanked.is_empty() {
+                        if let Ok(mut ctx) = arboard::Clipboard::new() {
+                            let _ = ctx.set_text(yanked.join("\n"));
+                        }
+                    }
                     self.clipboard = yanked;
                     self.status = format!("yanked {} lines", count);
                     self.vim_buffer.clear();
@@ -389,6 +399,11 @@ impl TerminalApp {
                     if self.lines.is_empty() {
                         self.lines.push(String::new());
                     }
+                    if !deleted.is_empty() {
+                        if let Ok(mut ctx) = arboard::Clipboard::new() {
+                            let _ = ctx.set_text(deleted.join("\n"));
+                        }
+                    }
                     self.clipboard = deleted;
                     self.status = format!("deleted {} lines", count);
                     self.vim_buffer.clear();
@@ -399,6 +414,15 @@ impl TerminalApp {
                 }
             }
             'p' => {
+                if let Ok(mut ctx) = arboard::Clipboard::new() {
+                    if let Ok(text) = ctx.get_text() {
+                        let sys_clip = text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
+                        if !sys_clip.is_empty() && (sys_clip != self.clipboard || self.clipboard.is_empty()) {
+                            self.clipboard = sys_clip;
+                        }
+                    }
+                }
+                
                 if !self.clipboard.is_empty() {
                     for _ in 0..count {
                         let mut insert_at = self.cursor_line;
@@ -415,8 +439,148 @@ impl TerminalApp {
                     self.vim_buffer.clear();
                 }
             }
+            'v' => {
+                self.mode = UiMode::Visual;
+                self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.status = "-- VISUAL --".to_string();
+                self.vim_buffer.clear();
+            }
+            'V' => {
+                self.mode = UiMode::VisualLine;
+                self.selection_anchor = Some((self.cursor_line, self.cursor_col));
+                self.status = "-- VISUAL LINE --".to_string();
+                self.vim_buffer.clear();
+            }
             _ => { self.vim_buffer.clear(); }
         }
+    }
+
+    fn handle_visual_key(&mut self, _db: &Db, key: Key) -> Result<(), String> {
+        match key {
+            Key::Esc | Key::Ctrl('c') => {
+                self.mode = UiMode::Normal;
+                self.selection_anchor = None;
+                self.status = "-- NORMAL --".to_string();
+            }
+            Key::ArrowUp => self.move_cursor_up(1),
+            Key::ArrowDown => self.move_cursor_down(1),
+            Key::ArrowLeft => self.move_cursor_left(),
+            Key::ArrowRight => self.move_cursor_right(),
+            Key::Char(c) => {
+                match c {
+                    'h' => self.move_cursor_left(),
+                    'j' => self.move_cursor_down(1),
+                    'k' => self.move_cursor_up(1),
+                    'l' => self.move_cursor_right(),
+                    'w' => self.move_cursor_right_word(),
+                    'b' => self.move_cursor_left_word(),
+                    '$' => self.cursor_col = line_char_len(self.current_line()),
+                    '0' => self.cursor_col = 0,
+                    'y' | 'd' | 'x' => {
+                        let is_delete = c == 'd' || c == 'x';
+                        let anchor = self.selection_anchor.unwrap_or((self.cursor_line, self.cursor_col));
+                        let start_line = min(anchor.0, self.cursor_line);
+                        let end_line = std::cmp::max(anchor.0, self.cursor_line);
+                        
+                        let mut yanked = Vec::new();
+                        
+                        if self.mode == UiMode::VisualLine {
+                            for i in start_line..=end_line {
+                                if i < self.lines.len() {
+                                    yanked.push(self.lines[i].clone());
+                                }
+                            }
+                            if is_delete {
+                                for _ in start_line..=end_line {
+                                    if start_line < self.lines.len() {
+                                        self.lines.remove(start_line);
+                                    }
+                                }
+                                if self.lines.is_empty() {
+                                    self.lines.push(String::new());
+                                }
+                                self.cursor_line = start_line.min(self.lines.len().saturating_sub(1));
+                                self.cursor_col = 0;
+                            }
+                        } else {
+                            let (start_col, end_col) = if anchor.0 == self.cursor_line {
+                                (min(anchor.1, self.cursor_col), std::cmp::max(anchor.1, self.cursor_col))
+                            } else if anchor.0 < self.cursor_line {
+                                (anchor.1, self.cursor_col)
+                            } else {
+                                (self.cursor_col, anchor.1)
+                            };
+                            
+                            if start_line == end_line {
+                                let line = &self.lines[start_line];
+                                let chars: Vec<char> = line.chars().collect();
+                                let c_start = min(start_col, chars.len());
+                                let c_end = min(end_col + 1, chars.len());
+                                
+                                yanked.push(chars[c_start..c_end].iter().collect::<String>());
+                                
+                                if is_delete {
+                                    let mut new_line: String = chars[..c_start].iter().collect();
+                                    let tail: String = chars[c_end..].iter().collect();
+                                    new_line.push_str(&tail);
+                                    self.lines[start_line] = new_line;
+                                    self.cursor_col = c_start;
+                                }
+                            } else {
+                                let l1_chars: Vec<char> = self.lines[start_line].chars().collect();
+                                let l1_start = min(start_col, l1_chars.len());
+                                yanked.push(l1_chars[l1_start..].iter().collect::<String>());
+                                
+                                for i in (start_line + 1)..end_line {
+                                    if i < self.lines.len() {
+                                        yanked.push(self.lines[i].clone());
+                                    }
+                                }
+                                
+                                let ln_chars: Vec<char> = self.lines[end_line].chars().collect();
+                                let ln_end = min(end_col + 1, ln_chars.len());
+                                yanked.push(ln_chars[..ln_end].iter().collect::<String>());
+                                
+                                if is_delete {
+                                    let mut new_l1: String = l1_chars[..l1_start].iter().collect();
+                                    let tail: String = ln_chars[ln_end..].iter().collect();
+                                    new_l1.push_str(&tail);
+                                    
+                                    for _ in start_line..=end_line {
+                                        if start_line < self.lines.len() {
+                                            self.lines.remove(start_line);
+                                        }
+                                    }
+                                    self.lines.insert(start_line, new_l1);
+                                    self.cursor_line = start_line;
+                                    self.cursor_col = l1_start;
+                                }
+                            }
+                        }
+                        
+                        if !yanked.is_empty() {
+                            if let Ok(mut ctx) = arboard::Clipboard::new() {
+                                let _ = ctx.set_text(yanked.join("\n"));
+                            }
+                            self.clipboard = yanked;
+                        }
+                        
+                        self.mode = UiMode::Normal;
+                        self.selection_anchor = None;
+                        self.status = if is_delete { "-- NORMAL --".to_string() } else { "-- NORMAL -- (yanked)".to_string() };
+                        if is_delete {
+                            self.mark_edited();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        
+        self.adjust_cursor();
+        self.adjust_scroll();
+        Ok(())
     }
 
     fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -1091,7 +1255,41 @@ impl TerminalApp {
                 let available = cols.saturating_sub(GUTTER_WIDTH);
                 let engine = crate::calc::engine::CalcEngine::new();
                 let calc_ghost = get_calc_ghost_for_line(&self.lines[line_idx], &engine);
-                let rendered_text = ctx.render_line(&self.lines[line_idx], available, calc_ghost.as_deref(), &[]);
+                let mut highlight_ranges = Vec::new();
+                if let Some(anchor) = self.selection_anchor {
+                    if self.mode == UiMode::Visual || self.mode == UiMode::VisualLine {
+                        let start_line = min(anchor.0, self.cursor_line);
+                        let end_line = std::cmp::max(anchor.0, self.cursor_line);
+                        
+                        if line_idx >= start_line && line_idx <= end_line {
+                            if self.mode == UiMode::VisualLine {
+                                let line_len = self.lines[line_idx].chars().count();
+                                highlight_ranges.push((0, line_len.max(1)));
+                            } else {
+                                let (start_col, end_col) = if anchor.0 == self.cursor_line {
+                                    (min(anchor.1, self.cursor_col), std::cmp::max(anchor.1, self.cursor_col))
+                                } else if anchor.0 < self.cursor_line {
+                                    (anchor.1, self.cursor_col)
+                                } else {
+                                    (self.cursor_col, anchor.1)
+                                };
+                                
+                                if start_line == end_line {
+                                    highlight_ranges.push((start_col, end_col + 1));
+                                } else if line_idx == start_line {
+                                    let line_len = self.lines[line_idx].chars().count();
+                                    highlight_ranges.push((start_col, line_len.max(start_col + 1)));
+                                } else if line_idx == end_line {
+                                    highlight_ranges.push((0, end_col + 1));
+                                } else {
+                                    let line_len = self.lines[line_idx].chars().count();
+                                    highlight_ranges.push((0, line_len.max(1)));
+                                }
+                            }
+                        }
+                    }
+                }
+                let rendered_text = ctx.render_line(&self.lines[line_idx], available, calc_ghost.as_deref(), &highlight_ranges);
                 buf.push_str(&goto(row, 1));
                 buf.push_str(&gutter);
                 buf.push_str(&rendered_text);
@@ -1101,7 +1299,7 @@ impl TerminalApp {
         }
 
         let status = match self.mode {
-            UiMode::Editor | UiMode::Normal | UiMode::CommandBar => &self.status,
+            UiMode::Editor | UiMode::Normal | UiMode::CommandBar | UiMode::Visual | UiMode::VisualLine => &self.status,
             UiMode::Switcher => "Switcher: type to filter, Enter open, Esc close",
             UiMode::DatePicker => "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel",
         };
@@ -1117,6 +1315,12 @@ impl TerminalApp {
 
         let (cursor_row, cursor_col) = self.cursor_position(rows, cols);
         buf.push_str(&goto(cursor_row, cursor_col));
+        
+        let cursor_style = match self.mode {
+            UiMode::Editor | UiMode::CommandBar | UiMode::Switcher | UiMode::DatePicker => "\x1b[5 q", // Blinking Bar
+            UiMode::Normal | UiMode::Visual | UiMode::VisualLine => "\x1b[1 q", // Blinking Block
+        };
+        buf.push_str(cursor_style);
         buf.push_str("\x1b[?25h");
 
         out.write_all(buf.as_bytes())
@@ -1135,7 +1339,7 @@ impl TerminalApp {
                 // Hide cursor inside the date picker
                 (1, 1)
             }
-            UiMode::Editor | UiMode::Normal => {
+            UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine => {
                 let row = EDITOR_TOP_ROW
                     + self
                         .cursor_line
@@ -1719,7 +1923,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original) };
         let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l");
+        let _ = out.write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l\x1b[0 q");
         let _ = out.flush();
     }
 }
