@@ -106,8 +106,7 @@ fn is_code_fence(text: &str) -> bool {
 fn apply_line_styles(chars: &[char], styles: &mut [CharStyle]) {
     let text: String = chars.iter().collect();
 
-    if let Some(level) = heading_level(&text) {
-        let marker_end = level + 1;
+    if let Some((_, marker_end)) = heading_marker_end(&text) {
         for (i, s) in styles.iter_mut().enumerate() {
             if i < marker_end.min(chars.len()) {
                 s.dim = true;
@@ -136,6 +135,19 @@ fn apply_line_styles(chars: &[char], styles: &mut [CharStyle]) {
         return;
     }
 
+    if let Some((marker_end, checked)) = checklist_marker_end(&text) {
+        for s in styles.iter_mut().take(marker_end.min(chars.len())) {
+            s.dim = true;
+        }
+        if checked {
+            for s in styles.iter_mut().skip(marker_end) {
+                s.strikethrough = true;
+                s.dim = true;
+            }
+        }
+        return;
+    }
+
     if let Some(marker_end) = list_marker_end(&text) {
         for s in styles.iter_mut().take(marker_end.min(chars.len())) {
             s.dim = true;
@@ -143,14 +155,22 @@ fn apply_line_styles(chars: &[char], styles: &mut [CharStyle]) {
     }
 }
 
-fn heading_level(text: &str) -> Option<usize> {
+fn heading_marker_end(text: &str) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
-    let mut level = 0;
-    while level < bytes.len() && level < 6 && bytes[level] == b'#' {
-        level += 1;
+    let mut i = 0;
+    while i < bytes.len() && bytes[i] == b' ' {
+        i += 1;
     }
-    if level > 0 && level < bytes.len() && bytes[level] == b' ' {
-        Some(level)
+    let mut level = 0;
+    while i < bytes.len() && level < 6 && bytes[i] == b'#' {
+        level += 1;
+        i += 1;
+    }
+    if level > 0 && i < bytes.len() && bytes[i] == b' ' {
+        while i < bytes.len() && bytes[i] == b' ' {
+            i += 1;
+        }
+        Some((level, i))
     } else {
         None
     }
@@ -188,7 +208,7 @@ fn is_horizontal_rule(text: &str) -> bool {
     count >= 3 && all_valid
 }
 
-fn list_marker_end(text: &str) -> Option<usize> {
+pub fn list_marker_end(text: &str) -> Option<usize> {
     let bytes = text.as_bytes();
     let mut i = 0;
     while i < bytes.len() && bytes[i] == b' ' {
@@ -223,6 +243,25 @@ fn list_marker_end(text: &str) -> Option<usize> {
         marker_end += 1;
     }
     Some(marker_end)
+}
+
+pub fn checklist_marker_end(text: &str) -> Option<(usize, bool)> {
+    if let Some(list_end) = list_marker_end(text) {
+        let rest = &text[list_end..];
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3 && bytes[0] == b'[' && bytes[2] == b']' {
+            let ch = bytes[1];
+            if ch == b' ' || ch == b'x' || ch == b'X' {
+                let checked = ch == b'x' || ch == b'X';
+                let mut end = list_end + 3;
+                while end < text.len() && text.as_bytes()[end] == b' ' {
+                    end += 1;
+                }
+                return Some((end, checked));
+            }
+        }
+    }
+    None
 }
 
 // --- Inline markdown scanning ---
@@ -326,7 +365,6 @@ fn scan_paired(
             for k in after..close {
                 if !claimed[k] {
                     apply(&mut styles[k]);
-                    claimed[k] = true;
                 }
             }
             for k in close..close + delim_len {
@@ -482,10 +520,10 @@ mod tests {
 
     #[test]
     fn heading_detected() {
-        assert_eq!(heading_level("# Hello"), Some(1));
-        assert_eq!(heading_level("### Foo"), Some(3));
-        assert_eq!(heading_level("Not a heading"), None);
-        assert_eq!(heading_level("#nospace"), None);
+        assert_eq!(heading_marker_end("# Hello"), Some((1, 2)));
+        assert_eq!(heading_marker_end("  ### Foo"), Some((3, 6)));
+        assert_eq!(heading_marker_end("Not a heading"), None);
+        assert_eq!(heading_marker_end("#nospace"), None);
     }
 
     #[test]

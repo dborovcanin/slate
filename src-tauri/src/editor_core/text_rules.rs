@@ -68,7 +68,6 @@ fn format_ordered_marker(parts: &[u32]) -> String {
         .join(".")
 }
 
-#[cfg(test)]
 fn increment_ordered_marker(marker: &str) -> String {
     let Some(mut parts) = parse_ordered_marker_segments(marker) else {
         return marker.to_string();
@@ -275,11 +274,58 @@ pub fn run_doc_change_rules(
 }
 
 pub fn run_enter_rules(
-    _snapshot: &EditorContextSnapshot,
+    snapshot: &EditorContextSnapshot,
     _options: TextRuleOptions,
 ) -> Option<EditOperation> {
-    // Placeholder for Rust-native enter key text rules.
-    None
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+
+    let line = ctx.current_line();
+    if selection.head != line.to {
+        return None;
+    }
+
+    let parts = parse_list_line_parts(&line.text)?;
+
+    if parts.content.trim().is_empty() {
+        return Some(replace_range(
+            line.from,
+            line.to,
+            "",
+            Some(OperationSelection {
+                anchor: line.from,
+                head: None,
+            }),
+        ));
+    }
+
+    let next_marker = if parse_ordered_marker_segments(parts.marker).is_some() {
+        increment_ordered_marker(parts.marker)
+    } else if is_unordered_marker(parts.marker) {
+        parts.marker.to_string()
+    } else {
+        return None;
+    };
+
+    let mut content_prefix = "";
+    if parse_checklist_after_prefix(parts.content).is_some() {
+        content_prefix = "[ ] ";
+    }
+
+    let insert = format!("\n{}{} {}", parts.indent, next_marker, content_prefix);
+
+    Some(replace_range(
+        line.to,
+        line.to,
+        insert.clone(),
+        Some(OperationSelection {
+            anchor: line.to + insert.len(),
+            head: None,
+        }),
+    ))
 }
 
 fn selection_line_span(ctx: &ResolvedContext) -> (usize, usize) {
@@ -464,9 +510,10 @@ mod tests {
     }
 
     #[test]
-    fn run_enter_rules_placeholder_is_noop() {
+    fn run_enter_rules_generates_next_item() {
         let doc = snapshot("- item", 6, 6);
-        assert_eq!(run_enter_rules(&doc, TextRuleOptions::default()), None);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "- item\n- ");
     }
 
     #[test]

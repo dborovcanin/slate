@@ -1,3 +1,5 @@
+pub mod render;
+
 use crate::config::ThemeConfig;
 use crate::storage::{Db, Note};
 use std::cmp::min;
@@ -37,6 +39,8 @@ enum Key {
     ArrowDown,
     ArrowLeft,
     ArrowRight,
+    CtrlArrowLeft,
+    CtrlArrowRight,
     Home,
     End,
     PageUp,
@@ -136,8 +140,12 @@ impl TerminalApp {
 
     fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match key {
-            Key::Ctrl('q') | Key::Ctrl('w') => {
+            Key::Ctrl('q') => {
                 self.quit = true;
+                return Ok(());
+            }
+            Key::Ctrl('w') => {
+                self.delete_word_backward();
                 return Ok(());
             }
             Key::Ctrl('s') => {
@@ -162,6 +170,8 @@ impl TerminalApp {
             Key::ArrowDown => self.move_cursor_down(1),
             Key::ArrowLeft => self.move_cursor_left(),
             Key::ArrowRight => self.move_cursor_right(),
+            Key::CtrlArrowLeft => self.move_cursor_left_word(),
+            Key::CtrlArrowRight => self.move_cursor_right_word(),
             Key::PageUp => self.move_cursor_up(self.editor_height().saturating_sub(1)),
             Key::PageDown => self.move_cursor_down(self.editor_height().saturating_sub(1)),
             Key::Home => self.cursor_col = 0,
@@ -169,7 +179,19 @@ impl TerminalApp {
             Key::Backspace => self.backspace(),
             Key::Delete => self.delete_forward(),
             Key::Enter => self.insert_newline(),
-            Key::Tab => self.insert_text("  "),
+            Key::Tab => {
+                let text = self.current_line().to_string();
+                let engine = crate::calc::engine::CalcEngine::new();
+                if let Some((from_byte, to_byte, result)) = find_calc_segment(&text, &engine) {
+                    self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
+                    self.cursor_col = line_char_len(&self.lines[self.cursor_line]);
+                    self.mark_edited();
+                } else if let Some(ghost) = get_calc_ghost_for_line(&text, &engine) {
+                    self.insert_text(&format!(" = {ghost}"));
+                } else {
+                    self.insert_text("  ");
+                }
+            }
             Key::Char(':') => {
                 self.command_input.clear();
                 self.mode = UiMode::CommandBar;
@@ -190,8 +212,18 @@ impl TerminalApp {
             Key::Esc | Key::Ctrl('p') => {
                 self.close_switcher();
             }
-            Key::Ctrl('q') | Key::Ctrl('w') => {
+            Key::Ctrl('q') => {
                 self.quit = true;
+            }
+            Key::Ctrl('w') => {
+                // simple word deletion for switcher
+                while let Some(c) = self.switcher_query.chars().last() {
+                    if !c.is_alphanumeric() { self.switcher_query.pop(); } else { break; }
+                }
+                while let Some(c) = self.switcher_query.chars().last() {
+                    if c.is_alphanumeric() { self.switcher_query.pop(); } else { break; }
+                }
+                self.recompute_switcher_matches();
             }
             Key::Ctrl('n') => {
                 self.close_switcher();
@@ -232,6 +264,8 @@ impl TerminalApp {
             | Key::Delete
             | Key::ArrowLeft
             | Key::ArrowRight
+            | Key::CtrlArrowLeft
+            | Key::CtrlArrowRight
             | Key::Home
             | Key::End
             | Key::PageUp
@@ -252,11 +286,16 @@ impl TerminalApp {
                 let cmd = self.command_input.trim().to_string();
                 self.mode = UiMode::Editor;
                 self.command_input.clear();
-                if cmd == "q!" {
-                    self.force_quit = true;
-                    self.quit = true;
-                } else {
-                    self.status = format!("unknown command: {cmd}");
+                self.execute_terminal_command(&cmd);
+            }
+            Key::Tab => {
+                let suggestions = crate::editor_core::commands::list_command_suggestions(
+                    crate::editor_core::types::CommandMode::Editor,
+                    &self.command_input,
+                );
+                if let Some(top) = suggestions.first() {
+                    self.command_input = top.value.clone();
+                    self.update_command_status();
                 }
             }
             Key::Backspace => {
@@ -265,16 +304,116 @@ impl TerminalApp {
                     self.mode = UiMode::Editor;
                     self.status = format!("editing {}", self.active_note.id);
                 } else {
-                    self.status = format!(":{}", self.command_input);
+                    self.update_command_status();
                 }
             }
             Key::Char(ch) => {
                 self.command_input.push(ch);
-                self.status = format!(":{}", self.command_input);
+                self.update_command_status();
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn update_command_status(&mut self) {
+        let suggestions = crate::editor_core::commands::list_command_suggestions(
+            crate::editor_core::types::CommandMode::Editor,
+            &self.command_input,
+        );
+        let hint = suggestions
+            .iter()
+            .take(3)
+            .map(|s| s.value.as_str())
+            .collect::<Vec<_>>()
+            .join("  ");
+        if hint.is_empty() {
+            self.status = format!(":{}", self.command_input);
+        } else {
+            self.status = format!(":{}  [{}]", self.command_input, hint);
+        }
+    }
+
+    fn execute_terminal_command(&mut self, cmd: &str) {
+        if cmd == "q!" || cmd == "q" {
+            self.force_quit = cmd == "q!";
+            self.quit = true;
+            return;
+        }
+
+        let snapshot = self.build_snapshot();
+        let result = crate::editor_core::commands::execute_command(
+            &snapshot,
+            cmd,
+            crate::editor_core::types::CommandMode::Editor,
+        );
+
+        if result.quit_requested {
+            self.quit = true;
+            return;
+        }
+
+        // Apply operations to the text buffer
+        for op in &result.operations {
+            let mut text = join_lines(&self.lines);
+            // Apply changes in reverse order to preserve offsets
+            let mut changes = op.changes.clone();
+            changes.sort_by(|a, b| b.from.cmp(&a.from));
+            for change in &changes {
+                let from = change.from.min(text.len());
+                let to = change.to.min(text.len());
+                text.replace_range(from..to, &change.insert);
+            }
+            self.lines = split_lines(&text);
+
+            // Update cursor from operation selection
+            if let Some(sel) = &op.selection {
+                let anchor = sel.anchor.min(text.len());
+                // Convert byte offset to line/col
+                let mut offset = 0;
+                for (i, line) in self.lines.iter().enumerate() {
+                    let line_end = offset + line.len();
+                    if anchor <= line_end {
+                        self.cursor_line = i;
+                        self.cursor_col = line[..anchor.saturating_sub(offset)].chars().count();
+                        break;
+                    }
+                    offset = line_end + 1; // +1 for \n
+                }
+            }
+        }
+
+        if !result.operations.is_empty() {
+            self.mark_edited();
+        }
+        self.status = if result.message.is_empty() {
+            format!("editing {}", self.active_note.id)
+        } else {
+            result.message
+        };
+        self.adjust_cursor();
+        self.adjust_scroll();
+    }
+
+    fn build_snapshot(&self) -> crate::editor_core::types::EditorContextSnapshot {
+        let text = join_lines(&self.lines);
+        // Convert cursor_line/cursor_col to byte offset
+        let mut offset = 0;
+        for (i, line) in self.lines.iter().enumerate() {
+            if i == self.cursor_line {
+                offset += byte_index(line, self.cursor_col);
+                break;
+            }
+            offset += line.len() + 1; // +1 for \n
+        }
+        crate::editor_core::types::EditorContextSnapshot {
+            text,
+            selection: crate::editor_core::types::SelectionSnapshot {
+                anchor: offset,
+                head: offset,
+            },
+            changed_range: None,
+        }
     }
 
     fn open_switcher(&mut self, db: &Db) -> Result<(), String> {
@@ -362,6 +501,72 @@ impl TerminalApp {
     fn mark_edited(&mut self) {
         self.dirty = true;
         self.last_edit = Instant::now();
+    }
+
+    fn move_cursor_left_word(&mut self) {
+        if self.cursor_col == 0 {
+            if self.cursor_line > 0 {
+                self.cursor_line -= 1;
+                self.cursor_col = line_char_len(self.current_line());
+            }
+            return;
+        }
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        let mut col = self.cursor_col;
+        while col > 0 && chars.get(col - 1).map_or(false, |c| !c.is_alphanumeric()) {
+            col -= 1;
+        }
+        while col > 0 && chars.get(col - 1).map_or(false, |c| c.is_alphanumeric()) {
+            col -= 1;
+        }
+        self.cursor_col = col;
+    }
+
+    fn move_cursor_right_word(&mut self) {
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+        if self.cursor_col == len {
+            if self.cursor_line + 1 < self.lines.len() {
+                self.cursor_line += 1;
+                self.cursor_col = 0;
+            }
+            return;
+        }
+        let mut col = self.cursor_col;
+        while col < len && chars.get(col).map_or(false, |c| c.is_alphanumeric()) {
+            col += 1;
+        }
+        while col < len && chars.get(col).map_or(false, |c| !c.is_alphanumeric()) {
+            col += 1;
+        }
+        self.cursor_col = col;
+    }
+
+    fn delete_word_backward(&mut self) {
+        if self.cursor_col == 0 {
+            if self.cursor_line > 0 {
+                self.backspace();
+            }
+            return;
+        }
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        let mut col = self.cursor_col;
+        while col > 0 && chars.get(col - 1).map_or(false, |c| !c.is_alphanumeric()) {
+            col -= 1;
+        }
+        while col > 0 && chars.get(col - 1).map_or(false, |c| c.is_alphanumeric()) {
+            col -= 1;
+        }
+        
+        let start_byte = byte_index(self.current_line(), col);
+        let end_byte = byte_index(self.current_line(), self.cursor_col);
+        let text = self.current_line_mut();
+        text.replace_range(start_byte..end_byte, "");
+        self.cursor_col = col;
+        self.mark_edited();
     }
 
     fn insert_char(&mut self, ch: char) {
@@ -511,6 +716,11 @@ impl TerminalApp {
         let title_line = format!(" note  [{}]  {}", self.active_note.id, title);
         draw_row(&mut buf, TITLE_ROW, cols, &title_line, true);
 
+        let mut ctx = render::RenderContext::new();
+        for line in self.lines.iter().take(self.scroll_line) {
+            ctx.advance_line(line);
+        }
+
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
             let line_idx = self.scroll_line + i;
@@ -518,11 +728,12 @@ impl TerminalApp {
                 let line_no = line_idx + 1;
                 let gutter = format!("{line_no:>4} ");
                 let available = cols.saturating_sub(GUTTER_WIDTH);
-                let text = clip_text(&self.lines[line_idx], available);
-                let mut line = String::new();
-                line.push_str(&gutter);
-                line.push_str(&text);
-                draw_row(&mut buf, row, cols, &line, false);
+                let engine = crate::calc::engine::CalcEngine::new();
+                let calc_ghost = get_calc_ghost_for_line(&self.lines[line_idx], &engine);
+                let rendered_text = ctx.render_line(&self.lines[line_idx], available, calc_ghost.as_deref(), &[]);
+                buf.push_str(&goto(row, 1));
+                buf.push_str(&gutter);
+                buf.push_str(&rendered_text);
             } else {
                 draw_row(&mut buf, row, cols, "~", false);
             }
@@ -922,37 +1133,42 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
     let Some(second) = read_byte()? else {
         return Ok(Some(Key::Esc));
     };
-    if second != b'[' {
+    if second != b'[' && second != b'O' {
         return Ok(Some(Key::Esc));
     }
-    let Some(third) = read_byte()? else {
-        return Ok(Some(Key::Esc));
-    };
-    let key = match third {
-        b'A' => Key::ArrowUp,
-        b'B' => Key::ArrowDown,
-        b'C' => Key::ArrowRight,
-        b'D' => Key::ArrowLeft,
-        b'H' => Key::Home,
-        b'F' => Key::End,
-        b'1' | b'3' | b'5' | b'6' => {
-            let Some(fourth) = read_byte()? else {
-                return Ok(Some(Key::Esc));
-            };
-            if fourth != b'~' {
-                return Ok(Some(Key::Esc));
-            }
-            match third {
-                b'1' => Key::Home,
-                b'3' => Key::Delete,
-                b'5' => Key::PageUp,
-                b'6' => Key::PageDown,
-                _ => Key::Esc,
-            }
+    
+    let mut seq = Vec::new();
+    loop {
+        let Some(b) = read_byte()? else { break; };
+        seq.push(b);
+        if b.is_ascii_alphabetic() || b == b'~' { break; }
+    }
+    
+    if seq.is_empty() { return Ok(Some(Key::Esc)); }
+    
+    let last = seq[seq.len() - 1];
+    if seq.len() == 1 {
+        match last {
+            b'A' => return Ok(Some(Key::ArrowUp)),
+            b'B' => return Ok(Some(Key::ArrowDown)),
+            b'C' => return Ok(Some(Key::ArrowRight)),
+            b'D' => return Ok(Some(Key::ArrowLeft)),
+            b'H' => return Ok(Some(Key::Home)),
+            b'F' => return Ok(Some(Key::End)),
+            _ => return Ok(Some(Key::Esc)),
         }
-        _ => Key::Esc,
-    };
-    Ok(Some(key))
+    } else {
+        let s = std::str::from_utf8(&seq).unwrap_or("");
+        if s == "1;5C" || s == "5C" { return Ok(Some(Key::CtrlArrowRight)); }
+        if s == "1;5D" || s == "5D" { return Ok(Some(Key::CtrlArrowLeft)); }
+        if s == "1~" || s == "7~" { return Ok(Some(Key::Home)); }
+        if s == "4~" || s == "8~" { return Ok(Some(Key::End)); }
+        if s == "3~" { return Ok(Some(Key::Delete)); }
+        if s == "5~" { return Ok(Some(Key::PageUp)); }
+        if s == "6~" { return Ok(Some(Key::PageDown)); }
+    }
+    
+    Ok(Some(Key::Esc))
 }
 
 fn read_byte() -> Result<Option<u8>, String> {
@@ -1019,4 +1235,62 @@ impl Drop for TerminalGuard {
         let _ = out.write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l");
         let _ = out.flush();
     }
+}
+
+fn get_calc_ghost_for_line(text: &str, engine: &crate::calc::engine::CalcEngine) -> Option<String> {
+    if let Some((_, _, ghost)) = find_calc_segment(text, engine) {
+        return Some(ghost);
+    }
+    
+    let trimmed = text.trim();
+    if trimmed.starts_with('|') && trimmed.ends_with('|') {
+        return None;
+    }
+    
+    engine.evaluate(text)
+}
+
+fn find_calc_segment(text: &str, engine: &crate::calc::engine::CalcEngine) -> Option<(usize, usize, String)> {
+    let trimmed_text = text.trim();
+    if trimmed_text.starts_with('|') && trimmed_text.ends_with('|') {
+        let pipes: Vec<usize> = text.match_indices('|').map(|(i, _)| i).collect();
+        if pipes.len() >= 2 {
+            let mut candidates = Vec::new();
+            for i in 0..pipes.len()-1 {
+                let start = pipes[i] + 1;
+                let end = pipes[i+1];
+                if start >= end { continue; }
+                let raw = &text[start..end];
+                let trimmed = raw.trim();
+                if let Some(ghost) = engine.evaluate(trimmed) {
+                    let leading_ws = raw.len() - raw.trim_start().len();
+                    let trailing_ws = raw.len() - raw.trim_end().len();
+                    candidates.push((start + leading_ws, end - trailing_ws, ghost));
+                }
+            }
+            if candidates.len() == 1 {
+                return Some(candidates[0].clone());
+            }
+        }
+        return None;
+    }
+    
+    let mut prefix_end = None;
+    if let Some((marker_end, _)) = render::checklist_marker_end(text) {
+        prefix_end = Some(marker_end);
+    } else if let Some(marker_end) = render::list_marker_end(text) {
+        prefix_end = Some(marker_end);
+    }
+    
+    if let Some(start) = prefix_end {
+        let raw = &text[start..];
+        let trimmed = raw.trim();
+        if let Some(ghost) = engine.evaluate(trimmed) {
+            let leading_ws = raw.len() - raw.trim_start().len();
+            let trailing_ws = raw.len() - raw.trim_end().len();
+            return Some((start + leading_ws, text.len() - trailing_ws, ghost));
+        }
+    }
+    
+    None
 }

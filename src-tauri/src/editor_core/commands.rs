@@ -1,3 +1,5 @@
+use crate::calc::engine::CalcEngine;
+use super::context::ResolvedContext;
 use super::operations::replace_range;
 use super::types::{
     CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation, EditorContextSnapshot,
@@ -169,8 +171,101 @@ pub fn insert_value_at_selection(snapshot: &EditorContextSnapshot, value: &str) 
     )
 }
 
+fn format_markdown(text: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(|s| s.trim_end().to_string()).collect();
+    
+    // Auto-format tables
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i].trim().starts_with('|') && lines[i].trim().ends_with('|') {
+            let start = i;
+            while i < lines.len() && lines[i].trim().starts_with('|') && lines[i].trim().ends_with('|') {
+                i += 1;
+            }
+            let end = i;
+            
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            for r in start..end {
+                let row = lines[r].trim();
+                let cols: Vec<String> = row.trim_start_matches('|').trim_end_matches('|').split('|').map(|s| s.trim().to_string()).collect();
+                rows.push(cols);
+            }
+            
+            if !rows.is_empty() {
+                let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+                let mut widths = vec![0; max_cols];
+                for r in &rows {
+                    for (c, col) in r.iter().enumerate() {
+                        if c < max_cols && col.len() > widths[c] {
+                            widths[c] = col.len();
+                        }
+                    }
+                }
+                
+                for r in start..end {
+                    let mut new_row = String::from("|");
+                    for c in 0..max_cols {
+                        let col = rows[r - start].get(c).unwrap_or(&String::new()).clone();
+                        let is_separator = rows[r - start].iter().all(|x| x.chars().all(|ch| ch == '-' || ch == ':' || ch.is_whitespace()));
+                        
+                        let width = widths[c].max(3);
+                        if is_separator {
+                            new_row.push_str(&format!(" {} |", "-".repeat(width)));
+                        } else {
+                            if col.is_empty() {
+                                new_row.push_str(&format!(" {:width$} |", "", width = width));
+                            } else {
+                                new_row.push_str(&format!(" {:width$} |", col, width = width));
+                            }
+                        }
+                    }
+                    lines[r] = new_row;
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    
+    // Formatting other elements
+    for line in &mut lines {
+        // Headings
+        if line.starts_with('#') {
+            let hashes = line.chars().take_while(|&c| c == '#').count();
+            if hashes > 0 && hashes <= 6 {
+                let rest = line[hashes..].trim_start();
+                if !rest.is_empty() {
+                    *line = format!("{} {}", "#".repeat(hashes), rest);
+                }
+            }
+        }
+        
+        // Block quotes
+        if line.starts_with('>') {
+            let rest = line[1..].trim_start();
+            *line = format!("> {}", rest);
+        }
+        
+        // Lists
+        if let Some(ch) = line.chars().next() {
+            if ch == '-' || ch == '*' || ch == '+' {
+                if line.len() > 1 && !line[1..].starts_with(' ') && !line[1..].starts_with(ch) {
+                    let rest = line[1..].trim_start();
+                    *line = format!("{} {}", ch, rest);
+                }
+            }
+        }
+        
+        // Bold, Italic, Strike
+        *line = line.replace("** ", "**").replace(" **", "**");
+        *line = line.replace("~~ ", "~~").replace(" ~~", "~~");
+    }
+    
+    lines.join("\n")
+}
+
 pub fn execute_command(
-    _snapshot: &EditorContextSnapshot,
+    snapshot: &EditorContextSnapshot,
     raw_input: &str,
     mode: CommandMode,
 ) -> CommandExecutionResult {
@@ -193,9 +288,90 @@ pub fn execute_command(
             clipboard_text: None,
             quit_requested: true,
         },
-        CommandBehavior::Sum => result_with_message("sum unavailable in rust placeholder"),
-        CommandBehavior::Date => result_with_message("date unavailable in rust placeholder"),
-        CommandBehavior::Format => result_with_message("format unavailable in rust placeholder"),
+        CommandBehavior::Sum => {
+            let ctx = ResolvedContext::new(snapshot.clone());
+            let current_line = ctx.current_line().number;
+            
+            let range = match command.value {
+                "sum doc" => Some(crate::editor_core::types::BlockLineRange {
+                    start_line: 1,
+                    end_line: ctx.line_count()
+                }),
+                "sum paragraph" => Some(ctx.paragraph_range_at_line(current_line)),
+                "sum list" => ctx.list_range_at_line(current_line),
+                "sum table" => ctx.table_range_at_line(current_line, 1),
+                _ => None,
+            };
+
+            if let Some(r) = range {
+                let engine = CalcEngine::new();
+                let mut sum = 0.0;
+                let mut has_values = false;
+                
+                for i in r.start_line..=r.end_line {
+                    let text = ctx.line_text(i);
+                    if let Some(res) = engine.evaluate(&text) {
+                        if let Ok(val) = res.parse::<f64>() {
+                            sum += val;
+                            has_values = true;
+                        }
+                    } else {
+                        let mut parts = text.split(" = ");
+                        let mut last = parts.next().unwrap_or("");
+                        if let Some(res) = parts.next() {
+                            last = res;
+                        }
+                        
+                        if let Ok(val) = last.trim().parse::<f64>() {
+                            sum += val;
+                            has_values = true;
+                        }
+                    }
+                }
+                
+                if has_values {
+                    let res_str = format!("\n**Total:** {}", sum);
+                    let target_line = ctx.line(r.end_line);
+                    let op = replace_range(
+                        target_line.to, 
+                        target_line.to,
+                        res_str.clone(),
+                        Some(OperationSelection {
+                            anchor: target_line.to + res_str.len(),
+                            head: None,
+                        })
+                    );
+                    let mut result = result_with_message("Sum calculated");
+                    result.operations.push(op);
+                    result
+                } else {
+                    result_with_message("No numeric values found to sum")
+                }
+            } else {
+                result_with_message("Could not resolve block bounds for sum")
+            }
+        },
+        CommandBehavior::Date => {
+            let date_str = time::OffsetDateTime::now_utc().date().to_string();
+            let mut result = result_with_message("Date inserted");
+            result.operations.push(insert_value_at_selection(snapshot, &date_str));
+            result
+        },
+        CommandBehavior::Format => {
+            let mut formatted = format_markdown(&snapshot.text);
+            if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
+                formatted.push('\n');
+            }
+            let op = replace_range(
+                0,
+                snapshot.text.len(),
+                formatted,
+                None,
+            );
+            let mut result = result_with_message("Document formatted");
+            result.operations.push(op);
+            result
+        },
     }
 }
 

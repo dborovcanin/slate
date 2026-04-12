@@ -6,7 +6,7 @@ import {
   highlightActiveLine,
   placeholder,
 } from "@codemirror/view";
-import { defaultKeymap, deleteGroupBackward, history, historyKeymap } from "@codemirror/commands";
+import { defaultKeymap, deleteGroupBackward, history, historyKeymap, cursorGroupLeft, cursorGroupRight } from "@codemirror/commands";
 import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
@@ -70,7 +70,12 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       vimMode: !!options.vimMode,
       onExitCommand: options.onExitCommand,
     }),
-    keymap.of([{ key: "Ctrl-Backspace", run: deleteGroupBackward }]),
+    keymap.of([
+      { key: "Ctrl-w", run: deleteGroupBackward },
+      { key: "Ctrl-Backspace", run: deleteGroupBackward },
+      { key: "Ctrl-ArrowLeft", run: cursorGroupLeft },
+      { key: "Ctrl-ArrowRight", run: cursorGroupRight },
+    ]),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,
     EditorView.lineWrapping,
