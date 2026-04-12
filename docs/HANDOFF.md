@@ -28,6 +28,15 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - cursor style differs by mode (insert bar cursor vs normal/visual block cursor)
   - visual selections: `v`, `V`, `Ctrl+v` (block)
   - yanking to system clipboard: `y` in visual modes, `yy` in normal mode (with counts like `3yy`)
+- Added ex command support in Vim mode:
+  - `:sum` (paragraph default)
+  - `:sum list`, `:sum table`, `:sum doc`
+  - `:sum_all` (full document)
+  - results are copied to clipboard and shown in command status
+- Added date insertion with calendar picker:
+  - shortcut: `Ctrl+Shift+D`
+  - Vim ex command: `:date`
+  - config key: `[editor] date_format = "%Y-%m-%d"`
 - Added markdown-style rich editing decorations:
   - headings, quotes, lists, horizontal rules
   - inline bold/italic/strikethrough/code/link highlighting

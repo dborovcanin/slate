@@ -11,6 +11,7 @@ import {
   setEditorContent,
   focusEditor,
   flushSave,
+  insertTextAtCursor,
 } from "./editor/editor";
 import {
   openSwitcher,
@@ -22,6 +23,7 @@ import { state } from "./state";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
+import { openDatePicker } from "./editor/date-picker";
 
 async function switchToNote(id: string) {
   await flushSave();
@@ -134,6 +136,21 @@ async function handleHideWindow() {
   await win.hide();
 }
 
+async function handleInsertDate() {
+  const cfg = await getThemeConfig().catch(() => ({
+    color_scheme: "catppuccin-mocha",
+    background: "plain",
+    font: "jetbrains-mono",
+    font_size: 14,
+    vim_mode: false,
+    date_format: "%Y-%m-%d",
+  }));
+  const value = await openDatePicker(cfg.date_format);
+  if (!value) return;
+  insertTextAtCursor(value);
+  focusEditor();
+}
+
 function runAction(action: () => Promise<void> | void) {
   void Promise.resolve()
     .then(action)
@@ -208,6 +225,13 @@ function setupKeyboardShortcuts() {
     if (e.ctrlKey && e.shiftKey && key === "e") {
       e.preventDefault();
       runAction(handleExportFile);
+      return;
+    }
+
+    // Ctrl+Shift+D — date picker insert
+    if (e.ctrlKey && e.shiftKey && key === "d") {
+      e.preventDefault();
+      runAction(handleInsertDate);
       return;
     }
 
@@ -335,17 +359,18 @@ export async function initApp() {
       font: "jetbrains-mono",
       font_size: 14,
       vim_mode: false,
+      date_format: "%Y-%m-%d",
     })),
   ]);
   state.setActiveNote(note);
   state.setNotes(notes);
 
   createStatusBar(container);
-  mountEditor(editorEl, { vimMode: !!config.vim_mode });
+  mountEditor(editorEl, { vimMode: !!config.vim_mode, dateFormat: config.date_format });
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {
-    showToast("Vim keys: Esc normal, i insert");
+    showToast("Vim mode: :sum, :sum_all, :date");
   }
 
   state.on(() => {

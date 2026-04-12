@@ -77,3 +77,66 @@ html, body {
 .toast.visible {
   opacity: 1;
 }
+
+.date-picker-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 220;
+}
+
+.date-picker-panel {
+  width: min(360px, calc(100vw - 32px));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.date-picker-title {
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+.date-picker-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 8px 10px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  outline: none;
+}
+
+.date-picker-input:focus {
+  border-color: var(--accent);
+}
+
+.date-picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.date-picker-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--fg);
+  background: var(--bg-overlay);
+}
+
+.date-picker-btn-primary {
+  border-color: var(--accent);
+}

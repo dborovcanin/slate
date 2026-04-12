@@ -26,6 +26,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
+- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum table`, `:sum doc`, `:sum_all`, `:date`
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 
 **Inline calculations**
@@ -66,6 +67,7 @@ sqrt(144) + 3^2         → 21
 | Tab                     | Apply calc result             |
 | Ctrl+E                  | Copy note to clipboard        |
 | Ctrl+Shift+E            | Export note to file           |
+| Ctrl+Shift+D            | Open calendar date picker     |
 | Ctrl++ / Ctrl+-         | Increase / decrease font size |
 | Ctrl+Alt++ / Ctrl+Alt+- | Next / previous font family   |
 | Ctrl+W                  | Hide window                   |
@@ -191,6 +193,7 @@ font_size = 14
 
 [editor]
 vim_mode = false
+date_format = "%Y-%m-%d"
 ```
 
 Available `color_scheme` values:
@@ -227,6 +230,12 @@ Available `font` values:
 
 Editor options:
 - `vim_mode = true` enables modal Vim-style key mappings (applies on app start)
+- `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
+
+Supported `date_format` tokens:
+- `%Y` year (4 digit), `%y` year (2 digit)
+- `%m` month (01-12), `%d` day (01-31)
+- `%b` short month (`Jan`), `%B` full month (`January`)
 
 ## Sway integration
 

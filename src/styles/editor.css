@@ -204,3 +204,54 @@
   user-select: none;
   padding-left: 16px;
 }
+
+.vim-command-bar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  z-index: 30;
+}
+
+.vim-command-prefix {
+  color: var(--accent);
+  font-weight: 700;
+  user-select: none;
+}
+
+.vim-command-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.vim-command-status {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  color: var(--fg-dim);
+  padding: 4px 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease-in-out;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.vim-command-status.visible {
+  opacity: 1;
+}

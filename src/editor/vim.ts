@@ -15,6 +15,8 @@ import {
 } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { computeBlockSpans } from "./vim-utils";
+import { executeExCommand } from "./ex-commands";
+import { openDatePicker } from "./date-picker";
 
 type VimMode = "insert" | "normal" | "visual" | "visual-line" | "visual-block";
 
@@ -63,7 +65,11 @@ function copyToClipboard(text: string) {
   });
 }
 
-export function vimModeExtension() {
+interface VimOptions {
+  dateFormat?: string;
+}
+
+export function vimModeExtension(options: VimOptions = {}) {
   let mode: VimMode = "insert";
   let pendingDelete = false;
   let pendingGo = false;
@@ -72,6 +78,9 @@ export function vimModeExtension() {
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
   let blockAnchor: { line: number; col: number } | null = null; // line: 1-based
+  let commandBarEl: HTMLDivElement | null = null;
+  let commandInputEl: HTMLInputElement | null = null;
+  let statusTimer: number | null = null;
 
   const clearPending = () => {
     pendingDelete = false;
@@ -105,6 +114,98 @@ export function vimModeExtension() {
       nextMode === "visual" || nextMode === "visual-line" || nextMode === "visual-block",
     );
     view.dom.dataset.vimMode = nextMode;
+  };
+
+  const showStatus = (view: EditorView, message: string) => {
+    const host = view.dom;
+    let statusEl = host.querySelector(".vim-command-status") as HTMLDivElement | null;
+    if (!statusEl) {
+      statusEl = document.createElement("div");
+      statusEl.className = "vim-command-status";
+      host.appendChild(statusEl);
+    }
+    statusEl.textContent = message;
+    statusEl.classList.add("visible");
+    if (statusTimer !== null) window.clearTimeout(statusTimer);
+    statusTimer = window.setTimeout(() => {
+      statusEl?.classList.remove("visible");
+    }, 1800);
+  };
+
+  const closeCommandBar = (view: EditorView) => {
+    if (commandBarEl) {
+      commandBarEl.remove();
+      commandBarEl = null;
+      commandInputEl = null;
+      view.focus();
+    }
+  };
+
+  const openCommandBar = (view: EditorView) => {
+    if (commandBarEl) return;
+    const bar = document.createElement("div");
+    bar.className = "vim-command-bar";
+
+    const prefix = document.createElement("span");
+    prefix.className = "vim-command-prefix";
+    prefix.textContent = ":";
+
+    const input = document.createElement("input");
+    input.className = "vim-command-input";
+    input.type = "text";
+    input.spellcheck = false;
+    input.autocapitalize = "off";
+    input.autocomplete = "off";
+    input.autocorrect = false;
+
+    bar.appendChild(prefix);
+    bar.appendChild(input);
+    view.dom.appendChild(bar);
+    commandBarEl = bar;
+    commandInputEl = input;
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeCommandBar(view);
+        return;
+      }
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const command = input.value.trim();
+        closeCommandBar(view);
+        if (!command) return;
+
+        if (command.toLowerCase().replace(/^:/, "") === "date") {
+          void openDatePicker(options.dateFormat ?? "%Y-%m-%d")
+            .then((value) => {
+              if (!value) {
+                showStatus(view, "date cancelled");
+                return;
+              }
+              insertAtSelection(view, value);
+              showStatus(view, `inserted ${value}`);
+            })
+            .catch((err) => {
+              console.error("Date command failed:", err);
+              showStatus(view, "date command failed");
+            });
+          return;
+        }
+
+        void executeExCommand(view, command)
+          .then((message) => {
+            if (message) showStatus(view, message);
+          })
+          .catch((err) => {
+            console.error("Vim command failed:", err);
+            showStatus(view, "command failed");
+          });
+      }
+    });
+
+    window.setTimeout(() => input.focus(), 0);
   };
 
   const collapseSelection = (view: EditorView) => {
@@ -295,12 +396,25 @@ export function vimModeExtension() {
     return true;
   };
 
+  const insertAtSelection = (view: EditorView, text: string) => {
+    const main = view.state.selection.main;
+    view.dispatch({
+      changes: { from: main.from, to: main.to, insert: text },
+      selection: { anchor: main.from + text.length },
+      scrollIntoView: true,
+    });
+  };
+
   return EditorView.domEventHandlers({
     focus: (_event, view) => {
       updateModeClasses(view, mode);
       return false;
     },
     keydown: (event, view) => {
+      if (commandBarEl) {
+        return false;
+      }
+
       const plainV = !event.altKey && !event.metaKey && !event.shiftKey && event.key === "v";
       const ctrlV =
         event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "v";
@@ -317,6 +431,13 @@ export function vimModeExtension() {
       if (event.key === "Escape") {
         event.preventDefault();
         setMode(view, "normal");
+        return true;
+      }
+
+      if (event.key === ":" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        event.preventDefault();
+        setMode(view, "normal");
+        openCommandBar(view);
         return true;
       }
 

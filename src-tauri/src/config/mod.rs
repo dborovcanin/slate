@@ -10,6 +10,7 @@ const DEFAULT_FONT_SIZE: u8 = 14;
 const MIN_FONT_SIZE: u8 = 11;
 const MAX_FONT_SIZE: u8 = 28;
 const DEFAULT_VIM_MODE: bool = false;
+const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Color schemes:
@@ -22,6 +23,9 @@ const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Fonts:
 #   jetbrains-mono, fira-code, cascadia-code, iosevka, hack, source-code-pro
+#
+# Date format tokens:
+#   %Y, %y, %m, %d, %b, %B
 
 [theme]
 color_scheme = "catppuccin-mocha"
@@ -31,6 +35,7 @@ font_size = 14
 
 [editor]
 vim_mode = false
+date_format = "%Y-%m-%d"
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -40,6 +45,7 @@ pub struct ThemeConfig {
     pub font: String,
     pub font_size: u8,
     pub vim_mode: bool,
+    pub date_format: String,
 }
 
 impl Default for ThemeConfig {
@@ -50,6 +56,7 @@ impl Default for ThemeConfig {
             font: DEFAULT_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
             vim_mode: DEFAULT_VIM_MODE,
+            date_format: DEFAULT_DATE_FORMAT.to_string(),
         }
     }
 }
@@ -73,6 +80,7 @@ struct ThemeSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EditorSection {
     vim_mode: Option<bool>,
+    date_format: Option<String>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -123,6 +131,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         font: normalize_name(raw.theme.font, DEFAULT_FONT),
         font_size: normalize_font_size(raw.theme.font_size),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
+        date_format: normalize_date_format(raw.editor.date_format),
     })
 }
 
@@ -151,6 +160,15 @@ fn normalize_font_size(value: Option<u16>) -> u8 {
     size as u8
 }
 
+fn normalize_date_format(value: Option<String>) -> String {
+    let trimmed = value.as_deref().map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        DEFAULT_DATE_FORMAT.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn config_file_path() -> Result<PathBuf, String> {
     let dirs = ProjectDirs::from("io", "github", "note")
         .ok_or_else(|| "Failed to determine app config directory".to_string())?;
@@ -173,6 +191,7 @@ mod tests {
 
             [editor]
             vim_mode = true
+            date_format = "%d.%m.%Y"
             "#,
         )
         .expect("config parsed");
@@ -182,6 +201,7 @@ mod tests {
         assert_eq!(cfg.font, "fira-code");
         assert_eq!(cfg.font_size, 18);
         assert!(cfg.vim_mode);
+        assert_eq!(cfg.date_format, "%d.%m.%Y");
     }
 
     #[test]
@@ -208,5 +228,16 @@ mod tests {
     fn defaults_vim_mode_to_false() {
         let cfg = parse_theme_config("[theme]\ncolor_scheme = 'dark'").expect("config parsed");
         assert!(!cfg.vim_mode);
+        assert_eq!(cfg.date_format, "%Y-%m-%d");
+    }
+
+    #[test]
+    fn normalize_date_format_uses_default_for_blank() {
+        assert_eq!(normalize_date_format(None), "%Y-%m-%d");
+        assert_eq!(normalize_date_format(Some(" ".to_string())), "%Y-%m-%d");
+        assert_eq!(
+            normalize_date_format(Some("%m/%d/%Y".to_string())),
+            "%m/%d/%Y"
+        );
     }
 }

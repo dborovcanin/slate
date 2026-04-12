@@ -46,6 +46,7 @@ const onUpdate = EditorView.updateListener.of((update) => {
 
 interface EditorMountOptions {
   vimMode?: boolean;
+  dateFormat?: string;
 }
 
 export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
@@ -66,7 +67,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   ];
 
   if (options.vimMode) {
-    extensions.push(vimModeExtension());
+    extensions.push(vimModeExtension({ dateFormat: options.dateFormat }));
   }
 
   const startState = EditorState.create({ doc, extensions });
@@ -95,4 +96,17 @@ export function focusEditor() {
 
 export function getEditorView(): EditorView | null {
   return view;
+}
+
+export function insertTextAtCursor(text: string): boolean {
+  if (!view) return false;
+  const main = view.state.selection.main;
+  const from = main.from;
+  const to = main.to;
+  view.dispatch({
+    changes: { from, to, insert: text },
+    selection: { anchor: from + text.length },
+    scrollIntoView: true,
+  });
+  return true;
 }

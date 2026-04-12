@@ -13,6 +13,7 @@ export interface ThemeConfig {
   font: string;
   font_size: number;
   vim_mode: boolean;
+  date_format: string;
 }
 
 export function getOrCreateNote(): Promise<Note> {
