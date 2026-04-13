@@ -6,9 +6,6 @@ mod ipc;
 mod storage;
 #[cfg(unix)]
 mod terminal;
-#[cfg(not(unix))]
-#[path = "terminal_stub.rs"]
-mod terminal;
 
 use calc::engine::CalcEngine;
 use directories::ProjectDirs;
@@ -17,11 +14,14 @@ use std::fs;
 use std::io::IsTerminal as _;
 use std::path::PathBuf;
 use storage::Db;
+
+#[cfg(unix)]
 use terminal::TerminalOptions;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     Gui,
+    #[cfg(unix)]
     Terminal,
 }
 
@@ -82,7 +82,7 @@ fn print_help() {
 
 Modes:
   --gui       Force Tauri GUI mode
-  --terminal  Force terminal editor mode (no window UI)
+  --terminal  Force terminal editor mode (no window UI, Unix only)
 
 Terminal options:
   --new       Create and edit a new note
@@ -95,6 +95,7 @@ When no explicit mode is passed:
     );
 }
 
+#[cfg(unix)]
 fn parse_args(
     args: &[String],
     config_terminal_mode: bool,
@@ -163,6 +164,30 @@ fn parse_args(
     Ok((mode, opts))
 }
 
+#[cfg(not(unix))]
+fn parse_args(
+    args: &[String],
+    _config_terminal_mode: bool,
+    _stdin_tty: bool,
+) -> Result<(Mode, ()), String> {
+    for arg in args {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                print_help();
+                return Err(String::new());
+            }
+            "--gui" => {}
+            unknown => {
+                return Err(format!(
+                    "Unknown argument: {unknown}. Use --help for usage."
+                ));
+            }
+        }
+    }
+    Ok((Mode::Gui, ()))
+}
+
+#[cfg(unix)]
 fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(), String> {
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
@@ -181,6 +206,7 @@ pub fn run() {
                 std::process::exit(1);
             }
         }
+        #[cfg(unix)]
         Ok((Mode::Terminal, opts)) => {
             if let Err(err) = run_terminal(&opts, &cfg) {
                 eprintln!("{err}");
@@ -198,6 +224,7 @@ pub fn run() {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 mod tests {
     use super::*;
 

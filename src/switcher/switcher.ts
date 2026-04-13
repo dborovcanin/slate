@@ -1,192 +1,79 @@
 import { state, type NoteEntry } from "../state";
+import { highlightPositions } from "../ui/escape.ts";
+import { createListOverlay, type ListOverlay } from "../overlays/overlay.ts";
 import { fuzzyFilter } from "./fuzzy";
 
-let overlay: HTMLElement | null = null;
-let input: HTMLInputElement | null = null;
-let listEl: HTMLElement | null = null;
-let selectedIndex = 0;
-let currentQuery = "";
-let filteredItems: { item: NoteEntry; positions: number[] }[] = [];
-let onSelect: ((id: string) => void) | null = null;
+type SwitcherItem = { item: NoteEntry; positions: number[] };
 
-export function isSwitcherOpen(): boolean {
-  return overlay !== null && !overlay.hidden;
-}
+let overlay: ListOverlay | null = null;
+let onSelectCallback: ((id: string) => void) | null = null;
 
-export function openSwitcher(selectCallback: (id: string) => void) {
-  onSelect = selectCallback;
-
-  if (!overlay) {
-    createDOM();
-  }
-
-  overlay!.hidden = false;
-  overlay!.setAttribute("aria-hidden", "false");
-  input!.value = "";
-  currentQuery = "";
-  selectedIndex = 0;
-  updateList(currentQuery);
-  input!.focus();
-}
-
-export function closeSwitcher() {
-  if (!overlay) return;
-  overlay.hidden = true;
-  overlay.setAttribute("aria-hidden", "true");
-}
-
-export function refreshSwitcher() {
-  if (!isSwitcherOpen()) return;
-  currentQuery = input?.value ?? currentQuery;
-  updateList(currentQuery);
-}
-
-function createDOM() {
-  overlay = document.createElement("div");
-  overlay.className = "switcher-overlay";
-  overlay.setAttribute("aria-hidden", "true");
-  overlay.addEventListener("mousedown", (e) => {
-    if (e.target === overlay) closeSwitcher();
-  });
-
-  const panel = document.createElement("div");
-  panel.className = "switcher-panel";
-
-  input = document.createElement("input");
-  input.className = "switcher-input";
-  input.type = "text";
-  input.placeholder = "Search notes...";
-  input.addEventListener("input", () => {
-    selectedIndex = 0;
-    currentQuery = input!.value;
-    updateList(currentQuery);
-  });
-  input.addEventListener("keydown", handleKeydown);
-
-  listEl = document.createElement("div");
-  listEl.className = "switcher-list";
-
-  panel.appendChild(input);
-  panel.appendChild(listEl);
-  overlay.appendChild(panel);
-  document.body.appendChild(overlay);
-}
-
-function handleKeydown(e: KeyboardEvent) {
-  switch (e.key) {
-    case "ArrowDown":
-      e.preventDefault();
-      if (filteredItems.length === 0) break;
-      selectedIndex = Math.min(selectedIndex + 1, filteredItems.length - 1);
-      renderList();
-      break;
-    case "ArrowUp":
-      e.preventDefault();
-      if (filteredItems.length === 0) break;
-      selectedIndex = Math.max(selectedIndex - 1, 0);
-      renderList();
-      break;
-    case "Enter":
-      e.preventDefault();
-      if (filteredItems[selectedIndex]) {
-        const id = filteredItems[selectedIndex].item.id;
-        closeSwitcher();
-        onSelect?.(id);
-      }
-      break;
-    case "Escape":
-      e.preventDefault();
-      closeSwitcher();
-      break;
-  }
-}
-
-function updateList(query: string) {
+function buildItems(query: string): SwitcherItem[] {
   const notes = state.notes.filter((n) => n.id !== state.activeNote?.id);
-  const allNotes = state.activeNote
+  const allNotes: NoteEntry[] = state.activeNote
     ? [
         {
           id: state.activeNote.id,
-          title:
-            state.notes.find((n) => n.id === state.activeNote!.id)?.title ??
-            "Untitled",
+          title: state.notes.find((n) => n.id === state.activeNote!.id)?.title ?? "Untitled",
           updatedAt: state.activeNote.updated_at,
         },
         ...notes,
       ]
     : notes;
-
-  filteredItems = fuzzyFilter(query, allNotes, (n) => n.title);
-  selectedIndex = Math.min(selectedIndex, Math.max(filteredItems.length - 1, 0));
-  renderList();
+  return fuzzyFilter(query, allNotes, (n) => n.title);
 }
 
-function renderList() {
-  if (!listEl) return;
-  listEl.innerHTML = "";
+function renderSwitcherItem(
+  { item, positions }: SwitcherItem,
+  selected: boolean,
+): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "switcher-item" + (selected ? " switcher-item--active" : "");
+  row.setAttribute("role", "option");
+  row.setAttribute("aria-selected", selected ? "true" : "false");
 
-  if (filteredItems.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "switcher-empty";
-    empty.textContent = "No notes found";
-    listEl.appendChild(empty);
-    return;
+  const title = document.createElement("span");
+  title.className = "switcher-item-title";
+  title.appendChild(highlightPositions(item.title, positions));
+  row.appendChild(title);
+
+  if (item.id === state.activeNote?.id) {
+    const badge = document.createElement("span");
+    badge.className = "switcher-item-badge";
+    badge.textContent = "current";
+    row.appendChild(badge);
   }
 
-  filteredItems.forEach(({ item, positions }, i) => {
-    const row = document.createElement("div");
-    row.className =
-      "switcher-item" + (i === selectedIndex ? " switcher-item--active" : "");
+  return row;
+}
 
-    const title = document.createElement("span");
-    title.className = "switcher-item-title";
-    title.innerHTML = highlightPositions(item.title, positions);
+export function isSwitcherOpen(): boolean {
+  return overlay?.isOpen() ?? false;
+}
 
-    const isActive = item.id === state.activeNote?.id;
-    if (isActive) {
-      const badge = document.createElement("span");
-      badge.className = "switcher-item-badge";
-      badge.textContent = "current";
-      row.appendChild(title);
-      row.appendChild(badge);
-    } else {
-      row.appendChild(title);
-    }
+export function openSwitcher(selectCallback: (id: string) => void) {
+  onSelectCallback = selectCallback;
 
-    row.addEventListener("click", () => {
-      closeSwitcher();
-      onSelect?.(item.id);
+  if (!overlay) {
+    overlay = createListOverlay<SwitcherItem>({
+      classPrefix: "switcher",
+      placeholder: "Search notes...",
+      backdrop: true,
+      getItems: buildItems,
+      renderItem: renderSwitcherItem,
+      onSelect: ({ item }) => onSelectCallback?.(item.id),
+      emptyMessage: "No notes found",
     });
-
-    listEl!.appendChild(row);
-  });
-
-  const activeEl = listEl.querySelector(".switcher-item--active");
-  activeEl?.scrollIntoView({ block: "nearest" });
-}
-
-function highlightPositions(text: string, positions: number[]): string {
-  if (positions.length === 0) return escapeHtml(text);
-
-  const posSet = new Set(positions);
-  let result = "";
-  let inHighlight = false;
-
-  for (let i = 0; i < text.length; i++) {
-    const shouldHighlight = posSet.has(i);
-    if (shouldHighlight && !inHighlight) {
-      result += "<b>";
-      inHighlight = true;
-    } else if (!shouldHighlight && inHighlight) {
-      result += "</b>";
-      inHighlight = false;
-    }
-    result += escapeHtml(text[i]);
   }
-  if (inHighlight) result += "</b>";
-  return result;
+
+  overlay.open();
 }
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+export function closeSwitcher() {
+  overlay?.close();
+}
+
+export function refreshSwitcher() {
+  if (!isSwitcherOpen()) return;
+  overlay?.refresh();
 }

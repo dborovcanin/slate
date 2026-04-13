@@ -1,7 +1,9 @@
 node_modules/
 dist/
 src-tauri/target/
+target/
 *.db
 *.db-wal
 *.db-shm
 build/
+pkg/

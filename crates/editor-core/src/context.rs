@@ -1,4 +1,4 @@
-use super::types::{
+use crate::types::{
     BlockLineRange, EditorContextSnapshot, LineContext, SelectionContext, TextRange, WordContext,
 };
 
@@ -295,7 +295,7 @@ impl ResolvedContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor_core::types::SelectionSnapshot;
+    use crate::types::SelectionSnapshot;
 
     fn ctx(text: &str, head: usize, anchor: usize) -> ResolvedContext {
         ResolvedContext::new(EditorContextSnapshot {

@@ -8,15 +8,17 @@
     "build": "tsc && vite build",
     "tauri": "tauri",
     "test": "npm run test:ts && npm run test:rust",
-    "test:ts": "node --test --experimental-strip-types src/state.test.ts src/switcher/fuzzy.test.ts src/theme/presets.test.ts src/editor/core/context.test.ts src/editor/core/text-rules.test.ts src/editor/core/commands.test.ts src/editor/markdown-decoration.test.ts src/editor/markdown-editing.test.ts src/editor/calc-decoration.test.ts src/editor/calc-incremental.test.ts src/editor/vim-utils.test.ts src/editor/date-picker.test.ts src/editor/ex-commands.test.ts src/editor/command-engine.test.ts src/editor/markdown-format.test.ts src/editor/variable-autocomplete.test.ts",
-    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "test:ts": "node --test --experimental-strip-types src/state.test.ts src/switcher/fuzzy.test.ts src/theme/presets.test.ts src/editor/core/context.test.ts src/editor/core/commands.test.ts src/editor/markdown-decoration.test.ts src/editor/markdown-editing.test.ts src/editor/calc-decoration.test.ts src/editor/calc-incremental.test.ts src/editor/vim-utils.test.ts src/editor/date-picker.test.ts src/editor/ex-commands.test.ts src/editor/command-engine.test.ts src/editor/markdown-format.test.ts src/editor/variable-autocomplete.test.ts",
+    "test:rust": "cargo test --workspace"
   },
   "dependencies": {
     "@codemirror/commands": "^6.8.1",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.8",
     "@tauri-apps/api": "^2.5.0",
-    "@tauri-apps/plugin-dialog": "^2.7.0"
+    "@tauri-apps/plugin-dialog": "^2.7.0",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.6.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.10.1",

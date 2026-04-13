@@ -225,6 +225,24 @@ Rough net: **~2,300 lines of duplicated/parallel code eliminated**, traded for ~
 
 Binary size impact: neutral (no new deps). Startup: unchanged.
 
+Also this was offloaded to the Phase 5 from the previous phase: ### 4.7 Reify sum as a first-class module
+- Current: `sum.ts` exists as a proper TS module (148 lines); Rust inlines the same logic inside `execute_command`'s `Sum` branch.
+- Extract `editor-core::sum::{resolve_scope_range, execute_sum}` so both runtimes call the same function and the TUI can use sum independently.
+- Net savings: ~50 lines post-dedup, plus correctness parity.
+
+
+Deferred/Skipped with rationale:                                                                                                                                            
+  - 4.2 — File split only (no WASM, since tokenizer runs at rendering rate per viewport line). Organizational split without WASM delivers zero line savings — not worth the   
+  noise of a 3-file split when the file is well-organized internally.                                                                                                         
+  - 4.3 — computeCalcRefresh + planIncrementalCalc could go to WASM, but the calc ghost system is the most complex interactive feature; the benefit (future TUI calc support, 
+  Phase 5) doesn't justify regression risk now.                                                                                                                               
+  - 4.5 — Phase 5 scope (vim state machine unification), explicitly deferred.                                                                                                 
+  - 4.7 — Phase 5 scope (sum module, fend-coupled), explicitly deferred.     
+  - 4.9 — specta 2.0.0-rc.24 uses fmt::from_fn and const TypeId::of() — both unstable on stable Rust 1.90. Blocked until specta stabilizes. Note: no known drift in the       
+  remaining hand-written interfaces (Note, ThemeConfig, NoteEvaluationResult).
+
+
+
 ## 6. Production hardening
 
 Numbered items, each with severity/effort/target files. Check off in Phase 1 and Phase 6.

@@ -16,6 +16,7 @@ name = "note-msg"
 path = "src/bin/note-msg.rs"
 
 [dependencies]
+editor-core = { path = "../crates/editor-core" }
 tauri = { version = "2", features = [] }
 tauri-build = { version = "2", features = [] }
 rusqlite = { version = "0.35", features = ["bundled"] }
@@ -31,6 +32,5 @@ tokio = { version = "1", features = ["net", "io-util", "sync", "rt"] }
 libc = "0.2"
 toml = "0.9"
 arboard = "3.6.1"
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -12,7 +12,7 @@ import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
 import { applyEditOperation, snapshotFromView } from "./core/codemirror-adapter";
-import { runTableCellNavigationRules } from "./core/text-rules";
+import { runTableCellNavigationRules } from "./wasm.ts";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";

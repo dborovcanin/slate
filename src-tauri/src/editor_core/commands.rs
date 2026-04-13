@@ -1,4 +1,5 @@
 use super::context::ResolvedContext;
+use super::format::format_markdown;
 use super::operations::replace_range;
 use super::types::{
     BlockLineRange, CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation,
@@ -479,105 +480,6 @@ pub fn insert_value_at_selection(snapshot: &EditorContextSnapshot, value: &str) 
     )
 }
 
-fn format_markdown(text: &str) -> String {
-    let mut lines: Vec<String> = text.lines().map(|s| s.trim_end().to_string()).collect();
-
-    // Auto-format tables
-    let mut i = 0;
-    while i < lines.len() {
-        if lines[i].trim().starts_with('|') && lines[i].trim().ends_with('|') {
-            let start = i;
-            while i < lines.len()
-                && lines[i].trim().starts_with('|')
-                && lines[i].trim().ends_with('|')
-            {
-                i += 1;
-            }
-            let end = i;
-
-            let mut rows: Vec<Vec<String>> = Vec::new();
-            for r in start..end {
-                let row = lines[r].trim();
-                let cols: Vec<String> = row
-                    .trim_start_matches('|')
-                    .trim_end_matches('|')
-                    .split('|')
-                    .map(|s| s.trim().to_string())
-                    .collect();
-                rows.push(cols);
-            }
-
-            if !rows.is_empty() {
-                let max_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
-                let mut widths = vec![0; max_cols];
-                for r in &rows {
-                    for (c, col) in r.iter().enumerate() {
-                        if c < max_cols && col.len() > widths[c] {
-                            widths[c] = col.len();
-                        }
-                    }
-                }
-
-                for r in start..end {
-                    let mut new_row = String::from("|");
-                    for c in 0..max_cols {
-                        let col = rows[r - start].get(c).unwrap_or(&String::new()).clone();
-                        let is_separator = rows[r - start].iter().all(|x| {
-                            x.chars()
-                                .all(|ch| ch == '-' || ch == ':' || ch.is_whitespace())
-                        });
-
-                        let width = widths[c].max(3);
-                        if is_separator {
-                            new_row.push_str(&format!(" {} |", "-".repeat(width)));
-                        } else {
-                            if col.is_empty() {
-                                new_row.push_str(&format!(" {:width$} |", "", width = width));
-                            } else {
-                                new_row.push_str(&format!(" {:width$} |", col, width = width));
-                            }
-                        }
-                    }
-                    lines[r] = new_row;
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    // Formatting other elements
-    for line in &mut lines {
-        // Headings
-        if line.starts_with('#') {
-            let hashes = line.chars().take_while(|&c| c == '#').count();
-            if hashes > 0 && hashes <= 6 {
-                let rest = line[hashes..].trim_start();
-                if !rest.is_empty() {
-                    *line = format!("{} {}", "#".repeat(hashes), rest);
-                }
-            }
-        }
-
-        // Block quotes
-        if line.starts_with('>') {
-            let rest = line[1..].trim_start();
-            *line = format!("> {}", rest);
-        }
-
-        // Lists
-        if let Some(ch) = line.chars().next() {
-            if ch == '-' || ch == '*' || ch == '+' {
-                if line.len() > 1 && !line[1..].starts_with(' ') && !line[1..].starts_with(ch) {
-                    let rest = line[1..].trim_start();
-                    *line = format!("{} {}", ch, rest);
-                }
-            }
-        }
-    }
-
-    lines.join("\n")
-}
 
 pub fn execute_command(
     snapshot: &EditorContextSnapshot,

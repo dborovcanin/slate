@@ -1,8 +1,16 @@
+// Pure logic lives in the editor-core crate (compiled native here, WASM for the GUI webview).
+// Re-export so existing callers (terminal/mod.rs, etc.) don't need path changes.
+pub use editor_core::context;
+pub use editor_core::format;
+pub use editor_core::operations;
+pub use editor_core::text_rules;
+pub use editor_core::types;
+
+// Commands stay here: they use fend-core (native-only) and async I/O.
 pub mod commands;
-pub mod context;
-pub mod operations;
-pub mod text_rules;
-pub mod types;
+
+// List-renumbering integration test, references crate::editor_core::* via re-exports above.
+pub mod tests_list;
 
 #[cfg(test)]
 mod tests {
@@ -28,4 +36,3 @@ mod tests {
         assert_eq!(operation.changes[0].insert, "3");
     }
 }
-pub mod tests_list;

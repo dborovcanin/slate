@@ -1,6 +1,6 @@
-use super::context::ResolvedContext;
-use super::operations::replace_range;
-use super::types::{EditOperation, EditorContextSnapshot, OperationSelection, TextChange};
+use crate::context::ResolvedContext;
+use crate::operations::replace_range;
+use crate::types::{EditOperation, EditorContextSnapshot, OperationSelection, TextChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRuleOptions {
@@ -334,7 +334,7 @@ fn is_delimiter_row(row: &[String]) -> bool {
             .all(|cell| is_delimiter_cell(cell) || cell.is_empty())
 }
 
-fn format_table_lines(lines: &[String]) -> Vec<String> {
+pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     if lines.is_empty() {
         return Vec::new();
     }
@@ -700,8 +700,8 @@ fn is_table_separator(text: &str) -> bool {
 }
 
 fn table_continuation_rule(
-    line: &crate::editor_core::types::LineContext,
-    selection: &crate::editor_core::types::SelectionContext,
+    line: &crate::types::LineContext,
+    selection: &crate::types::SelectionContext,
 ) -> Option<EditOperation> {
     if !is_table_line(&line.text) {
         return None;
@@ -750,8 +750,8 @@ fn table_continuation_rule(
 
 fn list_continuation_rule(
     _ctx: &ResolvedContext,
-    line: &crate::editor_core::types::LineContext,
-    _selection: &crate::editor_core::types::SelectionContext,
+    line: &crate::types::LineContext,
+    _selection: &crate::types::SelectionContext,
 ) -> Option<EditOperation> {
     let parts = parse_list_line_parts(&line.text)?;
 
@@ -1026,7 +1026,7 @@ pub fn run_table_cell_navigation_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor_core::types::SelectionSnapshot;
+    use crate::types::SelectionSnapshot;
 
     fn snapshot(text: &str, head: usize, anchor: usize) -> EditorContextSnapshot {
         EditorContextSnapshot {

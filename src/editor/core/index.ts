@@ -4,5 +4,4 @@ export * from "./operations.ts";
 export * from "./codemirror-adapter.ts";
 export * from "./commands.ts";
 export * from "./sum.ts";
-export * from "./text-rules.ts";
 export * from "./markdown-table.ts";

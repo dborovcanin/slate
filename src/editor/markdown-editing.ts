@@ -3,10 +3,10 @@ import { keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 import { getCalcResultAtCursor } from "./calc-decoration.ts";
 import { applyEditOperation, snapshotFromUpdate, snapshotFromView } from "./core/codemirror-adapter.ts";
-import { runDocChangeRules, runEnterRules, runTabRules } from "./core/text-rules.ts";
+import { runDocChangeRules, runEnterRules, runTabRules, rewriteLineWithChecklistToggleSuffix } from "./wasm.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
-export { rewriteLineWithChecklistToggleSuffix } from "./core/text-rules.ts";
+export { rewriteLineWithChecklistToggleSuffix };
 
 function toggleWrap(view: EditorView, left: string, right = left): boolean {
   const main = view.state.selection.main;

@@ -1,4 +1,4 @@
-use super::types::{EditOperation, OperationSelection, TextChange};
+use crate::types::{EditOperation, OperationSelection, TextChange};
 
 pub fn single_change(change: TextChange, selection: Option<OperationSelection>) -> EditOperation {
     EditOperation {
