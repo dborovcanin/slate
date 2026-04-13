@@ -263,6 +263,270 @@ fn checklist_toggle_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     ))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Align {
+    Left,
+    Center,
+    Right,
+    None,
+}
+
+fn split_table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
+    inner.split('|').map(|cell| cell.trim().to_string()).collect()
+}
+
+fn is_delimiter_cell(cell: &str) -> bool {
+    let bytes = cell.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+
+    let mut i = 0usize;
+    if bytes[i] == b':' {
+        i += 1;
+    }
+
+    let dash_start = i;
+    while i < bytes.len() && bytes[i] == b'-' {
+        i += 1;
+    }
+    if i.saturating_sub(dash_start) < 3 {
+        return false;
+    }
+
+    if i < bytes.len() && bytes[i] == b':' {
+        i += 1;
+    }
+
+    i == bytes.len()
+}
+
+fn parse_align(cell: &str) -> Align {
+    if !is_delimiter_cell(cell) {
+        return Align::None;
+    }
+    let left = cell.starts_with(':');
+    let right = cell.ends_with(':');
+    match (left, right) {
+        (true, true) => Align::Center,
+        (true, false) => Align::Left,
+        (false, true) => Align::Right,
+        (false, false) => Align::None,
+    }
+}
+
+fn delimiter_for_width(width: usize, align: Align) -> String {
+    let w = width.max(3);
+    match align {
+        Align::Left => format!(":{}", "-".repeat(w.saturating_sub(1).max(3))),
+        Align::Right => format!("{}:", "-".repeat(w.saturating_sub(1).max(3))),
+        Align::Center => format!(":{}:", "-".repeat(w.saturating_sub(2).max(3))),
+        Align::None => "-".repeat(w),
+    }
+}
+
+fn is_delimiter_row(row: &[String]) -> bool {
+    row.iter().any(|cell| is_delimiter_cell(cell))
+        && row
+            .iter()
+            .all(|cell| is_delimiter_cell(cell) || cell.is_empty())
+}
+
+fn format_table_lines(lines: &[String]) -> Vec<String> {
+    if lines.is_empty() {
+        return Vec::new();
+    }
+
+    let rows: Vec<Vec<String>> = lines.iter().map(|line| split_table_cells(line)).collect();
+    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+    if column_count == 0 {
+        return lines.to_vec();
+    }
+
+    let normalized_rows: Vec<Vec<String>> = rows
+        .into_iter()
+        .map(|mut row| {
+            while row.len() < column_count {
+                row.push(String::new());
+            }
+            row
+        })
+        .collect();
+
+    let mut align = vec![Align::None; column_count];
+    for row in &normalized_rows {
+        if !is_delimiter_row(row) {
+            continue;
+        }
+        for i in 0..column_count {
+            if is_delimiter_cell(&row[i]) {
+                align[i] = parse_align(&row[i]);
+            }
+        }
+        break;
+    }
+
+    let mut widths = vec![3usize; column_count];
+    for row in &normalized_rows {
+        if is_delimiter_row(row) {
+            continue;
+        }
+        for i in 0..column_count {
+            widths[i] = widths[i].max(row[i].len());
+        }
+    }
+
+    normalized_rows
+        .iter()
+        .map(|row| {
+            let delimiter = is_delimiter_row(row);
+            let mut parts = Vec::with_capacity(column_count);
+            for i in 0..column_count {
+                if delimiter {
+                    parts.push(delimiter_for_width(widths[i], align[i]));
+                } else {
+                    parts.push(format!("{:<width$}", row[i], width = widths[i]));
+                }
+            }
+            format!("| {} |", parts.join(" | "))
+        })
+        .collect()
+}
+
+fn table_pipe_positions(line: &str) -> Vec<usize> {
+    line.match_indices('|').map(|(idx, _)| idx).collect()
+}
+
+fn table_cell_index_for_column(pipes: &[usize], col: usize) -> Option<usize> {
+    if pipes.len() < 2 {
+        return None;
+    }
+    for i in 0..pipes.len() - 1 {
+        if col <= pipes[i + 1] {
+            return Some(i);
+        }
+    }
+    Some(pipes.len() - 2)
+}
+
+fn first_non_space_offset(text: &str) -> usize {
+    text.as_bytes()
+        .iter()
+        .position(|b| *b != b' ')
+        .unwrap_or(text.len())
+}
+
+fn last_non_space_end_offset(text: &str) -> usize {
+    text.as_bytes()
+        .iter()
+        .rposition(|b| *b != b' ')
+        .map(|idx| idx + 1)
+        .unwrap_or(0)
+}
+
+fn map_table_cursor_column(source_line: &str, target_line: &str, source_col: usize) -> usize {
+    let source_pipes = table_pipe_positions(source_line);
+    let target_pipes = table_pipe_positions(target_line);
+    if source_pipes.len() < 2 || target_pipes.len() < 2 {
+        return source_col.min(target_line.len());
+    }
+
+    let Some(source_cell_index) = table_cell_index_for_column(&source_pipes, source_col) else {
+        return source_col.min(target_line.len());
+    };
+    let target_cell_index = source_cell_index.min(target_pipes.len().saturating_sub(2));
+
+    let source_left = source_pipes[source_cell_index] + 1;
+    let source_right = source_pipes[source_cell_index + 1];
+    let source_raw = &source_line[source_left..source_right];
+    let source_trim_start = first_non_space_offset(source_raw);
+    let source_trim_end = last_non_space_end_offset(source_raw);
+    let source_content_len = source_trim_end.saturating_sub(source_trim_start);
+    let source_in_cell = source_col.saturating_sub(source_left).min(source_raw.len());
+
+    let mut semantic_offset = 0usize;
+    if source_content_len > 0 {
+        semantic_offset = if source_in_cell <= source_trim_start {
+            0
+        } else if source_in_cell >= source_trim_end {
+            source_content_len
+        } else {
+            source_in_cell - source_trim_start
+        };
+    }
+
+    let target_left = target_pipes[target_cell_index] + 1;
+    let target_right = target_pipes[target_cell_index + 1];
+    let target_raw = &target_line[target_left..target_right];
+    let target_trim_start = first_non_space_offset(target_raw);
+    let target_trim_end = last_non_space_end_offset(target_raw);
+    let target_content_len = target_trim_end.saturating_sub(target_trim_start);
+
+    if target_content_len == 0 {
+        return (target_left + 1).min(target_right);
+    }
+
+    let mapped_in_target = target_trim_start + semantic_offset.min(target_content_len);
+    (target_left + mapped_in_target).min(target_line.len())
+}
+
+fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+    let line = ctx.current_line();
+    let block = ctx.table_range_at_line(line.number, 2)?;
+
+    let lines: Vec<String> = (block.start_line..=block.end_line)
+        .map(|n| ctx.line_text(n).to_string())
+        .collect();
+    let formatted = format_table_lines(&lines);
+    if formatted
+        .iter()
+        .zip(lines.iter())
+        .all(|(formatted_line, source_line)| formatted_line == source_line)
+    {
+        return None;
+    }
+
+    let head = ctx.selection().head;
+    let head_line = ctx.line_at(head).number;
+    let head_col = head.saturating_sub(ctx.line(head_line).from);
+    let relative_line = head_line
+        .saturating_sub(block.start_line)
+        .min(formatted.len().saturating_sub(1));
+    let source_line = lines
+        .get(relative_line)
+        .map(String::as_str)
+        .unwrap_or_default();
+    let target_line = formatted
+        .get(relative_line)
+        .map(String::as_str)
+        .unwrap_or_default();
+    let mapped_head_col = if is_table_line(source_line) && is_table_line(target_line) {
+        map_table_cursor_column(source_line, target_line, head_col)
+    } else {
+        head_col.min(target_line.len())
+    };
+
+    let start_line = ctx.line(block.start_line);
+    let end_line = ctx.line(block.end_line);
+    let mut new_head = start_line.from;
+    for i in 0..relative_line {
+        new_head += formatted[i].len() + 1;
+    }
+    new_head += mapped_head_col.min(formatted[relative_line].len());
+
+    Some(replace_range(
+        start_line.from,
+        end_line.to,
+        formatted.join("\n"),
+        Some(OperationSelection {
+            anchor: new_head,
+            head: None,
+        }),
+    ))
+}
+
 fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     let line = ctx.current_line();
     let block = ctx.list_range_at_line(line.number)?;
@@ -359,7 +623,9 @@ pub fn run_doc_change_rules(
         return None;
     }
 
-    // if let Some(op) = table_autoformat_rule(&ctx) { return Some(op); }
+    if let Some(op) = table_autoformat_rule(&ctx) {
+        return Some(op);
+    }
 
     list_autoformat_rule(&ctx)
 }
@@ -529,6 +795,30 @@ fn marker_depth(indent: &str) -> usize {
         / 2
 }
 
+fn ensure_cell_anchor_keeps_leading_space(
+    line_text: &str,
+    pipes: &[usize],
+    left_pipe_index: usize,
+    anchor_in_line: usize,
+) -> usize {
+    let Some(&left_pipe) = pipes.get(left_pipe_index) else {
+        return anchor_in_line;
+    };
+    let Some(&right_pipe) = pipes.get(left_pipe_index + 1) else {
+        return anchor_in_line;
+    };
+
+    let cell_start = left_pipe + 1;
+    if anchor_in_line != cell_start || right_pipe <= cell_start {
+        return anchor_in_line;
+    }
+    if line_text.as_bytes().get(cell_start).copied() == Some(b' ') {
+        (cell_start + 1).min(right_pipe)
+    } else {
+        anchor_in_line
+    }
+}
+
 fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
@@ -582,6 +872,7 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
                     {
                         pos -= 1;
                     }
+                    pos = ensure_cell_anchor_keeps_leading_space(&line.text, &pipes, left - 1, pos);
                     target_anchor = line.from + pos;
                     found_target = true;
                     break;
@@ -613,6 +904,7 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
                     {
                         pos -= 1;
                     }
+                    pos = ensure_cell_anchor_keeps_leading_space(&line.text, &pipes, right, pos);
                     target_anchor = line.from + pos;
                     found_target = true;
                     break;
@@ -806,6 +1098,26 @@ mod tests {
         )
         .expect("outdent op");
         assert_eq!(apply_operation(&outdent_doc.text, &outdent_op), "1.2 child");
+    }
+
+    #[test]
+    fn run_doc_change_rules_formats_markdown_tables_when_enabled() {
+        let text = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+        let doc = snapshot(text, text.len(), text.len());
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "| a   | b   |\n| --- | --- |\n| 1   | 2   |"
+        );
+    }
+
+    #[test]
+    fn run_tab_rules_keeps_one_leading_space_when_entering_empty_table_cell() {
+        let text = "| a   |     |";
+        let head = text.find('a').unwrap() + 1;
+        let doc = snapshot(text, head, head);
+        let op = run_tab_rules(&doc, TabRuleOptions::default()).expect("operation");
+        assert_eq!(op.selection.expect("selection").anchor, 8);
     }
 
     #[test]

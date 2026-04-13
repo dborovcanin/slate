@@ -11,6 +11,8 @@ import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
+import { applyEditOperation, snapshotFromView } from "./core/codemirror-adapter";
+import { runTableCellNavigationRules } from "./core/text-rules";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
@@ -60,6 +62,21 @@ interface EditorMountOptions {
 let currentFormatOnSave = false;
 let currentDateFormat = "%Y-%m-%d";
 
+function moveTableCellOrWord(view: EditorView, outdent: boolean, markdownAutoformat: boolean): boolean {
+  if (!markdownAutoformat) {
+    return outdent ? cursorGroupLeft(view) : cursorGroupRight(view);
+  }
+  const operation = runTableCellNavigationRules(snapshotFromView(view), {
+    markdownAutoformat,
+    outdent,
+  });
+  if (operation) {
+    applyEditOperation(view, operation);
+    return true;
+  }
+  return outdent ? cursorGroupLeft(view) : cursorGroupRight(view);
+}
+
 export async function performFormatAndSave() {
   if (!view) return;
   if (currentFormatOnSave) {
@@ -72,6 +89,7 @@ export async function performFormatAndSave() {
 export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
   const note = state.activeNote;
   const doc = note?.body ?? "";
+  const markdownAutoformat = options.markdownAutoformat ?? true;
   
   currentFormatOnSave = !!options.formatOnSave;
   currentDateFormat = options.dateFormat || "%Y-%m-%d";
@@ -83,7 +101,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     highlightActiveLine(),
     placeholder("Start typing..."),
     markdownRichTextExtensions(),
-    markdownEditingExtensions({ autoformat: options.markdownAutoformat ?? true }),
+    markdownEditingExtensions({ autoformat: markdownAutoformat }),
     ...variableAutocompleteExtensions({
       enabled: options.variablesEnabled ?? true,
       minChars: options.variableAutocompleteMinChars ?? 3,
@@ -97,8 +115,8 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     keymap.of([
       { key: "Ctrl-w", run: deleteGroupBackward },
       { key: "Ctrl-Backspace", run: deleteGroupBackward },
-      { key: "Ctrl-ArrowLeft", run: cursorGroupLeft },
-      { key: "Ctrl-ArrowRight", run: cursorGroupRight },
+      { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, markdownAutoformat) },
+      { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, markdownAutoformat) },
       { key: "Ctrl-s", run: () => { performFormatAndSave(); return true; } },
     ]),
     keymap.of([...defaultKeymap, ...historyKeymap]),

@@ -6,6 +6,7 @@ import {
   runDocChangeRules,
   runEnterRules,
   runTabRules,
+  runTableCellNavigationRules,
 } from "./text-rules.ts";
 
 function applyOperation(source: string, operation: EditOperation): string {
@@ -148,4 +149,18 @@ test("runTabRules changes ordered list marker depth to hierarchical form", () =>
   );
   assert.ok(outdentOp);
   assert.equal(applyOperation("  1.1.1 child", outdentOp), "1.1 child");
+});
+
+test("runTableCellNavigationRules keeps one leading space when moving into empty table cell", () => {
+  const text = "| a   |     |";
+  const fromFirstCell = text.indexOf("a") + 1;
+  const op = runTableCellNavigationRules(
+    {
+      text,
+      selection: { anchor: fromFirstCell, head: fromFirstCell },
+    },
+    { markdownAutoformat: true, outdent: false },
+  );
+  assert.ok(op);
+  assert.equal(op.selection?.anchor, text.indexOf("|", text.indexOf("|") + 1) + 2);
 });

@@ -95,6 +95,22 @@ function mapTableCursorColumn(sourceLine: string, targetLine: string, sourceCol:
   return clamp(targetLeft + mappedInTarget, 0, targetLine.length);
 }
 
+function ensureCellAnchorKeepsLeadingSpace(
+  lineText: string,
+  pipes: number[],
+  leftPipeIndex: number,
+  anchorInLine: number,
+): number {
+  const leftPipe = pipes[leftPipeIndex];
+  const rightPipe = pipes[leftPipeIndex + 1];
+  if (leftPipe === undefined || rightPipe === undefined) return anchorInLine;
+  const cellStart = leftPipe + 1;
+  if (anchorInLine !== cellStart) return anchorInLine;
+  if (rightPipe <= cellStart) return anchorInLine;
+  if (lineText[cellStart] === " ") return Math.min(cellStart + 1, rightPipe);
+  return anchorInLine;
+}
+
 function parseOrderedMarker(marker: string): number[] | null {
   if (orderedTopLevelRe.test(marker)) {
     const value = Number.parseInt(marker.slice(0, -1), 10);
@@ -505,6 +521,7 @@ function tableTabRule(ctx: ResolvedContext, options: TabRuleOptions): EditOperat
         while (pos > pipes[leftPipe - 1] + 1 && line.text[pos - 1] === " ") {
           pos--;
         }
+        pos = ensureCellAnchorKeepsLeadingSpace(line.text, pipes, leftPipe - 1, pos);
         targetAnchor = line.from + pos;
         foundTarget = true;
         break;
@@ -533,6 +550,7 @@ function tableTabRule(ctx: ResolvedContext, options: TabRuleOptions): EditOperat
         while (pos > pipes[rightPipe] + 1 && line.text[pos - 1] === " ") {
           pos--;
         }
+        pos = ensureCellAnchorKeepsLeadingSpace(line.text, pipes, rightPipe, pos);
         targetAnchor = line.from + pos;
         foundTarget = true;
         break;
@@ -565,4 +583,13 @@ export function runTabRules(
   const tableOp = tableTabRule(ctx, options);
   if (tableOp) return tableOp;
   return listTabRule(ctx, options);
+}
+
+export function runTableCellNavigationRules(
+  snapshot: EditorContextSnapshot,
+  options: TextRuleOptions & TabRuleOptions = {},
+): EditOperation | null {
+  if (!(options.markdownAutoformat ?? true)) return null;
+  const ctx = new ResolvedContext(snapshot);
+  return tableTabRule(ctx, options);
 }
