@@ -51,12 +51,9 @@ fn copy_text_to_clipboard(text: &str) -> Option<ClipboardWriteBackend> {
         return None;
     }
 
-    if let Ok(mut ctx) = arboard::Clipboard::new() {
-        if ctx.set_text(text.to_string()).is_ok() {
-            return Some(ClipboardWriteBackend::Arboard);
-        }
-    }
-
+    // In terminal mode prefer explicit system/terminal clipboard transports.
+    // `arboard` can report success in environments where the desktop clipboard
+    // is not actually reachable from this terminal session.
     if let Some(backend) = write_clipboard_via_commands(text) {
         return Some(backend);
     }
@@ -65,6 +62,12 @@ fn copy_text_to_clipboard(text: &str) -> Option<ClipboardWriteBackend> {
     // unavailable. Many terminals support OSC 52 copy sequences.
     if write_clipboard_via_osc52(text) {
         return Some(ClipboardWriteBackend::Osc52);
+    }
+
+    if let Ok(mut ctx) = arboard::Clipboard::new() {
+        if ctx.set_text(text.to_string()).is_ok() {
+            return Some(ClipboardWriteBackend::Arboard);
+        }
     }
 
     None
@@ -583,12 +586,13 @@ impl TerminalApp {
     }
 
     fn read_system_clipboard_lines(&self) -> Option<Vec<String>> {
-        let text = if let Ok(mut ctx) = arboard::Clipboard::new() {
-            ctx.get_text().ok()
-        } else {
-            None
-        }
-        .or_else(read_clipboard_via_commands)?;
+        let text = read_clipboard_via_commands().or_else(|| {
+            if let Ok(mut ctx) = arboard::Clipboard::new() {
+                ctx.get_text().ok()
+            } else {
+                None
+            }
+        })?;
         let lines = text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
         if lines.is_empty() {
             None
