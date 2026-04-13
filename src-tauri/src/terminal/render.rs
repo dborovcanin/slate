@@ -10,6 +10,7 @@ const FG_CODE_NUMBER: u8 = 215;
 const FG_CODE_COMMENT: u8 = 244;
 const FG_CODE_FUNCTION: u8 = 74;
 const FG_CODE_TYPE: u8 = 183;
+const FG_VARIABLE: u8 = 179;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct CharStyle {
@@ -105,6 +106,7 @@ impl RenderContext {
         width: usize,
         calc_ghost: Option<&str>,
         search_ranges: &[(usize, usize)],
+        variable_names: &[String],
     ) -> String {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
@@ -128,6 +130,7 @@ impl RenderContext {
         } else {
             apply_line_styles(&chars, &mut styles);
             apply_inline_styles(&chars, &mut styles);
+            apply_variable_styles(&chars, &mut styles, variable_names);
         }
 
         for &(start, end) in search_ranges {
@@ -137,6 +140,82 @@ impl RenderContext {
         }
 
         build_ansi_output(&chars, &styles, width, calc_ghost)
+    }
+}
+
+fn is_variable_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn has_variable_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool {
+    let left_ok = start == 0 || !is_variable_word_byte(bytes[start - 1]);
+    let right_ok = end == bytes.len() || !is_variable_word_byte(bytes[end]);
+    left_ok && right_ok
+}
+
+fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, usize)> {
+    if text.is_empty() || variable_names.is_empty() {
+        return Vec::new();
+    }
+
+    let lower = text.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+
+    for raw in variable_names {
+        let needle_text = raw.trim().to_ascii_lowercase();
+        if needle_text.is_empty() {
+            continue;
+        }
+        let needle = needle_text.as_bytes();
+        if needle.len() > bytes.len() {
+            continue;
+        }
+
+        let mut idx = 0usize;
+        while idx + needle.len() <= bytes.len() {
+            let end = idx + needle.len();
+            if &bytes[idx..end] == needle && has_variable_word_boundaries(bytes, idx, end) {
+                matches.push((idx, end));
+            }
+            idx += 1;
+        }
+    }
+
+    if matches.len() <= 1 {
+        return matches;
+    }
+
+    // Prefer left-most ranges; for overlaps at same start, keep longer match.
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then((b.1 - b.0).cmp(&(a.1 - a.0))));
+
+    let mut deduped = Vec::new();
+    for candidate in matches {
+        let Some(last) = deduped.last() else {
+            deduped.push(candidate);
+            continue;
+        };
+        if candidate.0 < last.1 {
+            continue;
+        }
+        deduped.push(candidate);
+    }
+
+    deduped
+}
+
+fn apply_variable_styles(chars: &[char], styles: &mut [CharStyle], variable_names: &[String]) {
+    if chars.is_empty() || variable_names.is_empty() {
+        return;
+    }
+
+    let text: String = chars.iter().collect();
+    for (start, end) in find_variable_ranges(&text, variable_names) {
+        for style in styles.iter_mut().take(end).skip(start) {
+            style.fg = Some(FG_VARIABLE);
+            style.bold = true;
+            style.dim = false;
+        }
     }
 }
 
@@ -904,7 +983,7 @@ mod tests {
     #[test]
     fn render_plain_pads_to_width() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("hi", 10, None, &[]);
+        let out = ctx.render_line("hi", 10, None, &[], &[]);
         // "hi" + 8 spaces = 10 visible chars (plus potential ANSI reset)
         let visible: String = strip_ansi(&out);
         assert_eq!(visible.len(), 10);
@@ -914,7 +993,7 @@ mod tests {
     #[test]
     fn render_calc_ghost_appended() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("2+2", 30, Some("4"), &[]);
+        let out = ctx.render_line("2+2", 30, Some("4"), &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains("→ 4"));
     }
@@ -922,8 +1001,8 @@ mod tests {
     #[test]
     fn render_code_block_adds_syntax_color_sequences() {
         let mut ctx = RenderContext::new();
-        let _ = ctx.render_line("```rust", 60, None, &[]);
-        let out = ctx.render_line("let total = 42 // note", 60, None, &[]);
+        let _ = ctx.render_line("```rust", 60, None, &[], &[]);
+        let out = ctx.render_line("let total = 42 // note", 60, None, &[], &[]);
         assert!(out.contains("38;5;81"));
         assert!(out.contains("38;5;215"));
         assert!(out.contains("38;5;244"));
@@ -932,10 +1011,18 @@ mod tests {
     #[test]
     fn render_expands_tabs_into_spaces() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("a\tb", 12, None, &[]);
+        let out = ctx.render_line("a\tb", 12, None, &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.starts_with("a   b"));
         assert_eq!(visible.len(), 12);
+    }
+
+    #[test]
+    fn render_highlights_variables_in_bold_with_distinct_color() {
+        let mut ctx = RenderContext::new();
+        let vars = vec!["subtotal".to_string(), "tax rate".to_string()];
+        let out = ctx.render_line("total = subtotal + tax rate", 80, None, &[], &vars);
+        assert!(out.contains(&format!("0;1;38;5;{FG_VARIABLE}")));
     }
 
     fn strip_ansi(s: &str) -> String {

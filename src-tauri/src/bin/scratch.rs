@@ -7,7 +7,7 @@ fn main() {
     let text =
         "  # Heading\n  - List\n**bold** and *italic*\n***bold italic***\n _italic_ \n __bold__ ";
     for line in text.lines() {
-        let out = ctx.render_line(line, 80, None, &[]);
+        let out = ctx.render_line(line, 80, None, &[], &[]);
         println!("{}", out);
     }
 }

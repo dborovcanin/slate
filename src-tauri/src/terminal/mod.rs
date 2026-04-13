@@ -97,6 +97,7 @@ struct TerminalApp {
     selection_anchor: Option<(usize, usize)>, // (line, col)
     // Calc ghost cache
     calc_results: Vec<Option<String>>,
+    variable_names: Vec<String>,
     // Search state
     search_query: String,
     search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
@@ -125,7 +126,7 @@ impl TerminalApp {
         let active_note = select_note(db, opts)?;
         let lines = split_lines(&active_note.body);
         let switcher_items = load_note_meta(db)?;
-        let calc_results = compute_calc_results(&lines, variables_enabled);
+        let calc_data = compute_calc_data(&lines, variables_enabled);
 
         Ok(Self {
             active_note,
@@ -151,7 +152,8 @@ impl TerminalApp {
             vim_buffer: String::new(),
             clipboard: Vec::new(),
             selection_anchor: None,
-            calc_results,
+            calc_results: calc_data.line_results,
+            variable_names: calc_data.variable_names,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
@@ -1164,7 +1166,9 @@ impl TerminalApp {
     }
 
     fn recompute_calc_full(&mut self) {
-        self.calc_results = compute_calc_results(&self.lines, self.variables_enabled);
+        let calc_data = compute_calc_data(&self.lines, self.variables_enabled);
+        self.calc_results = calc_data.line_results;
+        self.variable_names = calc_data.variable_names;
     }
 
     // --- Search ---
@@ -1757,6 +1761,7 @@ impl TerminalApp {
                     available,
                     calc_ghost,
                     &highlight_ranges,
+                    &self.variable_names,
                 );
                 buf.push_str(&goto(row, 1));
                 // Dim gutter
@@ -2472,13 +2477,34 @@ impl Drop for TerminalGuard {
     }
 }
 
-fn compute_calc_results(lines: &[String], variables_enabled: bool) -> Vec<Option<String>> {
+struct CalcData {
+    line_results: Vec<Option<String>>,
+    variable_names: Vec<String>,
+}
+
+fn compute_calc_data(lines: &[String], variables_enabled: bool) -> CalcData {
     let engine = crate::calc::engine::CalcEngine::new();
     let result = engine.evaluate_note_context(
         lines,
         crate::calc::engine::NoteEvaluationOptions { variables_enabled },
     );
-    result.line_results
+    let mut variable_names = result
+        .variables
+        .into_iter()
+        .map(|entry| entry.normalized)
+        .collect::<Vec<_>>();
+    variable_names.sort();
+    variable_names.dedup();
+
+    CalcData {
+        line_results: result.line_results,
+        variable_names,
+    }
+}
+
+#[cfg(test)]
+fn compute_calc_results(lines: &[String], variables_enabled: bool) -> Vec<Option<String>> {
+    compute_calc_data(lines, variables_enabled).line_results
 }
 
 fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
