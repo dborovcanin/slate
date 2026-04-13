@@ -1572,6 +1572,9 @@ impl TerminalApp {
         else {
             return false;
         };
+        if contains_assignment_operator(&text) {
+            return false;
+        }
 
         if let Some((from_byte, to_byte)) = find_calc_segment_range(&text) {
             self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
@@ -2699,6 +2702,28 @@ fn has_calc_signal(text: &str) -> bool {
         || text.contains(" in ")
 }
 
+fn contains_assignment_operator(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 {
+        return false;
+    }
+
+    for i in 0..bytes.len() - 1 {
+        if bytes[i] != b':' || bytes[i + 1] != b'=' {
+            continue;
+        }
+        if i > 0 && matches!(bytes[i - 1], b':' | b'!' | b'<' | b'>' | b'=') {
+            continue;
+        }
+        if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
+            continue;
+        }
+        return true;
+    }
+
+    false
+}
+
 fn looks_like_date_with_delim(text: &str, delim: char) -> bool {
     let mut parts = text.split(delim);
     let (Some(a), Some(b), Some(c)) = (parts.next(), parts.next(), parts.next()) else {
@@ -2796,8 +2821,26 @@ mod tests {
         let lines = vec!["x := 4".to_string(), "x + 2".to_string()];
         let results = compute_calc_results(&lines, true);
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0], None);
+        assert_eq!(results[0].as_deref(), Some("4"));
         assert_eq!(results[1].as_deref(), Some("6"));
+    }
+
+    #[test]
+    fn compute_calc_results_resolves_variables_when_assignment_has_trailer_literal() {
+        let lines = vec![
+            "total := 12 = 12".to_string(),
+            "value := total + 3 = 15".to_string(),
+            "value + 1".to_string(),
+        ];
+        let results = compute_calc_results(&lines, true);
+        assert_eq!(
+            results,
+            vec![
+                Some("12".to_string()),
+                Some("15".to_string()),
+                Some("16".to_string())
+            ]
+        );
     }
 
     #[test]

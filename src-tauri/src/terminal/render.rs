@@ -139,7 +139,13 @@ impl RenderContext {
             }
         }
 
-        build_ansi_output(&chars, &styles, width, calc_ghost)
+        let calc_prefix = if contains_assignment_operator(text) {
+            " = "
+        } else {
+            " → "
+        };
+
+        build_ansi_output(&chars, &styles, width, calc_ghost, calc_prefix)
     }
 }
 
@@ -202,6 +208,30 @@ fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, us
     }
 
     deduped
+}
+
+fn contains_assignment_operator(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    if bytes.len() < 2 {
+        return false;
+    }
+
+    for i in 0..bytes.len() - 1 {
+        if bytes[i] != b':' || bytes[i + 1] != b'=' {
+            continue;
+        }
+
+        if i > 0 && matches!(bytes[i - 1], b':' | b'!' | b'<' | b'>' | b'=') {
+            continue;
+        }
+        if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
+            continue;
+        }
+
+        return true;
+    }
+
+    false
 }
 
 fn apply_variable_styles(chars: &[char], styles: &mut [CharStyle], variable_names: &[String]) {
@@ -863,6 +893,7 @@ fn build_ansi_output(
     styles: &[CharStyle],
     width: usize,
     calc_ghost: Option<&str>,
+    calc_prefix: &str,
 ) -> String {
     let mut buf = String::with_capacity(width * 4);
     let mut current = CharStyle::default();
@@ -903,7 +934,7 @@ fn build_ansi_output(
                 ghost_style.write_ansi(&mut buf);
                 current = ghost_style;
             }
-            for ch in " → ".chars().chain(ghost.chars()) {
+            for ch in calc_prefix.chars().chain(ghost.chars()) {
                 if visible >= width {
                     break;
                 }
@@ -996,6 +1027,14 @@ mod tests {
         let out = ctx.render_line("2+2", 30, Some("4"), &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains("→ 4"));
+    }
+
+    #[test]
+    fn render_assignment_calc_ghost_uses_equals_prefix() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line("value := 2 + 2", 30, Some("4"), &[], &[]);
+        let visible = strip_ansi(&out);
+        assert!(visible.contains("= 4"));
     }
 
     #[test]

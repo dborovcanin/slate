@@ -101,7 +101,8 @@ export const variableIndexField = StateField.define<VariableIndexEntry[]>({
     for (const e of tr.effects) {
       if (e.is(setVariableIndex)) return e.value;
     }
-    return value;
+    if (!tr.docChanged) return value;
+    return remapVariableIndexForDocChange(value, tr.startState.doc, tr.changes, tr.newDoc);
   },
 });
 
@@ -116,11 +117,12 @@ const calcDecorations = EditorView.decorations.compute(
       const lineNumber = lineIndex + 1;
       if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
       const line = state.doc.line(lineNumber); // 1-based
+      const prefix = lineUsesAssignmentGhostPrefix(line.text) ? " = " : " \u2192 ";
       builder.add(
         line.to,
         line.to,
         Decoration.widget({
-          widget: new CalcResultWidget(result),
+          widget: new CalcResultWidget(result, prefix),
           side: 1,
         }),
       );
@@ -132,25 +134,33 @@ const calcDecorations = EditorView.decorations.compute(
 
 class CalcResultWidget extends WidgetType {
   readonly result: string;
+  readonly prefix: string;
 
-  constructor(result: string) {
+  constructor(result: string, prefix: string) {
     super();
     this.result = result;
+    this.prefix = prefix;
   }
 
   toDOM(): HTMLElement {
     const span = document.createElement("span");
     span.className = "calc-ghost";
-    span.textContent = ` \u2192 ${this.result}`;
+    span.textContent = `${this.prefix}${this.result}`;
     return span;
   }
 
   eq(other: CalcResultWidget): boolean {
-    return this.result === other.result;
+    return this.result === other.result && this.prefix === other.prefix;
   }
 }
 
 const ASSIGNMENT_RE = /(^|[^:!<>=])(:=)(?!=)/;
+
+export function lineUsesAssignmentGhostPrefix(lineText: string): boolean {
+  const evalTarget = lineForCalcEvaluation(lineText).trim();
+  if (evalTarget.length > 0) return ASSIGNMENT_RE.test(evalTarget);
+  return ASSIGNMENT_RE.test(lineText);
+}
 
 export function containsVariableAssignment(lines: readonly string[]): boolean {
   for (const line of lines) {
@@ -359,6 +369,7 @@ function findClosestLineByEvalKey(
   key: string,
   preferredLineIndex: number,
   range: ChangedRange | null,
+  claimedLineIndexes: ReadonlySet<number>,
 ): number | null {
   const window = rangeSearchLineWindow(nextDoc, range);
   let closest: number | null = null;
@@ -366,6 +377,7 @@ function findClosestLineByEvalKey(
 
   for (let lineNo = window.startLine; lineNo <= window.endLine; lineNo++) {
     const lineIndex = lineNo - 1;
+    if (claimedLineIndexes.has(lineIndex)) continue;
     const line = nextDoc.line(lineNo);
     if (lineEvalKey(line.text) !== key) continue;
 
@@ -420,7 +432,10 @@ export function remapCalcResultsForDocChange(
   if (changedRanges.length === 0) return new Map(results);
 
   const remapped = new Map<number, string>();
-  for (const [lineIndex, result] of results) {
+  const claimedLineIndexes = new Set<number>();
+  const orderedEntries = [...results.entries()].sort((a, b) => a[0] - b[0]);
+
+  for (const [lineIndex, result] of orderedEntries) {
     const oldLineNumber = lineIndex + 1;
     if (oldLineNumber < 1 || oldLineNumber > startDoc.lines) continue;
 
@@ -454,15 +469,59 @@ export function remapCalcResultsForDocChange(
         evalKey,
         preferredLineIndex,
         lineRange,
+        claimedLineIndexes,
       );
       if (rescuedLineIndex === null) continue;
+      claimedLineIndexes.add(rescuedLineIndex);
       remapped.set(rescuedLineIndex, result);
       continue;
     }
 
+    if (claimedLineIndexes.has(newLineIndex)) {
+      // Keep the map one-to-one even under complex rewrites.
+      const evalKey = lineEvalKey(oldLine.text);
+      if (!evalKey) continue;
+      const rescuedLineIndex = findClosestLineByEvalKey(
+        nextDoc,
+        evalKey,
+        newLineIndex,
+        lineRange,
+        claimedLineIndexes,
+      );
+      if (rescuedLineIndex === null) continue;
+      claimedLineIndexes.add(rescuedLineIndex);
+      remapped.set(rescuedLineIndex, result);
+      continue;
+    }
+
+    claimedLineIndexes.add(newLineIndex);
     remapped.set(newLineIndex, result);
   }
   return remapped;
+}
+
+export function remapVariableIndexForDocChange(
+  entries: readonly VariableIndexEntry[],
+  startDoc: Text,
+  changes: ChangeDesc,
+  nextDoc: Text,
+): VariableIndexEntry[] {
+  if (entries.length === 0) return [];
+
+  const next: VariableIndexEntry[] = [];
+  for (const entry of entries) {
+    const oldLineNumber = entry.line;
+    if (oldLineNumber < 1 || oldLineNumber > startDoc.lines) continue;
+
+    const oldLine = startDoc.line(oldLineNumber);
+    const anchor = oldLine.from + (oldLine.length > 0 ? 1 : 0);
+    const mappedPos = changes.mapPos(anchor, 1);
+    const clampedPos = clampPos(mappedPos, nextDoc.length);
+    const newLineNumber = nextDoc.lineAt(clampedPos).number;
+    next.push({ ...entry, line: newLineNumber });
+  }
+
+  return next;
 }
 
 function calcResultMapsEqual(
@@ -740,9 +799,10 @@ const calcTabKeymap = keymap.of([
       const result = getCalcResultAtCursor(view);
 
       if (!result) return false;
+      const lineText = line.text;
+      if (lineUsesAssignmentGhostPrefix(lineText)) return false;
 
       // check if line already has " = <result>" at the end
-      const lineText = line.text;
       const segment = findCalcSegment(lineText);
       if (segment) {
         const replaceFrom = line.from + segment.fromCol;

@@ -333,12 +333,12 @@ impl CalcEngine {
                 continue;
             };
 
-            if parse_variable_assignment(&expression).is_some() {
-                continue;
-            }
-
             let result = if options.variables_enabled {
-                evaluate_expression_with_variables(&expression, &mut resolver)
+                if let Some((_name, normalized, _rhs)) = parse_variable_assignment(&expression) {
+                    resolver.resolve(&normalized)
+                } else {
+                    evaluate_expression_with_variables(&expression, &mut resolver)
+                }
             } else {
                 self.evaluate(&expression)
             };
@@ -439,6 +439,8 @@ fn parse_variable_assignment(text: &str) -> Option<(String, String, String)> {
     let idx = text.find(":=")?;
     let left = collapse_spaces(text[..idx].trim());
     let right = text[idx + 2..].trim();
+    let (rhs_expr, _applied) = split_applied_result(right);
+    let right = rhs_expr.trim();
 
     if left.is_empty() || right.is_empty() || !is_valid_variable_name(&left) {
         return None;
@@ -611,7 +613,7 @@ fn expression_for_variable_scan(line: &str) -> Option<String> {
 
 fn expression_for_ghost_eval(line: &str) -> Option<String> {
     if is_table_line(line) {
-        return table_expression_segment(line, false);
+        return table_expression_segment(line, true);
     }
 
     if let Some(body) = list_body_segment(line) {
@@ -883,7 +885,11 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
             result.line_results,
-            vec![None, None, Some("12".to_string())]
+            vec![
+                Some("10".to_string()),
+                Some("2".to_string()),
+                Some("12".to_string())
+            ]
         );
 
         let vars = result
@@ -895,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn note_eval_skips_assignment_lines_and_hides_unresolved() {
+    fn note_eval_assignment_lines_hide_unresolved_values() {
         let engine = CalcEngine::new();
         let lines = vec!["x := y + 1".to_string(), "x + 1".to_string()];
 
@@ -932,7 +938,7 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
             result.line_results,
-            vec![None, Some("6".to_string()), Some("7".to_string())]
+            vec![Some("4".to_string()), Some("6".to_string()), Some("7".to_string())]
         );
     }
 
@@ -970,12 +976,47 @@ mod tests {
         let lines = vec!["len:=4 km to m".to_string(), "len + 1".to_string()];
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
-        assert_eq!(result.line_results[0], None);
+        assert_eq!(result.line_results[0], Some("4000".to_string()));
         assert_eq!(result.line_results[1], Some("4001".to_string()));
         assert!(result
             .variables
             .iter()
             .any(|entry| entry.normalized == "len" && entry.line == 1));
+    }
+
+    #[test]
+    fn note_eval_table_assignment_line_emits_assigned_value() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| total := 12 |".to_string(),
+            "| value | total + 12 |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            result.line_results,
+            vec![Some("12".to_string()), Some("24".to_string())]
+        );
+    }
+
+    #[test]
+    fn note_eval_ignores_assignment_trailer_literal_in_variable_rhs() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "total := 12 = 12".to_string(),
+            "value := total + 12 = 24".to_string(),
+            "value + 1".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            result.line_results,
+            vec![
+                Some("12".to_string()),
+                Some("24".to_string()),
+                Some("25".to_string())
+            ]
+        );
     }
 
     #[test]

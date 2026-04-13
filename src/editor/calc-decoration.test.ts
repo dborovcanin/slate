@@ -10,8 +10,10 @@ import {
 import {
   computeCalcRefresh,
   containsVariableAssignment,
+  lineUsesAssignmentGhostPrefix,
   mergePartialCalcResults,
   remapCalcResultsForDocChange,
+  remapVariableIndexForDocChange,
   type CommitMarkerLoc,
 } from "./calc-decoration.ts";
 
@@ -113,6 +115,14 @@ test("containsVariableAssignment detects := while ignoring lookalike operators",
   assert.equal(containsVariableAssignment(["x == y"]), false);
   assert.equal(containsVariableAssignment(["2 + 2"]), false);
   assert.equal(containsVariableAssignment(["a >= b", "c <= d"]), false);
+});
+
+test("lineUsesAssignmentGhostPrefix detects assignment across plain/list/table lines", () => {
+  assert.equal(lineUsesAssignmentGhostPrefix("total := 12"), true);
+  assert.equal(lineUsesAssignmentGhostPrefix("- value := total + 12"), true);
+  assert.equal(lineUsesAssignmentGhostPrefix("| value := total + 12 |"), true);
+  assert.equal(lineUsesAssignmentGhostPrefix("total + 12"), false);
+  assert.equal(lineUsesAssignmentGhostPrefix("| label | total + 12 |"), false);
 });
 
 test("mergePartialCalcResults overlays backend results on top of base", () => {
@@ -417,4 +427,46 @@ test("remapCalcResultsForDocChange keeps ghost through full list rewrite when it
     tr.newDoc,
   );
   assert.equal(remapped.get(2), "200");
+});
+
+test("remapVariableIndexForDocChange shifts variable line numbers after deleting unrelated line above", () => {
+  const start = EditorState.create({
+    doc: "remove me\nvar1 := 10\n2 + var1",
+  });
+  const firstLine = start.doc.line(1);
+  const tr = start.update({
+    changes: { from: firstLine.from, to: firstLine.to + 1, insert: "" },
+  });
+  const remapped = remapVariableIndexForDocChange(
+    [{ name: "var1", normalized: "var1", line: 2 }],
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.deepEqual(remapped, [{ name: "var1", normalized: "var1", line: 1 }]);
+});
+
+test("remapCalcResultsForDocChange keeps duplicate-expression ghosts on distinct lines after list rewrite", () => {
+  const start = EditorState.create({
+    doc: "1.1 2 + val1\n1.2 2 + val1\nend",
+  });
+  const tr = start.update({
+    changes: {
+      from: 0,
+      to: start.doc.length,
+      insert: "1. head\n2.1 2 + val1\n2.2 2 + val1\nend",
+    },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([
+      [0, "200"],
+      [1, "200"],
+    ]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(1), "200");
+  assert.equal(remapped.get(2), "200");
+  assert.equal(remapped.size, 2);
 });
