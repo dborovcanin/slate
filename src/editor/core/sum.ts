@@ -140,6 +140,28 @@ async function sumTerms(
   return formatNumber(total);
 }
 
+async function averageTerms(
+  terms: readonly string[],
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string | null> {
+  if (terms.length === 0) return null;
+
+  const summed = await sumTerms(terms, evaluateExpression);
+  if (!summed) return null;
+  if (terms.length === 1) return summed;
+
+  if (evaluateExpression) {
+    const averaged = await evaluateExpression(`(${summed}) / ${terms.length}`);
+    const normalized = averaged?.trim() ?? "";
+    if (normalized) return normalized;
+    return null;
+  }
+
+  const numeric = parseNumbers(summed)[0];
+  if (numeric === undefined) return null;
+  return formatNumber(numeric / terms.length);
+}
+
 async function sumRows(
   text: string,
   evaluateExpression?: SumExpressionEvaluator,
@@ -172,6 +194,43 @@ async function sumColumns(
     const terms = evaluated.filter((value): value is string => value !== null);
     const summed = await sumTerms(terms, evaluateExpression);
     if (summed) out.push(summed);
+  }
+
+  return out;
+}
+
+async function averageRows(
+  text: string,
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string[]> {
+  const rows = parseTableDataRows(text);
+  const out: string[] = [];
+
+  for (const row of rows) {
+    const evaluated = await Promise.all(row.map((cell) => evaluateCellValue(cell, evaluateExpression)));
+    const terms = evaluated.filter((value): value is string => value !== null);
+    const averaged = await averageTerms(terms, evaluateExpression);
+    if (averaged) out.push(averaged);
+  }
+
+  return out;
+}
+
+async function averageColumns(
+  text: string,
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string[]> {
+  const rows = parseTableDataRows(text);
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const out: string[] = [];
+
+  for (let col = 0; col < columnCount; col++) {
+    const evaluated = await Promise.all(
+      rows.map((row) => evaluateCellValue(row[col] ?? "", evaluateExpression)),
+    );
+    const terms = evaluated.filter((value): value is string => value !== null);
+    const averaged = await averageTerms(terms, evaluateExpression);
+    if (averaged) out.push(averaged);
   }
 
   return out;
@@ -240,6 +299,23 @@ export function parseSumScopeFromCommand(rawCommand: string): SumScope | null {
   return null;
 }
 
+export function parseAvgScopeFromCommand(rawCommand: string): SumScope | null {
+  const trimmed = rawCommand.trim().replace(/^:/, "");
+  if (!trimmed) return null;
+  if (trimmed === "avg_all") return "doc";
+  if (trimmed === "avg_row") return "row";
+  if (trimmed === "avg_column") return "column";
+  if (!trimmed.startsWith("avg")) return null;
+
+  const rawScope = trimmed.slice(3).trim().toLowerCase();
+  if (rawScope.length === 0) return "paragraph";
+  if (rawScope === "doc" || rawScope === "all" || rawScope === "file") return "doc";
+  if (rawScope === "list") return "list";
+  if (rawScope === "row") return "row";
+  if (rawScope === "column") return "column";
+  return null;
+}
+
 export async function executeSumCommand(
   rawCommand: string,
   ctx: ResolvedContext,
@@ -288,6 +364,59 @@ export async function executeSumCommand(
 
   return {
     message: `sum(${scope}) = ${formatted} (${numbers.length} values, inserted at cursor + copied)`,
+    operation,
+    clipboardText: formatted,
+  };
+}
+
+export async function executeAvgCommand(
+  rawCommand: string,
+  ctx: ResolvedContext,
+  options: SumCommandOptions = {},
+): Promise<SumExecutionResult> {
+  const trimmed = rawCommand.trim().replace(/^:/, "");
+  const scope = parseAvgScopeFromCommand(trimmed);
+  if (!scope) {
+    return { message: `unknown command: ${trimmed}` };
+  }
+
+  const range = resolveScopeRangeInContext(ctx, scope);
+  const text = range ? ctx.textForLineRange(range) : "";
+  const selection = ctx.selection();
+
+  if (scope === "row" || scope === "column") {
+    const averages =
+      scope === "row"
+        ? await averageRows(text, options.evaluateExpression)
+        : await averageColumns(text, options.evaluateExpression);
+    if (averages.length === 0) {
+      return { message: `avg(${scope}): no numbers` };
+    }
+
+    const formatted = averages.join("\n");
+    const operation = replaceRange(selection.from, selection.to, formatted, {
+      anchor: selection.from + formatted.length,
+    });
+    return {
+      message: `avg(${scope}) = [${averages.join(", ")}] (${averages.length} averages, inserted at cursor + copied)`,
+      operation,
+      clipboardText: formatted,
+    };
+  }
+
+  const numbers = parseNumbers(text);
+  if (numbers.length === 0) {
+    return { message: `avg(${scope}): no numbers` };
+  }
+
+  const average = numbers.reduce((acc, n) => acc + n, 0) / numbers.length;
+  const formatted = formatNumber(average);
+  const operation = replaceRange(selection.from, selection.to, formatted, {
+    anchor: selection.from + formatted.length,
+  });
+
+  return {
+    message: `avg(${scope}) = ${formatted} (${numbers.length} values, inserted at cursor + copied)`,
     operation,
     clipboardText: formatted,
   };

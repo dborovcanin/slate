@@ -8,6 +8,7 @@ use super::types::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommandBehavior {
     Sum,
+    Avg,
     Date,
     Format,
     Quit,
@@ -25,7 +26,7 @@ struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 8] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 13] = [
     CommandDefinition {
         value: "sum",
         aliases: &[],
@@ -60,6 +61,41 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 8] = [
         description: "sum whole document (placeholder)",
         modes: &MODES_BOTH,
         behavior: CommandBehavior::Sum,
+    },
+    CommandDefinition {
+        value: "avg",
+        aliases: &[],
+        description: "average paragraph (placeholder)",
+        modes: &MODES_BOTH,
+        behavior: CommandBehavior::Avg,
+    },
+    CommandDefinition {
+        value: "avg list",
+        aliases: &[],
+        description: "average list at cursor",
+        modes: &MODES_BOTH,
+        behavior: CommandBehavior::Avg,
+    },
+    CommandDefinition {
+        value: "avg row",
+        aliases: &["avg_row"],
+        description: "average table per-row values at cursor",
+        modes: &MODES_BOTH,
+        behavior: CommandBehavior::Avg,
+    },
+    CommandDefinition {
+        value: "avg column",
+        aliases: &["avg_column"],
+        description: "average table per-column values at cursor",
+        modes: &MODES_BOTH,
+        behavior: CommandBehavior::Avg,
+    },
+    CommandDefinition {
+        value: "avg doc",
+        aliases: &["avg_all", "avg all"],
+        description: "average whole document",
+        modes: &MODES_BOTH,
+        behavior: CommandBehavior::Avg,
     },
     CommandDefinition {
         value: "date",
@@ -236,6 +272,28 @@ fn sum_term_values(terms: &[String]) -> Option<String> {
     Some(acc)
 }
 
+fn average_term_values(terms: &[String]) -> Option<String> {
+    if terms.is_empty() {
+        return None;
+    }
+
+    let summed = sum_term_values(terms)?;
+    if terms.len() == 1 {
+        return Some(summed);
+    }
+
+    let expr = format!("({summed}) / {}", terms.len());
+    if let Some(value) = evaluate_expression(&expr) {
+        let normalized = value.trim();
+        if !normalized.is_empty() {
+            return Some(normalized.to_string());
+        }
+    }
+
+    let numeric = parse_sum_numbers(&summed).first().copied()?;
+    Some(format_sum_result(numeric / terms.len() as f64))
+}
+
 fn sum_row(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
     let rows = table_data_rows(ctx, range);
     let mut out = Vec::new();
@@ -272,8 +330,53 @@ fn sum_column(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
     out
 }
 
+fn avg_row(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
+    let rows = table_data_rows(ctx, range);
+    let mut out = Vec::new();
+
+    for row in rows {
+        let terms = row
+            .iter()
+            .filter_map(|cell| evaluate_cell_term(cell))
+            .collect::<Vec<_>>();
+        if let Some(avg) = average_term_values(&terms) {
+            out.push(avg);
+        }
+    }
+
+    out
+}
+
+fn avg_column(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
+    let rows = table_data_rows(ctx, range);
+    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+    let mut out = Vec::new();
+
+    for col in 0..column_count {
+        let terms = rows
+            .iter()
+            .filter_map(|row| row.get(col))
+            .filter_map(|cell| evaluate_cell_term(cell))
+            .collect::<Vec<_>>();
+        if let Some(avg) = average_term_values(&terms) {
+            out.push(avg);
+        }
+    }
+
+    out
+}
+
 fn sum_scope_label(command_value: &str) -> &str {
     let rest = command_value.strip_prefix("sum").unwrap_or("").trim();
+    if rest.is_empty() {
+        "paragraph"
+    } else {
+        rest
+    }
+}
+
+fn avg_scope_label(command_value: &str) -> &str {
+    let rest = command_value.strip_prefix("avg").unwrap_or("").trim();
     if rest.is_empty() {
         "paragraph"
     } else {
@@ -553,6 +656,78 @@ pub fn execute_command(
                 result_with_message(format!("sum({scope}): no block at cursor"))
             }
         }
+        CommandBehavior::Avg => {
+            let ctx = ResolvedContext::new(snapshot.clone());
+            let current_line = ctx.current_line().number;
+
+            let range = match command.value {
+                "avg doc" => Some(crate::editor_core::types::BlockLineRange {
+                    start_line: 1,
+                    end_line: ctx.line_count(),
+                }),
+                "avg" => Some(ctx.paragraph_range_at_line(current_line)),
+                "avg list" => ctx.list_range_at_line(current_line),
+                "avg row" => ctx.table_range_at_line(current_line, 1),
+                "avg column" => ctx.table_range_at_line(current_line, 1),
+                _ => None,
+            };
+
+            let scope = avg_scope_label(command.value);
+
+            if let Some(r) = range {
+                let (formatted, msg) =
+                    if command.value == "avg row" || command.value == "avg column" {
+                        let averages = if command.value == "avg row" {
+                            avg_row(&ctx, r)
+                        } else {
+                            avg_column(&ctx, r)
+                        };
+                        if averages.is_empty() {
+                            return result_with_message(format!("avg({scope}): no numbers"));
+                        }
+                        let formatted = averages.join("\n");
+                        let msg = format!(
+                            "avg({scope}) = [{}] ({} averages, inserted + copied)",
+                            averages.join(", "),
+                            averages.len()
+                        );
+                        (formatted, msg)
+                    } else {
+                        let text = ctx.text_for_line_range(r);
+                        let numbers = parse_sum_numbers(&text);
+                        if numbers.is_empty() {
+                            return result_with_message(format!("avg({scope}): no numbers"));
+                        }
+                        let avg: f64 = numbers.iter().sum::<f64>() / numbers.len() as f64;
+                        let formatted = format_sum_result(avg);
+                        let msg = format!(
+                            "avg({scope}) = {formatted} ({} values, inserted + copied)",
+                            numbers.len()
+                        );
+                        (formatted, msg)
+                    };
+
+                let end_pos = ctx.line(r.end_line).to;
+                let insert = format!("\n{formatted}");
+                let new_anchor = end_pos + insert.len();
+                let op = replace_range(
+                    end_pos,
+                    end_pos,
+                    insert,
+                    Some(OperationSelection {
+                        anchor: new_anchor,
+                        head: None,
+                    }),
+                );
+
+                let mut result = result_with_message(msg);
+                result.operations.push(op);
+                result.clipboard_text = Some(formatted);
+                result
+            } else {
+                result_with_message(format!("avg({scope}): no block at cursor"))
+            }
+        }
         CommandBehavior::Date => {
             let date_str = time::OffsetDateTime::now_utc().date().to_string();
             let mut result = result_with_message("Date inserted");
@@ -609,6 +784,11 @@ mod tests {
                 "sum row",
                 "sum column",
                 "sum doc",
+                "avg",
+                "avg list",
+                "avg row",
+                "avg column",
+                "avg doc",
                 "date",
                 "format"
             ]
@@ -717,5 +897,57 @@ mod tests {
         assert!(result.message.contains("sum(column)"));
         let inserted = result.operations[0].changes[0].insert.replace(' ', "");
         assert_eq!(inserted, "\n5m\n2.004km");
+    }
+
+    #[test]
+    fn avg_command_inserts_after_range() {
+        let doc = snapshot("item 10\nitem 20\nitem 30", 0, 0);
+        let result = execute_command(&doc, "avg", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        let op = &result.operations[0];
+        assert_eq!(op.changes[0].insert, "\n20");
+        assert!(result.message.contains("avg(paragraph) = 20"));
+        assert_eq!(result.clipboard_text, Some("20".to_string()));
+    }
+
+    #[test]
+    fn avg_row_supports_unit_aware_values() {
+        let doc = snapshot(
+            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
+            0,
+            0,
+        );
+        let result = execute_command(&doc, "avg row", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("avg(row)"));
+        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
+        assert_eq!(inserted, "\n1001m\n3.5m");
+    }
+
+    #[test]
+    fn avg_column_supports_unit_aware_values_and_alias() {
+        let doc = snapshot(
+            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
+            0,
+            0,
+        );
+        let result = execute_command(&doc, "avg_column", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("avg(column)"));
+        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
+        assert_eq!(inserted, "\n2.5m\n1.002km");
+    }
+
+    #[test]
+    fn avg_column_ignores_non_numeric_header_cells() {
+        let doc = snapshot(
+            "| header | number |\n| ------ | ------ |\n| a      | 3      |\n| b      | 4      |",
+            0,
+            0,
+        );
+        let result = execute_command(&doc, "avg column", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("avg(column)"));
+        assert_eq!(result.operations[0].changes[0].insert, "\n3.5");
     }
 }

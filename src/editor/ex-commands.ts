@@ -2,6 +2,7 @@ import type { EditorView } from "@codemirror/view";
 import { ResolvedContext } from "./core/context.ts";
 import { applyEditOperations, snapshotFromView } from "./core/codemirror-adapter.ts";
 import {
+  executeAvgCommand,
   executeSumCommand,
   parseNumbers,
   parseScope,
@@ -36,7 +37,10 @@ export async function executeExCommand(view: EditorView, rawCommand: string): Pr
   if (!trimmed) return "";
 
   const ctx = resolveContextFromView(view);
-  const result = await executeSumCommand(trimmed, ctx);
+  const normalized = trimmed.toLowerCase();
+  const result = normalized.startsWith("avg")
+    ? await executeAvgCommand(trimmed, ctx)
+    : await executeSumCommand(trimmed, ctx);
 
   if (result.operation) {
     applyEditOperations(view, [result.operation]);

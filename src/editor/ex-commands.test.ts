@@ -97,3 +97,25 @@ test("executeExCommand inserts sum value at cursor and moves cursor to inserted 
   assert.deepEqual(dispatched?.changes, { from: 0, to: 0, insert: "30" });
   assert.deepEqual(dispatched?.selection, { anchor: 2 });
 });
+
+test("executeExCommand supports avg command", async () => {
+  const state = EditorState.create({
+    doc: "10\n20\n30",
+    selection: { anchor: 0 },
+  });
+
+  let dispatched: Record<string, unknown> | null = null;
+  const fakeView = {
+    state,
+    dispatch(spec: Record<string, unknown>) {
+      dispatched = spec;
+    },
+  } as unknown as EditorView;
+
+  const message = await executeExCommand(fakeView, "avg");
+
+  assert.equal(message.includes("avg(paragraph) = 20"), true);
+  assert.ok(dispatched);
+  assert.deepEqual(dispatched?.changes, { from: 0, to: 0, insert: "20" });
+  assert.deepEqual(dispatched?.selection, { anchor: 2 });
+});

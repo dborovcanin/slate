@@ -373,7 +373,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/row/column/doc, :date, :format, :q");
+    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :format, :q");
   }
 
   state.on(() => {

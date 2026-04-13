@@ -1,6 +1,6 @@
 import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
-import { executeSumCommand, type SumExpressionEvaluator } from "./sum.ts";
+import { executeAvgCommand, executeSumCommand, type SumExpressionEvaluator } from "./sum.ts";
 import type {
   CommandMode,
   CommandSuggestion,
@@ -81,6 +81,24 @@ async function runSumCommand(
   };
 }
 
+async function runAvgCommand(
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  const result = await executeAvgCommand(normalizedInput, ctx, {
+    evaluateExpression: runtime.evaluateExpression,
+  });
+  if (result.clipboardText) {
+    await runtime.copyText?.(result.clipboardText);
+  }
+
+  return {
+    message: result.message,
+    operations: result.operation ? [result.operation] : [],
+  };
+}
+
 async function runFormatCommand(
   _normalizedInput: string,
   ctx: ResolvedContext,
@@ -145,6 +163,39 @@ const COMMAND_DEFINITIONS: CommandDefinition[] = [
     aliases: ["sum_all", "sum all"],
     modes: ["vim", "editor"],
     execute: runSumCommand,
+  },
+  {
+    value: "avg",
+    description: "average paragraph (default scope)",
+    modes: ["vim", "editor"],
+    execute: runAvgCommand,
+  },
+  {
+    value: "avg list",
+    description: "average list at cursor",
+    modes: ["vim", "editor"],
+    execute: runAvgCommand,
+  },
+  {
+    value: "avg row",
+    aliases: ["avg_row"],
+    description: "average markdown table per row at cursor",
+    modes: ["vim", "editor"],
+    execute: runAvgCommand,
+  },
+  {
+    value: "avg column",
+    aliases: ["avg_column"],
+    description: "average markdown table per column at cursor",
+    modes: ["vim", "editor"],
+    execute: runAvgCommand,
+  },
+  {
+    value: "avg doc",
+    description: "average whole document",
+    aliases: ["avg_all", "avg all"],
+    modes: ["vim", "editor"],
+    execute: runAvgCommand,
   },
   {
     value: "date",
