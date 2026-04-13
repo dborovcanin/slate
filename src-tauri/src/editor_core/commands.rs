@@ -4,6 +4,7 @@ use super::types::{
     BlockLineRange, CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation,
     EditorContextSnapshot, OperationSelection,
 };
+use regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CommandBehavior {
@@ -153,15 +154,9 @@ fn parse_sum_numbers(text: &str) -> Vec<f64> {
 
 fn format_sum_result(value: f64) -> String {
     if !value.is_finite() {
-        return "0".to_string();
+        return "0.00".to_string();
     }
-    if (value - value.round()).abs() < 1e-9 {
-        return format!("{}", value.round() as i64);
-    }
-    format!("{:.10}", value)
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+    format!("{value:.2}")
 }
 
 struct NoInterrupt;
@@ -189,6 +184,35 @@ fn evaluate_expression(expr: &str) -> Option<String> {
     match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NO_INTERRUPT) {
         Ok(result) => Some(result.get_main_result().to_string()),
         Err(_) => None,
+    }
+}
+
+fn normalize_evaluated_value(raw: &str) -> Option<String> {
+    let cleaned = raw
+        .replace("approximately", "")
+        .replace("approx.", "")
+        .replace("approx", "")
+        .replace('≈', "")
+        .replace('~', "");
+    let cleaned = cleaned.trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let matcher = Regex::new(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+").ok()?;
+    let found = matcher.find(cleaned)?;
+    let numeric_raw = &cleaned[found.start()..found.end()];
+    let numeric = numeric_raw.replace(',', "").parse::<f64>().ok()?;
+    if !numeric.is_finite() {
+        return None;
+    }
+
+    let suffix = cleaned[found.end()..].trim();
+    let formatted = format_sum_result(numeric);
+    if suffix.is_empty() {
+        Some(formatted)
+    } else {
+        Some(format!("{formatted} {suffix}"))
     }
 }
 
@@ -238,9 +262,8 @@ fn evaluate_cell_term(cell: &str) -> Option<String> {
     }
 
     if let Some(value) = evaluate_expression(trimmed) {
-        let normalized = value.trim();
-        if !normalized.is_empty() {
-            return Some(normalized.to_string());
+        if let Some(normalized) = normalize_evaluated_value(&value) {
+            return Some(normalized);
         }
     }
 
@@ -263,11 +286,8 @@ fn sum_term_values(terms: &[String]) -> Option<String> {
     for term in terms.iter().skip(1) {
         let expr = format!("({acc}) + ({term})");
         let next = evaluate_expression(&expr)?;
-        let normalized = next.trim();
-        if normalized.is_empty() {
-            return None;
-        }
-        acc = normalized.to_string();
+        let normalized = normalize_evaluated_value(&next)?;
+        acc = normalized;
     }
     Some(acc)
 }
@@ -284,9 +304,8 @@ fn average_term_values(terms: &[String]) -> Option<String> {
 
     let expr = format!("({summed}) / {}", terms.len());
     if let Some(value) = evaluate_expression(&expr) {
-        let normalized = value.trim();
-        if !normalized.is_empty() {
-            return Some(normalized.to_string());
+        if let Some(normalized) = normalize_evaluated_value(&value) {
+            return Some(normalized);
         }
     }
 
@@ -635,18 +654,7 @@ pub fn execute_command(
                         (formatted, msg)
                     };
 
-                let end_pos = ctx.line(r.end_line).to;
-                let insert = format!("\n{formatted}");
-                let new_anchor = end_pos + insert.len();
-                let op = replace_range(
-                    end_pos,
-                    end_pos,
-                    insert,
-                    Some(OperationSelection {
-                        anchor: new_anchor,
-                        head: None,
-                    }),
-                );
+                let op = insert_value_at_selection(snapshot, &formatted);
 
                 let mut result = result_with_message(msg);
                 result.operations.push(op);
@@ -707,18 +715,7 @@ pub fn execute_command(
                         (formatted, msg)
                     };
 
-                let end_pos = ctx.line(r.end_line).to;
-                let insert = format!("\n{formatted}");
-                let new_anchor = end_pos + insert.len();
-                let op = replace_range(
-                    end_pos,
-                    end_pos,
-                    insert,
-                    Some(OperationSelection {
-                        anchor: new_anchor,
-                        head: None,
-                    }),
-                );
+                let op = insert_value_at_selection(snapshot, &formatted);
 
                 let mut result = result_with_message(msg);
                 result.operations.push(op);
@@ -845,22 +842,34 @@ mod tests {
 
     #[test]
     fn format_sum_result_clean_output() {
-        assert_eq!(format_sum_result(4.0), "4");
-        assert_eq!(format_sum_result(3.5), "3.5");
-        assert_eq!(format_sum_result(0.0), "0");
-        assert_eq!(format_sum_result(1234.0), "1234");
+        assert_eq!(format_sum_result(4.0), "4.00");
+        assert_eq!(format_sum_result(3.5), "3.50");
+        assert_eq!(format_sum_result(0.0), "0.00");
+        assert_eq!(format_sum_result(1234.0), "1234.00");
     }
 
     #[test]
-    fn sum_command_inserts_after_range() {
+    fn normalize_evaluated_value_strips_approx_and_rounds() {
+        assert_eq!(
+            normalize_evaluated_value("approximately 2.004 km"),
+            Some("2.00 km".to_string())
+        );
+        assert_eq!(
+            normalize_evaluated_value("≈ 7.006m"),
+            Some("7.01 m".to_string())
+        );
+    }
+
+    #[test]
+    fn sum_command_inserts_at_selection() {
         let doc = snapshot("item 10\nitem 20\nitem 30", 0, 0);
         let result = execute_command(&doc, "sum", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         let op = &result.operations[0];
-        assert_eq!(op.changes[0].insert, "\n60");
-        assert!(result.message.contains("60"));
+        assert_eq!(op.changes[0].insert, "60.00");
+        assert!(result.message.contains("60.00"));
         assert!(result.message.contains("3 values"));
-        assert_eq!(result.clipboard_text, Some("60".to_string()));
+        assert_eq!(result.clipboard_text, Some("60.00".to_string()));
     }
 
     #[test]
@@ -868,7 +877,7 @@ mod tests {
         let doc = snapshot("1\n2\n3", 0, 0);
         let result = execute_command(&doc, "sum doc", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
-        assert!(result.message.contains("6"));
+        assert!(result.message.contains("6.00"));
     }
 
     #[test]
@@ -882,7 +891,7 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("sum(row)"));
         let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "\n2002m\n7m");
+        assert_eq!(inserted, "2002.00m\n7.00m");
     }
 
     #[test]
@@ -896,18 +905,18 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("sum(column)"));
         let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "\n5m\n2.004km");
+        assert_eq!(inserted, "5.00m\n2.00km");
     }
 
     #[test]
-    fn avg_command_inserts_after_range() {
+    fn avg_command_inserts_at_selection() {
         let doc = snapshot("item 10\nitem 20\nitem 30", 0, 0);
         let result = execute_command(&doc, "avg", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         let op = &result.operations[0];
-        assert_eq!(op.changes[0].insert, "\n20");
-        assert!(result.message.contains("avg(paragraph) = 20"));
-        assert_eq!(result.clipboard_text, Some("20".to_string()));
+        assert_eq!(op.changes[0].insert, "20.00");
+        assert!(result.message.contains("avg(paragraph) = 20.00"));
+        assert_eq!(result.clipboard_text, Some("20.00".to_string()));
     }
 
     #[test]
@@ -921,7 +930,7 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("avg(row)"));
         let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "\n1001m\n3.5m");
+        assert_eq!(inserted, "1001.00m\n3.50m");
     }
 
     #[test]
@@ -935,7 +944,7 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("avg(column)"));
         let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "\n2.5m\n1.002km");
+        assert_eq!(inserted, "2.50m\n1.00km");
     }
 
     #[test]
@@ -948,6 +957,6 @@ mod tests {
         let result = execute_command(&doc, "avg column", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("avg(column)"));
-        assert_eq!(result.operations[0].changes[0].insert, "\n3.5");
+        assert_eq!(result.operations[0].changes[0].insert, "3.50");
     }
 }

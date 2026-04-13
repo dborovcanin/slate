@@ -28,9 +28,29 @@ const tableDelimiterCellRe = /^:?-{3,}:?$/;
 const numberRe = /[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+/g;
 
 function formatNumber(value: number): string {
-  if (!Number.isFinite(value)) return "0";
-  if (Number.isInteger(value)) return `${value}`;
-  return value.toFixed(10).replace(/\.?0+$/, "");
+  if (!Number.isFinite(value)) return "0.00";
+  return value.toFixed(2);
+}
+
+function normalizeEvaluatedValue(value: string | null | undefined): string | null {
+  const cleaned = (value ?? "")
+    .replace(/\bapproximately\b/gi, "")
+    .replace(/\bapprox\.?\b/gi, "")
+    .replace(/[≈~]/g, "")
+    .trim();
+  if (!cleaned) return null;
+
+  const match = cleaned.match(/[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+/);
+  if (!match) return null;
+
+  const raw = match[0] ?? "";
+  const numeric = Number.parseFloat(raw.replace(/,/g, ""));
+  if (!Number.isFinite(numeric)) return null;
+
+  const start = match.index ?? 0;
+  const suffix = cleaned.slice(start + raw.length).trim();
+  const formatted = formatNumber(numeric);
+  return suffix ? `${formatted} ${suffix}` : formatted;
 }
 
 export function parseNumbers(text: string): number[] {
@@ -107,8 +127,8 @@ async function evaluateCellValue(
 
   if (evaluateExpression) {
     const evaluated = await evaluateExpression(trimmed);
-    const normalized = evaluated?.trim() ?? "";
-    if (normalized.length > 0) return normalized;
+    const normalized = normalizeEvaluatedValue(evaluated);
+    if (normalized) return normalized;
   }
 
   const numeric = parseNumbers(trimmed);
@@ -127,7 +147,7 @@ async function sumTerms(
     let acc = terms[0] ?? "";
     for (const term of terms.slice(1)) {
       const combined = await evaluateExpression(`(${acc}) + (${term})`);
-      const normalized = combined?.trim() ?? "";
+      const normalized = normalizeEvaluatedValue(combined);
       if (!normalized) return null;
       acc = normalized;
     }
@@ -152,7 +172,7 @@ async function averageTerms(
 
   if (evaluateExpression) {
     const averaged = await evaluateExpression(`(${summed}) / ${terms.length}`);
-    const normalized = averaged?.trim() ?? "";
+    const normalized = normalizeEvaluatedValue(averaged);
     if (normalized) return normalized;
     return null;
   }

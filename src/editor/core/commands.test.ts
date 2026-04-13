@@ -116,10 +116,10 @@ test("core executeCommand computes sum and returns insertion operation", async (
     mode: "editor",
   });
 
-  assert.equal(result.message.includes("sum(paragraph) = 30"), true);
+  assert.equal(result.message.includes("sum(paragraph) = 30.00"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "30" });
-  assert.deepEqual(result.operations[0]?.selection, { anchor: 2 });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "30.00" });
+  assert.deepEqual(result.operations[0]?.selection, { anchor: 5 });
 });
 
 test("core executeCommand handles date and mode-gated q", async () => {
@@ -158,7 +158,26 @@ test("core executeCommand supports unit-aware sum row", async () => {
 
   assert.equal(result.message.includes("sum(row)"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "2002m\n7m" });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "2002.00 m\n7.00 m" });
+});
+
+test("core executeCommand strips approximate wording and rounds unit totals", async () => {
+  const text = [
+    "| item | value |",
+    "| --- | --- |",
+    "| x | 2km |",
+  ].join("\n");
+  const result = await executeCommand(snapshot(text, 0), "sum row", {
+    mode: "editor",
+    evaluateExpression: async (expression) => {
+      if (expression.trim() === "2km") return "approximately 2.004 km";
+      return null;
+    },
+  });
+
+  assert.equal(result.message.includes("sum(row)"), true);
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "2.00 km" });
 });
 
 test("core executeCommand supports unit-aware sum column via underscore alias", async () => {
@@ -175,7 +194,7 @@ test("core executeCommand supports unit-aware sum column via underscore alias", 
 
   assert.equal(result.message.includes("sum(column)"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "5m\n2.004km" });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "5.00 m\n2.00 km" });
 });
 
 test("core executeCommand ignores non-numeric header cells for sum column", async () => {
@@ -192,7 +211,7 @@ test("core executeCommand ignores non-numeric header cells for sum column", asyn
 
   assert.equal(result.message.includes("sum(column)"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "7" });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "7.00" });
 });
 
 test("core executeCommand computes avg paragraph", async () => {
@@ -202,7 +221,7 @@ test("core executeCommand computes avg paragraph", async () => {
 
   assert.equal(result.message.includes("avg(paragraph) = 20"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "20" });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "20.00" });
 });
 
 test("core executeCommand supports unit-aware avg row", async () => {
@@ -219,7 +238,7 @@ test("core executeCommand supports unit-aware avg row", async () => {
 
   assert.equal(result.message.includes("avg(row)"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "1001m\n3.5m" });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "1001.00 m\n3.50 m" });
 });
 
 test("core executeCommand ignores non-numeric header cells for avg column", async () => {
@@ -236,5 +255,5 @@ test("core executeCommand ignores non-numeric header cells for avg column", asyn
 
   assert.equal(result.message.includes("avg(column)"), true);
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "3.5" });
+  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "3.50" });
 });
