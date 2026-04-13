@@ -654,8 +654,12 @@ pub fn run_doc_change_rules(
 
 pub fn run_enter_rules(
     snapshot: &EditorContextSnapshot,
-    _options: TextRuleOptions,
+    options: TextRuleOptions,
 ) -> Option<EditOperation> {
+    if !options.markdown_autoformat {
+        return None;
+    }
+
     let ctx = ResolvedContext::new(snapshot.clone());
     let selection = ctx.selection();
     if !selection.empty {
@@ -1184,6 +1188,18 @@ mod tests {
         let doc = snapshot("- item", 6, 6);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(apply_operation(&doc.text, &op), "- item\n- ");
+    }
+
+    #[test]
+    fn run_enter_rules_is_disabled_when_markdown_autoformat_is_off() {
+        let doc = snapshot("- item", 6, 6);
+        let op = run_enter_rules(
+            &doc,
+            TextRuleOptions {
+                markdown_autoformat: false,
+            },
+        );
+        assert!(op.is_none());
     }
 
     #[test]

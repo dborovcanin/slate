@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "build:wasm": "wasm-pack build crates/editor-core --target web --out-dir ../../pkg/editor-core --out-name editor_core --release",
+    "predev": "npm run build:wasm",
+    "prebuild": "npm run build:wasm",
+    "pretest:ts": "npm run build:wasm",
     "dev": "vite",
     "build": "tsc && vite build",
     "tauri": "tauri",

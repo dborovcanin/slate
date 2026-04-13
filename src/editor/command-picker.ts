@@ -87,6 +87,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
 
   const submit = async (command: string) => {
     pickerOverlay?.close();
+    view.focus();
     if (!command) return;
     try {
       const message = await executeCommand(view, command, {
@@ -95,9 +96,11 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         onExitCommand: options.onExitCommand,
       });
       if (message) showStatus(view, message);
+      view.focus();
     } catch (err) {
       console.error("Command failed:", err);
       showStatus(view, "command failed");
+      view.focus();
     }
   };
 
