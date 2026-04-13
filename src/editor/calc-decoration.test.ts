@@ -7,9 +7,38 @@ import {
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
 import {
+  computeCalcRefresh,
   containsVariableAssignment,
   mergePartialCalcResults,
+  type CommitMarkerLoc,
 } from "./calc-decoration.ts";
+
+function buildLineStarts(lines: readonly string[]): number[] {
+  const starts: number[] = [];
+  let offset = 0;
+  for (const line of lines) {
+    starts.push(offset);
+    offset += line.length + 1;
+  }
+  return starts;
+}
+
+function markerFor(
+  lines: readonly string[],
+  lineIdx: number,
+  lastLiteral: string,
+): CommitMarkerLoc {
+  const starts = buildLineStarts(lines);
+  const text = lines[lineIdx];
+  const eqIdx = text.lastIndexOf(" = ");
+  if (eqIdx < 0) throw new Error("marker helper requires an ` = ` trailer");
+  return {
+    docPos: starts[lineIdx] + eqIdx,
+    lineIdx,
+    offsetInLine: eqIdx,
+    lastLiteral,
+  };
+}
 
 test("findSingleCalcTableCell extracts a single expression cell", () => {
   const line = "| item | 4+2 |";
@@ -114,6 +143,166 @@ test("mergePartialCalcResults deletes entries when backend returns null in range
   assert.equal(merged.has(1), false);
   assert.equal(merged.get(0), "4");
   assert.equal(merged.get(2), "9");
+});
+
+test("computeCalcRefresh returns empty plan when there are no markers", () => {
+  const lines = ["1 + 1 = 2"];
+  const plan = computeCalcRefresh(
+    [],
+    lines,
+    buildLineStarts(lines),
+    new Map([[0, "2"]]),
+    { from: 0, to: 0 },
+  );
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.prune, []);
+  assert.deepEqual(plan.syncedLines, []);
+});
+
+test("computeCalcRefresh rewrites a stale trailer when backend result changed", () => {
+  const lines = ["1 + 1 = 2"];
+  const marker = markerFor(lines, 0, "2");
+  const plan = computeCalcRefresh(
+    [marker],
+    lines,
+    buildLineStarts(lines),
+    new Map([[0, "3"]]),
+    { from: 0, to: 0 },
+  );
+  assert.equal(plan.changes.length, 1);
+  const change = plan.changes[0];
+  assert.equal(change.lineIdx, 0);
+  assert.equal(change.insert, " = 3");
+  assert.equal(change.newLiteral, "3");
+  assert.equal(change.from, marker.docPos);
+  assert.equal(change.to, lines[0].length);
+  assert.deepEqual(plan.prune, []);
+  assert.deepEqual(plan.syncedLines, [0]);
+});
+
+test("computeCalcRefresh is a no-op when current literal already matches the new result", () => {
+  const lines = ["1 + 1 = 2"];
+  const plan = computeCalcRefresh(
+    [markerFor(lines, 0, "2")],
+    lines,
+    buildLineStarts(lines),
+    new Map([[0, "2"]]),
+    { from: 0, to: 0 },
+  );
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.prune, []);
+  assert.deepEqual(plan.syncedLines, [0]);
+});
+
+test("computeCalcRefresh prunes markers when the trailer prefix is gone", () => {
+  // User deleted the trailer entirely; the marker's offset no longer has ` = `.
+  const lines = ["1 + 1"];
+  const marker: CommitMarkerLoc = {
+    docPos: 5,
+    lineIdx: 0,
+    offsetInLine: 5,
+    lastLiteral: "2",
+  };
+  const plan = computeCalcRefresh(
+    [marker],
+    lines,
+    buildLineStarts(lines),
+    new Map([[0, "2"]]),
+    { from: 0, to: 0 },
+  );
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.prune, [marker.docPos]);
+  assert.deepEqual(plan.syncedLines, []);
+});
+
+test("computeCalcRefresh prunes markers when the user hand-edited the literal", () => {
+  const lines = ["1 + 1 = FOO"];
+  const marker = markerFor(lines, 0, "2");
+  const plan = computeCalcRefresh(
+    [marker],
+    lines,
+    buildLineStarts(lines),
+    new Map([[0, "2"]]),
+    { from: 0, to: 0 },
+  );
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.prune, [marker.docPos]);
+  assert.deepEqual(plan.syncedLines, []);
+});
+
+test("computeCalcRefresh skips refresh when the selection overlaps the trailer", () => {
+  const lines = ["1 + 1 = 2"];
+  const marker = markerFor(lines, 0, "2");
+  const cursor = marker.docPos + 4; // inside the literal
+  const plan = computeCalcRefresh(
+    [marker],
+    lines,
+    buildLineStarts(lines),
+    new Map([[0, "3"]]),
+    { from: cursor, to: cursor },
+  );
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.prune, []);
+  assert.deepEqual(plan.syncedLines, []);
+});
+
+test("computeCalcRefresh keeps the marker when the backend has no result for the line", () => {
+  const lines = ["1 + 1 = 2"];
+  const marker = markerFor(lines, 0, "2");
+  const plan = computeCalcRefresh(
+    [marker],
+    lines,
+    buildLineStarts(lines),
+    new Map(),
+    { from: 0, to: 0 },
+  );
+  assert.deepEqual(plan.changes, []);
+  assert.deepEqual(plan.prune, []);
+  assert.deepEqual(plan.syncedLines, []);
+});
+
+test("computeCalcRefresh emits ordered changes across multiple lines", () => {
+  const lines = ["1 + 1 = 2", "- buy milk", "2 + 2 = 4"];
+  const starts = buildLineStarts(lines);
+  const markers = [markerFor(lines, 0, "2"), markerFor(lines, 2, "4")];
+  const plan = computeCalcRefresh(
+    markers,
+    lines,
+    starts,
+    new Map([
+      [0, "5"],
+      [2, "10"],
+    ]),
+    { from: 0, to: 0 },
+  );
+  assert.equal(plan.changes.length, 2);
+  assert.equal(plan.changes[0].lineIdx, 0);
+  assert.equal(plan.changes[0].newLiteral, "5");
+  assert.equal(plan.changes[1].lineIdx, 2);
+  assert.equal(plan.changes[1].newLiteral, "10");
+  // Must be sorted ascending by `from` so CodeMirror accepts the batch.
+  assert.ok(plan.changes[0].from < plan.changes[1].from);
+  assert.deepEqual(plan.syncedLines, [0, 2]);
+});
+
+test("computeCalcRefresh mixes refresh and prune outcomes independently", () => {
+  const lines = ["1 + 1 = 2", "2 + 2 = WAT"];
+  const markers = [markerFor(lines, 0, "2"), markerFor(lines, 1, "4")];
+  const plan = computeCalcRefresh(
+    markers,
+    lines,
+    buildLineStarts(lines),
+    new Map([
+      [0, "3"],
+      [1, "4"],
+    ]),
+    { from: 0, to: 0 },
+  );
+  assert.equal(plan.changes.length, 1);
+  assert.equal(plan.changes[0].lineIdx, 0);
+  assert.equal(plan.changes[0].newLiteral, "3");
+  assert.deepEqual(plan.prune, [markers[1].docPos]);
+  assert.deepEqual(plan.syncedLines, [0]);
 });
 
 test("mergePartialCalcResults leaves indices outside range untouched", () => {

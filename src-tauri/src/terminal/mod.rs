@@ -98,6 +98,11 @@ struct TerminalApp {
     // Calc ghost cache
     calc_results: Vec<Option<String>>,
     variable_names: Vec<String>,
+    // Snapshot of `lines` taken at the end of the previous `recompute_calc_full`.
+    // Used to gate the committed-trailer auto-refresh: a line is eligible only
+    // if it is byte-identical to this snapshot and its previous calc result
+    // was `None` (meaning the trailer was in sync with the backend last time).
+    prev_lines: Vec<String>,
     // Search state
     search_query: String,
     search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
@@ -127,6 +132,7 @@ impl TerminalApp {
         let lines = split_lines(&active_note.body);
         let switcher_items = load_note_meta(db)?;
         let calc_data = compute_calc_data(&lines, variables_enabled);
+        let prev_lines_snapshot = lines.clone();
 
         Ok(Self {
             active_note,
@@ -154,6 +160,7 @@ impl TerminalApp {
             selection_anchor: None,
             calc_results: calc_data.line_results,
             variable_names: calc_data.variable_names,
+            prev_lines: prev_lines_snapshot,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
@@ -1167,7 +1174,72 @@ impl TerminalApp {
 
     fn recompute_calc_full(&mut self) {
         let calc_data = compute_calc_data(&self.lines, self.variables_enabled);
-        self.calc_results = calc_data.line_results;
+        let mut new_results = calc_data.line_results;
+
+        // Auto-refresh committed-style trailers. Eligibility is deliberately
+        // conservative — it requires that the line is byte-identical to the
+        // snapshot taken at the end of the previous recompute AND that the
+        // previous recompute returned `None` for the line. A `None` result
+        // from the calc engine means "the trailing ` = <literal>` already
+        // matches what the left side evaluates to", so prev-None is the
+        // signal that the trailer was in sync. When a subsequent recompute
+        // reports `Some(new_result)` for the same untouched line, the left
+        // side has drifted (typically because of an upstream variable
+        // change) and we rewrite the trailer in place.
+        //
+        // Length mismatches (note switch, undo/redo, Enter, paste, line
+        // delete) invalidate per-index alignment; we skip the pass and
+        // reseed the snapshot below, so eligibility returns on the next
+        // recompute once the user resumes normal in-line editing.
+        let aligned = self.prev_lines.len() == self.lines.len()
+            && self.calc_results.len() == self.lines.len();
+
+        if aligned {
+            let cursor_line = self.cursor_line;
+            let cursor_col = self.cursor_col;
+            let selection_range: Option<(usize, usize)> =
+                self.selection_anchor.map(|(anchor_line, _)| {
+                    let a = anchor_line.min(cursor_line);
+                    let b = anchor_line.max(cursor_line);
+                    (a, b)
+                });
+
+            for i in 0..self.lines.len() {
+                let Some(new_result) = new_results[i].as_deref() else {
+                    continue;
+                };
+                if self.prev_lines[i] != self.lines[i] {
+                    continue;
+                }
+                if self.calc_results[i].is_some() {
+                    // Previous recompute already considered this line stale;
+                    // not eligible for auto-refresh (user hand-typed or
+                    // otherwise never-synced trailer).
+                    continue;
+                }
+                if let Some((a, b)) = selection_range {
+                    if a <= i && i <= b {
+                        continue;
+                    }
+                }
+                let refresh = compute_calc_trailer_refresh(
+                    &self.lines[i],
+                    new_result,
+                    cursor_line == i,
+                    cursor_col,
+                );
+                if let Some((eq_idx, new_tail)) = refresh {
+                    self.lines[i].replace_range(eq_idx.., &new_tail);
+                    // Line is back in sync with the backend, reflect it in
+                    // the cached result so the ghost widget disappears and
+                    // the next eligibility round still sees prev-None here.
+                    new_results[i] = None;
+                }
+            }
+        }
+
+        self.prev_lines = self.lines.clone();
+        self.calc_results = new_results;
         self.variable_names = calc_data.variable_names;
     }
 
@@ -2510,6 +2582,36 @@ fn compute_calc_results(lines: &[String], variables_enabled: bool) -> Vec<Option
     compute_calc_data(lines, variables_enabled).line_results
 }
 
+/// Decide whether an already-eligible line's trailing ` = <literal>` should
+/// be rewritten to `new_result`. The caller is responsible for the eligibility
+/// gate (line unchanged since last recompute AND previous backend result was
+/// `None`, i.e. trailer was in sync). This helper only handles the per-line
+/// mechanics: locate the trailer, short-circuit when already in sync, and
+/// enforce the cursor guard so we never yank text from under the caret.
+///
+/// Returns `Some((eq_byte_idx, new_tail))` so the caller can run
+/// `line.replace_range(eq_byte_idx.., &new_tail)`, or `None` to leave the
+/// line untouched.
+fn compute_calc_trailer_refresh(
+    line: &str,
+    new_result: &str,
+    is_cursor_line: bool,
+    cursor_col: usize,
+) -> Option<(usize, String)> {
+    let eq_idx = line.rfind(" = ")?;
+    let current_literal = &line[eq_idx + 3..];
+    if current_literal == new_result {
+        return None;
+    }
+    if is_cursor_line {
+        let eq_char_idx = line[..eq_idx].chars().count();
+        if cursor_col >= eq_char_idx {
+            return None;
+        }
+    }
+    Some((eq_idx, format!(" = {new_result}")))
+}
+
 fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
     let trimmed_text = text.trim();
     if trimmed_text.starts_with('|') && trimmed_text.ends_with('|') {
@@ -2615,7 +2717,7 @@ fn looks_like_date(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_calc_results, find_calc_segment_range};
+    use super::{compute_calc_results, compute_calc_trailer_refresh, find_calc_segment_range};
     use super::{line_char_len, Key, TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
     use std::fs;
@@ -2686,6 +2788,111 @@ mod tests {
         let expected_byte = app.lines[1].find("6").expect("result exists") + "6".len();
         let expected_col = app.lines[1][..expected_byte].chars().count();
         assert_eq!(app.cursor_col, expected_col);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn compute_calc_trailer_refresh_rewrites_stale_literal() {
+        let out = compute_calc_trailer_refresh("1 + 1 = 2", "3", false, 0);
+        let Some((eq_idx, tail)) = out else {
+            panic!("expected refresh");
+        };
+        assert_eq!(eq_idx, 5);
+        assert_eq!(tail, " = 3");
+    }
+
+    #[test]
+    fn compute_calc_trailer_refresh_skips_when_missing_trailer() {
+        let out = compute_calc_trailer_refresh("1 + 1", "3", false, 0);
+        assert_eq!(out, None);
+    }
+
+    #[test]
+    fn compute_calc_trailer_refresh_already_in_sync() {
+        // Caller passed the eligibility gate but the line's trailer already
+        // equals the new result — nothing to do.
+        let out = compute_calc_trailer_refresh("1 + 1 = 3", "3", false, 0);
+        assert_eq!(out, None);
+    }
+
+    #[test]
+    fn compute_calc_trailer_refresh_skips_when_cursor_inside_trailer() {
+        // Cursor sits on the space before `=`; treat the whole trailer as
+        // off-limits so we don't yank text out from under the caret.
+        let out = compute_calc_trailer_refresh("1 + 1 = 2", "3", true, 5);
+        assert_eq!(out, None);
+    }
+
+    #[test]
+    fn compute_calc_trailer_refresh_runs_when_cursor_is_before_trailer() {
+        let out = compute_calc_trailer_refresh("1 + 1 = 2", "3", true, 0);
+        assert!(out.is_some());
+    }
+
+    #[test]
+    fn recompute_calc_refreshes_stale_trailer_after_variable_change() {
+        let (db, mut app, path) =
+            app_with_note("rate := 10\n2 * rate = 20\nother line");
+        // Move the cursor out of the trailer so the refresh is not guarded.
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        // Seed: a recompute now should leave the trailer alone (already in sync).
+        app.recompute_calc_full();
+        assert_eq!(app.lines[1], "2 * rate = 20");
+
+        // Change the variable definition.
+        app.lines[0] = "rate := 15".to_string();
+        app.recompute_calc_full();
+
+        // Trailer should have been refreshed from `= 20` to `= 30`.
+        assert_eq!(app.lines[1], "2 * rate = 30");
+        assert_eq!(app.lines[2], "other line");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn recompute_calc_does_not_refresh_hand_typed_trailer() {
+        // The user typed `= FOO` by hand; it never matched a backend result,
+        // so subsequent recomputes must not clobber it even when the left
+        // side becomes reactively different.
+        let (db, mut app, path) =
+            app_with_note("rate := 10\n2 * rate = FOO");
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.recompute_calc_full();
+        assert_eq!(app.lines[1], "2 * rate = FOO");
+
+        app.lines[0] = "rate := 15".to_string();
+        app.recompute_calc_full();
+        assert_eq!(app.lines[1], "2 * rate = FOO");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn recompute_calc_skips_refresh_when_cursor_in_trailer() {
+        let (db, mut app, path) =
+            app_with_note("rate := 10\n2 * rate = 20");
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.recompute_calc_full();
+
+        // Park the cursor inside the trailer on line 1.
+        app.cursor_line = 1;
+        app.cursor_col = app.lines[1].chars().count(); // end of line, inside trailer
+        app.lines[0] = "rate := 15".to_string();
+        app.recompute_calc_full();
+
+        // Untouched because cursor is in the trailer region.
+        assert_eq!(app.lines[1], "2 * rate = 20");
 
         drop(app);
         drop(db);
