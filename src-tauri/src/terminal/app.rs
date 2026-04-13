@@ -1127,7 +1127,12 @@ impl TerminalApp {
         }
     }
 
-    fn handle_normal_key(&mut self, _db: &Db, key: Key) -> Result<(), String> {
+    fn handle_normal_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if key == Key::Ctrl('p') {
+            self.open_switcher(db)?;
+            return Ok(());
+        }
+
         let Some(vim_key) = Self::map_vim_key(key) else {
             return Ok(());
         };
@@ -1164,7 +1169,12 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn handle_visual_key(&mut self, _db: &Db, key: Key) -> Result<(), String> {
+    fn handle_visual_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if key == Key::Ctrl('p') {
+            self.open_switcher(db)?;
+            return Ok(());
+        }
+
         match key {
             Key::Esc | Key::Ctrl('c') => {
                 self.mode = UiMode::Normal;
@@ -2564,7 +2574,7 @@ impl TerminalApp {
                 let x = (cols.saturating_sub(box_w)) / 2 + 1;
                 let y = (rows.saturating_sub(box_h)) / 2 + 1;
                 let prompt = " search: ";
-                let col = (x + prompt.chars().count() + self.switcher_query.chars().count())
+                let col = (x + 1 + prompt.chars().count() + self.switcher_query.chars().count())
                     .min(cols.max(1));
                 (y + 1, col.max(1))
             }
