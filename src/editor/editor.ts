@@ -190,6 +190,10 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   const startState = EditorState.create({ doc, extensions });
 
   view = new EditorView({ state: startState, parent });
+  if (!options.vimMode) {
+    view.dom.classList.remove("cm-vim-normal", "cm-vim-insert", "cm-vim-visual");
+    delete view.dom.dataset.vimMode;
+  }
   view.focus();
 
   // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is

@@ -9,6 +9,7 @@ import {
   resolveScopeRange,
   resolveScopeRangeInView,
 } from "./ex-commands.ts";
+import { applyEditOperation } from "./core/codemirror-adapter.ts";
 
 test("parseScope defaults to paragraph", () => {
   assert.equal(parseScope(undefined), "paragraph");
@@ -95,7 +96,7 @@ test("executeExCommand inserts sum value at cursor and moves cursor to inserted 
   assert.equal(message.includes("inserted at cursor"), true);
   assert.ok(dispatched);
   assert.deepEqual(dispatched?.changes, { from: 0, to: 0, insert: "30.00" });
-  assert.deepEqual(dispatched?.selection, { anchor: 5 });
+  assert.deepEqual(dispatched?.selection, { anchor: 5, head: 5 });
 });
 
 test("executeExCommand supports avg command", async () => {
@@ -117,5 +118,40 @@ test("executeExCommand supports avg command", async () => {
   assert.equal(message.includes("avg(paragraph) = 20.00"), true);
   assert.ok(dispatched);
   assert.deepEqual(dispatched?.changes, { from: 0, to: 0, insert: "20.00" });
-  assert.deepEqual(dispatched?.selection, { anchor: 5 });
+  assert.deepEqual(dispatched?.selection, { anchor: 5, head: 5 });
+});
+
+test("applyEditOperation supports selection-only operations", () => {
+  let dispatched: Record<string, unknown> | null = null;
+  const fakeView = {
+    dispatch(spec: Record<string, unknown>) {
+      dispatched = spec;
+    },
+  } as unknown as EditorView;
+
+  applyEditOperation(fakeView, {
+    changes: [],
+    selection: { anchor: 9 },
+  });
+
+  assert.deepEqual(dispatched, {
+    selection: { anchor: 9, head: 9 },
+    scrollIntoView: true,
+  });
+});
+
+test("applyEditOperation treats null selection head as collapsed", () => {
+  let dispatched: Record<string, unknown> | null = null;
+  const fakeView = {
+    dispatch(spec: Record<string, unknown>) {
+      dispatched = spec;
+    },
+  } as unknown as EditorView;
+
+  applyEditOperation(fakeView, {
+    changes: [{ from: 0, to: 0, insert: "x" }],
+    selection: { anchor: 7, head: null as unknown as number },
+  });
+
+  assert.deepEqual(dispatched?.selection, { anchor: 7, head: 7 });
 });

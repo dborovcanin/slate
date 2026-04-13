@@ -6,6 +6,7 @@ use base64::Engine as _;
 use std::cmp::min;
 use std::io::{self, IsTerminal as _, Write};
 use std::mem::MaybeUninit;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use ulid::Ulid;
 
@@ -18,32 +19,226 @@ fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
 }
 
-fn copy_text_to_clipboard(text: &str) -> bool {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardWriteBackend {
+    Arboard,
+    Tmux,
+    WlCopy,
+    Xclip,
+    Xsel,
+    Pbcopy,
+    ClipExe,
+    Osc52,
+}
+
+impl ClipboardWriteBackend {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Arboard => "native",
+            Self::Tmux => "tmux",
+            Self::WlCopy => "wl-copy",
+            Self::Xclip => "xclip",
+            Self::Xsel => "xsel",
+            Self::Pbcopy => "pbcopy",
+            Self::ClipExe => "clip.exe",
+            Self::Osc52 => "osc52",
+        }
+    }
+}
+
+fn copy_text_to_clipboard(text: &str) -> Option<ClipboardWriteBackend> {
     if text.is_empty() {
-        return false;
+        return None;
     }
 
     if let Ok(mut ctx) = arboard::Clipboard::new() {
         if ctx.set_text(text.to_string()).is_ok() {
+            return Some(ClipboardWriteBackend::Arboard);
+        }
+    }
+
+    if let Some(backend) = write_clipboard_via_commands(text) {
+        return Some(backend);
+    }
+
+    // Fallback for terminal environments where native/system providers are
+    // unavailable. Many terminals support OSC 52 copy sequences.
+    if write_clipboard_via_osc52(text) {
+        return Some(ClipboardWriteBackend::Osc52);
+    }
+
+    None
+}
+
+fn write_terminal_sequence(sequence: &str) -> bool {
+    if io::stdout().is_terminal() {
+        let mut out = io::stdout();
+        if write!(out, "{sequence}").and_then(|_| out.flush()).is_ok() {
             return true;
         }
     }
 
-    // Fallback for terminal environments where the native clipboard provider
-    // is unavailable. Many terminals support OSC 52 copy sequences.
-    if !io::stdout().is_terminal() {
-        return false;
-    }
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let mut out = io::stdout();
-    if write!(out, "\x1b]52;c;{encoded}\x07")
-        .and_then(|_| out.flush())
-        .is_ok()
+    #[cfg(unix)]
     {
-        return true;
+        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            if tty
+                .write_all(sequence.as_bytes())
+                .and_then(|_| tty.flush())
+                .is_ok()
+            {
+                return true;
+            }
+        }
     }
 
     false
+}
+
+fn run_clipboard_write_command(bin: &str, args: &[&str], text: &str) -> bool {
+    let mut child = match Command::new(bin)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(_) => return false,
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if stdin.write_all(text.as_bytes()).is_err() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return false;
+        }
+    } else {
+        return false;
+    }
+
+    matches!(child.wait(), Ok(status) if status.success())
+}
+
+fn run_clipboard_write_command_with_arg(bin: &str, args: &[&str], text: &str) -> bool {
+    matches!(
+        Command::new(bin)
+            .args(args)
+            .arg(text)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status(),
+        Ok(status) if status.success()
+    )
+}
+
+fn run_clipboard_read_command(bin: &str, args: &[&str]) -> Option<String> {
+    let output = Command::new(bin)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn write_clipboard_via_tmux(text: &str) -> bool {
+    if run_clipboard_write_command("tmux", &["load-buffer", "-w", "-"], text) {
+        return true;
+    }
+    if run_clipboard_write_command_with_arg("tmux", &["set-buffer", "-w", "--"], text) {
+        return true;
+    }
+    if run_clipboard_write_command("tmux", &["load-buffer", "-"], text) {
+        return true;
+    }
+    run_clipboard_write_command_with_arg("tmux", &["set-buffer", "--"], text)
+}
+
+fn write_clipboard_via_commands(text: &str) -> Option<ClipboardWriteBackend> {
+    if run_clipboard_write_command("wl-copy", &[], text) {
+        return Some(ClipboardWriteBackend::WlCopy);
+    }
+    if run_clipboard_write_command("xclip", &["-selection", "clipboard"], text) {
+        return Some(ClipboardWriteBackend::Xclip);
+    }
+    if run_clipboard_write_command("xsel", &["--clipboard", "--input"], text) {
+        return Some(ClipboardWriteBackend::Xsel);
+    }
+    if run_clipboard_write_command("pbcopy", &[], text) {
+        return Some(ClipboardWriteBackend::Pbcopy);
+    }
+    if run_clipboard_write_command("clip.exe", &[], text) {
+        return Some(ClipboardWriteBackend::ClipExe);
+    }
+    if run_clipboard_write_command("clip", &[], text) {
+        return Some(ClipboardWriteBackend::ClipExe);
+    }
+    if std::env::var_os("TMUX").is_some() && write_clipboard_via_tmux(text) {
+        return Some(ClipboardWriteBackend::Tmux);
+    }
+
+    None
+}
+
+fn build_osc52_sequence(encoded: &str, terminator: &str) -> String {
+    // tmux/screen usually require DCS passthrough for OSC sequences.
+    if std::env::var_os("TMUX").is_some() {
+        return format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}{terminator}\x1b\\");
+    }
+    if std::env::var_os("STY").is_some() {
+        return format!("\x1bP\x1b]52;c;{encoded}{terminator}\x1b\\");
+    }
+    format!("\x1b]52;c;{encoded}{terminator}")
+}
+
+fn write_clipboard_via_osc52(text: &str) -> bool {
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let bel = build_osc52_sequence(&encoded, "\x07");
+    let st = build_osc52_sequence(&encoded, "\x1b\\");
+
+    // Emit both BEL- and ST-terminated forms for wider terminal compatibility.
+    let wrote_bel = write_terminal_sequence(&bel);
+    let wrote_st = write_terminal_sequence(&st);
+    wrote_bel || wrote_st
+}
+
+fn read_clipboard_via_commands() -> Option<String> {
+    if let Some(text) = run_clipboard_read_command("wl-paste", &["-n"]) {
+        return Some(text);
+    }
+    if let Some(text) = run_clipboard_read_command("xclip", &["-selection", "clipboard", "-o"]) {
+        return Some(text);
+    }
+    if let Some(text) = run_clipboard_read_command("xsel", &["--clipboard", "--output"]) {
+        return Some(text);
+    }
+    if let Some(text) = run_clipboard_read_command("pbpaste", &[]) {
+        return Some(text);
+    }
+    if let Some(text) = run_clipboard_read_command(
+        "powershell",
+        &["-NoProfile", "-Command", "Get-Clipboard -Raw"],
+    ) {
+        return Some(text);
+    }
+    if let Some(text) = run_clipboard_read_command("pwsh", &["-NoProfile", "-Command", "Get-Clipboard -Raw"]) {
+        return Some(text);
+    }
+    if std::env::var_os("TMUX").is_some() {
+        if let Some(text) = run_clipboard_read_command("tmux", &["save-buffer", "-"]) {
+            return Some(text);
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -127,6 +322,7 @@ struct TerminalApp {
     // Vim state
     vim_state: crate::editor_core::vim::VimState,
     clipboard: Vec<String>,
+    last_clipboard_backend: Option<ClipboardWriteBackend>,
     selection_anchor: Option<(usize, usize)>, // (line, col)
     // Calc ghost cache
     calc_results: Vec<Option<String>>,
@@ -192,6 +388,7 @@ impl TerminalApp {
             date_day: 0,
             vim_state: crate::editor_core::vim::VimState::default(),
             clipboard: Vec::new(),
+            last_clipboard_backend: None,
             selection_anchor: None,
             calc_results: calc_data.line_results,
             variable_names: calc_data.variable_names,
@@ -366,21 +563,32 @@ impl TerminalApp {
         }
     }
 
-    fn set_clipboard_lines(&mut self, lines: Vec<String>) {
+    fn set_clipboard_lines(&mut self, lines: Vec<String>) -> Option<ClipboardWriteBackend> {
         if lines.is_empty() {
-            return;
+            return None;
         }
         let joined = lines.join("\n");
-        let _ = copy_text_to_clipboard(&joined);
+        let backend = copy_text_to_clipboard(&joined);
+        self.last_clipboard_backend = backend;
         self.clipboard = lines;
+        backend
+    }
+
+    fn with_clipboard_status(&self, base: impl Into<String>) -> String {
+        let base = base.into();
+        match self.last_clipboard_backend {
+            Some(backend) => format!("{base} [clipboard: {}]", backend.label()),
+            None => format!("{base} [clipboard: local only]"),
+        }
     }
 
     fn read_system_clipboard_lines(&self) -> Option<Vec<String>> {
-        let mut ctx = arboard::Clipboard::new().ok()?;
-        let text = ctx.get_text().ok()?;
-        if text.is_empty() {
-            return None;
+        let text = if let Ok(mut ctx) = arboard::Clipboard::new() {
+            ctx.get_text().ok()
+        } else {
+            None
         }
+        .or_else(read_clipboard_via_commands)?;
         let lines = text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
         if lines.is_empty() {
             None
@@ -683,7 +891,7 @@ impl TerminalApp {
                     }
                     if !deleted.is_empty() {
                         self.set_clipboard_lines(deleted);
-                        self.status = format!("deleted {} lines", count);
+                        self.status = self.with_clipboard_status(format!("deleted {} lines", count));
                         self.mark_edited();
                         self.adjust_cursor();
                     }
@@ -697,7 +905,7 @@ impl TerminalApp {
                     }
                     if !yanked.is_empty() {
                         self.set_clipboard_lines(yanked);
-                        self.status = format!("yanked {} lines", count);
+                        self.status = self.with_clipboard_status(format!("yanked {} lines", count));
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteToLineStart => {
@@ -714,7 +922,7 @@ impl TerminalApp {
                     }
                     if !chunks.is_empty() {
                         self.set_clipboard_lines(chunks);
-                        self.status = "deleted to line start".to_string();
+                        self.status = self.with_clipboard_status("deleted to line start");
                         self.mark_edited();
                         self.adjust_cursor();
                     }
@@ -736,7 +944,7 @@ impl TerminalApp {
                     }
                     if !chunks.is_empty() {
                         self.set_clipboard_lines(chunks);
-                        self.status = "deleted to line end".to_string();
+                        self.status = self.with_clipboard_status("deleted to line end");
                         self.mark_edited();
                         self.adjust_cursor();
                     }
@@ -755,7 +963,7 @@ impl TerminalApp {
                     }
                     if !chunks.is_empty() {
                         self.set_clipboard_lines(chunks);
-                        self.status = "yanked to line start".to_string();
+                        self.status = self.with_clipboard_status("yanked to line start");
                     }
                 }
                 crate::editor_core::vim::VimIntent::YankToLineEnd => {
@@ -774,7 +982,7 @@ impl TerminalApp {
                     }
                     if !chunks.is_empty() {
                         self.set_clipboard_lines(chunks);
-                        self.status = "yanked to line end".to_string();
+                        self.status = self.with_clipboard_status("yanked to line end");
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteChar => {
@@ -806,81 +1014,89 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::DeleteInsideWord => {
                     let applied = self.apply_word_text_object(false, true, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "deleted inside word".to_string()
                         } else {
                             format!("deleted inside {} words", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteAroundWord => {
                     let applied = self.apply_word_text_object(true, true, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "deleted around word".to_string()
                         } else {
                             format!("deleted around {} words", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::YankInsideWord => {
                     let applied = self.apply_word_text_object(false, false, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "yanked inside word".to_string()
                         } else {
                             format!("yanked inside {} words", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::YankAroundWord => {
                     let applied = self.apply_word_text_object(true, false, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "yanked around word".to_string()
                         } else {
                             format!("yanked around {} words", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteInsidePipe => {
                     let applied = self.apply_pipe_text_object(false, true, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "deleted inside | |".to_string()
                         } else {
                             format!("deleted inside {} pipe ranges", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteAroundPipe => {
                     let applied = self.apply_pipe_text_object(true, true, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "deleted around | |".to_string()
                         } else {
                             format!("deleted around {} pipe ranges", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::YankInsidePipe => {
                     let applied = self.apply_pipe_text_object(false, false, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "yanked inside | |".to_string()
                         } else {
                             format!("yanked inside {} pipe ranges", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::YankAroundPipe => {
                     let applied = self.apply_pipe_text_object(true, false, count);
                     if applied > 0 {
-                        self.status = if applied == 1 {
+                        let msg = if applied == 1 {
                             "yanked around | |".to_string()
                         } else {
                             format!("yanked around {} pipe ranges", applied)
                         };
+                        self.status = self.with_clipboard_status(msg);
                     }
                 }
                 crate::editor_core::vim::VimIntent::Undo => {
@@ -1060,9 +1276,9 @@ impl TerminalApp {
                     self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
                     self.selection_anchor = None;
                     self.status = if is_delete {
-                        "-- NORMAL --".to_string()
+                        self.with_clipboard_status("-- NORMAL --")
                     } else {
-                        "-- NORMAL -- (yanked)".to_string()
+                        self.with_clipboard_status("-- NORMAL -- (yanked)")
                     };
                     if is_delete {
                         self.mark_edited();
@@ -1438,8 +1654,6 @@ impl TerminalApp {
         let saved = db.save_note(&self.active_note.id, &body)?;
         self.active_note = saved;
         self.dirty = false;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
         self.last_undo_snapshot = UndoEntry {
             lines: self.lines.clone(),
             cursor_line: self.cursor_line,
@@ -1496,12 +1710,12 @@ impl TerminalApp {
     fn mark_edited(&mut self) {
         // Push undo snapshot if enough time elapsed since last edit (debounce).
         // The snapshot represents the state *before* the current mutation.
+        self.redo_stack.clear();
         if self.last_edit.elapsed() >= Duration::from_millis(300) || self.undo_stack.is_empty() {
             self.undo_stack.push(self.last_undo_snapshot.clone());
             if self.undo_stack.len() > MAX_UNDO_ENTRIES {
                 self.undo_stack.remove(0);
             }
-            self.redo_stack.clear();
         }
         self.dirty = true;
         self.last_edit = Instant::now();
@@ -3507,6 +3721,49 @@ mod tests {
 
         run_keys(&mut app, &db, &[Key::Ctrl('r')]);
         assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_redo_is_cleared_after_new_edit() {
+        let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+        app.mode = UiMode::Normal;
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+        assert_eq!(app.lines, vec!["two".to_string(), "three".to_string()]);
+
+        run_keys(&mut app, &db, &[Key::Char('u')]);
+        assert_eq!(
+            app.lines,
+            vec!["one".to_string(), "two".to_string(), "three".to_string()]
+        );
+
+        run_keys(&mut app, &db, &[Key::Char('j'), Key::Char('d'), Key::Char('d')]);
+        assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
+
+        // New edit after undo should invalidate redo history.
+        run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+        assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_undo_still_works_after_save() {
+        let (db, mut app, path) = app_with_note("one\ntwo");
+        app.mode = UiMode::Normal;
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+        assert_eq!(app.lines, vec!["two".to_string()]);
+
+        app.save(&db).expect("save succeeds");
+        run_keys(&mut app, &db, &[Key::Char('u')]);
+        assert_eq!(app.lines, vec!["one".to_string(), "two".to_string()]);
 
         drop(app);
         drop(db);

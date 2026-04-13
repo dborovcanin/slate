@@ -1,7 +1,7 @@
 import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { formatTableLines, rewriteLineWithChecklistToggleSuffix } from "./markdown-editing.ts";
-import { ensureWasmReady } from "./wasm.ts";
+import { ensureWasmReady, runDocChangeRules } from "./wasm.ts";
 
 before(async () => {
   await ensureWasmReady();
@@ -59,4 +59,18 @@ test("rewriteLineWithChecklistToggleSuffix converts list items to checked checkl
 test("rewriteLineWithChecklistToggleSuffix ignores non-suffix /x usage", () => {
   assert.equal(rewriteLineWithChecklistToggleSuffix("- path/x"), null);
   assert.equal(rewriteLineWithChecklistToggleSuffix("- item /x now"), null);
+});
+
+test("runDocChangeRules keeps table autoformat selection collapsed (no backward range)", () => {
+  const text = "| header | number |\n| val | 3388.89 |";
+  const head = text.indexOf("3388.89") + "3388.89".length;
+  const operation = runDocChangeRules(
+    {
+      text,
+      selection: { anchor: head, head },
+    },
+    { markdownAutoformat: true },
+  );
+  assert.ok(operation);
+  assert.equal(operation?.selection?.head, undefined);
 });

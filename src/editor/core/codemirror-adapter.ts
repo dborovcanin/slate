@@ -35,16 +35,24 @@ export function snapshotFromUpdate(update: ViewUpdate): EditorContextSnapshot {
 }
 
 export function applyEditOperation(view: EditorView, operation: EditOperation): void {
-  if (operation.changes.length === 0) return;
-
   const selection = operation.selection
-    ? operation.selection.head === undefined
-      ? { anchor: operation.selection.anchor }
-      : {
-          anchor: operation.selection.anchor,
-          head: operation.selection.head,
-        }
+    ? {
+        anchor: operation.selection.anchor,
+        head:
+          operation.selection.head === undefined || operation.selection.head === null
+            ? operation.selection.anchor
+            : operation.selection.head,
+      }
     : undefined;
+
+  if (operation.changes.length === 0) {
+    if (!selection) return;
+    view.dispatch({
+      selection,
+      scrollIntoView: true,
+    });
+    return;
+  }
 
   view.dispatch({
     changes: operation.changes.length === 1 ? operation.changes[0] : operation.changes,

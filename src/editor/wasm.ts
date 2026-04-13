@@ -156,18 +156,92 @@ export interface VimStep {
   handled: boolean;
 }
 
+function utf16ToUtf8Offset(text: string, utf16Offset: number): number {
+  const clamped = Math.max(0, Math.min(utf16Offset, text.length));
+  if (clamped === 0) return 0;
+  return new TextEncoder().encode(text.slice(0, clamped)).length;
+}
+
+function utf8ToUtf16Offset(text: string, utf8Offset: number): number {
+  const target = Math.max(0, utf8Offset);
+  let bytes = 0;
+  let index = 0;
+  while (index < text.length) {
+    const cp = text.codePointAt(index);
+    if (cp === undefined) break;
+    const utf16Len = cp > 0xffff ? 2 : 1;
+    const utf8Len = cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+    if (bytes + utf8Len > target) break;
+    bytes += utf8Len;
+    index += utf16Len;
+    if (bytes === target) return index;
+  }
+  return index;
+}
+
+function normalizeOptionalOffset(value: number | null | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function applyChangesToText(text: string, changes: EditOperation["changes"]): string {
+  const ordered = [...changes].sort((a, b) => b.from - a.from || b.to - a.to);
+  let next = text;
+  for (const change of ordered) {
+    const from = Math.max(0, Math.min(change.from, next.length));
+    const to = Math.max(from, Math.min(change.to, next.length));
+    next = next.slice(0, from) + change.insert + next.slice(to);
+  }
+  return next;
+}
+
+function mapOperationFromUtf8ToUtf16(sourceText: string, operation: EditOperation): EditOperation {
+  const convertedChanges = operation.changes.map((change) => ({
+    from: utf8ToUtf16Offset(sourceText, change.from),
+    to: utf8ToUtf16Offset(sourceText, change.to),
+    insert: change.insert,
+  }));
+
+  const mapped: EditOperation = {
+    ...operation,
+    changes: convertedChanges,
+  };
+
+  if (operation.selection) {
+    const rawHead = normalizeOptionalOffset(
+      (operation.selection as { head?: number | null }).head,
+    );
+    const postText = applyChangesToText(sourceText, convertedChanges);
+    mapped.selection = {
+      anchor: utf8ToUtf16Offset(postText, operation.selection.anchor),
+      head: rawHead === undefined ? undefined : utf8ToUtf16Offset(postText, rawHead),
+    };
+  }
+
+  return mapped;
+}
+
 // Translate the TS EditorContextSnapshot (camelCase) to the JSON shape Rust expects (snake_case).
 function toRustSnapshot(snapshot: EditorContextSnapshot): string {
+  const text = snapshot.text;
   return JSON.stringify({
-    text: snapshot.text,
-    selection: snapshot.selection,
-    changed_range: snapshot.changedRange,
+    text,
+    selection: {
+      anchor: utf16ToUtf8Offset(text, snapshot.selection.anchor),
+      head: utf16ToUtf8Offset(text, snapshot.selection.head),
+    },
+    changed_range: snapshot.changedRange
+      ? {
+          from: utf16ToUtf8Offset(text, snapshot.changedRange.from),
+          to: utf16ToUtf8Offset(text, snapshot.changedRange.to),
+        }
+      : undefined,
   });
 }
 
-function parseOp(json: string | undefined): EditOperation | null {
+function parseOp(json: string | undefined, sourceText: string): EditOperation | null {
   if (!json) return null;
-  return JSON.parse(json) as EditOperation;
+  const operation = JSON.parse(json) as EditOperation;
+  return mapOperationFromUtf8ToUtf16(sourceText, operation);
 }
 
 export function runDocChangeRules(
@@ -177,6 +251,7 @@ export function runDocChangeRules(
   if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
     wasm_run_doc_change_rules(toRustSnapshot(snapshot), options.markdownAutoformat ?? true),
+    snapshot.text,
   );
 }
 
@@ -187,6 +262,7 @@ export function runEnterRules(
   if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
     wasm_run_enter_rules(toRustSnapshot(snapshot), options.markdownAutoformat ?? true),
+    snapshot.text,
   );
 }
 
@@ -201,6 +277,7 @@ export function runTabRules(
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
     ),
+    snapshot.text,
   );
 }
 
@@ -215,6 +292,7 @@ export function runTableCellNavigationRules(
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
     ),
+    snapshot.text,
   );
 }
 
