@@ -243,9 +243,19 @@ function tableAutoformatRule(ctx: ResolvedContext): EditOperation | null {
   const head = ctx.selection().head;
   const headLine = ctx.lineAt(head).number;
   const headCol = head - ctx.line(headLine).from;
-  const relativeLine = clamp(headLine - block.startLine, 0, formatted.length - 1);
-  const sourceLine = lines[relativeLine] ?? "";
-  const targetLine = formatted[relativeLine] ?? "";
+  const sourceRelativeLine = clamp(headLine - block.startLine, 0, lines.length - 1);
+  const insertedDelimiterAfterHeader =
+    lines.length >= 2 &&
+    formatted.length === lines.length + 1 &&
+    !lines.some((row) => tableSeparatorRe.test(row)) &&
+    tableSeparatorRe.test(formatted[1] ?? "");
+  const targetRelativeLine =
+    insertedDelimiterAfterHeader && sourceRelativeLine >= 1
+      ? clamp(sourceRelativeLine + 1, 0, formatted.length - 1)
+      : clamp(sourceRelativeLine, 0, formatted.length - 1);
+
+  const sourceLine = lines[sourceRelativeLine] ?? "";
+  const targetLine = formatted[targetRelativeLine] ?? "";
   const mappedHeadCol =
     tableLineRe.test(sourceLine) && tableLineRe.test(targetLine)
       ? mapTableCursorColumn(sourceLine, targetLine, headCol)
@@ -255,10 +265,10 @@ function tableAutoformatRule(ctx: ResolvedContext): EditOperation | null {
   const endLine = ctx.line(block.endLine);
 
   let newHead = startLine.from;
-  for (let i = 0; i < relativeLine; i++) {
+  for (let i = 0; i < targetRelativeLine; i++) {
     newHead += formatted[i].length + 1;
   }
-  newHead += mappedHeadCol;
+  newHead += Math.min(mappedHeadCol, targetLine.length);
 
   return replaceRange(startLine.from, endLine.to, formatted.join("\n"), {
     anchor: newHead,

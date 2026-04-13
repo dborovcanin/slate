@@ -61,6 +61,26 @@ test("runDocChangeRules inserts missing markdown table delimiter row", () => {
   );
 });
 
+test("runDocChangeRules keeps cursor on first data row when it inserts delimiter row", () => {
+  const text = "| test | count |\n|      |       |";
+  const inputDataRowStart = text.indexOf("\n|      |       |") + 1;
+  const cursor = inputDataRowStart + 2; // one whitespace after first pipe
+  const snapshot = {
+    text,
+    selection: { anchor: cursor, head: cursor },
+  };
+  const op = runDocChangeRules(snapshot, { markdownAutoformat: true });
+  assert.ok(op);
+
+  const formatted = applyOperation(text, op);
+  assert.equal(
+    formatted,
+    "| test | count |\n| ---- | ----- |\n|      |       |",
+  );
+  const outputDataRowStart = formatted.indexOf("\n|      |       |") + 1;
+  assert.equal(op.selection?.anchor, outputDataRowStart + 2);
+});
+
 test("runDocChangeRules keeps cursor after typed text in autoformatted empty table cell", () => {
   const text = "| a   | b   |\n| --- | --- |\n| 1   |x    |";
   const cursor = text.lastIndexOf("x") + 1;

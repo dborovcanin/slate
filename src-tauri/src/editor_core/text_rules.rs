@@ -501,15 +501,27 @@ fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     let head = ctx.selection().head;
     let head_line = ctx.line_at(head).number;
     let head_col = head.saturating_sub(ctx.line(head_line).from);
-    let relative_line = head_line
+    let source_relative_line = head_line
         .saturating_sub(block.start_line)
-        .min(formatted.len().saturating_sub(1));
+        .min(lines.len().saturating_sub(1));
+    let inserted_delimiter_after_header = lines.len() >= 2
+        && formatted.len() == lines.len() + 1
+        && !lines.iter().any(|row| is_table_separator(row))
+        && formatted
+            .get(1)
+            .map(|row| is_table_separator(row))
+            .unwrap_or(false);
+    let target_relative_line = if inserted_delimiter_after_header && source_relative_line >= 1 {
+        (source_relative_line + 1).min(formatted.len().saturating_sub(1))
+    } else {
+        source_relative_line.min(formatted.len().saturating_sub(1))
+    };
     let source_line = lines
-        .get(relative_line)
+        .get(source_relative_line)
         .map(String::as_str)
         .unwrap_or_default();
     let target_line = formatted
-        .get(relative_line)
+        .get(target_relative_line)
         .map(String::as_str)
         .unwrap_or_default();
     let mapped_head_col = if is_table_line(source_line) && is_table_line(target_line) {
@@ -521,10 +533,10 @@ fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     let start_line = ctx.line(block.start_line);
     let end_line = ctx.line(block.end_line);
     let mut new_head = start_line.from;
-    for i in 0..relative_line {
+    for i in 0..target_relative_line {
         new_head += formatted[i].len() + 1;
     }
-    new_head += mapped_head_col.min(formatted[relative_line].len());
+    new_head += mapped_head_col.min(formatted[target_relative_line].len());
 
     Some(replace_range(
         start_line.from,
@@ -1131,6 +1143,22 @@ mod tests {
             apply_operation(&doc.text, &op),
             "| test | count |\n| ---- | ----- |\n| bro  | 5     |"
         );
+    }
+
+    #[test]
+    fn run_doc_change_rules_keeps_cursor_on_first_data_row_when_inserting_delimiter() {
+        let text = "| test | count |\n|      |       |";
+        let input_row_start = text.find("\n|      |       |").unwrap() + 1;
+        let head = input_row_start + 2;
+        let doc = snapshot(text, head, head);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        let formatted = apply_operation(&doc.text, &op);
+        assert_eq!(
+            formatted,
+            "| test | count |\n| ---- | ----- |\n|      |       |"
+        );
+        let output_row_start = formatted.find("\n|      |       |").unwrap() + 1;
+        assert_eq!(op.selection.expect("selection").anchor, output_row_start + 2);
     }
 
     #[test]
