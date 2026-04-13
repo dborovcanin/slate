@@ -46,6 +46,21 @@ test("runDocChangeRules formats markdown tables when enabled", () => {
   assert.equal(applyOperation(text, op), "| a   | b   |\n| --- | --- |\n| 1   | 2   |");
 });
 
+test("runDocChangeRules keeps cursor after typed text in autoformatted empty table cell", () => {
+  const text = "| a   | b   |\n| --- | --- |\n| 1   |x    |";
+  const cursor = text.lastIndexOf("x") + 1;
+  const snapshot = {
+    text,
+    selection: { anchor: cursor, head: cursor },
+  };
+  const op = runDocChangeRules(snapshot, { markdownAutoformat: true });
+  assert.ok(op);
+
+  const formatted = applyOperation(text, op);
+  assert.equal(formatted, "| a   | b   |\n| --- | --- |\n| 1   | x   |");
+  assert.equal(op.selection?.anchor, formatted.lastIndexOf("x") + 1);
+});
+
 test("runEnterRules continues and exits markdown lists", () => {
   const continueText = "- task";
   const continueSnapshot = {
@@ -73,6 +88,20 @@ test("runEnterRules continues and exits markdown lists", () => {
   const exitOp = runEnterRules(exitSnapshot, { markdownAutoformat: true });
   assert.ok(exitOp);
   assert.equal(applyOperation(exitText, exitOp), "");
+});
+
+test("runEnterRules exits empty table row even when cursor is inside the row", () => {
+  const text = "| a | b |\n| |";
+  const cursorInsideEmptyRow = text.length - 1;
+  const op = runEnterRules(
+    {
+      text,
+      selection: { anchor: cursorInsideEmptyRow, head: cursorInsideEmptyRow },
+    },
+    { markdownAutoformat: true },
+  );
+  assert.ok(op);
+  assert.equal(applyOperation(text, op), "| a | b |\n");
 });
 
 test("runTabRules indents and outdents markdown list items for sublists", () => {

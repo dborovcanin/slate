@@ -375,13 +375,14 @@ pub fn run_enter_rules(
     }
 
     let line = ctx.current_line();
-    if selection.head != line.to {
-        return None;
-    }
 
     // Try table continuation first
-    if let Some(op) = table_continuation_rule(&line) {
+    if let Some(op) = table_continuation_rule(&line, &selection) {
         return Some(op);
+    }
+
+    if selection.head != line.to {
+        return None;
     }
 
     // Then list continuation
@@ -398,13 +399,22 @@ fn is_table_separator(text: &str) -> bool {
     if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
         return false;
     }
-    // A separator contains only |, -, :, and whitespace
-    trimmed
-        .chars()
-        .all(|c| c == '|' || c == '-' || c == ':' || c == ' ')
+    // A separator contains only |, -, :, and whitespace and must contain at least one '-'.
+    let mut has_dash = false;
+    for ch in trimmed.chars() {
+        match ch {
+            '|' | ':' | ' ' => {}
+            '-' => has_dash = true,
+            _ => return false,
+        }
+    }
+    has_dash
 }
 
-fn table_continuation_rule(line: &crate::editor_core::types::LineContext) -> Option<EditOperation> {
+fn table_continuation_rule(
+    line: &crate::editor_core::types::LineContext,
+    selection: &crate::editor_core::types::SelectionContext,
+) -> Option<EditOperation> {
     if !is_table_line(&line.text) {
         return None;
     }
@@ -432,6 +442,10 @@ fn table_continuation_rule(line: &crate::editor_core::types::LineContext) -> Opt
                 head: None,
             }),
         ));
+    }
+
+    if selection.head != line.to {
+        return None;
     }
 
     // Build empty row with matching column count
@@ -799,6 +813,14 @@ mod tests {
         let doc = snapshot("- item", 6, 6);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(apply_operation(&doc.text, &op), "- item\n- ");
+    }
+
+    #[test]
+    fn run_enter_rules_exits_empty_table_row_when_cursor_is_inside_row() {
+        let text = "| a | b |\n| |";
+        let doc = snapshot(text, text.len() - 1, text.len() - 1);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "| a | b |\n");
     }
 
     #[test]

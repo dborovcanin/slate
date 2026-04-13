@@ -13,9 +13,86 @@ const checklistToggleSuffixRe = /\/x$/i;
 
 const orderedTopLevelRe = /^\d+\.$/;
 const orderedNestedRe = /^\d+(?:\.\d+)+$/;
+const tableLineRe = /^\s*\|.*\|\s*$/;
+const tableSeparatorRe = /^\s*\|(?=.*-)[\s:|-]+\|\s*$/;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function tablePipePositions(line: string): number[] {
+  const pipes: number[] = [];
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "|") pipes.push(i);
+  }
+  return pipes;
+}
+
+function tableCellIndexForColumn(pipes: number[], col: number): number {
+  if (pipes.length < 2) return -1;
+  for (let i = 0; i < pipes.length - 1; i++) {
+    if (col <= pipes[i + 1]) return i;
+  }
+  return pipes.length - 2;
+}
+
+function firstNonSpaceOffset(text: string): number {
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== " ") return i;
+  }
+  return text.length;
+}
+
+function lastNonSpaceEndOffset(text: string): number {
+  for (let i = text.length - 1; i >= 0; i--) {
+    if (text[i] !== " ") return i + 1;
+  }
+  return 0;
+}
+
+function mapTableCursorColumn(sourceLine: string, targetLine: string, sourceCol: number): number {
+  const sourcePipes = tablePipePositions(sourceLine);
+  const targetPipes = tablePipePositions(targetLine);
+  if (sourcePipes.length < 2 || targetPipes.length < 2) {
+    return Math.min(sourceCol, targetLine.length);
+  }
+
+  const sourceCellIndex = tableCellIndexForColumn(sourcePipes, sourceCol);
+  if (sourceCellIndex < 0) return Math.min(sourceCol, targetLine.length);
+  const targetCellIndex = clamp(sourceCellIndex, 0, targetPipes.length - 2);
+
+  const sourceLeft = sourcePipes[sourceCellIndex] + 1;
+  const sourceRight = sourcePipes[sourceCellIndex + 1];
+  const sourceRaw = sourceLine.slice(sourceLeft, sourceRight);
+  const sourceTrimStart = firstNonSpaceOffset(sourceRaw);
+  const sourceTrimEnd = lastNonSpaceEndOffset(sourceRaw);
+  const sourceContentLen = Math.max(0, sourceTrimEnd - sourceTrimStart);
+  const sourceInCell = clamp(sourceCol - sourceLeft, 0, sourceRaw.length);
+
+  let semanticOffset = 0;
+  if (sourceContentLen > 0) {
+    if (sourceInCell <= sourceTrimStart) {
+      semanticOffset = 0;
+    } else if (sourceInCell >= sourceTrimEnd) {
+      semanticOffset = sourceContentLen;
+    } else {
+      semanticOffset = sourceInCell - sourceTrimStart;
+    }
+  }
+
+  const targetLeft = targetPipes[targetCellIndex] + 1;
+  const targetRight = targetPipes[targetCellIndex + 1];
+  const targetRaw = targetLine.slice(targetLeft, targetRight);
+  const targetTrimStart = firstNonSpaceOffset(targetRaw);
+  const targetTrimEnd = lastNonSpaceEndOffset(targetRaw);
+  const targetContentLen = Math.max(0, targetTrimEnd - targetTrimStart);
+
+  if (targetContentLen === 0) {
+    return Math.min(targetLeft + 1, targetRight);
+  }
+
+  const mappedInTarget = targetTrimStart + Math.min(semanticOffset, targetContentLen);
+  return clamp(targetLeft + mappedInTarget, 0, targetLine.length);
 }
 
 function parseOrderedMarker(marker: string): number[] | null {
@@ -138,6 +215,12 @@ function tableAutoformatRule(ctx: ResolvedContext): EditOperation | null {
   const headLine = ctx.lineAt(head).number;
   const headCol = head - ctx.line(headLine).from;
   const relativeLine = clamp(headLine - block.startLine, 0, formatted.length - 1);
+  const sourceLine = lines[relativeLine] ?? "";
+  const targetLine = formatted[relativeLine] ?? "";
+  const mappedHeadCol =
+    tableLineRe.test(sourceLine) && tableLineRe.test(targetLine)
+      ? mapTableCursorColumn(sourceLine, targetLine, headCol)
+      : Math.min(headCol, targetLine.length);
 
   const startLine = ctx.line(block.startLine);
   const endLine = ctx.line(block.endLine);
@@ -146,7 +229,7 @@ function tableAutoformatRule(ctx: ResolvedContext): EditOperation | null {
   for (let i = 0; i < relativeLine; i++) {
     newHead += formatted[i].length + 1;
   }
-  newHead += Math.min(headCol, formatted[relativeLine].length);
+  newHead += mappedHeadCol;
 
   return replaceRange(startLine.from, endLine.to, formatted.join("\n"), {
     anchor: newHead,
@@ -324,10 +407,7 @@ function listAutoformatRule(ctx: ResolvedContext): EditOperation | null {
   });
 }
 
-export function runDocChangeRules(
-  snapshot: EditorContextSnapshot,
-  options: TextRuleOptions = {},
-): EditOperation | null {
+export function runDocChangeRules(snapshot: EditorContextSnapshot, options: TextRuleOptions = {}): EditOperation | null {
   const ctx = new ResolvedContext(snapshot);
 
   const checklistOp = checklistToggleRule(ctx);
@@ -341,16 +421,13 @@ export function runDocChangeRules(
   return listAutoformatRule(ctx);
 }
 
-const tableLineRe = /^\s*\|.*\|\s*$/;
-const tableSeparatorRe = /^\s*\|[\s:|-]+\|\s*$/;
-
 function tableContinuationRule(ctx: ResolvedContext): EditOperation | null {
   const selection = ctx.selection();
   if (!selection.empty) return null;
 
   const line = ctx.currentLine();
   if (!tableLineRe.test(line.text)) return null;
-  if (selection.head !== line.to) return null;
+  const atLineEnd = selection.head === line.to;
 
   // Count columns by splitting on |
   const cells = line.text.split("|");
@@ -366,6 +443,7 @@ function tableContinuationRule(ctx: ResolvedContext): EditOperation | null {
     // Remove the empty row and place cursor on next line
     return replaceRange(line.from, line.to, "", { anchor: line.from });
   }
+  if (!atLineEnd) return null;
 
   // Build an empty row with matching column count
   const emptyRow = "|" + " |".repeat(columnCount);
