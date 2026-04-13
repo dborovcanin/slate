@@ -13,9 +13,11 @@ import {
   RangeSet,
   RangeValue,
   Annotation,
+  type ChangeDesc,
+  type Text,
 } from "@codemirror/state";
 import { evaluateNoteContext, type VariableIndexEntry } from "../api.ts";
-import { findCalcSegment } from "./calc-line-utils.ts";
+import { findCalcSegment, lineForCalcEvaluation } from "./calc-line-utils.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
 
 export interface CalcExtensionOptions {
@@ -86,7 +88,8 @@ const calcResultsField = StateField.define<Map<number, string>>({
     for (const e of tr.effects) {
       if (e.is(setCalcResults)) return e.value;
     }
-    return value;
+    if (!tr.docChanged) return value;
+    return remapCalcResultsForDocChange(value, tr.startState.doc, tr.changes, tr.newDoc);
   },
 });
 
@@ -104,24 +107,23 @@ export const variableIndexField = StateField.define<VariableIndexEntry[]>({
 
 // Decoration set derived from the calc results field
 const calcDecorations = EditorView.decorations.compute(
-  [calcResultsField],
+  [calcResultsField, "doc"],
   (state) => {
     const results = state.field(calcResultsField);
     const builder = new RangeSetBuilder<Decoration>();
 
-    for (let i = 0; i < state.doc.lines; i++) {
-      const result = results.get(i);
-      if (result) {
-        const line = state.doc.line(i + 1); // 1-based
-        builder.add(
-          line.to,
-          line.to,
-          Decoration.widget({
-            widget: new CalcResultWidget(result),
-            side: 1,
-          }),
-        );
-      }
+    for (const [lineIndex, result] of results) {
+      const lineNumber = lineIndex + 1;
+      if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
+      const line = state.doc.line(lineNumber); // 1-based
+      builder.add(
+        line.to,
+        line.to,
+        Decoration.widget({
+          widget: new CalcResultWidget(result),
+          side: 1,
+        }),
+      );
     }
 
     return builder.finish();
@@ -271,6 +273,229 @@ export function mergePartialCalcResults(
   return next;
 }
 
+interface ChangedRange {
+  fromA: number;
+  toA: number;
+  fromB: number;
+  toB: number;
+}
+
+function collectChangedRanges(changes: ChangeDesc): ChangedRange[] {
+  const ranges: ChangedRange[] = [];
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    ranges.push({ fromA, toA, fromB, toB });
+  });
+  return ranges;
+}
+
+function lineOverlapsChangedRanges(
+  lineFrom: number,
+  lineTo: number,
+  ranges: readonly ChangedRange[],
+): boolean {
+  return ranges.some((range) => range.fromA < lineTo && range.toA > lineFrom);
+}
+
+function changedRangeOverlappingLine(
+  lineFrom: number,
+  lineTo: number,
+  ranges: readonly ChangedRange[],
+): ChangedRange | null {
+  for (const range of ranges) {
+    if (range.fromA < lineTo && range.toA > lineFrom) return range;
+  }
+  return null;
+}
+
+function lineEvalKey(lineText: string): string | null {
+  const key = lineForCalcEvaluation(lineText).trim();
+  return key.length > 0 ? key : null;
+}
+
+function clampPos(pos: number, max: number): number {
+  return Math.min(Math.max(0, pos), max);
+}
+
+function clampLineIndex(index: number, lineCount: number): number {
+  if (lineCount <= 0) return 0;
+  return Math.min(Math.max(0, index), lineCount - 1);
+}
+
+function rangeSearchLineWindow(
+  nextDoc: Text,
+  range: ChangedRange | null,
+): { startLine: number; endLine: number } {
+  if (!range) {
+    return { startLine: 1, endLine: nextDoc.lines };
+  }
+
+  const from = clampPos(range.fromB, nextDoc.length);
+  const to = clampPos(range.toB, nextDoc.length);
+  const startLine = nextDoc.lineAt(from).number;
+  const endPos = to > from ? to - 1 : from;
+  const endLine = nextDoc.lineAt(endPos).number;
+  return {
+    startLine: Math.max(1, startLine),
+    endLine: Math.max(startLine, endLine),
+  };
+}
+
+function preferredLineIndexAfterRangeRewrite(
+  lineIndex: number,
+  range: ChangedRange | null,
+  startDoc: Text,
+  nextDoc: Text,
+): number {
+  if (!range) return lineIndex;
+
+  const oldStartLine = startDoc.lineAt(range.fromA).number - 1;
+  const newStartLine = nextDoc.lineAt(clampPos(range.fromB, nextDoc.length)).number - 1;
+  const offset = lineIndex - oldStartLine;
+  return clampLineIndex(newStartLine + offset, nextDoc.lines);
+}
+
+function findClosestLineByEvalKey(
+  nextDoc: Text,
+  key: string,
+  preferredLineIndex: number,
+  range: ChangedRange | null,
+): number | null {
+  const window = rangeSearchLineWindow(nextDoc, range);
+  let closest: number | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let lineNo = window.startLine; lineNo <= window.endLine; lineNo++) {
+    const lineIndex = lineNo - 1;
+    const line = nextDoc.line(lineNo);
+    if (lineEvalKey(line.text) !== key) continue;
+
+    const distance = Math.abs(lineIndex - preferredLineIndex);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      closest = lineIndex;
+      if (distance === 0) break;
+    }
+  }
+
+  return closest;
+}
+
+function changesTouchCalcExpression(
+  lineText: string,
+  lineFrom: number,
+  lineTo: number,
+  ranges: readonly ChangedRange[],
+): boolean {
+  const segment = findCalcSegment(lineText);
+  // For plain lines we cannot isolate a safe prefix; any line touch invalidates.
+  if (!segment) return lineOverlapsChangedRanges(lineFrom, lineTo, ranges);
+
+  for (const range of ranges) {
+    if (!(range.fromA < lineTo && range.toA > lineFrom)) continue;
+
+    const localStart = Math.max(range.fromA, lineFrom) - lineFrom;
+    const localEnd = Math.min(range.toA, lineTo) - lineFrom;
+
+    // Insertion (no old text replaced): only safe when it happens before calc segment.
+    if (localStart === localEnd) {
+      if (localStart >= segment.fromCol) return true;
+      continue;
+    }
+
+    // Replacement/deletion: safe only if it is strictly before calc segment.
+    if (localEnd > segment.fromCol) return true;
+  }
+  return false;
+}
+
+export function remapCalcResultsForDocChange(
+  results: ReadonlyMap<number, string>,
+  startDoc: Text,
+  changes: ChangeDesc,
+  nextDoc: Text,
+): Map<number, string> {
+  if (results.size === 0) return new Map();
+
+  const changedRanges = collectChangedRanges(changes);
+  if (changedRanges.length === 0) return new Map(results);
+
+  const remapped = new Map<number, string>();
+  for (const [lineIndex, result] of results) {
+    const oldLineNumber = lineIndex + 1;
+    if (oldLineNumber < 1 || oldLineNumber > startDoc.lines) continue;
+
+    const oldLine = startDoc.line(oldLineNumber);
+    // Map using an anchor inside the line to avoid boundary ambiguity when
+    // insertions happen exactly at line start.
+    const anchor = oldLine.from + (oldLine.length > 0 ? 1 : 0);
+    const mappedPos = changes.mapPos(anchor, 1);
+    const clampedPos = clampPos(mappedPos, nextDoc.length);
+    const newLineIndex = nextDoc.lineAt(clampedPos).number - 1;
+    const lineRange = changedRangeOverlappingLine(
+      oldLine.from,
+      oldLine.to,
+      changedRanges,
+    );
+
+    // If edits touched the expression region, try to preserve line identity
+    // by matching equivalent eval text in the rewritten region.
+    if (changesTouchCalcExpression(oldLine.text, oldLine.from, oldLine.to, changedRanges)) {
+      const evalKey = lineEvalKey(oldLine.text);
+      if (!evalKey) continue;
+
+      const preferredLineIndex = preferredLineIndexAfterRangeRewrite(
+        lineIndex,
+        lineRange,
+        startDoc,
+        nextDoc,
+      );
+      const rescuedLineIndex = findClosestLineByEvalKey(
+        nextDoc,
+        evalKey,
+        preferredLineIndex,
+        lineRange,
+      );
+      if (rescuedLineIndex === null) continue;
+      remapped.set(rescuedLineIndex, result);
+      continue;
+    }
+
+    remapped.set(newLineIndex, result);
+  }
+  return remapped;
+}
+
+function calcResultMapsEqual(
+  a: ReadonlyMap<number, string>,
+  b: ReadonlyMap<number, string>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, value] of a) {
+    if (b.get(key) !== value) return false;
+  }
+  return true;
+}
+
+function variableIndexEqual(
+  a: readonly VariableIndexEntry[],
+  b: readonly VariableIndexEntry[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const left = a[i];
+    const right = b[i];
+    if (!left || !right) return false;
+    if (
+      left.name !== right.name ||
+      left.normalized !== right.normalized ||
+      left.line !== right.line
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function buildCalcPlugin(options: CalcExtensionOptions) {
   const variablesEnabled = options.variablesEnabled ?? true;
 
@@ -281,6 +506,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let destroyed = false;
     let prevLines: string[] = [];
     let prevResults: Map<number, string> = new Map();
+    let prevVariables: VariableIndexEntry[] = [];
 
     function scheduleEval() {
       if (timer !== null) clearTimeout(timer);
@@ -329,9 +555,11 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           if (canUsePartial && plan.evalLines.length === 0) {
             // No lines changed in the middle — prefix/suffix cover everything.
             const nextMap = new Map(plan.baseResults);
-            view.dispatch({
-              effects: [setCalcResults.of(nextMap)],
-            });
+            if (!calcResultMapsEqual(prevResults, nextMap)) {
+              view.dispatch({
+                effects: [setCalcResults.of(nextMap)],
+              });
+            }
             prevLines = nextLines;
             prevResults = nextMap;
             continue;
@@ -397,10 +625,17 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             nextMap.delete(idx);
           }
 
-          const effects: StateEffect<unknown>[] = [
-            setCalcResults.of(nextMap),
-            setVariableIndex.of(evaluated.variables ?? []),
-          ];
+          const nextVariables = evaluated.variables ?? [];
+          const resultsChanged = !calcResultMapsEqual(prevResults, nextMap);
+          const variablesChanged = !variableIndexEqual(prevVariables, nextVariables);
+
+          const effects: StateEffect<unknown>[] = [];
+          if (resultsChanged) {
+            effects.push(setCalcResults.of(nextMap));
+          }
+          if (variablesChanged) {
+            effects.push(setVariableIndex.of(nextVariables));
+          }
 
           // Refreshed markers need to be dropped and re-added with the new
           // literal. Stack their pre-change positions onto the prune list so
@@ -443,12 +678,13 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
               nextLines[change.lineIdx] =
                 lineText.slice(0, offsetInLine) + change.insert;
             }
-          } else {
+          } else if (effects.length > 0) {
             view.dispatch({ effects });
           }
 
           prevLines = nextLines;
           prevResults = nextMap;
+          prevVariables = nextVariables;
         } catch (e) {
           console.error("Calc evaluation failed:", e);
         }

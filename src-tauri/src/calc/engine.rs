@@ -307,20 +307,20 @@ impl CalcEngine {
         };
         let variables = variable_index_from_definitions(&defs);
 
+        let line_count = lines.len();
+        let (eval_from, eval_to) = match options.eval_range {
+            Some((from, to)) => (from.min(line_count), to.min(line_count)),
+            None => (0, line_count),
+        };
         let mut resolver = VariableResolver::new(&defs);
-        if options.variables_enabled {
+        let is_full_eval = eval_from == 0 && eval_to == line_count;
+        if options.variables_enabled && is_full_eval {
             let mut names: Vec<String> = defs.keys().cloned().collect();
             names.sort();
             for normalized in names {
                 let _ = resolver.resolve(&normalized);
             }
         }
-
-        let line_count = lines.len();
-        let (eval_from, eval_to) = match options.eval_range {
-            Some((from, to)) => (from.min(line_count), to.min(line_count)),
-            None => (0, line_count),
-        };
 
         let mut line_results: Vec<Option<String>> = vec![None; line_count];
         for (idx, line) in lines

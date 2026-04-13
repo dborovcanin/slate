@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EditorState } from "@codemirror/state";
 import {
   findCalcSegment,
   findListCalcSegment,
@@ -10,6 +11,7 @@ import {
   computeCalcRefresh,
   containsVariableAssignment,
   mergePartialCalcResults,
+  remapCalcResultsForDocChange,
   type CommitMarkerLoc,
 } from "./calc-decoration.ts";
 
@@ -315,4 +317,104 @@ test("mergePartialCalcResults leaves indices outside range untouched", () => {
   assert.equal(merged.get(0), "keep");
   assert.equal(merged.get(2), "new");
   assert.equal(merged.get(5), "keep");
+});
+
+test("remapCalcResultsForDocChange shifts ghosts down when inserting lines above", () => {
+  const start = EditorState.create({ doc: "top\nexpr\ntail" });
+  const tr = start.update({
+    changes: { from: 0, to: 0, insert: "new line\n" },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([[1, "42"]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(2), "42");
+  assert.equal(remapped.has(1), false);
+});
+
+test("remapCalcResultsForDocChange shifts ghosts up when deleting lines above", () => {
+  const start = EditorState.create({ doc: "drop\nexpr\ntail" });
+  const dropLine = start.doc.line(1);
+  const tr = start.update({
+    changes: { from: dropLine.from, to: dropLine.to + 1, insert: "" },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([[1, "42"]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(0), "42");
+  assert.equal(remapped.has(1), false);
+});
+
+test("remapCalcResultsForDocChange keeps ghost when only list marker prefix changes", () => {
+  const start = EditorState.create({ doc: "3.1 2 + val1\nnext" });
+  const tr = start.update({
+    changes: { from: 0, to: 4, insert: "7.9 " },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([[0, "200"]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(0), "200");
+});
+
+test("remapCalcResultsForDocChange drops ghost when expression text changes", () => {
+  const start = EditorState.create({ doc: "3.1 2 + val1\nnext" });
+  const exprPos = start.doc.toString().indexOf("2 + val1");
+  const tr = start.update({
+    changes: { from: exprPos, to: exprPos + 1, insert: "9" },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([[0, "200"]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.has(0), false);
+});
+
+test("remapCalcResultsForDocChange keeps ghost through full list rewrite when item is added above", () => {
+  const start = EditorState.create({
+    doc: "1. a\n2. b\n3.1 2 + val1\n3.2 tail",
+  });
+  const tr = start.update({
+    changes: {
+      from: 0,
+      to: start.doc.length,
+      insert: "1. a\n2. new\n3. b\n4.1 2 + val1\n4.2 tail",
+    },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([[2, "200"]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(3), "200");
+});
+
+test("remapCalcResultsForDocChange keeps ghost through full list rewrite when item is added below", () => {
+  const start = EditorState.create({
+    doc: "1. a\n2. b\n3.1 2 + val1\n3.2 tail",
+  });
+  const tr = start.update({
+    changes: {
+      from: 0,
+      to: start.doc.length,
+      insert: "1. a\n2. b\n3.1 2 + val1\n3.2 new\n3.3 tail",
+    },
+  });
+  const remapped = remapCalcResultsForDocChange(
+    new Map([[2, "200"]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(2), "200");
 });
