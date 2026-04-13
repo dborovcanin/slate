@@ -250,8 +250,16 @@ impl TerminalApp {
             Key::ArrowDown => self.move_cursor_down(1),
             Key::ArrowLeft => self.move_cursor_left(),
             Key::ArrowRight => self.move_cursor_right(),
-            Key::CtrlArrowLeft => self.move_cursor_left_word(),
-            Key::CtrlArrowRight => self.move_cursor_right_word(),
+            Key::CtrlArrowLeft => {
+                if !self.try_table_navigation_rule(true) {
+                    self.move_cursor_left_word();
+                }
+            }
+            Key::CtrlArrowRight => {
+                if !self.try_table_navigation_rule(false) {
+                    self.move_cursor_right_word();
+                }
+            }
             Key::PageUp => self.move_cursor_up(self.editor_height().saturating_sub(1)),
             Key::PageDown => self.move_cursor_down(self.editor_height().saturating_sub(1)),
             Key::Home => self.cursor_col = 0,
@@ -1589,8 +1597,9 @@ impl TerminalApp {
             || trimmed.starts_with('+')
             || trimmed.starts_with("->")
             || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let might_be_table = trimmed.starts_with('|') && line.trim_end().ends_with('|');
         let might_be_checklist = might_be_list && line.contains("/x");
-        if !might_be_list && !might_be_checklist {
+        if !might_be_list && !might_be_checklist && !might_be_table {
             return;
         }
 
@@ -1622,6 +1631,21 @@ impl TerminalApp {
             outdent,
         };
         if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&snapshot, options) {
+            self.apply_edit_operation(&op);
+            return true;
+        }
+        false
+    }
+
+    fn try_table_navigation_rule(&mut self, outdent: bool) -> bool {
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TabRuleOptions {
+            markdown_autoformat: true,
+            outdent,
+        };
+        if let Some(op) =
+            crate::editor_core::text_rules::run_table_cell_navigation_rules(&snapshot, options)
+        {
             self.apply_edit_operation(&op);
             return true;
         }

@@ -1,4 +1,4 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, Prec } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -62,19 +62,69 @@ interface EditorMountOptions {
 let currentFormatOnSave = false;
 let currentDateFormat = "%Y-%m-%d";
 
-function moveTableCellOrWord(view: EditorView, outdent: boolean, markdownAutoformat: boolean): boolean {
-  if (!markdownAutoformat) {
-    return outdent ? cursorGroupLeft(view) : cursorGroupRight(view);
-  }
+function isLeftArrowKey(key: string): boolean {
+  return key === "ArrowLeft" || key === "Left";
+}
+
+function isRightArrowKey(key: string): boolean {
+  return key === "ArrowRight" || key === "Right";
+}
+
+function isLeftArrowEvent(event: KeyboardEvent): boolean {
+  return (
+    isLeftArrowKey(event.key) ||
+    event.code === "ArrowLeft" ||
+    event.keyCode === 37
+  );
+}
+
+function isRightArrowEvent(event: KeyboardEvent): boolean {
+  return (
+    isRightArrowKey(event.key) ||
+    event.code === "ArrowRight" ||
+    event.keyCode === 39
+  );
+}
+
+function tableCellNavigationDomHandler() {
+  return Prec.highest(
+    EditorView.domEventHandlers({
+      keydown: (event, view) => {
+        // Do not override Vim normal/visual modes.
+        const vimMode = view.dom.dataset.vimMode;
+        if (vimMode && vimMode !== "insert") return false;
+
+        const isMod = event.ctrlKey || event.metaKey;
+        if (!isMod || event.altKey || event.shiftKey) return false;
+
+        if (isLeftArrowKey(event.key)) {
+          event.preventDefault();
+          return moveTableCellOrWord(view, true, true);
+        }
+        if (isRightArrowKey(event.key)) {
+          event.preventDefault();
+          return moveTableCellOrWord(view, false, false);
+        }
+        return false;
+      },
+    }),
+  );
+}
+
+function moveTableCellOrWord(
+  view: EditorView,
+  tableOutdent: boolean,
+  fallbackLeft: boolean,
+): boolean {
   const operation = runTableCellNavigationRules(snapshotFromView(view), {
-    markdownAutoformat,
-    outdent,
+    markdownAutoformat: true,
+    outdent: tableOutdent,
   });
   if (operation) {
     applyEditOperation(view, operation);
     return true;
   }
-  return outdent ? cursorGroupLeft(view) : cursorGroupRight(view);
+  return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
 }
 
 export async function performFormatAndSave() {
@@ -112,13 +162,16 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       vimMode: !!options.vimMode,
       onExitCommand: options.onExitCommand,
     }),
-    keymap.of([
-      { key: "Ctrl-w", run: deleteGroupBackward },
-      { key: "Ctrl-Backspace", run: deleteGroupBackward },
-      { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, markdownAutoformat) },
-      { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, markdownAutoformat) },
-      { key: "Ctrl-s", run: () => { performFormatAndSave(); return true; } },
-    ]),
+    tableCellNavigationDomHandler(),
+    Prec.highest(keymap.of([
+      { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
+      { key: "Ctrl-Backspace", run: deleteGroupBackward, preventDefault: true },
+      { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
+      { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
+      { key: "Mod-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
+      { key: "Mod-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
+      { key: "Ctrl-s", run: () => { performFormatAndSave(); return true; }, preventDefault: true },
+    ])),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,
     EditorView.lineWrapping,
@@ -138,6 +191,30 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
 
   view = new EditorView({ state: startState, parent });
   view.focus();
+
+  // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is
+  // always available when the editor has focus.
+  window.addEventListener(
+    "keydown",
+    (event) => {
+      if (!view || !view.hasFocus) return;
+      const isMod = event.ctrlKey || event.metaKey;
+      if (!isMod || event.altKey || event.shiftKey) return;
+
+      if (isLeftArrowEvent(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveTableCellOrWord(view, true, true);
+        return;
+      }
+      if (isRightArrowEvent(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        moveTableCellOrWord(view, false, false);
+      }
+    },
+    true,
+  );
 
   window.addEventListener("beforeunload", flushSave);
   document.addEventListener("visibilitychange", () => {

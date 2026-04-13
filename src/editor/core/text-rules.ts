@@ -95,20 +95,33 @@ function mapTableCursorColumn(sourceLine: string, targetLine: string, sourceCol:
   return clamp(targetLeft + mappedInTarget, 0, targetLine.length);
 }
 
-function ensureCellAnchorKeepsLeadingSpace(
+function tableCellAnchorAfterLeadingSpace(
   lineText: string,
   pipes: number[],
   leftPipeIndex: number,
-  anchorInLine: number,
 ): number {
   const leftPipe = pipes[leftPipeIndex];
   const rightPipe = pipes[leftPipeIndex + 1];
-  if (leftPipe === undefined || rightPipe === undefined) return anchorInLine;
+  if (leftPipe === undefined || rightPipe === undefined) return 0;
   const cellStart = leftPipe + 1;
-  if (anchorInLine !== cellStart) return anchorInLine;
-  if (rightPipe <= cellStart) return anchorInLine;
+  if (rightPipe <= cellStart) return cellStart;
   if (lineText[cellStart] === " ") return Math.min(cellStart + 1, rightPipe);
-  return anchorInLine;
+  return cellStart;
+}
+
+function buildAlignedEmptyTableRow(lineText: string): string | null {
+  const pipes = tablePipePositions(lineText);
+  if (pipes.length < 2) return null;
+
+  const cells: string[] = [];
+  for (let i = 0; i < pipes.length - 1; i++) {
+    const start = pipes[i] + 1;
+    const end = pipes[i + 1];
+    const width = Math.max(1, end - start);
+    cells.push(" ".repeat(width));
+  }
+
+  return `|${cells.join("|")}|`;
 }
 
 function parseOrderedMarker(marker: string): number[] | null {
@@ -445,27 +458,24 @@ function tableContinuationRule(ctx: ResolvedContext): EditOperation | null {
   if (!tableLineRe.test(line.text)) return null;
   const atLineEnd = selection.head === line.to;
 
-  // Count columns by splitting on |
-  const cells = line.text.split("|");
-  // First and last are outside the pipes, inner ones are cells
-  const columnCount = Math.max(cells.length - 2, 1);
-
   // Check if this is a separator row — skip continuation
   if (tableSeparatorRe.test(line.text)) return null;
 
   // Check if the row is "empty" (only pipes and whitespace) — exit table
-  const innerContent = cells.slice(1, -1).join("").trim();
+  const innerContent = line.text.split("|").slice(1, -1).join("").trim();
   if (innerContent.length === 0) {
     // Remove the empty row and place cursor on next line
     return replaceRange(line.from, line.to, "", { anchor: line.from });
   }
   if (!atLineEnd) return null;
 
-  // Build an empty row with matching column count
-  const emptyRow = "|" + " |".repeat(columnCount);
+  // Build an empty row that preserves current column widths.
+  const emptyRow = buildAlignedEmptyTableRow(line.text);
+  if (!emptyRow) return null;
   const insert = `\n${emptyRow}`;
-  // Place cursor after first pipe + space in new row
-  const anchor = selection.head + 1 + 2; // \n + | + space
+  const emptyPipes = tablePipePositions(emptyRow);
+  const firstCellAnchor = tableCellAnchorAfterLeadingSpace(emptyRow, emptyPipes, 0);
+  const anchor = selection.head + 1 + firstCellAnchor; // \n + in-row anchor
   return replaceRange(selection.head, selection.head, insert, { anchor });
 }
 
@@ -484,7 +494,8 @@ function tableTabRule(ctx: ResolvedContext, options: TabRuleOptions): EditOperat
   const selection = ctx.selection();
   if (!selection.empty) return null;
 
-  let currentLineIdx = ctx.currentLine().number;
+  const startLineIdx = ctx.currentLine().number;
+  let currentLineIdx = startLineIdx;
   let headCol = selection.head - ctx.line(currentLineIdx).from;
   const outdent = options.outdent ?? false;
 
@@ -494,77 +505,52 @@ function tableTabRule(ctx: ResolvedContext, options: TabRuleOptions): EditOperat
   while (currentLineIdx >= 1 && currentLineIdx <= ctx.lineCount()) {
     const line = ctx.line(currentLineIdx);
     if (!tableLineRe.test(line.text)) break;
-    
+
     // Skip separator lines when wrapping
-    if (tableSeparatorRe.test(line.text) && currentLineIdx !== ctx.currentLine().number) {
+    if (tableSeparatorRe.test(line.text) && currentLineIdx !== startLineIdx) {
       currentLineIdx += outdent ? -1 : 1;
       continue;
     }
 
-    const pipes: number[] = [];
-    for (let i = 0; i < line.text.length; i++) {
-      if (line.text[i] === "|") pipes.push(i);
-    }
+    const pipes = tablePipePositions(line.text);
     if (pipes.length < 2) break;
+    const currentCell = tableCellIndexForColumn(pipes, headCol);
+    if (currentCell < 0) break;
 
     if (outdent) {
-      let leftPipe = -1;
-      for (let i = pipes.length - 1; i >= 0; i--) {
-        if (pipes[i] < headCol) {
-          leftPipe = i;
-          break;
-        }
-      }
-      if (leftPipe > 0) {
-        const targetPipeIndex = pipes[leftPipe];
-        let pos = targetPipeIndex;
-        while (pos > pipes[leftPipe - 1] + 1 && line.text[pos - 1] === " ") {
-          pos--;
-        }
-        pos = ensureCellAnchorKeepsLeadingSpace(line.text, pipes, leftPipe - 1, pos);
+      if (currentCell > 0) {
+        const pos = tableCellAnchorAfterLeadingSpace(line.text, pipes, currentCell - 1);
         targetAnchor = line.from + pos;
         foundTarget = true;
         break;
-      } else {
-        currentLineIdx--;
-        if (currentLineIdx >= 1) {
-          const prevLine = ctx.line(currentLineIdx);
-          if (tableLineRe.test(prevLine.text)) {
-            headCol = prevLine.text.length;
-            continue;
-          }
-        }
-        break;
       }
+
+      currentLineIdx--;
+      if (currentLineIdx >= 1) {
+        const prevLine = ctx.line(currentLineIdx);
+        if (tableLineRe.test(prevLine.text)) {
+          headCol = prevLine.text.length;
+          continue;
+        }
+      }
+      break;
     } else {
-      let rightPipe = -1;
-      for (let i = 0; i < pipes.length; i++) {
-        if (pipes[i] > headCol) {
-          rightPipe = i;
-          break;
-        }
-      }
-      if (rightPipe !== -1 && rightPipe + 1 < pipes.length) {
-        const targetPipeIndex = pipes[rightPipe + 1];
-        let pos = targetPipeIndex;
-        while (pos > pipes[rightPipe] + 1 && line.text[pos - 1] === " ") {
-          pos--;
-        }
-        pos = ensureCellAnchorKeepsLeadingSpace(line.text, pipes, rightPipe, pos);
+      if (currentCell + 1 < pipes.length - 1) {
+        const pos = tableCellAnchorAfterLeadingSpace(line.text, pipes, currentCell + 1);
         targetAnchor = line.from + pos;
         foundTarget = true;
         break;
-      } else {
-        currentLineIdx++;
-        if (currentLineIdx <= ctx.lineCount()) {
-          const nextLine = ctx.line(currentLineIdx);
-          if (tableLineRe.test(nextLine.text)) {
-            headCol = 0;
-            continue;
-          }
-        }
-        break;
       }
+
+      currentLineIdx++;
+      if (currentLineIdx <= ctx.lineCount()) {
+        const nextLine = ctx.line(currentLineIdx);
+        if (tableLineRe.test(nextLine.text)) {
+          headCol = 0;
+          continue;
+        }
+      }
+      break;
     }
   }
 

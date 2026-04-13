@@ -688,14 +688,12 @@ fn table_continuation_rule(
         return None;
     }
 
-    let column_count = line.text.matches('|').count().saturating_sub(1).max(1);
-
     // Check if the row is empty (only pipes and whitespace)
     let inner: String = line
         .text
         .split('|')
         .skip(1)
-        .take(column_count)
+        .take(line.text.matches('|').count().saturating_sub(1).max(1))
         .collect::<Vec<_>>()
         .join("");
     if inner.trim().is_empty() {
@@ -714,10 +712,12 @@ fn table_continuation_rule(
         return None;
     }
 
-    // Build empty row with matching column count
-    let empty_row = format!("|{}", " |".repeat(column_count));
+    // Build empty row with matching column widths.
+    let empty_row = build_aligned_empty_table_row(&line.text)?;
     let insert = format!("\n{}", empty_row);
-    let anchor = line.to + 1 + 2; // \n + | + space
+    let empty_pipes = table_pipe_positions(&empty_row);
+    let first_cell_anchor = table_cell_anchor_after_leading_space(&empty_row, &empty_pipes, 0);
+    let anchor = line.to + 1 + first_cell_anchor; // \n + in-row anchor
     Some(replace_range(
         line.to,
         line.to,
@@ -795,28 +795,44 @@ fn marker_depth(indent: &str) -> usize {
         / 2
 }
 
-fn ensure_cell_anchor_keeps_leading_space(
+fn table_cell_anchor_after_leading_space(
     line_text: &str,
     pipes: &[usize],
     left_pipe_index: usize,
-    anchor_in_line: usize,
 ) -> usize {
     let Some(&left_pipe) = pipes.get(left_pipe_index) else {
-        return anchor_in_line;
+        return 0;
     };
     let Some(&right_pipe) = pipes.get(left_pipe_index + 1) else {
-        return anchor_in_line;
+        return 0;
     };
 
     let cell_start = left_pipe + 1;
-    if anchor_in_line != cell_start || right_pipe <= cell_start {
-        return anchor_in_line;
+    if right_pipe <= cell_start {
+        return cell_start;
     }
     if line_text.as_bytes().get(cell_start).copied() == Some(b' ') {
         (cell_start + 1).min(right_pipe)
     } else {
-        anchor_in_line
+        cell_start
     }
+}
+
+fn build_aligned_empty_table_row(line_text: &str) -> Option<String> {
+    let pipes = table_pipe_positions(line_text);
+    if pipes.len() < 2 {
+        return None;
+    }
+
+    let mut out = String::from("|");
+    for i in 0..pipes.len() - 1 {
+        let start = pipes[i] + 1;
+        let end = pipes[i + 1];
+        let width = end.saturating_sub(start).max(1);
+        out.push_str(&" ".repeat(width));
+        out.push('|');
+    }
+    Some(out)
 }
 
 fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<EditOperation> {
@@ -825,7 +841,8 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
         return None;
     }
 
-    let mut current_line_idx = ctx.current_line().number;
+    let start_line_idx = ctx.current_line().number;
+    let mut current_line_idx = start_line_idx;
     let mut head_col = selection
         .head
         .saturating_sub(ctx.line(current_line_idx).from);
@@ -841,7 +858,7 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
             break;
         }
 
-        if is_table_separator(&line.text) && current_line_idx != ctx.current_line().number {
+        if is_table_separator(&line.text) && current_line_idx != start_line_idx {
             if outdent {
                 current_line_idx = current_line_idx.saturating_sub(1);
             } else {
@@ -854,29 +871,17 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
         if pipes.len() < 2 {
             break;
         }
+        let Some(current_cell) = table_cell_index_for_column(&pipes, head_col) else {
+            break;
+        };
 
         if outdent {
-            let mut left_pipe: Option<usize> = None;
-            for i in (0..pipes.len()).rev() {
-                if pipes[i] < head_col {
-                    left_pipe = Some(i);
-                    break;
-                }
-            }
-            if let Some(left) = left_pipe {
-                if left > 0 {
-                    let target_pipe_index = pipes[left];
-                    let mut pos = target_pipe_index;
-                    while pos > pipes[left - 1] + 1
-                        && line.text.as_bytes().get(pos - 1).copied() == Some(b' ')
-                    {
-                        pos -= 1;
-                    }
-                    pos = ensure_cell_anchor_keeps_leading_space(&line.text, &pipes, left - 1, pos);
-                    target_anchor = line.from + pos;
-                    found_target = true;
-                    break;
-                }
+            if current_cell > 0 {
+                let pos =
+                    table_cell_anchor_after_leading_space(&line.text, &pipes, current_cell - 1);
+                target_anchor = line.from + pos;
+                found_target = true;
+                break;
             }
             current_line_idx = current_line_idx.saturating_sub(1);
             if current_line_idx >= 1 {
@@ -888,27 +893,12 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
             }
             break;
         } else {
-            let mut right_pipe: Option<usize> = None;
-            for i in 0..pipes.len() {
-                if pipes[i] > head_col {
-                    right_pipe = Some(i);
-                    break;
-                }
-            }
-            if let Some(right) = right_pipe {
-                if right + 1 < pipes.len() {
-                    let target_pipe_index = pipes[right + 1];
-                    let mut pos = target_pipe_index;
-                    while pos > pipes[right] + 1
-                        && line.text.as_bytes().get(pos - 1).copied() == Some(b' ')
-                    {
-                        pos -= 1;
-                    }
-                    pos = ensure_cell_anchor_keeps_leading_space(&line.text, &pipes, right, pos);
-                    target_anchor = line.from + pos;
-                    found_target = true;
-                    break;
-                }
+            if current_cell + 1 < pipes.len().saturating_sub(1) {
+                let pos =
+                    table_cell_anchor_after_leading_space(&line.text, &pipes, current_cell + 1);
+                target_anchor = line.from + pos;
+                found_target = true;
+                break;
             }
             current_line_idx += 1;
             if current_line_idx <= line_count {
@@ -998,6 +988,17 @@ pub fn run_tab_rules(
         changes,
         selection: None,
     })
+}
+
+pub fn run_table_cell_navigation_rules(
+    snapshot: &EditorContextSnapshot,
+    options: TabRuleOptions,
+) -> Option<EditOperation> {
+    if !options.markdown_autoformat {
+        return None;
+    }
+    let ctx = ResolvedContext::new(snapshot.clone());
+    table_tab_rule(&ctx, &options)
 }
 
 #[cfg(test)]
@@ -1121,6 +1122,15 @@ mod tests {
     }
 
     #[test]
+    fn run_tab_rules_lands_at_content_start_for_non_empty_table_cells() {
+        let text = "| aaa | bb  |";
+        let head = text.find('a').unwrap() + 1;
+        let doc = snapshot(text, head, head);
+        let op = run_tab_rules(&doc, TabRuleOptions::default()).expect("operation");
+        assert_eq!(op.selection.expect("selection").anchor, text.len() - 5);
+    }
+
+    #[test]
     fn run_enter_rules_generates_next_item() {
         let doc = snapshot("- item", 6, 6);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
@@ -1133,6 +1143,18 @@ mod tests {
         let doc = snapshot(text, text.len() - 1, text.len() - 1);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(apply_operation(&doc.text, &op), "| a | b |\n");
+    }
+
+    #[test]
+    fn run_enter_rules_inserts_aligned_empty_table_placeholders() {
+        let text = "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |";
+        let doc = snapshot(text, text.len(), text.len());
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |\n|     |      |"
+        );
+        assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
     }
 
     #[test]

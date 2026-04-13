@@ -105,6 +105,24 @@ test("runEnterRules exits empty table row even when cursor is inside the row", (
   assert.equal(applyOperation(text, op), "| a | b |\n");
 });
 
+test("runEnterRules inserts aligned empty placeholders for the next table row", () => {
+  const text = "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |";
+  const cursor = text.length;
+  const op = runEnterRules(
+    {
+      text,
+      selection: { anchor: cursor, head: cursor },
+    },
+    { markdownAutoformat: true },
+  );
+  assert.ok(op);
+  assert.equal(
+    applyOperation(text, op),
+    "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |\n|     |      |",
+  );
+  assert.equal(op.selection?.anchor, cursor + 3);
+});
+
 test("runTabRules indents and outdents markdown list items for sublists", () => {
   const text = "- parent\n  - child\nplain";
   const indentOp = runTabRules(
@@ -163,4 +181,18 @@ test("runTableCellNavigationRules keeps one leading space when moving into empty
   );
   assert.ok(op);
   assert.equal(op.selection?.anchor, text.indexOf("|", text.indexOf("|") + 1) + 2);
+});
+
+test("runTableCellNavigationRules lands at cell content start for non-empty target cells", () => {
+  const text = "| aaa | bb  |";
+  const fromFirstCell = text.indexOf("a") + 1;
+  const op = runTableCellNavigationRules(
+    {
+      text,
+      selection: { anchor: fromFirstCell, head: fromFirstCell },
+    },
+    { markdownAutoformat: true, outdent: false },
+  );
+  assert.ok(op);
+  assert.equal(op.selection?.anchor, text.lastIndexOf("|") - 4);
 });
