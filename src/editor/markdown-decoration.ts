@@ -1,4 +1,4 @@
-import { RangeSetBuilder, type Text } from "@codemirror/state";
+import { RangeSetBuilder, type Range, type Text } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
@@ -758,6 +758,22 @@ function decorateContentLine(
   addInlineDecorations(builder, line.from, line.text);
 }
 
+function extractDecorationRanges(
+  set: DecorationSet,
+  fromPos: number,
+  toPos: number,
+): Range<Decoration>[] {
+  const out: Range<Decoration>[] = [];
+  const cursor = set.iter();
+  while (cursor.value) {
+    if (cursor.from >= fromPos && cursor.to <= toPos) {
+      out.push(cursor.value.range(cursor.from, cursor.to));
+    }
+    cursor.next();
+  }
+  return out;
+}
+
 const markdownRichPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -769,9 +785,127 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     update(update: ViewUpdate) {
       const prevVars = update.startState.field(variableIndexField, false) ?? [];
       const nextVars = update.state.field(variableIndexField, false) ?? [];
-      if (update.docChanged || update.viewportChanged || prevVars !== nextVars) {
+      const varsChanged = prevVars !== nextVars;
+
+      if (varsChanged || update.viewportChanged) {
         this.decorations = this.safeBuild(update.view);
+        return;
       }
+
+      if (!update.docChanged) return;
+
+      try {
+        const incremental = this.incrementalRebuild(update);
+        if (incremental) {
+          this.decorations = incremental;
+          return;
+        }
+      } catch (error) {
+        console.error("Incremental markdown rebuild failed, falling back:", error);
+      }
+      this.decorations = this.safeBuild(update.view);
+    }
+
+    /**
+     * Attempt a dirty-range-only rebuild. Returns null to signal the caller
+     * should fall back to a full viewport rebuild.
+     */
+    private incrementalRebuild(update: ViewUpdate): DecorationSet | null {
+      const view = update.view;
+      const doc = view.state.doc;
+
+      const visibleSpans: VisibleLineSpan[] = view.visibleRanges.map(({ from, to }) => ({
+        fromLine: doc.lineAt(from).number,
+        toLine: doc.lineAt(to).number,
+      }));
+      if (visibleSpans.length === 0) return Decoration.none;
+
+      // Check if any pre-viewport fence marker was touched — that would flip
+      // `inCodeBlock` at the viewport start and we can't recover cheaply.
+      const firstVisibleLine = visibleSpans[0].fromLine;
+      const lastVisibleLine = visibleSpans[visibleSpans.length - 1].toLine;
+      let preFenceTouched = false;
+      let fenceDirtied = false;
+      const changedNewRanges: Array<{ fromB: number; toB: number }> = [];
+
+      update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+        changedNewRanges.push({ fromB, toB });
+
+        const prevText = update.startState.doc.sliceString(fromA, toA);
+        const newText = doc.sliceString(fromB, toB);
+        const changeHasFence = prevText.includes("```") || newText.includes("```");
+
+        if (changeHasFence) {
+          // Where does the change land in new coords?
+          const startLineB = doc.lineAt(fromB).number;
+          if (startLineB < firstVisibleLine) {
+            preFenceTouched = true;
+          } else {
+            fenceDirtied = true;
+          }
+        }
+      });
+
+      if (preFenceTouched) return null;
+
+      // Map the existing decoration set through the change so positions stay valid.
+      let result = this.decorations.map(update.changes);
+      const variableIndex = update.state.field(variableIndexField, false) ?? [];
+
+      // Determine dirty line spans inside the viewport.
+      const dirtyByVisibleSpan: Array<{ fromLine: number; toLine: number }> = [];
+      for (const span of visibleSpans) {
+        let minDirty = Infinity;
+        let maxDirty = -Infinity;
+        for (const { fromB, toB } of changedNewRanges) {
+          const startLine = doc.lineAt(fromB).number;
+          const endLine = doc.lineAt(toB).number;
+          const clippedStart = Math.max(startLine, span.fromLine);
+          const clippedEnd = Math.min(endLine, span.toLine);
+          if (clippedStart > clippedEnd) continue;
+          if (clippedStart < minDirty) minDirty = clippedStart;
+          if (clippedEnd > maxDirty) maxDirty = clippedEnd;
+        }
+        if (minDirty === Infinity) continue;
+
+        const toLine = fenceDirtied ? span.toLine : maxDirty;
+        dirtyByVisibleSpan.push({ fromLine: minDirty, toLine });
+      }
+
+      // If a fence was dirtied somewhere in the viewport, all later visible
+      // spans are also potentially affected — fall back for simplicity.
+      if (fenceDirtied && dirtyByVisibleSpan.length < visibleSpans.length) {
+        return null;
+      }
+
+      if (dirtyByVisibleSpan.length === 0) {
+        // No changes landed inside the visible range; just keep the mapped set.
+        return result;
+      }
+
+      for (const dirty of dirtyByVisibleSpan) {
+        const fromPos = doc.line(dirty.fromLine).from;
+        const nextLineStart =
+          dirty.toLine < doc.lines ? doc.line(dirty.toLine + 1).from : doc.length + 1;
+        const filterTo = nextLineStart - 1;
+
+        const rebuilt = buildMarkdownDecorationsForSpans(doc, [dirty], variableIndex);
+        const adds = extractDecorationRanges(rebuilt, fromPos, filterTo);
+
+        result = result.update({
+          filterFrom: fromPos,
+          filterTo,
+          filter: () => false,
+          add: adds,
+          sort: true,
+        });
+      }
+
+      // Guard: we never touch decorations outside the current viewport, so
+      // lines scrolled past lastVisibleLine keep whatever they had from the
+      // mapped set. That's fine because #1 already scopes builds to viewport.
+      void lastVisibleLine;
+      return result;
     }
 
     private safeBuild(view: EditorView): DecorationSet {
