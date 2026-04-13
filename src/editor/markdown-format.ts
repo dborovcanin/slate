@@ -1,5 +1,5 @@
 import { EditorView } from "@codemirror/view";
-import { formatMarkdown } from "./wasm.ts";
+import { ensureWasmReady, formatMarkdown } from "./wasm.ts";
 
 export function formatMarkdownText(input: string): string {
   if (input.length === 0) return input;
@@ -8,6 +8,12 @@ export function formatMarkdownText(input: string): string {
   const body = hasTrailingNewline ? input.slice(0, -1) : input;
   const result = formatMarkdown(body);
   return hasTrailingNewline ? `${result}\n` : result;
+}
+
+export async function formatMarkdownTextAsync(input: string): Promise<string> {
+  if (input.length === 0) return input;
+  await ensureWasmReady();
+  return formatMarkdownText(input);
 }
 
 export function applyMarkdownFormat(view: EditorView): boolean {

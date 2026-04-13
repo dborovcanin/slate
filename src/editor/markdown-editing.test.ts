@@ -1,6 +1,11 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { formatTableLines, rewriteLineWithChecklistToggleSuffix } from "./markdown-editing.ts";
+import { ensureWasmReady } from "./wasm.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
 
 test("formatTableLines aligns columns and preserves delimiter alignment markers", () => {
   const input = ["| col | value |", "| :--- | ---: |", "| x | 10 |"];

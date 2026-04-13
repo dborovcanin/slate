@@ -1,6 +1,11 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { formatMarkdownText } from "./markdown-format.ts";
+import { ensureWasmReady } from "./wasm.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
 
 test("formatMarkdownText normalizes markdown basics", () => {
   const input = "##Title  \n* item\n1.   task\n";

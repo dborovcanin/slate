@@ -17,7 +17,7 @@ export interface CommandRuntime {
   evaluateExpression?: SumExpressionEvaluator;
   copyText?: (text: string) => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
-  formatMarkdown?: (input: string) => string;
+  formatMarkdown?: (input: string) => string | Promise<string>;
 }
 
 export interface CommandExecutionResult {
@@ -106,7 +106,7 @@ async function runFormatCommand(
 ): Promise<CommandExecutionResult> {
   const source = ctx.text();
   const formatter = runtime.formatMarkdown ?? ((value: string) => value);
-  const formatted = formatter(source);
+  const formatted = await formatter(source);
   if (formatted === source) {
     return { message: "already formatted", operations: [] };
   }

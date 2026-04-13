@@ -9,14 +9,15 @@ import init, {
 } from "../../pkg/editor-core/editor_core.js";
 import type { EditOperation, EditorContextSnapshot } from "./core/types.ts";
 
-// Initialize synchronously in Node.js (test env), asynchronously in the browser.
-// In the browser, vite-plugin-wasm handles WASM bundling; top-level await is enabled
-// by vite-plugin-top-level-await. In Node.js (npm test), fetch doesn't work for
-// file:// URLs, so we read the binary directly with fs.readFileSync.
+// Initialize non-blocking in the browser to avoid delaying first paint.
+// In Node.js tests we can call ensureWasmReady() up front.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _isNode = typeof (globalThis as any).process?.versions?.node === "string";
-if (_isNode) {
-  // Dynamic imports avoid bundling Node-only modules in the browser bundle.
+let _ready = false;
+let _initPromise: Promise<void> | null = null;
+let _initErrorLogged = false;
+
+async function initForNode(): Promise<void> {
   const { readFileSync } = await import("fs" as string);
   const { fileURLToPath } = await import("url" as string);
   const { resolve, dirname } = await import("path" as string);
@@ -26,8 +27,35 @@ if (_isNode) {
   const wasmPath = resolve(__dirname, "../../pkg/editor-core/editor_core_bg.wasm");
   const wasmBytes = readFileSync(wasmPath);
   initSync({ module: wasmBytes });
-} else {
-  await init();
+}
+
+function logInitError(error: unknown) {
+  if (_initErrorLogged) return;
+  _initErrorLogged = true;
+  console.error("Failed to initialize editor-core wasm:", error);
+}
+
+export function ensureWasmReady(): Promise<void> {
+  if (_ready) return Promise.resolve();
+  if (_initPromise) return _initPromise;
+
+  _initPromise = (_isNode ? initForNode() : init())
+    .then(() => {
+      _ready = true;
+    })
+    .catch((error) => {
+      _initPromise = null;
+      logInitError(error);
+      throw error;
+    });
+
+  return _initPromise;
+}
+
+function ensureWasmReadyNonBlocking(): boolean {
+  if (_ready) return true;
+  void ensureWasmReady().catch(logInitError);
+  return false;
 }
 
 export interface TextRuleOptions {
@@ -57,6 +85,7 @@ export function runDocChangeRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
 ): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
     wasm_run_doc_change_rules(toRustSnapshot(snapshot), options.markdownAutoformat ?? true),
   );
@@ -66,6 +95,7 @@ export function runEnterRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
 ): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
     wasm_run_enter_rules(toRustSnapshot(snapshot), options.markdownAutoformat ?? true),
   );
@@ -75,6 +105,7 @@ export function runTabRules(
   snapshot: EditorContextSnapshot,
   options: TabRuleOptions = {},
 ): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
     wasm_run_tab_rules(
       toRustSnapshot(snapshot),
@@ -88,6 +119,7 @@ export function runTableCellNavigationRules(
   snapshot: EditorContextSnapshot,
   options: TabRuleOptions = {},
 ): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
     wasm_run_table_cell_navigation_rules(
       toRustSnapshot(snapshot),
@@ -98,9 +130,14 @@ export function runTableCellNavigationRules(
 }
 
 export function rewriteLineWithChecklistToggleSuffix(lineText: string): string | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_rewrite_line_with_checklist_toggle_suffix(lineText) ?? null;
 }
 
 export function formatMarkdown(text: string): string {
+  if (!ensureWasmReadyNonBlocking()) return text;
   return wasm_format_markdown(text);
 }
+
+// Start compiling in the background as soon as this module is loaded.
+void ensureWasmReady().catch(logInitError);

@@ -8,7 +8,7 @@ import {
 } from "./core/commands.ts";
 import { applyEditOperations, snapshotFromView } from "./core/codemirror-adapter.ts";
 import { openDatePicker } from "./date-picker.ts";
-import { formatMarkdownText } from "./markdown-format.ts";
+import { formatMarkdownTextAsync } from "./markdown-format.ts";
 
 export type { CommandMode, CommandSuggestion };
 
@@ -47,7 +47,7 @@ export async function executeCommand(
     },
     copyText,
     onQuit: options.onExitCommand,
-    formatMarkdown: formatMarkdownText,
+    formatMarkdown: formatMarkdownTextAsync,
   });
 
   if (result.operations.length > 0) {
