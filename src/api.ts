@@ -77,13 +77,21 @@ export function evaluateLines(lines: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("evaluate_lines", { lines });
 }
 
+export interface NoteEvaluationRange {
+  evalFrom: number;
+  evalTo: number;
+}
+
 export function evaluateNoteContext(
   lines: string[],
   variablesEnabled = true,
+  range?: NoteEvaluationRange,
 ): Promise<NoteEvaluationResult> {
   return invoke<NoteEvaluationResult>("evaluate_note_context", {
     lines,
     variables_enabled: variablesEnabled,
+    eval_from: range?.evalFrom,
+    eval_to: range?.evalTo,
   });
 }
 

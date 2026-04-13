@@ -1,4 +1,4 @@
-import { RangeSetBuilder } from "@codemirror/state";
+import { RangeSetBuilder, type Text } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
@@ -615,86 +615,152 @@ export function findVariableNameRanges(
   return result;
 }
 
-function buildMarkdownDecorations(view: EditorView): DecorationSet {
+function advanceFenceStateInLine(
+  text: string,
+  state: { inCodeBlock: boolean; codeFenceLang: string | null },
+): void {
+  if (!fenceRe.test(text)) return;
+  if (!state.inCodeBlock) {
+    state.codeFenceLang = parseFenceLanguage(text);
+    state.inCodeBlock = true;
+  } else {
+    state.inCodeBlock = false;
+    state.codeFenceLang = null;
+  }
+}
+
+function fastForwardFenceState(
+  doc: Text,
+  fromLine: number,
+  toLine: number,
+  state: { inCodeBlock: boolean; codeFenceLang: string | null },
+): void {
+  if (fromLine > toLine) return;
+  const iter = doc.iterLines(fromLine, toLine + 1);
+  iter.next();
+  while (!iter.done) {
+    advanceFenceStateInLine(iter.value, state);
+    iter.next();
+  }
+}
+
+export interface VisibleLineSpan {
+  fromLine: number;
+  toLine: number;
+}
+
+export function buildMarkdownDecorationsForSpans(
+  doc: Text,
+  spans: readonly VisibleLineSpan[],
+  variableIndex: readonly Pick<VariableIndexEntry, "normalized">[],
+): DecorationSet {
+  if (spans.length === 0) return Decoration.none;
+
   const builder = new RangeSetBuilder<Decoration>();
-  let inCodeBlock = false;
-  let codeFenceLang: string | null = null;
-  const variableIndex = view.state.field(variableIndexField, false) ?? [];
+  const fenceState = { inCodeBlock: false, codeFenceLang: null as string | null };
+  let nextLineToProcess = 1;
 
-  for (let lineNo = 1; lineNo <= view.state.doc.lines; lineNo++) {
-    const line = view.state.doc.line(lineNo);
-    const info = classifyMarkdownLine(line.text);
+  for (const span of spans) {
+    fastForwardFenceState(doc, nextLineToProcess, span.fromLine - 1, fenceState);
 
-    if (info.isCodeFence) {
-      if (!inCodeBlock) {
-        codeFenceLang = parseFenceLanguage(line.text);
-      }
-      builder.add(line.from, line.from, decCodeFenceLine);
-      builder.add(line.from, line.to, decFenceToken);
-      inCodeBlock = !inCodeBlock;
-      if (!inCodeBlock) {
-        codeFenceLang = null;
-      }
-      continue;
-    }
+    for (let lineNo = span.fromLine; lineNo <= span.toLine; lineNo++) {
+      const line = doc.line(lineNo);
+      const info = classifyMarkdownLine(line.text);
 
-    if (inCodeBlock) {
-      builder.add(line.from, line.from, decCodeBlockLine);
-      addCodeSyntaxDecorations(builder, line.from, line.text, codeFenceLang);
-      continue;
-    }
-
-    if (info.headingLevel) {
-      builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
-      if (info.headingMarkerEnd) {
-        builder.add(line.from, line.from + info.headingMarkerEnd, decHeadingToken);
-        builder.add(line.from + info.headingMarkerEnd, line.to, decHeadingContent);
-      }
-    }
-
-    if (info.quoteMarkerEnd) {
-      builder.add(line.from, line.from, decQuoteLine);
-      builder.add(line.from, line.from + info.quoteMarkerEnd, decQuoteToken);
-    }
-
-    if (info.listMarkerEnd && info.checklistMarkerStart === null) {
-      builder.add(line.from, line.from, decListLine);
-      builder.add(line.from, line.from + info.listMarkerEnd, decListToken);
-    }
-
-    if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
-      try {
-        builder.add(line.from, line.from, decChecklistLine);
-        const markerFrom = line.from + info.checklistMarkerStart;
-        const markerTo = line.from + info.checklistMarkerEnd;
-        // Dim the brackets [ ] as tokens, style the inner mark
-        builder.add(markerFrom, markerFrom + 1, decChecklistToken);   // [
-        builder.add(markerFrom + 1, markerTo - 1, info.checklistChecked ? decChecklistMarkChecked : decChecklistMark); // x or space
-        builder.add(markerTo - 1, markerTo, decChecklistToken);       // ]
-        if (info.checklistChecked && info.checklistContentStart !== null) {
-          const contentFrom = line.from + info.checklistContentStart;
-          if (contentFrom < line.to) {
-            builder.add(contentFrom, line.to, decChecklistDoneContent);
-          }
+      if (info.isCodeFence) {
+        if (!fenceState.inCodeBlock) {
+          fenceState.codeFenceLang = parseFenceLanguage(line.text);
         }
-      } catch (error) {
-        console.error("Checklist decoration failed, skipping checklist render for line:", error);
+        builder.add(line.from, line.from, decCodeFenceLine);
+        builder.add(line.from, line.to, decFenceToken);
+        fenceState.inCodeBlock = !fenceState.inCodeBlock;
+        if (!fenceState.inCodeBlock) {
+          fenceState.codeFenceLang = null;
+        }
+        continue;
       }
-    }
 
-    if (info.isHorizontalRule) {
-      builder.add(line.from, line.from, decRuleLine);
-      builder.add(line.from, line.to, decRuleToken);
-    }
+      if (fenceState.inCodeBlock) {
+        builder.add(line.from, line.from, decCodeBlockLine);
+        addCodeSyntaxDecorations(builder, line.from, line.text, fenceState.codeFenceLang);
+        continue;
+      }
 
-    for (const range of findVariableNameRanges(line.text, variableIndex)) {
-      builder.add(line.from + range.from, line.from + range.to, decVariable);
+      decorateContentLine(builder, line, info, variableIndex);
     }
-
-    addInlineDecorations(builder, line.from, line.text);
+    nextLineToProcess = span.toLine + 1;
   }
 
   return builder.finish();
+}
+
+function buildMarkdownDecorations(view: EditorView): DecorationSet {
+  const doc = view.state.doc;
+  const variableIndex = view.state.field(variableIndexField, false) ?? [];
+  const spans: VisibleLineSpan[] = view.visibleRanges.map(({ from, to }) => ({
+    fromLine: doc.lineAt(from).number,
+    toLine: doc.lineAt(to).number,
+  }));
+  return buildMarkdownDecorationsForSpans(doc, spans, variableIndex);
+}
+
+function decorateContentLine(
+  builder: RangeSetBuilder<Decoration>,
+  line: { from: number; to: number; text: string },
+  info: MarkdownLineInfo,
+  variableIndex: readonly Pick<VariableIndexEntry, "normalized">[],
+): void {
+  if (info.headingLevel) {
+    builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
+    if (info.headingMarkerEnd) {
+      builder.add(line.from, line.from + info.headingMarkerEnd, decHeadingToken);
+      builder.add(line.from + info.headingMarkerEnd, line.to, decHeadingContent);
+    }
+  }
+
+  if (info.quoteMarkerEnd) {
+    builder.add(line.from, line.from, decQuoteLine);
+    builder.add(line.from, line.from + info.quoteMarkerEnd, decQuoteToken);
+  }
+
+  if (info.listMarkerEnd && info.checklistMarkerStart === null) {
+    builder.add(line.from, line.from, decListLine);
+    builder.add(line.from, line.from + info.listMarkerEnd, decListToken);
+  }
+
+  if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
+    try {
+      builder.add(line.from, line.from, decChecklistLine);
+      const markerFrom = line.from + info.checklistMarkerStart;
+      const markerTo = line.from + info.checklistMarkerEnd;
+      builder.add(markerFrom, markerFrom + 1, decChecklistToken);
+      builder.add(
+        markerFrom + 1,
+        markerTo - 1,
+        info.checklistChecked ? decChecklistMarkChecked : decChecklistMark,
+      );
+      builder.add(markerTo - 1, markerTo, decChecklistToken);
+      if (info.checklistChecked && info.checklistContentStart !== null) {
+        const contentFrom = line.from + info.checklistContentStart;
+        if (contentFrom < line.to) {
+          builder.add(contentFrom, line.to, decChecklistDoneContent);
+        }
+      }
+    } catch (error) {
+      console.error("Checklist decoration failed, skipping checklist render for line:", error);
+    }
+  }
+
+  if (info.isHorizontalRule) {
+    builder.add(line.from, line.from, decRuleLine);
+    builder.add(line.from, line.to, decRuleToken);
+  }
+
+  for (const range of findVariableNameRanges(line.text, variableIndex)) {
+    builder.add(line.from + range.from, line.from + range.to, decVariable);
+  }
+
+  addInlineDecorations(builder, line.from, line.text);
 }
 
 const markdownRichPlugin = ViewPlugin.fromClass(

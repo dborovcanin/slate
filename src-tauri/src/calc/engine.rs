@@ -7,12 +7,18 @@ pub struct CalcEngine;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoteEvaluationOptions {
     pub variables_enabled: bool,
+    /// Optional half-open range `[from, to)` of line indices (0-based) to evaluate.
+    /// When `None`, evaluates every line. Variable resolution always considers the
+    /// full document so that a restricted evaluation still sees vars defined elsewhere.
+    /// Positions outside the range are returned as `None` in `line_results`.
+    pub eval_range: Option<(usize, usize)>,
 }
 
 impl Default for NoteEvaluationOptions {
     fn default() -> Self {
         Self {
             variables_enabled: true,
+            eval_range: None,
         }
     }
 }
@@ -277,24 +283,35 @@ impl CalcEngine {
             }
         }
 
-        let line_results = lines
+        let line_count = lines.len();
+        let (eval_from, eval_to) = match options.eval_range {
+            Some((from, to)) => (from.min(line_count), to.min(line_count)),
+            None => (0, line_count),
+        };
+
+        let mut line_results: Vec<Option<String>> = vec![None; line_count];
+        for (idx, line) in lines
             .iter()
-            .map(|line| {
-                let Some(expression) = expression_for_ghost_eval(line) else {
-                    return None;
-                };
+            .enumerate()
+            .skip(eval_from)
+            .take(eval_to.saturating_sub(eval_from))
+        {
+            let Some(expression) = expression_for_ghost_eval(line) else {
+                continue;
+            };
 
-                if parse_variable_assignment(&expression).is_some() {
-                    return None;
-                }
+            if parse_variable_assignment(&expression).is_some() {
+                continue;
+            }
 
-                if options.variables_enabled {
-                    evaluate_expression_with_variables(&expression, &mut resolver)
-                } else {
-                    self.evaluate(&expression)
-                }
-            })
-            .collect();
+            let result = if options.variables_enabled {
+                evaluate_expression_with_variables(&expression, &mut resolver)
+            } else {
+                self.evaluate(&expression)
+            };
+
+            line_results[idx] = result;
+        }
 
         NoteEvaluationResult {
             line_results,
@@ -962,6 +979,7 @@ mod tests {
             &lines,
             NoteEvaluationOptions {
                 variables_enabled: false,
+                eval_range: None,
             },
         );
 
@@ -981,6 +999,56 @@ mod tests {
             .variables
             .iter()
             .any(|entry| entry.normalized == "len" && entry.line == 1));
+    }
+
+    #[test]
+    fn note_eval_partial_range_only_evaluates_requested_lines() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "2 + 2".to_string(),
+            "10 / 5".to_string(),
+            "3 * 3".to_string(),
+            "100 - 1".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                variables_enabled: true,
+                eval_range: Some((1, 3)),
+            },
+        );
+
+        assert_eq!(
+            result.line_results,
+            vec![None, Some("2".to_string()), Some("9".to_string()), None]
+        );
+    }
+
+    #[test]
+    fn note_eval_partial_range_still_resolves_variables_defined_outside_range() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "base := 10".to_string(),
+            "base + 1".to_string(),
+            "base + 2".to_string(),
+            "base + 3".to_string(),
+        ];
+
+        // Only re-evaluate line index 2; it should still see `base` defined at line 0.
+        let result = engine.evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                variables_enabled: true,
+                eval_range: Some((2, 3)),
+            },
+        );
+
+        assert_eq!(
+            result.line_results,
+            vec![None, None, Some("12".to_string()), None]
+        );
+        assert_eq!(result.variables.len(), 1);
     }
 
     #[test]

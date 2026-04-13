@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { Text } from "@codemirror/state";
 import {
+  buildMarkdownDecorationsForSpans,
   classifyMarkdownLine,
   findInlineMarkdownTokens,
   findVariableNameRanges,
@@ -90,6 +92,91 @@ test("findVariableNameRanges finds variable references with boundaries", () => {
       [9, 17],
       [20, 28],
     ],
+  );
+});
+
+function collectDecorations(decos: ReturnType<typeof buildMarkdownDecorationsForSpans>) {
+  const out: Array<{ from: number; to: number; cls: string }> = [];
+  const cursor = decos.iter();
+  while (cursor.value) {
+    const spec = cursor.value.spec as { class?: string; attributes?: { class?: string } };
+    const cls = spec.class ?? spec.attributes?.class ?? "";
+    out.push({ from: cursor.from, to: cursor.to, cls });
+    cursor.next();
+  }
+  return out;
+}
+
+test("buildMarkdownDecorationsForSpans only decorates lines inside visible spans", () => {
+  const doc = Text.of([
+    "# Outside heading",
+    "- outside list",
+    "# Inside heading",
+    "- inside list",
+    "# Also outside",
+  ]);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 3, toLine: 4 }],
+    [],
+  );
+  const flat = collectDecorations(decos);
+
+  const insideHeading = doc.line(3);
+  const insideList = doc.line(4);
+  const outsideFirst = doc.line(1);
+  const outsideLast = doc.line(5);
+
+  assert.ok(
+    flat.some((d) => d.from >= insideHeading.from && d.to <= insideHeading.to && d.cls.includes("md-heading")),
+    "inside heading should be decorated",
+  );
+  assert.ok(
+    flat.some((d) => d.from >= insideList.from && d.to <= insideList.to && d.cls.includes("md-list")),
+    "inside list should be decorated",
+  );
+  assert.ok(
+    !flat.some((d) => d.from >= outsideFirst.from && d.to <= outsideFirst.to),
+    "outside-before heading should not be decorated",
+  );
+  assert.ok(
+    !flat.some((d) => d.from >= outsideLast.from && d.to <= outsideLast.to),
+    "outside-after heading should not be decorated",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans recovers fence state when viewport starts inside a code block", () => {
+  const doc = Text.of([
+    "prose before",
+    "```rust",
+    "let x = 1;",
+    "fn main() {}",
+    "```",
+    "prose after",
+  ]);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 3, toLine: 4 }],
+    [],
+  );
+  const flat = collectDecorations(decos);
+
+  const line3 = doc.line(3);
+  const line4 = doc.line(4);
+
+  assert.ok(
+    flat.some((d) => d.from === line3.from && d.cls.includes("md-code-block-line")),
+    "line inside fenced block should get code-block line class",
+  );
+  assert.ok(
+    flat.some((d) => d.from >= line3.from && d.to <= line3.to && d.cls.includes("md-code-token-keyword")),
+    "keywords inside the fenced block should be highlighted with the correct language",
+  );
+  assert.ok(
+    flat.some((d) => d.from === line4.from && d.cls.includes("md-code-block-line")),
+    "second body line should also be treated as code",
   );
 });
 

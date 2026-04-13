@@ -6,6 +6,10 @@ import {
   findSingleCalcTableCell,
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
+import {
+  containsVariableAssignment,
+  mergePartialCalcResults,
+} from "./calc-decoration.ts";
 
 test("findSingleCalcTableCell extracts a single expression cell", () => {
   const line = "| item | 4+2 |";
@@ -68,4 +72,58 @@ test("lineForCalcEvaluation uses cell expression for table rows", () => {
 test("findCalcSegment returns null when no scoped calc target exists", () => {
   assert.equal(findCalcSegment("- buy milk"), null);
   assert.equal(findCalcSegment("| a | b |"), null);
+});
+
+test("containsVariableAssignment detects := while ignoring lookalike operators", () => {
+  assert.equal(containsVariableAssignment(["tax := 0.2"]), true);
+  assert.equal(containsVariableAssignment(["tax:=0.2"]), true);
+  assert.equal(containsVariableAssignment(["- base := 10"]), true);
+  assert.equal(containsVariableAssignment(["if a != b"]), false);
+  assert.equal(containsVariableAssignment(["x == y"]), false);
+  assert.equal(containsVariableAssignment(["2 + 2"]), false);
+  assert.equal(containsVariableAssignment(["a >= b", "c <= d"]), false);
+});
+
+test("mergePartialCalcResults overlays backend results on top of base", () => {
+  const base = new Map<number, string>([
+    [0, "4"],
+    [1, "stale"],
+    [3, "9"],
+  ]);
+  const lineResults: (string | null)[] = [null, "20", "30", null];
+  const merged = mergePartialCalcResults(base, lineResults, 1, 3);
+  assert.deepEqual(
+    [...merged.entries()].sort((a, b) => a[0] - b[0]),
+    [
+      [0, "4"],
+      [1, "20"],
+      [2, "30"],
+      [3, "9"],
+    ],
+  );
+});
+
+test("mergePartialCalcResults deletes entries when backend returns null in range", () => {
+  const base = new Map<number, string>([
+    [0, "4"],
+    [1, "4"],
+    [2, "9"],
+  ]);
+  const lineResults: (string | null)[] = [null, null, null];
+  const merged = mergePartialCalcResults(base, lineResults, 1, 2);
+  assert.equal(merged.has(1), false);
+  assert.equal(merged.get(0), "4");
+  assert.equal(merged.get(2), "9");
+});
+
+test("mergePartialCalcResults leaves indices outside range untouched", () => {
+  const base = new Map<number, string>([
+    [0, "keep"],
+    [5, "keep"],
+  ]);
+  const lineResults: (string | null)[] = [null, null, "new", null, null, null];
+  const merged = mergePartialCalcResults(base, lineResults, 2, 3);
+  assert.equal(merged.get(0), "keep");
+  assert.equal(merged.get(2), "new");
+  assert.equal(merged.get(5), "keep");
 });

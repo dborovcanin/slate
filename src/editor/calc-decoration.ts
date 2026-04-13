@@ -9,6 +9,7 @@ import {
 import { StateField, StateEffect, RangeSetBuilder } from "@codemirror/state";
 import { evaluateNoteContext, type VariableIndexEntry } from "../api.ts";
 import { findCalcSegment } from "./calc-line-utils.ts";
+import { planIncrementalCalc } from "./calc-incremental.ts";
 
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
@@ -89,6 +90,33 @@ class CalcResultWidget extends WidgetType {
   }
 }
 
+const ASSIGNMENT_RE = /(^|[^:!<>=])(:=)(?!=)/;
+
+export function containsVariableAssignment(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    if (ASSIGNMENT_RE.test(line)) return true;
+  }
+  return false;
+}
+
+export function mergePartialCalcResults(
+  baseResults: ReadonlyMap<number, string>,
+  lineResults: readonly (string | null)[],
+  evalFrom: number,
+  evalTo: number,
+): Map<number, string> {
+  const next = new Map(baseResults);
+  for (let i = evalFrom; i < evalTo; i++) {
+    const result = lineResults[i];
+    if (result != null) {
+      next.set(i, result);
+    } else {
+      next.delete(i);
+    }
+  }
+  return next;
+}
+
 function buildCalcPlugin(options: CalcExtensionOptions) {
   const variablesEnabled = options.variablesEnabled ?? true;
 
@@ -97,6 +125,8 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let inFlight = false;
     let rerunRequested = false;
     let destroyed = false;
+    let prevLines: string[] = [];
+    let prevResults: Map<number, string> = new Map();
 
     function scheduleEval() {
       if (timer !== null) clearTimeout(timer);
@@ -117,12 +147,50 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
         try {
           const doc = view.state.doc;
           const snapshot = doc.toString();
-          const lines: string[] = [];
+          const nextLines: string[] = [];
           for (let i = 1; i <= doc.lines; i++) {
-            lines.push(doc.line(i).text);
+            nextLines.push(doc.line(i).text);
           }
 
-          const evaluated = await evaluateNoteContext(lines, variablesEnabled);
+          const plan = planIncrementalCalc(prevLines, prevResults, nextLines);
+          const hasPrev = prevLines.length > 0;
+          // Prev-side changed slice mirrors the next-side plan:
+          //   prevChangedTo = prevLen - suffix
+          //                 = prevLen - (nextLen - plan.evalFrom - plan.evalLines.length)
+          const prevChangedTo =
+            prevLines.length - nextLines.length + plan.evalFrom + plan.evalLines.length;
+          const prevChangedLines = prevLines.slice(plan.evalFrom, prevChangedTo);
+          const touchesAnyAssignment =
+            containsVariableAssignment(plan.evalLines) ||
+            containsVariableAssignment(prevChangedLines);
+          const canUsePartial = hasPrev && !touchesAnyAssignment;
+
+          let evaluated;
+          let evalFrom = 0;
+          let evalTo = nextLines.length;
+
+          if (canUsePartial && plan.evalLines.length === 0) {
+            // No lines changed in the middle — prefix/suffix cover everything.
+            const nextMap = new Map(plan.baseResults);
+            view.dispatch({
+              effects: [setCalcResults.of(nextMap)],
+            });
+            prevLines = nextLines;
+            prevResults = nextMap;
+            continue;
+          }
+
+          if (canUsePartial) {
+            evalFrom = plan.evalFrom;
+            evalTo = plan.evalFrom + plan.evalLines.length;
+            evaluated = await evaluateNoteContext(nextLines, variablesEnabled, {
+              evalFrom,
+              evalTo,
+            });
+          } else {
+            evaluated = await evaluateNoteContext(nextLines, variablesEnabled);
+          }
+
           if (destroyed) break;
 
           // If the document changed during async evaluation, drop stale results and rerun.
@@ -131,10 +199,15 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             continue;
           }
 
-          const nextMap = new Map<number, string>();
-          evaluated.line_results.forEach((result, lineIndex) => {
-            if (result !== null) nextMap.set(lineIndex, result);
-          });
+          const nextMap = canUsePartial
+            ? mergePartialCalcResults(plan.baseResults, evaluated.line_results, evalFrom, evalTo)
+            : (() => {
+                const m = new Map<number, string>();
+                evaluated.line_results.forEach((result, lineIndex) => {
+                  if (result !== null) m.set(lineIndex, result);
+                });
+                return m;
+              })();
 
           view.dispatch({
             effects: [
@@ -142,6 +215,9 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
               setVariableIndex.of(evaluated.variables ?? []),
             ],
           });
+
+          prevLines = nextLines;
+          prevResults = nextMap;
         } catch (e) {
           console.error("Calc evaluation failed:", e);
         }

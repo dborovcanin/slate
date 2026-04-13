@@ -2486,7 +2486,10 @@ fn compute_calc_data(lines: &[String], variables_enabled: bool) -> CalcData {
     let engine = crate::calc::engine::CalcEngine::new();
     let result = engine.evaluate_note_context(
         lines,
-        crate::calc::engine::NoteEvaluationOptions { variables_enabled },
+        crate::calc::engine::NoteEvaluationOptions {
+            variables_enabled,
+            eval_range: None,
+        },
     );
     let mut variable_names = result
         .variables
