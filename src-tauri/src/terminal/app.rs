@@ -3773,4 +3773,37 @@ mod tests {
         drop(db);
         cleanup_db_files(&path);
     }
+
+    #[test]
+    fn vim_n_and_shift_n_cycle_last_search_matches() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta alpha\nalpha");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char('/'),
+                Key::Char('a'),
+                Key::Char('l'),
+                Key::Char('p'),
+                Key::Char('h'),
+                Key::Char('a'),
+                Key::Enter,
+            ],
+        );
+        assert_eq!(app.search_query, "alpha");
+        assert!(!app.search_matches.is_empty());
+        assert_eq!((app.cursor_line, app.cursor_col), (0, 0));
+
+        run_keys(&mut app, &db, &[Key::Char('n')]);
+        assert_eq!((app.cursor_line, app.cursor_col), (1, 5));
+
+        run_keys(&mut app, &db, &[Key::Char('N')]);
+        assert_eq!((app.cursor_line, app.cursor_col), (0, 0));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
 }

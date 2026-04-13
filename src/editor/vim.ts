@@ -32,6 +32,14 @@ function isPrintableTextKey(event: KeyboardEvent): boolean {
   return event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey;
 }
 
+function isLineStartMotionKey(event: KeyboardEvent): boolean {
+  return event.key === "0" || event.key === "Home";
+}
+
+function isLineEndMotionKey(event: KeyboardEvent): boolean {
+  return event.key === "$" || event.key === "End" || (event.shiftKey && event.code === "Digit4");
+}
+
 function moveToDocStart(view: EditorView): boolean {
   const first = view.state.doc.line(1).from;
   view.dispatch({ selection: { anchor: first }, scrollIntoView: true });
@@ -243,9 +251,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
 
     updateModeClasses(view, next);
-    if (next === "visual-block") {
-      updateVisualSelection(view);
-    }
+    updateVisualSelection(view);
   };
 
   const runCounted = (
@@ -281,7 +287,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     const isVisual = mode === "visual" || mode === "visual-line" || mode === "visual-block";
     const cmd = isVisual ? selectVariantFor(command) : command;
     runCounted(view, cmd, explicitCount);
-    if (mode === "visual-block") {
+    if (isVisual) {
       updateVisualSelection(view);
     }
     return true;
@@ -575,6 +581,7 @@ export function vimModeExtension(options: VimOptions = {}) {
         event.key.length === 1 &&
         event.key >= "0" &&
         event.key <= "9" &&
+        !event.shiftKey &&
         !event.ctrlKey &&
         !event.altKey &&
         !event.metaKey
@@ -604,11 +611,11 @@ export function vimModeExtension(options: VimOptions = {}) {
           pendingTextObject = { op: "delete", around: event.key === "a" };
           return true;
         }
-        if (event.key === "0") {
+        if (isLineStartMotionKey(event)) {
           clearPending();
           return deleteToLineStart(view);
         }
-        if (event.key === "$") {
+        if (isLineEndMotionKey(event)) {
           clearPending();
           return deleteToLineEnd(view);
         }
@@ -627,11 +634,11 @@ export function vimModeExtension(options: VimOptions = {}) {
           pendingTextObject = { op: "yank", around: event.key === "a" };
           return true;
         }
-        if (event.key === "0") {
+        if (isLineStartMotionKey(event)) {
           clearPending();
           return yankToLineStart(view);
         }
-        if (event.key === "$") {
+        if (isLineEndMotionKey(event)) {
           clearPending();
           return yankToLineEnd(view);
         }
@@ -673,6 +680,24 @@ export function vimModeExtension(options: VimOptions = {}) {
       if ((mode === "visual" || mode === "visual-line" || mode === "visual-block") && event.key === "y") {
         event.preventDefault();
         return yankVisualSelection(view);
+      }
+
+      if (!event.ctrlKey && !event.altKey && !event.metaKey && isLineEndMotionKey(event)) {
+        event.preventDefault();
+        return runMove(view, cursorLineEnd);
+      }
+
+      if (
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        event.key === "Home" &&
+        !pendingDelete &&
+        !pendingYank &&
+        !pendingGo
+      ) {
+        event.preventDefault();
+        return runMove(view, cursorLineStart);
       }
 
       switch (event.key) {
@@ -726,9 +751,6 @@ export function vimModeExtension(options: VimOptions = {}) {
         case "0":
           event.preventDefault();
           return runMove(view, cursorLineStart);
-        case "$":
-          event.preventDefault();
-          return runMove(view, cursorLineEnd);
         case "x":
           event.preventDefault();
           return runMove(view, deleteCharForward);
