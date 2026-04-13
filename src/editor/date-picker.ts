@@ -94,6 +94,8 @@ export function openDatePicker(format: string): Promise<string | null> {
   let year = now.getFullYear();
   let month = now.getMonth(); // 0-based
   let day = now.getDate();
+  const restoreTarget =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
   return new Promise((resolve) => {
     const overlay = document.createElement("div");
@@ -101,6 +103,10 @@ export function openDatePicker(format: string): Promise<string | null> {
 
     const panel = document.createElement("div");
     panel.className = "date-picker-panel";
+    panel.tabIndex = -1;
+    panel.setAttribute("role", "dialog");
+    panel.setAttribute("aria-modal", "true");
+    panel.setAttribute("aria-label", "Date picker");
 
     // Header row: < Month Year >
     const header = document.createElement("div");
@@ -113,6 +119,8 @@ export function openDatePicker(format: string): Promise<string | null> {
 
     const monthLabel = document.createElement("span");
     monthLabel.className = "date-picker-month-label";
+    monthLabel.id = "date-picker-month-label";
+    panel.setAttribute("aria-labelledby", monthLabel.id);
 
     const nextBtn = document.createElement("button");
     nextBtn.className = "date-picker-nav";
@@ -136,6 +144,7 @@ export function openDatePicker(format: string): Promise<string | null> {
     // Grid
     const grid = document.createElement("div");
     grid.className = "date-picker-grid";
+    grid.setAttribute("role", "grid");
 
     // Footer with selected date + actions
     const footer = document.createElement("div");
@@ -177,7 +186,7 @@ export function openDatePicker(format: string): Promise<string | null> {
       monthLabel.textContent = `${monthNamesLong[month]} ${year}`;
       selectedLabel.textContent = `${year}-${pad2(month + 1)}-${pad2(day)}`;
 
-      grid.innerHTML = "";
+      grid.replaceChildren();
       const startDow = startDayOfWeek(year, month);
       const maxDays = daysInMonth(year, month);
       const today = new Date();
@@ -189,16 +198,23 @@ export function openDatePicker(format: string): Promise<string | null> {
       for (let i = 0; i < startDow; i++) {
         const empty = document.createElement("span");
         empty.className = "date-picker-cell date-picker-cell-empty";
+        empty.setAttribute("aria-hidden", "true");
         grid.appendChild(empty);
       }
 
       for (let d = 1; d <= maxDays; d++) {
         const cell = document.createElement("button");
+        cell.type = "button";
         cell.className = "date-picker-cell";
         cell.textContent = `${d}`;
+        cell.setAttribute("role", "gridcell");
+        cell.setAttribute("aria-selected", d === day ? "true" : "false");
         if (d === day) cell.classList.add("date-picker-cell-selected");
         if (isCurrentMonth && d === todayDay)
           cell.classList.add("date-picker-cell-today");
+        if (isCurrentMonth && d === todayDay) {
+          cell.setAttribute("aria-current", "date");
+        }
         const dayVal = d;
         cell.addEventListener("click", () => {
           day = dayVal;
@@ -237,6 +253,9 @@ export function openDatePicker(format: string): Promise<string | null> {
     const close = (result: string | null) => {
       overlay.remove();
       document.removeEventListener("keydown", onKeyDown);
+      if (restoreTarget && restoreTarget.isConnected) {
+        restoreTarget.focus();
+      }
       resolve(result);
     };
 

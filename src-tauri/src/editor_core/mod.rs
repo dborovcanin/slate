@@ -1,10 +1,13 @@
 // Pure logic lives in the editor-core crate (compiled native here, WASM for the GUI webview).
 // Re-export so existing callers (terminal/mod.rs, etc.) don't need path changes.
+pub use editor_core::command_catalog;
 pub use editor_core::context;
 pub use editor_core::format;
 pub use editor_core::operations;
+pub use editor_core::sum;
 pub use editor_core::text_rules;
 pub use editor_core::types;
+pub use editor_core::vim;
 
 // Commands stay here: they use fend-core (native-only) and async I/O.
 pub mod commands;

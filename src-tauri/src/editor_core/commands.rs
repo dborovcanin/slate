@@ -1,163 +1,23 @@
+use super::command_catalog::{self, CommandId};
 use super::context::ResolvedContext;
 use super::format::format_markdown;
 use super::operations::replace_range;
+use super::sum::{
+    format_sum_result as format_numeric_result, parse_numbers as parse_numeric_values,
+    resolve_scope_range, SumScope,
+};
 use super::types::{
     BlockLineRange, CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation,
     EditorContextSnapshot, OperationSelection,
 };
 use regex::Regex;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CommandBehavior {
-    Sum,
-    Avg,
-    Date,
-    Format,
-    Quit,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct CommandDefinition {
-    value: &'static str,
-    aliases: &'static [&'static str],
-    description: &'static str,
-    modes: &'static [CommandMode],
-    behavior: CommandBehavior,
-}
-
-const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
-const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
-
-const COMMAND_DEFINITIONS: [CommandDefinition; 13] = [
-    CommandDefinition {
-        value: "sum",
-        aliases: &[],
-        description: "sum paragraph (placeholder)",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Sum,
-    },
-    CommandDefinition {
-        value: "sum list",
-        aliases: &[],
-        description: "sum list at cursor (placeholder)",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Sum,
-    },
-    CommandDefinition {
-        value: "sum row",
-        aliases: &["sum_row"],
-        description: "sum table per-row totals at cursor",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Sum,
-    },
-    CommandDefinition {
-        value: "sum column",
-        aliases: &["sum_column"],
-        description: "sum table per-column totals at cursor",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Sum,
-    },
-    CommandDefinition {
-        value: "sum doc",
-        aliases: &["sum_all", "sum all"],
-        description: "sum whole document (placeholder)",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Sum,
-    },
-    CommandDefinition {
-        value: "avg",
-        aliases: &[],
-        description: "average paragraph (placeholder)",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Avg,
-    },
-    CommandDefinition {
-        value: "avg list",
-        aliases: &[],
-        description: "average list at cursor",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Avg,
-    },
-    CommandDefinition {
-        value: "avg row",
-        aliases: &["avg_row"],
-        description: "average table per-row values at cursor",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Avg,
-    },
-    CommandDefinition {
-        value: "avg column",
-        aliases: &["avg_column"],
-        description: "average table per-column values at cursor",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Avg,
-    },
-    CommandDefinition {
-        value: "avg doc",
-        aliases: &["avg_all", "avg all"],
-        description: "average whole document",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Avg,
-    },
-    CommandDefinition {
-        value: "date",
-        aliases: &[],
-        description: "insert picked date (placeholder)",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Date,
-    },
-    CommandDefinition {
-        value: "format",
-        aliases: &["fmt"],
-        description: "format markdown document (placeholder)",
-        modes: &MODES_BOTH,
-        behavior: CommandBehavior::Format,
-    },
-    CommandDefinition {
-        value: "q",
-        aliases: &["q!"],
-        description: "quit",
-        modes: &MODES_VIM,
-        behavior: CommandBehavior::Quit,
-    },
-];
-
-fn normalize_command(input: &str) -> String {
-    let trimmed = input.trim();
-    let without_colon = trimmed.strip_prefix(':').unwrap_or(trimmed);
-    without_colon.to_lowercase()
-}
-
-fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
-    def.value == normalized_input || def.aliases.iter().any(|alias| *alias == normalized_input)
-}
-
-fn available_commands(mode: CommandMode) -> Vec<&'static CommandDefinition> {
-    COMMAND_DEFINITIONS
-        .iter()
-        .filter(|def| def.modes.contains(&mode))
-        .collect()
-}
-
 fn parse_sum_numbers(text: &str) -> Vec<f64> {
-    let cleaned = text.replace(',', "");
-    cleaned
-        .split(|c: char| !c.is_ascii_digit() && c != '.' && c != '-' && c != '+')
-        .filter_map(|w| {
-            let w = w.trim();
-            if w.is_empty() || matches!(w, "-" | "+" | ".") {
-                return None;
-            }
-            w.parse::<f64>().ok().filter(|v| v.is_finite())
-        })
-        .collect()
+    parse_numeric_values(text)
 }
 
 fn format_sum_result(value: f64) -> String {
-    if !value.is_finite() {
-        return "0.00".to_string();
-    }
-    format!("{value:.2}")
+    format_numeric_result(value)
 }
 
 struct NoInterrupt;
@@ -386,21 +246,24 @@ fn avg_column(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
     out
 }
 
-fn sum_scope_label(command_value: &str) -> &str {
-    let rest = command_value.strip_prefix("sum").unwrap_or("").trim();
-    if rest.is_empty() {
-        "paragraph"
-    } else {
-        rest
+fn scope_for_command_id(command_id: CommandId) -> Option<SumScope> {
+    match command_id {
+        CommandId::Sum | CommandId::Avg => Some(SumScope::Paragraph),
+        CommandId::SumList | CommandId::AvgList => Some(SumScope::List),
+        CommandId::SumRow | CommandId::AvgRow => Some(SumScope::Row),
+        CommandId::SumColumn | CommandId::AvgColumn => Some(SumScope::Column),
+        CommandId::SumDoc | CommandId::AvgDoc => Some(SumScope::Doc),
+        _ => None,
     }
 }
 
-fn avg_scope_label(command_value: &str) -> &str {
-    let rest = command_value.strip_prefix("avg").unwrap_or("").trim();
-    if rest.is_empty() {
-        "paragraph"
-    } else {
-        rest
+fn scope_label(scope: SumScope) -> &'static str {
+    match scope {
+        SumScope::Paragraph => "paragraph",
+        SumScope::List => "list",
+        SumScope::Row => "row",
+        SumScope::Column => "column",
+        SumScope::Doc => "doc",
     }
 }
 
@@ -414,52 +277,7 @@ fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
 }
 
 pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<CommandSuggestion> {
-    let query = normalize_command(raw_input);
-    let available = available_commands(mode);
-
-    if query.is_empty() {
-        return available
-            .into_iter()
-            .map(|command| CommandSuggestion {
-                value: command.value.to_string(),
-                description: command.description.to_string(),
-            })
-            .collect();
-    }
-
-    let mut matches = available
-        .into_iter()
-        .filter_map(|command| {
-            let lower_value = command.value.to_lowercase();
-            let score = if lower_value.starts_with(&query) {
-                0
-            } else if lower_value.contains(&query) {
-                1
-            } else {
-                2
-            };
-
-            if score < 2 {
-                Some((score, command))
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>();
-
-    matches.sort_by(|left, right| {
-        left.0
-            .cmp(&right.0)
-            .then_with(|| left.1.value.cmp(right.1.value))
-    });
-
-    matches
-        .into_iter()
-        .map(|(_, command)| CommandSuggestion {
-            value: command.value.to_string(),
-            description: command.description.to_string(),
-        })
-        .collect()
+    command_catalog::list_command_suggestions(mode, raw_input)
 }
 
 pub fn insert_value_at_selection(snapshot: &EditorContextSnapshot, value: &str) -> EditOperation {
@@ -480,154 +298,130 @@ pub fn insert_value_at_selection(snapshot: &EditorContextSnapshot, value: &str) 
     )
 }
 
-
 pub fn execute_command(
     snapshot: &EditorContextSnapshot,
     raw_input: &str,
     mode: CommandMode,
 ) -> CommandExecutionResult {
-    let normalized = normalize_command(raw_input);
+    let normalized = command_catalog::normalize_command(raw_input);
     if normalized.is_empty() {
         return result_with_message("");
     }
 
-    let Some(command) = available_commands(mode)
-        .into_iter()
-        .find(|def| command_matches(def, &normalized))
-    else {
+    let Some(command) = command_catalog::resolve_command(mode, raw_input) else {
         return result_with_message(format!("unknown command: {normalized}"));
     };
 
-    match command.behavior {
-        CommandBehavior::Quit => CommandExecutionResult {
+    match command.id {
+        CommandId::Quit => CommandExecutionResult {
             message: "quit".to_string(),
             operations: Vec::new(),
             clipboard_text: None,
             quit_requested: true,
         },
-        CommandBehavior::Sum => {
+        CommandId::Sum
+        | CommandId::SumList
+        | CommandId::SumRow
+        | CommandId::SumColumn
+        | CommandId::SumDoc => {
             let ctx = ResolvedContext::new(snapshot.clone());
-            let current_line = ctx.current_line().number;
-
-            let range = match command.value {
-                "sum doc" => Some(crate::editor_core::types::BlockLineRange {
-                    start_line: 1,
-                    end_line: ctx.line_count(),
-                }),
-                "sum" => Some(ctx.paragraph_range_at_line(current_line)),
-                "sum list" => ctx.list_range_at_line(current_line),
-                "sum row" => ctx.table_range_at_line(current_line, 1),
-                "sum column" => ctx.table_range_at_line(current_line, 1),
-                _ => None,
+            let Some(scope) = scope_for_command_id(command.id) else {
+                return result_with_message(format!("unknown command: {normalized}"));
+            };
+            let scope_name = scope_label(scope);
+            let Some(range) = resolve_scope_range(&ctx, scope) else {
+                return result_with_message(format!("sum({scope_name}): no block at cursor"));
             };
 
-            let scope = sum_scope_label(command.value);
-
-            if let Some(r) = range {
-                let (formatted, msg) =
-                    if command.value == "sum row" || command.value == "sum column" {
-                        let totals = if command.value == "sum row" {
-                            sum_row(&ctx, r)
-                        } else {
-                            sum_column(&ctx, r)
-                        };
-                        if totals.is_empty() {
-                            return result_with_message(format!("sum({scope}): no numbers"));
-                        }
-                        let formatted = totals.join("\n");
-                        let msg = format!(
-                            "sum({scope}) = [{}] ({} totals, inserted + copied)",
-                            totals.join(", "),
-                            totals.len()
-                        );
-                        (formatted, msg)
-                    } else {
-                        let text = ctx.text_for_line_range(r);
-                        let numbers = parse_sum_numbers(&text);
-                        if numbers.is_empty() {
-                            return result_with_message(format!("sum({scope}): no numbers"));
-                        }
-                        let sum: f64 = numbers.iter().sum();
-                        let formatted = format_sum_result(sum);
-                        let msg = format!(
-                            "sum({scope}) = {formatted} ({} values, inserted + copied)",
-                            numbers.len()
-                        );
-                        (formatted, msg)
-                    };
-
-                let op = insert_value_at_selection(snapshot, &formatted);
-
-                let mut result = result_with_message(msg);
-                result.operations.push(op);
-                result.clipboard_text = Some(formatted);
-                result
+            let (formatted, msg) = if scope == SumScope::Row || scope == SumScope::Column {
+                let totals = if scope == SumScope::Row {
+                    sum_row(&ctx, range)
+                } else {
+                    sum_column(&ctx, range)
+                };
+                if totals.is_empty() {
+                    return result_with_message(format!("sum({scope_name}): no numbers"));
+                }
+                let formatted = totals.join("\n");
+                let msg = format!(
+                    "sum({scope_name}) = [{}] ({} totals, inserted + copied)",
+                    totals.join(", "),
+                    totals.len()
+                );
+                (formatted, msg)
             } else {
-                result_with_message(format!("sum({scope}): no block at cursor"))
-            }
-        }
-        CommandBehavior::Avg => {
-            let ctx = ResolvedContext::new(snapshot.clone());
-            let current_line = ctx.current_line().number;
-
-            let range = match command.value {
-                "avg doc" => Some(crate::editor_core::types::BlockLineRange {
-                    start_line: 1,
-                    end_line: ctx.line_count(),
-                }),
-                "avg" => Some(ctx.paragraph_range_at_line(current_line)),
-                "avg list" => ctx.list_range_at_line(current_line),
-                "avg row" => ctx.table_range_at_line(current_line, 1),
-                "avg column" => ctx.table_range_at_line(current_line, 1),
-                _ => None,
+                let text = ctx.text_for_line_range(range);
+                let numbers = parse_sum_numbers(&text);
+                if numbers.is_empty() {
+                    return result_with_message(format!("sum({scope_name}): no numbers"));
+                }
+                let sum: f64 = numbers.iter().sum();
+                let formatted = format_sum_result(sum);
+                let msg = format!(
+                    "sum({scope_name}) = {formatted} ({} values, inserted + copied)",
+                    numbers.len()
+                );
+                (formatted, msg)
             };
 
-            let scope = avg_scope_label(command.value);
-
-            if let Some(r) = range {
-                let (formatted, msg) =
-                    if command.value == "avg row" || command.value == "avg column" {
-                        let averages = if command.value == "avg row" {
-                            avg_row(&ctx, r)
-                        } else {
-                            avg_column(&ctx, r)
-                        };
-                        if averages.is_empty() {
-                            return result_with_message(format!("avg({scope}): no numbers"));
-                        }
-                        let formatted = averages.join("\n");
-                        let msg = format!(
-                            "avg({scope}) = [{}] ({} averages, inserted + copied)",
-                            averages.join(", "),
-                            averages.len()
-                        );
-                        (formatted, msg)
-                    } else {
-                        let text = ctx.text_for_line_range(r);
-                        let numbers = parse_sum_numbers(&text);
-                        if numbers.is_empty() {
-                            return result_with_message(format!("avg({scope}): no numbers"));
-                        }
-                        let avg: f64 = numbers.iter().sum::<f64>() / numbers.len() as f64;
-                        let formatted = format_sum_result(avg);
-                        let msg = format!(
-                            "avg({scope}) = {formatted} ({} values, inserted + copied)",
-                            numbers.len()
-                        );
-                        (formatted, msg)
-                    };
-
-                let op = insert_value_at_selection(snapshot, &formatted);
-
-                let mut result = result_with_message(msg);
-                result.operations.push(op);
-                result.clipboard_text = Some(formatted);
-                result
-            } else {
-                result_with_message(format!("avg({scope}): no block at cursor"))
-            }
+            let op = insert_value_at_selection(snapshot, &formatted);
+            let mut result = result_with_message(msg);
+            result.operations.push(op);
+            result.clipboard_text = Some(formatted);
+            result
         }
-        CommandBehavior::Date => {
+        CommandId::Avg
+        | CommandId::AvgList
+        | CommandId::AvgRow
+        | CommandId::AvgColumn
+        | CommandId::AvgDoc => {
+            let ctx = ResolvedContext::new(snapshot.clone());
+            let Some(scope) = scope_for_command_id(command.id) else {
+                return result_with_message(format!("unknown command: {normalized}"));
+            };
+            let scope_name = scope_label(scope);
+            let Some(range) = resolve_scope_range(&ctx, scope) else {
+                return result_with_message(format!("avg({scope_name}): no block at cursor"));
+            };
+
+            let (formatted, msg) = if scope == SumScope::Row || scope == SumScope::Column {
+                let averages = if scope == SumScope::Row {
+                    avg_row(&ctx, range)
+                } else {
+                    avg_column(&ctx, range)
+                };
+                if averages.is_empty() {
+                    return result_with_message(format!("avg({scope_name}): no numbers"));
+                }
+                let formatted = averages.join("\n");
+                let msg = format!(
+                    "avg({scope_name}) = [{}] ({} averages, inserted + copied)",
+                    averages.join(", "),
+                    averages.len()
+                );
+                (formatted, msg)
+            } else {
+                let text = ctx.text_for_line_range(range);
+                let numbers = parse_sum_numbers(&text);
+                if numbers.is_empty() {
+                    return result_with_message(format!("avg({scope_name}): no numbers"));
+                }
+                let avg: f64 = numbers.iter().sum::<f64>() / numbers.len() as f64;
+                let formatted = format_sum_result(avg);
+                let msg = format!(
+                    "avg({scope_name}) = {formatted} ({} values, inserted + copied)",
+                    numbers.len()
+                );
+                (formatted, msg)
+            };
+
+            let op = insert_value_at_selection(snapshot, &formatted);
+            let mut result = result_with_message(msg);
+            result.operations.push(op);
+            result.clipboard_text = Some(formatted);
+            result
+        }
+        CommandId::Date => {
             let date_str = time::OffsetDateTime::now_utc().date().to_string();
             let mut result = result_with_message("Date inserted");
             result
@@ -635,7 +429,7 @@ pub fn execute_command(
                 .push(insert_value_at_selection(snapshot, &date_str));
             result
         }
-        CommandBehavior::Format => {
+        CommandId::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
                 formatted.push('\n');

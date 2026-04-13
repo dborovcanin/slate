@@ -24,6 +24,8 @@ export interface ListOverlayOptions<T> {
   emptyMessage?: string;
   /** Extra keydown handler on the input. Return true to prevent default navigation. */
   onKeydown?: (event: KeyboardEvent, state: ListOverlayState<T>) => boolean;
+  /** Restore focus to the previously focused element when closing. Defaults to true. */
+  restoreFocus?: boolean;
 }
 
 export interface ListOverlayState<T> {
@@ -44,6 +46,8 @@ export interface ListOverlay {
   refresh: () => void;
 }
 
+let overlaySequence = 0;
+
 export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverlay {
   const {
     container,
@@ -56,13 +60,16 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     onClose,
     emptyMessage = "No results",
     onKeydown,
+    restoreFocus = true,
   } = options;
 
   let root: HTMLElement | null = null;
   let inputEl: HTMLInputElement | null = null;
   let listEl: HTMLElement | null = null;
+  let restoreTarget: HTMLElement | null = null;
   let items: T[] = [];
   let selectedIndex = 0;
+  const listboxId = `${p}-listbox-${overlaySequence++}`;
 
   function getQuery(): string {
     return inputEl?.value ?? "";
@@ -73,6 +80,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     listEl.replaceChildren();
 
     if (items.length === 0) {
+      inputEl?.removeAttribute("aria-activedescendant");
       const empty = document.createElement("div");
       empty.className = `${p}-empty`;
       empty.textContent = emptyMessage;
@@ -82,6 +90,11 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
 
     items.forEach((item, i) => {
       const el = renderItem(item, i === selectedIndex, i);
+      el.id = `${listboxId}-item-${i}`;
+      if (!el.hasAttribute("role")) {
+        el.setAttribute("role", "option");
+      }
+      el.setAttribute("aria-selected", i === selectedIndex ? "true" : "false");
       el.addEventListener("mouseenter", () => {
         selectedIndex = i;
         renderList();
@@ -95,6 +108,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
       listEl!.appendChild(el);
     });
 
+    inputEl?.setAttribute("aria-activedescendant", `${listboxId}-item-${selectedIndex}`);
     listEl.querySelector(`.${p}-item--active`)?.scrollIntoView({ block: "nearest" });
   }
 
@@ -160,6 +174,10 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     if (root) return;
 
     const parent = container ?? document.body;
+    restoreTarget =
+      restoreFocus && document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
 
     if (backdrop) {
       root = document.createElement("div");
@@ -182,10 +200,14 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
       inputEl.className = `${p}-input`;
       inputEl.type = "text";
       inputEl.placeholder = placeholder;
+      inputEl.setAttribute("role", "combobox");
       inputEl.setAttribute("aria-autocomplete", "list");
+      inputEl.setAttribute("aria-expanded", "true");
+      inputEl.setAttribute("aria-controls", listboxId);
 
       listEl = document.createElement("div");
       listEl.className = `${p}-list`;
+      listEl.id = listboxId;
       listEl.setAttribute("role", "listbox");
 
       panel.appendChild(inputEl);
@@ -205,10 +227,14 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
       inputEl.autocomplete = "off";
       inputEl.setAttribute("autocorrect", "off");
       inputEl.setAttribute("autocapitalize", "off");
+      inputEl.setAttribute("role", "combobox");
       inputEl.setAttribute("aria-autocomplete", "list");
+      inputEl.setAttribute("aria-expanded", "true");
+      inputEl.setAttribute("aria-controls", listboxId);
 
       listEl = document.createElement("div");
       listEl.className = `${p}-list`;
+      listEl.id = listboxId;
       listEl.setAttribute("role", "listbox");
 
       root.appendChild(inputEl);
@@ -233,6 +259,10 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     root = null;
     inputEl = null;
     listEl = null;
+    if (restoreFocus && restoreTarget && restoreTarget.isConnected) {
+      restoreTarget.focus();
+    }
+    restoreTarget = null;
   }
 
   return {

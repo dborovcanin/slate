@@ -1,11 +1,13 @@
 use wasm_bindgen::prelude::*;
 
+use crate::command_catalog;
 use crate::format::format_markdown;
 use crate::text_rules::{
     run_doc_change_rules, run_enter_rules, run_tab_rules, run_table_cell_navigation_rules,
     rewrite_line_with_checklist_toggle_suffix, TabRuleOptions, TextRuleOptions,
 };
-use crate::types::EditorContextSnapshot;
+use crate::types::{CommandMode, EditorContextSnapshot};
+use crate::vim::{self, VimContext, VimState};
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -66,4 +68,46 @@ pub fn wasm_rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option
 #[wasm_bindgen]
 pub fn wasm_format_markdown(text: &str) -> String {
     format_markdown(text)
+}
+
+fn parse_mode(mode: &str) -> Option<CommandMode> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "vim" => Some(CommandMode::Vim),
+        "editor" => Some(CommandMode::Editor),
+        _ => None,
+    }
+}
+
+#[wasm_bindgen]
+pub fn wasm_normalize_command(raw_input: &str) -> String {
+    command_catalog::normalize_command(raw_input)
+}
+
+#[wasm_bindgen]
+pub fn wasm_list_command_suggestions(mode: &str, raw_input: &str) -> String {
+    let Some(mode) = parse_mode(mode) else {
+        return "[]".to_string();
+    };
+    let suggestions = command_catalog::list_command_suggestions(mode, raw_input);
+    serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".to_string())
+}
+
+#[wasm_bindgen]
+pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
+    let mode = parse_mode(mode)?;
+    let command = command_catalog::resolve_command(mode, raw_input)?;
+    Some(command.value.to_string())
+}
+
+#[wasm_bindgen]
+pub fn wasm_vim_step(
+    state_json: &str,
+    key_token: &str,
+    context_json: &str,
+) -> Option<String> {
+    let state: VimState = serde_json::from_str(state_json).ok()?;
+    let context: VimContext = serde_json::from_str(context_json).ok()?;
+    let key = vim::parse_key_token(key_token)?;
+    let step = vim::step(&state, key, &context);
+    serde_json::to_string(&step).ok()
 }
