@@ -101,17 +101,6 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
-fn table_data_rows(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<Vec<String>> {
-    let mut rows = Vec::new();
-    for line_no in range.start_line..=range.end_line {
-        let cells = split_table_cells(ctx.line_text(line_no));
-        if is_table_delimiter_row(&cells) {
-            continue;
-        }
-        rows.push(cells);
-    }
-    rows
-}
 
 fn evaluate_cell_term(cell: &str) -> Option<String> {
     let trimmed = cell.trim();
@@ -174,76 +163,82 @@ fn average_term_values(terms: &[String]) -> Option<String> {
     Some(format_sum_result(numeric / terms.len() as f64))
 }
 
-fn sum_row(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
-    let rows = table_data_rows(ctx, range);
-    let mut out = Vec::new();
-
-    for row in rows {
-        let terms = row
-            .iter()
-            .filter_map(|cell| evaluate_cell_term(cell))
-            .collect::<Vec<_>>();
-        if let Some(total) = sum_term_values(&terms) {
-            out.push(total);
-        }
+/// Returns the 0-indexed table column the cursor is currently in, or `None` if the
+/// cursor is not inside a table row.  Column index is determined by counting `|`
+/// separators to the left of the cursor within the current line.
+fn cursor_table_column(ctx: &ResolvedContext) -> Option<usize> {
+    let line = ctx.current_line();
+    if !line.text.trim_start().starts_with('|') {
+        return None;
     }
-
-    out
+    let col_in_line = ctx.cursor_pos().saturating_sub(line.from).min(line.text.len());
+    let pipes_before = line.text[..col_in_line].chars().filter(|&c| c == '|').count();
+    if pipes_before == 0 {
+        return None; // cursor is before the opening '|'
+    }
+    Some(pipes_before - 1)
 }
 
-fn sum_column(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
-    let rows = table_data_rows(ctx, range);
-    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-    let mut out = Vec::new();
+/// Collects the evaluated cell values to be summed/averaged for a row or column
+/// operation.
+///
+/// - `SumScope::Row`: all cells in the current row that are to the **left** of
+///   the cursor column (non-numeric cells are skipped).
+/// - `SumScope::Column`: all cells in the cursor column in rows **above** the
+///   cursor row (delimiter rows and non-numeric cells are skipped).
+///
+/// Returns an empty vec if the cursor is not in a table.
+fn collect_table_terms(
+    ctx: &ResolvedContext,
+    scope: SumScope,
+    range: BlockLineRange,
+) -> Vec<String> {
+    let Some(cursor_col) = cursor_table_column(ctx) else {
+        return Vec::new();
+    };
 
-    for col in 0..column_count {
-        let terms = rows
+    if scope == SumScope::Row {
+        let cells = split_table_cells(ctx.current_line().text.as_str());
+        cells[..cursor_col.min(cells.len())]
             .iter()
-            .filter_map(|row| row.get(col))
             .filter_map(|cell| evaluate_cell_term(cell))
-            .collect::<Vec<_>>();
-        if let Some(total) = sum_term_values(&terms) {
-            out.push(total);
+            .collect()
+    } else {
+        // Column: rows above cursor within the same table.
+        let cursor_line = ctx.current_line().number;
+        let mut terms = Vec::new();
+        for line_no in range.start_line..cursor_line {
+            let cells = split_table_cells(ctx.line_text(line_no));
+            if is_table_delimiter_row(&cells) {
+                continue;
+            }
+            if let Some(cell) = cells.get(cursor_col) {
+                if let Some(val) = evaluate_cell_term(cell) {
+                    terms.push(val);
+                }
+            }
         }
+        terms
     }
-
-    out
 }
 
-fn avg_row(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
-    let rows = table_data_rows(ctx, range);
-    let mut out = Vec::new();
-
-    for row in rows {
-        let terms = row
-            .iter()
-            .filter_map(|cell| evaluate_cell_term(cell))
-            .collect::<Vec<_>>();
-        if let Some(avg) = average_term_values(&terms) {
-            out.push(avg);
-        }
+/// Computes the sum or average of `terms`.  Returns an error string if `terms`
+/// is empty or if the units are incompatible (fend cannot add them).
+fn compute_table_terms(
+    terms: Vec<String>,
+    op_name: &str,
+    scope_name: &str,
+    use_avg: bool,
+) -> Result<String, String> {
+    if terms.is_empty() {
+        return Err(format!("{op_name}({scope_name}): no numbers"));
     }
-
-    out
-}
-
-fn avg_column(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
-    let rows = table_data_rows(ctx, range);
-    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-    let mut out = Vec::new();
-
-    for col in 0..column_count {
-        let terms = rows
-            .iter()
-            .filter_map(|row| row.get(col))
-            .filter_map(|cell| evaluate_cell_term(cell))
-            .collect::<Vec<_>>();
-        if let Some(avg) = average_term_values(&terms) {
-            out.push(avg);
-        }
-    }
-
-    out
+    let result = if use_avg {
+        average_term_values(&terms)
+    } else {
+        sum_term_values(&terms)
+    };
+    result.ok_or_else(|| format!("{op_name}({scope_name}): incompatible units"))
 }
 
 fn scope_for_command_id(command_id: CommandId) -> Option<SumScope> {
@@ -278,6 +273,42 @@ fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
 
 pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<CommandSuggestion> {
     command_catalog::list_command_suggestions(mode, raw_input)
+}
+
+/// Replaces the content of the table cell the cursor is currently in with `value`,
+/// padded with a single space on each side.  Falls back to a plain insert at the
+/// cursor if the cursor is not between two `|` separators on the current line.
+fn replace_table_cell_at_cursor(snapshot: &EditorContextSnapshot, value: &str) -> EditOperation {
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let line = ctx.current_line();
+    let cursor_in_line = snapshot
+        .selection
+        .anchor
+        .min(snapshot.selection.head)
+        .saturating_sub(line.from)
+        .min(line.text.len());
+
+    let left_pipe = line.text[..cursor_in_line].rfind('|');
+    let right_pipe = line.text[cursor_in_line..].find('|').map(|i| cursor_in_line + i);
+
+    if let (Some(lp), Some(rp)) = (left_pipe, right_pipe) {
+        let cell_start = line.from + lp + 1; // byte after the left '|'
+        let cell_end = line.from + rp; // byte of the right '|'
+        let formatted = format!(" {} ", value);
+        let next_anchor = cell_start + formatted.len();
+        return replace_range(
+            cell_start,
+            cell_end,
+            &formatted,
+            Some(OperationSelection {
+                anchor: next_anchor,
+                head: None,
+            }),
+        );
+    }
+
+    // Fallback: no surrounding pipes found — just insert at cursor.
+    insert_value_at_selection(snapshot, value)
 }
 
 pub fn insert_value_at_selection(snapshot: &EditorContextSnapshot, value: &str) -> EditOperation {
@@ -333,37 +364,31 @@ pub fn execute_command(
                 return result_with_message(format!("sum({scope_name}): no block at cursor"));
             };
 
-            let (formatted, msg) = if scope == SumScope::Row || scope == SumScope::Column {
-                let totals = if scope == SumScope::Row {
-                    sum_row(&ctx, range)
-                } else {
-                    sum_column(&ctx, range)
-                };
-                if totals.is_empty() {
-                    return result_with_message(format!("sum({scope_name}): no numbers"));
+            if scope == SumScope::Row || scope == SumScope::Column {
+                let terms = collect_table_terms(&ctx, scope, range);
+                match compute_table_terms(terms, "sum", scope_name, false) {
+                    Ok(total) => {
+                        let op = replace_table_cell_at_cursor(snapshot, &total);
+                        let mut result = result_with_message(format!("sum({scope_name}) = {total}"));
+                        result.operations.push(op);
+                        result.clipboard_text = Some(total);
+                        return result;
+                    }
+                    Err(msg) => return result_with_message(msg),
                 }
-                let formatted = totals.join("\n");
-                let msg = format!(
-                    "sum({scope_name}) = [{}] ({} totals, inserted + copied)",
-                    totals.join(", "),
-                    totals.len()
-                );
-                (formatted, msg)
-            } else {
-                let text = ctx.text_for_line_range(range);
-                let numbers = parse_sum_numbers(&text);
-                if numbers.is_empty() {
-                    return result_with_message(format!("sum({scope_name}): no numbers"));
-                }
-                let sum: f64 = numbers.iter().sum();
-                let formatted = format_sum_result(sum);
-                let msg = format!(
-                    "sum({scope_name}) = {formatted} ({} values, inserted + copied)",
-                    numbers.len()
-                );
-                (formatted, msg)
-            };
+            }
 
+            let text = ctx.text_for_line_range(range);
+            let numbers = parse_sum_numbers(&text);
+            if numbers.is_empty() {
+                return result_with_message(format!("sum({scope_name}): no numbers"));
+            }
+            let sum: f64 = numbers.iter().sum();
+            let formatted = format_sum_result(sum);
+            let msg = format!(
+                "sum({scope_name}) = {formatted} ({} values, inserted + copied)",
+                numbers.len()
+            );
             let op = insert_value_at_selection(snapshot, &formatted);
             let mut result = result_with_message(msg);
             result.operations.push(op);
@@ -384,37 +409,31 @@ pub fn execute_command(
                 return result_with_message(format!("avg({scope_name}): no block at cursor"));
             };
 
-            let (formatted, msg) = if scope == SumScope::Row || scope == SumScope::Column {
-                let averages = if scope == SumScope::Row {
-                    avg_row(&ctx, range)
-                } else {
-                    avg_column(&ctx, range)
-                };
-                if averages.is_empty() {
-                    return result_with_message(format!("avg({scope_name}): no numbers"));
+            if scope == SumScope::Row || scope == SumScope::Column {
+                let terms = collect_table_terms(&ctx, scope, range);
+                match compute_table_terms(terms, "avg", scope_name, true) {
+                    Ok(avg) => {
+                        let op = replace_table_cell_at_cursor(snapshot, &avg);
+                        let mut result = result_with_message(format!("avg({scope_name}) = {avg}"));
+                        result.operations.push(op);
+                        result.clipboard_text = Some(avg);
+                        return result;
+                    }
+                    Err(msg) => return result_with_message(msg),
                 }
-                let formatted = averages.join("\n");
-                let msg = format!(
-                    "avg({scope_name}) = [{}] ({} averages, inserted + copied)",
-                    averages.join(", "),
-                    averages.len()
-                );
-                (formatted, msg)
-            } else {
-                let text = ctx.text_for_line_range(range);
-                let numbers = parse_sum_numbers(&text);
-                if numbers.is_empty() {
-                    return result_with_message(format!("avg({scope_name}): no numbers"));
-                }
-                let avg: f64 = numbers.iter().sum::<f64>() / numbers.len() as f64;
-                let formatted = format_sum_result(avg);
-                let msg = format!(
-                    "avg({scope_name}) = {formatted} ({} values, inserted + copied)",
-                    numbers.len()
-                );
-                (formatted, msg)
-            };
+            }
 
+            let text = ctx.text_for_line_range(range);
+            let numbers = parse_sum_numbers(&text);
+            if numbers.is_empty() {
+                return result_with_message(format!("avg({scope_name}): no numbers"));
+            }
+            let avg: f64 = numbers.iter().sum::<f64>() / numbers.len() as f64;
+            let formatted = format_sum_result(avg);
+            let msg = format!(
+                "avg({scope_name}) = {formatted} ({} values, inserted + copied)",
+                numbers.len()
+            );
             let op = insert_value_at_selection(snapshot, &formatted);
             let mut result = result_with_message(msg);
             result.operations.push(op);
@@ -577,34 +596,6 @@ mod tests {
     }
 
     #[test]
-    fn sum_row_supports_unit_aware_totals() {
-        let doc = snapshot(
-            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
-            0,
-            0,
-        );
-        let result = execute_command(&doc, "sum row", CommandMode::Editor);
-        assert_eq!(result.operations.len(), 1);
-        assert!(result.message.contains("sum(row)"));
-        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "2002.00m\n7.00m");
-    }
-
-    #[test]
-    fn sum_column_supports_unit_aware_totals_and_alias() {
-        let doc = snapshot(
-            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
-            0,
-            0,
-        );
-        let result = execute_command(&doc, "sum_column", CommandMode::Editor);
-        assert_eq!(result.operations.len(), 1);
-        assert!(result.message.contains("sum(column)"));
-        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "5.00m\n2.00km");
-    }
-
-    #[test]
     fn avg_command_inserts_at_selection() {
         let doc = snapshot("item 10\nitem 20\nitem 30", 0, 0);
         let result = execute_command(&doc, "avg", CommandMode::Editor);
@@ -615,44 +606,96 @@ mod tests {
         assert_eq!(result.clipboard_text, Some("20.00".to_string()));
     }
 
+    // --- sum row / avg row ---
+    //
+    // Cursor is placed inside an empty trailing cell; all data cells to the left
+    // are summed and the result replaces the empty cell content.
+
     #[test]
-    fn avg_row_supports_unit_aware_values() {
-        let doc = snapshot(
-            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
-            0,
-            0,
-        );
+    fn sum_row_sums_cells_left_of_cursor() {
+        // Cursor inside the empty trailing cell — data cells are item (skip), 2m, 2km.
+        let table = "| item | 2m  | 2km |  |";
+        let cursor = table.rfind("|  |").unwrap() + 1; // inside the empty last cell
+        let doc = snapshot(table, cursor, cursor);
+        let result = execute_command(&doc, "sum row", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("sum(row)"));
+        // 2m + 2km = 2002m; cell is replaced so insert is trimmed value with padding
+        assert_eq!(result.operations[0].changes[0].insert.replace(' ', ""), "2002.00m");
+    }
+
+    #[test]
+    fn avg_row_averages_cells_left_of_cursor() {
+        // Cursor in empty trailing cell; data cells x (skip), 3m, 4m → avg = 3.5m.
+        let table = "| x | 3m | 4m |  |";
+        let cursor = table.rfind("|  |").unwrap() + 1;
+        let doc = snapshot(table, cursor, cursor);
         let result = execute_command(&doc, "avg row", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("avg(row)"));
-        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "1001.00m\n3.50m");
+        assert_eq!(result.operations[0].changes[0].insert.replace(' ', ""), "3.50m");
     }
 
     #[test]
-    fn avg_column_supports_unit_aware_values_and_alias() {
-        let doc = snapshot(
-            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
-            0,
-            0,
-        );
-        let result = execute_command(&doc, "avg_column", CommandMode::Editor);
+    fn sum_row_skips_non_numeric_cells() {
+        // Cursor in empty trailing cell; label (skip), 10, 20 → sum = 30.
+        let table = "| label | 10 | 20 |  |";
+        let cursor = table.rfind("|  |").unwrap() + 1;
+        let doc = snapshot(table, cursor, cursor);
+        let result = execute_command(&doc, "sum row", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
-        assert!(result.message.contains("avg(column)"));
-        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
-        assert_eq!(inserted, "2.50m\n1.00km");
+        assert_eq!(result.operations[0].changes[0].insert.trim(), "30.00");
     }
 
     #[test]
-    fn avg_column_ignores_non_numeric_header_cells() {
-        let doc = snapshot(
-            "| header | number |\n| ------ | ------ |\n| a      | 3      |\n| b      | 4      |",
-            0,
-            0,
-        );
+    fn sum_row_reports_incompatible_units() {
+        // Plain number + time duration → incompatible units error, no edit applied.
+        let table = "| 34 | 3h |  |";
+        let cursor = table.rfind("|  |").unwrap() + 1;
+        let doc = snapshot(table, cursor, cursor);
+        let result = execute_command(&doc, "sum row", CommandMode::Editor);
+        assert!(result.operations.is_empty());
+        assert!(result.message.contains("incompatible units"), "got: {}", result.message);
+    }
+
+    // --- sum column / avg column ---
+    //
+    // Cursor is inside a specific cell; only cells ABOVE the cursor row (in the
+    // same column) are summed and the result is inserted at the cursor position.
+
+    #[test]
+    fn sum_column_sums_cells_above_cursor() {
+        // Table:
+        //   | 2m  | 3m  |
+        //   | --- | --- |
+        //   | 4m  | 5m  |  ← cursor in col 1 (second numeric column)
+        let table = "| 2m  | 3m  |\n| --- | --- |\n| 4m  | 5m  |";
+        // Place cursor inside "5m" cell (col 1, row 3) — col 1 means after two '|' on that line.
+        // Row 3 starts at offset: len("| 2m  | 3m  |\n| --- | --- |\n") = 14 + 14 = 28
+        let row3_start = table.rfind("| 4m").unwrap();
+        let cursor = row3_start + table[row3_start..].find("5m").unwrap();
+        let doc = snapshot(table, cursor, cursor);
+        let result = execute_command(&doc, "sum_column", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("sum(column)"));
+        // Only "3m" from row 1 is above the cursor in col 1 (row 2 is delimiter)
+        assert_eq!(result.operations[0].changes[0].insert.replace(' ', ""), "3.00m");
+    }
+
+    #[test]
+    fn avg_column_ignores_non_numeric_cells() {
+        // | header | number |
+        // | ------ | ------ |
+        // | a      | 3      |
+        // | b      | 4      |   ← cursor in col 1
+        let table = "| header | number |\n| ------ | ------ |\n| a      | 3      |\n| b      | 4      |";
+        // Place cursor in last row, col 1 (the "4" cell)
+        let cursor = table.rfind("4 ").unwrap() + 1; // inside "4" cell
+        let doc = snapshot(table, cursor, cursor);
         let result = execute_command(&doc, "avg column", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("avg(column)"));
-        assert_eq!(result.operations[0].changes[0].insert, "3.50");
+        // col 1 above cursor: "number"(non-numeric, skipped), "3" → avg = 3.00
+        assert_eq!(result.operations[0].changes[0].insert.trim(), "3.00");
     }
 }
