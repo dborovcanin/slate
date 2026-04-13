@@ -557,62 +557,56 @@ interface TextRange {
   to: number;
 }
 
-function isVariableWordChar(ch: string | undefined): boolean {
-  return !!ch && /[A-Za-z0-9_]/.test(ch);
+export interface VariableMatcher {
+  findAll(text: string): TextRange[];
 }
 
-function hasVariableWordBoundaries(text: string, from: number, to: number): boolean {
-  const left = from === 0 ? undefined : text[from - 1];
-  const right = to >= text.length ? undefined : text[to];
-  return !isVariableWordChar(left) && !isVariableWordChar(right);
+const EMPTY_MATCHER: VariableMatcher = { findAll: () => [] };
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function createVariableMatcher(
+  variables: readonly Pick<VariableIndexEntry, "normalized">[],
+): VariableMatcher {
+  if (variables.length === 0) return EMPTY_MATCHER;
+
+  const names = variables
+    .map((v) => v.normalized.trim().toLowerCase())
+    .filter((n) => n.length > 0);
+  if (names.length === 0) return EMPTY_MATCHER;
+
+  // Longest-first so the regex engine's leftmost-first alternation picks the
+  // longest match at each position (mirrors the Rust backend).
+  names.sort((a, b) => b.length - a.length || (a < b ? -1 : a > b ? 1 : 0));
+
+  const pattern = `\\b(?:${names.map(escapeRegExp).join("|")})\\b`;
+  const regex = new RegExp(pattern, "gi");
+
+  return {
+    findAll(text: string): TextRange[] {
+      if (text.length === 0) return [];
+      const ranges: TextRange[] = [];
+      regex.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = regex.exec(text)) !== null) {
+        if (m[0].length === 0) {
+          regex.lastIndex++;
+          continue;
+        }
+        ranges.push({ from: m.index, to: m.index + m[0].length });
+      }
+      return ranges;
+    },
+  };
 }
 
 export function findVariableNameRanges(
   text: string,
   variables: readonly Pick<VariableIndexEntry, "normalized">[],
 ): TextRange[] {
-  if (text.length === 0 || variables.length === 0) return [];
-
-  const lower = text.toLowerCase();
-  const candidates: TextRange[] = [];
-
-  for (const entry of variables) {
-    const needle = entry.normalized.trim().toLowerCase();
-    if (!needle) continue;
-
-    let from = 0;
-    while (from <= lower.length - needle.length) {
-      const idx = lower.indexOf(needle, from);
-      if (idx < 0) break;
-      const end = idx + needle.length;
-      if (hasVariableWordBoundaries(lower, idx, end)) {
-        candidates.push({ from: idx, to: end });
-      }
-      from = idx + 1;
-    }
-  }
-
-  if (candidates.length <= 1) return candidates;
-
-  // Keep left-most ranges, preferring longer matches when overlaps happen.
-  candidates.sort(
-    (a, b) => a.from - b.from || (b.to - b.from) - (a.to - a.from) || a.to - b.to,
-  );
-
-  const result: TextRange[] = [];
-  for (const range of candidates) {
-    const last = result[result.length - 1];
-    if (!last) {
-      result.push(range);
-      continue;
-    }
-    if (range.from < last.to) {
-      continue;
-    }
-    result.push(range);
-  }
-
-  return result;
+  return createVariableMatcher(variables).findAll(text);
 }
 
 function advanceFenceStateInLine(
@@ -658,6 +652,7 @@ export function buildMarkdownDecorationsForSpans(
 
   const builder = new RangeSetBuilder<Decoration>();
   const fenceState = { inCodeBlock: false, codeFenceLang: null as string | null };
+  const matcher = createVariableMatcher(variableIndex);
   let nextLineToProcess = 1;
 
   for (const span of spans) {
@@ -686,7 +681,7 @@ export function buildMarkdownDecorationsForSpans(
         continue;
       }
 
-      decorateContentLine(builder, line, info, variableIndex);
+      decorateContentLine(builder, line, info, matcher);
     }
     nextLineToProcess = span.toLine + 1;
   }
@@ -708,7 +703,7 @@ function decorateContentLine(
   builder: RangeSetBuilder<Decoration>,
   line: { from: number; to: number; text: string },
   info: MarkdownLineInfo,
-  variableIndex: readonly Pick<VariableIndexEntry, "normalized">[],
+  matcher: VariableMatcher,
 ): void {
   if (info.headingLevel) {
     builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
@@ -756,7 +751,7 @@ function decorateContentLine(
     builder.add(line.from, line.to, decRuleToken);
   }
 
-  for (const range of findVariableNameRanges(line.text, variableIndex)) {
+  for (const range of matcher.findAll(line.text)) {
     builder.add(line.from + range.from, line.from + range.to, decVariable);
   }
 

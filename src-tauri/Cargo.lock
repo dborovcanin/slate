@@ -2085,6 +2085,7 @@ dependencies = [
  "directories",
  "fend-core",
  "libc",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

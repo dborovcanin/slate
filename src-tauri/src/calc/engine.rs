@@ -1,3 +1,4 @@
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::HashMap;
@@ -68,10 +69,11 @@ enum ResolveState {
 
 struct VariableResolver<'a> {
     defs: &'a HashMap<String, VariableDefinition>,
-    names_sorted: Vec<String>,
+    variable_regex: Option<Regex>,
     states: HashMap<String, ResolveState>,
     values: HashMap<String, String>,
     diagnostics: Vec<NoteEvaluationDiagnostic>,
+    raw_eval_cache: HashMap<String, Option<String>>,
 }
 
 struct NoInterrupt;
@@ -81,18 +83,53 @@ impl fend_core::Interrupt for NoInterrupt {
     }
 }
 
+static NO_INTERRUPT: NoInterrupt = NoInterrupt;
+
 impl<'a> VariableResolver<'a> {
     fn new(defs: &'a HashMap<String, VariableDefinition>) -> Self {
         let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
+        // Longest-first so leftmost-first regex alternation picks the longest match.
         names_sorted.sort_by_key(|name| (Reverse(name.len()), name.clone()));
+        let variable_regex = build_variable_regex(&names_sorted);
 
         Self {
             defs,
-            names_sorted,
+            variable_regex,
             states: HashMap::new(),
             values: HashMap::new(),
             diagnostics: Vec::new(),
+            raw_eval_cache: HashMap::new(),
         }
+    }
+
+    fn find_matches(&self, expression: &str) -> Vec<MatchSpan> {
+        let Some(regex) = &self.variable_regex else {
+            return Vec::new();
+        };
+        regex
+            .find_iter(expression)
+            .map(|m| MatchSpan {
+                normalized: expression[m.start()..m.end()].to_ascii_lowercase(),
+                start: m.start(),
+                end: m.end(),
+            })
+            .collect()
+    }
+
+    fn expression_references_variable(&self, expression: &str) -> bool {
+        self.variable_regex
+            .as_ref()
+            .map(|r| r.is_match(expression))
+            .unwrap_or(false)
+    }
+
+    fn eval_raw(&mut self, expr: &str) -> Option<String> {
+        if let Some(cached) = self.raw_eval_cache.get(expr) {
+            return cached.clone();
+        }
+        let result = evaluate_raw_expression(expr);
+        self.raw_eval_cache.insert(expr.to_string(), result.clone());
+        result
     }
 
     fn diagnostics(&self) -> Option<Vec<NoteEvaluationDiagnostic>> {
@@ -136,7 +173,7 @@ impl<'a> VariableResolver<'a> {
             }
         };
 
-        let raw_value = match evaluate_raw_expression(&substituted) {
+        let raw_value = match self.eval_raw(&substituted) {
             Some(value) => value,
             None => {
                 self.push_diagnostic(
@@ -175,16 +212,12 @@ impl<'a> VariableResolver<'a> {
         Some(formatted)
     }
 
-    fn has_variable_reference(&self, expression: &str) -> bool {
-        !find_variable_matches(expression, &self.names_sorted).is_empty()
-    }
-
     fn substitute_runtime(
         &mut self,
         expression: &str,
         owner_line: Option<usize>,
     ) -> Option<String> {
-        let matches = find_variable_matches(expression, &self.names_sorted);
+        let matches = self.find_matches(expression);
         if matches.is_empty() {
             return Some(expression.to_string());
         }
@@ -331,7 +364,7 @@ fn evaluate_expression_with_variables(
     }
 
     let (expr, applied_result) = split_applied_result(trimmed);
-    let has_var_refs = resolver.has_variable_reference(expr);
+    let has_var_refs = resolver.expression_references_variable(expr);
     if !has_calc_signal(expr) && !has_var_refs {
         return None;
     }
@@ -342,7 +375,7 @@ fn evaluate_expression_with_variables(
         expr.to_string()
     };
 
-    let text = evaluate_raw_expression(&substituted)?;
+    let text = resolver.eval_raw(&substituted)?;
     if text == expr {
         return None;
     }
@@ -358,7 +391,7 @@ fn evaluate_expression_with_variables(
 
 fn evaluate_raw_expression(expr: &str) -> Option<String> {
     let mut ctx = new_context();
-    match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NoInterrupt) {
+    match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NO_INTERRUPT) {
         Ok(result) => Some(result.get_main_result().to_string()),
         Err(_) => None,
     }
@@ -639,79 +672,23 @@ fn variable_index_from_definitions(
     entries
 }
 
-fn is_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-fn eq_ignore_ascii_case_slice(haystack: &[u8], needle: &[u8]) -> bool {
-    if haystack.len() != needle.len() {
-        return false;
-    }
-
-    haystack
+fn build_variable_regex(names_sorted: &[String]) -> Option<Regex> {
+    let escaped: Vec<String> = names_sorted
         .iter()
-        .zip(needle.iter())
-        .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
-}
-
-fn has_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool {
-    let left_ok = start == 0 || !is_word_byte(bytes[start - 1]);
-    let right_ok = end == bytes.len() || !is_word_byte(bytes[end]);
-    left_ok && right_ok
-}
-
-fn find_variable_matches(expression: &str, normalized_names: &[String]) -> Vec<MatchSpan> {
-    if normalized_names.is_empty() {
-        return Vec::new();
+        .filter(|n| !n.is_empty())
+        .map(|n| regex::escape(n))
+        .collect();
+    if escaped.is_empty() {
+        return None;
     }
-
-    let bytes = expression.as_bytes();
-    let mut matches = Vec::new();
-
-    for normalized in normalized_names {
-        if normalized.is_empty() {
-            continue;
-        }
-
-        let needle = normalized.as_bytes();
-        if needle.len() > bytes.len() {
-            continue;
-        }
-
-        let mut idx = 0usize;
-        while idx + needle.len() <= bytes.len() {
-            let end = idx + needle.len();
-            if eq_ignore_ascii_case_slice(&bytes[idx..end], needle)
-                && has_word_boundaries(bytes, idx, end)
-            {
-                matches.push(MatchSpan {
-                    normalized: normalized.clone(),
-                    start: idx,
-                    end,
-                });
-            }
-            idx += 1;
-        }
-    }
-
-    matches.sort_by(|a, b| {
-        a.start
-            .cmp(&b.start)
-            .then_with(|| (b.end - b.start).cmp(&(a.end - a.start)))
-            .then_with(|| a.normalized.cmp(&b.normalized))
-    });
-
-    let mut filtered = Vec::new();
-    let mut cursor = 0usize;
-    for span in matches {
-        if span.start < cursor {
-            continue;
-        }
-        cursor = span.end;
-        filtered.push(span);
-    }
-
-    filtered
+    // unicode(false) makes \b use ASCII word-char semantics ([A-Za-z0-9_]),
+    // matching the previous hand-rolled boundary check exactly.
+    let pattern = format!(r"\b(?:{})\b", escaped.join("|"));
+    RegexBuilder::new(&pattern)
+        .unicode(false)
+        .case_insensitive(true)
+        .build()
+        .ok()
 }
 
 fn format_number(value: f64) -> String {

@@ -25,6 +25,7 @@ ulid = "1"
 directories = "6"
 time = { version = "0.3", features = ["formatting"] }
 fend-core = "1"
+regex = "1"
 tauri-plugin-dialog = "2"
 tokio = { version = "1", features = ["net", "io-util", "sync", "rt"] }
 libc = "0.2"
