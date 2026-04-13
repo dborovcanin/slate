@@ -261,21 +261,17 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
-  const selectVariant: Record<string, (view: EditorView) => boolean> = {};
-  const registerSelectPair = (
-    cursorFn: (view: EditorView) => boolean,
-    selectFn: (view: EditorView) => boolean,
-  ) => {
-    selectVariant[cursorFn.name] = selectFn;
+  const selectVariantFor = (command: (view: EditorView) => boolean) => {
+    if (command === cursorCharLeft) return selectCharLeft;
+    if (command === cursorCharRight) return selectCharRight;
+    if (command === cursorLineUp) return selectLineUp;
+    if (command === cursorLineDown) return selectLineDown;
+    if (command === cursorGroupForward) return selectGroupForward;
+    if (command === cursorGroupBackward) return selectGroupBackward;
+    if (command === cursorLineStart) return selectLineStart;
+    if (command === cursorLineEnd) return selectLineEnd;
+    return command;
   };
-  registerSelectPair(cursorCharLeft, selectCharLeft);
-  registerSelectPair(cursorCharRight, selectCharRight);
-  registerSelectPair(cursorLineUp, selectLineUp);
-  registerSelectPair(cursorLineDown, selectLineDown);
-  registerSelectPair(cursorGroupForward, selectGroupForward);
-  registerSelectPair(cursorGroupBackward, selectGroupBackward);
-  registerSelectPair(cursorLineStart, selectLineStart);
-  registerSelectPair(cursorLineEnd, selectLineEnd);
 
   const runMove = (
     view: EditorView,
@@ -283,7 +279,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     explicitCount?: number,
   ) => {
     const isVisual = mode === "visual" || mode === "visual-line" || mode === "visual-block";
-    const cmd = isVisual ? (selectVariant[command.name] ?? command) : command;
+    const cmd = isVisual ? selectVariantFor(command) : command;
     runCounted(view, cmd, explicitCount);
     if (mode === "visual-block") {
       updateVisualSelection(view);
@@ -419,6 +415,46 @@ export function vimModeExtension(options: VimOptions = {}) {
       copyToClipboard(chunks.join("\n"));
     }
     return true;
+  };
+
+  const deleteRange = (view: EditorView, from: number, to: number) => {
+    if (to <= from) return true;
+    view.dispatch({
+      changes: { from, to, insert: "" },
+      selection: { anchor: from },
+      scrollIntoView: true,
+    });
+    return true;
+  };
+
+  const yankRange = (view: EditorView, from: number, to: number) => {
+    if (to <= from) return true;
+    copyToClipboard(view.state.sliceDoc(from, to));
+    return true;
+  };
+
+  const deleteToLineStart = (view: EditorView) => {
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    return deleteRange(view, line.from, head);
+  };
+
+  const deleteToLineEnd = (view: EditorView) => {
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    return deleteRange(view, head, line.to);
+  };
+
+  const yankToLineStart = (view: EditorView) => {
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    return yankRange(view, line.from, head);
+  };
+
+  const yankToLineEnd = (view: EditorView) => {
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    return yankRange(view, head, line.to);
   };
 
   const yankVisualSelection = (view: EditorView) => {
@@ -568,6 +604,14 @@ export function vimModeExtension(options: VimOptions = {}) {
           pendingTextObject = { op: "delete", around: event.key === "a" };
           return true;
         }
+        if (event.key === "0") {
+          clearPending();
+          return deleteToLineStart(view);
+        }
+        if (event.key === "$") {
+          clearPending();
+          return deleteToLineEnd(view);
+        }
         if (event.key === "d") {
           clearPending();
           return runCounted(view, deleteLine);
@@ -582,6 +626,14 @@ export function vimModeExtension(options: VimOptions = {}) {
           pendingYank = false;
           pendingTextObject = { op: "yank", around: event.key === "a" };
           return true;
+        }
+        if (event.key === "0") {
+          clearPending();
+          return yankToLineStart(view);
+        }
+        if (event.key === "$") {
+          clearPending();
+          return yankToLineEnd(view);
         }
         if (event.key === "y") {
           clearPending();

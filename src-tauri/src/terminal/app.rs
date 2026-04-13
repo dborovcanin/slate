@@ -152,6 +152,7 @@ struct TerminalApp {
     // Undo/redo
     undo_stack: Vec<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
+    last_undo_snapshot: UndoEntry,
 }
 
 impl TerminalApp {
@@ -166,6 +167,7 @@ impl TerminalApp {
         let switcher_items = load_note_meta(db)?;
         let calc_data = compute_calc_data(&lines, variables_enabled);
         let prev_lines_snapshot = lines.clone();
+        let undo_seed = lines.clone();
 
         Ok(Self {
             active_note,
@@ -205,6 +207,11 @@ impl TerminalApp {
             command_bar_from_normal: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            last_undo_snapshot: UndoEntry {
+                lines: undo_seed,
+                cursor_line: 0,
+                cursor_col: 0,
+            },
         })
     }
 
@@ -691,6 +698,83 @@ impl TerminalApp {
                     if !yanked.is_empty() {
                         self.set_clipboard_lines(yanked);
                         self.status = format!("yanked {} lines", count);
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteToLineStart => {
+                    let mut chunks = Vec::new();
+                    for _ in 0..count {
+                        if self.cursor_col == 0 {
+                            break;
+                        }
+                        if let Some(deleted) = self.delete_current_line_cols(0, self.cursor_col) {
+                            chunks.push(deleted);
+                        } else {
+                            break;
+                        }
+                    }
+                    if !chunks.is_empty() {
+                        self.set_clipboard_lines(chunks);
+                        self.status = "deleted to line start".to_string();
+                        self.mark_edited();
+                        self.adjust_cursor();
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteToLineEnd => {
+                    let mut chunks = Vec::new();
+                    for _ in 0..count {
+                        let end_col = line_char_len(self.current_line());
+                        if self.cursor_col >= end_col {
+                            break;
+                        }
+                        if let Some(deleted) =
+                            self.delete_current_line_cols(self.cursor_col, end_col)
+                        {
+                            chunks.push(deleted);
+                        } else {
+                            break;
+                        }
+                    }
+                    if !chunks.is_empty() {
+                        self.set_clipboard_lines(chunks);
+                        self.status = "deleted to line end".to_string();
+                        self.mark_edited();
+                        self.adjust_cursor();
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankToLineStart => {
+                    let mut chunks = Vec::new();
+                    for _ in 0..count {
+                        if self.cursor_col == 0 {
+                            break;
+                        }
+                        if let Some(yanked) = self.slice_current_line_cols(0, self.cursor_col) {
+                            chunks.push(yanked);
+                        } else {
+                            break;
+                        }
+                    }
+                    if !chunks.is_empty() {
+                        self.set_clipboard_lines(chunks);
+                        self.status = "yanked to line start".to_string();
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankToLineEnd => {
+                    let mut chunks = Vec::new();
+                    for _ in 0..count {
+                        let end_col = line_char_len(self.current_line());
+                        if self.cursor_col >= end_col {
+                            break;
+                        }
+                        if let Some(yanked) = self.slice_current_line_cols(self.cursor_col, end_col)
+                        {
+                            chunks.push(yanked);
+                        } else {
+                            break;
+                        }
+                    }
+                    if !chunks.is_empty() {
+                        self.set_clipboard_lines(chunks);
+                        self.status = "yanked to line end".to_string();
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteChar => {
@@ -1356,6 +1440,11 @@ impl TerminalApp {
         self.dirty = false;
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.last_undo_snapshot = UndoEntry {
+            lines: self.lines.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        };
         self.refresh_switcher_items(db)?;
         Ok(())
     }
@@ -1378,6 +1467,13 @@ impl TerminalApp {
         self.last_edit = Instant::now();
         self.search_query.clear();
         self.search_matches.clear();
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.last_undo_snapshot = UndoEntry {
+            lines: self.lines.clone(),
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        };
         self.recompute_calc_full();
         self.adjust_cursor();
         self.adjust_scroll();
@@ -1398,25 +1494,23 @@ impl TerminalApp {
     }
 
     fn mark_edited(&mut self) {
-        // Push undo snapshot if enough time elapsed since last edit (debounce)
+        // Push undo snapshot if enough time elapsed since last edit (debounce).
+        // The snapshot represents the state *before* the current mutation.
         if self.last_edit.elapsed() >= Duration::from_millis(300) || self.undo_stack.is_empty() {
-            self.push_undo();
+            self.undo_stack.push(self.last_undo_snapshot.clone());
+            if self.undo_stack.len() > MAX_UNDO_ENTRIES {
+                self.undo_stack.remove(0);
+            }
+            self.redo_stack.clear();
         }
         self.dirty = true;
         self.last_edit = Instant::now();
         self.recompute_calc_full();
-    }
-
-    fn push_undo(&mut self) {
-        self.undo_stack.push(UndoEntry {
+        self.last_undo_snapshot = UndoEntry {
             lines: self.lines.clone(),
             cursor_line: self.cursor_line,
             cursor_col: self.cursor_col,
-        });
-        if self.undo_stack.len() > MAX_UNDO_ENTRIES {
-            self.undo_stack.remove(0);
-        }
-        self.redo_stack.clear();
+        };
     }
 
     fn undo(&mut self) {
@@ -1434,6 +1528,11 @@ impl TerminalApp {
             self.recompute_calc_full();
             self.adjust_cursor();
             self.adjust_scroll();
+            self.last_undo_snapshot = UndoEntry {
+                lines: self.lines.clone(),
+                cursor_line: self.cursor_line,
+                cursor_col: self.cursor_col,
+            };
             self.status = format!("undo ({} left)", self.undo_stack.len());
         } else {
             self.status = "already at oldest change".to_string();
@@ -1455,6 +1554,11 @@ impl TerminalApp {
             self.recompute_calc_full();
             self.adjust_cursor();
             self.adjust_scroll();
+            self.last_undo_snapshot = UndoEntry {
+                lines: self.lines.clone(),
+                cursor_line: self.cursor_line,
+                cursor_col: self.cursor_col,
+            };
             self.status = format!("redo ({} left)", self.redo_stack.len());
         } else {
             self.status = "already at newest change".to_string();
@@ -3356,6 +3460,53 @@ mod tests {
 
         assert_eq!(app.lines, vec!["foo bar baz".to_string()]);
         assert_eq!(app.clipboard, vec!["bar ".to_string()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_dollar_and_d0_delete_line_ranges() {
+        let (db, mut app, path) = app_with_note("alpha beta");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 6;
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('$')]);
+        assert_eq!(app.lines, vec!["alpha ".to_string()]);
+
+        run_keys(&mut app, &db, &[Key::Char('u')]);
+        assert_eq!(app.lines, vec!["alpha beta".to_string()]);
+
+        app.cursor_col = 6;
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('0')]);
+        assert_eq!(app.lines, vec!["beta".to_string()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_normal_mode_undo_redo_roundtrip() {
+        let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('j'), Key::Char('d'), Key::Char('d')],
+        );
+        assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
+
+        run_keys(&mut app, &db, &[Key::Char('u')]);
+        assert_eq!(
+            app.lines,
+            vec!["one".to_string(), "two".to_string(), "three".to_string()]
+        );
+
+        run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+        assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
 
         drop(app);
         drop(db);

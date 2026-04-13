@@ -86,6 +86,10 @@ pub enum VimIntent {
     ExitVisual,
     DeleteLine,
     YankLine,
+    DeleteToLineStart,
+    DeleteToLineEnd,
+    YankToLineStart,
+    YankToLineEnd,
     DeleteChar,
     PasteAfter,
     Undo,
@@ -259,7 +263,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
     }
 
     if let VimKey::Char(digit) = key {
-        if digit.is_ascii_digit() {
+        if digit.is_ascii_digit() && next.pending.is_none() {
             if digit == '0' && !has_count(&next) && next.pending.is_none() {
                 actions.push(make_action(VimIntent::MoveLineStart, 1));
                 handled = true;
@@ -291,6 +295,26 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::Delete, VimKey::Char('0')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteToLineStart, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Delete, VimKey::Char('$')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteToLineEnd, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::Delete, VimKey::Char('i')) => {
                 next.pending = Some(VimPending::DeleteInner);
                 handled = true;
@@ -312,6 +336,26 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             (VimPending::Yank, VimKey::Char('y')) => {
                 let count = consume_count(&mut next);
                 actions.push(make_action(VimIntent::YankLine, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Yank, VimKey::Char('0')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankToLineStart, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Yank, VimKey::Char('$')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankToLineEnd, count));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -693,5 +737,18 @@ mod tests {
         assert_eq!(three.actions.len(), 1);
         assert_eq!(three.actions[0].intent, VimIntent::YankAroundWord);
         assert_eq!(three.actions[0].count, 1);
+    }
+
+    #[test]
+    fn d0_and_dollar_emit_line_range_deletes() {
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:0");
+        assert_eq!(two.actions.len(), 1);
+        assert_eq!(two.actions[0].intent, VimIntent::DeleteToLineStart);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:$");
+        assert_eq!(two.actions.len(), 1);
+        assert_eq!(two.actions[0].intent, VimIntent::DeleteToLineEnd);
     }
 }
