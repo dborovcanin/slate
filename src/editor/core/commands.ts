@@ -1,6 +1,6 @@
 import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
-import { executeSumCommand } from "./sum.ts";
+import { executeSumCommand, type SumExpressionEvaluator } from "./sum.ts";
 import type {
   CommandMode,
   CommandSuggestion,
@@ -14,6 +14,7 @@ export interface CommandRuntime {
   mode: CommandMode;
   dateFormat?: string;
   pickDate?: (dateFormat: string) => Promise<string | null>;
+  evaluateExpression?: SumExpressionEvaluator;
   copyText?: (text: string) => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
   formatMarkdown?: (input: string) => string;
@@ -67,7 +68,9 @@ async function runSumCommand(
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
-  const result = executeSumCommand(normalizedInput, ctx);
+  const result = await executeSumCommand(normalizedInput, ctx, {
+    evaluateExpression: runtime.evaluateExpression,
+  });
   if (result.clipboardText) {
     await runtime.copyText?.(result.clipboardText);
   }
@@ -123,8 +126,16 @@ const COMMAND_DEFINITIONS: CommandDefinition[] = [
     execute: runSumCommand,
   },
   {
-    value: "sum table",
-    description: "sum markdown table at cursor",
+    value: "sum row",
+    aliases: ["sum_row"],
+    description: "sum markdown table per row at cursor",
+    modes: ["vim", "editor"],
+    execute: runSumCommand,
+  },
+  {
+    value: "sum column",
+    aliases: ["sum_column"],
+    description: "sum markdown table per column at cursor",
     modes: ["vim", "editor"],
     execute: runSumCommand,
   },

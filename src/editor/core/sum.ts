@@ -2,7 +2,10 @@ import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
 import type { EditOperation } from "./types.ts";
 
-export type SumScope = "paragraph" | "list" | "table" | "doc";
+export type SumScope = "paragraph" | "list" | "row" | "column" | "doc";
+export type SumExpressionEvaluator = (
+  expression: string,
+) => Promise<string | null> | string | null;
 
 export interface LineRange {
   startLine: number;
@@ -15,8 +18,13 @@ export interface SumExecutionResult {
   clipboardText?: string;
 }
 
+export interface SumCommandOptions {
+  evaluateExpression?: SumExpressionEvaluator;
+}
+
 const listLineRe = /^\s*(?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+/;
 const tableLineRe = /^\s*\|.*\|\s*$/;
+const tableDelimiterCellRe = /^:?-{3,}:?$/;
 const numberRe = /[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+/g;
 
 function formatNumber(value: number): string {
@@ -68,6 +76,107 @@ function docRange(lines: string[]): LineRange {
   return { startLine: 1, endLine: Math.max(1, lines.length) };
 }
 
+function splitTableCells(line: string): string[] {
+  const trimmed = line.trim();
+  const inner = trimmed.replace(/^\|/, "").replace(/\|$/, "");
+  return inner.split("|").map((cell) => cell.trim());
+}
+
+function isTableDelimiterRowCells(cells: readonly string[]): boolean {
+  return cells.length > 0 && cells.every((cell) => cell.length === 0 || tableDelimiterCellRe.test(cell));
+}
+
+function parseTableDataRows(text: string): string[][] {
+  const rows: string[][] = [];
+  for (const line of text.split("\n")) {
+    if (!tableLineRe.test(line)) continue;
+    const cells = splitTableCells(line);
+    if (isTableDelimiterRowCells(cells)) continue;
+    rows.push(cells);
+  }
+  return rows;
+}
+
+async function evaluateCellValue(
+  cell: string,
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string | null> {
+  const trimmed = cell.trim();
+  if (!trimmed) return null;
+  if (!/\d/.test(trimmed)) return null;
+
+  if (evaluateExpression) {
+    const evaluated = await evaluateExpression(trimmed);
+    const normalized = evaluated?.trim() ?? "";
+    if (normalized.length > 0) return normalized;
+  }
+
+  const numeric = parseNumbers(trimmed);
+  if (numeric.length === 0) return null;
+  return formatNumber(numeric.reduce((acc, value) => acc + value, 0));
+}
+
+async function sumTerms(
+  terms: readonly string[],
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string | null> {
+  if (terms.length === 0) return null;
+  if (terms.length === 1) return terms[0] ?? null;
+
+  if (evaluateExpression) {
+    let acc = terms[0] ?? "";
+    for (const term of terms.slice(1)) {
+      const combined = await evaluateExpression(`(${acc}) + (${term})`);
+      const normalized = combined?.trim() ?? "";
+      if (!normalized) return null;
+      acc = normalized;
+    }
+    return acc || null;
+  }
+
+  const total = terms
+    .flatMap((term) => parseNumbers(term))
+    .reduce((acc, value) => acc + value, 0);
+  return formatNumber(total);
+}
+
+async function sumRows(
+  text: string,
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string[]> {
+  const rows = parseTableDataRows(text);
+  const out: string[] = [];
+
+  for (const row of rows) {
+    const evaluated = await Promise.all(row.map((cell) => evaluateCellValue(cell, evaluateExpression)));
+    const terms = evaluated.filter((value): value is string => value !== null);
+    const summed = await sumTerms(terms, evaluateExpression);
+    if (summed) out.push(summed);
+  }
+
+  return out;
+}
+
+async function sumColumns(
+  text: string,
+  evaluateExpression?: SumExpressionEvaluator,
+): Promise<string[]> {
+  const rows = parseTableDataRows(text);
+  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const out: string[] = [];
+
+  for (let col = 0; col < columnCount; col++) {
+    const evaluated = await Promise.all(
+      rows.map((row) => evaluateCellValue(row[col] ?? "", evaluateExpression)),
+    );
+    const terms = evaluated.filter((value): value is string => value !== null);
+    const summed = await sumTerms(terms, evaluateExpression);
+    if (summed) out.push(summed);
+  }
+
+  return out;
+}
+
 export function resolveScopeRange(
   lines: string[],
   cursorLine: number,
@@ -79,7 +188,8 @@ export function resolveScopeRange(
       return paragraphRange(lines, cursor);
     case "list":
       return listRange(lines, cursor);
-    case "table":
+    case "row":
+    case "column":
       return tableRange(lines, cursor);
     case "doc":
       return docRange(lines);
@@ -96,7 +206,8 @@ export function resolveScopeRangeInContext(
       return ctx.paragraphRangeAtLine(lineNo);
     case "list":
       return ctx.listRangeAtLine(lineNo);
-    case "table":
+    case "row":
+    case "column":
       return ctx.tableRangeAtLine(lineNo);
     case "doc":
       return { startLine: 1, endLine: ctx.lineCount() };
@@ -107,7 +218,8 @@ export function parseScope(raw: string | undefined): SumScope {
   const arg = (raw ?? "").trim().toLowerCase();
   if (arg === "all" || arg === "doc" || arg === "file") return "doc";
   if (arg === "list") return "list";
-  if (arg === "table") return "table";
+  if (arg === "row") return "row";
+  if (arg === "column") return "column";
   return "paragraph";
 }
 
@@ -115,11 +227,24 @@ export function parseSumScopeFromCommand(rawCommand: string): SumScope | null {
   const trimmed = rawCommand.trim().replace(/^:/, "");
   if (!trimmed) return null;
   if (trimmed === "sum_all") return "doc";
-  if (trimmed.startsWith("sum")) return parseScope(trimmed.slice(3));
+  if (trimmed === "sum_row") return "row";
+  if (trimmed === "sum_column") return "column";
+  if (!trimmed.startsWith("sum")) return null;
+
+  const rawScope = trimmed.slice(3).trim().toLowerCase();
+  if (rawScope.length === 0) return "paragraph";
+  if (rawScope === "doc" || rawScope === "all" || rawScope === "file") return "doc";
+  if (rawScope === "list") return "list";
+  if (rawScope === "row") return "row";
+  if (rawScope === "column") return "column";
   return null;
 }
 
-export function executeSumCommand(rawCommand: string, ctx: ResolvedContext): SumExecutionResult {
+export async function executeSumCommand(
+  rawCommand: string,
+  ctx: ResolvedContext,
+  options: SumCommandOptions = {},
+): Promise<SumExecutionResult> {
   const trimmed = rawCommand.trim().replace(/^:/, "");
   const scope = parseSumScopeFromCommand(trimmed);
   if (!scope) {
@@ -128,6 +253,28 @@ export function executeSumCommand(rawCommand: string, ctx: ResolvedContext): Sum
 
   const range = resolveScopeRangeInContext(ctx, scope);
   const text = range ? ctx.textForLineRange(range) : "";
+  const selection = ctx.selection();
+
+  if (scope === "row" || scope === "column") {
+    const totals =
+      scope === "row"
+        ? await sumRows(text, options.evaluateExpression)
+        : await sumColumns(text, options.evaluateExpression);
+    if (totals.length === 0) {
+      return { message: `sum(${scope}): no numbers` };
+    }
+
+    const formatted = totals.join("\n");
+    const operation = replaceRange(selection.from, selection.to, formatted, {
+      anchor: selection.from + formatted.length,
+    });
+    return {
+      message: `sum(${scope}) = [${totals.join(", ")}] (${totals.length} totals, inserted at cursor + copied)`,
+      operation,
+      clipboardText: formatted,
+    };
+  }
+
   const numbers = parseNumbers(text);
   if (numbers.length === 0) {
     return { message: `sum(${scope}): no numbers` };
@@ -135,7 +282,6 @@ export function executeSumCommand(rawCommand: string, ctx: ResolvedContext): Sum
 
   const sum = numbers.reduce((acc, n) => acc + n, 0);
   const formatted = formatNumber(sum);
-  const selection = ctx.selection();
   const operation = replaceRange(selection.from, selection.to, formatted, {
     anchor: selection.from + formatted.length,
   });

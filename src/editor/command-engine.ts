@@ -1,4 +1,5 @@
 import type { EditorView } from "@codemirror/view";
+import { evaluateLines } from "../api.ts";
 import {
   executeCommand as executeCoreCommand,
   listCommandSuggestions as listCoreCommandSuggestions,
@@ -40,6 +41,10 @@ export async function executeCommand(
     mode: options.mode,
     dateFormat: options.dateFormat,
     pickDate: (dateFormat) => openDatePicker(dateFormat),
+    evaluateExpression: async (expression) => {
+      const [result] = await evaluateLines([expression]);
+      return result ?? null;
+    },
     copyText,
     onQuit: options.onExitCommand,
     formatMarkdown: formatMarkdownText,

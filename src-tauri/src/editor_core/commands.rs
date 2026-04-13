@@ -1,8 +1,8 @@
 use super::context::ResolvedContext;
 use super::operations::replace_range;
 use super::types::{
-    CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation, EditorContextSnapshot,
-    OperationSelection,
+    BlockLineRange, CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation,
+    EditorContextSnapshot, OperationSelection,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +25,7 @@ struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 7] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 8] = [
     CommandDefinition {
         value: "sum",
         aliases: &[],
@@ -41,9 +41,16 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 7] = [
         behavior: CommandBehavior::Sum,
     },
     CommandDefinition {
-        value: "sum table",
-        aliases: &[],
-        description: "sum table at cursor (placeholder)",
+        value: "sum row",
+        aliases: &["sum_row"],
+        description: "sum table per-row totals at cursor",
+        modes: &MODES_BOTH,
+        behavior: CommandBehavior::Sum,
+    },
+    CommandDefinition {
+        value: "sum column",
+        aliases: &["sum_column"],
+        description: "sum table per-column totals at cursor",
         modes: &MODES_BOTH,
         behavior: CommandBehavior::Sum,
     },
@@ -119,6 +126,150 @@ fn format_sum_result(value: f64) -> String {
         .trim_end_matches('0')
         .trim_end_matches('.')
         .to_string()
+}
+
+struct NoInterrupt;
+
+impl fend_core::Interrupt for NoInterrupt {
+    fn should_interrupt(&self) -> bool {
+        false
+    }
+}
+
+static NO_INTERRUPT: NoInterrupt = NoInterrupt;
+
+fn new_fend_context() -> fend_core::Context {
+    let mut ctx = fend_core::Context::new();
+    ctx.set_random_u32_fn(|| {
+        use std::collections::hash_map::RandomState;
+        use std::hash::{BuildHasher, Hasher};
+        RandomState::new().build_hasher().finish() as u32
+    });
+    ctx
+}
+
+fn evaluate_expression(expr: &str) -> Option<String> {
+    let mut ctx = new_fend_context();
+    match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NO_INTERRUPT) {
+        Ok(result) => Some(result.get_main_result().to_string()),
+        Err(_) => None,
+    }
+}
+
+fn split_table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
+    inner
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn is_table_delimiter_cell(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    let core = without_left.strip_suffix(':').unwrap_or(without_left);
+    core.len() >= 3 && core.bytes().all(|byte| byte == b'-')
+}
+
+fn is_table_delimiter_row(cells: &[String]) -> bool {
+    !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
+}
+
+fn table_data_rows(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<Vec<String>> {
+    let mut rows = Vec::new();
+    for line_no in range.start_line..=range.end_line {
+        let cells = split_table_cells(ctx.line_text(line_no));
+        if is_table_delimiter_row(&cells) {
+            continue;
+        }
+        rows.push(cells);
+    }
+    rows
+}
+
+fn evaluate_cell_term(cell: &str) -> Option<String> {
+    let trimmed = cell.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.bytes().any(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    if let Some(value) = evaluate_expression(trimmed) {
+        let normalized = value.trim();
+        if !normalized.is_empty() {
+            return Some(normalized.to_string());
+        }
+    }
+
+    let numbers = parse_sum_numbers(trimmed);
+    if numbers.is_empty() {
+        return None;
+    }
+    Some(format_sum_result(numbers.iter().sum()))
+}
+
+fn sum_term_values(terms: &[String]) -> Option<String> {
+    if terms.is_empty() {
+        return None;
+    }
+    if terms.len() == 1 {
+        return Some(terms[0].clone());
+    }
+
+    let mut acc = terms[0].clone();
+    for term in terms.iter().skip(1) {
+        let expr = format!("({acc}) + ({term})");
+        let next = evaluate_expression(&expr)?;
+        let normalized = next.trim();
+        if normalized.is_empty() {
+            return None;
+        }
+        acc = normalized.to_string();
+    }
+    Some(acc)
+}
+
+fn sum_row(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
+    let rows = table_data_rows(ctx, range);
+    let mut out = Vec::new();
+
+    for row in rows {
+        let terms = row
+            .iter()
+            .filter_map(|cell| evaluate_cell_term(cell))
+            .collect::<Vec<_>>();
+        if let Some(total) = sum_term_values(&terms) {
+            out.push(total);
+        }
+    }
+
+    out
+}
+
+fn sum_column(ctx: &ResolvedContext, range: BlockLineRange) -> Vec<String> {
+    let rows = table_data_rows(ctx, range);
+    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
+    let mut out = Vec::new();
+
+    for col in 0..column_count {
+        let terms = rows
+            .iter()
+            .filter_map(|row| row.get(col))
+            .filter_map(|cell| evaluate_cell_term(cell))
+            .collect::<Vec<_>>();
+        if let Some(total) = sum_term_values(&terms) {
+            out.push(total);
+        }
+    }
+
+    out
 }
 
 fn sum_scope_label(command_value: &str) -> &str {
@@ -341,24 +492,45 @@ pub fn execute_command(
                 }),
                 "sum" => Some(ctx.paragraph_range_at_line(current_line)),
                 "sum list" => ctx.list_range_at_line(current_line),
-                "sum table" => ctx.table_range_at_line(current_line, 1),
+                "sum row" => ctx.table_range_at_line(current_line, 1),
+                "sum column" => ctx.table_range_at_line(current_line, 1),
                 _ => None,
             };
 
             let scope = sum_scope_label(command.value);
 
             if let Some(r) = range {
-                let text = ctx.text_for_line_range(r);
-                let numbers = parse_sum_numbers(&text);
-                if numbers.is_empty() {
-                    return result_with_message(format!("sum({scope}): no numbers"));
-                }
-                let sum: f64 = numbers.iter().sum();
-                let formatted = format_sum_result(sum);
-                let msg = format!(
-                    "sum({scope}) = {formatted} ({} values, inserted + copied)",
-                    numbers.len()
-                );
+                let (formatted, msg) =
+                    if command.value == "sum row" || command.value == "sum column" {
+                        let totals = if command.value == "sum row" {
+                            sum_row(&ctx, r)
+                        } else {
+                            sum_column(&ctx, r)
+                        };
+                        if totals.is_empty() {
+                            return result_with_message(format!("sum({scope}): no numbers"));
+                        }
+                        let formatted = totals.join("\n");
+                        let msg = format!(
+                            "sum({scope}) = [{}] ({} totals, inserted + copied)",
+                            totals.join(", "),
+                            totals.len()
+                        );
+                        (formatted, msg)
+                    } else {
+                        let text = ctx.text_for_line_range(r);
+                        let numbers = parse_sum_numbers(&text);
+                        if numbers.is_empty() {
+                            return result_with_message(format!("sum({scope}): no numbers"));
+                        }
+                        let sum: f64 = numbers.iter().sum();
+                        let formatted = format_sum_result(sum);
+                        let msg = format!(
+                            "sum({scope}) = {formatted} ({} values, inserted + copied)",
+                            numbers.len()
+                        );
+                        (formatted, msg)
+                    };
 
                 let end_pos = ctx.line(r.end_line).to;
                 let insert = format!("\n{formatted}");
@@ -431,7 +603,15 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             editor_values,
-            vec!["sum", "sum list", "sum table", "sum doc", "date", "format"]
+            vec![
+                "sum",
+                "sum list",
+                "sum row",
+                "sum column",
+                "sum doc",
+                "date",
+                "format"
+            ]
         );
 
         let vim_values = list_command_suggestions(CommandMode::Vim, "")
@@ -509,5 +689,33 @@ mod tests {
         let result = execute_command(&doc, "sum doc", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("6"));
+    }
+
+    #[test]
+    fn sum_row_supports_unit_aware_totals() {
+        let doc = snapshot(
+            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
+            0,
+            0,
+        );
+        let result = execute_command(&doc, "sum row", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("sum(row)"));
+        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
+        assert_eq!(inserted, "\n2002m\n7m");
+    }
+
+    #[test]
+    fn sum_column_supports_unit_aware_totals_and_alias() {
+        let doc = snapshot(
+            "| item | a  | b   |\n| ---- | -- | --- |\n| x    | 2m | 2km |\n| y    | 3m | 4m  |",
+            0,
+            0,
+        );
+        let result = execute_command(&doc, "sum_column", CommandMode::Editor);
+        assert_eq!(result.operations.len(), 1);
+        assert!(result.message.contains("sum(column)"));
+        let inserted = result.operations[0].changes[0].insert.replace(' ', "");
+        assert_eq!(inserted, "\n5m\n2.004km");
     }
 }

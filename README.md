@@ -14,7 +14,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Shared command panel in both Vim and non-Vim modes
   - Vim mode: open with `:`
   - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
-  - Built-in commands: `sum`, `sum list`, `sum table`, `sum doc`, `date`, `format`
+  - Built-in commands: `sum`, `sum list`, `sum row`, `sum column`, `sum doc`, `date`, `format`
 - Modular editor core (`src/editor/core`): snapshot-based context + operation-based command/rule engine, designed for GUI/terminal parity
 - Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
 - Checklist markdown (`- [ ]`, `- [x]`) gets dedicated visual styling (`☐` / crossed `☒` + done-item strike style)
@@ -38,7 +38,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
-- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum table`, `:sum doc`, `:date`, `:format`, `:q`
+- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:date`, `:format`, `:q`
 - `:sum` computes from the selected scope, inserts only `<value>` at cursor/selection, and copies the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 

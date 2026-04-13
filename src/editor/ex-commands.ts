@@ -36,7 +36,7 @@ export async function executeExCommand(view: EditorView, rawCommand: string): Pr
   if (!trimmed) return "";
 
   const ctx = resolveContextFromView(view);
-  const result = executeSumCommand(trimmed, ctx);
+  const result = await executeSumCommand(trimmed, ctx);
 
   if (result.operation) {
     applyEditOperations(view, [result.operation]);

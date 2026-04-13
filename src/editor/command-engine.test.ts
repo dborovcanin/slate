@@ -4,7 +4,7 @@ import { listCommandSuggestions } from "./command-engine.ts";
 
 test("editor mode exposes only editing commands", () => {
   const values = listCommandSuggestions("editor", "").map((entry) => entry.value);
-  assert.deepEqual(values, ["sum", "sum list", "sum table", "sum doc", "date", "format"]);
+  assert.deepEqual(values, ["sum", "sum list", "sum row", "sum column", "sum doc", "date", "format"]);
   assert.equal(values.includes("q"), false);
 });
 

@@ -848,6 +848,15 @@ mod tests {
     }
 
     #[test]
+    fn evaluates_decimal_addition_expression_precisely() {
+        let engine = CalcEngine::new();
+        assert_eq!(
+            engine.evaluate("3 + 346 + 5.4 + 105.03 + 2347 + 5 + 389.06 + 126 + 34.4"),
+            Some("3360.89".to_string())
+        );
+    }
+
+    #[test]
     fn ignores_date_like_lines() {
         let engine = CalcEngine::new();
         assert_eq!(engine.evaluate("2026-07-03"), None);
@@ -898,6 +907,21 @@ mod tests {
             .map(|entry| entry.normalized.clone())
             .collect::<Vec<_>>();
         assert_eq!(vars, vec!["subtotal", "tax"]);
+    }
+
+    #[test]
+    fn note_eval_assignment_with_decimals_matches_expected_sum() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "val := 3 + 346 + 5.4 + 105.03 + 2347 + 5 + 389.06 + 126 + 34.4".to_string(),
+            "val".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            result.line_results,
+            vec![Some("3360.89".to_string()), Some("3360.89".to_string())]
+        );
     }
 
     #[test]

@@ -21,7 +21,8 @@ test("parseScope maps aliases", () => {
   assert.equal(parseScope("all"), "doc");
   assert.equal(parseScope("file"), "doc");
   assert.equal(parseScope("list"), "list");
-  assert.equal(parseScope("table"), "table");
+  assert.equal(parseScope("row"), "row");
+  assert.equal(parseScope("column"), "column");
 });
 
 test("parseNumbers extracts integers and decimals", () => {
@@ -39,8 +40,10 @@ test("resolveScopeRange requires cursor on list/table for those scopes", () => {
   const lines = ["- a", "- b", "", "x", "| a | 1 |", "| b | 2 |"];
   assert.deepEqual(resolveScopeRange(lines, 2, "list"), { startLine: 1, endLine: 2 });
   assert.equal(resolveScopeRange(lines, 4, "list"), null);
-  assert.deepEqual(resolveScopeRange(lines, 6, "table"), { startLine: 5, endLine: 6 });
-  assert.equal(resolveScopeRange(lines, 4, "table"), null);
+  assert.deepEqual(resolveScopeRange(lines, 6, "row"), { startLine: 5, endLine: 6 });
+  assert.equal(resolveScopeRange(lines, 4, "row"), null);
+  assert.deepEqual(resolveScopeRange(lines, 6, "column"), { startLine: 5, endLine: 6 });
+  assert.equal(resolveScopeRange(lines, 4, "column"), null);
 });
 
 test("resolveScopeRange for doc spans entire file", () => {
@@ -68,7 +71,8 @@ test("resolveScopeRangeInView resolves around active cursor line", () => {
     selection: { anchor: 7 },
   });
   const tableView = { state: stateTable } as unknown as EditorView;
-  assert.deepEqual(resolveScopeRangeInView(tableView, "table"), { startLine: 2, endLine: 3 });
+  assert.deepEqual(resolveScopeRangeInView(tableView, "row"), { startLine: 2, endLine: 3 });
+  assert.deepEqual(resolveScopeRangeInView(tableView, "column"), { startLine: 2, endLine: 3 });
   assert.equal(resolveScopeRangeInView(tableView, "list"), null);
 });
 
