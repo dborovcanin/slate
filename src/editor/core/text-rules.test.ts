@@ -47,6 +47,20 @@ test("runDocChangeRules formats markdown tables when enabled", () => {
   assert.equal(applyOperation(text, op), "| a   | b   |\n| --- | --- |\n| 1   | 2   |");
 });
 
+test("runDocChangeRules inserts missing markdown table delimiter row", () => {
+  const text = "| test | count |\n| bro | 5 |";
+  const snapshot = {
+    text,
+    selection: { anchor: text.length, head: text.length },
+  };
+  const op = runDocChangeRules(snapshot, { markdownAutoformat: true });
+  assert.ok(op);
+  assert.equal(
+    applyOperation(text, op),
+    "| test | count |\n| ---- | ----- |\n| bro  | 5     |",
+  );
+});
+
 test("runDocChangeRules keeps cursor after typed text in autoformatted empty table cell", () => {
   const text = "| a   | b   |\n| --- | --- |\n| 1   |x    |";
   const cursor = text.lastIndexOf("x") + 1;

@@ -20,6 +20,17 @@ test("formatTableLines fills missing cells in shorter rows", () => {
   ]);
 });
 
+test("formatTableLines inserts a delimiter row when missing", () => {
+  const input = ["| test | count |", "| bro | 5 |"];
+  const out = formatTableLines(input);
+
+  assert.deepEqual(out, [
+    "| test | count |",
+    "| ---- | ----- |",
+    "| bro  | 5     |",
+  ]);
+});
+
 test("formatTableLines returns empty input unchanged", () => {
   assert.deepEqual(formatTableLines([]), []);
 });

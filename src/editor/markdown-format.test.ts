@@ -13,3 +13,9 @@ test("formatMarkdownText aligns markdown tables", () => {
   const out = formatMarkdownText(input);
   assert.equal(out, "| a   | b   |\n| --- | --- |\n| 1   | 2   |\n");
 });
+
+test("formatMarkdownText inserts missing markdown table delimiter row", () => {
+  const input = "| test | count |\n| bro | 5 |\n";
+  const out = formatMarkdownText(input);
+  assert.equal(out, "| test | count |\n| ---- | ----- |\n| bro  | 5     |\n");
+});

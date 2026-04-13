@@ -378,7 +378,17 @@ fn format_table_lines(lines: &[String]) -> Vec<String> {
         }
     }
 
-    normalized_rows
+    let has_delimiter_row = normalized_rows.iter().any(|row| is_delimiter_row(row));
+    let mut output_rows = normalized_rows.clone();
+    if !has_delimiter_row && output_rows.len() >= 2 {
+        let delimiter_row: Vec<String> = widths
+            .iter()
+            .map(|width| "-".repeat((*width).max(3)))
+            .collect();
+        output_rows.insert(1, delimiter_row);
+    }
+
+    output_rows
         .iter()
         .map(|row| {
             let delimiter = is_delimiter_row(row);
@@ -1109,6 +1119,17 @@ mod tests {
         assert_eq!(
             apply_operation(&doc.text, &op),
             "| a   | b   |\n| --- | --- |\n| 1   | 2   |"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_inserts_missing_table_delimiter_row() {
+        let text = "| test | count |\n| bro | 5 |";
+        let doc = snapshot(text, text.len(), text.len());
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "| test | count |\n| ---- | ----- |\n| bro  | 5     |"
         );
     }
 
