@@ -176,11 +176,13 @@ make release
 
 `make release` writes artifacts into `build/`:
 - `note-linux`, `note-msg-linux`
-- `note-windows.exe`, `note-msg-windows.exe` (if MinGW is available)
+- Windows NSIS installer (`*.exe`) when run on a native Windows host (MSVC toolchain)
 - macOS binaries when run on macOS, or when an osxcross toolchain is configured
 
 Notes:
 - Windows builds require `src-tauri/icons/icon.ico` (auto-generated from `icons/256x256.png` when `magick` is available).
+- Windows installer uses WebView2 `offlineInstaller` mode, so the runtime is bundled in the installer (larger installer size, no internet required at install time).
+- Build Windows installers from a native Windows shell with MSVC tools (`cl.exe`) available (e.g. "x64 Native Tools Command Prompt for VS"), not from Linux/WSL.
 - macOS cross-build from Linux is skipped unless `o64-clang` and `oa64-clang` are installed.
 
 ### Development

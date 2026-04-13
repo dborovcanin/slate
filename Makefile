@@ -6,12 +6,13 @@ ICON_DIR := $(TAURI_DIR)/icons
 BUILD_DIR := build
 
 LINUX_TARGET := x86_64-unknown-linux-gnu
-WINDOWS_TARGET := x86_64-pc-windows-gnu
+WINDOWS_TARGET := x86_64-pc-windows-msvc
 MAC_INTEL_TARGET := x86_64-apple-darwin
 MAC_ARM_TARGET := aarch64-apple-darwin
 
 HOST_OS := $(shell uname -s)
-HAS_MINGW := $(shell command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && echo 1 || echo 0)
+IS_NATIVE_WINDOWS_HOST := $(shell if printf '%s' "$(HOST_OS)" | grep -Eq '^(MINGW|MSYS|CYGWIN)'; then echo 1; else echo 0; fi)
+HAS_MSVC_CL := $(shell command -v cl >/dev/null 2>&1 && echo 1 || echo 0)
 HAS_OSXCROSS := $(shell command -v o64-clang >/dev/null 2>&1 && command -v oa64-clang >/dev/null 2>&1 && echo 1 || echo 0)
 HAS_MAGICK := $(shell command -v magick >/dev/null 2>&1 && echo 1 || echo 0)
 
@@ -61,15 +62,31 @@ release-linux:
 
 release-windows:
 	mkdir -p "$(BUILD_DIR)"
-	@if [ "$(HAS_MINGW)" != "1" ]; then \
-		echo "Skipping Windows build: x86_64-w64-mingw32-gcc not found."; \
-		exit 0; \
-	fi
-	rustup target add "$(WINDOWS_TARGET)"
-	cargo tauri build --target "$(WINDOWS_TARGET)"
-	cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(APP_NAME).exe" "$(BUILD_DIR)/$(APP_NAME)-windows.exe"
-	@if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(MSG_NAME).exe" ]; then \
-		cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(MSG_NAME).exe" "$(BUILD_DIR)/$(MSG_NAME)-windows.exe"; \
+	@if [ "$(IS_NATIVE_WINDOWS_HOST)" != "1" ]; then \
+		echo "Skipping Windows installer build: MSVC target requires a native Windows shell (MSYS2/Git-Bash/Cygwin) or CI on windows-latest."; \
+		echo "Hint: do not run release-windows from Linux/WSL."; \
+	elif [ "$(HAS_MSVC_CL)" != "1" ]; then \
+		echo "error: cl.exe not found in PATH."; \
+		echo "       open 'x64 Native Tools Command Prompt for VS' (or run VsDevCmd.bat) before running make release-windows."; \
+		exit 1; \
+	else \
+		rustup target add "$(WINDOWS_TARGET)"; \
+		env -u CC -u CXX -u AR -u CFLAGS -u CXXFLAGS cargo tauri build --target "$(WINDOWS_TARGET)"; \
+		if ls "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/bundle/nsis/"*.exe >/dev/null 2>&1; then \
+			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/bundle/nsis/"*.exe "$(BUILD_DIR)/"; \
+		else \
+			echo "error: no NSIS installer was generated for target $(WINDOWS_TARGET)."; \
+			exit 1; \
+		fi; \
+		if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(APP_NAME).exe" ]; then \
+			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(APP_NAME).exe" "$(BUILD_DIR)/$(APP_NAME)-windows-msvc.exe"; \
+		fi; \
+		if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(MSG_NAME).exe" ]; then \
+			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(MSG_NAME).exe" "$(BUILD_DIR)/$(MSG_NAME)-windows-msvc.exe"; \
+		fi; \
+		if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/WebView2Loader.dll" ]; then \
+			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/WebView2Loader.dll" "$(BUILD_DIR)/WebView2Loader.dll"; \
+		fi; \
 	fi
 
 release-macos:
