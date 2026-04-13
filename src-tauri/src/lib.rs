@@ -4,12 +4,17 @@ mod config;
 pub mod editor_core;
 mod ipc;
 mod storage;
+#[cfg(unix)]
+mod terminal;
+#[cfg(not(unix))]
+#[path = "terminal_stub.rs"]
 mod terminal;
 
 use calc::engine::CalcEngine;
 use directories::ProjectDirs;
 use ipc::server;
 use std::fs;
+use std::io::IsTerminal as _;
 use std::path::PathBuf;
 use storage::Db;
 use terminal::TerminalOptions;
@@ -21,8 +26,7 @@ enum Mode {
 }
 
 fn stdin_is_tty() -> bool {
-    // SAFETY: libc::isatty is thread-safe and side-effect free for fd checks.
-    unsafe { libc::isatty(libc::STDIN_FILENO) == 1 }
+    std::io::stdin().is_terminal()
 }
 
 fn data_dir() -> Result<PathBuf, String> {

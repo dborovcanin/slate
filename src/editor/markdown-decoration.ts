@@ -1,6 +1,8 @@
 import { RangeSetBuilder } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
+import { variableIndexField } from "./calc-decoration.ts";
+import type { VariableIndexEntry } from "../api.ts";
 
 type InlineTokenType =
   | "strong"
@@ -82,6 +84,7 @@ const decCodeType = Decoration.mark({ class: "md-code-token-type" });
 const decLinkText = Decoration.mark({ class: "md-link-text" });
 const decLinkUrl = Decoration.mark({ class: "md-link-url" });
 const decLinkMarker = Decoration.mark({ class: "md-token md-token-link" });
+const decVariable = Decoration.mark({ class: "md-variable" });
 
 const lineClass = (className: string) => Decoration.line({ class: className });
 
@@ -549,10 +552,74 @@ function addInlineDecorations(builder: RangeSetBuilder<Decoration>, lineFrom: nu
   }
 }
 
+interface TextRange {
+  from: number;
+  to: number;
+}
+
+function isVariableWordChar(ch: string | undefined): boolean {
+  return !!ch && /[A-Za-z0-9_]/.test(ch);
+}
+
+function hasVariableWordBoundaries(text: string, from: number, to: number): boolean {
+  const left = from === 0 ? undefined : text[from - 1];
+  const right = to >= text.length ? undefined : text[to];
+  return !isVariableWordChar(left) && !isVariableWordChar(right);
+}
+
+export function findVariableNameRanges(
+  text: string,
+  variables: readonly Pick<VariableIndexEntry, "normalized">[],
+): TextRange[] {
+  if (text.length === 0 || variables.length === 0) return [];
+
+  const lower = text.toLowerCase();
+  const candidates: TextRange[] = [];
+
+  for (const entry of variables) {
+    const needle = entry.normalized.trim().toLowerCase();
+    if (!needle) continue;
+
+    let from = 0;
+    while (from <= lower.length - needle.length) {
+      const idx = lower.indexOf(needle, from);
+      if (idx < 0) break;
+      const end = idx + needle.length;
+      if (hasVariableWordBoundaries(lower, idx, end)) {
+        candidates.push({ from: idx, to: end });
+      }
+      from = idx + 1;
+    }
+  }
+
+  if (candidates.length <= 1) return candidates;
+
+  // Keep left-most ranges, preferring longer matches when overlaps happen.
+  candidates.sort(
+    (a, b) => a.from - b.from || (b.to - b.from) - (a.to - a.from) || a.to - b.to,
+  );
+
+  const result: TextRange[] = [];
+  for (const range of candidates) {
+    const last = result[result.length - 1];
+    if (!last) {
+      result.push(range);
+      continue;
+    }
+    if (range.from < last.to) {
+      continue;
+    }
+    result.push(range);
+  }
+
+  return result;
+}
+
 function buildMarkdownDecorations(view: EditorView): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
   let inCodeBlock = false;
   let codeFenceLang: string | null = null;
+  const variableIndex = view.state.field(variableIndexField, false) ?? [];
 
   for (let lineNo = 1; lineNo <= view.state.doc.lines; lineNo++) {
     const line = view.state.doc.line(lineNo);
@@ -620,6 +687,10 @@ function buildMarkdownDecorations(view: EditorView): DecorationSet {
       builder.add(line.from, line.to, decRuleToken);
     }
 
+    for (const range of findVariableNameRanges(line.text, variableIndex)) {
+      builder.add(line.from + range.from, line.from + range.to, decVariable);
+    }
+
     addInlineDecorations(builder, line.from, line.text);
   }
 
@@ -635,7 +706,9 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      const prevVars = update.startState.field(variableIndexField, false) ?? [];
+      const nextVars = update.state.field(variableIndexField, false) ?? [];
+      if (update.docChanged || update.viewportChanged || prevVars !== nextVars) {
         this.decorations = this.safeBuild(update.view);
       }
     }

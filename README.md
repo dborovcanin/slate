@@ -162,6 +162,27 @@ cp src-tauri/target/release/note ~/.local/bin/
 cp src-tauri/target/release/note-msg ~/.local/bin/
 ```
 
+Or use:
+
+```sh
+make install
+```
+
+### Cross-platform release artifacts
+
+```sh
+make release
+```
+
+`make release` writes artifacts into `build/`:
+- `note-linux`, `note-msg-linux`
+- `note-windows.exe`, `note-msg-windows.exe` (if MinGW is available)
+- macOS binaries when run on macOS, or when an osxcross toolchain is configured
+
+Notes:
+- Windows builds require `src-tauri/icons/icon.ico` (auto-generated from `icons/256x256.png` when `magick` is available).
+- macOS cross-build from Linux is skipped unless `o64-clang` and `oa64-clang` are installed.
+
 ### Development
 
 ```sh

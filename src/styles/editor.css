@@ -217,6 +217,11 @@
   font-size: 0.95em;
 }
 
+.md-variable {
+  color: var(--code-token-type);
+  font-weight: 700;
+}
+
 .cm-editor .cm-line.md-checklist-item {
   color: var(--fg);
 }

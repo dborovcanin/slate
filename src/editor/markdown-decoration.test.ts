@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   classifyMarkdownLine,
   findInlineMarkdownTokens,
+  findVariableNameRanges,
   tokenizeCodeLine,
 } from "./markdown-decoration.ts";
 
@@ -73,4 +74,38 @@ test("tokenizeCodeLine marks keywords, numbers, strings, comments and symbols in
   const shTypes = new Set(sh.map((token) => token.type));
   assert.ok(shTypes.has("keyword"));
   assert.ok(shTypes.has("comment"));
+});
+
+test("findVariableNameRanges finds variable references with boundaries", () => {
+  const ranges = findVariableNameRanges("total := subtotal + tax rate", [
+    { normalized: "total" },
+    { normalized: "subtotal" },
+    { normalized: "tax rate" },
+  ]);
+
+  assert.deepEqual(
+    ranges.map((r) => [r.from, r.to]),
+    [
+      [0, 5],
+      [9, 17],
+      [20, 28],
+    ],
+  );
+});
+
+test("findVariableNameRanges is case-insensitive and prefers longest overlap", () => {
+  const ranges = findVariableNameRanges("Tax Rate + tax + tax_rate", [
+    { normalized: "tax" },
+    { normalized: "tax rate" },
+    { normalized: "tax_rate" },
+  ]);
+
+  assert.deepEqual(
+    ranges.map((r) => [r.from, r.to]),
+    [
+      [0, 8],
+      [11, 14],
+      [17, 25],
+    ],
+  );
 });
