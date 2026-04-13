@@ -10,7 +10,10 @@ fn normalize_list_line(line: &str) -> String {
     let indent = &line[..line.len() - trimmed.len()];
 
     // Unordered: normalize `*` and `+` → `-`, ensure single space after marker
-    if let Some(rest) = trimmed.strip_prefix("* ").or_else(|| trimmed.strip_prefix("+ ")) {
+    if let Some(rest) = trimmed
+        .strip_prefix("* ")
+        .or_else(|| trimmed.strip_prefix("+ "))
+    {
         return format!("{}- {}", indent, rest.trim_start());
     }
     if trimmed == "*" || trimmed == "+" {
@@ -20,7 +23,8 @@ fn normalize_list_line(line: &str) -> String {
     // Ordered: normalize extra spaces between marker and content ("1.   foo" → "1. foo")
     if let Some(dot_pos) = trimmed.find(|c: char| c == '.') {
         let marker = &trimmed[..=dot_pos];
-        let is_numeric = marker[..dot_pos].chars().all(|c| c.is_ascii_digit()) && !marker.is_empty();
+        let is_numeric =
+            marker[..dot_pos].chars().all(|c| c.is_ascii_digit()) && !marker.is_empty();
         if is_numeric {
             let after_marker = &trimmed[dot_pos + 1..];
             if after_marker.starts_with(char::is_whitespace) {

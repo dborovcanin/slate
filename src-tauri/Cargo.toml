@@ -32,5 +32,6 @@ tokio = { version = "1", features = ["net", "io-util", "sync", "rt"] }
 libc = "0.2"
 toml = "0.9"
 arboard = "3.6.1"
+base64 = "0.22"
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

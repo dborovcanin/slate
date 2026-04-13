@@ -274,7 +274,10 @@ enum Align {
 fn split_table_cells(line: &str) -> Vec<String> {
     let trimmed = line.trim();
     let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
-    inner.split('|').map(|cell| cell.trim().to_string()).collect()
+    inner
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
 }
 
 fn is_delimiter_cell(cell: &str) -> bool {
@@ -1162,7 +1165,10 @@ mod tests {
             "| test | count |\n| ---- | ----- |\n|      |       |"
         );
         let output_row_start = formatted.find("\n|      |       |").unwrap() + 1;
-        assert_eq!(op.selection.expect("selection").anchor, output_row_start + 2);
+        assert_eq!(
+            op.selection.expect("selection").anchor,
+            output_row_start + 2
+        );
     }
 
     #[test]

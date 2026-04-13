@@ -2102,6 +2102,7 @@ name = "note"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "base64 0.22.1",
  "directories",
  "editor-core",
  "fend-core",

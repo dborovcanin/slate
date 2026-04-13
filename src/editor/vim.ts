@@ -26,6 +26,7 @@ import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
 import { computeBlockSpans } from "./vim-utils";
 
 type VimMode = "insert" | "normal" | "visual" | "visual-line" | "visual-block";
+type PendingTextObject = { op: "delete" | "yank"; around: boolean } | null;
 
 function isPrintableTextKey(event: KeyboardEvent): boolean {
   return event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey;
@@ -82,6 +83,7 @@ export function vimModeExtension(options: VimOptions = {}) {
   let pendingDelete = false;
   let pendingGo = false;
   let pendingYank = false;
+  let pendingTextObject: PendingTextObject = null;
   let countBuffer = "";
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
@@ -91,6 +93,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     pendingDelete = false;
     pendingGo = false;
     pendingYank = false;
+    pendingTextObject = null;
   };
 
   const resetVisualAnchors = () => {
@@ -240,7 +243,9 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
 
     updateModeClasses(view, next);
-    updateVisualSelection(view);
+    if (next === "visual-block") {
+      updateVisualSelection(view);
+    }
   };
 
   const runCounted = (
@@ -280,8 +285,138 @@ export function vimModeExtension(options: VimOptions = {}) {
     const isVisual = mode === "visual" || mode === "visual-line" || mode === "visual-block";
     const cmd = isVisual ? (selectVariant[command.name] ?? command) : command;
     runCounted(view, cmd, explicitCount);
-    if (isVisual) {
+    if (mode === "visual-block") {
       updateVisualSelection(view);
+    }
+    return true;
+  };
+
+  const isWordChar = (char: string) => /[A-Za-z0-9_]/.test(char);
+
+  const findWordObjectRange = (
+    view: EditorView,
+    around: boolean,
+  ): { from: number; to: number } | null => {
+    const main = view.state.selection.main;
+    const line = view.state.doc.lineAt(main.head);
+    const text = line.text;
+    const len = text.length;
+    if (len === 0) return null;
+
+    let rel = Math.max(0, Math.min(main.head - line.from, len));
+    if (rel >= len) rel = len - 1;
+
+    if (!isWordChar(text[rel] ?? "")) {
+      if (rel > 0 && isWordChar(text[rel - 1] ?? "")) {
+        rel -= 1;
+      } else {
+        while (rel < len && !isWordChar(text[rel] ?? "")) {
+          rel += 1;
+        }
+        if (rel >= len) return null;
+      }
+    }
+
+    let start = rel;
+    while (start > 0 && isWordChar(text[start - 1] ?? "")) {
+      start -= 1;
+    }
+    let end = rel + 1;
+    while (end < len && isWordChar(text[end] ?? "")) {
+      end += 1;
+    }
+
+    if (around) {
+      let aroundStart = start;
+      let aroundEnd = end;
+      while (aroundEnd < len && /\s/.test(text[aroundEnd] ?? "")) {
+        aroundEnd += 1;
+      }
+      if (aroundEnd === end) {
+        while (aroundStart > 0 && /\s/.test(text[aroundStart - 1] ?? "")) {
+          aroundStart -= 1;
+        }
+      }
+      start = aroundStart;
+      end = aroundEnd;
+    }
+
+    if (start >= end) return null;
+    return { from: line.from + start, to: line.from + end };
+  };
+
+  const findPipeObjectRange = (
+    view: EditorView,
+    around: boolean,
+  ): { from: number; to: number } | null => {
+    const main = view.state.selection.main;
+    const line = view.state.doc.lineAt(main.head);
+    const text = line.text;
+    if (text.length < 2) return null;
+
+    const pipes: number[] = [];
+    for (let i = 0; i < text.length; i++) {
+      if (text[i] === "|") {
+        pipes.push(i);
+      }
+    }
+    if (pipes.length < 2) return null;
+
+    const rel = Math.max(0, Math.min(main.head - line.from, text.length));
+    let pair: [number, number] | null = null;
+    for (let i = 0; i < pipes.length - 1; i++) {
+      const left = pipes[i]!;
+      const right = pipes[i + 1]!;
+      if (rel === left || (rel > left && rel <= right)) {
+        pair = [left, right];
+        break;
+      }
+    }
+    if (!pair) return null;
+
+    const start = around ? pair[0] : pair[0] + 1;
+    const end = around ? pair[1] + 1 : pair[1];
+    if (start >= end) return null;
+    return { from: line.from + start, to: line.from + end };
+  };
+
+  const runPendingTextObject = (
+    view: EditorView,
+    pending: NonNullable<PendingTextObject>,
+    objectKey: string,
+  ) => {
+    const count = consumeCount();
+    const chunks: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const range =
+        objectKey === "w"
+          ? findWordObjectRange(view, pending.around)
+          : objectKey === "|"
+            ? findPipeObjectRange(view, pending.around)
+            : null;
+      if (!range) break;
+
+      const text = view.state.sliceDoc(range.from, range.to);
+      if (!text) break;
+      chunks.push(text);
+
+      if (pending.op === "delete") {
+        view.dispatch({
+          changes: { from: range.from, to: range.to, insert: "" },
+          selection: { anchor: range.from },
+          scrollIntoView: true,
+        });
+      } else {
+        // Advance to make counted text-object yanks progress.
+        view.dispatch({
+          selection: { anchor: range.to },
+          scrollIntoView: true,
+        });
+      }
+    }
+
+    if (chunks.length > 0) {
+      copyToClipboard(chunks.join("\n"));
     }
     return true;
   };
@@ -419,20 +554,41 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       // Pending operators
-      if (pendingDelete) {
+      if (pendingTextObject) {
+        event.preventDefault();
+        const pending = pendingTextObject;
         clearPending();
+        return runPendingTextObject(view, pending, event.key);
+      }
+
+      if (pendingDelete) {
+        event.preventDefault();
+        if (event.key === "i" || event.key === "a") {
+          pendingDelete = false;
+          pendingTextObject = { op: "delete", around: event.key === "a" };
+          return true;
+        }
         if (event.key === "d") {
-          event.preventDefault();
+          clearPending();
           return runCounted(view, deleteLine);
         }
+        clearPending();
+        return true;
       }
 
       if (pendingYank) {
-        clearPending();
+        event.preventDefault();
+        if (event.key === "i" || event.key === "a") {
+          pendingYank = false;
+          pendingTextObject = { op: "yank", around: event.key === "a" };
+          return true;
+        }
         if (event.key === "y") {
-          event.preventDefault();
+          clearPending();
           return yankCurrentLines(view);
         }
+        clearPending();
+        return true;
       }
 
       if (pendingGo) {
@@ -444,13 +600,13 @@ export function vimModeExtension(options: VimOptions = {}) {
             const lineNo = Math.min(count, view.state.doc.lines);
             const pos = view.state.doc.line(lineNo).from;
             view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
-            if (mode === "visual" || mode === "visual-line" || mode === "visual-block") {
+            if (mode === "visual-block") {
               updateVisualSelection(view);
             }
             return true;
           }
           const ok = moveToDocStart(view);
-          if (mode === "visual" || mode === "visual-line" || mode === "visual-block") {
+          if (mode === "visual-block") {
             updateVisualSelection(view);
           }
           return ok;
@@ -548,13 +704,13 @@ export function vimModeExtension(options: VimOptions = {}) {
             const lineNo = Math.min(consumeCount(), view.state.doc.lines);
             const pos = view.state.doc.line(lineNo).from;
             view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
-            if (mode === "visual" || mode === "visual-line" || mode === "visual-block") {
+            if (mode === "visual-block") {
               updateVisualSelection(view);
             }
             return true;
           }
           const ok = moveToDocEnd(view);
-          if (mode === "visual" || mode === "visual-line" || mode === "visual-block") {
+          if (mode === "visual-block") {
             updateVisualSelection(view);
           }
           return ok;

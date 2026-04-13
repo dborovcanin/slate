@@ -2,8 +2,9 @@ use super::render;
 
 use crate::config::ThemeConfig;
 use crate::storage::{Db, Note};
+use base64::Engine as _;
 use std::cmp::min;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal as _, Write};
 use std::mem::MaybeUninit;
 use std::time::{Duration, Instant};
 use ulid::Ulid;
@@ -12,6 +13,38 @@ const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
 const TITLE_ROW: usize = 1;
 const EDITOR_TOP_ROW: usize = 2;
 const GUTTER_WIDTH: usize = 6;
+
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn copy_text_to_clipboard(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+
+    if let Ok(mut ctx) = arboard::Clipboard::new() {
+        if ctx.set_text(text.to_string()).is_ok() {
+            return true;
+        }
+    }
+
+    // Fallback for terminal environments where the native clipboard provider
+    // is unavailable. Many terminals support OSC 52 copy sequences.
+    if !io::stdout().is_terminal() {
+        return false;
+    }
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+    let mut out = io::stdout();
+    if write!(out, "\x1b]52;c;{encoded}\x07")
+        .and_then(|_| out.flush())
+        .is_ok()
+    {
+        return true;
+    }
+
+    false
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalOptions {
@@ -326,6 +359,224 @@ impl TerminalApp {
         }
     }
 
+    fn set_clipboard_lines(&mut self, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+        let joined = lines.join("\n");
+        let _ = copy_text_to_clipboard(&joined);
+        self.clipboard = lines;
+    }
+
+    fn read_system_clipboard_lines(&self) -> Option<Vec<String>> {
+        let mut ctx = arboard::Clipboard::new().ok()?;
+        let text = ctx.get_text().ok()?;
+        if text.is_empty() {
+            return None;
+        }
+        let lines = text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
+        if lines.is_empty() {
+            None
+        } else {
+            Some(lines)
+        }
+    }
+
+    fn slice_current_line_cols(&self, start_col: usize, end_col: usize) -> Option<String> {
+        if start_col >= end_col {
+            return None;
+        }
+        let line = self.current_line();
+        let start = byte_index(line, start_col);
+        let end = byte_index(line, end_col);
+        if start >= end || end > line.len() {
+            return None;
+        }
+        Some(line[start..end].to_string())
+    }
+
+    fn delete_current_line_cols(&mut self, start_col: usize, end_col: usize) -> Option<String> {
+        if start_col >= end_col {
+            return None;
+        }
+        let line = self.current_line().to_string();
+        let start = byte_index(&line, start_col);
+        let end = byte_index(&line, end_col);
+        if start >= end || end > line.len() {
+            return None;
+        }
+        let deleted = line[start..end].to_string();
+        let mut updated = line;
+        updated.replace_range(start..end, "");
+        self.lines[self.cursor_line] = updated;
+        self.cursor_col = start_col;
+        Some(deleted)
+    }
+
+    fn find_word_object_bounds(&self, around: bool) -> Option<(usize, usize)> {
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+        if len == 0 {
+            return None;
+        }
+
+        let mut idx = self.cursor_col.min(len.saturating_sub(1));
+        if !is_word_char(chars[idx]) {
+            if idx > 0 && is_word_char(chars[idx - 1]) {
+                idx -= 1;
+            } else {
+                while idx < len && !is_word_char(chars[idx]) {
+                    idx += 1;
+                }
+                if idx >= len {
+                    return None;
+                }
+            }
+        }
+
+        let mut start = idx;
+        while start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = idx + 1;
+        while end < len && is_word_char(chars[end]) {
+            end += 1;
+        }
+
+        if around {
+            let mut astart = start;
+            let mut aend = end;
+            while aend < len && chars[aend].is_whitespace() {
+                aend += 1;
+            }
+            if aend == end {
+                while astart > 0 && chars[astart - 1].is_whitespace() {
+                    astart -= 1;
+                }
+            }
+            start = astart;
+            end = aend;
+        }
+
+        if start >= end {
+            None
+        } else {
+            Some((start, end))
+        }
+    }
+
+    fn find_pipe_object_bounds(&self, around: bool) -> Option<(usize, usize)> {
+        let line = self.current_line();
+        let chars: Vec<char> = line.chars().collect();
+        if chars.len() < 2 {
+            return None;
+        }
+        let pipes: Vec<usize> = chars
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, ch)| if *ch == '|' { Some(idx) } else { None })
+            .collect();
+        if pipes.len() < 2 {
+            return None;
+        }
+
+        let cursor = self.cursor_col.min(chars.len());
+        let mut pair = None;
+        for window in pipes.windows(2) {
+            let left = window[0];
+            let right = window[1];
+            if cursor == left || (cursor > left && cursor <= right) {
+                pair = Some((left, right));
+                break;
+            }
+        }
+        let (left, right) = pair?;
+        let start = if around { left } else { left + 1 };
+        let end = if around { right + 1 } else { right };
+        if start >= end {
+            None
+        } else {
+            Some((start, end))
+        }
+    }
+
+    fn apply_word_text_object(&mut self, around: bool, delete: bool, count: usize) -> usize {
+        let mut chunks = Vec::new();
+        let mut changed = false;
+        let mut applied = 0usize;
+
+        for _ in 0..count.max(1) {
+            let Some((start, end)) = self.find_word_object_bounds(around) else {
+                break;
+            };
+            if delete {
+                if let Some(deleted) = self.delete_current_line_cols(start, end) {
+                    chunks.push(deleted);
+                    changed = true;
+                    applied += 1;
+                } else {
+                    break;
+                }
+            } else if let Some(yanked) = self.slice_current_line_cols(start, end) {
+                self.cursor_col = end.min(line_char_len(self.current_line()));
+                chunks.push(yanked);
+                applied += 1;
+            } else {
+                break;
+            }
+        }
+
+        if chunks.is_empty() {
+            return 0;
+        }
+
+        self.set_clipboard_lines(chunks);
+        if changed {
+            self.mark_edited();
+            self.adjust_cursor();
+        }
+        applied
+    }
+
+    fn apply_pipe_text_object(&mut self, around: bool, delete: bool, count: usize) -> usize {
+        let mut chunks = Vec::new();
+        let mut changed = false;
+        let mut applied = 0usize;
+
+        for _ in 0..count.max(1) {
+            let Some((start, end)) = self.find_pipe_object_bounds(around) else {
+                break;
+            };
+            if delete {
+                if let Some(deleted) = self.delete_current_line_cols(start, end) {
+                    chunks.push(deleted);
+                    changed = true;
+                    applied += 1;
+                } else {
+                    break;
+                }
+            } else if let Some(yanked) = self.slice_current_line_cols(start, end) {
+                self.cursor_col = end.min(line_char_len(self.current_line()));
+                chunks.push(yanked);
+                applied += 1;
+            } else {
+                break;
+            }
+        }
+
+        if chunks.is_empty() {
+            return 0;
+        }
+
+        self.set_clipboard_lines(chunks);
+        if changed {
+            self.mark_edited();
+            self.adjust_cursor();
+        }
+        applied
+    }
+
     fn apply_vim_actions(&mut self, actions: &[crate::editor_core::vim::VimAction]) {
         for action in actions {
             let count = action.count.max(1);
@@ -424,14 +675,11 @@ impl TerminalApp {
                         self.lines.push(String::new());
                     }
                     if !deleted.is_empty() {
-                        if let Ok(mut ctx) = arboard::Clipboard::new() {
-                            let _ = ctx.set_text(deleted.join("\n"));
-                        }
+                        self.set_clipboard_lines(deleted);
+                        self.status = format!("deleted {} lines", count);
+                        self.mark_edited();
+                        self.adjust_cursor();
                     }
-                    self.clipboard = deleted;
-                    self.status = format!("deleted {} lines", count);
-                    self.mark_edited();
-                    self.adjust_cursor();
                 }
                 crate::editor_core::vim::VimIntent::YankLine => {
                     let mut yanked = Vec::new();
@@ -441,12 +689,9 @@ impl TerminalApp {
                         }
                     }
                     if !yanked.is_empty() {
-                        if let Ok(mut ctx) = arboard::Clipboard::new() {
-                            let _ = ctx.set_text(yanked.join("\n"));
-                        }
+                        self.set_clipboard_lines(yanked);
+                        self.status = format!("yanked {} lines", count);
                     }
-                    self.clipboard = yanked;
-                    self.status = format!("yanked {} lines", count);
                 }
                 crate::editor_core::vim::VimIntent::DeleteChar => {
                     for _ in 0..count {
@@ -454,15 +699,9 @@ impl TerminalApp {
                     }
                 }
                 crate::editor_core::vim::VimIntent::PasteAfter => {
-                    if let Ok(mut ctx) = arboard::Clipboard::new() {
-                        if let Ok(text) = ctx.get_text() {
-                            let sys_clip =
-                                text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
-                            if !sys_clip.is_empty()
-                                && (sys_clip != self.clipboard || self.clipboard.is_empty())
-                            {
-                                self.clipboard = sys_clip;
-                            }
+                    if let Some(sys_clip) = self.read_system_clipboard_lines() {
+                        if sys_clip != self.clipboard || self.clipboard.is_empty() {
+                            self.clipboard = sys_clip;
                         }
                     }
                     if !self.clipboard.is_empty() {
@@ -478,6 +717,86 @@ impl TerminalApp {
                             self.cursor_col = 0;
                         }
                         self.mark_edited();
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteInsideWord => {
+                    let applied = self.apply_word_text_object(false, true, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "deleted inside word".to_string()
+                        } else {
+                            format!("deleted inside {} words", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteAroundWord => {
+                    let applied = self.apply_word_text_object(true, true, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "deleted around word".to_string()
+                        } else {
+                            format!("deleted around {} words", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankInsideWord => {
+                    let applied = self.apply_word_text_object(false, false, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "yanked inside word".to_string()
+                        } else {
+                            format!("yanked inside {} words", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankAroundWord => {
+                    let applied = self.apply_word_text_object(true, false, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "yanked around word".to_string()
+                        } else {
+                            format!("yanked around {} words", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteInsidePipe => {
+                    let applied = self.apply_pipe_text_object(false, true, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "deleted inside | |".to_string()
+                        } else {
+                            format!("deleted inside {} pipe ranges", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteAroundPipe => {
+                    let applied = self.apply_pipe_text_object(true, true, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "deleted around | |".to_string()
+                        } else {
+                            format!("deleted around {} pipe ranges", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankInsidePipe => {
+                    let applied = self.apply_pipe_text_object(false, false, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "yanked inside | |".to_string()
+                        } else {
+                            format!("yanked inside {} pipe ranges", applied)
+                        };
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankAroundPipe => {
+                    let applied = self.apply_pipe_text_object(true, false, count);
+                    if applied > 0 {
+                        self.status = if applied == 1 {
+                            "yanked around | |".to_string()
+                        } else {
+                            format!("yanked around {} pipe ranges", applied)
+                        };
                     }
                 }
                 crate::editor_core::vim::VimIntent::Undo => {
@@ -650,10 +969,7 @@ impl TerminalApp {
                     }
 
                     if !yanked.is_empty() {
-                        if let Ok(mut ctx) = arboard::Clipboard::new() {
-                            let _ = ctx.set_text(yanked.join("\n"));
-                        }
-                        self.clipboard = yanked;
+                        self.set_clipboard_lines(yanked);
                     }
 
                     self.mode = UiMode::Normal;
@@ -2980,6 +3296,66 @@ mod tests {
         );
         assert_eq!(app.lines, vec!["gamma".to_string(), "delta".to_string()]);
         assert_eq!(app.cursor_line, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_di_pipe_deletes_cell_contents() {
+        let (db, mut app, path) = app_with_note("| one | two |");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 3;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('d'), Key::Char('i'), Key::Char('|')],
+        );
+
+        assert_eq!(app.lines, vec!["|| two |".to_string()]);
+        assert_eq!(app.cursor_col, 1);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_daw_deletes_word_with_padding() {
+        let (db, mut app, path) = app_with_note("foo bar baz");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 5;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('d'), Key::Char('a'), Key::Char('w')],
+        );
+
+        assert_eq!(app.lines, vec!["foo baz".to_string()]);
+        assert_eq!(app.cursor_col, 4);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_yaw_yanks_word_with_padding() {
+        let (db, mut app, path) = app_with_note("foo bar baz");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 5;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('y'), Key::Char('a'), Key::Char('w')],
+        );
+
+        assert_eq!(app.lines, vec!["foo bar baz".to_string()]);
+        assert_eq!(app.clipboard, vec!["bar ".to_string()]);
 
         drop(app);
         drop(db);

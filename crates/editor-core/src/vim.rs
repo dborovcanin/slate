@@ -15,6 +15,10 @@ pub enum VimPending {
     Delete,
     Yank,
     Go,
+    DeleteInner,
+    DeleteAround,
+    YankInner,
+    YankAround,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +94,14 @@ pub enum VimIntent {
     OpenSearch,
     SearchNext,
     SearchPrev,
+    DeleteInsideWord,
+    DeleteAroundWord,
+    YankInsideWord,
+    YankAroundWord,
+    DeleteInsidePipe,
+    DeleteAroundPipe,
+    YankInsidePipe,
+    YankAroundPipe,
     Swallow,
 }
 
@@ -161,10 +173,16 @@ pub fn parse_key_token(token: &str) -> Option<VimKey> {
     if token == "arrow_right" {
         return Some(VimKey::ArrowRight);
     }
-    if let Some(ch) = token.strip_prefix("char:").and_then(|raw| raw.chars().next()) {
+    if let Some(ch) = token
+        .strip_prefix("char:")
+        .and_then(|raw| raw.chars().next())
+    {
         return Some(VimKey::Char(ch));
     }
-    if let Some(ch) = token.strip_prefix("ctrl:").and_then(|raw| raw.chars().next()) {
+    if let Some(ch) = token
+        .strip_prefix("ctrl:")
+        .and_then(|raw| raw.chars().next())
+    {
         return Some(VimKey::Ctrl(ch.to_ascii_lowercase()));
     }
     None
@@ -273,6 +291,24 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::Delete, VimKey::Char('i')) => {
+                next.pending = Some(VimPending::DeleteInner);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Delete, VimKey::Char('a')) => {
+                next.pending = Some(VimPending::DeleteAround);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::Yank, VimKey::Char('y')) => {
                 let count = consume_count(&mut next);
                 actions.push(make_action(VimIntent::YankLine, count));
@@ -283,13 +319,114 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::Yank, VimKey::Char('i')) => {
+                next.pending = Some(VimPending::YankInner);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Yank, VimKey::Char('a')) => {
+                next.pending = Some(VimPending::YankAround);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::Go, VimKey::Char('g')) => {
                 let count = consume_count(&mut next);
                 if count > 1 {
-                    actions.push(make_action(VimIntent::MoveToLine, count.min(ctx.line_count.max(1))));
+                    actions.push(make_action(
+                        VimIntent::MoveToLine,
+                        count.min(ctx.line_count.max(1)),
+                    ));
                 } else {
                     actions.push(make_action(VimIntent::MoveDocStart, 1));
                 }
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteInner, VimKey::Char('w')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteInsideWord, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('w')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundWord, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::YankInner, VimKey::Char('w')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankInsideWord, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::YankAround, VimKey::Char('w')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankAroundWord, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteInner, VimKey::Char('|')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteInsidePipe, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('|')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundPipe, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::YankInner, VimKey::Char('|')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankInsidePipe, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::YankAround, VimKey::Char('|')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankAroundPipe, count));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -323,11 +460,15 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             actions.push(make_action(VimIntent::OpenSearch, 1));
             handled = true;
         }
-        VimKey::Char('n') if next.pending.is_none() && !has_count(&next) && ctx.has_search_matches => {
+        VimKey::Char('n')
+            if next.pending.is_none() && !has_count(&next) && ctx.has_search_matches =>
+        {
             actions.push(make_action(VimIntent::SearchNext, 1));
             handled = true;
         }
-        VimKey::Char('N') if next.pending.is_none() && !has_count(&next) && ctx.has_search_matches => {
+        VimKey::Char('N')
+            if next.pending.is_none() && !has_count(&next) && ctx.has_search_matches =>
+        {
             actions.push(make_action(VimIntent::SearchPrev, 1));
             handled = true;
         }
@@ -409,7 +550,10 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
         VimKey::Char('G') => {
             let count = consume_count(&mut next);
             if count > 1 {
-                actions.push(make_action(VimIntent::MoveToLine, count.min(ctx.line_count.max(1))));
+                actions.push(make_action(
+                    VimIntent::MoveToLine,
+                    count.min(ctx.line_count.max(1)),
+                ));
             } else {
                 actions.push(make_action(VimIntent::MoveDocEnd, 1));
             }
@@ -519,5 +663,35 @@ mod tests {
         let step = step_token(&state, "esc");
         assert!(step.handled);
         assert_eq!(step.state.mode, VimMode::Normal);
+    }
+
+    #[test]
+    fn di_pipe_emits_delete_inside_pipe() {
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:i");
+        let three = step_token(&two.state, "char:|");
+        assert_eq!(three.actions.len(), 1);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteInsidePipe);
+        assert_eq!(three.actions[0].count, 1);
+    }
+
+    #[test]
+    fn daw_emits_delete_around_word() {
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let three = step_token(&two.state, "char:w");
+        assert_eq!(three.actions.len(), 1);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteAroundWord);
+        assert_eq!(three.actions[0].count, 1);
+    }
+
+    #[test]
+    fn yaw_emits_yank_around_word() {
+        let one = step_token(&VimState::default(), "char:y");
+        let two = step_token(&one.state, "char:a");
+        let three = step_token(&two.state, "char:w");
+        assert_eq!(three.actions.len(), 1);
+        assert_eq!(three.actions[0].intent, VimIntent::YankAroundWord);
+        assert_eq!(three.actions[0].count, 1);
     }
 }

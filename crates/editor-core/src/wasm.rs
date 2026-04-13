@@ -3,8 +3,8 @@ use wasm_bindgen::prelude::*;
 use crate::command_catalog;
 use crate::format::format_markdown;
 use crate::text_rules::{
-    run_doc_change_rules, run_enter_rules, run_tab_rules, run_table_cell_navigation_rules,
-    rewrite_line_with_checklist_toggle_suffix, TabRuleOptions, TextRuleOptions,
+    rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules, run_enter_rules,
+    run_tab_rules, run_table_cell_navigation_rules, TabRuleOptions, TextRuleOptions,
 };
 use crate::types::{CommandMode, EditorContextSnapshot};
 use crate::vim::{self, VimContext, VimState};
@@ -18,7 +18,9 @@ pub fn init() {
 #[wasm_bindgen]
 pub fn wasm_run_doc_change_rules(snapshot_json: &str, markdown_autoformat: bool) -> Option<String> {
     let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
-    let options = TextRuleOptions { markdown_autoformat };
+    let options = TextRuleOptions {
+        markdown_autoformat,
+    };
     let op = run_doc_change_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()
 }
@@ -27,7 +29,9 @@ pub fn wasm_run_doc_change_rules(snapshot_json: &str, markdown_autoformat: bool)
 #[wasm_bindgen]
 pub fn wasm_run_enter_rules(snapshot_json: &str, markdown_autoformat: bool) -> Option<String> {
     let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
-    let options = TextRuleOptions { markdown_autoformat };
+    let options = TextRuleOptions {
+        markdown_autoformat,
+    };
     let op = run_enter_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()
 }
@@ -40,7 +44,10 @@ pub fn wasm_run_tab_rules(
     outdent: bool,
 ) -> Option<String> {
     let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
-    let options = TabRuleOptions { markdown_autoformat, outdent };
+    let options = TabRuleOptions {
+        markdown_autoformat,
+        outdent,
+    };
     let op = run_tab_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()
 }
@@ -53,7 +60,10 @@ pub fn wasm_run_table_cell_navigation_rules(
     outdent: bool,
 ) -> Option<String> {
     let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
-    let options = TabRuleOptions { markdown_autoformat, outdent };
+    let options = TabRuleOptions {
+        markdown_autoformat,
+        outdent,
+    };
     let op = run_table_cell_navigation_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()
 }
@@ -100,11 +110,7 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
 }
 
 #[wasm_bindgen]
-pub fn wasm_vim_step(
-    state_json: &str,
-    key_token: &str,
-    context_json: &str,
-) -> Option<String> {
+pub fn wasm_vim_step(state_json: &str, key_token: &str, context_json: &str) -> Option<String> {
     let state: VimState = serde_json::from_str(state_json).ok()?;
     let context: VimContext = serde_json::from_str(context_json).ok()?;
     let key = vim::parse_key_token(key_token)?;

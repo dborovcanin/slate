@@ -140,10 +140,7 @@ fn available_commands(mode: CommandMode) -> Vec<&'static CommandDefinition> {
         .collect()
 }
 
-pub fn resolve_command(
-    mode: CommandMode,
-    raw_input: &str,
-) -> Option<&'static CommandDefinition> {
+pub fn resolve_command(mode: CommandMode, raw_input: &str) -> Option<&'static CommandDefinition> {
     let normalized = normalize_command(raw_input);
     if normalized.is_empty() {
         return None;

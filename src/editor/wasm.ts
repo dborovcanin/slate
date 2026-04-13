@@ -81,7 +81,14 @@ export interface TabRuleOptions {
 }
 
 export type VimMode = "insert" | "normal" | "visual" | "visual_line";
-export type VimPending = "delete" | "yank" | "go";
+export type VimPending =
+  | "delete"
+  | "yank"
+  | "go"
+  | "delete_inner"
+  | "delete_around"
+  | "yank_inner"
+  | "yank_around";
 export type VimIntent =
   | "move_left"
   | "move_right"
@@ -113,6 +120,14 @@ export type VimIntent =
   | "open_search"
   | "search_next"
   | "search_prev"
+  | "delete_inside_word"
+  | "delete_around_word"
+  | "yank_inside_word"
+  | "yank_around_word"
+  | "delete_inside_pipe"
+  | "delete_around_pipe"
+  | "yank_inside_pipe"
+  | "yank_around_pipe"
   | "swallow";
 
 export interface VimState {

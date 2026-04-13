@@ -962,7 +962,11 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
             result.line_results,
-            vec![Some("4".to_string()), Some("6".to_string()), Some("7".to_string())]
+            vec![
+                Some("4".to_string()),
+                Some("6".to_string()),
+                Some("7".to_string())
+            ]
         );
     }
 
