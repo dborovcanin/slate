@@ -13,6 +13,8 @@ const FG_CODE_COMMENT: u8 = 244;
 const FG_CODE_FUNCTION: u8 = 74;
 const FG_CODE_TYPE: u8 = 183;
 const FG_VARIABLE: u8 = 179;
+const FG_SEARCH_MATCH: u8 = 141;
+const FG_SEARCH_CURRENT: u8 = 203;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct CharStyle {
@@ -104,6 +106,7 @@ impl RenderContext {
         width: usize,
         calc_ghost: Option<&str>,
         search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
         variable_names: &[String],
     ) -> String {
         self.render_line_with_dim_ranges(
@@ -111,7 +114,9 @@ impl RenderContext {
             width,
             calc_ghost,
             search_ranges,
+            current_search_ranges,
             variable_names,
+            &[],
             &[],
         )
     }
@@ -122,8 +127,10 @@ impl RenderContext {
         width: usize,
         calc_ghost: Option<&str>,
         search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
         variable_names: &[String],
         dim_ranges: &[(usize, usize)],
+        reverse_ranges: &[(usize, usize)],
     ) -> String {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
@@ -163,6 +170,19 @@ impl RenderContext {
         }
 
         for &(start, end) in search_ranges {
+            for s in styles.iter_mut().take(end.min(len)).skip(start) {
+                s.fg = Some(FG_SEARCH_MATCH);
+            }
+        }
+
+        for &(start, end) in current_search_ranges {
+            for s in styles.iter_mut().take(end.min(len)).skip(start) {
+                s.bold = true;
+                s.fg = Some(FG_SEARCH_CURRENT);
+            }
+        }
+
+        for &(start, end) in reverse_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start) {
                 s.reverse = true;
             }
@@ -552,7 +572,7 @@ mod tests {
     #[test]
     fn render_plain_pads_to_width() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("hi", 10, None, &[], &[]);
+        let out = ctx.render_line("hi", 10, None, &[], &[], &[]);
         // "hi" + 8 spaces = 10 visible chars (plus potential ANSI reset)
         let visible: String = strip_ansi(&out);
         assert_eq!(visible.len(), 10);
@@ -562,7 +582,7 @@ mod tests {
     #[test]
     fn render_calc_ghost_appended() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("2+2", 30, Some("4"), &[], &[]);
+        let out = ctx.render_line("2+2", 30, Some("4"), &[], &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains("→ 4"));
     }
@@ -570,7 +590,7 @@ mod tests {
     #[test]
     fn render_assignment_calc_ghost_uses_equals_prefix() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("value := 2 + 2", 30, Some("4"), &[], &[]);
+        let out = ctx.render_line("value := 2 + 2", 30, Some("4"), &[], &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains("= 4"));
     }
@@ -578,7 +598,7 @@ mod tests {
     #[test]
     fn render_formula_explanation_ghost_does_not_add_default_arrow_prefix() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("| a | 4* |", 40, Some("* ➜ avg_col()"), &[], &[]);
+        let out = ctx.render_line("| a | 4* |", 40, Some("* ➜ avg_col()"), &[], &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains(" * ➜ avg_col()"));
         assert!(!visible.contains("→ * ➜ avg_col()"));
@@ -587,15 +607,15 @@ mod tests {
     #[test]
     fn render_line_with_dim_ranges_dims_marker_character() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line_with_dim_ranges("abc*", 12, None, &[], &[], &[(3, 4)]);
+        let out = ctx.render_line_with_dim_ranges("abc*", 12, None, &[], &[], &[], &[(3, 4)], &[]);
         assert!(out.contains("\x1b[0;2m*"));
     }
 
     #[test]
     fn render_code_block_adds_syntax_color_sequences() {
         let mut ctx = RenderContext::new();
-        let _ = ctx.render_line("```rust", 60, None, &[], &[]);
-        let out = ctx.render_line("let total = 42 // note", 60, None, &[], &[]);
+        let _ = ctx.render_line("```rust", 60, None, &[], &[], &[]);
+        let out = ctx.render_line("let total = 42 // note", 60, None, &[], &[], &[]);
         assert!(out.contains("38;5;81"));
         assert!(out.contains("38;5;215"));
         assert!(out.contains("38;5;244"));
@@ -604,7 +624,7 @@ mod tests {
     #[test]
     fn render_expands_tabs_into_spaces() {
         let mut ctx = RenderContext::new();
-        let out = ctx.render_line("a\tb", 12, None, &[], &[]);
+        let out = ctx.render_line("a\tb", 12, None, &[], &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.starts_with("a   b"));
         assert_eq!(visible.len(), 12);
@@ -614,8 +634,23 @@ mod tests {
     fn render_highlights_variables_in_bold_with_distinct_color() {
         let mut ctx = RenderContext::new();
         let vars = vec!["subtotal".to_string(), "tax rate".to_string()];
-        let out = ctx.render_line("total = subtotal + tax rate", 80, None, &[], &vars);
+        let out = ctx.render_line("total = subtotal + tax rate", 80, None, &[], &[], &vars);
         assert!(out.contains(&format!("0;1;38;5;{FG_VARIABLE}")));
+    }
+
+    #[test]
+    fn render_search_uses_distinct_colors_for_current_and_other_matches() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line(
+            "alpha beta alpha",
+            40,
+            None,
+            &[(0, 5)],
+            &[(11, 16)],
+            &[],
+        );
+        assert!(out.contains(&format!("0;38;5;{FG_SEARCH_MATCH}")));
+        assert!(out.contains(&format!("0;1;38;5;{FG_SEARCH_CURRENT}")));
     }
 
     fn strip_ansi(s: &str) -> String {

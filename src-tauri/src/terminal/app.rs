@@ -2136,12 +2136,23 @@ impl TerminalApp {
         self.update_search_status();
     }
 
-    fn search_highlights_for_line(&self, line_idx: usize) -> Vec<(usize, usize)> {
-        self.search_matches
-            .iter()
-            .filter(|&&(l, _, _)| l == line_idx)
-            .map(|&(_, s, e)| (s, e))
-            .collect()
+    fn search_highlights_for_line(
+        &self,
+        line_idx: usize,
+    ) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+        let mut matches = Vec::new();
+        let mut current = Vec::new();
+        for (idx, &(line, start, end)) in self.search_matches.iter().enumerate() {
+            if line != line_idx {
+                continue;
+            }
+            if idx == self.search_current {
+                current.push((start, end));
+            } else {
+                matches.push((start, end));
+            }
+        }
+        (matches, current)
     }
 
     fn append_visual_highlights(&self, line_idx: usize, ranges: &mut Vec<(usize, usize)>) {
@@ -2682,15 +2693,17 @@ impl TerminalApp {
                     }
                 }
 
-                let mut highlight_ranges = self.search_highlights_for_line(line_idx);
-                self.append_visual_highlights(line_idx, &mut highlight_ranges);
+                let (search_ranges, current_search_ranges) = self.search_highlights_for_line(line_idx);
+                let mut visual_highlight_ranges = Vec::new();
+                self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
 
-                let rendered_text = if ghost_dim_ranges.is_empty() {
+                let rendered_text = if ghost_dim_ranges.is_empty() && visual_highlight_ranges.is_empty() {
                     ctx.render_line(
                         &rendered_line,
                         available,
                         calc_ghost_override.as_deref().or(calc_ghost),
-                        &highlight_ranges,
+                        &search_ranges,
+                        &current_search_ranges,
                         &self.variable_names,
                     )
                 } else {
@@ -2698,9 +2711,11 @@ impl TerminalApp {
                         &rendered_line,
                         available,
                         calc_ghost_override.as_deref().or(calc_ghost),
-                        &highlight_ranges,
+                        &search_ranges,
+                        &current_search_ranges,
                         &self.variable_names,
                         &ghost_dim_ranges,
+                        &visual_highlight_ranges,
                     )
                 };
                 buf.push_str(&goto(row, 1));
