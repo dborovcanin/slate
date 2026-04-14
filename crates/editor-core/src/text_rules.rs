@@ -200,6 +200,10 @@ fn parse_checklist_after_prefix(rest: &str) -> Option<(bool, usize)> {
     Some((matches!(bytes[1], b'x' | b'X'), i))
 }
 
+fn is_empty_checklist_content(content: &str) -> bool {
+    matches!(content.trim(), "[ ]" | "[x]" | "[X]")
+}
+
 fn strip_checklist_toggle_suffix(content: &str) -> Option<String> {
     let trimmed = content.trim_end();
     if trimmed.len() < 2 {
@@ -762,7 +766,11 @@ fn list_continuation_rule(
 ) -> Option<EditOperation> {
     let parts = parse_list_line_parts(&line.text)?;
 
-    if parts.content.trim().is_empty() {
+    let checklist_empty = parse_checklist_after_prefix(parts.content)
+        .map(|(_, content_start)| parts.content[content_start..].trim().is_empty())
+        .unwrap_or_else(|| is_empty_checklist_content(parts.content));
+
+    if parts.content.trim().is_empty() || checklist_empty {
         return Some(replace_range(
             line.from,
             line.to,
@@ -783,7 +791,9 @@ fn list_continuation_rule(
     };
 
     let mut content_prefix = "";
-    if parse_checklist_after_prefix(parts.content).is_some() {
+    if parse_checklist_after_prefix(parts.content).is_some()
+        || is_empty_checklist_content(parts.content)
+    {
         content_prefix = "[ ] ";
     }
 
@@ -1194,6 +1204,27 @@ mod tests {
         let doc = snapshot("- item", 6, 6);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(apply_operation(&doc.text, &op), "- item\n- ");
+    }
+
+    #[test]
+    fn run_enter_rules_exits_empty_checklist_without_trailing_space() {
+        let doc = snapshot("- [ ]", 5, 5);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "");
+    }
+
+    #[test]
+    fn run_enter_rules_exits_empty_checklist_with_trailing_space() {
+        let doc = snapshot("- [ ] ", 6, 6);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "");
+    }
+
+    #[test]
+    fn run_enter_rules_continues_non_empty_checklist_item() {
+        let doc = snapshot("- [ ] task", 10, 10);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "- [ ] task\n- [ ] ");
     }
 
     #[test]
