@@ -1,15 +1,15 @@
+use app_core::calc::{NoteEvaluationOptions, NoteEvaluationResult};
+use app_core::AppCore;
 use tauri::State;
 
-use crate::calc::engine::{CalcEngine, NoteEvaluationOptions, NoteEvaluationResult};
-
 #[tauri::command]
-pub fn evaluate_lines(engine: State<'_, CalcEngine>, lines: Vec<String>) -> Vec<Option<String>> {
-    engine.evaluate_lines(&lines)
+pub fn evaluate_lines(core: State<'_, AppCore>, lines: Vec<String>) -> Vec<Option<String>> {
+    core.calc_engine().evaluate_lines(&lines)
 }
 
 #[tauri::command]
 pub fn evaluate_note_context(
-    engine: State<'_, CalcEngine>,
+    core: State<'_, AppCore>,
     lines: Vec<String>,
     variables_enabled: Option<bool>,
     eval_from: Option<usize>,
@@ -23,5 +23,5 @@ pub fn evaluate_note_context(
         variables_enabled: variables_enabled.unwrap_or(true),
         eval_range,
     };
-    engine.evaluate_note_context(&lines, options)
+    core.calc_engine().evaluate_note_context(&lines, options)
 }

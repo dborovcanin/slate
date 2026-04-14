@@ -263,6 +263,19 @@
   padding-left: 16px;
 }
 
+.calc-formula-inline {
+  white-space: pre;
+}
+
+.calc-formula-value {
+  color: var(--fg);
+}
+
+.calc-formula-marker {
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
 .variable-autocomplete {
   position: absolute;
   z-index: 34;

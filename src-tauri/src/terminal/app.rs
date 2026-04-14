@@ -1,13 +1,15 @@
 use super::render;
 
 use crate::config::ThemeConfig;
+use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
+use app_core::calc::CalcEngine;
 use base64::Engine as _;
 use std::cmp::min;
 use std::io::{self, IsTerminal as _, Write};
 use std::mem::MaybeUninit;
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
@@ -233,7 +235,9 @@ fn read_clipboard_via_commands() -> Option<String> {
     ) {
         return Some(text);
     }
-    if let Some(text) = run_clipboard_read_command("pwsh", &["-NoProfile", "-Command", "Get-Clipboard -Raw"]) {
+    if let Some(text) =
+        run_clipboard_read_command("pwsh", &["-NoProfile", "-Command", "Get-Clipboard -Raw"])
+    {
         return Some(text);
     }
     if std::env::var_os("TMUX").is_some() {
@@ -300,7 +304,14 @@ struct UndoEntry {
     cursor_col: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, Default)]
+struct TerminalStartupMetrics {
+    loading_note: Duration,
+    loading_switcher: Duration,
+    loading_calc_engine: Duration,
+    loading_screen: Duration,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -328,6 +339,7 @@ struct TerminalApp {
     last_clipboard_backend: Option<ClipboardWriteBackend>,
     selection_anchor: Option<(usize, usize)>, // (line, col)
     // Calc ghost cache
+    calc_engine: CalcEngine,
     calc_results: Vec<Option<String>>,
     variable_names: Vec<String>,
     // Snapshot of `lines` taken at the end of the previous `recompute_calc_full`.
@@ -355,20 +367,33 @@ struct TerminalApp {
 }
 
 impl TerminalApp {
-    fn new(
+    fn new_with_startup_metrics(
         db: &Db,
         opts: &TerminalOptions,
         format_on_save: bool,
         variables_enabled: bool,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, TerminalStartupMetrics), String> {
+        let startup_begin = Instant::now();
+
+        let note_begin = Instant::now();
         let active_note = select_note(db, opts)?;
+        let loading_note = note_begin.elapsed();
+
         let lines = split_lines(&active_note.body);
+
+        let switcher_begin = Instant::now();
         let switcher_items = load_note_meta(db)?;
-        let calc_data = compute_calc_data(&lines, variables_enabled);
+        let loading_switcher = switcher_begin.elapsed();
+
+        let calc_engine = CalcEngine::new();
+        let calc_begin = Instant::now();
+        let calc_data = compute_calc_data(&calc_engine, &lines, variables_enabled);
+        let loading_calc_engine = calc_begin.elapsed();
+
         let prev_lines_snapshot = lines.clone();
         let undo_seed = lines.clone();
 
-        Ok(Self {
+        let app = Self {
             active_note,
             lines,
             cursor_line: 0,
@@ -393,6 +418,7 @@ impl TerminalApp {
             clipboard: Vec::new(),
             last_clipboard_backend: None,
             selection_anchor: None,
+            calc_engine,
             calc_results: calc_data.line_results,
             variable_names: calc_data.variable_names,
             prev_lines: prev_lines_snapshot,
@@ -412,7 +438,16 @@ impl TerminalApp {
                 cursor_line: 0,
                 cursor_col: 0,
             },
-        })
+        };
+
+        let metrics = TerminalStartupMetrics {
+            loading_note,
+            loading_switcher,
+            loading_calc_engine,
+            loading_screen: startup_begin.elapsed(),
+        };
+
+        Ok((app, metrics))
     }
 
     fn run(&mut self, db: &Db) -> Result<(), String> {
@@ -895,7 +930,8 @@ impl TerminalApp {
                     }
                     if !deleted.is_empty() {
                         self.set_clipboard_lines(deleted);
-                        self.status = self.with_clipboard_status(format!("deleted {} lines", count));
+                        self.status =
+                            self.with_clipboard_status(format!("deleted {} lines", count));
                         self.mark_edited();
                         self.adjust_cursor();
                     }
@@ -1794,7 +1830,7 @@ impl TerminalApp {
     }
 
     fn recompute_calc_full(&mut self) {
-        let calc_data = compute_calc_data(&self.lines, self.variables_enabled);
+        let calc_data = compute_calc_data(&self.calc_engine, &self.lines, self.variables_enabled);
         let mut new_results = calc_data.line_results;
 
         // Auto-refresh committed-style trailers. Eligibility is deliberately
@@ -2456,6 +2492,7 @@ impl TerminalApp {
 
         let mut ctx = render::RenderContext::new();
         ctx.advance_lines(&self.lines[..self.scroll_line.min(self.lines.len())]);
+        let mut cursor_line_override: Option<(String, usize)> = None;
 
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
@@ -2463,21 +2500,85 @@ impl TerminalApp {
             if line_idx < self.lines.len() {
                 let line_no = line_idx + 1;
                 let available = cols.saturating_sub(GUTTER_WIDTH);
-                let calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
+                let is_cursor_line = line_idx == self.cursor_line;
+                let mut calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
+                let mut calc_ghost_override: Option<String> = None;
+                let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
+                let line_text = &self.lines[line_idx];
+                let mut rendered_line = line_text.to_string();
+
+                if let Some(formula) = find_table_formula_segment(line_text) {
+                    // Formula rows render a marker in-cell (`value*`) and keep
+                    // the detailed explanation as a line-end ghost.
+                    calc_ghost = None;
+
+                    if let Some(result) = self.calc_results.get(line_idx).and_then(|r| r.as_deref())
+                    {
+                        if !(is_cursor_line
+                            && self.cursor_col >= formula.from_char
+                            && self.cursor_col <= formula.to_char)
+                        {
+                            let formatted = format_formula_display_value(result);
+                            let marker_char = formula.from_char + formatted.chars().count();
+                            let mut replacement = format!("{formatted}*");
+                            let old_len = formula.to_char.saturating_sub(formula.from_char);
+                            let new_len = replacement.chars().count();
+                            if new_len < old_len {
+                                replacement.push_str(&" ".repeat(old_len - new_len));
+                            }
+                            calc_ghost_override = Some(format!("* ➜ {}", formula.label));
+                            ghost_dim_ranges.push((marker_char, marker_char + 1));
+
+                            let mut out = String::with_capacity(
+                                line_text.len().saturating_sub(formula.to_byte - formula.from_byte)
+                                    + replacement.len(),
+                            );
+                            out.push_str(&line_text[..formula.from_byte]);
+                            out.push_str(&replacement);
+                            out.push_str(&line_text[formula.to_byte..]);
+                            rendered_line = out;
+
+                            if is_cursor_line {
+                                let mapped_col = if self.cursor_col <= formula.from_char {
+                                    self.cursor_col
+                                } else if self.cursor_col >= formula.to_char {
+                                    if new_len >= old_len {
+                                        self.cursor_col + (new_len - old_len)
+                                    } else {
+                                        self.cursor_col.saturating_sub(old_len - new_len)
+                                    }
+                                } else {
+                                    self.cursor_col
+                                };
+                                cursor_line_override = Some((rendered_line.clone(), mapped_col));
+                            }
+                        }
+                    }
+                }
 
                 let mut highlight_ranges = self.search_highlights_for_line(line_idx);
                 self.append_visual_highlights(line_idx, &mut highlight_ranges);
 
-                let rendered_text = ctx.render_line(
-                    &self.lines[line_idx],
-                    available,
-                    calc_ghost,
-                    &highlight_ranges,
-                    &self.variable_names,
-                );
+                let rendered_text = if ghost_dim_ranges.is_empty() {
+                    ctx.render_line(
+                        &rendered_line,
+                        available,
+                        calc_ghost_override.as_deref().or(calc_ghost),
+                        &highlight_ranges,
+                        &self.variable_names,
+                    )
+                } else {
+                    ctx.render_line_with_dim_ranges(
+                        &rendered_line,
+                        available,
+                        calc_ghost_override.as_deref().or(calc_ghost),
+                        &highlight_ranges,
+                        &self.variable_names,
+                        &ghost_dim_ranges,
+                    )
+                };
                 buf.push_str(&goto(row, 1));
                 // Dim gutter
-                let is_cursor_line = line_idx == self.cursor_line;
                 if is_cursor_line {
                     buf.push_str(render::BOLD);
                 } else {
@@ -2516,7 +2617,20 @@ impl TerminalApp {
             draw_date_picker(self, &mut buf, rows, cols);
         }
 
-        let (cursor_row, cursor_col) = self.cursor_position(rows, cols);
+        let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
+        if let Some((line_text, mapped_col)) = cursor_line_override {
+            if matches!(
+                self.mode,
+                UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+            ) {
+                let visible_col = visible_display_cols_for_prefix(
+                    &line_text,
+                    mapped_col,
+                    cols.saturating_sub(GUTTER_WIDTH),
+                );
+                cursor_col = (GUTTER_WIDTH + visible_col + 1).min(cols.max(1)).max(1);
+            }
+        }
         buf.push_str(&goto(cursor_row, cursor_col));
 
         let cursor_style = match self.mode {
@@ -2587,13 +2701,52 @@ pub fn run_terminal_session(
     config: &ThemeConfig,
     opts: &TerminalOptions,
 ) -> Result<(), String> {
+    let startup_ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+
     if opts.list_only {
         print_note_list(db)?;
+        let line = format!("time:{startup_ts_ms} loading_screen:0ms list_notes:0ms");
+        if let Err(err) = append_startup_log_line("tui", &line) {
+            eprintln!("Startup diagnostics: {err}");
+        }
         return Ok(());
     }
 
-    let mut app = TerminalApp::new(db, opts, config.format_on_save, config.variables_enabled)?;
+    let (mut app, metrics) = TerminalApp::new_with_startup_metrics(
+        db,
+        opts,
+        config.format_on_save,
+        config.variables_enabled,
+    )?;
+    let line = format!(
+        "time:{startup_ts_ms} loading_screen:{} loading_note:{} loading_switcher:{} loading_calc_engine:{}",
+        format_startup_duration(metrics.loading_screen),
+        format_startup_duration(metrics.loading_note),
+        format_startup_duration(metrics.loading_switcher),
+        format_startup_duration(metrics.loading_calc_engine),
+    );
+    if let Err(err) = append_startup_log_line("tui", &line) {
+        eprintln!("Startup diagnostics: {err}");
+    }
+
     app.run(db)
+}
+
+fn format_startup_duration(duration: Duration) -> String {
+    let ms = duration.as_secs_f64() * 1000.0;
+    if ms >= 1000.0 {
+        let seconds = ms / 1000.0;
+        if seconds >= 10.0 {
+            format!("{seconds:.1}s")
+        } else {
+            format!("{seconds:.2}s")
+        }
+    } else {
+        format!("{}ms", ms.round() as u64)
+    }
 }
 
 fn select_note(db: &Db, opts: &TerminalOptions) -> Result<Note, String> {
@@ -3194,11 +3347,10 @@ struct CalcData {
     variable_names: Vec<String>,
 }
 
-fn compute_calc_data(lines: &[String], variables_enabled: bool) -> CalcData {
-    let engine = crate::calc::engine::CalcEngine::new();
+fn compute_calc_data(engine: &CalcEngine, lines: &[String], variables_enabled: bool) -> CalcData {
     let result = engine.evaluate_note_context(
         lines,
-        crate::calc::engine::NoteEvaluationOptions {
+        app_core::calc::NoteEvaluationOptions {
             variables_enabled,
             eval_range: None,
         },
@@ -3219,7 +3371,8 @@ fn compute_calc_data(lines: &[String], variables_enabled: bool) -> CalcData {
 
 #[cfg(test)]
 fn compute_calc_results(lines: &[String], variables_enabled: bool) -> Vec<Option<String>> {
-    compute_calc_data(lines, variables_enabled).line_results
+    let engine = CalcEngine::new();
+    compute_calc_data(&engine, lines, variables_enabled).line_results
 }
 
 /// Decide whether an already-eligible line's trailing ` = <literal>` should
@@ -3257,6 +3410,7 @@ fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
     if trimmed_text.starts_with('|') && trimmed_text.ends_with('|') {
         let pipes: Vec<usize> = text.match_indices('|').map(|(i, _)| i).collect();
         if pipes.len() >= 2 {
+            let mut formula_candidates = Vec::new();
             let mut candidates = Vec::new();
             for i in 0..pipes.len() - 1 {
                 let start = pipes[i] + 1;
@@ -3271,10 +3425,21 @@ fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
                 }
                 let leading_ws = raw.len() - raw.trim_start().len();
                 let trailing_ws = raw.len() - raw.trim_end().len();
-                candidates.push((start + leading_ws, end - trailing_ws));
+                let span = (start + leading_ws, end - trailing_ws);
+                if is_builtin_formula(trimmed) {
+                    formula_candidates.push(span);
+                } else {
+                    candidates.push(span);
+                }
+            }
+            if formula_candidates.len() == 1 {
+                return Some(formula_candidates[0]);
+            }
+            if !formula_candidates.is_empty() {
+                return None;
             }
             if candidates.len() == 1 {
-                return Some(candidates[0].clone());
+                return Some(candidates[0]);
             }
         }
         return None;
@@ -3301,7 +3466,119 @@ fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
     None
 }
 
+struct TableFormulaSegment {
+    from_byte: usize,
+    to_byte: usize,
+    from_char: usize,
+    to_char: usize,
+    label: String,
+}
+
+fn builtin_formula_label(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+
+    let without_equals = text.strip_prefix('=').unwrap_or(text).trim();
+    if without_equals.is_empty() {
+        return None;
+    }
+
+    let compact = without_equals
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let token = compact.strip_suffix("()").unwrap_or(compact.as_str());
+
+    let normalized = match token {
+        "sum_row" => "sum_row",
+        "avg_row" => "avg_row",
+        "sum_col" | "sum_column" => "sum_col",
+        "avg_col" | "avg_column" => "avg_col",
+        _ => return None,
+    };
+
+    Some(format!("{normalized}()"))
+}
+
+fn find_table_formula_segment(text: &str) -> Option<TableFormulaSegment> {
+    let trimmed = text.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return None;
+    }
+
+    let (from_byte, to_byte) = find_calc_segment_range(text)?;
+    let expr = text.get(from_byte..to_byte)?;
+    let label = builtin_formula_label(expr)?;
+
+    Some(TableFormulaSegment {
+        from_byte,
+        to_byte,
+        from_char: text[..from_byte].chars().count(),
+        to_char: text[..to_byte].chars().count(),
+        label,
+    })
+}
+
+fn format_formula_display_value(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    let mut cleaned = trimmed.to_string();
+    if let Some(rest) = cleaned.strip_prefix('≈') {
+        cleaned = rest.trim_start().to_string();
+    }
+    if let Some(rest) = cleaned.strip_prefix('~') {
+        cleaned = rest.trim_start().to_string();
+    }
+    let lowered = cleaned.to_ascii_lowercase();
+    for prefix in ["approximately ", "approx. ", "approx ", "about "] {
+        if lowered.starts_with(prefix) {
+            cleaned = cleaned[prefix.len()..].trim_start().to_string();
+            break;
+        }
+    }
+    if cleaned.is_empty() {
+        cleaned = trimmed.to_string();
+    }
+
+    let mut parts = cleaned.splitn(2, char::is_whitespace);
+    let first = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("").trim_start();
+    let numeric = first.replace(',', "");
+
+    let Ok(value) = numeric.parse::<f64>() else {
+        return cleaned;
+    };
+    if !value.is_finite() {
+        return cleaned;
+    }
+
+    let rounded = (value * 100.0).round() / 100.0;
+    let mut out = format!("{rounded:.2}");
+    while out.contains('.') && out.ends_with('0') {
+        out.pop();
+    }
+    if out.ends_with('.') {
+        out.pop();
+    }
+
+    if rest.is_empty() {
+        out
+    } else {
+        format!("{out} {rest}")
+    }
+}
+
 fn has_calc_signal(text: &str) -> bool {
+    let trimmed = text.trim();
+    if is_builtin_formula(trimmed) {
+        return true;
+    }
+
     if looks_like_date(text) {
         return false;
     }
@@ -3313,6 +3590,10 @@ fn has_calc_signal(text: &str) -> bool {
         )
     }) || text.contains(" to ")
         || text.contains(" in ")
+}
+
+fn is_builtin_formula(text: &str) -> bool {
+    builtin_formula_label(text).is_some()
 }
 
 fn contains_assignment_operator(text: &str) -> bool {
@@ -3379,7 +3660,10 @@ fn looks_like_date(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{compute_calc_results, compute_calc_trailer_refresh, find_calc_segment_range};
+    use super::{
+        builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
+        find_calc_segment_range, find_table_formula_segment, format_formula_display_value,
+    };
     use super::{line_char_len, Key, TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
     use std::fs;
@@ -3406,7 +3690,8 @@ mod tests {
             note_id: Some(note_id.to_string()),
             list_only: false,
         };
-        let mut app = TerminalApp::new(&db, &opts, false, true).expect("terminal app");
+        let (mut app, _) =
+            TerminalApp::new_with_startup_metrics(&db, &opts, false, true).expect("terminal app");
         app.mode = UiMode::Editor;
         (db, app, path)
     }
@@ -3424,6 +3709,44 @@ mod tests {
             panic!("expected table segment");
         };
         assert_eq!(&line[from..to], "4+2");
+    }
+
+    #[test]
+    fn find_calc_segment_range_detects_builtin_formula_cell() {
+        let line = "| name | =avg_col() | 1.91 |";
+        let Some((from, to)) = find_calc_segment_range(line) else {
+            panic!("expected formula segment");
+        };
+        assert_eq!(&line[from..to], "=avg_col()");
+    }
+
+    #[test]
+    fn builtin_formula_label_normalizes_aliases() {
+        assert_eq!(builtin_formula_label("=avg_col()").as_deref(), Some("avg_col()"));
+        assert_eq!(
+            builtin_formula_label(" sum_column ( ) ").as_deref(),
+            Some("sum_col()")
+        );
+        assert_eq!(builtin_formula_label("2+2"), None);
+    }
+
+    #[test]
+    fn format_formula_display_value_rounds_and_strips_approximation_text() {
+        assert_eq!(format_formula_display_value("6.666666"), "6.67");
+        assert_eq!(format_formula_display_value("≈ 6.666666"), "6.67");
+        assert_eq!(format_formula_display_value("approximately 12.000"), "12");
+        assert_eq!(format_formula_display_value("5.555 m"), "5.56 m");
+    }
+
+    #[test]
+    fn find_table_formula_segment_extracts_cell_bounds_and_label() {
+        let line = "| a | =sum_column() | 9 |";
+        let Some(seg) = find_table_formula_segment(line) else {
+            panic!("expected table formula segment");
+        };
+        assert_eq!(&line[seg.from_byte..seg.to_byte], "=sum_column()");
+        assert_eq!(seg.label, "sum_col()");
+        assert!(seg.from_char < seg.to_char);
     }
 
     #[test]
@@ -3755,7 +4078,11 @@ mod tests {
             vec!["one".to_string(), "two".to_string(), "three".to_string()]
         );
 
-        run_keys(&mut app, &db, &[Key::Char('j'), Key::Char('d'), Key::Char('d')]);
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('j'), Key::Char('d'), Key::Char('d')],
+        );
         assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
 
         // New edit after undo should invalidate redo history.

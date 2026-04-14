@@ -1,5 +1,1 @@
-mod models;
-mod sqlite;
-
-pub use models::Note;
-pub use sqlite::Db;
+pub use app_core::storage::{Db, Note};

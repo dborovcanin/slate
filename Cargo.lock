@@ -48,6 +48,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
+name = "app-core"
+version = "0.1.0"
+dependencies = [
+ "directories",
+ "fend-core",
+ "regex",
+ "rusqlite",
+ "serde",
+ "time",
+ "toml 0.9.12+spec-1.1.0",
+ "ulid",
+]
+
+[[package]]
 name = "arboard"
 version = "3.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2101,14 +2115,13 @@ checksum = "72ef4a56884ca558e5ddb05a1d1e7e1bfd9a68d9ed024c21704cc98872dae1bb"
 name = "note"
 version = "0.1.0"
 dependencies = [
+ "app-core",
  "arboard",
  "base64 0.22.1",
- "directories",
  "editor-core",
  "fend-core",
  "libc",
  "regex",
- "rusqlite",
  "serde",
  "serde_json",
  "tauri",
@@ -2116,7 +2129,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "time",
  "tokio",
- "toml 0.9.12+spec-1.1.0",
  "ulid",
 ]
 

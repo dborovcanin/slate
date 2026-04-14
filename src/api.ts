@@ -103,6 +103,10 @@ export function getThemeConfig(): Promise<ThemeConfig> {
   return invoke<ThemeConfig>("get_theme_config");
 }
 
+export function appendStartupLog(mode: string, line: string): Promise<void> {
+  return invoke<void>("append_startup_log", { mode, line });
+}
+
 export async function getThemeConfigOrDefault(): Promise<ThemeConfig> {
   try {
     return await getThemeConfig();

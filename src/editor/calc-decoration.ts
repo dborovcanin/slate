@@ -17,7 +17,12 @@ import {
   type Text,
 } from "@codemirror/state";
 import { evaluateNoteContext, type VariableIndexEntry } from "../api.ts";
-import { findCalcSegment, lineForCalcEvaluation } from "./calc-line-utils.ts";
+import {
+  findCalcSegment,
+  findSingleCalcTableCell,
+  isBuiltinFormula,
+  lineForCalcEvaluation,
+} from "./calc-line-utils.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
 
 export interface CalcExtensionOptions {
@@ -106,32 +111,6 @@ export const variableIndexField = StateField.define<VariableIndexEntry[]>({
   },
 });
 
-// Decoration set derived from the calc results field
-const calcDecorations = EditorView.decorations.compute(
-  [calcResultsField, "doc"],
-  (state) => {
-    const results = state.field(calcResultsField);
-    const builder = new RangeSetBuilder<Decoration>();
-
-    for (const [lineIndex, result] of results) {
-      const lineNumber = lineIndex + 1;
-      if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
-      const line = state.doc.line(lineNumber); // 1-based
-      const prefix = lineUsesAssignmentGhostPrefix(line.text) ? " = " : " \u2192 ";
-      builder.add(
-        line.to,
-        line.to,
-        Decoration.widget({
-          widget: new CalcResultWidget(result, prefix),
-          side: 1,
-        }),
-      );
-    }
-
-    return builder.finish();
-  },
-);
-
 class CalcResultWidget extends WidgetType {
   readonly result: string;
   readonly prefix: string;
@@ -154,7 +133,173 @@ class CalcResultWidget extends WidgetType {
   }
 }
 
+class FormulaCellWidget extends WidgetType {
+  readonly value: string;
+  readonly marker: string;
+  readonly minWidthCh: number;
+
+  constructor(value: string, marker: string, minWidthCh: number) {
+    super();
+    this.value = value;
+    this.marker = marker;
+    this.minWidthCh = minWidthCh;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "calc-formula-inline";
+    span.style.minWidth = `${this.minWidthCh}ch`;
+
+    const value = document.createElement("span");
+    value.className = "calc-formula-value";
+    value.textContent = this.value;
+    span.append(value);
+
+    const marker = document.createElement("span");
+    marker.className = "calc-formula-marker";
+    marker.textContent = this.marker;
+    span.append(marker);
+
+    return span;
+  }
+
+  eq(other: FormulaCellWidget): boolean {
+    return (
+      this.value === other.value &&
+      this.marker === other.marker &&
+      this.minWidthCh === other.minWidthCh
+    );
+  }
+}
+
 const ASSIGNMENT_RE = /(^|[^:!<>=])(:=)(?!=)/;
+
+export function builtinFormulaExplanation(expression: string): string | null {
+  const trimmed = expression.trim();
+  if (!isBuiltinFormula(trimmed)) return null;
+  const withoutEquals = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
+  const compact = withoutEquals.replace(/\s+/g, "").toLowerCase();
+  const token = compact.endsWith("()") ? compact.slice(0, -2) : compact;
+  const normalized =
+    token === "sum_column"
+      ? "sum_col"
+      : token === "avg_column"
+        ? "avg_col"
+        : token;
+  return `${normalized}()`;
+}
+
+export function formatFormulaDisplayValue(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return raw;
+
+  let cleaned = trimmed
+    .replace(/^≈\s*/u, "")
+    .replace(/^~\s*/u, "")
+    .replace(/^approximately\s+/i, "")
+    .replace(/^approx\.?\s+/i, "")
+    .replace(/^about\s+/i, "")
+    .trim();
+  if (cleaned.length === 0) cleaned = trimmed;
+
+  const match = cleaned.match(/^([+-]?\d+(?:\.\d+)?)(\s+.*)?$/);
+  if (!match) return cleaned;
+
+  const num = Number.parseFloat(match[1] ?? "");
+  if (!Number.isFinite(num)) return cleaned;
+
+  const rounded = Math.round((num + Number.EPSILON) * 100) / 100;
+  const value = Number.isInteger(rounded)
+    ? rounded.toString()
+    : rounded.toFixed(2).replace(/\.?0+$/, "");
+  return `${value}${match[2] ?? ""}`.trimEnd();
+}
+
+function selectionTouchesSegment(
+  selection: { from: number; to: number },
+  lineFrom: number,
+  fromCol: number,
+  toCol: number,
+): boolean {
+  const from = lineFrom + fromCol;
+  const to = lineFrom + toCol;
+  return selection.from <= to && selection.to >= from;
+}
+
+const FORMULA_GHOST_MARKER = "*";
+
+// Decoration set derived from the calc results field
+const calcDecorations = EditorView.decorations.compute(
+  [calcResultsField, "doc", "selection"],
+  (state) => {
+    const results = state.field(calcResultsField);
+    const builder = new RangeSetBuilder<Decoration>();
+    const selection = state.selection.main;
+
+    for (const [lineIndex, result] of results) {
+      const lineNumber = lineIndex + 1;
+      if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
+      const line = state.doc.line(lineNumber); // 1-based
+
+      const cell = findSingleCalcTableCell(line.text);
+      const explanation =
+        cell && isBuiltinFormula(cell.expr) ? builtinFormulaExplanation(cell.expr) : null;
+      if (cell && explanation) {
+        const editingCell = selectionTouchesSegment(
+          selection,
+          line.from,
+          cell.fromCol,
+          cell.toCol,
+        );
+        if (editingCell) continue;
+
+        const formatted = formatFormulaDisplayValue(result);
+        const minWidthCh = Math.max(
+          1,
+          cell.toCol - cell.fromCol,
+          formatted.length + FORMULA_GHOST_MARKER.length,
+        );
+
+        builder.add(
+          line.from + cell.fromCol,
+          line.from + cell.toCol,
+          Decoration.replace({
+            widget: new FormulaCellWidget(
+              formatted,
+              FORMULA_GHOST_MARKER,
+              minWidthCh,
+            ),
+          }),
+        );
+
+        builder.add(
+          line.to,
+          line.to,
+          Decoration.widget({
+            widget: new CalcResultWidget(
+              `${FORMULA_GHOST_MARKER} \u279c ${explanation}`,
+              " ",
+            ),
+            side: 1,
+          }),
+        );
+
+        continue;
+      }
+      const prefix = lineUsesAssignmentGhostPrefix(line.text) ? " = " : " \u2192 ";
+      builder.add(
+        line.to,
+        line.to,
+        Decoration.widget({
+          widget: new CalcResultWidget(result, prefix),
+          side: 1,
+        }),
+      );
+    }
+
+    return builder.finish();
+  },
+);
 
 export function lineUsesAssignmentGhostPrefix(lineText: string): boolean {
   const evalTarget = lineForCalcEvaluation(lineText).trim();
@@ -165,6 +310,15 @@ export function lineUsesAssignmentGhostPrefix(lineText: string): boolean {
 export function containsVariableAssignment(lines: readonly string[]): boolean {
   for (const line of lines) {
     if (ASSIGNMENT_RE.test(line)) return true;
+  }
+  return false;
+}
+
+export function containsBuiltinFormula(lines: readonly string[]): boolean {
+  for (const line of lines) {
+    const evalTarget = lineForCalcEvaluation(line).trim();
+    if (evalTarget.length === 0) continue;
+    if (isBuiltinFormula(evalTarget)) return true;
   }
   return false;
 }
@@ -605,7 +759,9 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const touchesAnyAssignment =
             containsVariableAssignment(plan.evalLines) ||
             containsVariableAssignment(prevChangedLines);
-          const canUsePartial = hasPrev && !touchesAnyAssignment;
+          const hasBuiltinFormula =
+            containsBuiltinFormula(nextLines) || containsBuiltinFormula(prevLines);
+          const canUsePartial = hasPrev && !touchesAnyAssignment && !hasBuiltinFormula;
 
           let evaluated;
           let evalFrom = 0;
@@ -780,6 +936,8 @@ export function getCalcResultAtCursor(view: EditorView): string | null {
   if (!results) return null;
   const cursor = view.state.selection.main.head;
   const line = view.state.doc.lineAt(cursor);
+  const segment = findCalcSegment(line.text);
+  if (segment && isBuiltinFormula(segment.expr)) return null;
   return results.get(line.number - 1) ?? null;
 }
 
@@ -805,6 +963,7 @@ const calcTabKeymap = keymap.of([
       // check if line already has " = <result>" at the end
       const segment = findCalcSegment(lineText);
       if (segment) {
+        if (isBuiltinFormula(segment.expr)) return false;
         const replaceFrom = line.from + segment.fromCol;
         const replaceTo = line.from + segment.toCol;
         const nextResults = new Map(results);

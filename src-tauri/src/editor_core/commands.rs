@@ -101,7 +101,6 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
-
 fn evaluate_cell_term(cell: &str) -> Option<String> {
     let trimmed = cell.trim();
     if trimmed.is_empty() {
@@ -171,8 +170,14 @@ fn cursor_table_column(ctx: &ResolvedContext) -> Option<usize> {
     if !line.text.trim_start().starts_with('|') {
         return None;
     }
-    let col_in_line = ctx.cursor_pos().saturating_sub(line.from).min(line.text.len());
-    let pipes_before = line.text[..col_in_line].chars().filter(|&c| c == '|').count();
+    let col_in_line = ctx
+        .cursor_pos()
+        .saturating_sub(line.from)
+        .min(line.text.len());
+    let pipes_before = line.text[..col_in_line]
+        .chars()
+        .filter(|&c| c == '|')
+        .count();
     if pipes_before == 0 {
         return None; // cursor is before the opening '|'
     }
@@ -289,7 +294,9 @@ fn replace_table_cell_at_cursor(snapshot: &EditorContextSnapshot, value: &str) -
         .min(line.text.len());
 
     let left_pipe = line.text[..cursor_in_line].rfind('|');
-    let right_pipe = line.text[cursor_in_line..].find('|').map(|i| cursor_in_line + i);
+    let right_pipe = line.text[cursor_in_line..]
+        .find('|')
+        .map(|i| cursor_in_line + i);
 
     if let (Some(lp), Some(rp)) = (left_pipe, right_pipe) {
         let cell_start = line.from + lp + 1; // byte after the left '|'
@@ -369,7 +376,8 @@ pub fn execute_command(
                 match compute_table_terms(terms, "sum", scope_name, false) {
                     Ok(total) => {
                         let op = replace_table_cell_at_cursor(snapshot, &total);
-                        let mut result = result_with_message(format!("sum({scope_name}) = {total}"));
+                        let mut result =
+                            result_with_message(format!("sum({scope_name}) = {total}"));
                         result.operations.push(op);
                         result.clipboard_text = Some(total);
                         return result;
@@ -621,7 +629,10 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("sum(row)"));
         // 2m + 2km = 2002m; cell is replaced so insert is trimmed value with padding
-        assert_eq!(result.operations[0].changes[0].insert.replace(' ', ""), "2002.00m");
+        assert_eq!(
+            result.operations[0].changes[0].insert.replace(' ', ""),
+            "2002.00m"
+        );
     }
 
     #[test]
@@ -633,7 +644,10 @@ mod tests {
         let result = execute_command(&doc, "avg row", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("avg(row)"));
-        assert_eq!(result.operations[0].changes[0].insert.replace(' ', ""), "3.50m");
+        assert_eq!(
+            result.operations[0].changes[0].insert.replace(' ', ""),
+            "3.50m"
+        );
     }
 
     #[test]
@@ -655,7 +669,11 @@ mod tests {
         let doc = snapshot(table, cursor, cursor);
         let result = execute_command(&doc, "sum row", CommandMode::Editor);
         assert!(result.operations.is_empty());
-        assert!(result.message.contains("incompatible units"), "got: {}", result.message);
+        assert!(
+            result.message.contains("incompatible units"),
+            "got: {}",
+            result.message
+        );
     }
 
     // --- sum column / avg column ---
@@ -679,7 +697,10 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("sum(column)"));
         // Only "3m" from row 1 is above the cursor in col 1 (row 2 is delimiter)
-        assert_eq!(result.operations[0].changes[0].insert.replace(' ', ""), "3.00m");
+        assert_eq!(
+            result.operations[0].changes[0].insert.replace(' ', ""),
+            "3.00m"
+        );
     }
 
     #[test]
@@ -688,7 +709,8 @@ mod tests {
         // | ------ | ------ |
         // | a      | 3      |
         // | b      | 4      |   ← cursor in col 1
-        let table = "| header | number |\n| ------ | ------ |\n| a      | 3      |\n| b      | 4      |";
+        let table =
+            "| header | number |\n| ------ | ------ |\n| a      | 3      |\n| b      | 4      |";
         // Place cursor in last row, col 1 (the "4" cell)
         let cursor = table.rfind("4 ").unwrap() + 1; // inside "4" cell
         let doc = snapshot(table, cursor, cursor);

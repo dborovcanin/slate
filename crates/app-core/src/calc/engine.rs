@@ -67,6 +67,24 @@ enum ResolveState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaOp {
+    Sum,
+    Avg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FormulaScope {
+    Row,
+    Column,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FormulaSpec {
+    op: FormulaOp,
+    scope: FormulaScope,
+}
+
 struct VariableResolver<'a> {
     defs: &'a HashMap<String, VariableDefinition>,
     variable_regex: Option<Regex>,
@@ -334,13 +352,23 @@ impl CalcEngine {
             };
 
             let result = if options.variables_enabled {
-                if let Some((_name, normalized, _rhs)) = parse_variable_assignment(&expression) {
+                if let Some(value) =
+                    evaluate_table_formula(lines, idx, &expression, true, Some(&mut resolver))
+                {
+                    Some(value)
+                } else if let Some((_name, normalized, _rhs)) =
+                    parse_variable_assignment(&expression)
+                {
                     resolver.resolve(&normalized)
                 } else {
                     evaluate_expression_with_variables(&expression, &mut resolver)
                 }
             } else {
-                self.evaluate(&expression)
+                if let Some(value) = evaluate_table_formula(lines, idx, &expression, false, None) {
+                    Some(value)
+                } else {
+                    self.evaluate(&expression)
+                }
             };
 
             line_results[idx] = result;
@@ -447,6 +475,242 @@ fn parse_variable_assignment(text: &str) -> Option<(String, String, String)> {
     }
 
     Some((left.clone(), left.to_lowercase(), right.to_string()))
+}
+
+fn parse_builtin_formula(expression: &str) -> Option<FormulaSpec> {
+    let trimmed = expression.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_equals = trimmed.strip_prefix('=').unwrap_or(trimmed).trim();
+    let compact = without_equals
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let token = compact.strip_suffix("()").unwrap_or(compact.as_str());
+
+    match token {
+        "sum_row" => Some(FormulaSpec {
+            op: FormulaOp::Sum,
+            scope: FormulaScope::Row,
+        }),
+        "avg_row" => Some(FormulaSpec {
+            op: FormulaOp::Avg,
+            scope: FormulaScope::Row,
+        }),
+        "sum_col" | "sum_column" => Some(FormulaSpec {
+            op: FormulaOp::Sum,
+            scope: FormulaScope::Column,
+        }),
+        "avg_col" | "avg_column" => Some(FormulaSpec {
+            op: FormulaOp::Avg,
+            scope: FormulaScope::Column,
+        }),
+        _ => None,
+    }
+}
+
+fn split_table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
+    inner
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn is_table_delimiter_cell(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+
+    let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    let core = without_left.strip_suffix(':').unwrap_or(without_left);
+    core.len() >= 3 && core.bytes().all(|byte| byte == b'-')
+}
+
+fn is_table_delimiter_row(cells: &[String]) -> bool {
+    !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
+}
+
+fn table_block_range(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
+    if lines
+        .get(line_idx)
+        .map(|line| !is_table_line(line))
+        .unwrap_or(true)
+    {
+        return None;
+    }
+
+    let mut start = line_idx;
+    while start > 0 {
+        let prev = start - 1;
+        if !is_table_line(lines.get(prev)?) {
+            break;
+        }
+        start = prev;
+    }
+
+    let mut end = line_idx;
+    while end + 1 < lines.len() {
+        if !is_table_line(lines.get(end + 1)?) {
+            break;
+        }
+        end += 1;
+    }
+
+    Some((start, end))
+}
+
+fn formula_cell_index(cells: &[String]) -> Option<usize> {
+    let mut idx = None;
+    for (cell_idx, cell) in cells.iter().enumerate() {
+        if parse_builtin_formula(cell).is_none() {
+            continue;
+        }
+        if idx.is_some() {
+            return None;
+        }
+        idx = Some(cell_idx);
+    }
+    idx
+}
+
+fn collect_table_formula_terms(
+    lines: &[String],
+    line_idx: usize,
+    spec: FormulaSpec,
+) -> Option<Vec<String>> {
+    let current_line = lines.get(line_idx)?;
+    if !is_table_line(current_line) {
+        return None;
+    }
+
+    let current_cells = split_table_cells(current_line);
+    if is_table_delimiter_row(&current_cells) {
+        return None;
+    }
+
+    let formula_col = formula_cell_index(&current_cells)?;
+    let mut terms = Vec::new();
+
+    match spec.scope {
+        FormulaScope::Row => {
+            for cell in current_cells.iter().take(formula_col) {
+                if cell.trim().is_empty() || is_table_delimiter_cell(cell) {
+                    continue;
+                }
+                terms.push(cell.clone());
+            }
+        }
+        FormulaScope::Column => {
+            let (table_start, table_end) = table_block_range(lines, line_idx)?;
+            let mut data_start = table_start;
+            for row_idx in table_start..=table_end {
+                let row_line = lines.get(row_idx)?;
+                let row_cells = split_table_cells(row_line);
+                if is_table_delimiter_row(&row_cells) {
+                    data_start = row_idx.saturating_add(1);
+                    break;
+                }
+            }
+
+            for row_idx in data_start..line_idx {
+                let row_line = lines.get(row_idx)?;
+                let row_cells = split_table_cells(row_line);
+                if is_table_delimiter_row(&row_cells) {
+                    continue;
+                }
+
+                let Some(cell) = row_cells.get(formula_col) else {
+                    continue;
+                };
+                if cell.trim().is_empty() || parse_builtin_formula(cell).is_some() {
+                    continue;
+                }
+                terms.push(cell.clone());
+            }
+        }
+    }
+
+    Some(terms)
+}
+
+fn reduce_formula_values(values: &[String], op: FormulaOp) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+
+    let mut acc = values[0].clone();
+    for value in values.iter().skip(1) {
+        let expr = format!("({acc}) + ({value})");
+        acc = evaluate_raw_expression(&expr)?;
+    }
+
+    if op == FormulaOp::Avg && values.len() > 1 {
+        let avg_expr = format!("({acc}) / {}", values.len());
+        acc = evaluate_raw_expression(&avg_expr)?;
+    }
+
+    Some(acc)
+}
+
+fn evaluate_formula_term(term: &str) -> Option<String> {
+    let trimmed = term.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    evaluate_raw_expression(trimmed)
+}
+
+fn evaluate_formula_term_with_variables(
+    term: &str,
+    resolver: &mut VariableResolver<'_>,
+) -> Option<String> {
+    let trimmed = term.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let substituted = if resolver.expression_references_variable(trimmed) {
+        resolver.substitute_runtime(trimmed, None)?
+    } else {
+        trimmed.to_string()
+    };
+
+    resolver.eval_raw(&substituted)
+}
+
+fn evaluate_table_formula(
+    lines: &[String],
+    line_idx: usize,
+    expression: &str,
+    variables_enabled: bool,
+    resolver: Option<&mut VariableResolver<'_>>,
+) -> Option<String> {
+    let spec = parse_builtin_formula(expression)?;
+    let terms = collect_table_formula_terms(lines, line_idx, spec)?;
+
+    let mut values = Vec::new();
+    if variables_enabled {
+        let resolver = resolver?;
+        for term in terms {
+            if let Some(value) = evaluate_formula_term_with_variables(&term, resolver) {
+                values.push(value);
+            }
+        }
+    } else {
+        for term in terms {
+            if let Some(value) = evaluate_formula_term(&term) {
+                values.push(value);
+            }
+        }
+    }
+
+    reduce_formula_values(&values, spec.op)
 }
 
 fn is_table_line(line: &str) -> bool {
@@ -560,6 +824,7 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
         return None;
     }
 
+    let mut formula_candidates = Vec::new();
     let mut candidates = Vec::new();
     for pair in pipes.windows(2) {
         let start = pair[0] + 1;
@@ -574,6 +839,11 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
             continue;
         }
 
+        if parse_builtin_formula(trimmed).is_some() {
+            formula_candidates.push(trimmed.to_string());
+            continue;
+        }
+
         let qualifies =
             has_calc_signal(trimmed) || (allow_assignments && looks_like_assignment(trimmed));
         if !qualifies {
@@ -581,6 +851,13 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
         }
 
         candidates.push(trimmed.to_string());
+    }
+
+    if formula_candidates.len() == 1 {
+        return formula_candidates.pop();
+    }
+    if !formula_candidates.is_empty() {
+        return None;
     }
 
     if candidates.len() != 1 {
@@ -968,6 +1245,79 @@ mod tests {
                 Some("7".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn note_eval_table_avg_col_formula_uses_rows_above_same_column() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 10 |".to_string(),
+            "| 20 |".to_string(),
+            "| =avg_col() |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[4], Some("15".to_string()));
+    }
+
+    #[test]
+    fn note_eval_table_sum_row_formula_uses_cells_left_of_formula_cell() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| left | right | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| 2 | 3 | =sum_row() |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[2], Some("5".to_string()));
+    }
+
+    #[test]
+    fn note_eval_table_avg_col_formula_in_middle_column_with_trailing_cells() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| first | last | grade | height | time |".to_string(),
+            "| ----- | ---- | ----- | ------ | ---- |".to_string(),
+            "| Dusan | Boro | 5 | 1.94 | 12h 30min |".to_string(),
+            "| Dusan | Peric | 5 | 1.88 | 12h 30min |".to_string(),
+            "| Dusan | Boro | 4 | 1.98 | 13h 15min |".to_string(),
+            "| dsad | dsdsd | =avg_col() | 1.91 | |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let value = result.line_results[5].as_deref().unwrap_or("");
+        let numeric = extract_first_number(value).unwrap_or(f64::NAN);
+        assert!((numeric - (14.0 / 3.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn note_eval_table_avg_col_formula_reacts_when_rows_are_added_above_formula() {
+        let engine = CalcEngine::new();
+        let lines_before = vec![
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 4 |".to_string(),
+            "| 6 |".to_string(),
+            "| =avg_col() |".to_string(),
+        ];
+        let before = engine.evaluate_note_context(&lines_before, NoteEvaluationOptions::default());
+        assert_eq!(before.line_results[4].as_deref(), Some("5"));
+
+        let lines_after = vec![
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 4 |".to_string(),
+            "| 6 |".to_string(),
+            "| 10 |".to_string(),
+            "| =avg_col() |".to_string(),
+        ];
+        let after = engine.evaluate_note_context(&lines_after, NoteEvaluationOptions::default());
+        let value = after.line_results[5].as_deref().unwrap_or("");
+        let numeric = extract_first_number(value).unwrap_or(f64::NAN);
+        assert!((numeric - (20.0 / 3.0)).abs() < 1e-6);
     }
 
     #[test]

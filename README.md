@@ -231,6 +231,18 @@ Run backend-only tests:
 npm run test:rust
 ```
 
+Record startup baseline metrics:
+
+```sh
+npm run perf:startup:record
+```
+
+Check startup regressions against the baseline:
+
+```sh
+npm run perf:startup:check
+```
+
 Current automated coverage:
 - TypeScript unit tests for fuzzy search scoring and app state updates
 - TypeScript unit tests for theme preset inventory

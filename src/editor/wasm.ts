@@ -17,6 +17,7 @@ import type {
   EditOperation,
   EditorContextSnapshot,
 } from "./core/types.ts";
+import { startupMark } from "../perf/startup.ts";
 
 // Initialize non-blocking in the browser to avoid delaying first paint.
 // In Node.js tests we can call ensureWasmReady() up front.
@@ -51,6 +52,7 @@ export function ensureWasmReady(): Promise<void> {
   _initPromise = (_isNode ? initForNode() : init())
     .then(() => {
       _ready = true;
+      startupMark("ui_wasm_ready");
     })
     .catch((error) => {
       _initPromise = null;

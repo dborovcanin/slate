@@ -26,6 +26,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 import { openDatePicker } from "./editor/date-picker";
+import { startupMark } from "./perf/startup.ts";
 
 async function switchToNote(id: string) {
   await flushSave();
@@ -343,6 +344,7 @@ function updateStatusBar() {
 }
 
 export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>) {
+  startupMark("ui_init_app_start");
   const container = document.getElementById("app");
   if (!container) throw new Error("Missing #app element");
 
@@ -357,6 +359,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     listNotes(),
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
   ]);
+  startupMark("ui_data_loaded");
   state.setActiveNote(note);
   state.setNotes(notes);
 
@@ -370,6 +373,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     variableAutocompleteMinChars: config.variables_autocomplete_min_chars,
     onExitCommand: handleHideWindow,
   });
+  startupMark("ui_editor_mounted");
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {

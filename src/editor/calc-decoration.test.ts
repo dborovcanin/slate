@@ -8,8 +8,11 @@ import {
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
 import {
+  builtinFormulaExplanation,
+  containsBuiltinFormula,
   computeCalcRefresh,
   containsVariableAssignment,
+  formatFormulaDisplayValue,
   lineUsesAssignmentGhostPrefix,
   mergePartialCalcResults,
   remapCalcResultsForDocChange,
@@ -55,6 +58,22 @@ test("findSingleCalcTableCell extracts a single expression cell", () => {
 test("findSingleCalcTableCell ignores ambiguous rows with multiple expressions", () => {
   const line = "| 1+2 | 3+4 |";
   assert.equal(findSingleCalcTableCell(line), null);
+});
+
+test("findSingleCalcTableCell extracts builtin formula cells", () => {
+  const line = "| name | =avg_col() | 1.91 |";
+  const cell = findSingleCalcTableCell(line);
+  assert.ok(cell);
+  assert.equal(line.slice(cell!.fromCol, cell!.toCol), "=avg_col()");
+  assert.equal(cell!.expr, "=avg_col()");
+});
+
+test("findSingleCalcTableCell prioritizes a single builtin formula cell", () => {
+  const line = "| =avg_col() | 2+2 |";
+  const cell = findSingleCalcTableCell(line);
+  assert.ok(cell);
+  assert.equal(line.slice(cell!.fromCol, cell!.toCol), "=avg_col()");
+  assert.equal(cell!.expr, "=avg_col()");
 });
 
 test("findListCalcSegment extracts calc body for unordered and ordered items", () => {
@@ -115,6 +134,37 @@ test("containsVariableAssignment detects := while ignoring lookalike operators",
   assert.equal(containsVariableAssignment(["x == y"]), false);
   assert.equal(containsVariableAssignment(["2 + 2"]), false);
   assert.equal(containsVariableAssignment(["a >= b", "c <= d"]), false);
+});
+
+test("containsBuiltinFormula detects builtin formulas from calc segments", () => {
+  assert.equal(
+    containsBuiltinFormula([
+      "| first | second |",
+      "| --- | --- |",
+      "| name | =avg_col() |",
+    ]),
+    true,
+  );
+  assert.equal(containsBuiltinFormula(["- [ ] =sum_row()"]), true);
+});
+
+test("containsBuiltinFormula ignores non-formula lines", () => {
+  assert.equal(containsBuiltinFormula(["| name | 2+2 |"]), false);
+  assert.equal(containsBuiltinFormula(["- [ ] buy milk"]), false);
+  assert.equal(containsBuiltinFormula(["plain text"]), false);
+});
+
+test("builtinFormulaExplanation normalizes formula labels", () => {
+  assert.equal(builtinFormulaExplanation("=avg_col()"), "avg_col()");
+  assert.equal(builtinFormulaExplanation(" sum_column ( ) "), "sum_col()");
+  assert.equal(builtinFormulaExplanation("2+2"), null);
+});
+
+test("formatFormulaDisplayValue rounds numeric results and strips approximation prefixes", () => {
+  assert.equal(formatFormulaDisplayValue("6.666666"), "6.67");
+  assert.equal(formatFormulaDisplayValue("≈ 6.666666"), "6.67");
+  assert.equal(formatFormulaDisplayValue("approximately 12.000"), "12");
+  assert.equal(formatFormulaDisplayValue("5.555 m"), "5.56 m");
 });
 
 test("lineUsesAssignmentGhostPrefix detects assignment across plain/list/table lines", () => {

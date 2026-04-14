@@ -108,6 +108,18 @@ impl RenderContext {
         search_ranges: &[(usize, usize)],
         variable_names: &[String],
     ) -> String {
+        self.render_line_with_dim_ranges(text, width, calc_ghost, search_ranges, variable_names, &[])
+    }
+
+    pub fn render_line_with_dim_ranges(
+        &mut self,
+        text: &str,
+        width: usize,
+        calc_ghost: Option<&str>,
+        search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+        dim_ranges: &[(usize, usize)],
+    ) -> String {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut styles = vec![CharStyle::default(); len];
@@ -133,13 +145,24 @@ impl RenderContext {
             apply_variable_styles(&chars, &mut styles, variable_names);
         }
 
+        for &(start, end) in dim_ranges {
+            for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
+                s.dim = true;
+            }
+        }
+
         for &(start, end) in search_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start) {
                 s.reverse = true;
             }
         }
 
-        let calc_prefix = if contains_assignment_operator(text) {
+        let calc_prefix = if calc_ghost
+            .map(|ghost| ghost.trim_start().starts_with('*'))
+            .unwrap_or(false)
+        {
+            " "
+        } else if contains_assignment_operator(text) {
             " = "
         } else {
             " → "
@@ -1035,6 +1058,22 @@ mod tests {
         let out = ctx.render_line("value := 2 + 2", 30, Some("4"), &[], &[]);
         let visible = strip_ansi(&out);
         assert!(visible.contains("= 4"));
+    }
+
+    #[test]
+    fn render_formula_explanation_ghost_does_not_add_default_arrow_prefix() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line("| a | 4* |", 40, Some("* ➜ avg_col()"), &[], &[]);
+        let visible = strip_ansi(&out);
+        assert!(visible.contains(" * ➜ avg_col()"));
+        assert!(!visible.contains("→ * ➜ avg_col()"));
+    }
+
+    #[test]
+    fn render_line_with_dim_ranges_dims_marker_character() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line_with_dim_ranges("abc*", 12, None, &[], &[], &[(3, 4)]);
+        assert!(out.contains("\x1b[0;2m*"));
     }
 
     #[test]

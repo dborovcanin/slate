@@ -1,9 +1,14 @@
 import { initApp } from "./app";
 import { loadAndApplyTheme } from "./theme/theme";
+import { startupFlush, startupMark } from "./perf/startup.ts";
 
 async function bootstrap() {
+  startupMark("ui_bootstrap_start");
   const configPromise = loadAndApplyTheme();
+  startupMark("ui_theme_load_requested");
   await initApp(configPromise);
+  startupMark("ui_app_ready");
+  startupFlush("gui");
 }
 
 bootstrap().catch((e) => {

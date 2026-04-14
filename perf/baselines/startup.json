@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "recorded_at": "2026-04-14T11:36:55.279Z",
+  "threshold_pct": 15,
+  "runs": 5,
+  "modes": {
+    "gui": {
+      "probe_start": 0,
+      "config_ensured": 0.036,
+      "config_loaded": 0.219,
+      "app_core_opened": 0.655,
+      "note_fetch_complete": 0.694
+    },
+    "tui": {
+      "probe_start": 0,
+      "config_ensured": 0.033,
+      "config_loaded": 0.222,
+      "app_core_opened": 0.645,
+      "note_fetch_complete": 0.684,
+      "line_split_ready": 0.688
+    }
+  }
+}

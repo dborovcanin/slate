@@ -9,8 +9,25 @@ interface TableCalcCell {
   toCol: number;
 }
 
+export function isBuiltinFormula(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return false;
+  const withoutEquals = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
+  const compact = withoutEquals.replace(/\s+/g, "").toLowerCase();
+  const token = compact.endsWith("()") ? compact.slice(0, -2) : compact;
+  return (
+    token === "sum_row" ||
+    token === "avg_row" ||
+    token === "sum_col" ||
+    token === "sum_column" ||
+    token === "avg_col" ||
+    token === "avg_column"
+  );
+}
+
 function hasCalcSignal(text: string): boolean {
   if (text.trim().length === 0) return false;
+  if (isBuiltinFormula(text)) return true;
   const hasOperator = /[+\-*/^%()]/.test(text);
   if (hasOperator) return true;
   return text.includes(" to ") || text.includes(" in ");
@@ -48,6 +65,7 @@ export function findSingleCalcTableCell(lineText: string): TableCalcCell | null 
   }
   if (pipeIdx.length < 2) return null;
 
+  const formulaCandidates: TableCalcCell[] = [];
   const candidates: TableCalcCell[] = [];
   for (let i = 0; i < pipeIdx.length - 1; i++) {
     const start = pipeIdx[i] + 1;
@@ -64,9 +82,15 @@ export function findSingleCalcTableCell(lineText: string): TableCalcCell | null 
     const toCol = end - trailingWs;
     if (fromCol >= toCol) continue;
 
-    candidates.push({ expr: trimmed, fromCol, toCol });
+    if (isBuiltinFormula(trimmed)) {
+      formulaCandidates.push({ expr: trimmed, fromCol, toCol });
+    } else {
+      candidates.push({ expr: trimmed, fromCol, toCol });
+    }
   }
 
+  if (formulaCandidates.length === 1) return formulaCandidates[0] ?? null;
+  if (formulaCandidates.length > 1) return null;
   if (candidates.length !== 1) return null;
   return candidates[0] ?? null;
 }

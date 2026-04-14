@@ -1,19 +1,15 @@
-mod calc;
 mod commands;
 mod config;
 pub mod editor_core;
 mod ipc;
+mod startup_log;
 mod storage;
 #[cfg(unix)]
 mod terminal;
 
-use calc::engine::CalcEngine;
-use directories::ProjectDirs;
+use app_core::AppCore;
 use ipc::server;
-use std::fs;
 use std::io::IsTerminal as _;
-use std::path::PathBuf;
-use storage::Db;
 
 #[cfg(unix)]
 use terminal::TerminalOptions;
@@ -29,30 +25,15 @@ fn stdin_is_tty() -> bool {
     std::io::stdin().is_terminal()
 }
 
-fn data_dir() -> Result<PathBuf, String> {
-    let project_dirs = ProjectDirs::from("io", "github", "note")
-        .ok_or_else(|| "Failed to determine app data directory".to_string())?;
-    let data_dir = project_dirs.data_dir().to_path_buf();
-    fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create data directory: {e}"))?;
-    Ok(data_dir)
-}
-
-fn open_db() -> Result<Db, String> {
-    let dir = data_dir()?;
-    Db::open(dir.join("notes.db"))
-}
-
 fn run_gui() -> Result<(), String> {
-    let db = open_db()?;
-    let calc_engine = CalcEngine::new();
+    let core = AppCore::open_default()?;
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(db)
-        .manage(calc_engine)
+        .manage(core)
         .invoke_handler(tauri::generate_handler![
             commands::notes::get_or_create_note,
             commands::notes::save_note,
@@ -61,6 +42,7 @@ fn run_gui() -> Result<(), String> {
             commands::notes::delete_note,
             commands::calc::evaluate_lines,
             commands::calc::evaluate_note_context,
+            commands::perf::append_startup_log,
             commands::config::get_theme_config,
             commands::export::export_to_file,
         ])
@@ -192,8 +174,8 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
-    let db = open_db()?;
-    terminal::run_terminal_session(&db, theme, opts)
+    let core = AppCore::open_default()?;
+    terminal::run_terminal_session(core.db(), theme, opts)
 }
 
 pub fn run() {
