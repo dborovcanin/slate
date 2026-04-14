@@ -2625,7 +2625,7 @@ impl TerminalApp {
         );
         draw_row(&mut buf, TITLE_ROW, cols, &title_line, true);
 
-        let mut ctx = render::RenderContext::new();
+        let mut ctx = render::RenderContext::new_with_palette(render::RenderPalette::default());
         ctx.advance_lines(&self.lines[..self.scroll_line.min(self.lines.len())]);
         let mut cursor_line_override: Option<(String, usize)> = None;
 

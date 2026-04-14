@@ -6,15 +6,35 @@ pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
 pub const TAB_WIDTH: usize = 4;
-const FG_CODE_KEYWORD: u8 = 81;
-const FG_CODE_STRING: u8 = 114;
-const FG_CODE_NUMBER: u8 = 215;
-const FG_CODE_COMMENT: u8 = 244;
-const FG_CODE_FUNCTION: u8 = 74;
-const FG_CODE_TYPE: u8 = 183;
-const FG_VARIABLE: u8 = 179;
-const FG_SEARCH_MATCH: u8 = 141;
-const FG_SEARCH_CURRENT: u8 = 203;
+
+#[derive(Clone, Copy)]
+pub struct RenderPalette {
+    pub code_keyword: u8,
+    pub code_string: u8,
+    pub code_number: u8,
+    pub code_comment: u8,
+    pub code_function: u8,
+    pub code_type: u8,
+    pub variable: u8,
+    pub search_match: u8,
+    pub search_current: u8,
+}
+
+impl Default for RenderPalette {
+    fn default() -> Self {
+        Self {
+            code_keyword: 81,
+            code_string: 114,
+            code_number: 215,
+            code_comment: 244,
+            code_function: 74,
+            code_type: 183,
+            variable: 179,
+            search_match: 141,
+            search_current: 203,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct CharStyle {
@@ -64,13 +84,24 @@ impl CharStyle {
 pub struct RenderContext {
     in_code_block: bool,
     code_fence_lang: Option<String>,
+    palette: RenderPalette,
 }
 
 impl RenderContext {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self {
             in_code_block: false,
             code_fence_lang: None,
+            palette: RenderPalette::default(),
+        }
+    }
+
+    pub fn new_with_palette(palette: RenderPalette) -> Self {
+        Self {
+            in_code_block: false,
+            code_fence_lang: None,
+            palette,
         }
     }
 
@@ -155,12 +186,12 @@ impl RenderContext {
                 style.fg = None;
             }
             let code_tokens = markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
-            apply_code_token_styles(&code_tokens, &mut styles);
+            apply_code_token_styles(&code_tokens, &mut styles, self.palette);
         } else {
             apply_line_styles_from_info(&info, &mut styles);
             let inline_tokens = markdown_tokens::tokenize_inline_markdown(text);
             apply_inline_token_styles(&inline_tokens, &mut styles);
-            apply_variable_styles(&chars, &mut styles, variable_names);
+            apply_variable_styles(&chars, &mut styles, variable_names, self.palette.variable);
         }
 
         for &(start, end) in dim_ranges {
@@ -171,14 +202,14 @@ impl RenderContext {
 
         for &(start, end) in search_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start) {
-                s.fg = Some(FG_SEARCH_MATCH);
+                s.fg = Some(self.palette.search_match);
             }
         }
 
         for &(start, end) in current_search_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start) {
                 s.bold = true;
-                s.fg = Some(FG_SEARCH_CURRENT);
+                s.fg = Some(self.palette.search_current);
             }
         }
 
@@ -288,7 +319,12 @@ fn contains_assignment_operator(text: &str) -> bool {
     false
 }
 
-fn apply_variable_styles(chars: &[char], styles: &mut [CharStyle], variable_names: &[String]) {
+fn apply_variable_styles(
+    chars: &[char],
+    styles: &mut [CharStyle],
+    variable_names: &[String],
+    variable_color: u8,
+) {
     if chars.is_empty() || variable_names.is_empty() {
         return;
     }
@@ -296,7 +332,7 @@ fn apply_variable_styles(chars: &[char], styles: &mut [CharStyle], variable_name
     let text: String = chars.iter().collect();
     for (start, end) in find_variable_ranges(&text, variable_names) {
         for style in styles.iter_mut().take(end).skip(start) {
-            style.fg = Some(FG_VARIABLE);
+            style.fg = Some(variable_color);
             style.bold = true;
             style.dim = false;
         }
@@ -404,7 +440,11 @@ fn apply_inline_token_styles(tokens: &[markdown_tokens::InlineToken], styles: &m
     }
 }
 
-fn apply_code_token_styles(tokens: &[markdown_tokens::CodeToken], styles: &mut [CharStyle]) {
+fn apply_code_token_styles(
+    tokens: &[markdown_tokens::CodeToken],
+    styles: &mut [CharStyle],
+    palette: RenderPalette,
+) {
     let len = styles.len();
     for token in tokens {
         let from = token.from.min(len);
@@ -416,27 +456,27 @@ fn apply_code_token_styles(tokens: &[markdown_tokens::CodeToken], styles: &mut [
         for style in styles.iter_mut().take(to).skip(from) {
             match token.kind {
                 CodeTokenType::Keyword => {
-                    style.fg = Some(FG_CODE_KEYWORD);
+                    style.fg = Some(palette.code_keyword);
                     style.dim = false;
                 }
                 CodeTokenType::String => {
-                    style.fg = Some(FG_CODE_STRING);
+                    style.fg = Some(palette.code_string);
                     style.dim = false;
                 }
                 CodeTokenType::Number => {
-                    style.fg = Some(FG_CODE_NUMBER);
+                    style.fg = Some(palette.code_number);
                     style.dim = false;
                 }
                 CodeTokenType::Comment => {
-                    style.fg = Some(FG_CODE_COMMENT);
+                    style.fg = Some(palette.code_comment);
                     style.dim = true;
                 }
                 CodeTokenType::Function => {
-                    style.fg = Some(FG_CODE_FUNCTION);
+                    style.fg = Some(palette.code_function);
                     style.dim = false;
                 }
                 CodeTokenType::Type => {
-                    style.fg = Some(FG_CODE_TYPE);
+                    style.fg = Some(palette.code_type);
                     style.dim = false;
                 }
             }
@@ -614,11 +654,12 @@ mod tests {
     #[test]
     fn render_code_block_adds_syntax_color_sequences() {
         let mut ctx = RenderContext::new();
+        let palette = RenderPalette::default();
         let _ = ctx.render_line("```rust", 60, None, &[], &[], &[]);
         let out = ctx.render_line("let total = 42 // note", 60, None, &[], &[], &[]);
-        assert!(out.contains("38;5;81"));
-        assert!(out.contains("38;5;215"));
-        assert!(out.contains("38;5;244"));
+        assert!(out.contains(&format!("38;5;{}", palette.code_keyword)));
+        assert!(out.contains(&format!("38;5;{}", palette.code_number)));
+        assert!(out.contains(&format!("38;5;{}", palette.code_comment)));
     }
 
     #[test]
@@ -633,14 +674,16 @@ mod tests {
     #[test]
     fn render_highlights_variables_in_bold_with_distinct_color() {
         let mut ctx = RenderContext::new();
+        let palette = RenderPalette::default();
         let vars = vec!["subtotal".to_string(), "tax rate".to_string()];
         let out = ctx.render_line("total = subtotal + tax rate", 80, None, &[], &[], &vars);
-        assert!(out.contains(&format!("0;1;38;5;{FG_VARIABLE}")));
+        assert!(out.contains(&format!("0;1;38;5;{}", palette.variable)));
     }
 
     #[test]
     fn render_search_uses_distinct_colors_for_current_and_other_matches() {
         let mut ctx = RenderContext::new();
+        let palette = RenderPalette::default();
         let out = ctx.render_line(
             "alpha beta alpha",
             40,
@@ -649,8 +692,28 @@ mod tests {
             &[(11, 16)],
             &[],
         );
-        assert!(out.contains(&format!("0;38;5;{FG_SEARCH_MATCH}")));
-        assert!(out.contains(&format!("0;1;38;5;{FG_SEARCH_CURRENT}")));
+        assert!(out.contains(&format!("0;38;5;{}", palette.search_match)));
+        assert!(out.contains(&format!("0;1;38;5;{}", palette.search_current)));
+    }
+
+    #[test]
+    fn render_supports_custom_palette_for_search_highlights() {
+        let custom = RenderPalette {
+            search_match: 135,
+            search_current: 196,
+            ..RenderPalette::default()
+        };
+        let mut ctx = RenderContext::new_with_palette(custom);
+        let out = ctx.render_line(
+            "alpha beta alpha",
+            40,
+            None,
+            &[(0, 5)],
+            &[(11, 16)],
+            &[],
+        );
+        assert!(out.contains("0;38;5;135"));
+        assert!(out.contains("0;1;38;5;196"));
     }
 
     fn strip_ansi(s: &str) -> String {
