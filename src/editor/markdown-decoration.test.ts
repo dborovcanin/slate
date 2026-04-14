@@ -185,6 +185,43 @@ test("buildMarkdownDecorationsForSpans recovers fence state when viewport starts
   );
 });
 
+test("buildMarkdownDecorationsForSpans stays stable for calc variable expressions with underscores", () => {
+  const doc = Text.of([
+    "# Plan",
+    "",
+    "money_prior := 182980 = 182980",
+    "money_now := 186633 = 186633",
+    "",
+    "total := money_now - money_prior = 3653",
+    "",
+    "## Features",
+    "- [ ] Context menu",
+  ]);
+
+  let decos: ReturnType<typeof buildMarkdownDecorationsForSpans> | null = null;
+  assert.doesNotThrow(() => {
+    decos = buildMarkdownDecorationsForSpans(
+      doc,
+      [{ fromLine: 1, toLine: doc.lines }],
+      [{ normalized: "money_prior" }, { normalized: "money_now" }, { normalized: "total" }],
+    );
+  });
+
+  const flat = collectDecorations(decos!);
+  const heading = doc.line(1);
+  const checklist = doc.line(9);
+  assert.ok(
+    flat.some(
+      (d) => d.from >= heading.from && d.to <= heading.to && d.cls.includes("md-heading"),
+    ),
+    "heading formatting should remain active",
+  );
+  assert.ok(
+    flat.some((d) => d.from === checklist.from && d.cls.includes("md-checklist-item")),
+    "checklist formatting should remain active",
+  );
+});
+
 test("findVariableNameRanges is case-insensitive and prefers longest overlap", () => {
   const ranges = findVariableNameRanges("Tax Rate + tax + tax_rate", [
     { normalized: "tax" },

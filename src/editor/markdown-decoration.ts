@@ -90,41 +90,48 @@ export function tokenizeCodeLine(text: string, lang: string | null): CodeToken[]
   return markdownTokenizeCodeLine(text, lang);
 }
 
-function addInlineDecorations(
-  builder: RangeSetBuilder<Decoration>,
+interface PendingDecoration {
+  from: number;
+  to: number;
+  decoration: Decoration;
+}
+
+function collectInlineDecorations(
   lineFrom: number,
   tokens: readonly InlineToken[],
-) {
+): PendingDecoration[] {
+  const pending: PendingDecoration[] = [];
   for (const token of tokens) {
     const from = lineFrom + token.from;
     const to = lineFrom + token.to;
     switch (token.type) {
       case "strong":
-        builder.add(from, to, decStrong);
+        pending.push({ from, to, decoration: decStrong });
         break;
       case "emphasis":
-        builder.add(from, to, decEmphasis);
+        pending.push({ from, to, decoration: decEmphasis });
         break;
       case "strikethrough":
-        builder.add(from, to, decStrike);
+        pending.push({ from, to, decoration: decStrike });
         break;
       case "code":
-        builder.add(from, to, decCode);
+        pending.push({ from, to, decoration: decCode });
         break;
       case "code-marker":
-        builder.add(from, to, decCodeMarker);
+        pending.push({ from, to, decoration: decCodeMarker });
         break;
       case "link-text":
-        builder.add(from, to, decLinkText);
+        pending.push({ from, to, decoration: decLinkText });
         break;
       case "link-url":
-        builder.add(from, to, decLinkUrl);
+        pending.push({ from, to, decoration: decLinkUrl });
         break;
       case "link-marker":
-        builder.add(from, to, decLinkMarker);
+        pending.push({ from, to, decoration: decLinkMarker });
         break;
     }
   }
+  return pending;
 }
 
 interface TextRange {
@@ -307,11 +314,21 @@ function decorateContentLine(
     builder.add(line.from, line.to, decRuleToken);
   }
 
+  const pending: PendingDecoration[] = [];
   for (const range of matcher.findAll(line.text)) {
-    builder.add(line.from + range.from, line.from + range.to, decVariable);
+    pending.push({
+      from: line.from + range.from,
+      to: line.from + range.to,
+      decoration: decVariable,
+    });
   }
-
-  addInlineDecorations(builder, line.from, inlineTokens);
+  for (const inline of collectInlineDecorations(line.from, inlineTokens)) {
+    pending.push(inline);
+  }
+  pending.sort((a, b) => a.from - b.from || a.to - b.to);
+  for (const entry of pending) {
+    builder.add(entry.from, entry.to, entry.decoration);
+  }
 }
 
 function extractDecorationRanges(
