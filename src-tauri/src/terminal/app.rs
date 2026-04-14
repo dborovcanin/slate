@@ -267,9 +267,10 @@ enum UiMode {
     DatePicker,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Char(char),
+    Paste(String),
     Enter,
     Backspace,
     Delete,
@@ -494,6 +495,7 @@ impl TerminalApp {
     }
 
     fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        let mut should_autoformat = true;
         match key {
             Key::Ctrl('q') => {
                 self.quit = true;
@@ -567,6 +569,12 @@ impl TerminalApp {
                 self.open_search();
                 return Ok(());
             }
+            Key::Paste(text) => {
+                self.insert_paste(&text);
+                // Pasted content should stay as-is; skip per-keystroke
+                // autoformat pass that would otherwise scan the full document.
+                should_autoformat = false;
+            }
             Key::Char(ch) => self.insert_char(ch),
             Key::Esc => {
                 self.mode = UiMode::Normal;
@@ -579,12 +587,14 @@ impl TerminalApp {
         self.adjust_cursor();
         self.adjust_scroll();
 
-        self.try_autoformat_rules();
+        if should_autoformat {
+            self.try_autoformat_rules();
+        }
 
         Ok(())
     }
 
-    fn map_vim_key(key: Key) -> Option<crate::editor_core::vim::VimKey> {
+    fn map_vim_key(key: &Key) -> Option<crate::editor_core::vim::VimKey> {
         match key {
             Key::Esc => Some(crate::editor_core::vim::VimKey::Esc),
             Key::Enter => Some(crate::editor_core::vim::VimKey::Enter),
@@ -595,8 +605,8 @@ impl TerminalApp {
             Key::ArrowDown => Some(crate::editor_core::vim::VimKey::ArrowDown),
             Key::ArrowLeft => Some(crate::editor_core::vim::VimKey::ArrowLeft),
             Key::ArrowRight => Some(crate::editor_core::vim::VimKey::ArrowRight),
-            Key::Char(ch) => Some(crate::editor_core::vim::VimKey::Char(ch)),
-            Key::Ctrl(ch) => Some(crate::editor_core::vim::VimKey::Ctrl(ch)),
+            Key::Char(ch) => Some(crate::editor_core::vim::VimKey::Char(*ch)),
+            Key::Ctrl(ch) => Some(crate::editor_core::vim::VimKey::Ctrl(*ch)),
             _ => None,
         }
     }
@@ -1169,7 +1179,7 @@ impl TerminalApp {
             return Ok(());
         }
 
-        let Some(vim_key) = Self::map_vim_key(key) else {
+        let Some(vim_key) = Self::map_vim_key(&key) else {
             return Ok(());
         };
 
@@ -1405,6 +1415,12 @@ impl TerminalApp {
                 self.switcher_query.push(ch);
                 self.recompute_switcher_matches();
             }
+            Key::Paste(text) => {
+                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                    self.switcher_query.push(ch);
+                }
+                self.recompute_switcher_matches();
+            }
             Key::Tab
             | Key::Delete
             | Key::BackTab
@@ -1484,6 +1500,12 @@ impl TerminalApp {
             }
             Key::Char(ch) => {
                 self.command_input.push(ch);
+                self.update_command_status();
+            }
+            Key::Paste(text) => {
+                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                    self.command_input.push(ch);
+                }
                 self.update_command_status();
             }
             _ => {}
@@ -2022,6 +2044,12 @@ impl TerminalApp {
                 self.search_query.push(ch);
                 self.recompute_search();
             }
+            Key::Paste(text) => {
+                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                    self.search_query.push(ch);
+                }
+                self.recompute_search();
+            }
             _ => {}
         }
         Ok(())
@@ -2248,6 +2276,50 @@ impl TerminalApp {
         let idx = byte_index(line, col);
         line.insert_str(idx, text);
         self.cursor_col += text.chars().count();
+        self.mark_edited();
+    }
+
+    fn insert_paste(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+
+        // Normalize line endings to keep cursor/line mapping predictable.
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let parts: Vec<&str> = normalized.split('\n').collect();
+        if parts.is_empty() {
+            return;
+        }
+
+        let line_idx = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let col = self.cursor_col;
+        let current = self.lines[line_idx].clone();
+        let split_idx = byte_index(&current, col);
+        let (left, right) = current.split_at(split_idx);
+
+        if parts.len() == 1 {
+            self.lines[line_idx] = format!("{left}{}{right}", parts[0]);
+            self.cursor_line = line_idx;
+            self.cursor_col = col + parts[0].chars().count();
+            self.mark_edited();
+            return;
+        }
+
+        self.lines[line_idx] = format!("{left}{}", parts[0]);
+        let mut insert_at = line_idx + 1;
+        for part in &parts[1..parts.len() - 1] {
+            self.lines.insert(insert_at, (*part).to_string());
+            insert_at += 1;
+        }
+
+        let tail = *parts.last().unwrap_or(&"");
+        self.lines.insert(insert_at, format!("{tail}{right}"));
+        self.cursor_line = insert_at;
+        self.cursor_col = tail.chars().count();
         self.mark_edited();
     }
 
@@ -3267,6 +3339,35 @@ fn utf8_continuation_count(first: u8) -> usize {
     }
 }
 
+fn read_bracketed_paste_payload() -> Result<String, String> {
+    const END: &[u8] = b"\x1b[201~";
+    let mut payload = Vec::new();
+    let mut idle_ticks = 0usize;
+
+    loop {
+        match read_byte()? {
+            Some(byte) => {
+                idle_ticks = 0;
+                payload.push(byte);
+                if payload.len() >= END.len() && payload.ends_with(END) {
+                    payload.truncate(payload.len() - END.len());
+                    break;
+                }
+            }
+            None => {
+                // VTIME=1 means 100ms per empty read; bail out after a short
+                // idle window so malformed/partial sequences don't hang input.
+                idle_ticks += 1;
+                if idle_ticks >= 8 {
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(String::from_utf8_lossy(&payload).into_owned())
+}
+
 fn parse_escape_sequence() -> Result<Option<Key>, String> {
     let Some(second) = read_byte()? else {
         return Ok(Some(Key::Esc));
@@ -3304,6 +3405,13 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
         }
     } else {
         let s = std::str::from_utf8(&seq).unwrap_or("");
+        if s == "200~" {
+            let pasted = read_bracketed_paste_payload()?;
+            return Ok(Some(Key::Paste(pasted)));
+        }
+        if s == "201~" {
+            return Ok(None);
+        }
         if s == "1;5C" || s == "5C" {
             return Ok(Some(Key::CtrlArrowRight));
         }
@@ -3379,7 +3487,7 @@ impl TerminalGuard {
         }
 
         let mut out = io::stdout();
-        out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[H\x1b[2J")
+        out.write_all(b"\x1b[?1049h\x1b[?2004h\x1b[?25l\x1b[H\x1b[2J")
             .and_then(|_| out.flush())
             .map_err(|e| format!("Failed to initialize terminal screen: {e}"))?;
 
@@ -3391,7 +3499,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original) };
         let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[0m\x1b[?25h\x1b[?1049l\x1b[0 q");
+        let _ = out.write_all(b"\x1b[0m\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0 q");
         let _ = out.flush();
     }
 }
@@ -3536,7 +3644,8 @@ mod tests {
 
     fn run_keys(app: &mut TerminalApp, db: &Db, keys: &[Key]) {
         for key in keys {
-            app.handle_key(db, *key).expect("key sequence should apply");
+            app.handle_key(db, key.clone())
+                .expect("key sequence should apply");
         }
     }
 
@@ -3756,6 +3865,28 @@ mod tests {
 
         assert_eq!(app.lines[1], "- [ ] 15");
         assert_eq!(app.cursor_col, app.lines[1].chars().count());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn editor_paste_multiline_inserts_as_single_bulk_edit() {
+        let (db, mut app, path) = app_with_note("start end");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 0;
+        app.cursor_col = 6; // after "start "
+
+        app.handle_editor_key(&db, Key::Paste("a\nb\n".to_string()))
+            .expect("paste applies");
+
+        assert_eq!(
+            app.lines,
+            vec!["start a".to_string(), "b".to_string(), "end".to_string()]
+        );
+        assert_eq!(app.cursor_line, 2);
+        assert_eq!(app.cursor_col, 0);
 
         drop(app);
         drop(db);
