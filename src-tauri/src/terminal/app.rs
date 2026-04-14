@@ -3713,7 +3713,7 @@ mod tests {
         let lines = vec!["x := 4".to_string(), "x + 2".to_string()];
         let results = compute_calc_results(&lines, true);
         assert_eq!(results.len(), 2);
-        assert_eq!(results[0].as_deref(), Some("4"));
+        assert_eq!(results[0].as_deref(), None);
         assert_eq!(results[1].as_deref(), Some("6"));
     }
 
@@ -3728,7 +3728,7 @@ mod tests {
         assert_eq!(
             results,
             vec![
-                Some("12".to_string()),
+                None,
                 Some("15".to_string()),
                 Some("16".to_string())
             ]

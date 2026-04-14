@@ -356,10 +356,14 @@ impl CalcEngine {
                     evaluate_table_formula(lines, idx, &expression, true, Some(&mut resolver))
                 {
                     Some(value)
-                } else if let Some((_name, normalized, _rhs)) =
-                    parse_variable_assignment(&expression)
+                } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(&expression)
                 {
-                    resolver.resolve(&normalized)
+                    let resolved = resolver.resolve(&normalized);
+                    if assignment_rhs_is_plain_numeric_literal(&rhs) {
+                        None
+                    } else {
+                        resolved
+                    }
                 } else {
                     evaluate_expression_with_variables(&expression, &mut resolver)
                 }
@@ -475,6 +479,52 @@ fn parse_variable_assignment(text: &str) -> Option<(String, String, String)> {
     }
 
     Some((left.clone(), left.to_lowercase(), right.to_string()))
+}
+
+fn assignment_rhs_is_plain_numeric_literal(rhs: &str) -> bool {
+    parse_plain_numeric_literal(rhs).is_some()
+}
+
+fn parse_plain_numeric_literal(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|ch| !matches!(ch, ',' | '_'))
+        .collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    for (idx, ch) in cleaned.chars().enumerate() {
+        if ch.is_ascii_digit() {
+            seen_digit = true;
+            continue;
+        }
+        if ch == '.' && !seen_dot {
+            seen_dot = true;
+            continue;
+        }
+        if matches!(ch, '+' | '-') && idx == 0 {
+            continue;
+        }
+        return None;
+    }
+    if !seen_digit {
+        return None;
+    }
+
+    let value = cleaned.parse::<f64>().ok()?;
+    if value.is_finite() {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn parse_builtin_formula(expression: &str) -> Option<FormulaSpec> {
@@ -1172,7 +1222,7 @@ mod tests {
         assert_eq!(
             result.line_results,
             vec![
-                Some("10".to_string()),
+                None,
                 Some("2".to_string()),
                 Some("12".to_string())
             ]
@@ -1240,7 +1290,7 @@ mod tests {
         assert_eq!(
             result.line_results,
             vec![
-                Some("4".to_string()),
+                None,
                 Some("6".to_string()),
                 Some("7".to_string())
             ]
@@ -1371,10 +1421,7 @@ mod tests {
         ];
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
-        assert_eq!(
-            result.line_results,
-            vec![Some("12".to_string()), Some("24".to_string())]
-        );
+        assert_eq!(result.line_results, vec![None, Some("24".to_string())]);
     }
 
     #[test]
@@ -1389,12 +1436,17 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
             result.line_results,
-            vec![
-                Some("12".to_string()),
-                Some("24".to_string()),
-                Some("25".to_string())
-            ]
+            vec![None, Some("24".to_string()), Some("25".to_string())]
         );
+    }
+
+    #[test]
+    fn note_eval_hides_literal_assignment_ghost_but_keeps_variable_value() {
+        let engine = CalcEngine::new();
+        let lines = vec!["x := 213323".to_string(), "x + 2".to_string()];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results, vec![None, Some("213325".to_string())]);
     }
 
     #[test]
