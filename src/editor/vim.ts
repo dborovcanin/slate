@@ -10,14 +10,6 @@ import {
   deleteCharForward,
   deleteLine,
   redo,
-  selectCharLeft,
-  selectCharRight,
-  selectGroupBackward,
-  selectGroupForward,
-  selectLineDown,
-  selectLineEnd,
-  selectLineStart,
-  selectLineUp,
   undo,
 } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
@@ -100,19 +92,36 @@ function firstCodePoint(value: string): number | null {
 }
 
 function toVimKeyInput(event: KeyboardEvent): VimKeyInput | null {
-  if (event.key === "Escape") return { kind: VIM_KEY_KIND.ESC };
+  const key = event.key;
+  const code = event.code;
+
+  if (key === "Escape" || key === "Esc" || code === "Escape") {
+    return { kind: VIM_KEY_KIND.ESC };
+  }
   if (event.key === "Enter") return { kind: VIM_KEY_KIND.ENTER };
   if (event.key === "Tab") return { kind: VIM_KEY_KIND.TAB };
   if (event.key === "Backspace") return { kind: VIM_KEY_KIND.BACKSPACE };
-  if (event.key === "Delete") return { kind: VIM_KEY_KIND.DELETE };
-  if (event.key === "ArrowUp") return { kind: VIM_KEY_KIND.ARROW_UP };
-  if (event.key === "ArrowDown") return { kind: VIM_KEY_KIND.ARROW_DOWN };
-  if (event.key === "ArrowLeft") return { kind: VIM_KEY_KIND.ARROW_LEFT };
-  if (event.key === "ArrowRight") return { kind: VIM_KEY_KIND.ARROW_RIGHT };
+  if (key === "Delete" || key === "Del") return { kind: VIM_KEY_KIND.DELETE };
+  if (key === "ArrowUp" || key === "Up" || code === "ArrowUp") {
+    return { kind: VIM_KEY_KIND.ARROW_UP };
+  }
+  if (key === "ArrowDown" || key === "Down" || code === "ArrowDown") {
+    return { kind: VIM_KEY_KIND.ARROW_DOWN };
+  }
+  if (key === "ArrowLeft" || key === "Left" || code === "ArrowLeft") {
+    return { kind: VIM_KEY_KIND.ARROW_LEFT };
+  }
+  if (key === "ArrowRight" || key === "Right" || code === "ArrowRight") {
+    return { kind: VIM_KEY_KIND.ARROW_RIGHT };
+  }
 
   const isPlain = !event.ctrlKey && !event.altKey && !event.metaKey;
-  if (isPlain && event.key === "Home") return { kind: VIM_KEY_KIND.CHAR, charCode: "0".charCodeAt(0) };
-  if (isPlain && event.key === "End") return { kind: VIM_KEY_KIND.CHAR, charCode: "$".charCodeAt(0) };
+  if (isPlain && (key === "Home" || code === "Home")) {
+    return { kind: VIM_KEY_KIND.CHAR, charCode: "0".charCodeAt(0) };
+  }
+  if (isPlain && (key === "End" || code === "End")) {
+    return { kind: VIM_KEY_KIND.CHAR, charCode: "$".charCodeAt(0) };
+  }
 
   if (event.ctrlKey && !event.altKey && !event.metaKey) {
     const codePoint = firstCodePoint(event.key.toLowerCase());
@@ -122,8 +131,8 @@ function toVimKeyInput(event: KeyboardEvent): VimKeyInput | null {
     return null;
   }
 
-  if (isPlain && event.key.length === 1) {
-    const codePoint = firstCodePoint(event.key);
+  if (isPlain && key.length === 1) {
+    const codePoint = firstCodePoint(key);
     if (codePoint !== null) {
       return { kind: VIM_KEY_KIND.CHAR, charCode: codePoint };
     }
@@ -291,12 +300,13 @@ export function vimModeExtension(options: VimOptions = {}) {
   const applyVisualLineSelection = (view: EditorView) => {
     if (visualAnchorLine === null) return;
     const { lineNumber } = getHeadInfo(view);
-    const startLine = Math.min(visualAnchorLine, lineNumber);
-    const endLine = Math.max(visualAnchorLine, lineNumber);
-    const from = view.state.doc.line(startLine).from;
-    const to = view.state.doc.line(endLine).to;
+    const anchorLine = view.state.doc.line(visualAnchorLine);
+    const headLine = view.state.doc.line(lineNumber);
+    const anchor =
+      lineNumber >= visualAnchorLine ? anchorLine.from : anchorLine.to;
+    const head = lineNumber >= visualAnchorLine ? headLine.to : headLine.from;
     view.dispatch({
-      selection: { anchor: from, head: to },
+      selection: { anchor, head },
       scrollIntoView: true,
     });
   };
@@ -338,18 +348,6 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
-  const selectVariantFor = (command: (view: EditorView) => boolean) => {
-    if (command === cursorCharLeft) return selectCharLeft;
-    if (command === cursorCharRight) return selectCharRight;
-    if (command === cursorLineUp) return selectLineUp;
-    if (command === cursorLineDown) return selectLineDown;
-    if (command === cursorGroupForward) return selectGroupForward;
-    if (command === cursorGroupBackward) return selectGroupBackward;
-    if (command === cursorLineStart) return selectLineStart;
-    if (command === cursorLineEnd) return selectLineEnd;
-    return command;
-  };
-
   const runMove = (
     view: EditorView,
     command: (target: EditorView) => boolean,
@@ -357,8 +355,24 @@ export function vimModeExtension(options: VimOptions = {}) {
   ) => {
     const currentMode = mode();
     const isVisual = currentMode === "visual" || currentMode === "visual-line";
-    const cmd = isVisual ? selectVariantFor(command) : command;
-    runCounted(view, cmd, explicitCount);
+    if (isVisual) {
+      const main = view.state.selection.main;
+      if (!main.empty) {
+        let caret = main.head;
+        if (currentMode === "visual-line") {
+          const line = view.state.doc.lineAt(caret);
+          // Keep caret inside the visual-line head line to avoid boundary
+          // ambiguity when reversing movement direction.
+          if (caret === line.to && line.to > line.from) {
+            caret = line.to - 1;
+          }
+        }
+        // Keep a stable caret head for movement commands while preserving
+        // Vim visual anchor semantics.
+        view.dispatch({ selection: { anchor: caret } });
+      }
+    }
+    runCounted(view, command, explicitCount);
     if (isVisual) {
       updateVisualSelection(view);
     }
@@ -521,9 +535,17 @@ export function vimModeExtension(options: VimOptions = {}) {
       case 7: // move_line_end
         return runMove(view, cursorLineEnd, count);
       case 8: // move_doc_start
-        return moveToDocStart(view);
+        moveToDocStart(view);
+        if (mode() === "visual" || mode() === "visual-line") {
+          updateVisualSelection(view);
+        }
+        return true;
       case 9: // move_doc_end
-        return moveToDocEnd(view);
+        moveToDocEnd(view);
+        if (mode() === "visual" || mode() === "visual-line") {
+          updateVisualSelection(view);
+        }
+        return true;
       case 10: { // move_to_line
         const lineNo = Math.min(Math.max(count, 1), view.state.doc.lines);
         const pos = view.state.doc.line(lineNo).from;
@@ -621,6 +643,37 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const activeMode = mode();
+
+      // Hard guarantee for visual behavior: both hjkl and arrow keys move the
+      // selection, and Esc exits to normal in a single press.
+      if (activeMode === "visual" || activeMode === "visual-line") {
+        if (event.key === "Escape" || event.key === "Esc" || event.code === "Escape") {
+          event.preventDefault();
+          setModeLocally(view, "normal");
+          session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: view.state.doc.lines });
+          return true;
+        }
+
+        const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
+        if (plain) {
+          if (event.key === "h" || event.key === "ArrowLeft" || event.key === "Left") {
+            event.preventDefault();
+            return runMove(view, cursorCharLeft, 1);
+          }
+          if (event.key === "l" || event.key === "ArrowRight" || event.key === "Right") {
+            event.preventDefault();
+            return runMove(view, cursorCharRight, 1);
+          }
+          if (event.key === "k" || event.key === "ArrowUp" || event.key === "Up") {
+            event.preventDefault();
+            return runMove(view, cursorLineUp, 1);
+          }
+          if (event.key === "j" || event.key === "ArrowDown" || event.key === "Down") {
+            event.preventDefault();
+            return runMove(view, cursorLineDown, 1);
+          }
+        }
+      }
 
       // Insert-mode fast path: avoid wasm roundtrip for regular insert editing.
       if (activeMode === "insert" && event.key !== "Escape") {

@@ -245,10 +245,12 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
 
   if (options.vimMode) {
     extensions.push(
-      vimModeExtension({
-        dateFormat: options.dateFormat,
-        onExitCommand: options.onExitCommand,
-      }),
+      Prec.highest(
+        vimModeExtension({
+          dateFormat: options.dateFormat,
+          onExitCommand: options.onExitCommand,
+        }),
+      ),
     );
   }
 
