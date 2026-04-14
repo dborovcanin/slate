@@ -108,7 +108,14 @@ impl RenderContext {
         search_ranges: &[(usize, usize)],
         variable_names: &[String],
     ) -> String {
-        self.render_line_with_dim_ranges(text, width, calc_ghost, search_ranges, variable_names, &[])
+        self.render_line_with_dim_ranges(
+            text,
+            width,
+            calc_ghost,
+            search_ranges,
+            variable_names,
+            &[],
+        )
     }
 
     pub fn render_line_with_dim_ranges(

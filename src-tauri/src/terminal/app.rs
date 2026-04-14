@@ -2530,7 +2530,9 @@ impl TerminalApp {
                             ghost_dim_ranges.push((marker_char, marker_char + 1));
 
                             let mut out = String::with_capacity(
-                                line_text.len().saturating_sub(formula.to_byte - formula.from_byte)
+                                line_text
+                                    .len()
+                                    .saturating_sub(formula.to_byte - formula.from_byte)
                                     + replacement.len(),
                             );
                             out.push_str(&line_text[..formula.from_byte]);
@@ -3722,7 +3724,10 @@ mod tests {
 
     #[test]
     fn builtin_formula_label_normalizes_aliases() {
-        assert_eq!(builtin_formula_label("=avg_col()").as_deref(), Some("avg_col()"));
+        assert_eq!(
+            builtin_formula_label("=avg_col()").as_deref(),
+            Some("avg_col()")
+        );
         assert_eq!(
             builtin_formula_label(" sum_column ( ) ").as_deref(),
             Some("sum_col()")

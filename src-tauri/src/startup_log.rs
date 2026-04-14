@@ -27,7 +27,6 @@ pub fn append_startup_log_line(mode: &str, line: &str) -> Result<(), String> {
         .append(true)
         .open(&path)
         .map_err(|e| format!("open startup log '{}': {e}", path.display()))?;
-    writeln!(file, "{line}")
-        .map_err(|e| format!("write startup log '{}': {e}", path.display()))?;
+    writeln!(file, "{line}").map_err(|e| format!("write startup log '{}': {e}", path.display()))?;
     Ok(())
 }

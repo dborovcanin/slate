@@ -7,7 +7,7 @@ use crate::text_rules::{
     run_tab_rules, run_table_cell_navigation_rules, TabRuleOptions, TextRuleOptions,
 };
 use crate::types::{CommandMode, EditorContextSnapshot};
-use crate::vim::{self, VimContext, VimState};
+use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -109,11 +109,137 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
     Some(command.value.to_string())
 }
 
+fn mode_from_id(id: u32) -> Option<VimMode> {
+    match id {
+        0 => Some(VimMode::Insert),
+        1 => Some(VimMode::Normal),
+        2 => Some(VimMode::Visual),
+        3 => Some(VimMode::VisualLine),
+        _ => None,
+    }
+}
+
+fn mode_to_id(mode: VimMode) -> u32 {
+    match mode {
+        VimMode::Insert => 0,
+        VimMode::Normal => 1,
+        VimMode::Visual => 2,
+        VimMode::VisualLine => 3,
+    }
+}
+
+fn decode_key(kind: u32, key_char: u32) -> Option<VimKey> {
+    match kind {
+        0 => Some(VimKey::Esc),
+        1 => Some(VimKey::Enter),
+        2 => Some(VimKey::Tab),
+        3 => Some(VimKey::Backspace),
+        4 => Some(VimKey::Delete),
+        5 => Some(VimKey::ArrowUp),
+        6 => Some(VimKey::ArrowDown),
+        7 => Some(VimKey::ArrowLeft),
+        8 => Some(VimKey::ArrowRight),
+        9 => char::from_u32(key_char).map(VimKey::Char),
+        10 => char::from_u32(key_char).map(|ch| VimKey::Ctrl(ch.to_ascii_lowercase())),
+        _ => None,
+    }
+}
+
+fn intent_to_id(intent: VimIntent) -> u32 {
+    match intent {
+        VimIntent::MoveLeft => 0,
+        VimIntent::MoveRight => 1,
+        VimIntent::MoveUp => 2,
+        VimIntent::MoveDown => 3,
+        VimIntent::MoveWordForward => 4,
+        VimIntent::MoveWordBackward => 5,
+        VimIntent::MoveLineStart => 6,
+        VimIntent::MoveLineEnd => 7,
+        VimIntent::MoveDocStart => 8,
+        VimIntent::MoveDocEnd => 9,
+        VimIntent::MoveToLine => 10,
+        VimIntent::EnterInsert => 11,
+        VimIntent::AppendInsert => 12,
+        VimIntent::InsertLineStart => 13,
+        VimIntent::AppendLineEnd => 14,
+        VimIntent::OpenLineBelow => 15,
+        VimIntent::OpenLineAbove => 16,
+        VimIntent::EnterVisual => 17,
+        VimIntent::EnterVisualLine => 18,
+        VimIntent::ExitVisual => 19,
+        VimIntent::DeleteLine => 20,
+        VimIntent::YankLine => 21,
+        VimIntent::DeleteToLineStart => 22,
+        VimIntent::DeleteToLineEnd => 23,
+        VimIntent::YankToLineStart => 24,
+        VimIntent::YankToLineEnd => 25,
+        VimIntent::DeleteChar => 26,
+        VimIntent::PasteAfter => 27,
+        VimIntent::Undo => 28,
+        VimIntent::Redo => 29,
+        VimIntent::OpenCommandBar => 30,
+        VimIntent::OpenSearch => 31,
+        VimIntent::SearchNext => 32,
+        VimIntent::SearchPrev => 33,
+        VimIntent::DeleteInsideWord => 34,
+        VimIntent::DeleteAroundWord => 35,
+        VimIntent::YankInsideWord => 36,
+        VimIntent::YankAroundWord => 37,
+        VimIntent::DeleteInsidePipe => 38,
+        VimIntent::DeleteAroundPipe => 39,
+        VimIntent::YankInsidePipe => 40,
+        VimIntent::YankAroundPipe => 41,
+        VimIntent::Swallow => 42,
+    }
+}
+
+fn encode_empty_step(mode: VimMode) -> Box<[u32]> {
+    vec![0, mode_to_id(mode), 0].into_boxed_slice()
+}
+
+fn encode_step(step: &vim::VimStep) -> Box<[u32]> {
+    let mut encoded = Vec::with_capacity(3 + step.actions.len() * 2);
+    encoded.push(u32::from(step.handled));
+    encoded.push(mode_to_id(step.state.mode));
+    encoded.push(step.actions.len() as u32);
+    for action in &step.actions {
+        encoded.push(intent_to_id(action.intent));
+        encoded.push(action.count.max(1) as u32);
+    }
+    encoded.into_boxed_slice()
+}
+
 #[wasm_bindgen]
-pub fn wasm_vim_step(state_json: &str, key_token: &str, context_json: &str) -> Option<String> {
-    let state: VimState = serde_json::from_str(state_json).ok()?;
-    let context: VimContext = serde_json::from_str(context_json).ok()?;
-    let key = vim::parse_key_token(key_token)?;
-    let step = vim::step(&state, key, &context);
-    serde_json::to_string(&step).ok()
+pub struct WasmVimSession {
+    state: VimState,
+}
+
+#[wasm_bindgen]
+impl WasmVimSession {
+    #[wasm_bindgen(constructor)]
+    pub fn new(initial_mode: u32) -> WasmVimSession {
+        let mut state = VimState::default();
+        state.mode = mode_from_id(initial_mode).unwrap_or(VimMode::Normal);
+        WasmVimSession { state }
+    }
+
+    pub fn step(
+        &mut self,
+        key_kind: u32,
+        key_char: u32,
+        has_search_matches: bool,
+        line_count: usize,
+    ) -> Box<[u32]> {
+        let Some(key) = decode_key(key_kind, key_char) else {
+            return encode_empty_step(self.state.mode);
+        };
+
+        let context = VimContext {
+            has_search_matches,
+            line_count,
+        };
+        let step = vim::step(&self.state, key, &context);
+        self.state = step.state.clone();
+        encode_step(&step)
+    }
 }

@@ -1,4 +1,5 @@
 import init, {
+  WasmVimSession,
   initSync,
   wasm_format_markdown,
   wasm_list_command_suggestions,
@@ -9,7 +10,6 @@ import init, {
   wasm_run_enter_rules,
   wasm_run_tab_rules,
   wasm_run_table_cell_navigation_rules,
-  wasm_vim_step,
 } from "../../pkg/editor-core/editor_core.js";
 import type {
   CommandMode,
@@ -83,79 +83,77 @@ export interface TabRuleOptions {
 }
 
 export type VimMode = "insert" | "normal" | "visual" | "visual_line";
-export type VimPending =
-  | "delete"
-  | "yank"
-  | "go"
-  | "delete_inner"
-  | "delete_around"
-  | "yank_inner"
-  | "yank_around";
-export type VimIntent =
-  | "move_left"
-  | "move_right"
-  | "move_up"
-  | "move_down"
-  | "move_word_forward"
-  | "move_word_backward"
-  | "move_line_start"
-  | "move_line_end"
-  | "move_doc_start"
-  | "move_doc_end"
-  | "move_to_line"
-  | "enter_insert"
-  | "append_insert"
-  | "insert_line_start"
-  | "append_line_end"
-  | "open_line_below"
-  | "open_line_above"
-  | "enter_visual"
-  | "enter_visual_line"
-  | "exit_visual"
-  | "delete_line"
-  | "yank_line"
-  | "delete_to_line_start"
-  | "delete_to_line_end"
-  | "yank_to_line_start"
-  | "yank_to_line_end"
-  | "delete_char"
-  | "paste_after"
-  | "undo"
-  | "redo"
-  | "open_command_bar"
-  | "open_search"
-  | "search_next"
-  | "search_prev"
-  | "delete_inside_word"
-  | "delete_around_word"
-  | "yank_inside_word"
-  | "yank_around_word"
-  | "delete_inside_pipe"
-  | "delete_around_pipe"
-  | "yank_inside_pipe"
-  | "yank_around_pipe"
-  | "swallow";
-
-export interface VimState {
-  mode: VimMode;
-  count_buffer?: string;
-  pending?: VimPending | null;
-}
 
 export interface VimContext {
   has_search_matches?: boolean;
   line_count?: number;
 }
 
+export interface VimKeyInput {
+  kind: number;
+  charCode?: number;
+}
+
 export interface VimAction {
-  intent: VimIntent;
+  intent: number;
   count: number;
 }
 
 export interface VimStep {
-  state: VimState;
+  mode: VimMode;
   actions: VimAction[];
   handled: boolean;
+}
+
+export const VIM_KEY_KIND = {
+  ESC: 0,
+  ENTER: 1,
+  TAB: 2,
+  BACKSPACE: 3,
+  DELETE: 4,
+  ARROW_UP: 5,
+  ARROW_DOWN: 6,
+  ARROW_LEFT: 7,
+  ARROW_RIGHT: 8,
+  CHAR: 9,
+  CTRL: 10,
+} as const;
+
+export const VIM_MODE_ID = {
+  INSERT: 0,
+  NORMAL: 1,
+  VISUAL: 2,
+  VISUAL_LINE: 3,
+} as const;
+
+function modeFromId(modeId: number): VimMode {
+  switch (modeId) {
+    case VIM_MODE_ID.INSERT:
+      return "insert";
+    case VIM_MODE_ID.NORMAL:
+      return "normal";
+    case VIM_MODE_ID.VISUAL:
+      return "visual";
+    case VIM_MODE_ID.VISUAL_LINE:
+      return "visual_line";
+    default:
+      return "normal";
+  }
+}
+
+function modeToId(mode: VimMode): number {
+  switch (mode) {
+    case "insert":
+      return VIM_MODE_ID.INSERT;
+    case "normal":
+      return VIM_MODE_ID.NORMAL;
+    case "visual":
+      return VIM_MODE_ID.VISUAL;
+    case "visual_line":
+      return VIM_MODE_ID.VISUAL_LINE;
+    default:
+      return VIM_MODE_ID.NORMAL;
+  }
 }
 
 function utf16ToUtf8Offset(text: string, utf16Offset: number): number {
@@ -334,18 +332,44 @@ export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): str
   return wasm_resolve_command(mode, rawInput) ?? null;
 }
 
-export function vimStepFromWasm(
-  state: VimState,
-  keyToken: string,
-  context: VimContext,
-): VimStep | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const raw = wasm_vim_step(JSON.stringify(state), keyToken, JSON.stringify(context));
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as VimStep;
-  } catch {
-    return null;
+function decodeVimStep(raw: Uint32Array): VimStep {
+  const handled = raw[0] === 1;
+  const mode = modeFromId(raw[1] ?? VIM_MODE_ID.NORMAL);
+  const actionCount = raw[2] ?? 0;
+  const actions: VimAction[] = [];
+
+  for (let i = 0; i < actionCount; i++) {
+    const base = 3 + i * 2;
+    if (base + 1 >= raw.length) break;
+    const intent = raw[base] ?? 42;
+    const count = Math.max(1, raw[base + 1] ?? 1);
+    actions.push({ intent, count });
+  }
+
+  return { mode, actions, handled };
+}
+
+export class VimSession {
+  private session: WasmVimSession | null = null;
+  private readonly initialMode: VimMode;
+
+  constructor(initialMode: VimMode = "normal") {
+    this.initialMode = initialMode;
+  }
+
+  step(key: VimKeyInput, context: VimContext = {}): VimStep | null {
+    if (!ensureWasmReadyNonBlocking()) return null;
+    if (!this.session) {
+      this.session = new WasmVimSession(modeToId(this.initialMode));
+    }
+
+    const raw = this.session.step(
+      key.kind,
+      key.charCode ?? 0,
+      context.has_search_matches ?? false,
+      context.line_count ?? 0,
+    );
+    return decodeVimStep(raw);
   }
 }
 
