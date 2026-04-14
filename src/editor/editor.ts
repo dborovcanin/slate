@@ -113,6 +113,14 @@ function tableCellNavigationDomHandler() {
 }
 
 function snapEditorScrollToPixels() {
+  // Most wheel mice report ±3 line deltas per notch. Normalize that to ~1 line
+  // while keeping sub-line movement for smaller deltas.
+  const normalizeLineDelta = (delta: number): number => {
+    const abs = Math.abs(delta);
+    if (abs < 0.001) return 0;
+    return Math.sign(delta) * Math.max(0.5, abs / 3);
+  };
+
   const clamp = (value: number, min: number, max: number) =>
     Math.min(max, Math.max(min, value));
 
@@ -140,8 +148,9 @@ function snapEditorScrollToPixels() {
 
         const scroller = view.scrollDOM;
         const scale = wheelScale(event, view);
-        const deltaY = event.deltaY * scale;
-        const deltaX = event.deltaX * scale;
+        const lineMode = event.deltaMode === WheelEvent.DOM_DELTA_LINE;
+        const deltaY = lineMode ? normalizeLineDelta(event.deltaY) * scale : event.deltaY * scale;
+        const deltaX = lineMode ? normalizeLineDelta(event.deltaX) * scale : event.deltaX * scale;
         if (Math.abs(deltaY) < 0.001 && Math.abs(deltaX) < 0.001) return false;
 
         const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
