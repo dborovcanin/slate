@@ -164,7 +164,7 @@ const FALLBACK_COMMANDS: FallbackCommand[] = [
   { value: "avg doc", aliases: ["avg_all", "avg all"], description: "average whole document", modes: ["vim", "editor"] },
   { value: "date", description: "insert picked date", modes: ["vim", "editor"] },
   { value: "format", aliases: ["fmt"], description: "format markdown document", modes: ["vim", "editor"] },
-  { value: "q", aliases: ["q!"], description: "hide window", modes: ["vim"] },
+  { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"] },
 ];
 
 function fallbackAvailableCommands(mode: CommandMode): FallbackCommand[] {

@@ -139,6 +139,12 @@ async function handleHideWindow() {
   await win.hide();
 }
 
+async function handleExitWindow() {
+  const win = getCurrentWindow();
+  await flushSave();
+  await win.close();
+}
+
 async function handleInsertDate() {
   const cfg = await getThemeConfigOrDefault();
   const value = await openDatePicker(cfg.date_format);
@@ -371,7 +377,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     dateFormat: config.date_format,
     variablesEnabled: config.variables_enabled,
     variableAutocompleteMinChars: config.variables_autocomplete_min_chars,
-    onExitCommand: handleHideWindow,
+    onExitCommand: handleExitWindow,
   });
   startupMark("ui_editor_mounted");
   setupKeyboardShortcuts();

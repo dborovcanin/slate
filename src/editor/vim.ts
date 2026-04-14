@@ -244,14 +244,77 @@ function findPipeObjectRange(
 export function vimModeExtension(options: VimOptions = {}) {
   const session = new VimSession("insert");
   let currentMode: VimUiMode = "insert";
+  let unnamedRegister = "";
 
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
+  let visualHeadLine: number | null = null; // 1-based (visual-line only)
 
   const mode = (): VimUiMode => currentMode;
 
+  const setRegister = (text: string) => {
+    if (!text) return;
+    unnamedRegister = text;
+    copyToClipboard(text);
+  };
+
+  const insertAfterCursorOnce = (view: EditorView, text: string) => {
+    if (!text) return;
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    const insertAt = head < line.to ? head + 1 : line.to;
+    view.dispatch({
+      changes: { from: insertAt, to: insertAt, insert: text },
+      selection: { anchor: insertAt + text.length },
+      scrollIntoView: true,
+    });
+  };
+
+  const pasteAfter = (view: EditorView, count: number) => {
+    const repeats = Math.max(1, count);
+    const pasteText = (text: string) => {
+      if (!text) return;
+      for (let i = 0; i < repeats; i++) {
+        insertAfterCursorOnce(view, text);
+      }
+    };
+
+    if (unnamedRegister) {
+      pasteText(unnamedRegister);
+      return true;
+    }
+
+    if (navigator.clipboard?.readText) {
+      void navigator.clipboard
+        .readText()
+        .then((text) => {
+          if (!text) return;
+          unnamedRegister = text;
+          pasteText(text);
+        })
+        .catch((err) => {
+          console.error("Vim paste failed:", err);
+        });
+    }
+    return true;
+  };
+
   const syncModeClasses = (view: EditorView) => {
     updateModeClasses(view, currentMode);
+  };
+
+  const refreshFocusedCursor = (view: EditorView) => {
+    syncModeClasses(view);
+    const current = mode();
+    if (current === "insert") return;
+    if (current === "visual" || current === "visual-line") {
+      updateVisualSelection(view);
+      return;
+    }
+    // Force a cursor layer refresh when regaining focus so normal-mode
+    // block cursor is restored immediately without waiting for movement keys.
+    const head = view.state.selection.main.head;
+    view.dispatch({ selection: { anchor: head } });
   };
 
   const collapseSelection = (view: EditorView) => {
@@ -262,6 +325,7 @@ export function vimModeExtension(options: VimOptions = {}) {
   const resetVisualAnchors = () => {
     visualAnchorPos = null;
     visualAnchorLine = null;
+    visualHeadLine = null;
   };
 
   const setModeLocally = (view: EditorView, next: VimUiMode) => {
@@ -299,7 +363,9 @@ export function vimModeExtension(options: VimOptions = {}) {
 
   const applyVisualLineSelection = (view: EditorView) => {
     if (visualAnchorLine === null) return;
-    const { lineNumber } = getHeadInfo(view);
+    const lineNumber =
+      visualHeadLine ??
+      Math.min(Math.max(getHeadInfo(view).lineNumber, 1), view.state.doc.lines);
     const anchorLine = view.state.doc.line(visualAnchorLine);
     const headLine = view.state.doc.line(lineNumber);
     const anchor =
@@ -327,8 +393,10 @@ export function vimModeExtension(options: VimOptions = {}) {
     if (next === "visual") {
       visualAnchorPos = info.head;
       visualAnchorLine = null;
+      visualHeadLine = null;
     } else {
       visualAnchorLine = info.lineNumber;
+      visualHeadLine = info.lineNumber;
       visualAnchorPos = null;
     }
 
@@ -355,6 +423,19 @@ export function vimModeExtension(options: VimOptions = {}) {
   ) => {
     const currentMode = mode();
     const isVisual = currentMode === "visual" || currentMode === "visual-line";
+    const count = Number.isFinite(explicitCount) && explicitCount > 0 ? explicitCount : 1;
+
+    if (currentMode === "visual-line" && (command === cursorLineUp || command === cursorLineDown)) {
+      let headLine = visualHeadLine ?? getHeadInfo(view).lineNumber;
+      for (let i = 0; i < count; i++) {
+        headLine += command === cursorLineUp ? -1 : 1;
+        headLine = Math.min(Math.max(headLine, 1), view.state.doc.lines);
+      }
+      visualHeadLine = headLine;
+      applyVisualLineSelection(view);
+      return true;
+    }
+
     if (isVisual) {
       const main = view.state.selection.main;
       if (!main.empty) {
@@ -372,8 +453,16 @@ export function vimModeExtension(options: VimOptions = {}) {
         view.dispatch({ selection: { anchor: caret } });
       }
     }
-    runCounted(view, command, explicitCount);
+    runCounted(view, command, count);
     if (isVisual) {
+      if (currentMode === "visual-line") {
+        let caret = view.state.selection.main.head;
+        const line = view.state.doc.lineAt(caret);
+        if (caret === line.to && line.to > line.from) {
+          caret = line.to - 1;
+        }
+        visualHeadLine = view.state.doc.lineAt(caret).number;
+      }
       updateVisualSelection(view);
     }
     return true;
@@ -415,7 +504,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
 
     if (chunks.length > 0) {
-      copyToClipboard(chunks.join("\n"));
+      setRegister(chunks.join("\n"));
     }
 
     return chunks.length;
@@ -464,7 +553,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       chunks.push(view.state.sliceDoc(line.from, head));
     }
     if (chunks.length > 0) {
-      copyToClipboard(chunks.join("\n"));
+      setRegister(chunks.join("\n"));
       return true;
     }
     return false;
@@ -479,7 +568,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       chunks.push(view.state.sliceDoc(head, line.to));
     }
     if (chunks.length > 0) {
-      copyToClipboard(chunks.join("\n"));
+      setRegister(chunks.join("\n"));
       return true;
     }
     return false;
@@ -494,12 +583,12 @@ export function vimModeExtension(options: VimOptions = {}) {
       for (let lineNo = start; lineNo <= end; lineNo++) {
         parts.push(view.state.doc.line(lineNo).text);
       }
-      copyToClipboard(parts.join("\n"));
+      setRegister(parts.join("\n"));
       return true;
     }
 
     const text = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
-    copyToClipboard(text);
+    setRegister(text);
     return true;
   };
 
@@ -510,7 +599,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     for (let lineNo = current; lineNo <= end; lineNo++) {
       parts.push(view.state.doc.line(lineNo).text);
     }
-    copyToClipboard(parts.join("\n"));
+    setRegister(parts.join("\n"));
     return true;
   };
 
@@ -592,7 +681,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       case 26: // delete_char
         return runCounted(view, deleteCharForward, count);
       case 27: // paste_after
-        return true;
+        return pasteAfter(view, count);
       case 28: // undo
         return runCounted(view, undo, count);
       case 29: // redo
@@ -632,8 +721,17 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
   };
 
-  return EditorView.domEventHandlers({
+  const focusSync = EditorView.updateListener.of((update) => {
+    if (!update.focusChanged || !update.view.hasFocus) return;
+    refreshFocusedCursor(update.view);
+  });
+
+  const handlers = EditorView.domEventHandlers({
     focus: (_event, view) => {
+      refreshFocusedCursor(view);
+      return false;
+    },
+    blur: (_event, view) => {
       syncModeClasses(view);
       return false;
     },
@@ -740,4 +838,6 @@ export function vimModeExtension(options: VimOptions = {}) {
       return true;
     },
   });
+
+  return [handlers, focusSync];
 }
