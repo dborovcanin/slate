@@ -183,53 +183,22 @@ export interface IncrementalCalcPlan {
   evalLines: string[];
 }
 
-interface CalcSegmentRaw {
-  expr: string;
-  from_col: number;
-  to_col: number;
-  from_byte: number;
-  to_byte: number;
-}
-
-interface TableFormulaSegmentRaw {
-  from_byte: number;
-  to_byte: number;
-  from_char: number;
-  to_char: number;
-  label: string;
-}
-
-interface CommitMarkerLocRaw {
-  doc_pos: number;
-  line_idx: number;
-  offset_in_line: number;
-  last_literal: string;
-}
-
-interface CalcRefreshChangeRaw {
-  line_idx: number;
-  from: number;
-  to: number;
-  insert: string;
-  new_literal: string;
-}
-
-interface CalcRefreshPlanRaw {
-  changes: CalcRefreshChangeRaw[];
-  prune: number[];
-  synced_lines: number[];
-}
-
-interface LineCalcResultRaw {
-  line_idx: number;
+interface LineCalcResultEntry {
+  lineIdx: number;
   result: string;
 }
 
-interface IncrementalCalcPlanRaw {
-  base_results: LineCalcResultRaw[];
-  eval_from: number;
-  eval_to: number;
-  eval_lines: string[];
+interface IncrementalCalcPlanPayload {
+  baseResults: LineCalcResultEntry[];
+  evalFrom: number;
+  evalTo: number;
+  evalLines: string[];
+}
+
+interface CalcRefreshPlanPayload {
+  changes: CalcRefreshChange[];
+  prune: number[];
+  syncedLines: number[];
 }
 
 function modeFromId(modeId: number): VimMode {
@@ -349,37 +318,6 @@ function parseOp(json: string | undefined, sourceText: string): EditOperation | 
   return mapOperationFromUtf8ToUtf16(sourceText, operation);
 }
 
-function parseJson<T>(raw: string | null | undefined): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function mapSegment(raw: CalcSegmentRaw | null): CalcSegment | null {
-  if (!raw) return null;
-  return {
-    expr: raw.expr,
-    fromCol: raw.from_col,
-    toCol: raw.to_col,
-    fromByte: raw.from_byte,
-    toByte: raw.to_byte,
-  };
-}
-
-function mapTableFormula(raw: TableFormulaSegmentRaw | null): TableFormulaSegment | null {
-  if (!raw) return null;
-  return {
-    fromByte: raw.from_byte,
-    toByte: raw.to_byte,
-    fromChar: raw.from_char,
-    toChar: raw.to_char,
-    label: raw.label,
-  };
-}
-
 export function runDocChangeRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
@@ -470,24 +408,24 @@ export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): str
 
 export function calcFindSingleTableCell(lineText: string): CalcSegment | null {
   if (!ensureWasmReadyNonBlocking()) return null;
-  return mapSegment(parseJson<CalcSegmentRaw>(wasm_calc_find_single_table_cell(lineText)));
+  return (wasm_calc_find_single_table_cell(lineText) as CalcSegment | null | undefined) ?? null;
 }
 
 export function calcFindListSegment(lineText: string): CalcSegment | null {
   if (!ensureWasmReadyNonBlocking()) return null;
-  return mapSegment(parseJson<CalcSegmentRaw>(wasm_calc_find_list_segment(lineText)));
+  return (wasm_calc_find_list_segment(lineText) as CalcSegment | null | undefined) ?? null;
 }
 
 export function calcFindSegment(lineText: string): CalcSegment | null {
   if (!ensureWasmReadyNonBlocking()) return null;
-  return mapSegment(parseJson<CalcSegmentRaw>(wasm_calc_find_segment(lineText)));
+  return (wasm_calc_find_segment(lineText) as CalcSegment | null | undefined) ?? null;
 }
 
 export function calcFindTableFormulaSegment(lineText: string): TableFormulaSegment | null {
   if (!ensureWasmReadyNonBlocking()) return null;
-  return mapTableFormula(
-    parseJson<TableFormulaSegmentRaw>(wasm_calc_find_table_formula_segment(lineText)),
-  );
+  return (
+    wasm_calc_find_table_formula_segment(lineText) as TableFormulaSegment | null | undefined
+  ) ?? null;
 }
 
 export function calcLineForEvaluation(lineText: string): string {
@@ -517,12 +455,12 @@ export function calcLineUsesAssignmentPrefix(lineText: string): boolean {
 
 export function calcContainsVariableAssignment(lines: readonly string[]): boolean {
   if (!ensureWasmReadyNonBlocking()) return false;
-  return wasm_calc_contains_variable_assignment(JSON.stringify(lines)) ?? false;
+  return wasm_calc_contains_variable_assignment([...lines]) ?? false;
 }
 
 export function calcContainsBuiltinFormula(lines: readonly string[]): boolean {
   if (!ensureWasmReadyNonBlocking()) return false;
-  return wasm_calc_contains_builtin_formula(JSON.stringify(lines)) ?? false;
+  return wasm_calc_contains_builtin_formula([...lines]) ?? false;
 }
 
 export function calcPlanIncremental(
@@ -544,15 +482,19 @@ export function calcPlanIncremental(
     prevDense.push(prevResults.get(i) ?? null);
   }
 
-  const rawPlan = parseJson<IncrementalCalcPlanRaw>(
-    wasm_calc_plan_incremental(
-      JSON.stringify(prevLines),
-      JSON.stringify(prevDense),
-      JSON.stringify(nextLines),
-    ),
-  );
+  const rawPlan = wasm_calc_plan_incremental(
+    prevLines,
+    prevDense,
+    nextLines,
+  ) as IncrementalCalcPlanPayload | null | undefined;
 
-  if (!rawPlan) {
+  if (
+    !rawPlan ||
+    !Array.isArray(rawPlan.baseResults) ||
+    !Array.isArray(rawPlan.evalLines) ||
+    typeof rawPlan.evalFrom !== "number" ||
+    typeof rawPlan.evalTo !== "number"
+  ) {
     return {
       baseResults: new Map(),
       evalFrom: 0,
@@ -562,15 +504,16 @@ export function calcPlanIncremental(
   }
 
   const baseResults = new Map<number, string>();
-  for (const entry of rawPlan.base_results) {
-    baseResults.set(entry.line_idx, entry.result);
+  for (const entry of rawPlan.baseResults) {
+    if (typeof entry?.lineIdx !== "number" || typeof entry?.result !== "string") continue;
+    baseResults.set(entry.lineIdx, entry.result);
   }
 
   return {
     baseResults,
-    evalFrom: rawPlan.eval_from,
-    evalTo: rawPlan.eval_to,
-    evalLines: rawPlan.eval_lines,
+    evalFrom: rawPlan.evalFrom,
+    evalTo: rawPlan.evalTo,
+    evalLines: rawPlan.evalLines,
   };
 }
 
@@ -585,43 +528,33 @@ export function calcComputeRefresh(
     return { changes: [], prune: [], syncedLines: [] };
   }
 
-  const markersRaw: CommitMarkerLocRaw[] = markers.map((marker) => ({
-    doc_pos: marker.docPos,
-    line_idx: marker.lineIdx,
-    offset_in_line: marker.offsetInLine,
-    last_literal: marker.lastLiteral,
-  }));
-
   const denseResults: (string | null)[] = [];
   for (let i = 0; i < lines.length; i++) {
     denseResults.push(nextResults.get(i) ?? null);
   }
 
-  const rawPlan = parseJson<CalcRefreshPlanRaw>(
-    wasm_calc_compute_refresh(
-      JSON.stringify(markersRaw),
-      JSON.stringify(lines),
-      JSON.stringify(lineStarts),
-      JSON.stringify(denseResults),
-      selection.from,
-      selection.to,
-    ),
-  );
+  const rawPlan = wasm_calc_compute_refresh(
+    [...markers],
+    [...lines],
+    [...lineStarts],
+    denseResults,
+    selection.from,
+    selection.to,
+  ) as CalcRefreshPlanPayload | null | undefined;
 
-  if (!rawPlan) {
+  if (
+    !rawPlan ||
+    !Array.isArray(rawPlan.changes) ||
+    !Array.isArray(rawPlan.prune) ||
+    !Array.isArray(rawPlan.syncedLines)
+  ) {
     return { changes: [], prune: [], syncedLines: [] };
   }
 
   return {
-    changes: rawPlan.changes.map((change) => ({
-      lineIdx: change.line_idx,
-      from: change.from,
-      to: change.to,
-      insert: change.insert,
-      newLiteral: change.new_literal,
-    })),
+    changes: rawPlan.changes,
     prune: rawPlan.prune,
-    syncedLines: rawPlan.synced_lines,
+    syncedLines: rawPlan.syncedLines,
   };
 }
 

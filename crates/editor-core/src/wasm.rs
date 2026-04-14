@@ -1,4 +1,6 @@
+use js_sys::{Array, Object, Reflect};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
 
 use crate::calc_plan::{
     self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
@@ -112,28 +114,165 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
     Some(command.value.to_string())
 }
 
+fn set_prop(obj: &Object, key: &str, value: JsValue) -> bool {
+    Reflect::set(obj, &JsValue::from_str(key), &value).is_ok()
+}
+
+fn calc_segment_to_js(segment: &CalcSegment) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "expr", JsValue::from_str(&segment.expr));
+    let _ = set_prop(&out, "fromCol", JsValue::from_f64(segment.from_col as f64));
+    let _ = set_prop(&out, "toCol", JsValue::from_f64(segment.to_col as f64));
+    let _ = set_prop(&out, "fromByte", JsValue::from_f64(segment.from_byte as f64));
+    let _ = set_prop(&out, "toByte", JsValue::from_f64(segment.to_byte as f64));
+    out.into()
+}
+
+fn table_formula_segment_to_js(segment: &TableFormulaSegment) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "fromByte", JsValue::from_f64(segment.from_byte as f64));
+    let _ = set_prop(&out, "toByte", JsValue::from_f64(segment.to_byte as f64));
+    let _ = set_prop(&out, "fromChar", JsValue::from_f64(segment.from_char as f64));
+    let _ = set_prop(&out, "toChar", JsValue::from_f64(segment.to_char as f64));
+    let _ = set_prop(&out, "label", JsValue::from_str(&segment.label));
+    out.into()
+}
+
+fn js_strings(value: JsValue) -> Option<Vec<String>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for value in array.iter() {
+        out.push(value.as_string()?);
+    }
+    Some(out)
+}
+
+fn js_optional_strings(value: JsValue) -> Option<Vec<Option<String>>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for value in array.iter() {
+        if value.is_null() || value.is_undefined() {
+            out.push(None);
+        } else {
+            out.push(Some(value.as_string()?));
+        }
+    }
+    Some(out)
+}
+
+fn js_usize(value: JsValue) -> Option<Vec<usize>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for value in array.iter() {
+        let number = value.as_f64()?;
+        if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
+            return None;
+        }
+        out.push(number as usize);
+    }
+    Some(out)
+}
+
+fn js_prop_usize(value: &JsValue, key: &str) -> Option<usize> {
+    let raw = Reflect::get(value, &JsValue::from_str(key)).ok()?;
+    let number = raw.as_f64()?;
+    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
+        return None;
+    }
+    Some(number as usize)
+}
+
+fn js_prop_string(value: &JsValue, key: &str) -> Option<String> {
+    Reflect::get(value, &JsValue::from_str(key))
+        .ok()?
+        .as_string()
+}
+
+fn js_commit_markers(value: JsValue) -> Option<Vec<CommitMarkerLoc>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for value in array.iter() {
+        out.push(CommitMarkerLoc {
+            doc_pos: js_prop_usize(&value, "docPos")?,
+            line_idx: js_prop_usize(&value, "lineIdx")?,
+            offset_in_line: js_prop_usize(&value, "offsetInLine")?,
+            last_literal: js_prop_string(&value, "lastLiteral")?,
+        });
+    }
+    Some(out)
+}
+
+fn incremental_plan_to_js(plan: &IncrementalCalcPlan) -> JsValue {
+    let out = Object::new();
+    let base_results = Array::new();
+    for entry in &plan.base_results {
+        let item = Object::new();
+        let _ = set_prop(&item, "lineIdx", JsValue::from_f64(entry.line_idx as f64));
+        let _ = set_prop(&item, "result", JsValue::from_str(&entry.result));
+        base_results.push(&item);
+    }
+    let eval_lines = Array::new();
+    for line in &plan.eval_lines {
+        eval_lines.push(&JsValue::from_str(line));
+    }
+    let _ = set_prop(&out, "baseResults", base_results.into());
+    let _ = set_prop(&out, "evalFrom", JsValue::from_f64(plan.eval_from as f64));
+    let _ = set_prop(&out, "evalTo", JsValue::from_f64(plan.eval_to as f64));
+    let _ = set_prop(&out, "evalLines", eval_lines.into());
+    out.into()
+}
+
+fn calc_refresh_plan_to_js(plan: &CalcRefreshPlan) -> JsValue {
+    let out = Object::new();
+    let changes = Array::new();
+    for change in &plan.changes {
+        let item = Object::new();
+        let _ = set_prop(&item, "lineIdx", JsValue::from_f64(change.line_idx as f64));
+        let _ = set_prop(&item, "from", JsValue::from_f64(change.from as f64));
+        let _ = set_prop(&item, "to", JsValue::from_f64(change.to as f64));
+        let _ = set_prop(&item, "insert", JsValue::from_str(&change.insert));
+        let _ = set_prop(&item, "newLiteral", JsValue::from_str(&change.new_literal));
+        changes.push(&item);
+    }
+
+    let prune = Array::new();
+    for idx in &plan.prune {
+        prune.push(&JsValue::from_f64(*idx as f64));
+    }
+
+    let synced = Array::new();
+    for idx in &plan.synced_lines {
+        synced.push(&JsValue::from_f64(*idx as f64));
+    }
+
+    let _ = set_prop(&out, "changes", changes.into());
+    let _ = set_prop(&out, "prune", prune.into());
+    let _ = set_prop(&out, "syncedLines", synced.into());
+    out.into()
+}
+
 #[wasm_bindgen]
-pub fn wasm_calc_find_single_table_cell(line_text: &str) -> Option<String> {
+pub fn wasm_calc_find_single_table_cell(line_text: &str) -> Option<JsValue> {
     let segment: CalcSegment = calc_plan::find_single_calc_table_cell(line_text)?;
-    serde_json::to_string(&segment).ok()
+    Some(calc_segment_to_js(&segment))
 }
 
 #[wasm_bindgen]
-pub fn wasm_calc_find_list_segment(line_text: &str) -> Option<String> {
+pub fn wasm_calc_find_list_segment(line_text: &str) -> Option<JsValue> {
     let segment: CalcSegment = calc_plan::find_list_calc_segment(line_text)?;
-    serde_json::to_string(&segment).ok()
+    Some(calc_segment_to_js(&segment))
 }
 
 #[wasm_bindgen]
-pub fn wasm_calc_find_segment(line_text: &str) -> Option<String> {
+pub fn wasm_calc_find_segment(line_text: &str) -> Option<JsValue> {
     let segment: CalcSegment = calc_plan::find_calc_segment(line_text)?;
-    serde_json::to_string(&segment).ok()
+    Some(calc_segment_to_js(&segment))
 }
 
 #[wasm_bindgen]
-pub fn wasm_calc_find_table_formula_segment(line_text: &str) -> Option<String> {
+pub fn wasm_calc_find_table_formula_segment(line_text: &str) -> Option<JsValue> {
     let segment: TableFormulaSegment = calc_plan::find_table_formula_segment(line_text)?;
-    serde_json::to_string(&segment).ok()
+    Some(table_formula_segment_to_js(&segment))
 }
 
 #[wasm_bindgen]
@@ -162,44 +301,44 @@ pub fn wasm_calc_line_uses_assignment_prefix(line_text: &str) -> bool {
 }
 
 #[wasm_bindgen]
-pub fn wasm_calc_contains_variable_assignment(lines_json: &str) -> Option<bool> {
-    let lines: Vec<String> = serde_json::from_str(lines_json).ok()?;
+pub fn wasm_calc_contains_variable_assignment(lines: JsValue) -> Option<bool> {
+    let lines = js_strings(lines)?;
     Some(calc_plan::contains_variable_assignment(&lines))
 }
 
 #[wasm_bindgen]
-pub fn wasm_calc_contains_builtin_formula(lines_json: &str) -> Option<bool> {
-    let lines: Vec<String> = serde_json::from_str(lines_json).ok()?;
+pub fn wasm_calc_contains_builtin_formula(lines: JsValue) -> Option<bool> {
+    let lines = js_strings(lines)?;
     Some(calc_plan::contains_builtin_formula(&lines))
 }
 
 #[wasm_bindgen]
 pub fn wasm_calc_plan_incremental(
-    prev_lines_json: &str,
-    prev_results_json: &str,
-    next_lines_json: &str,
-) -> Option<String> {
-    let prev_lines: Vec<String> = serde_json::from_str(prev_lines_json).ok()?;
-    let prev_results: Vec<Option<String>> = serde_json::from_str(prev_results_json).ok()?;
-    let next_lines: Vec<String> = serde_json::from_str(next_lines_json).ok()?;
+    prev_lines: JsValue,
+    prev_results: JsValue,
+    next_lines: JsValue,
+) -> Option<JsValue> {
+    let prev_lines = js_strings(prev_lines)?;
+    let prev_results = js_optional_strings(prev_results)?;
+    let next_lines = js_strings(next_lines)?;
     let plan: IncrementalCalcPlan =
         calc_plan::plan_incremental_calc(&prev_lines, &prev_results, &next_lines);
-    serde_json::to_string(&plan).ok()
+    Some(incremental_plan_to_js(&plan))
 }
 
 #[wasm_bindgen]
 pub fn wasm_calc_compute_refresh(
-    markers_json: &str,
-    lines_json: &str,
-    line_starts_json: &str,
-    next_results_json: &str,
+    markers: JsValue,
+    lines: JsValue,
+    line_starts: JsValue,
+    next_results: JsValue,
     selection_from: usize,
     selection_to: usize,
-) -> Option<String> {
-    let markers: Vec<CommitMarkerLoc> = serde_json::from_str(markers_json).ok()?;
-    let lines: Vec<String> = serde_json::from_str(lines_json).ok()?;
-    let line_starts: Vec<usize> = serde_json::from_str(line_starts_json).ok()?;
-    let next_results: Vec<Option<String>> = serde_json::from_str(next_results_json).ok()?;
+) -> Option<JsValue> {
+    let markers = js_commit_markers(markers)?;
+    let lines = js_strings(lines)?;
+    let line_starts = js_usize(line_starts)?;
+    let next_results = js_optional_strings(next_results)?;
     let plan: CalcRefreshPlan = calc_plan::compute_calc_refresh(
         &markers,
         &lines,
@@ -208,7 +347,7 @@ pub fn wasm_calc_compute_refresh(
         selection_from,
         selection_to,
     );
-    serde_json::to_string(&plan).ok()
+    Some(calc_refresh_plan_to_js(&plan))
 }
 
 fn mode_from_id(id: u32) -> Option<VimMode> {
