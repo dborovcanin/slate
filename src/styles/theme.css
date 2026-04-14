@@ -24,7 +24,16 @@
   --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", ui-monospace, monospace;
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
   --font-size: 14px;
-  --line-height: 1.65;
+  --line-height: 23px;
+  --heading-1-size: 25px;
+  --heading-2-size: 21px;
+  --heading-3-size: 18px;
+  --heading-4-size: 16px;
+  --heading-5-size: 15px;
+  --heading-6-size: 14px;
+  --heading-1-line-height: 33px;
+  --heading-2-line-height: 28px;
+  --heading-line-height: 23px;
 }
 
 ::-webkit-scrollbar {

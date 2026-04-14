@@ -203,12 +203,15 @@ export function buildMarkdownDecorationsForSpans(
 ): DecorationSet {
   if (spans.length === 0) return Decoration.none;
 
+  const sortedSpans = [...spans].sort(
+    (a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine,
+  );
   const builder = new RangeSetBuilder<Decoration>();
   const fenceState = { inCodeBlock: false, codeFenceLang: null as string | null };
   const matcher = createVariableMatcher(variableIndex);
   let nextLineToProcess = 1;
 
-  for (const span of spans) {
+  for (const span of sortedSpans) {
     if (nextLineToProcess > span.toLine) {
       nextLineToProcess = span.toLine + 1;
       continue;
@@ -355,7 +358,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     private destroyed = false;
 
     constructor(view: EditorView) {
-      this.decorations = this.safeBuild(view);
+      this.decorations = this.safeBuild(view, Decoration.none);
       void ensureWasmReady()
         .then(() => {
           if (this.destroyed) return;
@@ -372,7 +375,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           transaction.annotation(markdownWasmReadyAnnotation),
         )
       ) {
-        this.decorations = this.safeBuild(update.view);
+        this.decorations = this.safeBuild(update.view, this.decorations);
         return;
       }
 
@@ -381,7 +384,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       const varsChanged = prevVars !== nextVars;
 
       if (varsChanged || update.viewportChanged) {
-        this.decorations = this.safeBuild(update.view);
+        this.decorations = this.safeBuild(update.view, this.decorations);
         return;
       }
 
@@ -396,7 +399,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       } catch (error) {
         console.error("Incremental markdown rebuild failed, falling back:", error);
       }
-      this.decorations = this.safeBuild(update.view);
+      this.decorations = this.safeBuild(update.view, this.decorations);
     }
 
     /**
@@ -501,12 +504,12 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       return result;
     }
 
-    private safeBuild(view: EditorView): DecorationSet {
+    private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {
       try {
         return buildMarkdownDecorations(view);
       } catch (error) {
         console.error("Markdown decoration build failed:", error);
-        return Decoration.none;
+        return fallback;
       }
     }
 

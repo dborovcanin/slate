@@ -222,6 +222,38 @@ test("buildMarkdownDecorationsForSpans stays stable for calc variable expression
   );
 });
 
+test("buildMarkdownDecorationsForSpans handles unsorted visible spans", () => {
+  const doc = Text.of([
+    "# Header",
+    "plain",
+    "more",
+    "- [ ] checklist",
+  ]);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [
+      { fromLine: 4, toLine: 4 },
+      { fromLine: 1, toLine: 1 },
+    ],
+    [],
+  );
+  const flat = collectDecorations(decos);
+
+  const heading = doc.line(1);
+  const checklist = doc.line(4);
+  assert.ok(
+    flat.some(
+      (d) => d.from >= heading.from && d.to <= heading.to && d.cls.includes("md-heading"),
+    ),
+    "heading in the earlier span should still be decorated",
+  );
+  assert.ok(
+    flat.some((d) => d.from === checklist.from && d.cls.includes("md-checklist-item")),
+    "checklist in the later span should still be decorated",
+  );
+});
+
 test("findVariableNameRanges is case-insensitive and prefers longest overlap", () => {
   const ranges = findVariableNameRanges("Tax Rate + tax + tax_rate", [
     { normalized: "tax" },

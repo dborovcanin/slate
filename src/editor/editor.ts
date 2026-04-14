@@ -112,6 +112,60 @@ function tableCellNavigationDomHandler() {
   );
 }
 
+function snapEditorScrollToPixels() {
+  const clamp = (value: number, min: number, max: number) =>
+    Math.min(max, Math.max(min, value));
+
+  const wheelScale = (event: WheelEvent, view: EditorView): number => {
+    if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+      const rootLineHeight = Number.parseFloat(
+        document.documentElement.style.getPropertyValue("--line-height") || "",
+      );
+      if (Number.isFinite(rootLineHeight) && rootLineHeight > 0) {
+        return rootLineHeight;
+      }
+      const lineHeight = Number.parseFloat(window.getComputedStyle(view.contentDOM).lineHeight || "");
+      return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 24;
+    }
+    if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+      return view.scrollDOM.clientHeight || 1;
+    }
+    return 1;
+  };
+
+  return Prec.highest(
+    EditorView.domEventHandlers({
+      wheel: (event, view) => {
+        if (event.ctrlKey || event.metaKey) return false;
+
+        const scroller = view.scrollDOM;
+        const scale = wheelScale(event, view);
+        const deltaY = event.deltaY * scale;
+        const deltaX = event.deltaX * scale;
+        if (Math.abs(deltaY) < 0.001 && Math.abs(deltaX) < 0.001) return false;
+
+        const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+        const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+
+        const nextTop = Math.round(clamp(scroller.scrollTop + deltaY, 0, maxTop) * dpr) / dpr;
+        const nextLeft = Math.round(clamp(scroller.scrollLeft + deltaX, 0, maxLeft) * dpr) / dpr;
+        if (
+          Math.abs(nextTop - scroller.scrollTop) < 0.001 &&
+          Math.abs(nextLeft - scroller.scrollLeft) < 0.001
+        ) {
+          return false;
+        }
+
+        event.preventDefault();
+        scroller.scrollTop = nextTop;
+        scroller.scrollLeft = nextLeft;
+        return true;
+      },
+    }),
+  );
+}
+
 function moveTableCellOrWord(
   view: EditorView,
   tableOutdent: boolean,
@@ -164,6 +218,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       onExitCommand: options.onExitCommand,
     }),
     tableCellNavigationDomHandler(),
+    snapEditorScrollToPixels(),
     Prec.highest(keymap.of([
       { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
       { key: "Ctrl-Backspace", run: deleteGroupBackward, preventDefault: true },

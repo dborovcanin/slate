@@ -33,6 +33,7 @@ const FALLBACK_BG: Rgb = { r: 30, g: 30, b: 46 };
 const FALLBACK_FG: Rgb = { r: 205, g: 214, b: 244 };
 const FALLBACK_ACCENT: Rgb = { r: 137, g: 180, b: 250 };
 const FALLBACK_FG_DIM: Rgb = { r: 127, g: 132, b: 156 };
+const BASE_LINE_HEIGHT_RATIO = 1.65;
 
 function clampChannel(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
@@ -191,6 +192,35 @@ function normalizeName(value: string | null | undefined): string {
     .replace(/[_\s]+/g, "-");
 }
 
+function computeEditorLineHeightPx(fontSize: number): number {
+  return Math.max(fontSize + 4, Math.round(fontSize * BASE_LINE_HEIGHT_RATIO));
+}
+
+function scaledPx(basePx: number, ratio: number, minPx = basePx): number {
+  return Math.max(minPx, Math.round(basePx * ratio));
+}
+
+function computeHeadingMetrics(fontSize: number, lineHeightPx: number) {
+  const heading1Size = scaledPx(fontSize, 1.75, fontSize + 4);
+  const heading2Size = scaledPx(fontSize, 1.5, fontSize + 3);
+  const heading3Size = scaledPx(fontSize, 1.3, fontSize + 2);
+  const heading4Size = scaledPx(fontSize, 1.15, fontSize + 1);
+  const heading5Size = scaledPx(fontSize, 1.05, fontSize + 1);
+  const heading6Size = fontSize;
+
+  return {
+    heading1Size,
+    heading2Size,
+    heading3Size,
+    heading4Size,
+    heading5Size,
+    heading6Size,
+    heading1LineHeight: scaledPx(heading1Size, 1.3, heading1Size + 4),
+    heading2LineHeight: scaledPx(heading2Size, 1.35, heading2Size + 3),
+    headingLineHeight: lineHeightPx,
+  };
+}
+
 export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelection {
   const colorSchemeKey = normalizeName(input.color_scheme);
   const backgroundKey = normalizeName(input.background);
@@ -212,6 +242,8 @@ export function applyTheme(selection: ThemeSelection) {
     BACKGROUND_PRESETS[selection.background] ?? BACKGROUND_PRESETS[DEFAULT_BACKGROUND];
   const font = FONT_PRESETS[selection.font] ?? FONT_PRESETS[DEFAULT_FONT];
   const fontSize = clampFontSize(selection.fontSize);
+  const lineHeightPx = computeEditorLineHeightPx(fontSize);
+  const heading = computeHeadingMetrics(fontSize, lineHeightPx);
   const root = document.documentElement;
 
   for (const [name, value] of Object.entries(scheme.vars)) {
@@ -227,6 +259,16 @@ export function applyTheme(selection: ThemeSelection) {
   root.style.setProperty("--bg-pattern-size", background.size);
   root.style.setProperty("--font-mono", font.stack);
   root.style.setProperty("--font-size", `${fontSize}px`);
+  root.style.setProperty("--line-height", `${lineHeightPx}px`);
+  root.style.setProperty("--heading-1-size", `${heading.heading1Size}px`);
+  root.style.setProperty("--heading-2-size", `${heading.heading2Size}px`);
+  root.style.setProperty("--heading-3-size", `${heading.heading3Size}px`);
+  root.style.setProperty("--heading-4-size", `${heading.heading4Size}px`);
+  root.style.setProperty("--heading-5-size", `${heading.heading5Size}px`);
+  root.style.setProperty("--heading-6-size", `${heading.heading6Size}px`);
+  root.style.setProperty("--heading-1-line-height", `${heading.heading1LineHeight}px`);
+  root.style.setProperty("--heading-2-line-height", `${heading.heading2LineHeight}px`);
+  root.style.setProperty("--heading-line-height", `${heading.headingLineHeight}px`);
 
   root.dataset.theme = scheme.id;
   root.dataset.background = background.id;
