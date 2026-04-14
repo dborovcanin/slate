@@ -16,6 +16,12 @@ import init, {
   wasm_calc_plan_incremental,
   wasm_format_markdown,
   wasm_list_command_suggestions,
+  wasm_markdown_analyze_lines,
+  wasm_markdown_classify_line,
+  wasm_markdown_find_inline_tokens,
+  wasm_markdown_is_code_fence,
+  wasm_markdown_parse_fence_language,
+  wasm_markdown_tokenize_code_line,
   wasm_normalize_command,
   wasm_rewrite_line_with_checklist_toggle_suffix,
   wasm_resolve_command,
@@ -199,6 +205,63 @@ interface CalcRefreshPlanPayload {
   changes: CalcRefreshChange[];
   prune: number[];
   syncedLines: number[];
+}
+
+export type MarkdownInlineTokenType =
+  | "strong"
+  | "emphasis"
+  | "strikethrough"
+  | "code"
+  | "code-marker"
+  | "link-text"
+  | "link-url"
+  | "link-marker";
+
+export type MarkdownCodeTokenType =
+  | "keyword"
+  | "string"
+  | "number"
+  | "comment"
+  | "function"
+  | "type";
+
+export interface MarkdownInlineToken {
+  from: number;
+  to: number;
+  type: MarkdownInlineTokenType;
+}
+
+export interface MarkdownCodeToken {
+  from: number;
+  to: number;
+  type: MarkdownCodeTokenType;
+}
+
+export interface MarkdownLineInfo {
+  headingLevel: number | null;
+  headingMarkerEnd: number | null;
+  quoteMarkerEnd: number | null;
+  listMarkerEnd: number | null;
+  checklistMarkerStart: number | null;
+  checklistMarkerEnd: number | null;
+  checklistContentStart: number | null;
+  checklistChecked: boolean;
+  isHorizontalRule: boolean;
+  isCodeFence: boolean;
+}
+
+export interface MarkdownAnalyzedLine {
+  info: MarkdownLineInfo;
+  inCodeBlock: boolean;
+  codeFenceLang: string | null;
+  inlineTokens: MarkdownInlineToken[];
+  codeTokens: MarkdownCodeToken[];
+}
+
+export interface MarkdownAnalyzeResult {
+  lines: MarkdownAnalyzedLine[];
+  finalInCodeBlock: boolean;
+  finalCodeFenceLang: string | null;
 }
 
 function modeFromId(modeId: number): VimMode {
@@ -404,6 +467,180 @@ export function listCommandSuggestionsFromWasm(
 export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): string | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_resolve_command(mode, rawInput) ?? null;
+}
+
+const DEFAULT_MARKDOWN_LINE_INFO: MarkdownLineInfo = {
+  headingLevel: null,
+  headingMarkerEnd: null,
+  quoteMarkerEnd: null,
+  listMarkerEnd: null,
+  checklistMarkerStart: null,
+  checklistMarkerEnd: null,
+  checklistContentStart: null,
+  checklistChecked: false,
+  isHorizontalRule: false,
+  isCodeFence: false,
+};
+
+function asMarkdownLineInfo(value: unknown): MarkdownLineInfo | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Partial<MarkdownLineInfo>;
+  if (
+    typeof raw.checklistChecked !== "boolean" ||
+    typeof raw.isHorizontalRule !== "boolean" ||
+    typeof raw.isCodeFence !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    headingLevel: typeof raw.headingLevel === "number" ? raw.headingLevel : null,
+    headingMarkerEnd: typeof raw.headingMarkerEnd === "number" ? raw.headingMarkerEnd : null,
+    quoteMarkerEnd: typeof raw.quoteMarkerEnd === "number" ? raw.quoteMarkerEnd : null,
+    listMarkerEnd: typeof raw.listMarkerEnd === "number" ? raw.listMarkerEnd : null,
+    checklistMarkerStart:
+      typeof raw.checklistMarkerStart === "number" ? raw.checklistMarkerStart : null,
+    checklistMarkerEnd: typeof raw.checklistMarkerEnd === "number" ? raw.checklistMarkerEnd : null,
+    checklistContentStart:
+      typeof raw.checklistContentStart === "number" ? raw.checklistContentStart : null,
+    checklistChecked: raw.checklistChecked,
+    isHorizontalRule: raw.isHorizontalRule,
+    isCodeFence: raw.isCodeFence,
+  };
+}
+
+function asMarkdownInlineTokens(value: unknown): MarkdownInlineToken[] {
+  if (!Array.isArray(value)) return [];
+  const out: MarkdownInlineToken[] = [];
+  for (const token of value) {
+    if (typeof token !== "object" || token === null) continue;
+    const raw = token as Partial<MarkdownInlineToken>;
+    if (
+      typeof raw.from !== "number" ||
+      typeof raw.to !== "number" ||
+      typeof raw.type !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      from: raw.from,
+      to: raw.to,
+      type: raw.type as MarkdownInlineTokenType,
+    });
+  }
+  return out;
+}
+
+function asMarkdownCodeTokens(value: unknown): MarkdownCodeToken[] {
+  if (!Array.isArray(value)) return [];
+  const out: MarkdownCodeToken[] = [];
+  for (const token of value) {
+    if (typeof token !== "object" || token === null) continue;
+    const raw = token as Partial<MarkdownCodeToken>;
+    if (
+      typeof raw.from !== "number" ||
+      typeof raw.to !== "number" ||
+      typeof raw.type !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      from: raw.from,
+      to: raw.to,
+      type: raw.type as MarkdownCodeTokenType,
+    });
+  }
+  return out;
+}
+
+export function markdownClassifyLine(lineText: string): MarkdownLineInfo {
+  if (!ensureWasmReadyNonBlocking()) return DEFAULT_MARKDOWN_LINE_INFO;
+  const value = wasm_markdown_classify_line(lineText) as unknown;
+  return asMarkdownLineInfo(value) ?? DEFAULT_MARKDOWN_LINE_INFO;
+}
+
+export function markdownFindInlineTokens(lineText: string): MarkdownInlineToken[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  return asMarkdownInlineTokens(wasm_markdown_find_inline_tokens(lineText));
+}
+
+export function markdownTokenizeCodeLine(
+  lineText: string,
+  lang: string | null,
+): MarkdownCodeToken[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  return asMarkdownCodeTokens(wasm_markdown_tokenize_code_line(lineText, lang ?? undefined));
+}
+
+export function markdownIsCodeFence(lineText: string): boolean {
+  if (!ensureWasmReadyNonBlocking()) return false;
+  return wasm_markdown_is_code_fence(lineText);
+}
+
+export function markdownParseFenceLanguage(lineText: string): string | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return wasm_markdown_parse_fence_language(lineText) ?? null;
+}
+
+export function markdownAnalyzeLines(
+  lines: readonly string[],
+  start: { inCodeBlock: boolean; codeFenceLang: string | null },
+): MarkdownAnalyzeResult {
+  if (!ensureWasmReadyNonBlocking()) {
+    return {
+      lines: lines.map(() => ({
+        info: DEFAULT_MARKDOWN_LINE_INFO,
+        inCodeBlock: start.inCodeBlock,
+        codeFenceLang: start.codeFenceLang,
+        inlineTokens: [],
+        codeTokens: [],
+      })),
+      finalInCodeBlock: start.inCodeBlock,
+      finalCodeFenceLang: start.codeFenceLang,
+    };
+  }
+
+  const raw = wasm_markdown_analyze_lines(
+    [...lines],
+    start.inCodeBlock,
+    start.codeFenceLang ?? undefined,
+  ) as unknown;
+
+  if (typeof raw !== "object" || raw === null) {
+    return {
+      lines: [],
+      finalInCodeBlock: start.inCodeBlock,
+      finalCodeFenceLang: start.codeFenceLang,
+    };
+  }
+
+  const payload = raw as Partial<MarkdownAnalyzeResult>;
+  const outLines: MarkdownAnalyzedLine[] = [];
+  if (Array.isArray(payload.lines)) {
+    for (const line of payload.lines as unknown[]) {
+      if (typeof line !== "object" || line === null) continue;
+      const rawLine = line as Partial<MarkdownAnalyzedLine>;
+      const info = asMarkdownLineInfo(rawLine.info);
+      if (!info || typeof rawLine.inCodeBlock !== "boolean") continue;
+      outLines.push({
+        info,
+        inCodeBlock: rawLine.inCodeBlock,
+        codeFenceLang:
+          typeof rawLine.codeFenceLang === "string" ? rawLine.codeFenceLang : null,
+        inlineTokens: asMarkdownInlineTokens(rawLine.inlineTokens),
+        codeTokens: asMarkdownCodeTokens(rawLine.codeTokens),
+      });
+    }
+  }
+
+  return {
+    lines: outLines,
+    finalInCodeBlock:
+      typeof payload.finalInCodeBlock === "boolean"
+        ? payload.finalInCodeBlock
+        : start.inCodeBlock,
+    finalCodeFenceLang:
+      typeof payload.finalCodeFenceLang === "string" ? payload.finalCodeFenceLang : null,
+  };
 }
 
 export function calcFindSingleTableCell(lineText: string): CalcSegment | null {

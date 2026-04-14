@@ -4,6 +4,7 @@ pub use editor_core::calc_plan;
 pub use editor_core::command_catalog;
 pub use editor_core::context;
 pub use editor_core::format;
+pub use editor_core::markdown_tokens;
 pub use editor_core::operations;
 pub use editor_core::sum;
 pub use editor_core::text_rules;

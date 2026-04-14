@@ -1,64 +1,22 @@
-import { RangeSetBuilder, type Range, type Text } from "@codemirror/state";
+import { Annotation, RangeSetBuilder, type Range, type Text } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
 import type { VariableIndexEntry } from "../api.ts";
+import {
+  ensureWasmReady,
+  markdownAnalyzeLines,
+  markdownClassifyLine,
+  markdownFindInlineTokens,
+  markdownTokenizeCodeLine,
+  type MarkdownCodeToken as SharedCodeToken,
+  type MarkdownInlineToken as SharedInlineToken,
+  type MarkdownLineInfo as SharedMarkdownLineInfo,
+} from "./wasm.ts";
 
-type InlineTokenType =
-  | "strong"
-  | "emphasis"
-  | "strikethrough"
-  | "code"
-  | "code-marker"
-  | "link-text"
-  | "link-url"
-  | "link-marker";
-
-type CodeTokenType = "keyword" | "string" | "number" | "comment" | "function" | "type";
-
-interface InlineToken {
-  from: number;
-  to: number;
-  type: InlineTokenType;
-}
-
-interface CodeToken {
-  from: number;
-  to: number;
-  type: CodeTokenType;
-}
-
-interface ProtectedRange {
-  from: number;
-  to: number;
-}
-
-export interface MarkdownLineInfo {
-  headingLevel: number | null;
-  headingMarkerEnd: number | null;
-  quoteMarkerEnd: number | null;
-  listMarkerEnd: number | null;
-  checklistMarkerStart: number | null;
-  checklistMarkerEnd: number | null;
-  checklistContentStart: number | null;
-  checklistChecked: boolean;
-  isHorizontalRule: boolean;
-  isCodeFence: boolean;
-}
-
-const headingRe = /^(\s*)(#{1,6})\s+/;
-const quoteRe = /^(\s*>+)\s*/;
-const listRe = /^(\s*)(->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+/;
-const checklistRe = /^(\s*(?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(\[(?: |x|X)\])(\s+)/;
-const hrRe = /^\s*(([-*_])\s*){3,}$/;
-const fenceRe = /^\s*```/;
-
-const codeSpanRe = /(`+)([^`]+?)\1/g;
-const linkRe = /\[([^\]\n]+)\]\(([^)\n]+)\)/g;
-const strongRe = /(\*\*|__)(?=\S)(.+?)(?<=\S)\1/g;
-const strikeRe = /~~(?=\S)(.+?)(?<=\S)~~/g;
-const emStarRe = /(^|[^*])\*(?=\S)([^*\n]+?)(?<=\S)\*/g;
-const emUnderscoreRe = /(^|[^_])_(?=\S)([^_\n]+?)(?<=\S)_/g;
+type InlineToken = SharedInlineToken;
+type CodeToken = SharedCodeToken;
+export type MarkdownLineInfo = SharedMarkdownLineInfo;
 
 const decHeadingToken = Decoration.mark({ class: "md-token md-token-heading" });
 const decQuoteToken = Decoration.mark({ class: "md-token md-token-quote" });
@@ -103,411 +61,20 @@ const decRuleLine = lineClass("md-line md-hr");
 const decCodeFenceLine = lineClass("md-line md-code-fence");
 const decCodeBlockLine = lineClass("md-line md-code-block-line");
 
-function overlaps(ranges: ProtectedRange[], from: number, to: number): boolean {
-  return ranges.some((range) => from < range.to && to > range.from);
-}
-
-function protect(ranges: ProtectedRange[], from: number, to: number) {
-  if (to > from) {
-    ranges.push({ from, to });
-  }
-}
-
-function pushToken(tokens: InlineToken[], from: number, to: number, type: InlineTokenType) {
-  if (to > from) {
-    tokens.push({ from, to, type });
-  }
-}
-
 export function classifyMarkdownLine(text: string): MarkdownLineInfo {
-  const headingMatch = text.match(headingRe);
-  const quoteMatch = text.match(quoteRe);
-  const listMatch = text.match(listRe);
-  const checklistMatch = text.match(checklistRe);
-  const checklistPrefix = checklistMatch?.[1] ?? "";
-  const checklistBox = checklistMatch?.[2] ?? "";
-  const checklistSpacer = checklistMatch?.[3] ?? "";
-  const checklistMarkerStart = checklistMatch ? checklistPrefix.length : null;
-  const checklistMarkerEnd = checklistMatch
-    ? checklistPrefix.length + checklistBox.length
-    : null;
-  const checklistContentStart = checklistMatch
-    ? checklistPrefix.length + checklistBox.length + checklistSpacer.length
-    : null;
-  return {
-    headingLevel: headingMatch ? headingMatch[2].length : null,
-    headingMarkerEnd: headingMatch ? headingMatch[0].length : null,
-    quoteMarkerEnd: quoteMatch ? quoteMatch[0].length : null,
-    listMarkerEnd: listMatch ? listMatch[0].length : null,
-    checklistMarkerStart,
-    checklistMarkerEnd,
-    checklistContentStart,
-    checklistChecked: checklistMatch ? checklistBox.toLowerCase() === "[x]" : false,
-    isHorizontalRule: hrRe.test(text),
-    isCodeFence: fenceRe.test(text),
-  };
+  return markdownClassifyLine(text);
 }
 
 export function findInlineMarkdownTokens(text: string): InlineToken[] {
-  const tokens: InlineToken[] = [];
-  const protectedRanges: ProtectedRange[] = [];
-
-  for (const match of text.matchAll(codeSpanRe)) {
-    const start = match.index ?? 0;
-    const markerLen = match[1].length;
-    const end = start + match[0].length;
-    pushToken(tokens, start, start + markerLen, "code-marker");
-    pushToken(tokens, start + markerLen, end - markerLen, "code");
-    pushToken(tokens, end - markerLen, end, "code-marker");
-    protect(protectedRanges, start, end);
-  }
-
-  for (const match of text.matchAll(linkRe)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    if (overlaps(protectedRanges, start, end)) continue;
-
-    const textStart = start + 1;
-    const textEnd = textStart + match[1].length;
-    const urlStart = textEnd + 2;
-    const urlEnd = urlStart + match[2].length;
-
-    pushToken(tokens, start, start + 1, "link-marker");
-    pushToken(tokens, textStart, textEnd, "link-text");
-    pushToken(tokens, textEnd, textEnd + 2, "link-marker");
-    pushToken(tokens, urlStart, urlEnd, "link-url");
-    pushToken(tokens, urlEnd, end, "link-marker");
-    protect(protectedRanges, start, end);
-  }
-
-  for (const match of text.matchAll(strongRe)) {
-    const start = match.index ?? 0;
-    const markerLen = match[1].length;
-    const end = start + match[0].length;
-    if (overlaps(protectedRanges, start, end)) continue;
-
-    pushToken(tokens, start, start + markerLen, "code-marker");
-    pushToken(tokens, start + markerLen, end - markerLen, "strong");
-    pushToken(tokens, end - markerLen, end, "code-marker");
-    protect(protectedRanges, start, end);
-  }
-
-  for (const match of text.matchAll(strikeRe)) {
-    const start = match.index ?? 0;
-    const end = start + match[0].length;
-    if (overlaps(protectedRanges, start, end)) continue;
-
-    pushToken(tokens, start, start + 2, "code-marker");
-    pushToken(tokens, start + 2, end - 2, "strikethrough");
-    pushToken(tokens, end - 2, end, "code-marker");
-    protect(protectedRanges, start, end);
-  }
-
-  for (const match of text.matchAll(emStarRe)) {
-    const prefixLen = match[1].length;
-    const start = (match.index ?? 0) + prefixLen;
-    const end = start + match[0].length - prefixLen;
-    if (overlaps(protectedRanges, start, end)) continue;
-
-    pushToken(tokens, start, start + 1, "code-marker");
-    pushToken(tokens, start + 1, end - 1, "emphasis");
-    pushToken(tokens, end - 1, end, "code-marker");
-  }
-
-  for (const match of text.matchAll(emUnderscoreRe)) {
-    const prefixLen = match[1].length;
-    const start = (match.index ?? 0) + prefixLen;
-    const end = start + match[0].length - prefixLen;
-    if (overlaps(protectedRanges, start, end)) continue;
-
-    pushToken(tokens, start, start + 1, "code-marker");
-    pushToken(tokens, start + 1, end - 1, "emphasis");
-    pushToken(tokens, end - 1, end, "code-marker");
-  }
-
-  tokens.sort((a, b) => (a.from === b.from ? a.to - b.to : a.from - b.from));
-  return tokens;
-}
-
-const jsKeywords = new Set([
-  "const",
-  "let",
-  "var",
-  "function",
-  "return",
-  "if",
-  "else",
-  "for",
-  "while",
-  "switch",
-  "case",
-  "break",
-  "continue",
-  "import",
-  "export",
-  "from",
-  "class",
-  "extends",
-  "new",
-  "async",
-  "await",
-  "try",
-  "catch",
-  "finally",
-  "throw",
-  "typeof",
-  "instanceof",
-  "in",
-  "of",
-  "true",
-  "false",
-  "null",
-  "undefined",
-]);
-
-const rustKeywords = new Set([
-  "fn",
-  "let",
-  "mut",
-  "pub",
-  "struct",
-  "enum",
-  "impl",
-  "trait",
-  "use",
-  "mod",
-  "match",
-  "if",
-  "else",
-  "for",
-  "while",
-  "loop",
-  "return",
-  "self",
-  "Self",
-  "crate",
-  "super",
-  "as",
-  "where",
-  "const",
-  "static",
-  "true",
-  "false",
-]);
-
-const pythonKeywords = new Set([
-  "def",
-  "class",
-  "return",
-  "if",
-  "elif",
-  "else",
-  "for",
-  "while",
-  "try",
-  "except",
-  "finally",
-  "with",
-  "import",
-  "from",
-  "as",
-  "pass",
-  "break",
-  "continue",
-  "yield",
-  "lambda",
-  "True",
-  "False",
-  "None",
-]);
-
-const shellKeywords = new Set([
-  "if",
-  "then",
-  "else",
-  "fi",
-  "for",
-  "in",
-  "do",
-  "done",
-  "case",
-  "esac",
-  "while",
-  "function",
-  "export",
-  "local",
-]);
-
-const hashCommentLangs = new Set(["py", "python", "sh", "bash", "zsh", "yaml", "yml", "toml"]);
-const noCommentLangs = new Set(["json"]);
-
-function normalizeFenceLang(raw: string | null): string | null {
-  if (!raw) return null;
-  const value = raw.trim().toLowerCase();
-  if (!value) return null;
-  if (value === "typescript") return "ts";
-  if (value === "javascript") return "js";
-  if (value === "shell") return "sh";
-  if (value === "py") return "python";
-  if (value === "rs") return "rust";
-  if (value === "tsx") return "ts";
-  if (value === "jsx") return "js";
-  return value;
-}
-
-function parseFenceLanguage(lineText: string): string | null {
-  const match = lineText.match(/^\s*```([A-Za-z0-9_+-]+)/);
-  return normalizeFenceLang(match?.[1] ?? null);
-}
-
-function keywordSetForLang(lang: string | null): Set<string> {
-  if (!lang) return jsKeywords;
-  if (lang === "ts" || lang === "js" || lang === "go" || lang === "java" || lang === "c") {
-    return jsKeywords;
-  }
-  if (lang === "rust") return rustKeywords;
-  if (lang === "python") return pythonKeywords;
-  if (lang === "sh" || lang === "bash" || lang === "zsh") return shellKeywords;
-  return jsKeywords;
-}
-
-function isIdentifierChar(ch: string): boolean {
-  return /[A-Za-z0-9_]/.test(ch);
-}
-
-function nextNonWhitespaceChar(text: string, from: number): string | null {
-  let i = from;
-  while (i < text.length && /\s/.test(text[i] ?? "")) i++;
-  return i < text.length ? (text[i] ?? null) : null;
-}
-
-function pushCodeToken(tokens: CodeToken[], from: number, to: number, type: CodeTokenType): void {
-  if (to > from) {
-    tokens.push({ from, to, type });
-  }
-}
-
-function scanStringTokens(text: string, tokens: CodeToken[], protectedRanges: ProtectedRange[]) {
-  const quoteSet = new Set(["'", '"', "`"]);
-  let i = 0;
-  while (i < text.length) {
-    const ch = text[i] ?? "";
-    if (!quoteSet.has(ch)) {
-      i++;
-      continue;
-    }
-
-    const quote = ch;
-    const start = i;
-    i++;
-    let escaped = false;
-    while (i < text.length) {
-      const next = text[i] ?? "";
-      if (escaped) {
-        escaped = false;
-        i++;
-        continue;
-      }
-      if (next === "\\") {
-        escaped = true;
-        i++;
-        continue;
-      }
-      if (next === quote) {
-        i++;
-        break;
-      }
-      i++;
-    }
-
-    pushCodeToken(tokens, start, i, "string");
-    protect(protectedRanges, start, i);
-  }
-}
-
-function findCommentStart(text: string, lang: string | null, protectedRanges: ProtectedRange[]): number {
-  if (lang && noCommentLangs.has(lang)) return -1;
-  if (lang && hashCommentLangs.has(lang)) {
-    for (let i = 0; i < text.length; i++) {
-      if (text[i] === "#" && !overlaps(protectedRanges, i, i + 1)) return i;
-    }
-    return -1;
-  }
-
-  for (let i = 0; i < text.length - 1; i++) {
-    if (text[i] === "/" && text[i + 1] === "/" && !overlaps(protectedRanges, i, i + 2)) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-export function tokenizeCodeLine(text: string, lang: string | null): CodeToken[] {
-  const normalizedLang = normalizeFenceLang(lang);
-  const keywords = keywordSetForLang(normalizedLang);
-  const tokens: CodeToken[] = [];
-  const protectedRanges: ProtectedRange[] = [];
-
-  scanStringTokens(text, tokens, protectedRanges);
-
-  const commentStart = findCommentStart(text, normalizedLang, protectedRanges);
-  if (commentStart >= 0) {
-    pushCodeToken(tokens, commentStart, text.length, "comment");
-    protect(protectedRanges, commentStart, text.length);
-  }
-
-  let i = 0;
-  while (i < text.length) {
-    const ch = text[i] ?? "";
-    if (overlaps(protectedRanges, i, i + 1)) {
-      i++;
-      continue;
-    }
-
-    if (/[A-Za-z_]/.test(ch)) {
-      const start = i;
-      i++;
-      while (i < text.length && isIdentifierChar(text[i] ?? "")) i++;
-      const word = text.slice(start, i);
-      if (keywords.has(word)) {
-        pushCodeToken(tokens, start, i, "keyword");
-      } else {
-        const next = nextNonWhitespaceChar(text, i);
-        if (next === "(" || next === "!") {
-          pushCodeToken(tokens, start, i, "function");
-        } else if (/^[A-Z][A-Za-z0-9_]*$/.test(word)) {
-          pushCodeToken(tokens, start, i, "type");
-        }
-      }
-      continue;
-    }
-
-    if (/[0-9]/.test(ch)) {
-      const start = i;
-      i++;
-      while (i < text.length && /[0-9_]/.test(text[i] ?? "")) i++;
-      if (text[i] === "." && /[0-9]/.test(text[i + 1] ?? "")) {
-        i++;
-        while (i < text.length && /[0-9_]/.test(text[i] ?? "")) i++;
-      }
-      pushCodeToken(tokens, start, i, "number");
-      continue;
-    }
-
-    i++;
-  }
-
-  tokens.sort((a, b) => (a.from === b.from ? a.to - b.to : a.from - b.from));
-  return tokens;
+  return markdownFindInlineTokens(text);
 }
 
 function addCodeSyntaxDecorations(
   builder: RangeSetBuilder<Decoration>,
   lineFrom: number,
-  text: string,
-  lang: string | null,
+  tokens: readonly CodeToken[],
 ) {
-  for (const token of tokenizeCodeLine(text, lang)) {
+  for (const token of tokens) {
     const from = lineFrom + token.from;
     const to = lineFrom + token.to;
     if (token.type === "keyword") builder.add(from, to, decCodeKeyword);
@@ -519,8 +86,16 @@ function addCodeSyntaxDecorations(
   }
 }
 
-function addInlineDecorations(builder: RangeSetBuilder<Decoration>, lineFrom: number, text: string) {
-  for (const token of findInlineMarkdownTokens(text)) {
+export function tokenizeCodeLine(text: string, lang: string | null): CodeToken[] {
+  return markdownTokenizeCodeLine(text, lang);
+}
+
+function addInlineDecorations(
+  builder: RangeSetBuilder<Decoration>,
+  lineFrom: number,
+  tokens: readonly InlineToken[],
+) {
+  for (const token of tokens) {
     const from = lineFrom + token.from;
     const to = lineFrom + token.to;
     switch (token.type) {
@@ -609,35 +184,6 @@ export function findVariableNameRanges(
   return createVariableMatcher(variables).findAll(text);
 }
 
-function advanceFenceStateInLine(
-  text: string,
-  state: { inCodeBlock: boolean; codeFenceLang: string | null },
-): void {
-  if (!fenceRe.test(text)) return;
-  if (!state.inCodeBlock) {
-    state.codeFenceLang = parseFenceLanguage(text);
-    state.inCodeBlock = true;
-  } else {
-    state.inCodeBlock = false;
-    state.codeFenceLang = null;
-  }
-}
-
-function fastForwardFenceState(
-  doc: Text,
-  fromLine: number,
-  toLine: number,
-  state: { inCodeBlock: boolean; codeFenceLang: string | null },
-): void {
-  if (fromLine > toLine) return;
-  const iter = doc.iterLines(fromLine, toLine + 1);
-  iter.next();
-  while (!iter.done) {
-    advanceFenceStateInLine(iter.value, state);
-    iter.next();
-  }
-}
-
 export interface VisibleLineSpan {
   fromLine: number;
   toLine: number;
@@ -656,33 +202,42 @@ export function buildMarkdownDecorationsForSpans(
   let nextLineToProcess = 1;
 
   for (const span of spans) {
-    fastForwardFenceState(doc, nextLineToProcess, span.fromLine - 1, fenceState);
+    if (nextLineToProcess > span.toLine) {
+      nextLineToProcess = span.toLine + 1;
+      continue;
+    }
 
-    for (let lineNo = span.fromLine; lineNo <= span.toLine; lineNo++) {
+    const chunkLines: string[] = [];
+    for (let lineNo = nextLineToProcess; lineNo <= span.toLine; lineNo++) {
+      chunkLines.push(doc.line(lineNo).text);
+    }
+    const analysis = markdownAnalyzeLines(chunkLines, fenceState);
+
+    const offset = span.fromLine - nextLineToProcess;
+    for (let idx = Math.max(0, offset); idx < analysis.lines.length; idx++) {
+      const lineNo = nextLineToProcess + idx;
+      if (lineNo > span.toLine) break;
       const line = doc.line(lineNo);
-      const info = classifyMarkdownLine(line.text);
+      const lineAnalysis = analysis.lines[idx];
+      if (!lineAnalysis) continue;
+      const info = lineAnalysis.info;
 
       if (info.isCodeFence) {
-        if (!fenceState.inCodeBlock) {
-          fenceState.codeFenceLang = parseFenceLanguage(line.text);
-        }
         builder.add(line.from, line.from, decCodeFenceLine);
         builder.add(line.from, line.to, decFenceToken);
-        fenceState.inCodeBlock = !fenceState.inCodeBlock;
-        if (!fenceState.inCodeBlock) {
-          fenceState.codeFenceLang = null;
-        }
         continue;
       }
 
-      if (fenceState.inCodeBlock) {
+      if (lineAnalysis.inCodeBlock) {
         builder.add(line.from, line.from, decCodeBlockLine);
-        addCodeSyntaxDecorations(builder, line.from, line.text, fenceState.codeFenceLang);
+        addCodeSyntaxDecorations(builder, line.from, lineAnalysis.codeTokens);
         continue;
       }
 
-      decorateContentLine(builder, line, info, matcher);
+      decorateContentLine(builder, line, info, matcher, lineAnalysis.inlineTokens);
     }
+    fenceState.inCodeBlock = analysis.finalInCodeBlock;
+    fenceState.codeFenceLang = analysis.finalCodeFenceLang;
     nextLineToProcess = span.toLine + 1;
   }
 
@@ -704,6 +259,7 @@ function decorateContentLine(
   line: { from: number; to: number; text: string },
   info: MarkdownLineInfo,
   matcher: VariableMatcher,
+  inlineTokens: readonly InlineToken[],
 ): void {
   if (info.headingLevel) {
     builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
@@ -755,7 +311,7 @@ function decorateContentLine(
     builder.add(line.from + range.from, line.from + range.to, decVariable);
   }
 
-  addInlineDecorations(builder, line.from, line.text);
+  addInlineDecorations(builder, line.from, inlineTokens);
 }
 
 function extractDecorationRanges(
@@ -774,15 +330,35 @@ function extractDecorationRanges(
   return out;
 }
 
+const markdownWasmReadyAnnotation = Annotation.define<boolean>();
+
 const markdownRichPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
+    private destroyed = false;
 
     constructor(view: EditorView) {
       this.decorations = this.safeBuild(view);
+      void ensureWasmReady()
+        .then(() => {
+          if (this.destroyed) return;
+          view.dispatch({ annotations: markdownWasmReadyAnnotation.of(true) });
+        })
+        .catch((error) => {
+          console.error("Markdown wasm init failed:", error);
+        });
     }
 
     update(update: ViewUpdate) {
+      if (
+        update.transactions.some((transaction) =>
+          transaction.annotation(markdownWasmReadyAnnotation),
+        )
+      ) {
+        this.decorations = this.safeBuild(update.view);
+        return;
+      }
+
       const prevVars = update.startState.field(variableIndexField, false) ?? [];
       const nextVars = update.state.field(variableIndexField, false) ?? [];
       const varsChanged = prevVars !== nextVars;
@@ -915,6 +491,10 @@ const markdownRichPlugin = ViewPlugin.fromClass(
         console.error("Markdown decoration build failed:", error);
         return Decoration.none;
       }
+    }
+
+    destroy() {
+      this.destroyed = true;
     }
   },
   {

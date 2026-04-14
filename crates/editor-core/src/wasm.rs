@@ -7,6 +7,9 @@ use crate::calc_plan::{
 };
 use crate::command_catalog;
 use crate::format::format_markdown;
+use crate::markdown_tokens::{
+    self, CodeToken, InlineToken, MarkdownAnalyzeResult, MarkdownAnalyzedLine, MarkdownLineInfo,
+};
 use crate::text_rules::{
     rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules, run_enter_rules,
     run_tab_rules, run_table_cell_navigation_rules, TabRuleOptions, TextRuleOptions,
@@ -249,6 +252,171 @@ fn calc_refresh_plan_to_js(plan: &CalcRefreshPlan) -> JsValue {
     let _ = set_prop(&out, "prune", prune.into());
     let _ = set_prop(&out, "syncedLines", synced.into());
     out.into()
+}
+
+fn markdown_line_info_to_js(info: &MarkdownLineInfo) -> JsValue {
+    let out = Object::new();
+    let heading_level = info
+        .heading_level
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+    let heading_marker_end = info
+        .heading_marker_end
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+    let quote_marker_end = info
+        .quote_marker_end
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+    let list_marker_end = info
+        .list_marker_end
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+    let checklist_marker_start = info
+        .checklist_marker_start
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+    let checklist_marker_end = info
+        .checklist_marker_end
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+    let checklist_content_start = info
+        .checklist_content_start
+        .map(|v| JsValue::from_f64(v as f64))
+        .unwrap_or(JsValue::NULL);
+
+    let _ = set_prop(&out, "headingLevel", heading_level);
+    let _ = set_prop(&out, "headingMarkerEnd", heading_marker_end);
+    let _ = set_prop(&out, "quoteMarkerEnd", quote_marker_end);
+    let _ = set_prop(&out, "listMarkerEnd", list_marker_end);
+    let _ = set_prop(&out, "checklistMarkerStart", checklist_marker_start);
+    let _ = set_prop(&out, "checklistMarkerEnd", checklist_marker_end);
+    let _ = set_prop(&out, "checklistContentStart", checklist_content_start);
+    let _ = set_prop(
+        &out,
+        "checklistChecked",
+        JsValue::from_bool(info.checklist_checked),
+    );
+    let _ = set_prop(
+        &out,
+        "isHorizontalRule",
+        JsValue::from_bool(info.is_horizontal_rule),
+    );
+    let _ = set_prop(&out, "isCodeFence", JsValue::from_bool(info.is_code_fence));
+    out.into()
+}
+
+fn inline_token_to_js(token: &InlineToken) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "from", JsValue::from_f64(token.from as f64));
+    let _ = set_prop(&out, "to", JsValue::from_f64(token.to as f64));
+    let _ = set_prop(&out, "type", JsValue::from_str(token.kind.as_str()));
+    out.into()
+}
+
+fn code_token_to_js(token: &CodeToken) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "from", JsValue::from_f64(token.from as f64));
+    let _ = set_prop(&out, "to", JsValue::from_f64(token.to as f64));
+    let _ = set_prop(&out, "type", JsValue::from_str(token.kind.as_str()));
+    out.into()
+}
+
+fn inline_tokens_to_js(tokens: &[InlineToken]) -> JsValue {
+    let out = Array::new();
+    for token in tokens {
+        out.push(&inline_token_to_js(token));
+    }
+    out.into()
+}
+
+fn code_tokens_to_js(tokens: &[CodeToken]) -> JsValue {
+    let out = Array::new();
+    for token in tokens {
+        out.push(&code_token_to_js(token));
+    }
+    out.into()
+}
+
+fn markdown_analyzed_line_to_js(line: &MarkdownAnalyzedLine) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "info", markdown_line_info_to_js(&line.info));
+    let _ = set_prop(&out, "inCodeBlock", JsValue::from_bool(line.in_code_block));
+    let _ = set_prop(
+        &out,
+        "codeFenceLang",
+        line.code_fence_lang
+            .as_deref()
+            .map(JsValue::from_str)
+            .unwrap_or(JsValue::NULL),
+    );
+    let _ = set_prop(&out, "inlineTokens", inline_tokens_to_js(&line.inline_tokens));
+    let _ = set_prop(&out, "codeTokens", code_tokens_to_js(&line.code_tokens));
+    out.into()
+}
+
+fn markdown_analyze_result_to_js(result: &MarkdownAnalyzeResult) -> JsValue {
+    let out = Object::new();
+    let lines = Array::new();
+    for line in &result.lines {
+        lines.push(&markdown_analyzed_line_to_js(line));
+    }
+    let _ = set_prop(&out, "lines", lines.into());
+    let _ = set_prop(
+        &out,
+        "finalInCodeBlock",
+        JsValue::from_bool(result.final_in_code_block),
+    );
+    let _ = set_prop(
+        &out,
+        "finalCodeFenceLang",
+        result
+            .final_code_fence_lang
+            .as_deref()
+            .map(JsValue::from_str)
+            .unwrap_or(JsValue::NULL),
+    );
+    out.into()
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_classify_line(line_text: &str) -> JsValue {
+    markdown_line_info_to_js(&markdown_tokens::classify_markdown_line(line_text))
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_find_inline_tokens(line_text: &str) -> JsValue {
+    inline_tokens_to_js(&markdown_tokens::tokenize_inline_markdown(line_text))
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_tokenize_code_line(line_text: &str, lang: Option<String>) -> JsValue {
+    code_tokens_to_js(&markdown_tokens::tokenize_code_line(line_text, lang.as_deref()))
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_is_code_fence(line_text: &str) -> bool {
+    markdown_tokens::is_code_fence(line_text)
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_parse_fence_language(line_text: &str) -> Option<String> {
+    markdown_tokens::parse_fence_language(line_text)
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_analyze_lines(
+    lines: JsValue,
+    start_in_code_block: bool,
+    start_code_fence_lang: Option<String>,
+) -> Option<JsValue> {
+    let lines = js_strings(lines)?;
+    let result = markdown_tokens::analyze_lines(
+        &lines,
+        start_in_code_block,
+        start_code_fence_lang.as_deref(),
+    );
+    Some(markdown_analyze_result_to_js(&result))
 }
 
 #[wasm_bindgen]

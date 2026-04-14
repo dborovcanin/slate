@@ -1,5 +1,7 @@
 use std::fmt::Write as _;
 
+use crate::editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType, MarkdownLineInfo};
+
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
 pub const DIM: &str = "\x1b[2m";
@@ -72,30 +74,26 @@ impl RenderContext {
 
     /// Skip ahead through `lines` without rendering — just track code fence state.
     pub fn advance_lines(&mut self, lines: &[String]) {
+        let mut state = markdown_tokens::FenceState {
+            in_code_block: self.in_code_block,
+            code_fence_lang: self.code_fence_lang.clone(),
+        };
         for line in lines {
-            if is_code_fence(line) {
-                if self.in_code_block {
-                    self.in_code_block = false;
-                    self.code_fence_lang = None;
-                } else {
-                    self.in_code_block = true;
-                    self.code_fence_lang = fence_language(line);
-                }
-            }
+            markdown_tokens::advance_fence_state(&mut state, line);
         }
+        self.in_code_block = state.in_code_block;
+        self.code_fence_lang = state.code_fence_lang;
     }
 
     #[cfg(test)]
     pub fn advance_line(&mut self, text: &str) {
-        if is_code_fence(text) {
-            if self.in_code_block {
-                self.in_code_block = false;
-                self.code_fence_lang = None;
-            } else {
-                self.in_code_block = true;
-                self.code_fence_lang = fence_language(text);
-            }
-        }
+        let mut state = markdown_tokens::FenceState {
+            in_code_block: self.in_code_block,
+            code_fence_lang: self.code_fence_lang.clone(),
+        };
+        markdown_tokens::advance_fence_state(&mut state, text);
+        self.in_code_block = state.in_code_block;
+        self.code_fence_lang = state.code_fence_lang;
     }
 
     /// Render a single line with ANSI markdown formatting.
@@ -131,24 +129,30 @@ impl RenderContext {
         let len = chars.len();
         let mut styles = vec![CharStyle::default(); len];
 
-        let is_fence = is_code_fence(text);
+        let info = markdown_tokens::classify_markdown_line(text);
 
-        if is_fence {
+        if info.is_code_fence {
             for s in &mut styles {
                 s.dim = true;
             }
-            if self.in_code_block {
-                self.in_code_block = false;
-                self.code_fence_lang = None;
-            } else {
-                self.in_code_block = true;
-                self.code_fence_lang = fence_language(text);
-            }
+            let mut state = markdown_tokens::FenceState {
+                in_code_block: self.in_code_block,
+                code_fence_lang: self.code_fence_lang.clone(),
+            };
+            markdown_tokens::advance_fence_state(&mut state, text);
+            self.in_code_block = state.in_code_block;
+            self.code_fence_lang = state.code_fence_lang;
         } else if self.in_code_block {
-            apply_code_block_styles(&chars, &mut styles, self.code_fence_lang.as_deref());
+            for style in &mut styles {
+                style.dim = true;
+                style.fg = None;
+            }
+            let code_tokens = markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
+            apply_code_token_styles(&code_tokens, &mut styles);
         } else {
-            apply_line_styles(&chars, &mut styles);
-            apply_inline_styles(&chars, &mut styles);
+            apply_line_styles_from_info(&info, &mut styles);
+            let inline_tokens = markdown_tokens::tokenize_inline_markdown(text);
+            apply_inline_token_styles(&inline_tokens, &mut styles);
             apply_variable_styles(&chars, &mut styles, variable_names);
         }
 
@@ -279,641 +283,145 @@ fn apply_variable_styles(chars: &[char], styles: &mut [CharStyle], variable_name
     }
 }
 
+#[cfg(test)]
 fn is_code_fence(text: &str) -> bool {
-    text.trim_start().starts_with("```")
+    markdown_tokens::is_code_fence(text)
 }
 
-fn normalize_fence_lang(raw: &str) -> Option<String> {
-    let value = raw.trim().to_ascii_lowercase();
-    if value.is_empty() {
-        return None;
-    }
-    let normalized = match value.as_str() {
-        "typescript" | "tsx" => "ts",
-        "javascript" | "jsx" => "js",
-        "shell" | "bash" | "zsh" => "sh",
-        "py" => "python",
-        "rs" => "rust",
-        other => other,
-    };
-    Some(normalized.to_string())
-}
-
+#[cfg(test)]
 fn fence_language(text: &str) -> Option<String> {
-    let trimmed = text.trim_start();
-    if !trimmed.starts_with("```") {
-        return None;
-    }
-    let rest = trimmed[3..].trim_start();
-    if rest.is_empty() {
-        return None;
-    }
-    let lang: String = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '+' | '-'))
-        .collect();
-    if lang.is_empty() {
-        return None;
-    }
-    normalize_fence_lang(&lang)
+    markdown_tokens::parse_fence_language(text)
 }
 
-fn is_ident_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_'
-}
-
-fn next_non_whitespace_char(chars: &[char], from: usize) -> Option<char> {
-    let mut idx = from;
-    while idx < chars.len() && chars[idx].is_ascii_whitespace() {
-        idx += 1;
-    }
-    chars.get(idx).copied()
-}
-
-fn keyword_list(lang: Option<&str>) -> &'static [&'static str] {
-    const JS: &[&str] = &[
-        "const",
-        "let",
-        "var",
-        "function",
-        "return",
-        "if",
-        "else",
-        "for",
-        "while",
-        "switch",
-        "case",
-        "break",
-        "continue",
-        "import",
-        "export",
-        "from",
-        "class",
-        "extends",
-        "new",
-        "async",
-        "await",
-        "try",
-        "catch",
-        "finally",
-        "throw",
-        "true",
-        "false",
-        "null",
-        "undefined",
-    ];
-    const RUST: &[&str] = &[
-        "fn", "let", "mut", "pub", "struct", "enum", "impl", "trait", "use", "mod", "match", "if",
-        "else", "for", "while", "loop", "return", "self", "Self", "crate", "super", "where",
-        "const", "static", "true", "false",
-    ];
-    const PY: &[&str] = &[
-        "def", "class", "return", "if", "elif", "else", "for", "while", "try", "except", "finally",
-        "with", "import", "from", "as", "break", "continue", "yield", "lambda", "True", "False",
-        "None",
-    ];
-    const SH: &[&str] = &[
-        "if", "then", "else", "fi", "for", "in", "do", "done", "case", "esac", "while", "function",
-        "export", "local",
-    ];
-
-    match lang {
-        Some("rust") => RUST,
-        Some("python") => PY,
-        Some("sh") => SH,
-        Some("ts") | Some("js") | Some("go") | Some("java") | Some("c") => JS,
-        _ => JS,
-    }
-}
-
-fn comment_mode(lang: Option<&str>) -> &'static str {
-    match lang {
-        Some("json") => "none",
-        Some("python") | Some("sh") | Some("yaml") | Some("yml") | Some("toml") => "hash",
-        _ => "slash",
-    }
-}
-
-fn apply_style_range(
-    styles: &mut [CharStyle],
-    protected: &mut [bool],
-    from: usize,
-    to: usize,
-    fg: u8,
-    dim: bool,
-) {
-    let end = to.min(styles.len());
-    for i in from.min(end)..end {
-        styles[i].fg = Some(fg);
-        styles[i].dim = dim;
-        protected[i] = true;
-    }
-}
-
-fn apply_code_block_styles(chars: &[char], styles: &mut [CharStyle], lang: Option<&str>) {
-    for style in styles.iter_mut() {
-        style.dim = true;
-        style.fg = None;
-    }
-    if chars.is_empty() {
-        return;
-    }
-
-    let mut protected = vec![false; chars.len()];
-    let mut i = 0;
-    while i < chars.len() {
-        let ch = chars[i];
-        if !matches!(ch, '"' | '\'' | '`') {
-            i += 1;
-            continue;
-        }
-        let quote = ch;
-        let start = i;
-        i += 1;
-        let mut escaped = false;
-        while i < chars.len() {
-            let current = chars[i];
-            if escaped {
-                escaped = false;
-                i += 1;
-                continue;
-            }
-            if current == '\\' {
-                escaped = true;
-                i += 1;
-                continue;
-            }
-            if current == quote {
-                i += 1;
-                break;
-            }
-            i += 1;
-        }
-        apply_style_range(styles, &mut protected, start, i, FG_CODE_STRING, false);
-    }
-
-    match comment_mode(lang) {
-        "hash" => {
-            for idx in 0..chars.len() {
-                if chars[idx] == '#' && !protected[idx] {
-                    apply_style_range(
-                        styles,
-                        &mut protected,
-                        idx,
-                        chars.len(),
-                        FG_CODE_COMMENT,
-                        true,
-                    );
-                    break;
-                }
-            }
-        }
-        "slash" => {
-            for idx in 0..chars.len().saturating_sub(1) {
-                if chars[idx] == '/'
-                    && chars[idx + 1] == '/'
-                    && !protected[idx]
-                    && !protected[idx + 1]
-                {
-                    apply_style_range(
-                        styles,
-                        &mut protected,
-                        idx,
-                        chars.len(),
-                        FG_CODE_COMMENT,
-                        true,
-                    );
-                    break;
-                }
-            }
-        }
-        _ => {}
-    }
-
-    let keywords = keyword_list(lang);
-    let mut pos = 0;
-    while pos < chars.len() {
-        if protected[pos] {
-            pos += 1;
-            continue;
-        }
-
-        let ch = chars[pos];
-        if ch.is_ascii_alphabetic() || ch == '_' {
-            let start = pos;
-            pos += 1;
-            while pos < chars.len() && is_ident_char(chars[pos]) {
-                pos += 1;
-            }
-            if !protected[start..pos].iter().any(|&v| v) {
-                let word: String = chars[start..pos].iter().collect();
-                let color = if keywords.contains(&word.as_str()) {
-                    Some(FG_CODE_KEYWORD)
-                } else if next_non_whitespace_char(chars, pos)
-                    .is_some_and(|ch| ch == '(' || ch == '!')
-                {
-                    Some(FG_CODE_FUNCTION)
-                } else if word
-                    .chars()
-                    .next()
-                    .is_some_and(|ch| ch.is_ascii_uppercase())
-                {
-                    Some(FG_CODE_TYPE)
-                } else {
-                    None
-                };
-                if let Some(color) = color {
-                    for idx in start..pos {
-                        styles[idx].fg = Some(color);
-                        styles[idx].dim = false;
-                    }
-                }
-            }
-            continue;
-        }
-
-        if ch.is_ascii_digit() {
-            let prev_is_ident = pos > 0 && is_ident_char(chars[pos - 1]);
-            if prev_is_ident {
-                pos += 1;
-                continue;
-            }
-            let start = pos;
-            pos += 1;
-            while pos < chars.len() && (chars[pos].is_ascii_digit() || chars[pos] == '_') {
-                pos += 1;
-            }
-            if pos + 1 < chars.len() && chars[pos] == '.' && chars[pos + 1].is_ascii_digit() {
-                pos += 1;
-                while pos < chars.len() && (chars[pos].is_ascii_digit() || chars[pos] == '_') {
-                    pos += 1;
-                }
-            }
-            if !protected[start..pos].iter().any(|&v| v) {
-                for idx in start..pos {
-                    styles[idx].fg = Some(FG_CODE_NUMBER);
-                    styles[idx].dim = false;
-                }
-            }
-            continue;
-        }
-
-        pos += 1;
-    }
-}
-
-fn apply_line_styles(chars: &[char], styles: &mut [CharStyle]) {
-    let text: String = chars.iter().collect();
-
-    if let Some((_, marker_end)) = heading_marker_end(&text) {
-        for (i, s) in styles.iter_mut().enumerate() {
-            if i < marker_end.min(chars.len()) {
-                s.dim = true;
-            } else {
-                s.bold = true;
-            }
-        }
-        return;
-    }
-
-    if let Some(marker_end) = quote_marker_end(&text) {
-        for (i, s) in styles.iter_mut().enumerate() {
-            if i < marker_end {
-                s.dim = true;
-            } else {
-                s.italic = true;
-            }
-        }
-        return;
-    }
-
-    if is_horizontal_rule(&text) {
-        for s in styles.iter_mut() {
-            s.dim = true;
-        }
-        return;
-    }
-
-    if let Some((marker_end, checked)) = checklist_marker_end(&text) {
-        for s in styles.iter_mut().take(marker_end.min(chars.len())) {
-            s.dim = true;
-        }
-        if checked {
-            for s in styles.iter_mut().skip(marker_end) {
-                s.strikethrough = true;
-                s.dim = true;
-            }
-        }
-        return;
-    }
-
-    if let Some(marker_end) = list_marker_end(&text) {
-        for s in styles.iter_mut().take(marker_end.min(chars.len())) {
-            s.dim = true;
-        }
-    }
-}
-
+#[cfg(test)]
 fn heading_marker_end(text: &str) -> Option<(usize, usize)> {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && bytes[i] == b' ' {
-        i += 1;
-    }
-    let mut level = 0;
-    while i < bytes.len() && level < 6 && bytes[i] == b'#' {
-        level += 1;
-        i += 1;
-    }
-    if level > 0 && i < bytes.len() && bytes[i] == b' ' {
-        while i < bytes.len() && bytes[i] == b' ' {
-            i += 1;
-        }
-        Some((level, i))
-    } else {
-        None
-    }
+    let info = markdown_tokens::classify_markdown_line(text);
+    Some((info.heading_level?, info.heading_marker_end?))
 }
 
-fn quote_marker_end(text: &str) -> Option<usize> {
-    let trimmed = text.trim_start();
-    if !trimmed.starts_with('>') {
-        return None;
-    }
-    let leading = text.len() - trimmed.len();
-    let bytes = text.as_bytes();
-    let mut i = leading;
-    while i < bytes.len() && bytes[i] == b'>' {
-        i += 1;
-    }
-    if i < bytes.len() && bytes[i] == b' ' {
-        Some(i + 1)
-    } else {
-        Some(i)
-    }
-}
-
+#[cfg(test)]
 fn is_horizontal_rule(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.len() < 3 {
-        return false;
-    }
-    let first = match trimmed.chars().find(|c| !c.is_whitespace()) {
-        Some(c @ ('-' | '*' | '_')) => c,
-        _ => return false,
-    };
-    let count = trimmed.chars().filter(|&c| c == first).count();
-    let all_valid = trimmed.chars().all(|c| c == first || c.is_whitespace());
-    count >= 3 && all_valid
+    markdown_tokens::is_horizontal_rule(text)
 }
 
+#[cfg(test)]
 pub fn list_marker_end(text: &str) -> Option<usize> {
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() && bytes[i] == b' ' {
-        i += 1;
-    }
-    if i >= bytes.len() {
-        return None;
-    }
-
-    let mut marker_end = i;
-    while marker_end < bytes.len() && !bytes[marker_end].is_ascii_whitespace() {
-        marker_end += 1;
-    }
-    if marker_end == i || marker_end >= bytes.len() || !bytes[marker_end].is_ascii_whitespace() {
-        return None;
-    }
-
-    let marker = &text[i..marker_end];
-    let is_digits = |segment: &str| {
-        !segment.is_empty() && segment.as_bytes().iter().all(|b| b.is_ascii_digit())
-    };
-    let is_ordered = if let Some(stripped) = marker.strip_suffix('.') {
-        is_digits(stripped) || (stripped.contains('.') && stripped.split('.').all(is_digits))
-    } else {
-        marker.contains('.') && marker.split('.').all(is_digits)
-    };
-    if !matches!(marker, "-" | "*" | "+" | "->") && !is_ordered {
-        return None;
-    }
-
-    while marker_end < bytes.len() && bytes[marker_end].is_ascii_whitespace() {
-        marker_end += 1;
-    }
-    Some(marker_end)
+    markdown_tokens::list_marker_end(text)
 }
 
-pub fn checklist_marker_end(text: &str) -> Option<(usize, bool)> {
-    if let Some(list_end) = list_marker_end(text) {
-        let rest = &text[list_end..];
-        let bytes = rest.as_bytes();
-        if bytes.len() >= 3 && bytes[0] == b'[' && bytes[2] == b']' {
-            let ch = bytes[1];
-            if ch == b' ' || ch == b'x' || ch == b'X' {
-                let checked = ch == b'x' || ch == b'X';
-                let mut end = list_end + 3;
-                while end < text.len() && text.as_bytes()[end] == b' ' {
-                    end += 1;
-                }
-                return Some((end, checked));
+fn apply_line_styles_from_info(info: &MarkdownLineInfo, styles: &mut [CharStyle]) {
+    let len = styles.len();
+
+    if let (Some(level), Some(marker_end)) = (info.heading_level, info.heading_marker_end) {
+        let _ = level;
+        for (idx, style) in styles.iter_mut().enumerate() {
+            if idx < marker_end.min(len) {
+                style.dim = true;
+            } else {
+                style.bold = true;
             }
         }
-    }
-    None
-}
-
-// --- Inline markdown scanning ---
-
-fn apply_inline_styles(chars: &[char], styles: &mut [CharStyle]) {
-    let len = chars.len();
-    if len == 0 {
         return;
     }
-    let mut claimed = vec![false; len];
 
-    scan_code_spans(chars, styles, &mut claimed);
-    scan_paired(chars, styles, &mut claimed, '*', 2, |s| s.bold = true);
-    scan_paired(chars, styles, &mut claimed, '_', 2, |s| s.bold = true);
-    scan_paired(chars, styles, &mut claimed, '~', 2, |s| {
-        s.strikethrough = true
-    });
-    scan_single_em(chars, styles, &claimed, '*');
-    scan_single_em(chars, styles, &claimed, '_');
-}
-
-fn scan_code_spans(chars: &[char], styles: &mut [CharStyle], claimed: &mut [bool]) {
-    let len = chars.len();
-    let mut i = 0;
-    while i < len {
-        if claimed[i] || chars[i] != '`' {
-            i += 1;
-            continue;
-        }
-        let open = i;
-        let mut bt = 0;
-        while i < len && chars[i] == '`' {
-            bt += 1;
-            i += 1;
-        }
-        if let Some(close) = find_backtick_close(chars, i, bt) {
-            for k in open..close + bt {
-                if k < len {
-                    styles[k].dim = true;
-                    claimed[k] = true;
-                }
+    if let Some(marker_end) = info.quote_marker_end {
+        for (idx, style) in styles.iter_mut().enumerate() {
+            if idx < marker_end.min(len) {
+                style.dim = true;
+            } else {
+                style.italic = true;
             }
-            i = close + bt;
         }
-    }
-}
-
-fn find_backtick_close(chars: &[char], from: usize, count: usize) -> Option<usize> {
-    let len = chars.len();
-    let mut i = from;
-    while i + count <= len {
-        if chars[i] == '`' {
-            let start = i;
-            let mut c = 0;
-            while i < len && chars[i] == '`' {
-                c += 1;
-                i += 1;
-            }
-            if c == count {
-                return Some(start);
-            }
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
-fn scan_paired(
-    chars: &[char],
-    styles: &mut [CharStyle],
-    claimed: &mut [bool],
-    delim: char,
-    delim_len: usize,
-    apply: fn(&mut CharStyle),
-) {
-    let len = chars.len();
-    if len < delim_len * 2 + 1 {
         return;
     }
-    let mut i = 0;
-    while i + delim_len * 2 < len {
-        if claimed[i] {
-            i += 1;
-            continue;
+
+    if info.is_horizontal_rule {
+        for style in styles.iter_mut() {
+            style.dim = true;
         }
-        if !is_run(chars, i, delim, delim_len) {
-            i += 1;
-            continue;
+        return;
+    }
+
+    if let Some(marker_end) = info.checklist_marker_end {
+        for style in styles.iter_mut().take(marker_end.min(len)) {
+            style.dim = true;
         }
-        let after = i + delim_len;
-        if after < len && chars[after].is_whitespace() {
-            i += 1;
-            continue;
-        }
-        if let Some(close) = find_paired_close(chars, claimed, after, delim, delim_len) {
-            for k in i..i + delim_len {
-                styles[k].dim = true;
-                claimed[k] = true;
+        if info.checklist_checked {
+            for style in styles.iter_mut().skip(marker_end.min(len)) {
+                style.strikethrough = true;
+                style.dim = true;
             }
-            for k in after..close {
-                if !claimed[k] {
-                    apply(&mut styles[k]);
+        }
+        return;
+    }
+
+    if let Some(marker_end) = info.list_marker_end {
+        for style in styles.iter_mut().take(marker_end.min(len)) {
+            style.dim = true;
+        }
+    }
+}
+
+fn apply_inline_token_styles(tokens: &[markdown_tokens::InlineToken], styles: &mut [CharStyle]) {
+    let len = styles.len();
+    for token in tokens {
+        let from = token.from.min(len);
+        let to = token.to.min(len);
+        if to <= from {
+            continue;
+        }
+
+        for style in styles.iter_mut().take(to).skip(from) {
+            match token.kind {
+                InlineTokenType::Strong => style.bold = true,
+                InlineTokenType::Emphasis => style.italic = true,
+                InlineTokenType::Strikethrough => style.strikethrough = true,
+                InlineTokenType::Code | InlineTokenType::CodeMarker => style.dim = true,
+                InlineTokenType::LinkText => style.bold = true,
+                InlineTokenType::LinkUrl | InlineTokenType::LinkMarker => style.dim = true,
+            }
+        }
+    }
+}
+
+fn apply_code_token_styles(tokens: &[markdown_tokens::CodeToken], styles: &mut [CharStyle]) {
+    let len = styles.len();
+    for token in tokens {
+        let from = token.from.min(len);
+        let to = token.to.min(len);
+        if to <= from {
+            continue;
+        }
+
+        for style in styles.iter_mut().take(to).skip(from) {
+            match token.kind {
+                CodeTokenType::Keyword => {
+                    style.fg = Some(FG_CODE_KEYWORD);
+                    style.dim = false;
+                }
+                CodeTokenType::String => {
+                    style.fg = Some(FG_CODE_STRING);
+                    style.dim = false;
+                }
+                CodeTokenType::Number => {
+                    style.fg = Some(FG_CODE_NUMBER);
+                    style.dim = false;
+                }
+                CodeTokenType::Comment => {
+                    style.fg = Some(FG_CODE_COMMENT);
+                    style.dim = true;
+                }
+                CodeTokenType::Function => {
+                    style.fg = Some(FG_CODE_FUNCTION);
+                    style.dim = false;
+                }
+                CodeTokenType::Type => {
+                    style.fg = Some(FG_CODE_TYPE);
+                    style.dim = false;
                 }
             }
-            for k in close..close + delim_len {
-                styles[k].dim = true;
-                claimed[k] = true;
-            }
-            i = close + delim_len;
-        } else {
-            i += 1;
         }
     }
-}
-
-fn is_run(chars: &[char], pos: usize, ch: char, count: usize) -> bool {
-    for j in 0..count {
-        if pos + j >= chars.len() || chars[pos + j] != ch {
-            return false;
-        }
-    }
-    true
-}
-
-fn find_paired_close(
-    chars: &[char],
-    claimed: &[bool],
-    from: usize,
-    delim: char,
-    delim_len: usize,
-) -> Option<usize> {
-    let len = chars.len();
-    let mut i = from;
-    while i + delim_len <= len {
-        if !claimed[i] && is_run(chars, i, delim, delim_len) {
-            if i > 0 && !chars[i - 1].is_whitespace() {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
-}
-
-fn scan_single_em(chars: &[char], styles: &mut [CharStyle], claimed: &[bool], delim: char) {
-    let len = chars.len();
-    let mut i = 0;
-    while i + 2 < len {
-        if claimed[i] || chars[i] != delim {
-            i += 1;
-            continue;
-        }
-        // Skip if this is a double delimiter
-        if i + 1 < len && chars[i + 1] == delim {
-            i += 2;
-            continue;
-        }
-        if i + 1 < len && chars[i + 1].is_whitespace() {
-            i += 1;
-            continue;
-        }
-        if let Some(close) = find_single_close(chars, claimed, i + 1, delim) {
-            styles[i].dim = true;
-            for k in i + 1..close {
-                if !claimed[k] {
-                    styles[k].italic = true;
-                }
-            }
-            styles[close].dim = true;
-            i = close + 1;
-        } else {
-            i += 1;
-        }
-    }
-}
-
-fn find_single_close(chars: &[char], claimed: &[bool], from: usize, delim: char) -> Option<usize> {
-    let len = chars.len();
-    let mut i = from;
-    while i < len {
-        if !claimed[i] && chars[i] == delim {
-            if i + 1 < len && chars[i + 1] == delim {
-                i += 2;
-                continue;
-            }
-            if i > 0 && !chars[i - 1].is_whitespace() {
-                return Some(i);
-            }
-        }
-        i += 1;
-    }
-    None
 }
 
 // --- Output ---

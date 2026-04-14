@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { Text } from "@codemirror/state";
 import {
@@ -8,6 +8,11 @@ import {
   findVariableNameRanges,
   tokenizeCodeLine,
 } from "./markdown-decoration.ts";
+import { ensureWasmReady } from "./wasm.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
 
 test("classifyMarkdownLine detects heading, list, quote and fences", () => {
   const heading = classifyMarkdownLine("### Title");
