@@ -1,6 +1,19 @@
 import init, {
   WasmVimSession,
   initSync,
+  wasm_calc_builtin_formula_label,
+  wasm_calc_compute_refresh,
+  wasm_calc_contains_builtin_formula,
+  wasm_calc_contains_variable_assignment,
+  wasm_calc_find_list_segment,
+  wasm_calc_find_segment,
+  wasm_calc_find_single_table_cell,
+  wasm_calc_find_table_formula_segment,
+  wasm_calc_format_formula_display_value,
+  wasm_calc_is_builtin_formula,
+  wasm_calc_line_for_eval,
+  wasm_calc_line_uses_assignment_prefix,
+  wasm_calc_plan_incremental,
   wasm_format_markdown,
   wasm_list_command_suggestions,
   wasm_normalize_command,
@@ -119,12 +132,105 @@ export const VIM_KEY_KIND = {
   CTRL: 10,
 } as const;
 
-export const VIM_MODE_ID = {
+const VIM_MODE_ID = {
   INSERT: 0,
   NORMAL: 1,
   VISUAL: 2,
   VISUAL_LINE: 3,
 } as const;
+
+export interface CalcSegment {
+  expr: string;
+  fromCol: number;
+  toCol: number;
+  fromByte: number;
+  toByte: number;
+}
+
+export interface TableFormulaSegment {
+  fromByte: number;
+  toByte: number;
+  fromChar: number;
+  toChar: number;
+  label: string;
+}
+
+export interface CommitMarkerLoc {
+  docPos: number;
+  lineIdx: number;
+  offsetInLine: number;
+  lastLiteral: string;
+}
+
+export interface CalcRefreshChange {
+  lineIdx: number;
+  from: number;
+  to: number;
+  insert: string;
+  newLiteral: string;
+}
+
+export interface CalcRefreshPlan {
+  changes: CalcRefreshChange[];
+  prune: number[];
+  syncedLines: number[];
+}
+
+export interface IncrementalCalcPlan {
+  baseResults: Map<number, string>;
+  evalFrom: number;
+  evalTo: number;
+  evalLines: string[];
+}
+
+interface CalcSegmentRaw {
+  expr: string;
+  from_col: number;
+  to_col: number;
+  from_byte: number;
+  to_byte: number;
+}
+
+interface TableFormulaSegmentRaw {
+  from_byte: number;
+  to_byte: number;
+  from_char: number;
+  to_char: number;
+  label: string;
+}
+
+interface CommitMarkerLocRaw {
+  doc_pos: number;
+  line_idx: number;
+  offset_in_line: number;
+  last_literal: string;
+}
+
+interface CalcRefreshChangeRaw {
+  line_idx: number;
+  from: number;
+  to: number;
+  insert: string;
+  new_literal: string;
+}
+
+interface CalcRefreshPlanRaw {
+  changes: CalcRefreshChangeRaw[];
+  prune: number[];
+  synced_lines: number[];
+}
+
+interface LineCalcResultRaw {
+  line_idx: number;
+  result: string;
+}
+
+interface IncrementalCalcPlanRaw {
+  base_results: LineCalcResultRaw[];
+  eval_from: number;
+  eval_to: number;
+  eval_lines: string[];
+}
 
 function modeFromId(modeId: number): VimMode {
   switch (modeId) {
@@ -220,7 +326,6 @@ function mapOperationFromUtf8ToUtf16(sourceText: string, operation: EditOperatio
   return mapped;
 }
 
-// Translate the TS EditorContextSnapshot (camelCase) to the JSON shape Rust expects (snake_case).
 function toRustSnapshot(snapshot: EditorContextSnapshot): string {
   const text = snapshot.text;
   return JSON.stringify({
@@ -242,6 +347,37 @@ function parseOp(json: string | undefined, sourceText: string): EditOperation | 
   if (!json) return null;
   const operation = JSON.parse(json) as EditOperation;
   return mapOperationFromUtf8ToUtf16(sourceText, operation);
+}
+
+function parseJson<T>(raw: string | null | undefined): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function mapSegment(raw: CalcSegmentRaw | null): CalcSegment | null {
+  if (!raw) return null;
+  return {
+    expr: raw.expr,
+    fromCol: raw.from_col,
+    toCol: raw.to_col,
+    fromByte: raw.from_byte,
+    toByte: raw.to_byte,
+  };
+}
+
+function mapTableFormula(raw: TableFormulaSegmentRaw | null): TableFormulaSegment | null {
+  if (!raw) return null;
+  return {
+    fromByte: raw.from_byte,
+    toByte: raw.to_byte,
+    fromChar: raw.from_char,
+    toChar: raw.to_char,
+    label: raw.label,
+  };
 }
 
 export function runDocChangeRules(
@@ -330,6 +466,163 @@ export function listCommandSuggestionsFromWasm(
 export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): string | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_resolve_command(mode, rawInput) ?? null;
+}
+
+export function calcFindSingleTableCell(lineText: string): CalcSegment | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return mapSegment(parseJson<CalcSegmentRaw>(wasm_calc_find_single_table_cell(lineText)));
+}
+
+export function calcFindListSegment(lineText: string): CalcSegment | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return mapSegment(parseJson<CalcSegmentRaw>(wasm_calc_find_list_segment(lineText)));
+}
+
+export function calcFindSegment(lineText: string): CalcSegment | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return mapSegment(parseJson<CalcSegmentRaw>(wasm_calc_find_segment(lineText)));
+}
+
+export function calcFindTableFormulaSegment(lineText: string): TableFormulaSegment | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return mapTableFormula(
+    parseJson<TableFormulaSegmentRaw>(wasm_calc_find_table_formula_segment(lineText)),
+  );
+}
+
+export function calcLineForEvaluation(lineText: string): string {
+  if (!ensureWasmReadyNonBlocking()) return lineText;
+  return wasm_calc_line_for_eval(lineText);
+}
+
+export function calcIsBuiltinFormula(text: string): boolean {
+  if (!ensureWasmReadyNonBlocking()) return false;
+  return wasm_calc_is_builtin_formula(text);
+}
+
+export function calcBuiltinFormulaLabel(text: string): string | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return wasm_calc_builtin_formula_label(text) ?? null;
+}
+
+export function calcFormatFormulaDisplayValue(raw: string): string {
+  if (!ensureWasmReadyNonBlocking()) return raw;
+  return wasm_calc_format_formula_display_value(raw);
+}
+
+export function calcLineUsesAssignmentPrefix(lineText: string): boolean {
+  if (!ensureWasmReadyNonBlocking()) return false;
+  return wasm_calc_line_uses_assignment_prefix(lineText);
+}
+
+export function calcContainsVariableAssignment(lines: readonly string[]): boolean {
+  if (!ensureWasmReadyNonBlocking()) return false;
+  return wasm_calc_contains_variable_assignment(JSON.stringify(lines)) ?? false;
+}
+
+export function calcContainsBuiltinFormula(lines: readonly string[]): boolean {
+  if (!ensureWasmReadyNonBlocking()) return false;
+  return wasm_calc_contains_builtin_formula(JSON.stringify(lines)) ?? false;
+}
+
+export function calcPlanIncremental(
+  prevLines: string[],
+  prevResults: ReadonlyMap<number, string>,
+  nextLines: string[],
+): IncrementalCalcPlan {
+  if (!ensureWasmReadyNonBlocking()) {
+    return {
+      baseResults: new Map(),
+      evalFrom: 0,
+      evalTo: nextLines.length,
+      evalLines: [...nextLines],
+    };
+  }
+
+  const prevDense: (string | null)[] = [];
+  for (let i = 0; i < prevLines.length; i++) {
+    prevDense.push(prevResults.get(i) ?? null);
+  }
+
+  const rawPlan = parseJson<IncrementalCalcPlanRaw>(
+    wasm_calc_plan_incremental(
+      JSON.stringify(prevLines),
+      JSON.stringify(prevDense),
+      JSON.stringify(nextLines),
+    ),
+  );
+
+  if (!rawPlan) {
+    return {
+      baseResults: new Map(),
+      evalFrom: 0,
+      evalTo: nextLines.length,
+      evalLines: [...nextLines],
+    };
+  }
+
+  const baseResults = new Map<number, string>();
+  for (const entry of rawPlan.base_results) {
+    baseResults.set(entry.line_idx, entry.result);
+  }
+
+  return {
+    baseResults,
+    evalFrom: rawPlan.eval_from,
+    evalTo: rawPlan.eval_to,
+    evalLines: rawPlan.eval_lines,
+  };
+}
+
+export function calcComputeRefresh(
+  markers: readonly CommitMarkerLoc[],
+  lines: readonly string[],
+  lineStarts: readonly number[],
+  nextResults: ReadonlyMap<number, string>,
+  selection: { from: number; to: number },
+): CalcRefreshPlan {
+  if (!ensureWasmReadyNonBlocking()) {
+    return { changes: [], prune: [], syncedLines: [] };
+  }
+
+  const markersRaw: CommitMarkerLocRaw[] = markers.map((marker) => ({
+    doc_pos: marker.docPos,
+    line_idx: marker.lineIdx,
+    offset_in_line: marker.offsetInLine,
+    last_literal: marker.lastLiteral,
+  }));
+
+  const denseResults: (string | null)[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    denseResults.push(nextResults.get(i) ?? null);
+  }
+
+  const rawPlan = parseJson<CalcRefreshPlanRaw>(
+    wasm_calc_compute_refresh(
+      JSON.stringify(markersRaw),
+      JSON.stringify(lines),
+      JSON.stringify(lineStarts),
+      JSON.stringify(denseResults),
+      selection.from,
+      selection.to,
+    ),
+  );
+
+  if (!rawPlan) {
+    return { changes: [], prune: [], syncedLines: [] };
+  }
+
+  return {
+    changes: rawPlan.changes.map((change) => ({
+      lineIdx: change.line_idx,
+      from: change.from,
+      to: change.to,
+      insert: change.insert,
+      newLiteral: change.new_literal,
+    })),
+    prune: rawPlan.prune,
+    syncedLines: rawPlan.synced_lines,
+  };
 }
 
 function decodeVimStep(raw: Uint32Array): VimStep {

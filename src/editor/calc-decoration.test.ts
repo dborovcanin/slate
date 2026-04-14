@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { EditorState } from "@codemirror/state";
 import {
@@ -19,6 +19,11 @@ import {
   remapVariableIndexForDocChange,
   type CommitMarkerLoc,
 } from "./calc-decoration.ts";
+import { ensureWasmReady } from "./wasm.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
 
 function buildLineStarts(lines: readonly string[]): number[] {
   const starts: number[] = [];

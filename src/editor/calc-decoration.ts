@@ -24,6 +24,14 @@ import {
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
+import {
+  calcBuiltinFormulaLabel,
+  calcComputeRefresh,
+  calcContainsBuiltinFormula,
+  calcContainsVariableAssignment,
+  calcFormatFormulaDisplayValue,
+  calcLineUsesAssignmentPrefix,
+} from "./wasm.ts";
 
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
@@ -172,47 +180,12 @@ class FormulaCellWidget extends WidgetType {
   }
 }
 
-const ASSIGNMENT_RE = /(^|[^:!<>=])(:=)(?!=)/;
-
 export function builtinFormulaExplanation(expression: string): string | null {
-  const trimmed = expression.trim();
-  if (!isBuiltinFormula(trimmed)) return null;
-  const withoutEquals = trimmed.startsWith("=") ? trimmed.slice(1).trim() : trimmed;
-  const compact = withoutEquals.replace(/\s+/g, "").toLowerCase();
-  const token = compact.endsWith("()") ? compact.slice(0, -2) : compact;
-  const normalized =
-    token === "sum_column"
-      ? "sum_col"
-      : token === "avg_column"
-        ? "avg_col"
-        : token;
-  return `${normalized}()`;
+  return calcBuiltinFormulaLabel(expression);
 }
 
 export function formatFormulaDisplayValue(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return raw;
-
-  let cleaned = trimmed
-    .replace(/^≈\s*/u, "")
-    .replace(/^~\s*/u, "")
-    .replace(/^approximately\s+/i, "")
-    .replace(/^approx\.?\s+/i, "")
-    .replace(/^about\s+/i, "")
-    .trim();
-  if (cleaned.length === 0) cleaned = trimmed;
-
-  const match = cleaned.match(/^([+-]?\d+(?:\.\d+)?)(\s+.*)?$/);
-  if (!match) return cleaned;
-
-  const num = Number.parseFloat(match[1] ?? "");
-  if (!Number.isFinite(num)) return cleaned;
-
-  const rounded = Math.round((num + Number.EPSILON) * 100) / 100;
-  const value = Number.isInteger(rounded)
-    ? rounded.toString()
-    : rounded.toFixed(2).replace(/\.?0+$/, "");
-  return `${value}${match[2] ?? ""}`.trimEnd();
+  return calcFormatFormulaDisplayValue(raw);
 }
 
 function selectionTouchesSegment(
@@ -302,25 +275,15 @@ const calcDecorations = EditorView.decorations.compute(
 );
 
 export function lineUsesAssignmentGhostPrefix(lineText: string): boolean {
-  const evalTarget = lineForCalcEvaluation(lineText).trim();
-  if (evalTarget.length > 0) return ASSIGNMENT_RE.test(evalTarget);
-  return ASSIGNMENT_RE.test(lineText);
+  return calcLineUsesAssignmentPrefix(lineText);
 }
 
 export function containsVariableAssignment(lines: readonly string[]): boolean {
-  for (const line of lines) {
-    if (ASSIGNMENT_RE.test(line)) return true;
-  }
-  return false;
+  return calcContainsVariableAssignment(lines);
 }
 
 export function containsBuiltinFormula(lines: readonly string[]): boolean {
-  for (const line of lines) {
-    const evalTarget = lineForCalcEvaluation(line).trim();
-    if (evalTarget.length === 0) continue;
-    if (isBuiltinFormula(evalTarget)) return true;
-  }
-  return false;
+  return calcContainsBuiltinFormula(lines);
 }
 
 export interface CommitMarkerLoc {
@@ -354,69 +317,7 @@ export function computeCalcRefresh(
   nextResults: ReadonlyMap<number, string>,
   selection: { from: number; to: number },
 ): CalcRefreshPlan {
-  const changes: CalcRefreshChange[] = [];
-  const prune: number[] = [];
-  const syncedLines: number[] = [];
-
-  for (const marker of markers) {
-    const { docPos, lineIdx, offsetInLine, lastLiteral } = marker;
-    const lineText = lines[lineIdx];
-    if (lineText === undefined) {
-      prune.push(docPos);
-      continue;
-    }
-
-    // Trailer sanity: marker must still sit at the " = " prefix it was born
-    // against. Any drift (partial delete, reflow) means the committed trailer
-    // is gone and we should relinquish ownership.
-    if (lineText.slice(offsetInLine, offsetInLine + 3) !== " = ") {
-      prune.push(docPos);
-      continue;
-    }
-
-    const currentLiteral = lineText.slice(offsetInLine + 3);
-
-    // Hand-edit detection: the marker carries the literal we last wrote. If
-    // the doc now holds anything else at that slot, the user has edited the
-    // trailer (including appending trailing text). Relinquish ownership so we
-    // don't clobber their edit.
-    if (currentLiteral !== lastLiteral) {
-      prune.push(docPos);
-      continue;
-    }
-
-    const nextResult = nextResults.get(lineIdx);
-
-    // Backend no longer yields a result (expression dropped, mid-edit). Keep
-    // the marker so the trailer stays live when the expression comes back.
-    if (nextResult === undefined) continue;
-
-    // Already in sync — nothing to rewrite, but flag the line so the
-    // caller suppresses the redundant ghost widget.
-    if (currentLiteral === nextResult) {
-      syncedLines.push(lineIdx);
-      continue;
-    }
-
-    const lineStart = lineStarts[lineIdx];
-    const trailerFrom = lineStart + offsetInLine;
-    const trailerTo = lineStart + lineText.length;
-
-    // Cursor guard: never yank the caret out from under the user when they
-    // are editing inside the trailer span.
-    if (selection.from <= trailerTo && selection.to >= trailerFrom) continue;
-
-    changes.push({
-      lineIdx,
-      from: trailerFrom,
-      to: trailerTo,
-      insert: ` = ${nextResult}`,
-      newLiteral: nextResult,
-    });
-    syncedLines.push(lineIdx);
-  }
-
-  return { changes, prune, syncedLines };
+  return calcComputeRefresh(markers, lines, lineStarts, nextResults, selection);
 }
 
 export function mergePartialCalcResults(

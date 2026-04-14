@@ -1,3 +1,4 @@
+pub mod calc_plan;
 pub mod command_catalog;
 pub mod context;
 pub mod format;

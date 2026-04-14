@@ -387,7 +387,7 @@ impl TerminalApp {
 
         let calc_engine = CalcEngine::new();
         let calc_begin = Instant::now();
-        let calc_data = compute_calc_data(&calc_engine, &lines, variables_enabled);
+        let calc_data = compute_calc_data(&calc_engine, &lines, variables_enabled, None);
         let loading_calc_engine = calc_begin.elapsed();
 
         let prev_lines_snapshot = lines.clone();
@@ -1830,8 +1830,60 @@ impl TerminalApp {
     }
 
     fn recompute_calc_full(&mut self) {
-        let calc_data = compute_calc_data(&self.calc_engine, &self.lines, self.variables_enabled);
-        let mut new_results = calc_data.line_results;
+        let plan = crate::editor_core::calc_plan::plan_incremental_calc(
+            &self.prev_lines,
+            &self.calc_results,
+            &self.lines,
+        );
+        let has_prev = !self.prev_lines.is_empty();
+        let has_builtin_formula =
+            crate::editor_core::calc_plan::contains_builtin_formula(&self.lines)
+                || crate::editor_core::calc_plan::contains_builtin_formula(&self.prev_lines);
+
+        // Prev-side changed slice mirrors the next-side plan by preserving
+        // the shared suffix length.
+        let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
+        let prev_changed_from = plan.eval_from.min(self.prev_lines.len());
+        let prev_changed_to = self
+            .prev_lines
+            .len()
+            .saturating_sub(suffix_len)
+            .max(prev_changed_from);
+        let prev_changed_lines = &self.prev_lines[prev_changed_from..prev_changed_to];
+        let touches_any_assignment =
+            crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
+                || crate::editor_core::calc_plan::contains_variable_assignment(prev_changed_lines);
+        let can_use_partial = has_prev && !touches_any_assignment && !has_builtin_formula;
+
+        let (mut new_results, variable_names) = if can_use_partial {
+            let mut merged_results = vec![None; self.lines.len()];
+            for entry in &plan.base_results {
+                if let Some(slot) = merged_results.get_mut(entry.line_idx) {
+                    *slot = Some(entry.result.clone());
+                }
+            }
+
+            if plan.eval_from < plan.eval_to {
+                let calc_data = compute_calc_data(
+                    &self.calc_engine,
+                    &self.lines,
+                    self.variables_enabled,
+                    Some((plan.eval_from, plan.eval_to)),
+                );
+                for idx in plan.eval_from..plan.eval_to {
+                    if let Some(slot) = merged_results.get_mut(idx) {
+                        *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
+                    }
+                }
+                (merged_results, calc_data.variable_names)
+            } else {
+                (merged_results, self.variable_names.clone())
+            }
+        } else {
+            let calc_data =
+                compute_calc_data(&self.calc_engine, &self.lines, self.variables_enabled, None);
+            (calc_data.line_results, calc_data.variable_names)
+        };
 
         // Auto-refresh committed-style trailers. Eligibility is deliberately
         // conservative — it requires that the line is byte-identical to the
@@ -1897,7 +1949,7 @@ impl TerminalApp {
 
         self.prev_lines = self.lines.clone();
         self.calc_results = new_results;
-        self.variable_names = calc_data.variable_names;
+        self.variable_names = variable_names;
     }
 
     // --- Search ---
@@ -3349,12 +3401,17 @@ struct CalcData {
     variable_names: Vec<String>,
 }
 
-fn compute_calc_data(engine: &CalcEngine, lines: &[String], variables_enabled: bool) -> CalcData {
+fn compute_calc_data(
+    engine: &CalcEngine,
+    lines: &[String],
+    variables_enabled: bool,
+    eval_range: Option<(usize, usize)>,
+) -> CalcData {
     let result = engine.evaluate_note_context(
         lines,
         app_core::calc::NoteEvaluationOptions {
             variables_enabled,
-            eval_range: None,
+            eval_range,
         },
     );
     let mut variable_names = result
@@ -3374,7 +3431,7 @@ fn compute_calc_data(engine: &CalcEngine, lines: &[String], variables_enabled: b
 #[cfg(test)]
 fn compute_calc_results(lines: &[String], variables_enabled: bool) -> Vec<Option<String>> {
     let engine = CalcEngine::new();
-    compute_calc_data(&engine, lines, variables_enabled).line_results
+    compute_calc_data(&engine, lines, variables_enabled, None).line_results
 }
 
 /// Decide whether an already-eligible line's trailing ` = <literal>` should
@@ -3393,79 +3450,18 @@ fn compute_calc_trailer_refresh(
     is_cursor_line: bool,
     cursor_col: usize,
 ) -> Option<(usize, String)> {
-    let eq_idx = line.rfind(" = ")?;
-    let current_literal = &line[eq_idx + 3..];
-    if current_literal == new_result {
-        return None;
-    }
-    if is_cursor_line {
-        let eq_char_idx = line[..eq_idx].chars().count();
-        if cursor_col >= eq_char_idx {
-            return None;
-        }
-    }
-    Some((eq_idx, format!(" = {new_result}")))
+    let refresh = crate::editor_core::calc_plan::compute_calc_trailer_refresh(
+        line,
+        new_result,
+        is_cursor_line,
+        cursor_col,
+    )?;
+    Some((refresh.eq_byte_idx, refresh.new_tail))
 }
 
 fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
-    let trimmed_text = text.trim();
-    if trimmed_text.starts_with('|') && trimmed_text.ends_with('|') {
-        let pipes: Vec<usize> = text.match_indices('|').map(|(i, _)| i).collect();
-        if pipes.len() >= 2 {
-            let mut formula_candidates = Vec::new();
-            let mut candidates = Vec::new();
-            for i in 0..pipes.len() - 1 {
-                let start = pipes[i] + 1;
-                let end = pipes[i + 1];
-                if start >= end {
-                    continue;
-                }
-                let raw = &text[start..end];
-                let trimmed = raw.trim();
-                if trimmed.is_empty() || !has_calc_signal(trimmed) {
-                    continue;
-                }
-                let leading_ws = raw.len() - raw.trim_start().len();
-                let trailing_ws = raw.len() - raw.trim_end().len();
-                let span = (start + leading_ws, end - trailing_ws);
-                if is_builtin_formula(trimmed) {
-                    formula_candidates.push(span);
-                } else {
-                    candidates.push(span);
-                }
-            }
-            if formula_candidates.len() == 1 {
-                return Some(formula_candidates[0]);
-            }
-            if !formula_candidates.is_empty() {
-                return None;
-            }
-            if candidates.len() == 1 {
-                return Some(candidates[0]);
-            }
-        }
-        return None;
-    }
-
-    let mut prefix_end = None;
-    if let Some((marker_end, _)) = render::checklist_marker_end(text) {
-        prefix_end = Some(marker_end);
-    } else if let Some(marker_end) = render::list_marker_end(text) {
-        prefix_end = Some(marker_end);
-    }
-
-    if let Some(start) = prefix_end {
-        let raw = &text[start..];
-        let leading_ws = raw.len() - raw.trim_start().len();
-        let trailing_ws = raw.len() - raw.trim_end().len();
-        let from = start + leading_ws;
-        let to = text.len().saturating_sub(trailing_ws);
-        if from < to {
-            return Some((from, to));
-        }
-    }
-
-    None
+    let segment = crate::editor_core::calc_plan::find_calc_segment(text)?;
+    Some((segment.from_byte, segment.to_byte))
 }
 
 struct TableFormulaSegment {
@@ -3476,188 +3472,28 @@ struct TableFormulaSegment {
     label: String,
 }
 
+#[cfg(test)]
 fn builtin_formula_label(text: &str) -> Option<String> {
-    if text.is_empty() {
-        return None;
-    }
-
-    let without_equals = text.strip_prefix('=').unwrap_or(text).trim();
-    if without_equals.is_empty() {
-        return None;
-    }
-
-    let compact = without_equals
-        .chars()
-        .filter(|ch| !ch.is_ascii_whitespace())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let token = compact.strip_suffix("()").unwrap_or(compact.as_str());
-
-    let normalized = match token {
-        "sum_row" => "sum_row",
-        "avg_row" => "avg_row",
-        "sum_col" | "sum_column" => "sum_col",
-        "avg_col" | "avg_column" => "avg_col",
-        _ => return None,
-    };
-
-    Some(format!("{normalized}()"))
+    crate::editor_core::calc_plan::builtin_formula_label(text)
 }
 
 fn find_table_formula_segment(text: &str) -> Option<TableFormulaSegment> {
-    let trimmed = text.trim();
-    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
-        return None;
-    }
-
-    let (from_byte, to_byte) = find_calc_segment_range(text)?;
-    let expr = text.get(from_byte..to_byte)?;
-    let label = builtin_formula_label(expr)?;
-
+    let segment = crate::editor_core::calc_plan::find_table_formula_segment(text)?;
     Some(TableFormulaSegment {
-        from_byte,
-        to_byte,
-        from_char: text[..from_byte].chars().count(),
-        to_char: text[..to_byte].chars().count(),
-        label,
+        from_byte: segment.from_byte,
+        to_byte: segment.to_byte,
+        from_char: segment.from_char,
+        to_char: segment.to_char,
+        label: segment.label,
     })
 }
 
 fn format_formula_display_value(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    let mut cleaned = trimmed.to_string();
-    if let Some(rest) = cleaned.strip_prefix('≈') {
-        cleaned = rest.trim_start().to_string();
-    }
-    if let Some(rest) = cleaned.strip_prefix('~') {
-        cleaned = rest.trim_start().to_string();
-    }
-    let lowered = cleaned.to_ascii_lowercase();
-    for prefix in ["approximately ", "approx. ", "approx ", "about "] {
-        if lowered.starts_with(prefix) {
-            cleaned = cleaned[prefix.len()..].trim_start().to_string();
-            break;
-        }
-    }
-    if cleaned.is_empty() {
-        cleaned = trimmed.to_string();
-    }
-
-    let mut parts = cleaned.splitn(2, char::is_whitespace);
-    let first = parts.next().unwrap_or("");
-    let rest = parts.next().unwrap_or("").trim_start();
-    let numeric = first.replace(',', "");
-
-    let Ok(value) = numeric.parse::<f64>() else {
-        return cleaned;
-    };
-    if !value.is_finite() {
-        return cleaned;
-    }
-
-    let rounded = (value * 100.0).round() / 100.0;
-    let mut out = format!("{rounded:.2}");
-    while out.contains('.') && out.ends_with('0') {
-        out.pop();
-    }
-    if out.ends_with('.') {
-        out.pop();
-    }
-
-    if rest.is_empty() {
-        out
-    } else {
-        format!("{out} {rest}")
-    }
-}
-
-fn has_calc_signal(text: &str) -> bool {
-    let trimmed = text.trim();
-    if is_builtin_formula(trimmed) {
-        return true;
-    }
-
-    if looks_like_date(text) {
-        return false;
-    }
-
-    text.bytes().any(|b| {
-        matches!(
-            b,
-            b'+' | b'-' | b'*' | b'/' | b'^' | b'%' | b'(' | b'0'..=b'9'
-        )
-    }) || text.contains(" to ")
-        || text.contains(" in ")
-}
-
-fn is_builtin_formula(text: &str) -> bool {
-    builtin_formula_label(text).is_some()
+    crate::editor_core::calc_plan::format_formula_display_value(raw)
 }
 
 fn contains_assignment_operator(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    if bytes.len() < 2 {
-        return false;
-    }
-
-    for i in 0..bytes.len() - 1 {
-        if bytes[i] != b':' || bytes[i + 1] != b'=' {
-            continue;
-        }
-        if i > 0 && matches!(bytes[i - 1], b':' | b'!' | b'<' | b'>' | b'=') {
-            continue;
-        }
-        if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
-            continue;
-        }
-        return true;
-    }
-
-    false
-}
-
-fn looks_like_date_with_delim(text: &str, delim: char) -> bool {
-    let mut parts = text.split(delim);
-    let (Some(a), Some(b), Some(c)) = (parts.next(), parts.next(), parts.next()) else {
-        return false;
-    };
-    if parts.next().is_some() {
-        return false;
-    }
-
-    let parse_len = |part: &str, min_len: usize, max_len: usize| -> Option<u32> {
-        if part.len() < min_len
-            || part.len() > max_len
-            || !part.as_bytes().iter().all(|byte| byte.is_ascii_digit())
-        {
-            return None;
-        }
-        part.parse::<u32>().ok()
-    };
-
-    if parse_len(a, 4, 4).is_some() {
-        if let (Some(month), Some(day)) = (parse_len(b, 1, 2), parse_len(c, 1, 2)) {
-            return (1..=12).contains(&month) && (1..=31).contains(&day);
-        }
-    }
-
-    if let (Some(day), Some(month), Some(year)) =
-        (parse_len(a, 1, 2), parse_len(b, 1, 2), parse_len(c, 2, 4))
-    {
-        return year > 0 && (1..=12).contains(&month) && (1..=31).contains(&day);
-    }
-
-    false
-}
-
-fn looks_like_date(text: &str) -> bool {
-    looks_like_date_with_delim(text, '-')
-        || looks_like_date_with_delim(text, '.')
-        || looks_like_date_with_delim(text, '/')
+    crate::editor_core::calc_plan::contains_assignment_operator(text)
 }
 
 #[cfg(test)]

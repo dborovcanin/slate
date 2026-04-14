@@ -1,5 +1,8 @@
 use wasm_bindgen::prelude::*;
 
+use crate::calc_plan::{
+    self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
+};
 use crate::command_catalog;
 use crate::format::format_markdown;
 use crate::text_rules::{
@@ -107,6 +110,105 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
     let mode = parse_mode(mode)?;
     let command = command_catalog::resolve_command(mode, raw_input)?;
     Some(command.value.to_string())
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_find_single_table_cell(line_text: &str) -> Option<String> {
+    let segment: CalcSegment = calc_plan::find_single_calc_table_cell(line_text)?;
+    serde_json::to_string(&segment).ok()
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_find_list_segment(line_text: &str) -> Option<String> {
+    let segment: CalcSegment = calc_plan::find_list_calc_segment(line_text)?;
+    serde_json::to_string(&segment).ok()
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_find_segment(line_text: &str) -> Option<String> {
+    let segment: CalcSegment = calc_plan::find_calc_segment(line_text)?;
+    serde_json::to_string(&segment).ok()
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_find_table_formula_segment(line_text: &str) -> Option<String> {
+    let segment: TableFormulaSegment = calc_plan::find_table_formula_segment(line_text)?;
+    serde_json::to_string(&segment).ok()
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_line_for_eval(line_text: &str) -> String {
+    calc_plan::line_for_calc_evaluation(line_text)
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_is_builtin_formula(text: &str) -> bool {
+    calc_plan::is_builtin_formula(text)
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_builtin_formula_label(text: &str) -> Option<String> {
+    calc_plan::builtin_formula_label(text)
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_format_formula_display_value(raw: &str) -> String {
+    calc_plan::format_formula_display_value(raw)
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_line_uses_assignment_prefix(line_text: &str) -> bool {
+    calc_plan::line_uses_assignment_ghost_prefix(line_text)
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_contains_variable_assignment(lines_json: &str) -> Option<bool> {
+    let lines: Vec<String> = serde_json::from_str(lines_json).ok()?;
+    Some(calc_plan::contains_variable_assignment(&lines))
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_contains_builtin_formula(lines_json: &str) -> Option<bool> {
+    let lines: Vec<String> = serde_json::from_str(lines_json).ok()?;
+    Some(calc_plan::contains_builtin_formula(&lines))
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_plan_incremental(
+    prev_lines_json: &str,
+    prev_results_json: &str,
+    next_lines_json: &str,
+) -> Option<String> {
+    let prev_lines: Vec<String> = serde_json::from_str(prev_lines_json).ok()?;
+    let prev_results: Vec<Option<String>> = serde_json::from_str(prev_results_json).ok()?;
+    let next_lines: Vec<String> = serde_json::from_str(next_lines_json).ok()?;
+    let plan: IncrementalCalcPlan =
+        calc_plan::plan_incremental_calc(&prev_lines, &prev_results, &next_lines);
+    serde_json::to_string(&plan).ok()
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_compute_refresh(
+    markers_json: &str,
+    lines_json: &str,
+    line_starts_json: &str,
+    next_results_json: &str,
+    selection_from: usize,
+    selection_to: usize,
+) -> Option<String> {
+    let markers: Vec<CommitMarkerLoc> = serde_json::from_str(markers_json).ok()?;
+    let lines: Vec<String> = serde_json::from_str(lines_json).ok()?;
+    let line_starts: Vec<usize> = serde_json::from_str(line_starts_json).ok()?;
+    let next_results: Vec<Option<String>> = serde_json::from_str(next_results_json).ok()?;
+    let plan: CalcRefreshPlan = calc_plan::compute_calc_refresh(
+        &markers,
+        &lines,
+        &line_starts,
+        &next_results,
+        selection_from,
+        selection_to,
+    );
+    serde_json::to_string(&plan).ok()
 }
 
 fn mode_from_id(id: u32) -> Option<VimMode> {

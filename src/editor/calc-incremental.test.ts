@@ -1,6 +1,11 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { planIncrementalCalc } from "./calc-incremental.ts";
+import { ensureWasmReady } from "./wasm.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
 
 test("planIncrementalCalc reuses unchanged prefix and suffix", () => {
   const prevLines = ["a", "2+2", "tail"];
