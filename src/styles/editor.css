@@ -106,6 +106,17 @@
   background: var(--active-line-bg);
 }
 
+.cm-editor .cm-search-match {
+  background: rgba(142, 68, 173, 0.28);
+  border-radius: 2px;
+}
+
+.cm-editor .cm-search-current {
+  background: rgba(200, 48, 48, 0.32);
+  border-radius: 2px;
+  box-shadow: inset 0 -1px 0 rgba(200, 48, 48, 0.65);
+}
+
 .cm-editor .cm-line.md-heading-1 {
   font-size: var(--heading-1-size);
   font-weight: 750;
@@ -432,4 +443,43 @@
 
 .command-picker-status.visible {
   opacity: 1;
+}
+
+.editor-search-bar {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-surface);
+  z-index: 33;
+}
+
+.editor-search-prefix {
+  color: var(--accent);
+  font-weight: 700;
+  user-select: none;
+}
+
+.editor-search-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+}
+
+.editor-search-meta {
+  color: var(--fg-dim);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  justify-self: end;
+  white-space: nowrap;
 }

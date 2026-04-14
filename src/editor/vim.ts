@@ -15,6 +15,13 @@ import {
 import { EditorView } from "@codemirror/view";
 import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
 import {
+  editorSearchHasMatches,
+  editorSearchNext,
+  editorSearchPrev,
+  isEditorSearchOverlayTarget,
+  openEditorSearch,
+} from "./search";
+import {
   VimSession,
   VIM_KEY_KIND,
   type VimAction,
@@ -695,9 +702,11 @@ export function vimModeExtension(options: VimOptions = {}) {
         });
         return true;
       case 31: // open_search
+        return openEditorSearch(view);
       case 32: // search_next
+        return editorSearchNext(view);
       case 33: // search_prev
-        return true;
+        return editorSearchPrev(view);
       case 34: // delete_inside_word
         return applyTextObject(view, "word", false, true, count) > 0;
       case 35: // delete_around_word
@@ -738,6 +747,19 @@ export function vimModeExtension(options: VimOptions = {}) {
     keydown: (event, view) => {
       if (isCommandPickerOpen(view)) {
         return false;
+      }
+      if (isEditorSearchOverlayTarget(view, event.target)) {
+        return false;
+      }
+
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        !event.altKey &&
+        !event.shiftKey &&
+        event.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        return openEditorSearch(view);
       }
 
       const activeMode = mode();
@@ -788,7 +810,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const step = session.step(keyInput, {
-        has_search_matches: false,
+        has_search_matches: editorSearchHasMatches(view),
         line_count: view.state.doc.lines,
       });
 

@@ -16,6 +16,7 @@ import { runTableCellNavigationRules } from "./wasm.ts";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
+import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
 import { startupMark } from "../perf/startup.ts";
 
@@ -221,6 +222,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       minChars: options.variableAutocompleteMinChars ?? 3,
     }),
     ...calcExtensions({ variablesEnabled: options.variablesEnabled ?? true }),
+    ...editorSearchExtensions(),
     commandModeExtension({
       dateFormat: options.dateFormat,
       vimMode: !!options.vimMode,
