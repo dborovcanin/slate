@@ -78,7 +78,7 @@ pub fn send_system_notification(title: String, body: String) -> Result<(), Strin
     #[cfg(target_os = "linux")]
     {
         let status = Command::new("notify-send")
-            .args([title.as_str(), body.as_str()])
+            .args(["--", title.as_str(), body.as_str()])
             .status()
             .map_err(|e| format!("notify-send unavailable: {e}"))?;
         if status.success() {

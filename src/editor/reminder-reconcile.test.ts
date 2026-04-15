@@ -1,8 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { Text } from "@codemirror/state";
+import { EditorState, Text } from "@codemirror/state";
 import type { NoteReminder } from "../api.ts";
-import { reconcileReminderLinesOnOpen, remindersEqual } from "./reminder-reconcile.ts";
+import {
+  reconcileReminderLinesOnOpen,
+  remindersEqual,
+  remapReminderLinesForDocChange,
+} from "./reminder-reconcile.ts";
 
 function reminder(lineNumber: number, lineText: string): NoteReminder {
   return {
@@ -89,4 +93,57 @@ test("remindersEqual compares material reminder identity/position fields", () =>
   const different = [reminder(2, "alpha")];
   assert.equal(remindersEqual(left, right), true);
   assert.equal(remindersEqual(left, different), false);
+});
+
+test("remapReminderLinesForDocChange shifts reminder line down when line is inserted above", () => {
+  const start = EditorState.create({ doc: "alpha\nbeta" });
+  const tr = start.update({
+    changes: { from: 0, to: 0, insert: "new\n" },
+  });
+  const remapped = remapReminderLinesForDocChange(
+    new Map([[2, reminder(2, "beta")]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(3)?.line_number, 3);
+  assert.equal(remapped.has(2), false);
+});
+
+test("remapReminderLinesForDocChange shifts reminder line up when line above is deleted", () => {
+  const start = EditorState.create({ doc: "drop\nalpha\nbeta" });
+  const firstLine = start.doc.line(1);
+  const tr = start.update({
+    changes: { from: firstLine.from, to: firstLine.to + 1, insert: "" },
+  });
+  const remapped = remapReminderLinesForDocChange(
+    new Map([[2, reminder(2, "alpha")]]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.get(1)?.line_number, 1);
+  assert.equal(remapped.has(2), false);
+});
+
+test("remapReminderLinesForDocChange keeps reminders on distinct lines after collision", () => {
+  const start = EditorState.create({ doc: "a\nb\nc" });
+  const secondLine = start.doc.line(2);
+  const tr = start.update({
+    changes: { from: secondLine.from, to: secondLine.to + 1, insert: "" },
+  });
+  const remapped = remapReminderLinesForDocChange(
+    new Map([
+      [2, reminder(2, "b")],
+      [3, reminder(3, "c")],
+    ]),
+    tr.startState.doc,
+    tr.changes,
+    tr.newDoc,
+  );
+  assert.equal(remapped.size, 2);
+  const lineNumbers = [...remapped.values()]
+    .map((entry) => entry.line_number)
+    .sort((a, b) => a - b);
+  assert.deepEqual(lineNumbers, [1, 2]);
 });

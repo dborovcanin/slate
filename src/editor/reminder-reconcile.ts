@@ -1,4 +1,4 @@
-import type { Text } from "@codemirror/state";
+import type { ChangeDesc, Text } from "@codemirror/state";
 import type { NoteReminder } from "../api.ts";
 
 export type MoveReminderLineFn = (
@@ -30,6 +30,27 @@ function findNearestAvailableLine(
   return best;
 }
 
+function clampPos(pos: number, max: number): number {
+  return Math.min(Math.max(0, pos), max);
+}
+
+function clampLineNumber(lineNumber: number, lineCount: number): number {
+  if (lineCount <= 0) return 1;
+  return Math.min(Math.max(1, lineNumber), lineCount);
+}
+
+function nearestFreeLine(preferredLine: number, lineCount: number, usedLines: Set<number>): number {
+  const clamped = clampLineNumber(preferredLine, lineCount);
+  if (!usedLines.has(clamped)) return clamped;
+  for (let distance = 1; distance <= lineCount; distance += 1) {
+    const down = clamped + distance;
+    if (down <= lineCount && !usedLines.has(down)) return down;
+    const up = clamped - distance;
+    if (up >= 1 && !usedLines.has(up)) return up;
+  }
+  return clamped;
+}
+
 export function remindersEqual(left: NoteReminder[], right: NoteReminder[]): boolean {
   if (left.length !== right.length) return false;
   for (let i = 0; i < left.length; i += 1) {
@@ -48,6 +69,41 @@ export function remindersEqual(left: NoteReminder[], right: NoteReminder[]): boo
     }
   }
   return true;
+}
+
+export function remapReminderLinesForDocChange(
+  remindersByLine: ReadonlyMap<number, NoteReminder>,
+  startDoc: Text,
+  changes: ChangeDesc,
+  nextDoc: Text,
+): Map<number, NoteReminder> {
+  if (remindersByLine.size === 0) return new Map();
+  if (nextDoc.lines <= 0) return new Map();
+
+  const ordered = [...remindersByLine.values()].sort((a, b) => a.line_number - b.line_number);
+  const usedLines = new Set<number>();
+  const remapped = new Map<number, NoteReminder>();
+
+  for (const reminder of ordered) {
+    let mappedLine = reminder.line_number;
+    if (mappedLine >= 1 && mappedLine <= startDoc.lines) {
+      const oldLine = startDoc.line(mappedLine);
+      const anchor = oldLine.from + (oldLine.length > 0 ? 1 : 0);
+      const mappedPos = clampPos(changes.mapPos(anchor, 1), nextDoc.length);
+      mappedLine = nextDoc.lineAt(mappedPos).number;
+    } else {
+      mappedLine = clampLineNumber(mappedLine, nextDoc.lines);
+    }
+
+    const targetLine = nearestFreeLine(mappedLine, nextDoc.lines, usedLines);
+    usedLines.add(targetLine);
+    remapped.set(targetLine, {
+      ...reminder,
+      line_number: targetLine,
+    });
+  }
+
+  return remapped;
 }
 
 export async function reconcileReminderLinesOnOpen(

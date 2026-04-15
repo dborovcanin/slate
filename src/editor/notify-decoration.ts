@@ -12,7 +12,11 @@ import {
   moveNoteReminderLine,
   sendSystemNotification,
 } from "../api.ts";
-import { reconcileReminderLinesOnOpen, remindersEqual } from "./reminder-reconcile.ts";
+import {
+  reconcileReminderLinesOnOpen,
+  remindersEqual,
+  remapReminderLinesForDocChange,
+} from "./reminder-reconcile.ts";
 
 interface ReminderState {
   noteId: string | null;
@@ -39,6 +43,93 @@ const markReminderNotifiedEffect = StateEffect.define<{
 }>();
 const tickReminderNowEffect = StateEffect.define<number>();
 const reminderReloadAnnotation = Annotation.define<boolean>();
+
+function reminderRecordEqual(left: NoteReminder, right: NoteReminder): boolean {
+  return (
+    left.note_id === right.note_id &&
+    left.line_number === right.line_number &&
+    left.remind_at_ms === right.remind_at_ms &&
+    left.display_at === right.display_at &&
+    left.line_text === right.line_text &&
+    (left.notified_at_ms ?? null) === (right.notified_at_ms ?? null) &&
+    left.created_at === right.created_at &&
+    left.updated_at === right.updated_at
+  );
+}
+
+function reminderMapsEqual(
+  left: ReadonlyMap<number, NoteReminder>,
+  right: ReadonlyMap<number, NoteReminder>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [lineNumber, reminder] of left) {
+    const other = right.get(lineNumber);
+    if (!other || !reminderRecordEqual(reminder, other)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function reminderPersistenceKey(reminder: NoteReminder): string {
+  return [
+    reminder.note_id,
+    reminder.created_at,
+    String(reminder.remind_at_ms),
+    reminder.display_at,
+    reminder.line_text,
+    String(reminder.notified_at_ms ?? ""),
+  ].join("\u0000");
+}
+
+function collectReminderLineMoves(
+  previous: ReminderState,
+  next: ReminderState,
+  doc: { lines: number; line: (lineNumber: number) => { text: string } },
+): Array<{ noteId: string; fromLineNumber: number; toLineNumber: number; lineText: string }> {
+  if (!previous.noteId || previous.noteId !== next.noteId) {
+    return [];
+  }
+
+  const previousBuckets = new Map<string, NoteReminder[]>();
+  const previousReminders = [...previous.remindersByLine.values()].sort(
+    (a, b) => a.line_number - b.line_number,
+  );
+  for (const reminder of previousReminders) {
+    const key = reminderPersistenceKey(reminder);
+    const bucket = previousBuckets.get(key);
+    if (bucket) {
+      bucket.push(reminder);
+    } else {
+      previousBuckets.set(key, [reminder]);
+    }
+  }
+
+  const moves: Array<{
+    noteId: string;
+    fromLineNumber: number;
+    toLineNumber: number;
+    lineText: string;
+  }> = [];
+  const nextReminders = [...next.remindersByLine.values()].sort((a, b) => a.line_number - b.line_number);
+  for (const reminder of nextReminders) {
+    const key = reminderPersistenceKey(reminder);
+    const bucket = previousBuckets.get(key);
+    if (!bucket || bucket.length === 0) continue;
+    const source = bucket.shift();
+    if (!source) continue;
+    if (source.line_number === reminder.line_number) continue;
+    if (reminder.line_number < 1 || reminder.line_number > doc.lines) continue;
+    const lineText = doc.line(reminder.line_number).text;
+    moves.push({
+      noteId: next.noteId,
+      fromLineNumber: source.line_number,
+      toLineNumber: reminder.line_number,
+      lineText,
+    });
+  }
+  return moves;
+}
 
 const reminderStateField = StateField.define<ReminderState>({
   create() {
@@ -105,6 +196,22 @@ const reminderStateField = StateField.define<ReminderState>({
         };
       }
     }
+
+    if (tr.docChanged && next.noteId && next.remindersByLine.size > 0) {
+      const remapped = remapReminderLinesForDocChange(
+        next.remindersByLine,
+        tr.startState.doc,
+        tr.changes,
+        tr.newDoc,
+      );
+      if (!reminderMapsEqual(next.remindersByLine, remapped)) {
+        next = {
+          ...next,
+          remindersByLine: remapped,
+        };
+      }
+    }
+
     return next;
   },
 });
@@ -384,6 +491,23 @@ function buildReminderPlugin(options: NotifyExtensionOptions) {
           update.transactions.some((tr) => tr.annotation(reminderReloadAnnotation))
         ) {
           return;
+        }
+        if (update.docChanged) {
+          const previousState = update.startState.field(reminderStateField, false);
+          const nextState = update.state.field(reminderStateField, false);
+          if (!previousState || !nextState) return;
+          const moves = collectReminderLineMoves(previousState, nextState, update.state.doc);
+          if (moves.length === 0) return;
+          for (const move of moves) {
+            void moveNoteReminderLine(
+              move.noteId,
+              move.fromLineNumber,
+              move.toLineNumber,
+              move.lineText,
+            ).catch((error) => {
+              console.error("Failed to persist reminder line move:", error);
+            });
+          }
         }
       },
       destroy() {
