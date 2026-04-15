@@ -6,7 +6,7 @@ use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use base64::Engine as _;
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{self, IsTerminal as _, Write};
 use std::mem::MaybeUninit;
@@ -328,6 +328,8 @@ struct TerminalStartupMetrics {
 struct LineReminderGhost {
     remind_at_ms: i64,
     display_at: String,
+    line_text: String,
+    notified_at_ms: Option<i64>,
 }
 
 struct TerminalApp {
@@ -369,6 +371,8 @@ struct TerminalApp {
     calc_engine: CalcEngine,
     calc_results: Vec<Option<String>>,
     reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
+    reminders_dirty: bool,
+    last_reminder_check: Instant,
     variable_names: Vec<String>,
     // Snapshot of `lines` taken at the end of the previous `recompute_calc_full`.
     // Used to gate the committed-trailer auto-refresh: a line is eligible only
@@ -463,6 +467,8 @@ impl TerminalApp {
             calc_engine,
             calc_results: calc_data.line_results,
             reminder_ghosts,
+            reminders_dirty: false,
+            last_reminder_check: Instant::now(),
             variable_names: calc_data.variable_names,
             prev_lines: prev_lines_snapshot,
             search_query: String::new(),
@@ -508,6 +514,9 @@ impl TerminalApp {
                 Some(key) => self.handle_key(db, key)?,
                 None => self.maybe_autosave(db)?,
             }
+
+            self.sync_reminder_ghosts_if_dirty(db)?;
+            self.maybe_dispatch_due_reminders(db);
         }
 
         if !self.force_quit {
@@ -1783,6 +1792,8 @@ impl TerminalApp {
                         LineReminderGhost {
                             remind_at_ms,
                             display_at: display_at.clone(),
+                            line_text: line_text.clone(),
+                            notified_at_ms: None,
                         },
                     );
                 }
@@ -1910,6 +1921,7 @@ impl TerminalApp {
         if !self.dirty {
             return Ok(());
         }
+        self.sync_reminder_ghosts_if_dirty(db)?;
         let body = join_lines(&self.lines);
         let saved = db.save_note(&self.active_note.id, &body)?;
         self.active_note = saved;
@@ -1921,6 +1933,86 @@ impl TerminalApp {
         };
         self.refresh_switcher_items(db)?;
         Ok(())
+    }
+
+    fn sync_reminder_ghosts_if_dirty(&mut self, db: &Db) -> Result<(), String> {
+        if !self.reminders_dirty {
+            return Ok(());
+        }
+        self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
+        self.reminders_dirty = false;
+        Ok(())
+    }
+
+    fn maybe_dispatch_due_reminders(&mut self, db: &Db) {
+        if self.last_reminder_check.elapsed() < Duration::from_secs(1) {
+            return;
+        }
+        self.last_reminder_check = Instant::now();
+
+        if self.reminder_ghosts.is_empty() {
+            return;
+        }
+
+        let now_ms = now_epoch_ms();
+        let mut due_lines = self
+            .reminder_ghosts
+            .iter()
+            .filter_map(|(line_idx, reminder)| {
+                if reminder.notified_at_ms.is_none() && reminder.remind_at_ms <= now_ms {
+                    Some(*line_idx)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        due_lines.sort_unstable();
+
+        for line_idx in due_lines {
+            let Some(reminder) = self.reminder_ghosts.get(&line_idx).cloned() else {
+                continue;
+            };
+            let body = self
+                .lines
+                .get(line_idx)
+                .map(|line| line.trim())
+                .filter(|line| !line.is_empty())
+                .map(|line| line.to_string())
+                .or_else(|| {
+                    let trimmed = reminder.line_text.trim();
+                    if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(trimmed.to_string())
+                    }
+                })
+                .unwrap_or_else(|| "Reminder".to_string());
+
+            if let Err(error) = send_system_notification("Note reminder", &body) {
+                eprintln!("Reminder notification failed: {error}");
+                continue;
+            }
+
+            let line_number = i64::try_from(line_idx + 1).unwrap_or(i64::MAX);
+            match db.mark_reminder_notified(&self.active_note.id, line_number, now_ms) {
+                Ok(updated) => {
+                    let notified_at = updated
+                        .and_then(|entry| entry.notified_at_ms)
+                        .unwrap_or(now_ms);
+                    if let Some(entry) = self.reminder_ghosts.get_mut(&line_idx) {
+                        entry.notified_at_ms = Some(notified_at);
+                        entry.line_text = self
+                            .lines
+                            .get(line_idx)
+                            .cloned()
+                            .unwrap_or_else(|| entry.line_text.clone());
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to persist reminder notification: {error}");
+                }
+            }
+        }
     }
 
     fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
@@ -1935,6 +2027,8 @@ impl TerminalApp {
         self.active_note = note;
         self.lines = split_lines(&self.active_note.body);
         self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
+        self.reminders_dirty = false;
+        self.last_reminder_check = Instant::now();
         self.cursor_line = 0;
         self.cursor_col = 0;
         self.scroll_line = 0;
@@ -1982,6 +2076,9 @@ impl TerminalApp {
         }
         self.dirty = true;
         self.last_edit = Instant::now();
+        if !self.reminder_ghosts.is_empty() {
+            self.reminders_dirty = true;
+        }
         self.recompute_calc_full();
         self.last_undo_snapshot = UndoEntry {
             lines: self.lines.clone(),
@@ -2002,6 +2099,9 @@ impl TerminalApp {
             self.cursor_col = entry.cursor_col;
             self.dirty = true;
             self.last_edit = Instant::now();
+            if !self.reminder_ghosts.is_empty() {
+                self.reminders_dirty = true;
+            }
             self.recompute_calc_full();
             self.adjust_cursor();
             self.adjust_scroll();
@@ -2028,6 +2128,9 @@ impl TerminalApp {
             self.cursor_col = entry.cursor_col;
             self.dirty = true;
             self.last_edit = Instant::now();
+            if !self.reminder_ghosts.is_empty() {
+                self.reminders_dirty = true;
+            }
             self.recompute_calc_full();
             self.adjust_cursor();
             self.adjust_scroll();
@@ -3238,6 +3341,65 @@ fn load_note_reminder_ghosts(
     note_id: &str,
     lines: &[String],
 ) -> Result<HashMap<usize, LineReminderGhost>, String> {
+    #[derive(Debug, Clone)]
+    struct PlannedReminder {
+        source_line: i64,
+        source_text: String,
+        target_line: i64,
+        target_text: String,
+        remind_at_ms: i64,
+        display_at: String,
+        notified_at_ms: Option<i64>,
+    }
+
+    fn nearest_available_line(
+        candidates: &[usize],
+        preferred: usize,
+        used_lines: &HashSet<usize>,
+    ) -> Option<usize> {
+        let mut best: Option<usize> = None;
+        let mut best_distance = usize::MAX;
+        for &line_number in candidates {
+            if used_lines.contains(&line_number) {
+                continue;
+            }
+            let distance = line_number.abs_diff(preferred);
+            if distance < best_distance
+                || (distance == best_distance
+                    && best.map(|current| line_number < current).unwrap_or(true))
+            {
+                best = Some(line_number);
+                best_distance = distance;
+            }
+        }
+        best
+    }
+
+    fn nearest_free_line(
+        preferred: usize,
+        line_count: usize,
+        used_lines: &HashSet<usize>,
+    ) -> Option<usize> {
+        if line_count == 0 {
+            return None;
+        }
+        let clamped = preferred.clamp(1, line_count);
+        if !used_lines.contains(&clamped) {
+            return Some(clamped);
+        }
+        for distance in 1..=line_count {
+            let down = clamped.saturating_add(distance);
+            if down <= line_count && !used_lines.contains(&down) {
+                return Some(down);
+            }
+            let up = clamped.saturating_sub(distance);
+            if up >= 1 && !used_lines.contains(&up) {
+                return Some(up);
+            }
+        }
+        None
+    }
+
     let mut reminders = db.list_reminders(note_id)?;
     reminders.sort_by_key(|reminder| reminder.line_number);
 
@@ -3246,83 +3408,126 @@ fn load_note_reminder_ghosts(
         text_to_lines.entry(line.clone()).or_default().push(idx + 1);
     }
 
-    let mut used_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut by_line = HashMap::with_capacity(reminders.len());
+    let mut used_lines: HashSet<usize> = HashSet::new();
+    let mut planned = Vec::with_capacity(reminders.len());
 
-    for mut reminder in reminders {
+    for reminder in reminders {
         let old_line = reminder.line_number;
-        let old_line_idx = old_line
-            .checked_sub(1)
-            .and_then(|line| usize::try_from(line).ok());
+        let old_line_usize = usize::try_from(old_line).ok().filter(|line| *line >= 1);
+        let old_line_idx = old_line_usize
+            .and_then(|line| line.checked_sub(1))
+            .filter(|idx| *idx < lines.len());
         let old_text_matches = old_line_idx
             .and_then(|idx| lines.get(idx))
             .map(|line| line == &reminder.line_text)
             .unwrap_or(false);
 
-        let mut final_line = old_line;
-        if old_text_matches
-            && old_line_idx
-                .map(|idx| !used_lines.contains(&(idx + 1)))
-                .unwrap_or(false)
-        {
-            if let Some(idx) = old_line_idx {
-                used_lines.insert(idx + 1);
-            }
-        } else if let Some(candidates) = text_to_lines.get(&reminder.line_text) {
-            let old_line_usize = usize::try_from(old_line.max(1)).unwrap_or(1);
-            let mut best: Option<usize> = None;
-            let mut best_distance = usize::MAX;
-            for &line_number in candidates {
-                if used_lines.contains(&line_number) {
-                    continue;
-                }
-                let distance = line_number.abs_diff(old_line_usize);
-                if distance < best_distance
-                    || (distance == best_distance
-                        && best.map(|current| line_number < current).unwrap_or(true))
-                {
-                    best = Some(line_number);
-                    best_distance = distance;
-                }
-            }
+        let preferred_line = old_line_usize.unwrap_or(1);
+        let mut target_line = None;
 
-            if let Some(target_line) = best {
-                if target_line != old_line_usize {
-                    let target_text = lines
-                        .get(target_line.saturating_sub(1))
-                        .cloned()
-                        .unwrap_or_default();
-                    if db.move_reminder_line(
-                        note_id,
-                        old_line,
-                        i64::try_from(target_line).unwrap_or(old_line),
-                        &target_text,
-                    )? {
-                        reminder.line_number = i64::try_from(target_line).unwrap_or(old_line);
-                        reminder.line_text = target_text;
-                    }
+        if old_text_matches {
+            if let Some(old_line_num) = old_line_usize {
+                if !used_lines.contains(&old_line_num) {
+                    target_line = Some(old_line_num);
                 }
-                used_lines.insert(target_line);
-                final_line = reminder.line_number;
-            } else if let Some(idx) = old_line_idx {
-                used_lines.insert(idx + 1);
             }
-        } else if let Some(idx) = old_line_idx {
-            used_lines.insert(idx + 1);
         }
 
-        let Some(line_idx) = final_line
+        if target_line.is_none() {
+            if let Some(candidates) = text_to_lines.get(&reminder.line_text) {
+                target_line = nearest_available_line(candidates, preferred_line, &used_lines);
+            }
+        }
+
+        if target_line.is_none() {
+            if let Some(old_line_num) = old_line_usize {
+                if old_line_num >= 1
+                    && old_line_num <= lines.len()
+                    && !used_lines.contains(&old_line_num)
+                {
+                    target_line = Some(old_line_num);
+                }
+            }
+        }
+
+        if target_line.is_none() {
+            target_line = nearest_free_line(preferred_line, lines.len(), &used_lines);
+        }
+
+        let Some(target_line) = target_line else {
+            continue;
+        };
+        used_lines.insert(target_line);
+
+        let Some(target_text) = lines.get(target_line.saturating_sub(1)).cloned() else {
+            continue;
+        };
+
+        planned.push(PlannedReminder {
+            source_line: old_line,
+            source_text: reminder.line_text,
+            target_line: i64::try_from(target_line).unwrap_or(old_line),
+            target_text,
+            remind_at_ms: reminder.remind_at_ms,
+            display_at: reminder.display_at,
+            notified_at_ms: reminder.notified_at_ms,
+        });
+    }
+
+    if !planned.is_empty() {
+        let max_existing_line = planned
+            .iter()
+            .flat_map(|entry| [entry.source_line, entry.target_line])
+            .filter(|line| *line > 0)
+            .max()
+            .unwrap_or_else(|| i64::try_from(lines.len()).unwrap_or(1));
+        let temp_base = max_existing_line.saturating_add(10);
+        let mut temp_moves = Vec::new();
+
+        for (idx, entry) in planned.iter().enumerate() {
+            if entry.source_line == entry.target_line {
+                continue;
+            }
+            let temp_line = temp_base.saturating_add(i64::try_from(idx).unwrap_or(0) + 1);
+            if db.move_reminder_line(note_id, entry.source_line, temp_line, &entry.source_text)? {
+                temp_moves.push((idx, temp_line));
+            }
+        }
+
+        for (idx, temp_line) in temp_moves {
+            let entry = &planned[idx];
+            let _ =
+                db.move_reminder_line(note_id, temp_line, entry.target_line, &entry.target_text)?;
+        }
+
+        for entry in &planned {
+            if entry.source_line == entry.target_line && entry.source_text != entry.target_text {
+                let _ = db.move_reminder_line(
+                    note_id,
+                    entry.source_line,
+                    entry.target_line,
+                    &entry.target_text,
+                )?;
+            }
+        }
+    }
+
+    let mut by_line = HashMap::with_capacity(planned.len());
+    for entry in planned {
+        let Some(line_idx) = entry
+            .target_line
             .checked_sub(1)
             .and_then(|line| usize::try_from(line).ok())
         else {
             continue;
         };
-
         by_line.insert(
             line_idx,
             LineReminderGhost {
-                remind_at_ms: reminder.remind_at_ms,
-                display_at: reminder.display_at,
+                remind_at_ms: entry.remind_at_ms,
+                display_at: entry.display_at,
+                line_text: entry.target_text,
+                notified_at_ms: entry.notified_at_ms,
             },
         );
     }
@@ -3826,6 +4031,75 @@ fn now_epoch_ms() -> i64 {
         .unwrap_or_default()
         .as_millis();
     i64::try_from(millis).unwrap_or(i64::MAX)
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', " ")
+}
+
+fn send_system_notification(title: &str, body: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new("notify-send")
+            .args(["--", title, body])
+            .status()
+            .map_err(|e| format!("notify-send unavailable: {e}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("notify-send exited with status {status}"));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let script = format!(
+            "display notification \"{}\" with title \"{}\"",
+            escape_applescript(body),
+            escape_applescript(title)
+        );
+        let status = Command::new("osascript")
+            .args(["-e", script.as_str()])
+            .status()
+            .map_err(|e| format!("osascript unavailable: {e}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("osascript exited with status {status}"));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let escaped_title = title.replace('\'', "''");
+        let escaped_body = body.replace('\'', "''");
+        let command = format!(
+            "$null=[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
+             $null=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime];\
+             $xml=New-Object Windows.Data.Xml.Dom.XmlDocument;\
+             $xml.LoadXml(\"<toast><visual><binding template='ToastGeneric'><text>{escaped_title}</text><text>{escaped_body}</text></binding></visual></toast>\");\
+             $toast=[Windows.UI.Notifications.ToastNotification]::new($xml);\
+             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('note').Show($toast);"
+        );
+        let status = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                command.as_str(),
+            ])
+            .status()
+            .map_err(|e| format!("powershell unavailable: {e}"))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("powershell exited with status {status}"));
+    }
+
+    #[allow(unreachable_code)]
+    Err("system notifications are not supported on this platform".to_string())
 }
 
 fn current_local_datetime_parts() -> Option<(i32, u32, u32, u32, u32)> {
@@ -4519,6 +4793,60 @@ mod tests {
             app.handle_key(db, key.clone())
                 .expect("key sequence should apply");
         }
+    }
+
+    #[test]
+    fn load_note_reminder_ghosts_reconciles_shift_without_dropping_adjacent_reminders() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let note_id = "n1";
+        db.save_note(note_id, "a\nb\nc").expect("note saved");
+        db.upsert_reminder(note_id, 1, 1_900_000_000_000, "2030-03-10 09:00", "a")
+            .expect("reminder a");
+        db.upsert_reminder(note_id, 2, 1_900_000_100_000, "2030-03-10 09:05", "b")
+            .expect("reminder b");
+
+        let lines = vec![
+            "x".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+        ];
+        let ghosts = super::load_note_reminder_ghosts(&db, note_id, &lines).expect("load ghosts");
+        assert!(ghosts.contains_key(&1));
+        assert!(ghosts.contains_key(&2));
+
+        let persisted = db.list_reminders(note_id).expect("list reminders");
+        let persisted_lines = persisted
+            .iter()
+            .map(|entry| entry.line_number)
+            .collect::<Vec<_>>();
+        assert_eq!(persisted_lines, vec![2, 3]);
+
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn load_note_reminder_ghosts_updates_line_text_when_line_changes_in_place() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let note_id = "n1";
+        db.save_note(note_id, "alpha").expect("note saved");
+        db.upsert_reminder(note_id, 1, 1_900_000_000_000, "2030-03-10 09:00", "alpha")
+            .expect("reminder");
+
+        let lines = vec!["alpha updated".to_string()];
+        let ghosts = super::load_note_reminder_ghosts(&db, note_id, &lines).expect("load ghosts");
+        let ghost = ghosts.get(&0).expect("ghost on first line");
+        assert_eq!(ghost.line_text, "alpha updated");
+
+        let persisted = db.list_reminders(note_id).expect("list reminders");
+        assert_eq!(persisted[0].line_number, 1);
+        assert_eq!(persisted[0].line_text, "alpha updated");
+
+        drop(db);
+        cleanup_db_files(&path);
     }
 
     #[test]
