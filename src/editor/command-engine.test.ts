@@ -19,6 +19,8 @@ test("editor mode exposes only editing commands", () => {
     "notify",
     "notify-delete",
     "format",
+    "clip-watch",
+    "clip-watch-stop",
     "clist",
     "ulist",
     "olist",

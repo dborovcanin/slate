@@ -168,6 +168,14 @@ export function exportToFile(path: string, content: string): Promise<void> {
   return invoke<void>("export_to_file", { path, content });
 }
 
+export async function readSystemClipboardText(): Promise<string | null> {
+  try {
+    return await invoke<string | null>("read_clipboard_text");
+  } catch {
+    return null;
+  }
+}
+
 export function getThemeConfig(): Promise<ThemeConfig> {
   return invoke<ThemeConfig>("get_theme_config");
 }

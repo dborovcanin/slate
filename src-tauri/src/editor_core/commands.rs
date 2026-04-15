@@ -598,6 +598,8 @@ pub fn execute_command(
         }
         CommandId::Notify => result_with_message("notify handled by host"),
         CommandId::NotifyDelete => result_with_message("notify-delete handled by host"),
+        CommandId::ClipWatch => result_with_message("clip-watch handled by host"),
+        CommandId::ClipWatchStop => result_with_message("clip-watch-stop handled by host"),
         CommandId::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
@@ -664,6 +666,8 @@ mod tests {
                 "notify",
                 "notify-delete",
                 "format",
+                "clip-watch",
+                "clip-watch-stop",
                 "clist",
                 "ulist",
                 "olist",

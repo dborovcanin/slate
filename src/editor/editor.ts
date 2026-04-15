@@ -62,6 +62,8 @@ interface EditorMountOptions {
   variablesEnabled?: boolean;
   variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
+  onClipWatchStateChange?: (active: boolean) => void;
+  onClipWatchPaste?: (text: string) => void;
 }
 
 let currentFormatOnSave = false;
@@ -238,6 +240,8 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       dateTimeFormat: options.dateTimeFormat,
       vimMode: !!options.vimMode,
       onExitCommand: options.onExitCommand,
+      onClipWatchStateChange: options.onClipWatchStateChange,
+      onClipWatchPaste: options.onClipWatchPaste,
     }),
     tableCellNavigationDomHandler(),
     snapEditorScrollToPixels(),
@@ -263,6 +267,8 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
           dateFormat: options.dateFormat,
           dateTimeFormat: options.dateTimeFormat,
           onExitCommand: options.onExitCommand,
+          onClipWatchStateChange: options.onClipWatchStateChange,
+          onClipWatchPaste: options.onClipWatchPaste,
         }),
       ),
     );

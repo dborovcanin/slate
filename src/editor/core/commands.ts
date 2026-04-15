@@ -48,6 +48,8 @@ export interface CommandRuntime {
   copyText?: (text: string) => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
   formatMarkdown?: (input: string) => string | Promise<string>;
+  startClipboardWatch?: () => Promise<boolean> | boolean;
+  stopClipboardWatch?: () => Promise<boolean> | boolean;
 }
 
 export interface CommandExecutionResult {
@@ -260,6 +262,36 @@ async function runQuitCommand(
   return { message: "quit", operations: [] };
 }
 
+async function runClipWatchCommand(
+  _normalizedInput: string,
+  _ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  if (!runtime.startClipboardWatch) {
+    return { message: "clip-watch unavailable", operations: [] };
+  }
+  const started = await runtime.startClipboardWatch();
+  return {
+    message: started ? "clip-watch started" : "clip-watch already active",
+    operations: [],
+  };
+}
+
+async function runClipWatchStopCommand(
+  _normalizedInput: string,
+  _ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  if (!runtime.stopClipboardWatch) {
+    return { message: "clip-watch-stop unavailable", operations: [] };
+  }
+  const stopped = await runtime.stopClipboardWatch();
+  return {
+    message: stopped ? "clip-watch stopped" : "clip-watch not active",
+    operations: [],
+  };
+}
+
 type ListConversionKind = "checklist" | "unordered" | "ordered";
 
 function convertLineToList(
@@ -397,6 +429,8 @@ const COMMAND_REGISTRY: CommandRegistryEntry[] = [
   { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: MODES_BOTH, execute: runNotifyCommand },
   { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: MODES_BOTH, execute: runNotifyDeleteCommand },
   { value: "format", aliases: ["fmt"], description: "format markdown document", modes: MODES_BOTH, execute: runFormatCommand },
+  { value: "clip-watch", aliases: ["clip_watch"], description: "watch clipboard and paste text at cursor", modes: MODES_BOTH, execute: runClipWatchCommand },
+  { value: "clip-watch-stop", aliases: ["clip_watch_stop"], description: "stop clipboard watch", modes: MODES_BOTH, execute: runClipWatchStopCommand },
   { value: "clist", aliases: ["checklist", "checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: MODES_BOTH, execute: runChecklistCommand },
   { value: "ulist", aliases: ["unordered-list", "unordered"], description: "convert selected lines to unordered list", modes: MODES_BOTH, execute: runUnorderedListCommand },
   { value: "olist", aliases: ["ordered-list", "ordered"], description: "convert selected lines to ordered list", modes: MODES_BOTH, execute: runOrderedListCommand },

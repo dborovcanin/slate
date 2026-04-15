@@ -51,6 +51,7 @@ fn run_gui() -> Result<(), String> {
             commands::perf::append_startup_log,
             commands::config::get_theme_config,
             commands::export::export_to_file,
+            commands::clipboard::read_clipboard_text,
         ])
         .setup(|app| {
             server::start_ipc_server(app.handle().clone());

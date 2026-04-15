@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
+const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const TITLE_ROW: usize = 1;
 const EDITOR_TOP_ROW: usize = 2;
 const GUTTER_WIDTH: usize = 6;
@@ -397,6 +398,10 @@ struct TerminalApp {
     render_palette: render::RenderPalette,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
+    // Clipboard watch
+    clipboard_watch_enabled: bool,
+    clipboard_watch_last_text: Option<String>,
+    clipboard_watch_last_poll: Instant,
     // Undo/redo
     undo_stack: Vec<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
@@ -491,6 +496,9 @@ impl TerminalApp {
             variables_enabled,
             render_palette,
             command_bar_from_normal: false,
+            clipboard_watch_enabled: false,
+            clipboard_watch_last_text: None,
+            clipboard_watch_last_poll: Instant::now(),
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_undo_snapshot: UndoEntry {
@@ -525,6 +533,7 @@ impl TerminalApp {
                 None => self.maybe_autosave(db)?,
             }
 
+            self.maybe_clipboard_watch();
             self.sync_reminder_ghosts_if_dirty(db)?;
             self.maybe_dispatch_due_reminders(db);
         }
@@ -541,6 +550,59 @@ impl TerminalApp {
             self.status = format!("autosaved {}", self.active_note.id);
         }
         Ok(())
+    }
+
+    fn start_clipboard_watch(&mut self) -> bool {
+        if self.clipboard_watch_enabled {
+            return false;
+        }
+        self.clipboard_watch_enabled = true;
+        self.clipboard_watch_last_text = read_clipboard_via_commands();
+        self.clipboard_watch_last_poll =
+            Instant::now() - Duration::from_millis(CLIPBOARD_WATCH_POLL_MS);
+        true
+    }
+
+    fn stop_clipboard_watch(&mut self) -> bool {
+        if !self.clipboard_watch_enabled {
+            return false;
+        }
+        self.clipboard_watch_enabled = false;
+        true
+    }
+
+    fn maybe_clipboard_watch(&mut self) {
+        if !self.clipboard_watch_enabled {
+            return;
+        }
+        if !matches!(self.mode, UiMode::Editor | UiMode::Normal) {
+            return;
+        }
+        if self.clipboard_watch_last_poll.elapsed() < Duration::from_millis(CLIPBOARD_WATCH_POLL_MS)
+        {
+            return;
+        }
+        self.clipboard_watch_last_poll = Instant::now();
+
+        let Some(text) = read_clipboard_via_commands() else {
+            return;
+        };
+        if text.is_empty() {
+            return;
+        }
+        if self.clipboard_watch_last_text.as_deref() == Some(text.as_str()) {
+            return;
+        }
+
+        self.clipboard_watch_last_text = Some(text.clone());
+        let mut pasted = text;
+        if !pasted.ends_with('\n') {
+            pasted.push('\n');
+        }
+        self.insert_paste(&pasted);
+        self.adjust_cursor();
+        self.adjust_scroll();
+        self.status = "clip-watch pasted".to_string();
     }
 
     fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -680,6 +742,7 @@ impl TerminalApp {
             return None;
         }
         let joined = lines.join("\n");
+        self.clipboard_watch_last_text = Some(joined.clone());
         let backend = copy_text_to_clipboard(&joined);
         self.last_clipboard_backend = backend;
         self.clipboard = lines;
@@ -1668,6 +1731,22 @@ impl TerminalApp {
                         Err(error) => {
                             self.status = format!("notify-delete failed: {error}");
                         }
+                    }
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::ClipWatch => {
+                    if self.start_clipboard_watch() {
+                        self.status = "clip-watch started".to_string();
+                    } else {
+                        self.status = "clip-watch already active".to_string();
+                    }
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::ClipWatchStop => {
+                    if self.stop_clipboard_watch() {
+                        self.status = "clip-watch stopped".to_string();
+                    } else {
+                        self.status = "clip-watch not active".to_string();
                     }
                     return;
                 }
@@ -5466,6 +5545,32 @@ mod tests {
 
         run_keys(&mut app, &db, &[Key::Ctrl('q')]);
         assert!(app.quit);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn clip_watch_commands_toggle_terminal_watcher() {
+        let (db, mut app, path) = app_with_note("alpha");
+        app.mode = UiMode::Normal;
+
+        app.execute_terminal_command(&db, "clip-watch");
+        assert!(app.clipboard_watch_enabled);
+        assert_eq!(app.status, "clip-watch started");
+
+        app.execute_terminal_command(&db, "clip-watch");
+        assert!(app.clipboard_watch_enabled);
+        assert_eq!(app.status, "clip-watch already active");
+
+        app.execute_terminal_command(&db, "clip-watch-stop");
+        assert!(!app.clipboard_watch_enabled);
+        assert_eq!(app.status, "clip-watch stopped");
+
+        app.execute_terminal_command(&db, "clip-watch-stop");
+        assert!(!app.clipboard_watch_enabled);
+        assert_eq!(app.status, "clip-watch not active");
 
         drop(app);
         drop(db);

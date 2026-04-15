@@ -308,6 +308,7 @@ function showToast(message: string) {
 
 let statusTitleEl: HTMLElement;
 let statusMetaEl: HTMLElement;
+let clipWatchActive = false;
 
 function createStatusBar(container: HTMLElement) {
   const bar = document.createElement("div");
@@ -347,6 +348,23 @@ function updateStatusBar() {
     span.textContent = text;
     statusMetaEl.prepend(span);
   }
+
+  const hintEl = statusMetaEl.querySelector(".status-bar-hint");
+  let watchEl = statusMetaEl.querySelector(".status-clip-watch") as HTMLElement | null;
+  if (clipWatchActive) {
+    if (!watchEl) {
+      watchEl = document.createElement("span");
+      watchEl.className = "status-clip-watch";
+      watchEl.textContent = "clip-watch ON";
+    }
+    if (hintEl) {
+      statusMetaEl.insertBefore(watchEl, hintEl);
+    } else {
+      statusMetaEl.appendChild(watchEl);
+    }
+  } else if (watchEl) {
+    watchEl.remove();
+  }
 }
 
 export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>) {
@@ -380,12 +398,20 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     variablesEnabled: config.variables_enabled,
     variableAutocompleteMinChars: config.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
+    onClipWatchStateChange: (active) => {
+      clipWatchActive = active;
+      updateStatusBar();
+    },
+    onClipWatchPaste: (text) => {
+      const suffix = text.includes("\n") ? " (multiline)" : "";
+      showToast(`clip-watch pasted${suffix}`);
+    },
   });
   startupMark("ui_editor_mounted");
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :q");
+    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch, :clip-watch-stop, :q");
   }
 
   state.on(() => {

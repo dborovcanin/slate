@@ -8,6 +8,8 @@ interface CommandPickerOptions {
   dateFormat?: string;
   dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
+  onClipWatchStateChange?: (active: boolean) => void;
+  onClipWatchPaste?: (text: string) => void;
   source?: "vim-colon" | "shortcut";
   selectionOverride?: {
     anchor: number;
@@ -20,6 +22,8 @@ interface CommandModeExtensionOptions {
   dateFormat?: string;
   dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
+  onClipWatchStateChange?: (active: boolean) => void;
+  onClipWatchPaste?: (text: string) => void;
 }
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
@@ -101,6 +105,8 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
         onExitCommand: options.onExitCommand,
+        onClipWatchStateChange: options.onClipWatchStateChange,
+        onClipWatchPaste: options.onClipWatchPaste,
         selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
@@ -175,6 +181,8 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
         onExitCommand: options.onExitCommand,
+        onClipWatchStateChange: options.onClipWatchStateChange,
+        onClipWatchPaste: options.onClipWatchPaste,
         source: "shortcut",
       });
       return true;

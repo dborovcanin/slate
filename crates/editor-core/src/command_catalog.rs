@@ -19,6 +19,8 @@ pub enum CommandId {
     Checklist,
     UnorderedList,
     OrderedList,
+    ClipWatch,
+    ClipWatchStop,
     Quit,
 }
 
@@ -34,7 +36,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 18] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 20] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -131,6 +133,20 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 18] = [
         value: "format",
         aliases: &["fmt"],
         description: "format markdown document",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ClipWatch,
+        value: "clip-watch",
+        aliases: &["clip_watch"],
+        description: "watch clipboard and paste text at cursor",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ClipWatchStop,
+        value: "clip-watch-stop",
+        aliases: &["clip_watch_stop"],
+        description: "stop clipboard watch",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -279,6 +295,10 @@ mod tests {
         assert_eq!(
             resolve_command(CommandMode::Editor, "ordered").map(|cmd| cmd.id),
             Some(CommandId::OrderedList)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "clip_watch_stop").map(|cmd| cmd.id),
+            Some(CommandId::ClipWatchStop)
         );
     }
 

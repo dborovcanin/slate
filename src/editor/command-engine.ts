@@ -1,5 +1,10 @@
 import type { EditorView } from "@codemirror/view";
-import { deleteNoteReminder, evaluateLines, upsertNoteReminder } from "../api.ts";
+import {
+  deleteNoteReminder,
+  evaluateLines,
+  readSystemClipboardText,
+  upsertNoteReminder,
+} from "../api.ts";
 import {
   executeCommand as executeCoreCommand,
   listCommandSuggestions as listCoreCommandSuggestions,
@@ -19,10 +24,109 @@ export interface CommandExecutionOptions {
   dateFormat?: string;
   dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
+  onClipWatchStateChange?: (active: boolean) => void;
+  onClipWatchPaste?: (text: string) => void;
   selectionOverride?: {
     anchor: number;
     head: number;
   };
+}
+
+const CLIPBOARD_WATCH_POLL_MS = 400;
+
+let clipboardWatchTimer: number | null = null;
+let clipboardWatchInFlight = false;
+let clipboardWatchLastText: string | null = null;
+let clipboardWatchTarget: EditorView | null = null;
+let clipboardWatchStateChangeCb: ((active: boolean) => void) | null = null;
+let clipboardWatchPasteCb: ((text: string) => void) | null = null;
+
+function clipboardWatchSupported(): boolean {
+  return typeof window !== "undefined";
+}
+
+function isClipboardWatchActive(): boolean {
+  return clipboardWatchTimer !== null;
+}
+
+async function readClipboardText(): Promise<string | null> {
+  if (!clipboardWatchSupported()) return null;
+  const backendText = await readSystemClipboardText();
+  if (backendText && backendText.length > 0) {
+    return backendText;
+  }
+  if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+    return null;
+  }
+  try {
+    const value = await navigator.clipboard.readText();
+    if (!value || value.length === 0) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+function insertClipboardText(view: EditorView, text: string) {
+  if (!text) return;
+  const main = view.state.selection.main;
+  view.dispatch({
+    changes: { from: main.from, to: main.to, insert: text },
+    selection: { anchor: main.from + text.length },
+    scrollIntoView: true,
+  });
+}
+
+async function pollClipboardWatch() {
+  if (clipboardWatchInFlight) return;
+  if (!clipboardWatchTarget) return;
+  clipboardWatchInFlight = true;
+  try {
+    const text = await readClipboardText();
+    if (!text || text === clipboardWatchLastText) return;
+    clipboardWatchLastText = text;
+    insertClipboardText(clipboardWatchTarget, text);
+    clipboardWatchPasteCb?.(text);
+  } finally {
+    clipboardWatchInFlight = false;
+  }
+}
+
+async function startClipboardWatch(
+  view: EditorView,
+  callbacks: {
+    onStateChange?: (active: boolean) => void;
+    onPaste?: (text: string) => void;
+  } = {},
+): Promise<boolean> {
+  if (!clipboardWatchSupported()) return false;
+  clipboardWatchStateChangeCb = callbacks.onStateChange ?? null;
+  clipboardWatchPasteCb = callbacks.onPaste ?? null;
+  clipboardWatchTarget = view;
+  if (clipboardWatchTimer !== null) return false;
+
+  clipboardWatchLastText = await readClipboardText();
+  clipboardWatchTimer = window.setInterval(() => {
+    void pollClipboardWatch();
+  }, CLIPBOARD_WATCH_POLL_MS);
+  clipboardWatchStateChangeCb?.(true);
+  return true;
+}
+
+function stopClipboardWatch(): boolean {
+  if (clipboardWatchTimer === null) {
+    clipboardWatchStateChangeCb?.(false);
+    return false;
+  }
+  window.clearInterval(clipboardWatchTimer);
+  clipboardWatchTimer = null;
+  clipboardWatchTarget = null;
+  clipboardWatchInFlight = false;
+  clipboardWatchLastText = null;
+  clipboardWatchStateChangeCb?.(false);
+  clipboardWatchStateChangeCb = null;
+  clipboardWatchPasteCb = null;
+  return true;
 }
 
 async function copyText(text: string) {
@@ -50,6 +154,7 @@ export async function executeCommand(
       head: options.selectionOverride.head,
     };
   }
+  const canClipboardWatch = clipboardWatchSupported();
   const result = await executeCoreCommand(snapshot, rawInput, {
     mode: options.mode,
     dateFormat: options.dateFormat,
@@ -79,6 +184,15 @@ export async function executeCommand(
       return result ?? null;
     },
     copyText,
+    startClipboardWatch: canClipboardWatch
+      ? () => startClipboardWatch(view, {
+        onStateChange: options.onClipWatchStateChange,
+        onPaste: options.onClipWatchPaste,
+      })
+      : undefined,
+    stopClipboardWatch: canClipboardWatch || isClipboardWatchActive()
+      ? () => stopClipboardWatch()
+      : undefined,
     onQuit: options.onExitCommand,
     formatMarkdown: formatMarkdownTextAsync,
   });

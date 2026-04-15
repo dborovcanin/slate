@@ -107,6 +107,8 @@ test("core command suggestions are mode-aware", () => {
     "notify",
     "notify-delete",
     "format",
+    "clip-watch",
+    "clip-watch-stop",
     "clist",
     "ulist",
     "olist",
@@ -241,6 +243,44 @@ test("core executeCommand handles notify-delete miss", async () => {
 
   assert.equal(result.operations.length, 0);
   assert.equal(result.message, "notify-delete: no reminder on line 1");
+});
+
+test("core executeCommand handles clip-watch start/stop", async () => {
+  const starts: string[] = [];
+  const stops: string[] = [];
+
+  const started = await executeCommand(snapshot("alpha", 0), "clip-watch", {
+    mode: "editor",
+    startClipboardWatch: async () => {
+      starts.push("start");
+      return true;
+    },
+  });
+  assert.equal(started.message, "clip-watch started");
+  assert.equal(started.operations.length, 0);
+  assert.equal(starts.length, 1);
+
+  const alreadyActive = await executeCommand(snapshot("alpha", 0), "clip-watch", {
+    mode: "editor",
+    startClipboardWatch: async () => false,
+  });
+  assert.equal(alreadyActive.message, "clip-watch already active");
+
+  const stopped = await executeCommand(snapshot("alpha", 0), "clip-watch-stop", {
+    mode: "editor",
+    stopClipboardWatch: async () => {
+      stops.push("stop");
+      return true;
+    },
+  });
+  assert.equal(stopped.message, "clip-watch stopped");
+  assert.equal(stops.length, 1);
+
+  const notActive = await executeCommand(snapshot("alpha", 0), "clip-watch-stop", {
+    mode: "editor",
+    stopClipboardWatch: async () => false,
+  });
+  assert.equal(notActive.message, "clip-watch not active");
 });
 
 test("core executeCommand supports unit-aware sum row", async () => {

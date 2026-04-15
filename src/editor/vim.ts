@@ -36,6 +36,8 @@ interface VimOptions {
   dateFormat?: string;
   dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
+  onClipWatchStateChange?: (active: boolean) => void;
+  onClipWatchPaste?: (text: string) => void;
 }
 
 function isPrintableTextKey(event: KeyboardEvent): boolean {
@@ -724,6 +726,8 @@ export function vimModeExtension(options: VimOptions = {}) {
           dateFormat: options.dateFormat,
           dateTimeFormat: options.dateTimeFormat,
           onExitCommand: options.onExitCommand,
+          onClipWatchStateChange: options.onClipWatchStateChange,
+          onClipWatchPaste: options.onClipWatchPaste,
           source: "vim-colon",
           selectionOverride: preservedSelection,
         });
