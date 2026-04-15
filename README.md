@@ -86,11 +86,6 @@ sqrt(144) + 3^2         → 21
 - Ctrl+Shift+E opens a native file dialog to save as `.md` or `.txt`
 - Toast feedback on export
 
-**IPC / Sway integration**
-- `slate-msg` CLI binary communicates with the running app over a Unix socket
-- Commands: `ping`, `show`, `hide`, `toggle`
-- Bind to a Sway keybind for instant toggle from any workspace
-
 **Keyboard shortcuts**
 
 | Shortcut                | Action                        |
@@ -151,15 +146,13 @@ npm install
 cargo tauri build
 ```
 
-Outputs two binaries:
+Output binary:
 - `src-tauri/target/release/slate` (14MB) — the app
-- `src-tauri/target/release/slate-msg` (471KB) — the IPC client
 
 Install them:
 
 ```sh
 cp src-tauri/target/release/slate ~/.local/bin/
-cp src-tauri/target/release/slate-msg ~/.local/bin/
 ```
 
 Or use:
@@ -175,7 +168,7 @@ make release
 ```
 
 `make release` writes artifacts into `build/`:
-- `slate-linux`, `slate-msg-linux`
+- `slate-linux`
 - Windows NSIS installer (`*.exe`) when run on a native Windows host (MSVC toolchain)
 - macOS binaries when run on macOS, or when an osxcross toolchain is configured
 
@@ -327,31 +320,6 @@ Supported `date_format` tokens:
 - `%m` month (01-12), `%d` day (01-31)
 - `%b` short month (`Jan`), `%B` full month (`January`)
 
-## Sway integration
-
-Add to your Sway config:
-
-```
-# Float the window
-for_window [app_id="slate"] floating enable
-
-# Toggle with a keybind
-bindsym $mod+n exec slate-msg toggle || slate
-```
-
-The `||` fallback launches `slate` if `slate-msg` can't connect (app not running).
-
-### IPC commands
-
-```sh
-slate-msg ping     # Check if the app is running
-slate-msg show     # Show and focus the window
-slate-msg hide     # Hide the window
-slate-msg toggle   # Toggle visibility
-```
-
-The socket lives at `$XDG_RUNTIME_DIR/slate.sock` and is cleaned up on exit.
-
 ## Architecture
 
 Tauri v2 app: Rust backend + vanilla TypeScript frontend.
@@ -362,17 +330,17 @@ Tauri v2 app: Rust backend + vanilla TypeScript frontend.
 
 ```
                     Unix socket IPC
-┌─────────────┐  ping|show|hide|toggle   ┌─────────────────────────────────┐
-│  slate-msg  │ ───────────────────────> │          slate (Tauri v2)       │
-│  (471KB)    │                          │                                 │
-└─────────────┘                          │  Frontend        Backend        │
-                                         │  ┌────────────┐  ┌────────────┐ │
-                                         │  │ CodeMirror │  │ SQLite+WAL │ │
-                                         │  │ Calc ghost │  │ fend-core  │ │
-                                         │  │ Switcher   │  │ IPC server │ │
-                                         │  │ Export     │  │ Export I/O │ │
-                                         │  └────────────┘  └────────────┘ │
-                                         └─────────────────────────────────┘
+┌─────────────────────────────────┐
+│          slate (Tauri v2)       │
+│                                 │
+│  Frontend        Backend        │
+│  ┌────────────┐  ┌────────────┐ │
+│  │ CodeMirror │  │ SQLite+WAL │ │
+│  │ Calc ghost │  │ fend-core  │ │
+│  │ Switcher   │  │ IPC server │ │
+│  │ Export     │  │ Export I/O │ │
+│  └────────────┘  └────────────┘ │
+└─────────────────────────────────┘
 ```
 
 ## Project structure
@@ -406,8 +374,6 @@ src-tauri/                    # Backend (Rust)
       engine.rs               # fend-core wrapper + heuristics
     ipc/
       server.rs               # Unix socket listener
-  src/bin/
-    slate-msg.rs              # CLI client binary
   migrations/
     0001_init.sql             # Schema
 ```

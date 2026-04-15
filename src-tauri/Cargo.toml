@@ -11,10 +11,6 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "slate"
 path = "src/main.rs"
 
-[[bin]]
-name = "slate-msg"
-path = "src/bin/slate-msg.rs"
-
 [dependencies]
 app-core = { path = "../crates/app-core" }
 editor-core = { path = "../crates/editor-core" }

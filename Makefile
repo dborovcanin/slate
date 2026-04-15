@@ -1,5 +1,4 @@
 APP_NAME := slate
-MSG_NAME := slate-msg
 BIN_DIR := $(HOME)/.local/bin
 TAURI_DIR := src-tauri
 ICON_DIR := $(TAURI_DIR)/icons
@@ -17,7 +16,6 @@ HAS_OSXCROSS := $(shell command -v o64-clang >/dev/null 2>&1 && command -v oa64-
 HAS_MAGICK := $(shell command -v magick >/dev/null 2>&1 && echo 1 || echo 0)
 
 RELEASE_NOTE_BIN := $(TAURI_DIR)/target/release/$(APP_NAME)
-RELEASE_MSG_BIN := $(TAURI_DIR)/target/release/$(MSG_NAME)
 
 .PHONY: all npm-install build install ensure-icons release release-linux release-windows release-macos
 
@@ -32,8 +30,7 @@ build: npm-install
 install: build
 	mkdir -p "$(BIN_DIR)"
 	install -m 0755 "$(RELEASE_NOTE_BIN)" "$(BIN_DIR)/$(APP_NAME)"
-	install -m 0755 "$(RELEASE_MSG_BIN)" "$(BIN_DIR)/$(MSG_NAME)"
-	@echo "Installed $(APP_NAME) and $(MSG_NAME) to $(BIN_DIR)"
+	@echo "Installed $(APP_NAME) to $(BIN_DIR)"
 
 ensure-icons:
 	@mkdir -p "$(ICON_DIR)"
@@ -56,9 +53,6 @@ release-linux:
 	rustup target add "$(LINUX_TARGET)"
 	cargo tauri build --target "$(LINUX_TARGET)"
 	cp "$(TAURI_DIR)/target/$(LINUX_TARGET)/release/$(APP_NAME)" "$(BUILD_DIR)/$(APP_NAME)-linux"
-	@if [ -f "$(TAURI_DIR)/target/$(LINUX_TARGET)/release/$(MSG_NAME)" ]; then \
-		cp "$(TAURI_DIR)/target/$(LINUX_TARGET)/release/$(MSG_NAME)" "$(BUILD_DIR)/$(MSG_NAME)-linux"; \
-	fi
 
 release-windows:
 	mkdir -p "$(BUILD_DIR)"
@@ -81,9 +75,6 @@ release-windows:
 		if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(APP_NAME).exe" ]; then \
 			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(APP_NAME).exe" "$(BUILD_DIR)/$(APP_NAME)-windows-msvc.exe"; \
 		fi; \
-		if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(MSG_NAME).exe" ]; then \
-			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/$(MSG_NAME).exe" "$(BUILD_DIR)/$(MSG_NAME)-windows-msvc.exe"; \
-		fi; \
 		if [ -f "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/WebView2Loader.dll" ]; then \
 			cp "$(TAURI_DIR)/target/$(WINDOWS_TARGET)/release/WebView2Loader.dll" "$(BUILD_DIR)/WebView2Loader.dll"; \
 		fi; \
@@ -97,12 +88,6 @@ release-macos:
 		cp "$(TAURI_DIR)/target/$(MAC_INTEL_TARGET)/release/$(APP_NAME)" "$(BUILD_DIR)/$(APP_NAME)-mac-intel"; \
 		cargo tauri build --target "$(MAC_ARM_TARGET)"; \
 		cp "$(TAURI_DIR)/target/$(MAC_ARM_TARGET)/release/$(APP_NAME)" "$(BUILD_DIR)/$(APP_NAME)-mac-arm"; \
-		if [ -f "$(TAURI_DIR)/target/$(MAC_INTEL_TARGET)/release/$(MSG_NAME)" ]; then \
-			cp "$(TAURI_DIR)/target/$(MAC_INTEL_TARGET)/release/$(MSG_NAME)" "$(BUILD_DIR)/$(MSG_NAME)-mac-intel"; \
-		fi; \
-		if [ -f "$(TAURI_DIR)/target/$(MAC_ARM_TARGET)/release/$(MSG_NAME)" ]; then \
-			cp "$(TAURI_DIR)/target/$(MAC_ARM_TARGET)/release/$(MSG_NAME)" "$(BUILD_DIR)/$(MSG_NAME)-mac-arm"; \
-		fi; \
 	elif [ "$(HAS_OSXCROSS)" = "1" ]; then \
 		echo "Using osxcross toolchain for macOS cross-build"; \
 		rustup target add "$(MAC_INTEL_TARGET)" "$(MAC_ARM_TARGET)"; \
@@ -110,12 +95,6 @@ release-macos:
 		cp "$(TAURI_DIR)/target/$(MAC_INTEL_TARGET)/release/$(APP_NAME)" "$(BUILD_DIR)/$(APP_NAME)-mac-intel"; \
 		CC_aarch64_apple_darwin=oa64-clang CXX_aarch64_apple_darwin=oa64-clang++ cargo tauri build --target "$(MAC_ARM_TARGET)"; \
 		cp "$(TAURI_DIR)/target/$(MAC_ARM_TARGET)/release/$(APP_NAME)" "$(BUILD_DIR)/$(APP_NAME)-mac-arm"; \
-		if [ -f "$(TAURI_DIR)/target/$(MAC_INTEL_TARGET)/release/$(MSG_NAME)" ]; then \
-			cp "$(TAURI_DIR)/target/$(MAC_INTEL_TARGET)/release/$(MSG_NAME)" "$(BUILD_DIR)/$(MSG_NAME)-mac-intel"; \
-		fi; \
-		if [ -f "$(TAURI_DIR)/target/$(MAC_ARM_TARGET)/release/$(MSG_NAME)" ]; then \
-			cp "$(TAURI_DIR)/target/$(MAC_ARM_TARGET)/release/$(MSG_NAME)" "$(BUILD_DIR)/$(MSG_NAME)-mac-arm"; \
-		fi; \
 	else \
 		echo "Skipping macOS build: requires macOS host or osxcross (o64-clang/oa64-clang)."; \
 	fi
