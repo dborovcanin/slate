@@ -1,9 +1,10 @@
 #[cfg(unix)]
 mod imp {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::PathBuf;
+    use std::thread;
     use tauri::{AppHandle, Manager};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-    use tokio::net::UnixListener;
 
     pub fn socket_path() -> PathBuf {
         let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
@@ -20,7 +21,7 @@ mod imp {
         // remove stale socket
         let _ = std::fs::remove_file(&path);
 
-        tauri::async_runtime::spawn(async move {
+        thread::spawn(move || {
             let listener = match UnixListener::bind(&path) {
                 Ok(l) => l,
                 Err(e) => {
@@ -29,28 +30,29 @@ mod imp {
                 }
             };
 
-            loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(s) => s,
-                    Err(_) => continue,
+            for incoming in listener.incoming() {
+                let Ok(stream) = incoming else {
+                    continue;
                 };
-
                 let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let (reader, mut writer) = stream.into_split();
-                    let mut reader = BufReader::new(reader);
-                    let mut line = String::new();
-
-                    if reader.read_line(&mut line).await.is_err() {
-                        return;
-                    }
-
-                    let response = handle_command(line.trim(), &app);
-                    let _ = writer.write_all(response.as_bytes()).await;
-                    let _ = writer.write_all(b"\n").await;
+                thread::spawn(move || {
+                    handle_stream(stream, &app);
                 });
             }
         });
+    }
+
+    fn handle_stream(stream: UnixStream, app: &AppHandle) {
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+
+        if reader.read_line(&mut line).is_err() {
+            return;
+        }
+
+        let response = handle_command(line.trim(), app);
+        let mut stream = reader.into_inner();
+        let _ = writeln!(stream, "{response}");
     }
 
     fn handle_command(cmd: &str, app: &AppHandle) -> String {

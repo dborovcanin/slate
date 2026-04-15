@@ -3351,13 +3351,10 @@ dependencies = [
  "fend-core",
  "libc",
  "regex",
- "serde",
- "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "time",
- "tokio",
  "ulid",
 ]
 

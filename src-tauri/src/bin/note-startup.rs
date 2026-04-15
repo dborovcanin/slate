@@ -1,15 +1,15 @@
 use app_core::config;
 use app_core::AppCore;
-use serde::Serialize;
+use std::fmt::Write as _;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct StartupMark {
     name: String,
     ms: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct StartupReport {
     mode: String,
     marks: Vec<StartupMark>,
@@ -101,6 +101,43 @@ fn usage() {
     eprintln!("Usage: note-startup <gui|tui>");
 }
 
+fn json_escape(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    for ch in input.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn report_to_json(report: &StartupReport) -> String {
+    let mut out = String::new();
+    out.push_str("{\"mode\":\"");
+    out.push_str(&json_escape(&report.mode));
+    out.push_str("\",\"marks\":[");
+    for (idx, mark) in report.marks.iter().enumerate() {
+        if idx > 0 {
+            out.push(',');
+        }
+        out.push_str("{\"name\":\"");
+        out.push_str(&json_escape(&mark.name));
+        out.push_str("\",\"ms\":");
+        let _ = write!(out, "{}", mark.ms);
+        out.push('}');
+    }
+    out.push_str("]}");
+    out
+}
+
 fn main() {
     let mode = std::env::args().nth(1);
     let result = match mode.as_deref() {
@@ -114,10 +151,7 @@ fn main() {
 
     match result {
         Ok(report) => {
-            println!(
-                "{}",
-                serde_json::to_string(&report).unwrap_or_else(|_| "{}".to_string())
-            );
+            println!("{}", report_to_json(&report));
         }
         Err(err) => {
             eprintln!("Startup probe failed: {err}");
