@@ -236,6 +236,16 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 actions.push(make_action(VimIntent::ExitVisual, 1));
                 handled = true;
             }
+            VimKey::Char(':') | VimKey::Ctrl('e') => {
+                // Enter command bar from visual modes without emitting ExitVisual.
+                // Host adapters can keep the current selection range available
+                // while mode transitions to normal.
+                next.mode = VimMode::Normal;
+                next.pending = None;
+                next.count_buffer.clear();
+                actions.push(make_action(VimIntent::OpenCommandBar, 1));
+                handled = true;
+            }
             VimKey::ArrowLeft | VimKey::Char('h') => {
                 actions.push(make_action(VimIntent::MoveLeft, 1));
                 handled = true;
@@ -695,6 +705,19 @@ mod tests {
     fn colon_opens_command_bar() {
         let step = step_token(&VimState::default(), "char::");
         assert!(step.handled);
+        assert_eq!(step.actions[0].intent, VimIntent::OpenCommandBar);
+    }
+
+    #[test]
+    fn colon_from_visual_switches_to_normal_without_exit_action() {
+        let state = VimState {
+            mode: VimMode::Visual,
+            ..VimState::default()
+        };
+        let step = step_token(&state, "char::");
+        assert!(step.handled);
+        assert_eq!(step.state.mode, VimMode::Normal);
+        assert_eq!(step.actions.len(), 1);
         assert_eq!(step.actions[0].intent, VimIntent::OpenCommandBar);
     }
 

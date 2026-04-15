@@ -19,7 +19,9 @@ test("editor mode exposes only editing commands", () => {
     "notify",
     "notify-delete",
     "format",
-    "checklist",
+    "clist",
+    "ulist",
+    "olist",
   ]);
   assert.equal(values.includes("q"), false);
 });

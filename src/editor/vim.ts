@@ -712,12 +712,20 @@ export function vimModeExtension(options: VimOptions = {}) {
       case 29: // redo
         return runCounted(view, redo, count);
       case 30: // open_command_bar
+        // Preserve visual selection for command execution: command-bar focus
+        // can collapse the CM selection when mode is normal.
+        const preservedSelection =
+          view.state.selection.main.empty ? undefined : {
+            anchor: view.state.selection.main.anchor,
+            head: view.state.selection.main.head,
+          };
         openCommandPicker(view, {
           mode: "vim",
           dateFormat: options.dateFormat,
           dateTimeFormat: options.dateTimeFormat,
           onExitCommand: options.onExitCommand,
           source: "vim-colon",
+          selectionOverride: preservedSelection,
         });
         return true;
       case 31: // open_search

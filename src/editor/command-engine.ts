@@ -19,6 +19,10 @@ export interface CommandExecutionOptions {
   dateFormat?: string;
   dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
+  selectionOverride?: {
+    anchor: number;
+    head: number;
+  };
 }
 
 async function copyText(text: string) {
@@ -40,6 +44,12 @@ export async function executeCommand(
   options: CommandExecutionOptions,
 ): Promise<string> {
   const snapshot = snapshotFromView(view);
+  if (options.selectionOverride) {
+    snapshot.selection = {
+      anchor: options.selectionOverride.anchor,
+      head: options.selectionOverride.head,
+    };
+  }
   const result = await executeCoreCommand(snapshot, rawInput, {
     mode: options.mode,
     dateFormat: options.dateFormat,

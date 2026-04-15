@@ -17,6 +17,8 @@ pub enum CommandId {
     NotifyDelete,
     Format,
     Checklist,
+    UnorderedList,
+    OrderedList,
     Quit,
 }
 
@@ -32,7 +34,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 16] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 18] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -133,9 +135,23 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 16] = [
     },
     CommandDefinition {
         id: CommandId::Checklist,
-        value: "checklist",
-        aliases: &["checkbox", "checkboxes", "todo"],
+        value: "clist",
+        aliases: &["checklist", "checkbox", "checkboxes", "todo"],
         description: "convert selected lines to checklist",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::UnorderedList,
+        value: "ulist",
+        aliases: &["unordered-list", "unordered"],
+        description: "convert selected lines to unordered list",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::OrderedList,
+        value: "olist",
+        aliases: &["ordered-list", "ordered"],
+        description: "convert selected lines to ordered list",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -255,6 +271,14 @@ mod tests {
         assert_eq!(
             resolve_command(CommandMode::Editor, "notify-delte").map(|cmd| cmd.id),
             Some(CommandId::NotifyDelete)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "checklist").map(|cmd| cmd.id),
+            Some(CommandId::Checklist)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "ordered").map(|cmd| cmd.id),
+            Some(CommandId::OrderedList)
         );
     }
 

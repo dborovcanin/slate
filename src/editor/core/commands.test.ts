@@ -107,7 +107,9 @@ test("core command suggestions are mode-aware", () => {
     "notify",
     "notify-delete",
     "format",
-    "checklist",
+    "clist",
+    "ulist",
+    "olist",
   ]);
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);
@@ -321,10 +323,10 @@ test("core executeCommand computes avg paragraph", async () => {
   assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "20.00" });
 });
 
-test("core executeCommand checklist converts selected lines to checkboxes", async () => {
+test("core executeCommand clist converts selected lines to checkboxes", async () => {
   const text = ["alpha", "- beta", "1. gamma", "tail"].join("\n");
   const tailStart = text.indexOf("\ntail");
-  const result = await executeCommand(snapshot(text, tailStart, 0), "checklist", {
+  const result = await executeCommand(snapshot(text, tailStart, 0), "clist", {
     mode: "editor",
   });
 
@@ -334,6 +336,70 @@ test("core executeCommand checklist converts selected lines to checkboxes", asyn
     from: 0,
     to: tailStart,
     insert: "- [ ] alpha\n- [ ] beta\n1. [ ] gamma",
+  });
+});
+
+test("core executeCommand checklist alias still resolves", async () => {
+  const text = ["alpha", "tail"].join("\n");
+  const tailStart = text.indexOf("\ntail");
+  const result = await executeCommand(snapshot(text, tailStart, 0), "checklist", {
+    mode: "editor",
+  });
+
+  assert.equal(result.message, "converted 1 line to checklist");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: 0,
+    to: tailStart,
+    insert: "- [ ] alpha",
+  });
+});
+
+test("core executeCommand ulist converts only current line without selection", async () => {
+  const text = ["alpha", "1. beta", "gamma"].join("\n");
+  const betaStart = text.indexOf("1. beta");
+  const result = await executeCommand(snapshot(text, betaStart + 2), "ulist", {
+    mode: "editor",
+  });
+
+  assert.equal(result.message, "converted 1 line to unordered list");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: betaStart,
+    to: betaStart + "1. beta".length,
+    insert: "- beta",
+  });
+});
+
+test("core executeCommand olist converts selected lines into ordered items", async () => {
+  const text = ["alpha", "- [x] beta", "- gamma", "tail"].join("\n");
+  const tailStart = text.indexOf("\ntail");
+  const result = await executeCommand(snapshot(text, tailStart, 0), "olist", {
+    mode: "editor",
+  });
+
+  assert.equal(result.message, "converted 3 lines to ordered list");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: 0,
+    to: tailStart,
+    insert: "1. alpha\n2. beta\n3. gamma",
+  });
+});
+
+test("core executeCommand clist in vim mode treats endpoint lines as selected", async () => {
+  const text = ["alpha", "beta", "gamma"].join("\n");
+  const betaStart = text.indexOf("beta");
+  const result = await executeCommand(snapshot(text, betaStart, 0), "clist", {
+    mode: "vim",
+  });
+
+  assert.equal(result.message, "converted 2 lines to checklist");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: 0,
+    to: betaStart + "beta".length,
+    insert: "- [ ] alpha\n- [ ] beta",
   });
 });
 

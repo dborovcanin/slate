@@ -260,66 +260,124 @@ async function runQuitCommand(
   return { message: "quit", operations: [] };
 }
 
-function normalizeChecklistLine(line: string): string {
-  if (line.trim().length === 0) return line;
+type ListConversionKind = "checklist" | "unordered" | "ordered";
+
+function convertLineToList(
+  line: string,
+  kind: ListConversionKind,
+  orderedIndex: number,
+): { text: string; converted: boolean } {
+  if (line.trim().length === 0) return { text: line, converted: false };
 
   const indentMatch = line.match(/^\s*/);
   const indent = indentMatch?.[0] ?? "";
   const body = line.slice(indent.length);
-
-  const checklistMatch = body.match(
-    /^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)\[(?: |x|X)\]\s*(.*)$/,
+  const listMatch = body.match(
+    /^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+))\s+(?:\[(?: |x|X)\]\s*)?(.*)$/,
   );
-  if (checklistMatch) {
-    const marker = checklistMatch[1] ?? "";
-    const content = (checklistMatch[2] ?? "").trimStart();
-    return content.length > 0 ? `${indent}${marker}[ ] ${content}` : `${indent}${marker}[ ]`;
+
+  const marker = listMatch?.[1] ?? "";
+  const content = (listMatch?.[2] ?? body).trimStart();
+
+  if (kind === "checklist") {
+    const prefix = marker.length > 0 ? `${marker} [ ]` : "- [ ]";
+    return {
+      text: content.length > 0 ? `${indent}${prefix} ${content}` : `${indent}${prefix}`,
+      converted: true,
+    };
   }
 
-  const listMatch = body.match(/^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(.*)$/);
-  if (listMatch) {
-    const marker = listMatch[1] ?? "";
-    const content = (listMatch[2] ?? "").trimStart();
-    return content.length > 0 ? `${indent}${marker}[ ] ${content}` : `${indent}${marker}[ ]`;
+  if (kind === "unordered") {
+    return {
+      text: content.length > 0 ? `${indent}- ${content}` : `${indent}-`,
+      converted: true,
+    };
   }
 
-  const content = body.trimStart();
-  return content.length > 0 ? `${indent}- [ ] ${content}` : `${indent}- [ ]`;
+  const orderedMarker = `${orderedIndex}.`;
+  return {
+    text: content.length > 0 ? `${indent}${orderedMarker} ${content}` : `${indent}${orderedMarker}`,
+    converted: true,
+  };
 }
 
-async function runChecklistCommand(
+function listConversionLabel(kind: ListConversionKind): string {
+  if (kind === "checklist") return "checklist";
+  if (kind === "unordered") return "unordered list";
+  return "ordered list";
+}
+
+async function runListConvertCommand(
+  kind: ListConversionKind,
   _normalizedInput: string,
   ctx: ResolvedContext,
-  _runtime: CommandRuntime,
+  runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
   const selection = ctx.selection();
-  const startLine = ctx.lineAt(selection.from).number;
-  const endCursor = selection.empty
-    ? selection.head
-    : Math.max(selection.from, selection.to - 1);
-  const endLine = ctx.lineAt(endCursor).number;
+  let startLine = ctx.lineAt(selection.from).number;
+  let endLine = startLine;
+  if (!selection.empty) {
+    if (runtime.mode === "vim") {
+      const anchorLine = ctx.lineAt(selection.anchor).number;
+      const headLine = ctx.lineAt(selection.head).number;
+      startLine = Math.min(anchorLine, headLine);
+      endLine = Math.max(anchorLine, headLine);
+    } else {
+      const endCursor = Math.max(selection.from, selection.to - 1);
+      endLine = ctx.lineAt(endCursor).number;
+    }
+  }
 
   const converted: string[] = [];
   let changed = 0;
+  let orderedIndex = 1;
   for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
     const source = ctx.lineText(lineNo);
-    const next = normalizeChecklistLine(source);
-    converted.push(next);
-    if (next !== source) changed += 1;
+    const lineConversion = convertLineToList(source, kind, orderedIndex);
+    converted.push(lineConversion.text);
+    if (lineConversion.converted && kind === "ordered") {
+      orderedIndex += 1;
+    }
+    if (lineConversion.text !== source) changed += 1;
   }
 
   if (changed === 0) {
-    return { message: "already checklist", operations: [] };
+    return { message: `already ${listConversionLabel(kind)}`, operations: [] };
   }
 
   const from = ctx.line(startLine).from;
   const to = ctx.line(endLine).to;
   const insert = converted.join("\n");
-  const summary = changed === 1 ? "converted 1 line to checklist" : `converted ${changed} lines to checklist`;
+  const label = listConversionLabel(kind);
+  const summary = changed === 1 ? `converted 1 line to ${label}` : `converted ${changed} lines to ${label}`;
   return {
     message: summary,
     operations: [replaceRange(from, to, insert, { anchor: from + insert.length })],
   };
+}
+
+async function runChecklistCommand(
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  return runListConvertCommand("checklist", normalizedInput, ctx, runtime);
+}
+
+async function runUnorderedListCommand(
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  return runListConvertCommand("unordered", normalizedInput, ctx, runtime);
+}
+
+async function runOrderedListCommand(
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  return runListConvertCommand("ordered", normalizedInput, ctx, runtime);
 }
 
 const MODES_BOTH: CommandMode[] = ["vim", "editor"];
@@ -339,7 +397,9 @@ const COMMAND_REGISTRY: CommandRegistryEntry[] = [
   { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: MODES_BOTH, execute: runNotifyCommand },
   { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: MODES_BOTH, execute: runNotifyDeleteCommand },
   { value: "format", aliases: ["fmt"], description: "format markdown document", modes: MODES_BOTH, execute: runFormatCommand },
-  { value: "checklist", aliases: ["checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: MODES_BOTH, execute: runChecklistCommand },
+  { value: "clist", aliases: ["checklist", "checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: MODES_BOTH, execute: runChecklistCommand },
+  { value: "ulist", aliases: ["unordered-list", "unordered"], description: "convert selected lines to unordered list", modes: MODES_BOTH, execute: runUnorderedListCommand },
+  { value: "olist", aliases: ["ordered-list", "ordered"], description: "convert selected lines to ordered list", modes: MODES_BOTH, execute: runOrderedListCommand },
   { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"], execute: runQuitCommand },
 ];
 

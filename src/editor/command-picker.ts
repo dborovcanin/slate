@@ -9,6 +9,10 @@ interface CommandPickerOptions {
   dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
   source?: "vim-colon" | "shortcut";
+  selectionOverride?: {
+    anchor: number;
+    head: number;
+  };
 }
 
 interface CommandModeExtensionOptions {
@@ -97,6 +101,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
         onExitCommand: options.onExitCommand,
+        selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
       view.focus();

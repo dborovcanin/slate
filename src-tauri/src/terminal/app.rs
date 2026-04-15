@@ -367,6 +367,8 @@ struct TerminalApp {
     clipboard: Vec<String>,
     last_clipboard_backend: Option<ClipboardWriteBackend>,
     selection_anchor: Option<(usize, usize)>, // (line, col)
+    command_selection: Option<crate::editor_core::types::SelectionSnapshot>,
+    command_selection_linewise: bool,
     // Calc ghost cache
     calc_engine: CalcEngine,
     calc_results: Vec<Option<String>>,
@@ -468,6 +470,8 @@ impl TerminalApp {
             clipboard: Vec::new(),
             last_clipboard_backend: None,
             selection_anchor: None,
+            command_selection: None,
+            command_selection_linewise: false,
             calc_engine,
             calc_results: calc_data.line_results,
             reminder_ghosts,
@@ -619,6 +623,8 @@ impl TerminalApp {
             Key::Ctrl('e') => {
                 self.command_input.clear();
                 self.command_bar_from_normal = false;
+                self.command_selection = None;
+                self.command_selection_linewise = false;
                 self.mode = UiMode::CommandBar;
                 self.status = ":".to_string();
                 return Ok(());
@@ -1224,6 +1230,8 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::OpenCommandBar => {
                     self.command_input.clear();
                     self.command_bar_from_normal = true;
+                    self.command_selection = None;
+                    self.command_selection_linewise = false;
                     self.mode = UiMode::CommandBar;
                     self.status = ":".to_string();
                 }
@@ -1294,7 +1302,17 @@ impl TerminalApp {
                 self.mode = UiMode::Normal;
                 self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
                 self.selection_anchor = None;
+                self.command_selection = None;
                 self.status = "-- NORMAL --".to_string();
+            }
+            Key::Ctrl('e') => {
+                self.command_selection_linewise = self.mode == UiMode::VisualLine;
+                self.command_selection = self.capture_visual_command_selection();
+                self.vim_state = crate::editor_core::vim::VimState::default();
+                self.command_input.clear();
+                self.command_bar_from_normal = true;
+                self.mode = UiMode::CommandBar;
+                self.status = ":".to_string();
             }
             Key::ArrowUp => self.move_cursor_up(1),
             Key::ArrowDown => self.move_cursor_down(1),
@@ -1305,6 +1323,15 @@ impl TerminalApp {
                 'j' => self.move_cursor_down(1),
                 'k' => self.move_cursor_up(1),
                 'l' => self.move_cursor_right(),
+                ':' => {
+                    self.command_selection_linewise = self.mode == UiMode::VisualLine;
+                    self.command_selection = self.capture_visual_command_selection();
+                    self.vim_state = crate::editor_core::vim::VimState::default();
+                    self.command_input.clear();
+                    self.command_bar_from_normal = true;
+                    self.mode = UiMode::CommandBar;
+                    self.status = ":".to_string();
+                }
                 'w' => self.move_cursor_right_word(),
                 'b' => self.move_cursor_left_word(),
                 '$' => self.cursor_col = line_char_len(self.current_line()).saturating_sub(1),
@@ -1522,6 +1549,8 @@ impl TerminalApp {
                     UiMode::Editor
                 };
                 self.command_input.clear();
+                self.command_selection = None;
+                self.command_selection_linewise = false;
                 self.status = if self.command_bar_from_normal {
                     "-- NORMAL --".to_string()
                 } else {
@@ -1538,6 +1567,8 @@ impl TerminalApp {
                 self.mode = return_to;
                 self.command_input.clear();
                 self.execute_terminal_command(db, &cmd);
+                self.command_selection = None;
+                self.command_selection_linewise = false;
             }
             Key::Tab => {
                 let suggestions = crate::editor_core::commands::list_command_suggestions(
@@ -1557,6 +1588,8 @@ impl TerminalApp {
                     } else {
                         UiMode::Editor
                     };
+                    self.command_selection = None;
+                    self.command_selection_linewise = false;
                     self.status = if self.command_bar_from_normal {
                         "-- NORMAL --".to_string()
                     } else {
@@ -1664,23 +1697,70 @@ impl TerminalApp {
         self.adjust_scroll();
     }
 
-    fn build_snapshot(&self) -> crate::editor_core::types::EditorContextSnapshot {
-        let text = join_lines(&self.lines);
-        // Convert cursor_line/cursor_col to byte offset
+    fn byte_offset_for_line_col(&self, line_idx: usize, col: usize) -> usize {
         let mut offset = 0;
         for (i, line) in self.lines.iter().enumerate() {
-            if i == self.cursor_line {
-                offset += byte_index(line, self.cursor_col);
+            if i == line_idx {
+                offset += byte_index(line, col);
                 break;
             }
             offset += line.len() + 1; // +1 for \n
         }
+        offset
+    }
+
+    fn capture_visual_command_selection(
+        &self,
+    ) -> Option<crate::editor_core::types::SelectionSnapshot> {
+        let anchor = self.selection_anchor?;
+        match self.mode {
+            UiMode::Visual => {
+                let anchor_offset = self.byte_offset_for_line_col(anchor.0, anchor.1);
+                let head_offset = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+                Some(crate::editor_core::types::SelectionSnapshot {
+                    anchor: anchor_offset,
+                    head: head_offset,
+                })
+            }
+            UiMode::VisualLine => {
+                let anchor_line = anchor.0.min(self.lines.len().saturating_sub(1));
+                let head_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+                let anchor_line_len = line_char_len(&self.lines[anchor_line]);
+                let head_line_len = line_char_len(&self.lines[head_line]);
+
+                let (anchor_offset, head_offset) = if head_line >= anchor_line {
+                    (
+                        self.byte_offset_for_line_col(anchor_line, 0),
+                        self.byte_offset_for_line_col(head_line, head_line_len),
+                    )
+                } else {
+                    (
+                        self.byte_offset_for_line_col(anchor_line, anchor_line_len),
+                        self.byte_offset_for_line_col(head_line, 0),
+                    )
+                };
+
+                Some(crate::editor_core::types::SelectionSnapshot {
+                    anchor: anchor_offset,
+                    head: head_offset,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn build_snapshot(&self) -> crate::editor_core::types::EditorContextSnapshot {
+        let text = join_lines(&self.lines);
+        let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let selection =
+            self.command_selection
+                .unwrap_or(crate::editor_core::types::SelectionSnapshot {
+                    anchor: fallback_cursor,
+                    head: fallback_cursor,
+                });
         crate::editor_core::types::EditorContextSnapshot {
             text,
-            selection: crate::editor_core::types::SelectionSnapshot {
-                anchor: offset,
-                head: offset,
-            },
+            selection,
             changed_range: None,
         }
     }
@@ -2234,12 +2314,18 @@ impl TerminalApp {
         if aligned {
             let cursor_line = self.cursor_line;
             let cursor_col = self.cursor_col;
-            let selection_range: Option<(usize, usize)> =
+            let selection_range: Option<(usize, usize)> = if matches!(
+                self.mode,
+                UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
+            ) {
                 self.selection_anchor.map(|(anchor_line, _)| {
                     let a = anchor_line.min(cursor_line);
                     let b = anchor_line.max(cursor_line);
                     (a, b)
-                });
+                })
+            } else {
+                None
+            };
 
             for i in 0..self.lines.len() {
                 let Some(new_result) = new_results[i].as_deref() else {
@@ -2465,7 +2551,10 @@ impl TerminalApp {
         let Some(anchor) = self.selection_anchor else {
             return;
         };
-        if self.mode != UiMode::Visual && self.mode != UiMode::VisualLine {
+        let has_visual_selection = self.mode == UiMode::Visual
+            || self.mode == UiMode::VisualLine
+            || (self.mode == UiMode::CommandBar && self.command_selection.is_some());
+        if !has_visual_selection {
             return;
         }
 
@@ -2476,7 +2565,9 @@ impl TerminalApp {
             return;
         }
 
-        if self.mode == UiMode::VisualLine {
+        let linewise = self.mode == UiMode::VisualLine
+            || (self.mode == UiMode::CommandBar && self.command_selection_linewise);
+        if linewise {
             let line_len = self.lines[line_idx].chars().count();
             ranges.push((0, line_len.max(1)));
             return;
@@ -5393,6 +5484,110 @@ mod tests {
         );
         assert_eq!(app.lines, vec!["gamma".to_string(), "delta".to_string()]);
         assert_eq!(app.cursor_line, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn visual_colon_runs_command_on_preserved_selection() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta\ngamma");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char('v'),
+                Key::Char('j'),
+                Key::Char(':'),
+                Key::Char('c'),
+                Key::Char('l'),
+                Key::Char('i'),
+                Key::Char('s'),
+                Key::Char('t'),
+                Key::Enter,
+            ],
+        );
+
+        assert_eq!(app.mode, UiMode::Normal);
+        assert_eq!(app.lines[0], "- [ ] alpha");
+        assert_eq!(app.lines[1], "- [ ] beta");
+        assert_eq!(app.lines[2], "gamma");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn visual_colon_keeps_selection_while_command_bar_is_open() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta\ngamma");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('v'), Key::Char('j'), Key::Char(':')],
+        );
+
+        assert_eq!(app.mode, UiMode::CommandBar);
+        assert!(app.selection_anchor.is_some());
+        assert!(app.command_selection.is_some());
+        assert!(!app.command_selection_linewise);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn visual_line_colon_runs_command_on_preserved_selection() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta\ngamma");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char('V'),
+                Key::Char('j'),
+                Key::Char(':'),
+                Key::Char('o'),
+                Key::Char('l'),
+                Key::Char('i'),
+                Key::Char('s'),
+                Key::Char('t'),
+                Key::Enter,
+            ],
+        );
+
+        assert_eq!(app.mode, UiMode::Normal);
+        assert_eq!(app.lines[0], "1. alpha");
+        assert_eq!(app.lines[1], "2. beta");
+        assert_eq!(app.lines[2], "gamma");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn visual_line_colon_keeps_linewise_selection_while_command_bar_is_open() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta\ngamma");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('V'), Key::Char('j'), Key::Char(':')],
+        );
+
+        assert_eq!(app.mode, UiMode::CommandBar);
+        assert!(app.selection_anchor.is_some());
+        assert!(app.command_selection.is_some());
+        assert!(app.command_selection_linewise);
 
         drop(app);
         drop(db);

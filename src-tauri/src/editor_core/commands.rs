@@ -276,9 +276,28 @@ fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
     }
 }
 
-fn normalize_checklist_line(line: &str) -> String {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ListConversionKind {
+    Checklist,
+    Unordered,
+    Ordered,
+}
+
+fn list_conversion_label(kind: ListConversionKind) -> &'static str {
+    match kind {
+        ListConversionKind::Checklist => "checklist",
+        ListConversionKind::Unordered => "unordered list",
+        ListConversionKind::Ordered => "ordered list",
+    }
+}
+
+fn convert_line_to_list(
+    line: &str,
+    kind: ListConversionKind,
+    ordered_index: usize,
+) -> (String, bool) {
     if line.trim().is_empty() {
-        return line.to_string();
+        return (line.to_string(), false);
     }
 
     let indent_len = line
@@ -288,44 +307,113 @@ fn normalize_checklist_line(line: &str) -> String {
     let indent = &line[..indent_len];
     let body = &line[indent_len..];
 
-    if let Ok(checklist_re) =
-        Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)\[(?: |x|X)\]\s*(.*)$")
+    let mut marker = String::new();
+    let mut content = body.trim_start().to_string();
+    if let Ok(list_re) =
+        Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+))\s+(?:\[(?: |x|X)\]\s*)?(.*)$")
     {
-        if let Some(caps) = checklist_re.captures(body) {
-            let marker = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
-            let content = caps
-                .get(2)
-                .map(|m| m.as_str().trim_start())
-                .unwrap_or_default();
-            return if content.is_empty() {
-                format!("{indent}{marker}[ ]")
-            } else {
-                format!("{indent}{marker}[ ] {content}")
-            };
-        }
-    }
-
-    if let Ok(list_re) = Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(.*)$") {
         if let Some(caps) = list_re.captures(body) {
-            let marker = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
-            let content = caps
-                .get(2)
-                .map(|m| m.as_str().trim_start())
+            marker = caps
+                .get(1)
+                .map(|m| m.as_str().to_string())
                 .unwrap_or_default();
-            return if content.is_empty() {
-                format!("{indent}{marker}[ ]")
-            } else {
-                format!("{indent}{marker}[ ] {content}")
-            };
+            content = caps
+                .get(2)
+                .map(|m| m.as_str().trim_start().to_string())
+                .unwrap_or_default();
         }
     }
 
-    let content = body.trim_start();
-    if content.is_empty() {
-        format!("{indent}- [ ]")
+    let converted = match kind {
+        ListConversionKind::Checklist => {
+            let prefix = if marker.is_empty() {
+                "- [ ]".to_string()
+            } else {
+                format!("{marker} [ ]")
+            };
+            if content.is_empty() {
+                format!("{indent}{prefix}")
+            } else {
+                format!("{indent}{prefix} {content}")
+            }
+        }
+        ListConversionKind::Unordered => {
+            if content.is_empty() {
+                format!("{indent}-")
+            } else {
+                format!("{indent}- {content}")
+            }
+        }
+        ListConversionKind::Ordered => {
+            if content.is_empty() {
+                format!("{indent}{ordered_index}.")
+            } else {
+                format!("{indent}{ordered_index}. {content}")
+            }
+        }
+    };
+    (converted, true)
+}
+
+fn run_list_convert_command(
+    snapshot: &EditorContextSnapshot,
+    kind: ListConversionKind,
+    mode: CommandMode,
+) -> CommandExecutionResult {
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let selection = ctx.selection();
+    let (start_line, end_line) = if selection.empty {
+        let line = ctx.line_at(selection.head).number;
+        (line, line)
+    } else if mode == CommandMode::Vim {
+        let anchor_line = ctx.line_at(selection.anchor).number;
+        let head_line = ctx.line_at(selection.head).number;
+        (anchor_line.min(head_line), anchor_line.max(head_line))
     } else {
-        format!("{indent}- [ ] {content}")
+        let start = ctx.line_at(selection.from).number;
+        let end_cursor = selection.from.max(selection.to.saturating_sub(1));
+        let end = ctx.line_at(end_cursor).number;
+        (start, end)
+    };
+
+    let mut converted = Vec::new();
+    let mut changed = 0usize;
+    let mut ordered_index = 1usize;
+    for line_no in start_line..=end_line {
+        let source = ctx.line_text(line_no);
+        let (next, converted_line) = convert_line_to_list(source, kind, ordered_index);
+        if kind == ListConversionKind::Ordered && converted_line {
+            ordered_index += 1;
+        }
+        if next != source {
+            changed += 1;
+        }
+        converted.push(next);
     }
+
+    if changed == 0 {
+        return result_with_message(format!("already {}", list_conversion_label(kind)));
+    }
+
+    let from = ctx.line(start_line).from;
+    let to = ctx.line(end_line).to;
+    let insert = converted.join("\n");
+    let anchor = from + insert.len();
+    let op = replace_range(
+        from,
+        to,
+        insert,
+        Some(OperationSelection { anchor, head: None }),
+    );
+    let label = list_conversion_label(kind);
+    let message = if changed == 1 {
+        format!("converted 1 line to {label}")
+    } else {
+        format!("converted {changed} lines to {label}")
+    };
+    let mut result = result_with_message(message);
+    result.operations.push(op);
+    result
 }
 
 pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<CommandSuggestion> {
@@ -528,52 +616,14 @@ pub fn execute_command(
             result.operations.push(op);
             result
         }
-        CommandId::Checklist => {
-            let ctx = ResolvedContext::new(snapshot.clone());
-            let selection = ctx.selection();
-            let start_line = ctx.line_at(selection.from).number;
-            let end_cursor = if selection.empty {
-                selection.head
-            } else {
-                selection.from.max(selection.to.saturating_sub(1))
+        CommandId::Checklist | CommandId::UnorderedList | CommandId::OrderedList => {
+            let kind = match command.id {
+                CommandId::Checklist => ListConversionKind::Checklist,
+                CommandId::UnorderedList => ListConversionKind::Unordered,
+                CommandId::OrderedList => ListConversionKind::Ordered,
+                _ => unreachable!(),
             };
-            let end_line = ctx.line_at(end_cursor).number;
-
-            let mut converted = Vec::new();
-            let mut changed = 0usize;
-            for line_no in start_line..=end_line {
-                let source = ctx.line_text(line_no);
-                let next = normalize_checklist_line(source);
-                if next != source {
-                    changed += 1;
-                }
-                converted.push(next);
-            }
-
-            if changed == 0 {
-                return result_with_message("already checklist");
-            }
-
-            let from = ctx.line(start_line).from;
-            let to = ctx.line(end_line).to;
-            let insert = converted.join("\n");
-            let op = replace_range(
-                from,
-                to,
-                insert,
-                Some(OperationSelection {
-                    anchor: from + converted.join("\n").len(),
-                    head: None,
-                }),
-            );
-            let message = if changed == 1 {
-                "converted 1 line to checklist".to_string()
-            } else {
-                format!("converted {changed} lines to checklist")
-            };
-            let mut result = result_with_message(message);
-            result.operations.push(op);
-            result
+            run_list_convert_command(snapshot, kind, mode)
         }
     }
 }
@@ -614,7 +664,9 @@ mod tests {
                 "notify",
                 "notify-delete",
                 "format",
-                "checklist",
+                "clist",
+                "ulist",
+                "olist",
             ]
         );
 
@@ -826,16 +878,60 @@ mod tests {
     }
 
     #[test]
-    fn checklist_converts_selected_lines() {
+    fn clist_converts_selected_lines() {
         let text = "alpha\n- beta\n1. gamma\ntail";
         let tail_start = text.find("\ntail").expect("tail marker");
         let doc = snapshot(text, tail_start, 0);
-        let result = execute_command(&doc, "checklist", CommandMode::Editor);
+        let result = execute_command(&doc, "clist", CommandMode::Editor);
         assert_eq!(result.message, "converted 3 lines to checklist");
         assert_eq!(result.operations.len(), 1);
         let change = &result.operations[0].changes[0];
         assert_eq!(change.from, 0);
         assert_eq!(change.to, tail_start);
         assert_eq!(change.insert, "- [ ] alpha\n- [ ] beta\n1. [ ] gamma");
+    }
+
+    #[test]
+    fn ulist_converts_only_current_line_without_selection() {
+        let text = "alpha\n1. beta\ngamma";
+        let cursor = text.find("beta").expect("cursor");
+        let doc = snapshot(text, cursor, cursor);
+        let result = execute_command(&doc, "ulist", CommandMode::Editor);
+        assert_eq!(result.message, "converted 1 line to unordered list");
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        let beta_line_from = text.find("\n1. beta").expect("line start") + 1;
+        let beta_line_to = beta_line_from + "1. beta".len();
+        assert_eq!(change.from, beta_line_from);
+        assert_eq!(change.to, beta_line_to);
+        assert_eq!(change.insert, "- beta");
+    }
+
+    #[test]
+    fn olist_converts_selection_to_numbered_items() {
+        let text = "alpha\n- [x] beta\n- gamma\ntail";
+        let tail_start = text.find("\ntail").expect("tail marker");
+        let doc = snapshot(text, tail_start, 0);
+        let result = execute_command(&doc, "olist", CommandMode::Editor);
+        assert_eq!(result.message, "converted 3 lines to ordered list");
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        assert_eq!(change.from, 0);
+        assert_eq!(change.to, tail_start);
+        assert_eq!(change.insert, "1. alpha\n2. beta\n3. gamma");
+    }
+
+    #[test]
+    fn clist_in_vim_mode_treats_endpoint_lines_as_selected() {
+        let text = "alpha\nbeta\ngamma";
+        let beta_start = text.find("beta").expect("beta");
+        let doc = snapshot(text, beta_start, 0);
+        let result = execute_command(&doc, "clist", CommandMode::Vim);
+        assert_eq!(result.message, "converted 2 lines to checklist");
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        assert_eq!(change.from, 0);
+        assert_eq!(change.to, beta_start + "beta".len());
+        assert_eq!(change.insert, "- [ ] alpha\n- [ ] beta");
     }
 }
