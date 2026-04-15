@@ -254,6 +254,27 @@ test("buildMarkdownDecorationsForSpans handles unsorted visible spans", () => {
   );
 });
 
+test("buildMarkdownDecorationsForSpans hides unordered checklist list marker prefix", () => {
+  const doc = Text.of(["- [ ] checklist"]);
+  const line = doc.line(1);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+  );
+  const flat = collectDecorations(decos);
+
+  assert.ok(
+    flat.some(
+      (d) =>
+        d.from === line.from &&
+        d.to === line.from + 2,
+    ),
+    "unordered marker prefix range should be replaced for checklist line",
+  );
+});
+
 test("findVariableNameRanges is case-insensitive and prefers longest overlap", () => {
   const ranges = findVariableNameRanges("Tax Rate + tax + tax_rate", [
     { normalized: "tax" },

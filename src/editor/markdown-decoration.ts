@@ -86,6 +86,25 @@ class ChecklistMarkWidget extends WidgetType {
   }
 }
 
+class HiddenChecklistPrefixWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.contentEditable = "false";
+    span.setAttribute("draggable", "false");
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  }
+}
+
+const decChecklistHiddenPrefix = Decoration.replace({
+  widget: new HiddenChecklistPrefixWidget(),
+  inclusive: false,
+});
+
 const decChecklistMark = Decoration.replace({
   widget: new ChecklistMarkWidget(false),
   inclusive: false,
@@ -326,6 +345,22 @@ function decorateContentLine(
   if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
     try {
       builder.add(line.from, line.from, decChecklistLine);
+
+      // Hide unordered checklist list markers ("- ", "* ", "+ ", "-> ")
+      // while keeping indentation and source text intact.
+      if (info.listMarkerEnd !== null && info.listMarkerEnd === info.checklistMarkerStart) {
+        const beforeChecklist = line.text.slice(0, info.checklistMarkerStart);
+        const markerMatch = beforeChecklist.match(/^(\s*)(->|[-*+])\s+$/);
+        if (markerMatch) {
+          const indentLen = (markerMatch[1] ?? "").length;
+          const prefixFrom = line.from + indentLen;
+          const prefixTo = line.from + info.checklistMarkerStart;
+          if (prefixFrom < prefixTo) {
+            builder.add(prefixFrom, prefixTo, decChecklistHiddenPrefix);
+          }
+        }
+      }
+
       const markerFrom = line.from + info.checklistMarkerStart;
       const markerTo = line.from + info.checklistMarkerEnd;
       if (markerFrom < markerTo) {
