@@ -1,9 +1,15 @@
 import { Prec } from "@codemirror/state";
-import { keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
-import type { EditorView, ViewUpdate } from "@codemirror/view";
+import { EditorView, keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
+import type { ViewUpdate } from "@codemirror/view";
 import { getCalcResultAtCursor } from "./calc-decoration.ts";
 import { applyEditOperation, snapshotFromUpdate, snapshotFromView } from "./core/codemirror-adapter.ts";
-import { runDocChangeRules, runEnterRules, runTabRules, rewriteLineWithChecklistToggleSuffix } from "./wasm.ts";
+import {
+  markdownClassifyLine,
+  runDocChangeRules,
+  runEnterRules,
+  runTabRules,
+  rewriteLineWithChecklistToggleSuffix,
+} from "./wasm.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix };
@@ -165,6 +171,50 @@ function textRulesPlugin(enabled: boolean) {
   });
 }
 
+function toggleChecklistAtPos(view: EditorView, pos: number): boolean {
+  const line = view.state.doc.lineAt(pos);
+  const info = markdownClassifyLine(line.text);
+  if (info.checklistMarkerStart === null || info.checklistMarkerEnd === null) {
+    return false;
+  }
+  const markerFrom = line.from + info.checklistMarkerStart;
+  const markerTo = line.from + info.checklistMarkerEnd;
+
+  const markFrom = markerFrom + 1;
+  const markTo = markerTo - 1;
+  if (markFrom >= markTo || markFrom < line.from || markTo > line.to) {
+    return false;
+  }
+
+  view.dispatch({
+    changes: { from: markFrom, to: markTo, insert: info.checklistChecked ? " " : "x" },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function checklistClickHandlers() {
+  return EditorView.domEventHandlers({
+    click(event, view) {
+      const target = event.target;
+      if (!(target instanceof Element)) return false;
+      const markEl = target.closest(".md-checklist-mark");
+      if (!markEl) return false;
+      let pos: number;
+      try {
+        pos = view.posAtDOM(markEl, 0);
+      } catch {
+        return false;
+      }
+      const toggled = toggleChecklistAtPos(view, pos);
+      if (!toggled) return false;
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    },
+  });
+}
+
 interface MarkdownEditingOptions {
   autoformat?: boolean;
 }
@@ -174,6 +224,7 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   return [
     Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
     Prec.low(keymap.of(markdownTabKeymap(autoformat))),
+    checklistClickHandlers(),
     textRulesPlugin(autoformat),
   ];
 }

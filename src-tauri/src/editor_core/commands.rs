@@ -276,6 +276,52 @@ fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
     }
 }
 
+fn normalize_checklist_line(line: &str) -> String {
+    if line.trim().is_empty() {
+        return line.to_string();
+    }
+
+    let indent_len = line
+        .char_indices()
+        .find_map(|(idx, ch)| if ch.is_whitespace() { None } else { Some(idx) })
+        .unwrap_or(line.len());
+    let indent = &line[..indent_len];
+    let body = &line[indent_len..];
+
+    if let Ok(checklist_re) =
+        Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)\[(?: |x|X)\]\s*(.*)$")
+    {
+        if let Some(caps) = checklist_re.captures(body) {
+            let marker = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+            let content = caps.get(2).map(|m| m.as_str().trim_start()).unwrap_or_default();
+            return if content.is_empty() {
+                format!("{indent}{marker}[ ]")
+            } else {
+                format!("{indent}{marker}[ ] {content}")
+            };
+        }
+    }
+
+    if let Ok(list_re) = Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(.*)$") {
+        if let Some(caps) = list_re.captures(body) {
+            let marker = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
+            let content = caps.get(2).map(|m| m.as_str().trim_start()).unwrap_or_default();
+            return if content.is_empty() {
+                format!("{indent}{marker}[ ]")
+            } else {
+                format!("{indent}{marker}[ ] {content}")
+            };
+        }
+    }
+
+    let content = body.trim_start();
+    if content.is_empty() {
+        format!("{indent}- [ ]")
+    } else {
+        format!("{indent}- [ ] {content}")
+    }
+}
+
 pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<CommandSuggestion> {
     command_catalog::list_command_suggestions(mode, raw_input)
 }
@@ -474,6 +520,53 @@ pub fn execute_command(
             result.operations.push(op);
             result
         }
+        CommandId::Checklist => {
+            let ctx = ResolvedContext::new(snapshot.clone());
+            let selection = ctx.selection();
+            let start_line = ctx.line_at(selection.from).number;
+            let end_cursor = if selection.empty {
+                selection.head
+            } else {
+                selection.from.max(selection.to.saturating_sub(1))
+            };
+            let end_line = ctx.line_at(end_cursor).number;
+
+            let mut converted = Vec::new();
+            let mut changed = 0usize;
+            for line_no in start_line..=end_line {
+                let source = ctx.line_text(line_no);
+                let next = normalize_checklist_line(source);
+                if next != source {
+                    changed += 1;
+                }
+                converted.push(next);
+            }
+
+            if changed == 0 {
+                return result_with_message("already checklist");
+            }
+
+            let from = ctx.line(start_line).from;
+            let to = ctx.line(end_line).to;
+            let insert = converted.join("\n");
+            let op = replace_range(
+                from,
+                to,
+                insert,
+                Some(OperationSelection {
+                    anchor: from + converted.join("\n").len(),
+                    head: None,
+                }),
+            );
+            let message = if changed == 1 {
+                "converted 1 line to checklist".to_string()
+            } else {
+                format!("converted {changed} lines to checklist")
+            };
+            let mut result = result_with_message(message);
+            result.operations.push(op);
+            result
+        }
     }
 }
 
@@ -510,7 +603,8 @@ mod tests {
                 "avg column",
                 "avg doc",
                 "date",
-                "format"
+                "format",
+                "checklist",
             ]
         );
 
@@ -719,5 +813,19 @@ mod tests {
         assert!(result.message.contains("avg(column)"));
         // col 1 above cursor: "number"(non-numeric, skipped), "3" → avg = 3.00
         assert_eq!(result.operations[0].changes[0].insert.trim(), "3.00");
+    }
+
+    #[test]
+    fn checklist_converts_selected_lines() {
+        let text = "alpha\n- beta\n1. gamma\ntail";
+        let tail_start = text.find("\ntail").expect("tail marker");
+        let doc = snapshot(text, tail_start, 0);
+        let result = execute_command(&doc, "checklist", CommandMode::Editor);
+        assert_eq!(result.message, "converted 3 lines to checklist");
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        assert_eq!(change.from, 0);
+        assert_eq!(change.to, tail_start);
+        assert_eq!(change.insert, "- [ ] alpha\n- [ ] beta\n1. [ ] gamma");
     }
 }

@@ -17,6 +17,7 @@ test("editor mode exposes only editing commands", () => {
     "avg doc",
     "date",
     "format",
+    "checklist",
   ]);
   assert.equal(values.includes("q"), false);
 });

@@ -251,17 +251,50 @@
 }
 
 .md-checklist-token {
-  opacity: 0.35;
+  display: inline-block;
+  width: 0;
+  overflow: hidden;
+  color: transparent;
+  opacity: 0;
+  font-size: 0;
+  user-select: none;
+  pointer-events: none;
 }
 
 .md-checklist-mark {
-  opacity: 0.35;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 0.98rem;
+  height: 0.98rem;
+  margin: 0 0.14em 0 0.03em;
+  border-radius: 0.2em;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  color: transparent;
+  line-height: 1;
+  user-select: none;
+  cursor: pointer;
+  vertical-align: middle;
 }
 
 .md-checklist-mark-checked {
+  border-color: var(--accent);
+  background: var(--bg-overlay);
+}
+
+.md-checklist-mark-checked::after {
+  content: "✓";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   color: var(--accent);
+  font-size: 0.78rem;
   font-weight: 700;
-  opacity: 1;
+  line-height: 1;
 }
 
 .md-checklist-content-done {

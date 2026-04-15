@@ -1,5 +1,5 @@
-import { Annotation, RangeSetBuilder, type Range, type Text } from "@codemirror/state";
-import { Decoration, EditorView, ViewPlugin } from "@codemirror/view";
+import { Annotation, RangeSetBuilder, type Text } from "@codemirror/state";
+import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
 import type { VariableIndexEntry } from "../api.ts";
@@ -24,9 +24,6 @@ const decListToken = Decoration.mark({ class: "md-token md-token-list" });
 const decRuleToken = Decoration.mark({ class: "md-token md-token-rule" });
 const decFenceToken = Decoration.mark({ class: "md-token md-token-code-fence" });
 const decHeadingContent = Decoration.mark({ class: "md-heading-content" });
-const decChecklistToken = Decoration.mark({ class: "md-token md-checklist-token" });
-const decChecklistMark = Decoration.mark({ class: "md-checklist-mark" });
-const decChecklistMarkChecked = Decoration.mark({ class: "md-checklist-mark md-checklist-mark-checked" });
 const decChecklistDoneContent = Decoration.mark({ class: "md-checklist-content-done" });
 const decStrong = Decoration.mark({ class: "md-strong" });
 const decEmphasis = Decoration.mark({ class: "md-emphasis" });
@@ -60,6 +57,43 @@ const decChecklistLine = lineClass("md-line md-checklist-item");
 const decRuleLine = lineClass("md-line md-hr");
 const decCodeFenceLine = lineClass("md-line md-code-fence");
 const decCodeBlockLine = lineClass("md-line md-code-block-line");
+
+class ChecklistMarkWidget extends WidgetType {
+  private readonly checked: boolean;
+
+  constructor(checked: boolean) {
+    super();
+    this.checked = checked;
+  }
+
+  eq(other: ChecklistMarkWidget): boolean {
+    return other.checked === this.checked;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = this.checked
+      ? "md-checklist-mark md-checklist-mark-checked"
+      : "md-checklist-mark";
+    span.contentEditable = "false";
+    span.setAttribute("draggable", "false");
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+const decChecklistMark = Decoration.replace({
+  widget: new ChecklistMarkWidget(false),
+  inclusive: false,
+});
+const decChecklistMarkChecked = Decoration.replace({
+  widget: new ChecklistMarkWidget(true),
+  inclusive: false,
+});
 
 export function classifyMarkdownLine(text: string): MarkdownLineInfo {
   return markdownClassifyLine(text);
@@ -294,13 +328,13 @@ function decorateContentLine(
       builder.add(line.from, line.from, decChecklistLine);
       const markerFrom = line.from + info.checklistMarkerStart;
       const markerTo = line.from + info.checklistMarkerEnd;
-      builder.add(markerFrom, markerFrom + 1, decChecklistToken);
-      builder.add(
-        markerFrom + 1,
-        markerTo - 1,
-        info.checklistChecked ? decChecklistMarkChecked : decChecklistMark,
-      );
-      builder.add(markerTo - 1, markerTo, decChecklistToken);
+      if (markerFrom < markerTo) {
+        builder.add(
+          markerFrom,
+          markerTo,
+          info.checklistChecked ? decChecklistMarkChecked : decChecklistMark,
+        );
+      }
       if (info.checklistChecked && info.checklistContentStart !== null) {
         const contentFrom = line.from + info.checklistContentStart;
         if (contentFrom < line.to) {
@@ -332,22 +366,6 @@ function decorateContentLine(
   for (const entry of pending) {
     builder.add(entry.from, entry.to, entry.decoration);
   }
-}
-
-function extractDecorationRanges(
-  set: DecorationSet,
-  fromPos: number,
-  toPos: number,
-): Range<Decoration>[] {
-  const out: Range<Decoration>[] = [];
-  const cursor = set.iter();
-  while (cursor.value) {
-    if (cursor.from >= fromPos && cursor.to <= toPos) {
-      out.push(cursor.value.range(cursor.from, cursor.to));
-    }
-    cursor.next();
-  }
-  return out;
 }
 
 const markdownWasmReadyAnnotation = Annotation.define<boolean>();
@@ -389,119 +407,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       }
 
       if (!update.docChanged) return;
-
-      try {
-        const incremental = this.incrementalRebuild(update);
-        if (incremental) {
-          this.decorations = incremental;
-          return;
-        }
-      } catch (error) {
-        console.error("Incremental markdown rebuild failed, falling back:", error);
-      }
       this.decorations = this.safeBuild(update.view, this.decorations);
-    }
-
-    /**
-     * Attempt a dirty-range-only rebuild. Returns null to signal the caller
-     * should fall back to a full viewport rebuild.
-     */
-    private incrementalRebuild(update: ViewUpdate): DecorationSet | null {
-      const view = update.view;
-      const doc = view.state.doc;
-
-      const visibleSpans: VisibleLineSpan[] = view.visibleRanges.map(({ from, to }) => ({
-        fromLine: doc.lineAt(from).number,
-        toLine: doc.lineAt(to).number,
-      }));
-      if (visibleSpans.length === 0) return Decoration.none;
-
-      // Check if any pre-viewport fence marker was touched — that would flip
-      // `inCodeBlock` at the viewport start and we can't recover cheaply.
-      const firstVisibleLine = visibleSpans[0].fromLine;
-      const lastVisibleLine = visibleSpans[visibleSpans.length - 1].toLine;
-      let preFenceTouched = false;
-      let fenceDirtied = false;
-      const changedNewRanges: Array<{ fromB: number; toB: number }> = [];
-
-      update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-        changedNewRanges.push({ fromB, toB });
-
-        const prevText = update.startState.doc.sliceString(fromA, toA);
-        const newText = doc.sliceString(fromB, toB);
-        const changeHasFence = prevText.includes("```") || newText.includes("```");
-
-        if (changeHasFence) {
-          // Where does the change land in new coords?
-          const startLineB = doc.lineAt(fromB).number;
-          if (startLineB < firstVisibleLine) {
-            preFenceTouched = true;
-          } else {
-            fenceDirtied = true;
-          }
-        }
-      });
-
-      if (preFenceTouched) return null;
-
-      // Map the existing decoration set through the change so positions stay valid.
-      let result = this.decorations.map(update.changes);
-      const variableIndex = update.state.field(variableIndexField, false) ?? [];
-
-      // Determine dirty line spans inside the viewport.
-      const dirtyByVisibleSpan: Array<{ fromLine: number; toLine: number }> = [];
-      for (const span of visibleSpans) {
-        let minDirty = Infinity;
-        let maxDirty = -Infinity;
-        for (const { fromB, toB } of changedNewRanges) {
-          const startLine = doc.lineAt(fromB).number;
-          const endLine = doc.lineAt(toB).number;
-          const clippedStart = Math.max(startLine, span.fromLine);
-          const clippedEnd = Math.min(endLine, span.toLine);
-          if (clippedStart > clippedEnd) continue;
-          if (clippedStart < minDirty) minDirty = clippedStart;
-          if (clippedEnd > maxDirty) maxDirty = clippedEnd;
-        }
-        if (minDirty === Infinity) continue;
-
-        const toLine = fenceDirtied ? span.toLine : maxDirty;
-        dirtyByVisibleSpan.push({ fromLine: minDirty, toLine });
-      }
-
-      // If a fence was dirtied somewhere in the viewport, all later visible
-      // spans are also potentially affected — fall back for simplicity.
-      if (fenceDirtied && dirtyByVisibleSpan.length < visibleSpans.length) {
-        return null;
-      }
-
-      if (dirtyByVisibleSpan.length === 0) {
-        // No changes landed inside the visible range; just keep the mapped set.
-        return result;
-      }
-
-      for (const dirty of dirtyByVisibleSpan) {
-        const fromPos = doc.line(dirty.fromLine).from;
-        const nextLineStart =
-          dirty.toLine < doc.lines ? doc.line(dirty.toLine + 1).from : doc.length + 1;
-        const filterTo = nextLineStart - 1;
-
-        const rebuilt = buildMarkdownDecorationsForSpans(doc, [dirty], variableIndex);
-        const adds = extractDecorationRanges(rebuilt, fromPos, filterTo);
-
-        result = result.update({
-          filterFrom: fromPos,
-          filterTo,
-          filter: () => false,
-          add: adds,
-          sort: true,
-        });
-      }
-
-      // Guard: we never touch decorations outside the current viewport, so
-      // lines scrolled past lastVisibleLine keep whatever they had from the
-      // mapped set. That's fine because #1 already scopes builds to viewport.
-      void lastVisibleLine;
-      return result;
     }
 
     private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {

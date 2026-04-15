@@ -128,6 +128,68 @@ async function runQuitCommand(
   return { message: "quit", operations: [] };
 }
 
+function normalizeChecklistLine(line: string): string {
+  if (line.trim().length === 0) return line;
+
+  const indentMatch = line.match(/^\s*/);
+  const indent = indentMatch?.[0] ?? "";
+  const body = line.slice(indent.length);
+
+  const checklistMatch = body.match(
+    /^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)\[(?: |x|X)\]\s*(.*)$/,
+  );
+  if (checklistMatch) {
+    const marker = checklistMatch[1] ?? "";
+    const content = (checklistMatch[2] ?? "").trimStart();
+    return content.length > 0 ? `${indent}${marker}[ ] ${content}` : `${indent}${marker}[ ]`;
+  }
+
+  const listMatch = body.match(/^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(.*)$/);
+  if (listMatch) {
+    const marker = listMatch[1] ?? "";
+    const content = (listMatch[2] ?? "").trimStart();
+    return content.length > 0 ? `${indent}${marker}[ ] ${content}` : `${indent}${marker}[ ]`;
+  }
+
+  const content = body.trimStart();
+  return content.length > 0 ? `${indent}- [ ] ${content}` : `${indent}- [ ]`;
+}
+
+async function runChecklistCommand(
+  _normalizedInput: string,
+  ctx: ResolvedContext,
+  _runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  const selection = ctx.selection();
+  const startLine = ctx.lineAt(selection.from).number;
+  const endCursor = selection.empty
+    ? selection.head
+    : Math.max(selection.from, selection.to - 1);
+  const endLine = ctx.lineAt(endCursor).number;
+
+  const converted: string[] = [];
+  let changed = 0;
+  for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
+    const source = ctx.lineText(lineNo);
+    const next = normalizeChecklistLine(source);
+    converted.push(next);
+    if (next !== source) changed += 1;
+  }
+
+  if (changed === 0) {
+    return { message: "already checklist", operations: [] };
+  }
+
+  const from = ctx.line(startLine).from;
+  const to = ctx.line(endLine).to;
+  const insert = converted.join("\n");
+  const summary = changed === 1 ? "converted 1 line to checklist" : `converted ${changed} lines to checklist`;
+  return {
+    message: summary,
+    operations: [replaceRange(from, to, insert, { anchor: from + insert.length })],
+  };
+}
+
 const COMMAND_EXECUTORS: Record<string, CommandDefinition["execute"]> = {
   sum: runSumCommand,
   "sum list": runSumCommand,
@@ -141,6 +203,7 @@ const COMMAND_EXECUTORS: Record<string, CommandDefinition["execute"]> = {
   "avg doc": runAvgCommand,
   date: runDateCommand,
   format: runFormatCommand,
+  checklist: runChecklistCommand,
   q: runQuitCommand,
 };
 
@@ -164,6 +227,7 @@ const FALLBACK_COMMANDS: FallbackCommand[] = [
   { value: "avg doc", aliases: ["avg_all", "avg all"], description: "average whole document", modes: ["vim", "editor"] },
   { value: "date", description: "insert picked date", modes: ["vim", "editor"] },
   { value: "format", aliases: ["fmt"], description: "format markdown document", modes: ["vim", "editor"] },
+  { value: "checklist", aliases: ["checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: ["vim", "editor"] },
   { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"] },
 ];
 

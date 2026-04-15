@@ -105,6 +105,7 @@ test("core command suggestions are mode-aware", () => {
     "avg doc",
     "date",
     "format",
+    "checklist",
   ]);
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);
@@ -222,6 +223,22 @@ test("core executeCommand computes avg paragraph", async () => {
   assert.equal(result.message.includes("avg(paragraph) = 20"), true);
   assert.equal(result.operations.length, 1);
   assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "20.00" });
+});
+
+test("core executeCommand checklist converts selected lines to checkboxes", async () => {
+  const text = ["alpha", "- beta", "1. gamma", "tail"].join("\n");
+  const tailStart = text.indexOf("\ntail");
+  const result = await executeCommand(snapshot(text, tailStart, 0), "checklist", {
+    mode: "editor",
+  });
+
+  assert.equal(result.message, "converted 3 lines to checklist");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: 0,
+    to: tailStart,
+    insert: "- [ ] alpha\n- [ ] beta\n1. [ ] gamma",
+  });
 });
 
 test("core executeCommand supports unit-aware avg row", async () => {

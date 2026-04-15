@@ -14,6 +14,7 @@ pub enum CommandId {
     AvgDoc,
     Date,
     Format,
+    Checklist,
     Quit,
 }
 
@@ -29,7 +30,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 13] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 14] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -112,6 +113,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 13] = [
         value: "format",
         aliases: &["fmt"],
         description: "format markdown document",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::Checklist,
+        value: "checklist",
+        aliases: &["checkbox", "checkboxes", "todo"],
+        description: "convert selected lines to checklist",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
