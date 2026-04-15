@@ -1,5 +1,5 @@
-APP_NAME := note
-MSG_NAME := note-msg
+APP_NAME := slate
+MSG_NAME := slate-msg
 BIN_DIR := $(HOME)/.local/bin
 TAURI_DIR := src-tauri
 ICON_DIR := $(TAURI_DIR)/icons

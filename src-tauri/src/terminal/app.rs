@@ -4081,7 +4081,7 @@ fn send_system_notification(title: &str, body: &str) -> Result<(), String> {
              $xml=New-Object Windows.Data.Xml.Dom.XmlDocument;\
              $xml.LoadXml(\"<toast><visual><binding template='ToastGeneric'><text>{escaped_title}</text><text>{escaped_body}</text></binding></visual></toast>\");\
              $toast=[Windows.UI.Notifications.ToastNotification]::new($xml);\
-             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('note').Show($toast);"
+             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('slate').Show($toast);"
         );
         let status = Command::new("powershell")
             .args([

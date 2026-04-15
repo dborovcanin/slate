@@ -8,14 +8,14 @@ mod imp {
 
     fn socket_path() -> PathBuf {
         let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| format!("/tmp/note-{}", unsafe { libc::getuid() }));
-        PathBuf::from(runtime_dir).join("note.sock")
+            .unwrap_or_else(|_| format!("/tmp/slate-{}", unsafe { libc::getuid() }));
+        PathBuf::from(runtime_dir).join("slate.sock")
     }
 
     pub fn run() {
         let args: Vec<String> = std::env::args().collect();
         if args.len() != 2 {
-            eprintln!("Usage: note-msg <ping|show|hide|toggle>");
+            eprintln!("Usage: slate-msg <ping|show|hide|toggle>");
             process::exit(2);
         }
 
@@ -24,7 +24,7 @@ mod imp {
             "ping" | "show" | "hide" | "toggle" => {}
             _ => {
                 eprintln!("Unknown command: {cmd}");
-                eprintln!("Usage: note-msg <ping|show|hide|toggle>");
+                eprintln!("Usage: slate-msg <ping|show|hide|toggle>");
                 process::exit(2);
             }
         }
@@ -33,7 +33,7 @@ mod imp {
         let mut stream = match UnixStream::connect(&path) {
             Ok(s) => s,
             Err(_) => {
-                eprintln!("note is not running (no socket at {})", path.display());
+                eprintln!("slate is not running (no socket at {})", path.display());
                 process::exit(1);
             }
         };
@@ -58,7 +58,7 @@ mod imp {
                 }
             }
             Err(e) => {
-                eprintln!("No response from note: {e}");
+                eprintln!("No response from slate: {e}");
                 process::exit(1);
             }
         }
@@ -68,7 +68,7 @@ mod imp {
 #[cfg(not(unix))]
 mod imp {
     pub fn run() {
-        eprintln!("note-msg is currently supported only on Unix-like platforms.");
+        eprintln!("slate-msg is currently supported only on Unix-like platforms.");
         std::process::exit(1);
     }
 }

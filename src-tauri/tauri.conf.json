@@ -1,7 +1,7 @@
 {
-  "productName": "note",
+  "productName": "slate",
   "version": "0.1.0",
-  "identifier": "io.github.note",
+  "identifier": "io.github.slate",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Note",
+        "title": "Slate",
         "width": 600,
         "height": 500,
         "minWidth": 300,

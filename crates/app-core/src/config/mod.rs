@@ -256,7 +256,7 @@ fn normalize_variable_autocomplete_min_chars(value: Option<u16>) -> u8 {
 }
 
 fn config_file_path() -> Result<PathBuf, String> {
-    let dirs = ProjectDirs::from("io", "github", "note")
+    let dirs = ProjectDirs::from("io", "github", "slate")
         .ok_or_else(|| "Failed to determine app config directory".to_string())?;
     Ok(dirs.config_dir().join("config.toml"))
 }

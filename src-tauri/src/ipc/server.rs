@@ -7,8 +7,8 @@ mod imp {
 
     pub fn socket_path() -> PathBuf {
         let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| format!("/tmp/note-{}", unsafe { libc::getuid() }));
-        PathBuf::from(runtime_dir).join("note.sock")
+            .unwrap_or_else(|_| format!("/tmp/slate-{}", unsafe { libc::getuid() }));
+        PathBuf::from(runtime_dir).join("slate.sock")
     }
 
     pub fn start_ipc_server(app: AppHandle) {

@@ -33,7 +33,7 @@ impl AppCore {
 }
 
 pub fn data_dir() -> Result<PathBuf, String> {
-    let project_dirs = ProjectDirs::from("io", "github", "note")
+    let project_dirs = ProjectDirs::from("io", "github", "slate")
         .ok_or_else(|| "Failed to determine app data directory".to_string())?;
     let data_dir = project_dirs.data_dir().to_path_buf();
     fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create data directory: {e}"))?;

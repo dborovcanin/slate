@@ -1,19 +1,19 @@
 [package]
-name = "note"
+name = "slate"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "note_lib"
+name = "slate_lib"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
-name = "note"
+name = "slate"
 path = "src/main.rs"
 
 [[bin]]
-name = "note-msg"
-path = "src/bin/note-msg.rs"
+name = "slate-msg"
+path = "src/bin/slate-msg.rs"
 
 [dependencies]
 app-core = { path = "../crates/app-core" }

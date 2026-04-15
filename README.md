@@ -1,4 +1,4 @@
-# Note
+# Slate
 
 A minimal, fast, keyboard-first scratchpad for Linux. Inspired by [Antinote](https://antinote.io/).
 
@@ -28,7 +28,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 **Themes and backgrounds**
 - 12 built-in color schemes: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
 - 5 background patterns: `plain`, `lines`, `squares`, `dots`, `diagonal`
-- Configurable via TOML (`$XDG_CONFIG_HOME/note/config.toml` or `~/.config/note/config.toml`)
+- Configurable via TOML (`$XDG_CONFIG_HOME/slate/config.toml` or `~/.config/slate/config.toml`)
 - Live reload while the app is running (polls config changes automatically)
 
 **Optional Vim mode**
@@ -44,7 +44,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 
 **Optional terminal mode**
 - Enable with `[editor] terminal_mode = true`
-- Or run explicitly with `note --terminal`
+- Or run explicitly with `slate --terminal`
 - Runs as a standalone full-screen terminal app (no Tauri window)
 - Built-in editor with note list/switcher and status bar
 - Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
@@ -87,7 +87,7 @@ sqrt(144) + 3^2         → 21
 - Toast feedback on export
 
 **IPC / Sway integration**
-- `note-msg` CLI binary communicates with the running app over a Unix socket
+- `slate-msg` CLI binary communicates with the running app over a Unix socket
 - Commands: `ping`, `show`, `hide`, `toggle`
 - Bind to a Sway keybind for instant toggle from any workspace
 
@@ -116,8 +116,8 @@ sqrt(144) + 3^2         → 21
 | Escape                  | Close switcher                |
 
 **Storage**
-- SQLite with WAL mode in `~/.local/share/note/notes.db`
-- Config file is auto-generated on first run (`~/.config/note/config.toml`)
+- SQLite with WAL mode in `~/.local/share/slate/notes.db`
+- Config file is auto-generated on first run (`~/.config/slate/config.toml`)
 
 ## Requirements
 
@@ -152,14 +152,14 @@ cargo tauri build
 ```
 
 Outputs two binaries:
-- `src-tauri/target/release/note` (14MB) — the app
-- `src-tauri/target/release/note-msg` (471KB) — the IPC client
+- `src-tauri/target/release/slate` (14MB) — the app
+- `src-tauri/target/release/slate-msg` (471KB) — the IPC client
 
 Install them:
 
 ```sh
-cp src-tauri/target/release/note ~/.local/bin/
-cp src-tauri/target/release/note-msg ~/.local/bin/
+cp src-tauri/target/release/slate ~/.local/bin/
+cp src-tauri/target/release/slate-msg ~/.local/bin/
 ```
 
 Or use:
@@ -175,7 +175,7 @@ make release
 ```
 
 `make release` writes artifacts into `build/`:
-- `note-linux`, `note-msg-linux`
+- `slate-linux`, `slate-msg-linux`
 - Windows NSIS installer (`*.exe`) when run on a native Windows host (MSVC toolchain)
 - macOS binaries when run on macOS, or when an osxcross toolchain is configured
 
@@ -207,7 +207,7 @@ npx tsc --noEmit
 cargo tauri build --debug
 ```
 
-Debug binary: `src-tauri/target/debug/note`
+Debug binary: `src-tauri/target/debug/slate`
 
 To see WebView devtools, right-click inside the app window during `cargo tauri dev`.
 
@@ -252,8 +252,8 @@ Current automated coverage:
 ## Configuration (TOML)
 
 Config file location:
-- `$XDG_CONFIG_HOME/note/config.toml`
-- fallback: `~/.config/note/config.toml`
+- `$XDG_CONFIG_HOME/slate/config.toml`
+- fallback: `~/.config/slate/config.toml`
 
 The file is generated automatically on first run.
 Theme changes are picked up live while the app is running (typically within ~1-2 seconds).
@@ -314,7 +314,7 @@ Available `font` values:
 Editor options:
 - `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
 - `format_on_save = false` runs `:format` before save when enabled (Ctrl+S and autosave flush path)
-- `terminal_mode = true` makes `note` default to terminal runtime (when launched from a TTY)
+- `terminal_mode = true` makes `slate` default to terminal runtime (when launched from a TTY)
 - `vim_mode = true` enables modal Vim-style key mappings in GUI
 - `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
 
@@ -333,24 +333,24 @@ Add to your Sway config:
 
 ```
 # Float the window
-for_window [app_id="note"] floating enable
+for_window [app_id="slate"] floating enable
 
 # Toggle with a keybind
-bindsym $mod+n exec note-msg toggle || note
+bindsym $mod+n exec slate-msg toggle || slate
 ```
 
-The `||` fallback launches `note` if `note-msg` can't connect (app not running).
+The `||` fallback launches `slate` if `slate-msg` can't connect (app not running).
 
 ### IPC commands
 
 ```sh
-note-msg ping     # Check if the app is running
-note-msg show     # Show and focus the window
-note-msg hide     # Hide the window
-note-msg toggle   # Toggle visibility
+slate-msg ping     # Check if the app is running
+slate-msg show     # Show and focus the window
+slate-msg hide     # Hide the window
+slate-msg toggle   # Toggle visibility
 ```
 
-The socket lives at `$XDG_RUNTIME_DIR/note.sock` and is cleaned up on exit.
+The socket lives at `$XDG_RUNTIME_DIR/slate.sock` and is cleaned up on exit.
 
 ## Architecture
 
@@ -363,7 +363,7 @@ Tauri v2 app: Rust backend + vanilla TypeScript frontend.
 ```
                     Unix socket IPC
 ┌─────────────┐  ping|show|hide|toggle   ┌─────────────────────────────────┐
-│  note-msg   │ ───────────────────────> │           note (Tauri v2)       │
+│  slate-msg  │ ───────────────────────> │          slate (Tauri v2)       │
 │  (471KB)    │                          │                                 │
 └─────────────┘                          │  Frontend        Backend        │
                                          │  ┌────────────┐  ┌────────────┐ │
@@ -407,7 +407,7 @@ src-tauri/                    # Backend (Rust)
     ipc/
       server.rs               # Unix socket listener
   src/bin/
-    note-msg.rs               # CLI client binary
+    slate-msg.rs              # CLI client binary
   migrations/
     0001_init.sql             # Schema
 ```

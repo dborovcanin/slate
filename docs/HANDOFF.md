@@ -7,7 +7,7 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 - Added config-driven theme loading from TOML:
   - `src-tauri/src/config/mod.rs`
   - command: `get_theme_config`
-  - file path: `$XDG_CONFIG_HOME/note/config.toml` (fallback `~/.config/note/config.toml`)
+  - file path: `$XDG_CONFIG_HOME/slate/config.toml` (fallback `~/.config/slate/config.toml`)
   - default file is auto-created on first run
 - Added frontend theme engine with presets:
   - color schemes: 12 built-ins
