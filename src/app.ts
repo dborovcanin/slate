@@ -372,6 +372,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   createStatusBar(container);
   mountEditor(editorEl, {
     markdownAutoformat: config.markdown_autoformat,
+    checklistAutoReorder: config.checklist_auto_reorder,
     formatOnSave: config.format_on_save,
     vimMode: !!config.vim_mode,
     dateFormat: config.date_format,

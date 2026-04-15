@@ -12,6 +12,7 @@ const MAX_FONT_SIZE: u8 = 28;
 const DEFAULT_VIM_MODE: bool = false;
 const DEFAULT_TERMINAL_MODE: bool = false;
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
+const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
@@ -46,6 +47,8 @@ font_size = 14
 [editor]
 # Enable markdown editing helpers (list continuation, table alignment, etc.)
 markdown_autoformat = true
+# Automatically move checked checklist items to bottom and unchecked to top
+checklist_auto_reorder = true
 # Run :format before save (Ctrl+S and save flush path)
 format_on_save = false
 # Start in terminal mode by default when launched from a TTY
@@ -71,6 +74,7 @@ pub struct ThemeConfig {
     pub font: String,
     pub font_size: u8,
     pub markdown_autoformat: bool,
+    pub checklist_auto_reorder: bool,
     pub format_on_save: bool,
     pub terminal_mode: bool,
     pub vim_mode: bool,
@@ -88,6 +92,7 @@ impl Default for ThemeConfig {
             font: DEFAULT_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
+            checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
             terminal_mode: DEFAULT_TERMINAL_MODE,
             vim_mode: DEFAULT_VIM_MODE,
@@ -118,6 +123,7 @@ struct ThemeSection {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct EditorSection {
     markdown_autoformat: Option<bool>,
+    checklist_auto_reorder: Option<bool>,
     format_on_save: Option<bool>,
     terminal_mode: Option<bool>,
     vim_mode: Option<bool>,
@@ -185,6 +191,10 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             .editor
             .markdown_autoformat
             .unwrap_or(DEFAULT_MARKDOWN_AUTOFORMAT),
+        checklist_auto_reorder: raw
+            .editor
+            .checklist_auto_reorder
+            .unwrap_or(DEFAULT_CHECKLIST_AUTO_REORDER),
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         terminal_mode: raw.editor.terminal_mode.unwrap_or(DEFAULT_TERMINAL_MODE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
@@ -277,6 +287,7 @@ mod tests {
 
             [editor]
             markdown_autoformat = false
+            checklist_auto_reorder = false
             format_on_save = true
             terminal_mode = true
             vim_mode = true
@@ -295,6 +306,7 @@ mod tests {
         assert_eq!(cfg.font, "fira-code");
         assert_eq!(cfg.font_size, 18);
         assert!(!cfg.markdown_autoformat);
+        assert!(!cfg.checklist_auto_reorder);
         assert!(cfg.format_on_save);
         assert!(cfg.terminal_mode);
         assert!(cfg.vim_mode);
@@ -328,6 +340,7 @@ mod tests {
     fn defaults_vim_mode_to_false() {
         let cfg = parse_theme_config("[theme]\ncolor_scheme = 'dark'").expect("config parsed");
         assert!(cfg.markdown_autoformat);
+        assert!(cfg.checklist_auto_reorder);
         assert!(!cfg.format_on_save);
         assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
@@ -341,6 +354,12 @@ mod tests {
     fn parses_markdown_autoformat_override() {
         let cfg = parse_theme_config("[editor]\nmarkdown_autoformat = false").expect("config");
         assert!(!cfg.markdown_autoformat);
+    }
+
+    #[test]
+    fn parses_checklist_auto_reorder_override() {
+        let cfg = parse_theme_config("[editor]\nchecklist_auto_reorder = false").expect("config");
+        assert!(!cfg.checklist_auto_reorder);
     }
 
     #[test]

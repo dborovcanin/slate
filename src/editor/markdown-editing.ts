@@ -137,7 +137,7 @@ function markdownTabKeymap(autoformat: boolean): KeyBinding[] {
   ];
 }
 
-function textRulesPlugin(enabled: boolean) {
+function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
   return ViewPlugin.define(() => {
     let applying = false;
     return {
@@ -146,7 +146,8 @@ function textRulesPlugin(enabled: boolean) {
         applying = true;
         try {
           const operation = runDocChangeRules(snapshotFromUpdate(update), {
-            markdownAutoformat: enabled,
+            markdownAutoformat: autoformat,
+            checklistAutoReorder,
           });
           if (operation) {
             Promise.resolve().then(() => {
@@ -225,14 +226,16 @@ function checklistClickHandlers() {
 
 interface MarkdownEditingOptions {
   autoformat?: boolean;
+  checklistAutoReorder?: boolean;
 }
 
 export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) {
   const autoformat = options.autoformat ?? true;
+  const checklistAutoReorder = options.checklistAutoReorder ?? true;
   return [
     Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
     Prec.low(keymap.of(markdownTabKeymap(autoformat))),
     checklistClickHandlers(),
-    textRulesPlugin(autoformat),
+    textRulesPlugin(autoformat, checklistAutoReorder),
   ];
 }

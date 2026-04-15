@@ -388,6 +388,8 @@ struct TerminalApp {
     search_orig_scroll: usize,
     // Auto format
     format_on_save: bool,
+    markdown_autoformat: bool,
+    checklist_auto_reorder: bool,
     // Calc/variables behavior
     variables_enabled: bool,
     render_palette: render::RenderPalette,
@@ -404,6 +406,8 @@ impl TerminalApp {
         db: &Db,
         opts: &TerminalOptions,
         format_on_save: bool,
+        markdown_autoformat: bool,
+        checklist_auto_reorder: bool,
         variables_enabled: bool,
         render_palette: render::RenderPalette,
         date_format: String,
@@ -478,6 +482,8 @@ impl TerminalApp {
             search_orig_col: 0,
             search_orig_scroll: 0,
             format_on_save,
+            markdown_autoformat,
+            checklist_auto_reorder,
             variables_enabled,
             render_palette,
             command_bar_from_normal: false,
@@ -1267,7 +1273,8 @@ impl TerminalApp {
 
         let snapshot = self.build_snapshot();
         let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: true,
+            markdown_autoformat: self.markdown_autoformat,
+            checklist_auto_reorder: self.checklist_auto_reorder,
         };
         if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
             self.apply_edit_operation(&op);
@@ -2691,7 +2698,8 @@ impl TerminalApp {
 
         let snapshot = self.build_snapshot();
         let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: true,
+            markdown_autoformat: self.markdown_autoformat,
+            checklist_auto_reorder: self.checklist_auto_reorder,
         };
         if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
             self.apply_edit_operation(&op);
@@ -2701,7 +2709,8 @@ impl TerminalApp {
     fn try_enter_rule(&mut self) -> bool {
         let snapshot = self.build_snapshot();
         let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: true,
+            markdown_autoformat: self.markdown_autoformat,
+            checklist_auto_reorder: self.checklist_auto_reorder,
         };
         if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&snapshot, options) {
             self.apply_edit_operation(&op);
@@ -2713,7 +2722,7 @@ impl TerminalApp {
     fn try_tab_rule(&mut self, outdent: bool) -> bool {
         let snapshot = self.build_snapshot();
         let options = crate::editor_core::text_rules::TabRuleOptions {
-            markdown_autoformat: true,
+            markdown_autoformat: self.markdown_autoformat,
             outdent,
         };
         if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&snapshot, options) {
@@ -2726,7 +2735,7 @@ impl TerminalApp {
     fn try_table_navigation_rule(&mut self, outdent: bool) -> bool {
         let snapshot = self.build_snapshot();
         let options = crate::editor_core::text_rules::TabRuleOptions {
-            markdown_autoformat: true,
+            markdown_autoformat: self.markdown_autoformat,
             outdent,
         };
         if let Some(op) =
@@ -3285,6 +3294,8 @@ pub fn run_terminal_session(
         db,
         opts,
         config.format_on_save,
+        config.markdown_autoformat,
+        config.checklist_auto_reorder,
         config.variables_enabled,
         render::RenderPalette::for_color_scheme(&config.color_scheme),
         config.date_format.clone(),
@@ -4783,6 +4794,8 @@ mod tests {
             &db,
             &opts,
             false,
+            true,
+            true,
             true,
             super::render::RenderPalette::default(),
             "%Y-%m-%d".to_string(),

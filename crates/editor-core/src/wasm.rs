@@ -24,10 +24,15 @@ pub fn init() {
 
 /// Run document-change text rules. Returns JSON-encoded EditOperation or null.
 #[wasm_bindgen]
-pub fn wasm_run_doc_change_rules(snapshot_json: &str, markdown_autoformat: bool) -> Option<String> {
+pub fn wasm_run_doc_change_rules(
+    snapshot_json: &str,
+    markdown_autoformat: bool,
+    checklist_auto_reorder: bool,
+) -> Option<String> {
     let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
     let options = TextRuleOptions {
         markdown_autoformat,
+        checklist_auto_reorder,
     };
     let op = run_doc_change_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()
@@ -39,6 +44,7 @@ pub fn wasm_run_enter_rules(snapshot_json: &str, markdown_autoformat: bool) -> O
     let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
     let options = TextRuleOptions {
         markdown_autoformat,
+        checklist_auto_reorder: true,
     };
     let op = run_enter_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()

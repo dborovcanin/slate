@@ -24,6 +24,7 @@ export interface ThemeConfig {
   font: string;
   font_size: number;
   markdown_autoformat: boolean;
+  checklist_auto_reorder: boolean;
   format_on_save?: boolean;
   terminal_mode: boolean;
   vim_mode: boolean;
@@ -39,6 +40,7 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   font: "jetbrains-mono",
   font_size: 14,
   markdown_autoformat: true,
+  checklist_auto_reorder: true,
   format_on_save: false,
   terminal_mode: false,
   vim_mode: false,

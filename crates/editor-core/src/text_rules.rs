@@ -5,12 +5,14 @@ use crate::types::{EditOperation, EditorContextSnapshot, OperationSelection, Tex
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRuleOptions {
     pub markdown_autoformat: bool,
+    pub checklist_auto_reorder: bool,
 }
 
 impl Default for TextRuleOptions {
     fn default() -> Self {
         Self {
             markdown_autoformat: true,
+            checklist_auto_reorder: true,
         }
     }
 }
@@ -270,6 +272,32 @@ fn parse_checklist_after_prefix(rest: &str) -> Option<(bool, usize)> {
     Some((matches!(bytes[1], b'x' | b'X'), i))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ChecklistLineMeta<'a> {
+    parts: ListLineParts<'a>,
+    checked: bool,
+}
+
+fn parse_checklist_line_meta(line: &str) -> Option<ChecklistLineMeta<'_>> {
+    let parts = parse_list_line_parts(line)?;
+    let (checked, _) = parse_checklist_after_prefix(parts.content)?;
+    Some(ChecklistLineMeta { parts, checked })
+}
+
+fn checklist_marker_offset(line: &str) -> Option<usize> {
+    let parts = parse_list_line_parts(line)?;
+    let rest = &line[parts.prefix_end..];
+    parse_checklist_after_prefix(rest)?;
+    Some(parts.prefix_end + 1)
+}
+
+fn is_checklist_line_with_depth(line: &str, depth: usize) -> bool {
+    let Some(meta) = parse_checklist_line_meta(line) else {
+        return false;
+    };
+    marker_depth(meta.parts.indent) == depth
+}
+
 fn is_empty_checklist_content(content: &str) -> bool {
     matches!(content.trim(), "[ ]" | "[x]" | "[X]")
 }
@@ -310,7 +338,9 @@ pub fn rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option<Stri
     Some(format!("{prefix}[x] {next_content}"))
 }
 
-fn checklist_toggle_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+fn checklist_toggle_from_suffix(
+    ctx: &ResolvedContext,
+) -> Option<(usize, usize, usize, String, bool)> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -322,16 +352,122 @@ fn checklist_toggle_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     }
 
     let replacement = rewrite_line_with_checklist_toggle_suffix(&line.text)?;
-    if replacement == line.text {
+    let checked = parse_checklist_line_meta(&replacement)?.checked;
+    Some((line.number, line.from, line.to, replacement, checked))
+}
+
+fn checklist_toggle_from_marker_change(
+    ctx: &ResolvedContext,
+) -> Option<(usize, usize, usize, String, bool)> {
+    let changed = ctx.changed_range()?;
+    if changed.to <= changed.from {
+        return None;
+    }
+
+    let line = ctx.line_at(changed.from);
+    if changed.from < line.from || changed.to > line.to {
+        return None;
+    }
+
+    let marker_offset = checklist_marker_offset(&line.text)?;
+    let marker_from = line.from + marker_offset;
+    let marker_to = marker_from + 1;
+    if changed.from > marker_from || changed.to < marker_to {
+        return None;
+    }
+
+    let checked = parse_checklist_line_meta(&line.text)?.checked;
+    Some((line.number, line.from, line.to, line.text.clone(), checked))
+}
+
+fn reorder_checklist_toggle(
+    ctx: &ResolvedContext,
+    line_number: usize,
+    replacement: &str,
+    move_to_bottom: bool,
+) -> Option<EditOperation> {
+    let meta = parse_checklist_line_meta(replacement)?;
+    let depth = marker_depth(meta.parts.indent);
+    let line_count = ctx.line_count();
+
+    let mut start_line = line_number;
+    while start_line > 1 && is_checklist_line_with_depth(ctx.line_text(start_line - 1), depth) {
+        start_line -= 1;
+    }
+
+    let mut end_line = line_number;
+    while end_line < line_count && is_checklist_line_with_depth(ctx.line_text(end_line + 1), depth)
+    {
+        end_line += 1;
+    }
+
+    let mut updated_lines = Vec::with_capacity(end_line - start_line + 1);
+    let mut original_lines = Vec::with_capacity(end_line - start_line + 1);
+    for current in start_line..=end_line {
+        let original = ctx.line_text(current).to_string();
+        original_lines.push(original.clone());
+        if current == line_number {
+            updated_lines.push(replacement.to_string());
+        } else {
+            updated_lines.push(original);
+        }
+    }
+
+    let source_idx = line_number - start_line;
+    let target_idx = if move_to_bottom {
+        updated_lines.len().saturating_sub(1)
+    } else {
+        0
+    };
+
+    if source_idx != target_idx {
+        let moved = updated_lines.remove(source_idx);
+        updated_lines.insert(target_idx, moved);
+    }
+
+    let new_text = updated_lines.join("\n");
+    let old_text = original_lines.join("\n");
+    if new_text == old_text {
+        return None;
+    }
+
+    let start = ctx.line(start_line);
+    let end = ctx.line(end_line);
+    let mut anchor = start.from;
+    for line_text in updated_lines.iter().take(target_idx) {
+        anchor += line_text.len() + 1;
+    }
+    anchor += updated_lines[target_idx].len();
+
+    Some(replace_range(
+        start.from,
+        end.to,
+        new_text,
+        Some(OperationSelection { anchor, head: None }),
+    ))
+}
+
+fn checklist_toggle_rule(ctx: &ResolvedContext, options: TextRuleOptions) -> Option<EditOperation> {
+    let (line_number, line_from, line_to, replacement, checked) =
+        checklist_toggle_from_suffix(ctx).or_else(|| checklist_toggle_from_marker_change(ctx))?;
+
+    if options.checklist_auto_reorder {
+        if let Some(op) = reorder_checklist_toggle(ctx, line_number, &replacement, checked) {
+            return Some(op);
+        }
+    }
+
+    let original_line = ctx.line_text(line_number);
+    if replacement == original_line {
         return None;
     }
 
     Some(replace_range(
-        line.from,
-        line.to,
+        line_from,
+        line_to,
         replacement.clone(),
         Some(OperationSelection {
-            anchor: line.from + replacement.len(),
+            anchor: line_from + replacement.len(),
             head: None,
         }),
     ))
@@ -714,7 +850,7 @@ pub fn run_doc_change_rules(
 ) -> Option<EditOperation> {
     let ctx = ResolvedContext::new(snapshot.clone());
 
-    if let Some(op) = checklist_toggle_rule(&ctx) {
+    if let Some(op) = checklist_toggle_rule(&ctx, options) {
         return Some(op);
     }
 
@@ -1113,13 +1249,27 @@ pub fn run_table_cell_navigation_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SelectionSnapshot;
+    use crate::types::{SelectionSnapshot, TextRange};
 
     fn snapshot(text: &str, head: usize, anchor: usize) -> EditorContextSnapshot {
         EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },
             changed_range: None,
+        }
+    }
+
+    fn snapshot_with_changed_range(
+        text: &str,
+        head: usize,
+        anchor: usize,
+        from: usize,
+        to: usize,
+    ) -> EditorContextSnapshot {
+        EditorContextSnapshot {
+            text: text.to_string(),
+            selection: SelectionSnapshot { anchor, head },
+            changed_range: Some(TextRange { from, to }),
         }
     }
 
@@ -1162,6 +1312,60 @@ mod tests {
         let doc = snapshot(text, text.len(), text.len());
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(apply_operation(&doc.text, &op), "- [x] task");
+    }
+
+    #[test]
+    fn run_doc_change_rules_moves_checked_item_to_bottom() {
+        let text = "- [ ] first /x\n- [ ] second\n- [x] done";
+        let first_line_end = text.find('\n').expect("newline");
+        let doc = snapshot(text, first_line_end, first_line_end);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "- [ ] second\n- [x] done\n- [x] first"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_moves_unchecked_item_to_top() {
+        let text = "- [ ] first\n- [x] second /x\n- [x] third";
+        let second_line_end = text.find("\n- [x] third").expect("line suffix");
+        let doc = snapshot(text, second_line_end, second_line_end);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "- [ ] second\n- [ ] first\n- [x] third"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_can_disable_checklist_reordering() {
+        let text = "- [ ] first /x\n- [ ] second\n- [x] done";
+        let first_line_end = text.find('\n').expect("newline");
+        let doc = snapshot(text, first_line_end, first_line_end);
+        let op = run_doc_change_rules(
+            &doc,
+            TextRuleOptions {
+                checklist_auto_reorder: false,
+                ..TextRuleOptions::default()
+            },
+        )
+        .expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "- [x] first\n- [ ] second\n- [x] done"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_reorders_when_checkbox_marker_is_clicked() {
+        let text = "- [x] first\n- [ ] second";
+        let marker_from = 3;
+        let marker_to = marker_from + 1;
+        let doc =
+            snapshot_with_changed_range(text, marker_from, marker_from, marker_from, marker_to);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "- [ ] second\n- [x] first");
     }
 
     #[test]
@@ -1304,6 +1508,7 @@ mod tests {
             &doc,
             TextRuleOptions {
                 markdown_autoformat: false,
+                ..TextRuleOptions::default()
             },
         );
         assert!(op.is_none());

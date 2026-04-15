@@ -15,6 +15,7 @@ mod tests_list {
             &snap,
             TextRuleOptions {
                 markdown_autoformat: true,
+                ..TextRuleOptions::default()
             },
         );
         if let Some(op) = op {

@@ -54,6 +54,7 @@ const onUpdate = EditorView.updateListener.of((update) => {
 
 interface EditorMountOptions {
   markdownAutoformat?: boolean;
+  checklistAutoReorder?: boolean;
   formatOnSave?: boolean;
   vimMode?: boolean;
   dateFormat?: string;
@@ -207,7 +208,8 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   const note = state.activeNote;
   const doc = note?.body ?? "";
   const markdownAutoformat = options.markdownAutoformat ?? true;
-  
+  const checklistAutoReorder = options.checklistAutoReorder ?? true;
+
   currentFormatOnSave = !!options.formatOnSave;
   currentDateFormat = options.dateFormat || "%Y-%m-%d";
 
@@ -218,7 +220,10 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     highlightActiveLine(),
     placeholder("Start typing..."),
     markdownRichTextExtensions(),
-    markdownEditingExtensions({ autoformat: markdownAutoformat }),
+    markdownEditingExtensions({
+      autoformat: markdownAutoformat,
+      checklistAutoReorder,
+    }),
     ...variableAutocompleteExtensions({
       enabled: options.variablesEnabled ?? true,
       minChars: options.variableAutocompleteMinChars ?? 3,

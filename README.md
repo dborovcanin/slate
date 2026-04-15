@@ -22,8 +22,9 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
   - `Ctrl/Cmd+B` bold, `Ctrl/Cmd+I` italic, `Ctrl/Cmd+Shift+X` strikethrough, `Ctrl/Cmd+K` link
   - List continuation on Enter
   - End a list/checklist line with ` /x` to toggle checkbox state (`- item /x` -> `- [x] item`, `- [x] item /x` -> `- [ ] item`)
+  - Checklist auto-reorder (when enabled): checking an item moves it to the bottom, unchecking moves it to the top
   - Markdown table autoformat/alignment while editing
-  - Controlled by `[editor] markdown_autoformat` (defaults to `true`)
+- Controlled by `[editor] markdown_autoformat` (defaults to `true`) and `[editor] checklist_auto_reorder` (defaults to `true`)
 
 **Themes and backgrounds**
 - 12 built-in color schemes: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
@@ -262,6 +263,7 @@ font_size = 14
 
 [editor]
 markdown_autoformat = true
+checklist_auto_reorder = true
 format_on_save = false
 terminal_mode = false
 vim_mode = false
@@ -306,6 +308,7 @@ Available `font` values:
 
 Editor options:
 - `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
+- `checklist_auto_reorder = true` automatically moves checked checklist items to the bottom and unchecked items to the top
 - `format_on_save = false` runs `:format` before save when enabled (Ctrl+S and autosave flush path)
 - `terminal_mode = true` makes `slate` default to terminal runtime (when launched from a TTY)
 - `vim_mode = true` enables modal Vim-style key mappings in GUI

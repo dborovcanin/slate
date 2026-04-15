@@ -94,6 +94,7 @@ function ensureWasmReadyNonBlocking(): boolean {
 
 export interface TextRuleOptions {
   markdownAutoformat?: boolean;
+  checklistAutoReorder?: boolean;
 }
 
 export interface TabRuleOptions {
@@ -387,7 +388,11 @@ export function runDocChangeRules(
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return parseOp(
-    wasm_run_doc_change_rules(toRustSnapshot(snapshot), options.markdownAutoformat ?? true),
+    wasm_run_doc_change_rules(
+      toRustSnapshot(snapshot),
+      options.markdownAutoformat ?? true,
+      options.checklistAutoReorder ?? true,
+    ),
     snapshot.text,
   );
 }
