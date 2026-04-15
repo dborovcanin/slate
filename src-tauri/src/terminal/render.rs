@@ -3,8 +3,6 @@ use std::fmt::Write as _;
 use crate::editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType, MarkdownLineInfo};
 
 pub const RESET: &str = "\x1b[0m";
-pub const BOLD: &str = "\x1b[1m";
-pub const DIM: &str = "\x1b[2m";
 pub const TAB_WIDTH: usize = 4;
 
 #[derive(Clone, Copy)]
@@ -32,6 +30,150 @@ impl Default for RenderPalette {
             variable: 179,
             search_match: 141,
             search_current: 203,
+        }
+    }
+}
+
+fn normalize_color_scheme(value: &str) -> String {
+    value.trim().to_ascii_lowercase().replace(['_', ' '], "-")
+}
+
+impl RenderPalette {
+    pub fn for_color_scheme(color_scheme: &str) -> Self {
+        match normalize_color_scheme(color_scheme).as_str() {
+            "catppuccin-mocha" => Self {
+                code_keyword: 111,
+                code_string: 150,
+                code_number: 217,
+                code_comment: 103,
+                code_function: 117,
+                code_type: 183,
+                variable: 180,
+                search_match: 147,
+                search_current: 211,
+            },
+            "catppuccin-latte" => Self {
+                code_keyword: 33,
+                code_string: 29,
+                code_number: 166,
+                code_comment: 102,
+                code_function: 25,
+                code_type: 61,
+                variable: 130,
+                search_match: 69,
+                search_current: 160,
+            },
+            "gruvbox-dark" => Self {
+                code_keyword: 214,
+                code_string: 142,
+                code_number: 208,
+                code_comment: 245,
+                code_function: 109,
+                code_type: 175,
+                variable: 172,
+                search_match: 179,
+                search_current: 167,
+            },
+            "gruvbox-light" => Self {
+                code_keyword: 130,
+                code_string: 64,
+                code_number: 166,
+                code_comment: 102,
+                code_function: 25,
+                code_type: 95,
+                variable: 94,
+                search_match: 136,
+                search_current: 160,
+            },
+            "dracula" => Self {
+                code_keyword: 177,
+                code_string: 114,
+                code_number: 221,
+                code_comment: 103,
+                code_function: 117,
+                code_type: 183,
+                variable: 222,
+                search_match: 141,
+                search_current: 204,
+            },
+            "dark" => Self {
+                code_keyword: 75,
+                code_string: 114,
+                code_number: 215,
+                code_comment: 244,
+                code_function: 74,
+                code_type: 153,
+                variable: 152,
+                search_match: 111,
+                search_current: 203,
+            },
+            "white" => Self {
+                code_keyword: 26,
+                code_string: 28,
+                code_number: 166,
+                code_comment: 102,
+                code_function: 31,
+                code_type: 61,
+                variable: 24,
+                search_match: 69,
+                search_current: 160,
+            },
+            "solarized-dark" => Self {
+                code_keyword: 136,
+                code_string: 64,
+                code_number: 166,
+                code_comment: 102,
+                code_function: 37,
+                code_type: 61,
+                variable: 109,
+                search_match: 144,
+                search_current: 166,
+            },
+            "solarized-light" => Self {
+                code_keyword: 166,
+                code_string: 64,
+                code_number: 130,
+                code_comment: 102,
+                code_function: 31,
+                code_type: 60,
+                variable: 65,
+                search_match: 137,
+                search_current: 160,
+            },
+            "nord" => Self {
+                code_keyword: 110,
+                code_string: 150,
+                code_number: 180,
+                code_comment: 102,
+                code_function: 81,
+                code_type: 146,
+                variable: 152,
+                search_match: 109,
+                search_current: 203,
+            },
+            "tokyo-night" => Self {
+                code_keyword: 111,
+                code_string: 114,
+                code_number: 216,
+                code_comment: 103,
+                code_function: 75,
+                code_type: 147,
+                variable: 153,
+                search_match: 147,
+                search_current: 204,
+            },
+            "one-dark" => Self {
+                code_keyword: 75,
+                code_string: 114,
+                code_number: 180,
+                code_comment: 245,
+                code_function: 74,
+                code_type: 176,
+                variable: 152,
+                search_match: 111,
+                search_current: 203,
+            },
+            _ => Self::default(),
         }
     }
 }
@@ -185,7 +327,8 @@ impl RenderContext {
                 style.dim = true;
                 style.fg = None;
             }
-            let code_tokens = markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
+            let code_tokens =
+                markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
             apply_code_token_styles(&code_tokens, &mut styles, self.palette);
         } else {
             apply_line_styles_from_info(&info, &mut styles);
@@ -684,14 +827,7 @@ mod tests {
     fn render_search_uses_distinct_colors_for_current_and_other_matches() {
         let mut ctx = RenderContext::new();
         let palette = RenderPalette::default();
-        let out = ctx.render_line(
-            "alpha beta alpha",
-            40,
-            None,
-            &[(0, 5)],
-            &[(11, 16)],
-            &[],
-        );
+        let out = ctx.render_line("alpha beta alpha", 40, None, &[(0, 5)], &[(11, 16)], &[]);
         assert!(out.contains(&format!("0;38;5;{}", palette.search_match)));
         assert!(out.contains(&format!("0;1;38;5;{}", palette.search_current)));
     }
@@ -704,16 +840,27 @@ mod tests {
             ..RenderPalette::default()
         };
         let mut ctx = RenderContext::new_with_palette(custom);
-        let out = ctx.render_line(
-            "alpha beta alpha",
-            40,
-            None,
-            &[(0, 5)],
-            &[(11, 16)],
-            &[],
-        );
+        let out = ctx.render_line("alpha beta alpha", 40, None, &[(0, 5)], &[(11, 16)], &[]);
         assert!(out.contains("0;38;5;135"));
         assert!(out.contains("0;1;38;5;196"));
+    }
+
+    #[test]
+    fn render_palette_supports_named_color_schemes() {
+        let palette = RenderPalette::for_color_scheme("gruvbox-dark");
+        assert_eq!(palette.code_keyword, 214);
+        assert_eq!(palette.search_current, 167);
+
+        let normalized = RenderPalette::for_color_scheme("Gruvbox Dark");
+        assert_eq!(normalized.code_keyword, 214);
+    }
+
+    #[test]
+    fn render_palette_falls_back_to_default_for_unknown_scheme() {
+        let palette = RenderPalette::for_color_scheme("unknown-scheme");
+        let default_palette = RenderPalette::default();
+        assert_eq!(palette.code_keyword, default_palette.code_keyword);
+        assert_eq!(palette.search_match, default_palette.search_match);
     }
 
     fn strip_ansi(s: &str) -> String {

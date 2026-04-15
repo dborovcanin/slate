@@ -6,6 +6,7 @@ use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use base64::Engine as _;
 use std::cmp::min;
+use std::fmt::Write as _;
 use std::io::{self, IsTerminal as _, Write};
 use std::mem::MaybeUninit;
 use std::process::{Command, Stdio};
@@ -359,6 +360,7 @@ struct TerminalApp {
     format_on_save: bool,
     // Calc/variables behavior
     variables_enabled: bool,
+    render_palette: render::RenderPalette,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
     // Undo/redo
@@ -373,6 +375,7 @@ impl TerminalApp {
         opts: &TerminalOptions,
         format_on_save: bool,
         variables_enabled: bool,
+        render_palette: render::RenderPalette,
     ) -> Result<(Self, TerminalStartupMetrics), String> {
         let startup_begin = Instant::now();
 
@@ -431,6 +434,7 @@ impl TerminalApp {
             search_orig_scroll: 0,
             format_on_save,
             variables_enabled,
+            render_palette,
             command_bar_from_normal: false,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
@@ -2623,9 +2627,22 @@ impl TerminalApp {
             " note  {}  {}{}{}",
             self.active_note.id, title, dirty_mark, mode_label
         );
-        draw_row(&mut buf, TITLE_ROW, cols, &title_line, true);
+        let title_bg = self.render_palette.search_current;
+        draw_row_at_styled(
+            &mut buf,
+            TITLE_ROW,
+            1,
+            cols,
+            &title_line,
+            AnsiStyle {
+                fg: Some(contrast_fg_for_bg(title_bg)),
+                bg: Some(title_bg),
+                bold: true,
+                ..Default::default()
+            },
+        );
 
-        let mut ctx = render::RenderContext::new_with_palette(render::RenderPalette::default());
+        let mut ctx = render::RenderContext::new_with_palette(self.render_palette);
         ctx.advance_lines(&self.lines[..self.scroll_line.min(self.lines.len())]);
         let mut cursor_line_override: Option<(String, usize)> = None;
 
@@ -2693,44 +2710,59 @@ impl TerminalApp {
                     }
                 }
 
-                let (search_ranges, current_search_ranges) = self.search_highlights_for_line(line_idx);
+                let (search_ranges, current_search_ranges) =
+                    self.search_highlights_for_line(line_idx);
                 let mut visual_highlight_ranges = Vec::new();
                 self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
 
-                let rendered_text = if ghost_dim_ranges.is_empty() && visual_highlight_ranges.is_empty() {
-                    ctx.render_line(
-                        &rendered_line,
-                        available,
-                        calc_ghost_override.as_deref().or(calc_ghost),
-                        &search_ranges,
-                        &current_search_ranges,
-                        &self.variable_names,
-                    )
-                } else {
-                    ctx.render_line_with_dim_ranges(
-                        &rendered_line,
-                        available,
-                        calc_ghost_override.as_deref().or(calc_ghost),
-                        &search_ranges,
-                        &current_search_ranges,
-                        &self.variable_names,
-                        &ghost_dim_ranges,
-                        &visual_highlight_ranges,
-                    )
-                };
+                let rendered_text =
+                    if ghost_dim_ranges.is_empty() && visual_highlight_ranges.is_empty() {
+                        ctx.render_line(
+                            &rendered_line,
+                            available,
+                            calc_ghost_override.as_deref().or(calc_ghost),
+                            &search_ranges,
+                            &current_search_ranges,
+                            &self.variable_names,
+                        )
+                    } else {
+                        ctx.render_line_with_dim_ranges(
+                            &rendered_line,
+                            available,
+                            calc_ghost_override.as_deref().or(calc_ghost),
+                            &search_ranges,
+                            &current_search_ranges,
+                            &self.variable_names,
+                            &ghost_dim_ranges,
+                            &visual_highlight_ranges,
+                        )
+                    };
                 buf.push_str(&goto(row, 1));
-                // Dim gutter
-                if is_cursor_line {
-                    buf.push_str(render::BOLD);
+                let gutter_style = if is_cursor_line {
+                    AnsiStyle {
+                        fg: Some(self.render_palette.variable),
+                        bold: true,
+                        ..Default::default()
+                    }
                 } else {
-                    buf.push_str(render::DIM);
-                }
+                    AnsiStyle {
+                        fg: Some(self.render_palette.code_comment),
+                        dim: true,
+                        ..Default::default()
+                    }
+                };
+                gutter_style.write_to(&mut buf);
                 buf.push_str(&format!("{line_no:>4}  "));
                 buf.push_str(render::RESET);
                 buf.push_str(&rendered_text);
             } else {
                 buf.push_str(&goto(row, 1));
-                buf.push_str(render::DIM);
+                AnsiStyle {
+                    fg: Some(self.render_palette.code_comment),
+                    dim: true,
+                    ..Default::default()
+                }
+                .write_to(&mut buf);
                 buf.push_str(&pad_right("~", cols));
                 buf.push_str(render::RESET);
             }
@@ -2748,14 +2780,26 @@ impl TerminalApp {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
         };
-        draw_row(&mut buf, rows, cols, status, true);
+        let status_bg = self.render_palette.search_match;
+        draw_row_at_styled(
+            &mut buf,
+            rows,
+            1,
+            cols,
+            status,
+            AnsiStyle {
+                fg: Some(contrast_fg_for_bg(status_bg)),
+                bg: Some(status_bg),
+                ..Default::default()
+            },
+        );
 
         if self.mode == UiMode::Switcher {
-            draw_switcher(self, &mut buf, rows, cols);
+            draw_switcher(self, &mut buf, rows, cols, self.render_palette);
         }
 
         if self.mode == UiMode::DatePicker {
-            draw_date_picker(self, &mut buf, rows, cols);
+            draw_date_picker(self, &mut buf, rows, cols, self.render_palette);
         }
 
         let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
@@ -2861,6 +2905,7 @@ pub fn run_terminal_session(
         opts,
         config.format_on_save,
         config.variables_enabled,
+        render::RenderPalette::for_color_scheme(&config.color_scheme),
     )?;
     let line = format!(
         "time:{startup_ts_ms} loading_screen:{} loading_note:{} loading_switcher:{} loading_calc_engine:{}",
@@ -3067,28 +3112,138 @@ fn pad_right(text: &str, width: usize) -> String {
     out
 }
 
-fn draw_row_at(buf: &mut String, row: usize, col: usize, width: usize, text: &str, inverted: bool) {
+#[derive(Clone, Copy, Default)]
+struct AnsiStyle {
+    fg: Option<u8>,
+    bg: Option<u8>,
+    bold: bool,
+    dim: bool,
+    reverse: bool,
+}
+
+impl AnsiStyle {
+    fn write_to(self, buf: &mut String) {
+        buf.push_str("\x1b[0");
+        if self.bold {
+            buf.push_str(";1");
+        }
+        if self.dim {
+            buf.push_str(";2");
+        }
+        if self.reverse {
+            buf.push_str(";7");
+        }
+        if let Some(fg) = self.fg {
+            let _ = write!(buf, ";38;5;{fg}");
+        }
+        if let Some(bg) = self.bg {
+            let _ = write!(buf, ";48;5;{bg}");
+        }
+        buf.push('m');
+    }
+}
+
+fn ansi_256_rgb(index: u8) -> (u8, u8, u8) {
+    if index < 16 {
+        const ANSI16: [(u8, u8, u8); 16] = [
+            (0, 0, 0),
+            (128, 0, 0),
+            (0, 128, 0),
+            (128, 128, 0),
+            (0, 0, 128),
+            (128, 0, 128),
+            (0, 128, 128),
+            (192, 192, 192),
+            (128, 128, 128),
+            (255, 0, 0),
+            (0, 255, 0),
+            (255, 255, 0),
+            (0, 0, 255),
+            (255, 0, 255),
+            (0, 255, 255),
+            (255, 255, 255),
+        ];
+        return ANSI16[index as usize];
+    }
+
+    if index <= 231 {
+        let idx = index - 16;
+        let r = idx / 36;
+        let g = (idx % 36) / 6;
+        let b = idx % 6;
+        let level = |v: u8| if v == 0 { 0 } else { 55 + 40 * v };
+        return (level(r), level(g), level(b));
+    }
+
+    let gray = 8 + (index - 232) * 10;
+    (gray, gray, gray)
+}
+
+fn contrast_fg_for_bg(bg: u8) -> u8 {
+    let (r, g, b) = ansi_256_rgb(bg);
+    // Relative luminance approximation in integer space.
+    let luminance = (299u32 * r as u32 + 587u32 * g as u32 + 114u32 * b as u32) / 1000u32;
+    if luminance >= 140 {
+        16 // dark text on light background
+    } else {
+        231 // light text on dark background
+    }
+}
+
+fn draw_row_at_styled(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    width: usize,
+    text: &str,
+    style: AnsiStyle,
+) {
     buf.push_str(&goto(row, col));
-    if inverted {
-        buf.push_str("\x1b[7m");
-    }
+    style.write_to(buf);
     buf.push_str(&pad_right(text, width));
-    if inverted {
-        buf.push_str("\x1b[0m");
-    }
+    buf.push_str(render::RESET);
 }
 
-fn draw_row(buf: &mut String, row: usize, width: usize, text: &str, inverted: bool) {
-    draw_row_at(buf, row, 1, width, text, inverted);
-}
-
-fn draw_switcher(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) {
+fn draw_switcher(
+    app: &TerminalApp,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: render::RenderPalette,
+) {
     let box_w = min(cols.saturating_sub(4).max(30), 72);
     let box_h = min(rows.saturating_sub(4).max(8), 14);
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
 
+    let border_style = AnsiStyle {
+        fg: Some(palette.code_type),
+        ..Default::default()
+    };
+    let prompt_style = AnsiStyle {
+        fg: Some(palette.code_keyword),
+        bold: true,
+        ..Default::default()
+    };
+    let label_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        dim: true,
+        ..Default::default()
+    };
+    let row_style = AnsiStyle {
+        fg: Some(palette.variable),
+        ..Default::default()
+    };
+    let selected_bg = palette.search_current;
+    let selected_style = AnsiStyle {
+        fg: Some(contrast_fg_for_bg(selected_bg)),
+        bg: Some(selected_bg),
+        bold: true,
+        ..Default::default()
+    };
+
     // Border
+    border_style.write_to(buf);
     for dx in 0..box_w {
         let ch_top = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
         buf.push_str(&goto(y, x + dx));
@@ -3102,16 +3257,24 @@ fn draw_switcher(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) 
         buf.push_str(&goto(y + dy, x + box_w - 1));
         buf.push('|');
     }
+    buf.push_str(render::RESET);
 
     let prompt = format!(" search: {}", app.switcher_query);
-    draw_row_at(buf, y + 1, x + 1, box_w.saturating_sub(2), &prompt, false);
-    draw_row_at(
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        &prompt,
+        prompt_style,
+    );
+    draw_row_at_styled(
         buf,
         y + 2,
         x + 1,
         box_w.saturating_sub(2),
         " results:",
-        false,
+        label_style,
     );
 
     let max_rows = box_h.saturating_sub(4);
@@ -3130,16 +3293,20 @@ fn draw_switcher(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) 
                 " "
             };
             let text = format!("{marker} {}  {}", item.id, item.title);
-            draw_row_at(
-                buf,
-                row,
-                x + 1,
-                box_w.saturating_sub(2),
-                &text,
-                start + i == app.switcher_selected,
-            );
+            if start + i == app.switcher_selected {
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    x + 1,
+                    box_w.saturating_sub(2),
+                    &text,
+                    selected_style,
+                );
+            } else {
+                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
+            }
         } else {
-            draw_row_at(buf, row, x + 1, box_w.saturating_sub(2), "", false);
+            draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
         }
     }
 }
@@ -3191,18 +3358,56 @@ fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
     dow as u32
 }
 
-fn draw_date_picker(app: &TerminalApp, buf: &mut String, rows: usize, cols: usize) {
+fn draw_date_picker(
+    app: &TerminalApp,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: render::RenderPalette,
+) {
     let box_w: usize = 30;
     let box_h: usize = 12;
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
 
+    let border_style = AnsiStyle {
+        fg: Some(palette.code_type),
+        ..Default::default()
+    };
+    let title_style = AnsiStyle {
+        fg: Some(palette.code_keyword),
+        bold: true,
+        ..Default::default()
+    };
+    let header_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        dim: true,
+        ..Default::default()
+    };
+    let day_style = AnsiStyle {
+        fg: Some(palette.variable),
+        ..Default::default()
+    };
+    let selected_bg = palette.search_current;
+    let selected_day_style = AnsiStyle {
+        fg: Some(contrast_fg_for_bg(selected_bg)),
+        bg: Some(selected_bg),
+        bold: true,
+        ..Default::default()
+    };
+    let footer_style = AnsiStyle {
+        fg: Some(palette.search_match),
+        bold: true,
+        ..Default::default()
+    };
+
     // Clear box area
     for dy in 0..box_h {
-        draw_row_at(buf, y + dy, x, box_w, "", false);
+        draw_row_at_styled(buf, y + dy, x, box_w, "", AnsiStyle::default());
     }
 
     // Border
+    border_style.write_to(buf);
     for dx in 0..box_w {
         let ch = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
         buf.push_str(&goto(y, x + dx));
@@ -3216,21 +3421,22 @@ fn draw_date_picker(app: &TerminalApp, buf: &mut String, rows: usize, cols: usiz
         buf.push_str(&goto(y + dy, x + box_w - 1));
         buf.push('|');
     }
+    buf.push_str(render::RESET);
 
     // Title: month + year
     let month_name = MONTH_NAMES[app.date_month.saturating_sub(1).min(11) as usize];
     let title = format!("< {} {} >", month_name, app.date_year);
     let title_x = x + 1 + (box_w.saturating_sub(2).saturating_sub(title.len())) / 2;
-    draw_row_at(buf, y + 1, title_x, title.len(), &title, false);
+    draw_row_at_styled(buf, y + 1, title_x, title.len(), &title, title_style);
 
     // Day headers
     let header = " Mo Tu We Th Fr Sa Su ";
     let inner_w = box_w.saturating_sub(2);
     let hdr_text: String = header.chars().take(inner_w).collect();
     buf.push_str(&goto(y + 2, x + 1));
-    buf.push_str("\x1b[2m");
+    header_style.write_to(buf);
     buf.push_str(&hdr_text);
-    buf.push_str("\x1b[0m");
+    buf.push_str(render::RESET);
 
     // Calendar grid
     let first_dow = day_of_week(app.date_year, app.date_month, 1);
@@ -3246,12 +3452,12 @@ fn draw_date_picker(app: &TerminalApp, buf: &mut String, rows: usize, cols: usiz
         if grid_row < y + box_h - 1 {
             buf.push_str(&goto(grid_row, grid_col));
             if day == app.date_day {
-                buf.push_str("\x1b[7m"); // reverse
+                selected_day_style.write_to(buf);
+            } else {
+                day_style.write_to(buf);
             }
             buf.push_str(&format!("{:>2}", day));
-            if day == app.date_day {
-                buf.push_str("\x1b[0m");
-            }
+            buf.push_str(render::RESET);
         }
 
         col_idx += 1;
@@ -3268,9 +3474,9 @@ fn draw_date_picker(app: &TerminalApp, buf: &mut String, rows: usize, cols: usiz
     );
     let footer_x = x + 1 + (inner_w.saturating_sub(selected.len())) / 2;
     buf.push_str(&goto(y + box_h - 2, footer_x));
-    buf.push_str("\x1b[1m");
+    footer_style.write_to(buf);
     buf.push_str(&selected);
-    buf.push_str("\x1b[0m");
+    buf.push_str(render::RESET);
 }
 
 fn goto(row: usize, col: usize) -> String {
@@ -3651,8 +3857,14 @@ mod tests {
             note_id: Some(note_id.to_string()),
             list_only: false,
         };
-        let (mut app, _) =
-            TerminalApp::new_with_startup_metrics(&db, &opts, false, true).expect("terminal app");
+        let (mut app, _) = TerminalApp::new_with_startup_metrics(
+            &db,
+            &opts,
+            false,
+            true,
+            super::render::RenderPalette::default(),
+        )
+        .expect("terminal app");
         app.mode = UiMode::Editor;
         (db, app, path)
     }
@@ -3742,11 +3954,7 @@ mod tests {
         let results = compute_calc_results(&lines, true);
         assert_eq!(
             results,
-            vec![
-                None,
-                Some("15".to_string()),
-                Some("16".to_string())
-            ]
+            vec![None, Some("15".to_string()), Some("16".to_string())]
         );
     }
 
