@@ -36,3 +36,11 @@ export function computeBlockSpans(
 
   return spans;
 }
+
+export function vimNormalLineEndPos(lineFrom: number, lineTo: number): number {
+  return lineTo > lineFrom ? lineTo - 1 : lineFrom;
+}
+
+export function vimAppendInsertPos(head: number, lineTo: number): number {
+  return head < lineTo ? head + 1 : lineTo;
+}

@@ -28,6 +28,7 @@ import {
   type VimKeyInput,
   type VimMode,
 } from "./wasm.ts";
+import { vimAppendInsertPos, vimNormalLineEndPos } from "./vim-utils.ts";
 
 type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
 
@@ -60,6 +61,22 @@ function moveToDocStart(view: EditorView): boolean {
 function moveToDocEnd(view: EditorView): boolean {
   const last = view.state.doc.line(view.state.doc.lines);
   view.dispatch({ selection: { anchor: last.from }, scrollIntoView: true });
+  return true;
+}
+
+function moveToLineEndNormalLike(view: EditorView): boolean {
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  const anchor = vimNormalLineEndPos(line.from, line.to);
+  view.dispatch({ selection: { anchor }, scrollIntoView: true });
+  return true;
+}
+
+function appendInsertWithinLine(view: EditorView): boolean {
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  const anchor = vimAppendInsertPos(head, line.to);
+  view.dispatch({ selection: { anchor }, scrollIntoView: true });
   return true;
 }
 
@@ -629,7 +646,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       case 6: // move_line_start
         return runMove(view, cursorLineStart, count);
       case 7: // move_line_end
-        return runMove(view, cursorLineEnd, count);
+        return runMove(view, moveToLineEndNormalLike, count);
       case 8: // move_doc_start
         moveToDocStart(view);
         if (mode() === "visual" || mode() === "visual-line") {
@@ -654,7 +671,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       case 11: // enter_insert
         return true;
       case 12: // append_insert
-        return cursorCharRight(view);
+        return appendInsertWithinLine(view);
       case 13: // insert_line_start
         return cursorLineStart(view);
       case 14: // append_line_end

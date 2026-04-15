@@ -12,7 +12,7 @@
     "build": "tsc && vite build",
     "tauri": "tauri",
     "test": "npm run test:ts && npm run test:rust",
-    "test:ts": "node --test --experimental-strip-types src/state.test.ts src/switcher/fuzzy.test.ts src/theme/presets.test.ts src/editor/core/context.test.ts src/editor/core/commands.test.ts src/editor/markdown-decoration.test.ts src/editor/markdown-editing.test.ts src/editor/calc-decoration.test.ts src/editor/calc-incremental.test.ts src/editor/vim-utils.test.ts src/editor/date-picker.test.ts src/editor/ex-commands.test.ts src/editor/command-engine.test.ts src/editor/markdown-format.test.ts src/editor/variable-autocomplete.test.ts",
+    "test:ts": "node --test --experimental-strip-types src/state.test.ts src/switcher/fuzzy.test.ts src/theme/presets.test.ts src/editor/core/context.test.ts src/editor/core/commands.test.ts src/editor/markdown-decoration.test.ts src/editor/markdown-editing.test.ts src/editor/calc-decoration.test.ts src/editor/calc-incremental.test.ts src/editor/vim-utils.test.ts src/editor/vim-cursor.test.ts src/editor/date-picker.test.ts src/editor/ex-commands.test.ts src/editor/command-engine.test.ts src/editor/markdown-format.test.ts src/editor/variable-autocomplete.test.ts",
     "test:rust": "cargo test --workspace"
   },
   "dependencies": {
