@@ -43,6 +43,18 @@ pub fn delete_note_reminder(
 }
 
 #[tauri::command]
+pub fn move_note_reminder_line(
+    core: State<'_, AppCore>,
+    note_id: String,
+    from_line_number: i64,
+    to_line_number: i64,
+    line_text: String,
+) -> Result<bool, String> {
+    core.db()
+        .move_reminder_line(&note_id, from_line_number, to_line_number, &line_text)
+}
+
+#[tauri::command]
 pub fn mark_note_reminder_notified(
     core: State<'_, AppCore>,
     note_id: String,

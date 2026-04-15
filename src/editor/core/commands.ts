@@ -63,6 +63,13 @@ interface CommandDefinition {
   ) => Promise<CommandExecutionResult>;
 }
 
+interface CommandRegistryEntry extends CommandDefinition {
+  value: string;
+  aliases?: string[];
+  description: string;
+  modes: CommandMode[];
+}
+
 function errorToMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
@@ -315,67 +322,42 @@ async function runChecklistCommand(
   };
 }
 
-const COMMAND_EXECUTORS: Record<string, CommandDefinition["execute"]> = {
-  sum: runSumCommand,
-  "sum list": runSumCommand,
-  "sum row": runSumCommand,
-  "sum column": runSumCommand,
-  "sum doc": runSumCommand,
-  avg: runAvgCommand,
-  "avg list": runAvgCommand,
-  "avg row": runAvgCommand,
-  "avg column": runAvgCommand,
-  "avg doc": runAvgCommand,
-  date: runDateCommand,
-  notify: runNotifyCommand,
-  "notify-delete": runNotifyDeleteCommand,
-  format: runFormatCommand,
-  checklist: runChecklistCommand,
-  q: runQuitCommand,
-};
+const MODES_BOTH: CommandMode[] = ["vim", "editor"];
 
-interface FallbackCommand {
-  value: string;
-  aliases?: string[];
-  description: string;
-  modes: CommandMode[];
-}
-
-const FALLBACK_COMMANDS: FallbackCommand[] = [
-  { value: "sum", description: "sum paragraph (default scope)", modes: ["vim", "editor"] },
-  { value: "sum list", description: "sum list at cursor", modes: ["vim", "editor"] },
-  { value: "sum row", aliases: ["sum_row"], description: "sum markdown table per row at cursor", modes: ["vim", "editor"] },
-  { value: "sum column", aliases: ["sum_column"], description: "sum markdown table per column at cursor", modes: ["vim", "editor"] },
-  { value: "sum doc", aliases: ["sum_all", "sum all"], description: "sum whole document", modes: ["vim", "editor"] },
-  { value: "avg", description: "average paragraph (default scope)", modes: ["vim", "editor"] },
-  { value: "avg list", description: "average list at cursor", modes: ["vim", "editor"] },
-  { value: "avg row", aliases: ["avg_row"], description: "average markdown table per row at cursor", modes: ["vim", "editor"] },
-  { value: "avg column", aliases: ["avg_column"], description: "average markdown table per column at cursor", modes: ["vim", "editor"] },
-  { value: "avg doc", aliases: ["avg_all", "avg all"], description: "average whole document", modes: ["vim", "editor"] },
-  { value: "date", description: "insert picked date", modes: ["vim", "editor"] },
-  { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: ["vim", "editor"] },
-  { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: ["vim", "editor"] },
-  { value: "format", aliases: ["fmt"], description: "format markdown document", modes: ["vim", "editor"] },
-  { value: "checklist", aliases: ["checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: ["vim", "editor"] },
-  { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"] },
+const COMMAND_REGISTRY: CommandRegistryEntry[] = [
+  { value: "sum", description: "sum paragraph (default scope)", modes: MODES_BOTH, execute: runSumCommand },
+  { value: "sum list", description: "sum list at cursor", modes: MODES_BOTH, execute: runSumCommand },
+  { value: "sum row", aliases: ["sum_row"], description: "sum markdown table per row at cursor", modes: MODES_BOTH, execute: runSumCommand },
+  { value: "sum column", aliases: ["sum_column"], description: "sum markdown table per column at cursor", modes: MODES_BOTH, execute: runSumCommand },
+  { value: "sum doc", aliases: ["sum_all", "sum all"], description: "sum whole document", modes: MODES_BOTH, execute: runSumCommand },
+  { value: "avg", description: "average paragraph (default scope)", modes: MODES_BOTH, execute: runAvgCommand },
+  { value: "avg list", description: "average list at cursor", modes: MODES_BOTH, execute: runAvgCommand },
+  { value: "avg row", aliases: ["avg_row"], description: "average markdown table per row at cursor", modes: MODES_BOTH, execute: runAvgCommand },
+  { value: "avg column", aliases: ["avg_column"], description: "average markdown table per column at cursor", modes: MODES_BOTH, execute: runAvgCommand },
+  { value: "avg doc", aliases: ["avg_all", "avg all"], description: "average whole document", modes: MODES_BOTH, execute: runAvgCommand },
+  { value: "date", description: "insert picked date", modes: MODES_BOTH, execute: runDateCommand },
+  { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: MODES_BOTH, execute: runNotifyCommand },
+  { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: MODES_BOTH, execute: runNotifyDeleteCommand },
+  { value: "format", aliases: ["fmt"], description: "format markdown document", modes: MODES_BOTH, execute: runFormatCommand },
+  { value: "checklist", aliases: ["checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: MODES_BOTH, execute: runChecklistCommand },
+  { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"], execute: runQuitCommand },
 ];
 
-function fallbackAvailableCommands(mode: CommandMode): FallbackCommand[] {
-  return FALLBACK_COMMANDS.filter((command) => command.modes.includes(mode));
+function registryAvailableCommands(mode: CommandMode): CommandRegistryEntry[] {
+  return COMMAND_REGISTRY.filter((command) => command.modes.includes(mode));
 }
 
-function fallbackResolveCommand(mode: CommandMode, rawInput: string): string | null {
+function registryResolveCommand(mode: CommandMode, rawInput: string): CommandRegistryEntry | null {
   const normalized = normalizeCommand(rawInput);
   if (!normalized) return null;
-  const command = fallbackAvailableCommands(mode).find((entry) =>
+  return registryAvailableCommands(mode).find((entry) =>
     entry.value === normalized || entry.aliases?.includes(normalized),
-  );
-  return command?.value ?? null;
+  ) ?? null;
 }
 
-function fallbackListSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
+function registryListSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
   const query = normalizeCommand(rawInput);
-  const commands = fallbackAvailableCommands(mode);
+  const commands = registryAvailableCommands(mode);
   if (!query) {
     return commands.map((command) => ({
       value: command.value,
@@ -400,7 +382,7 @@ function fallbackListSuggestions(mode: CommandMode, rawInput: string): CommandSu
 }
 
 export function listCommandSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
-  const fallback = fallbackListSuggestions(mode, rawInput);
+  const fallback = registryListSuggestions(mode, rawInput);
   if (!isWasmReady()) {
     return fallback;
   }
@@ -426,15 +408,13 @@ export async function executeCommand(
   if (!normalizedInput) return { message: "", operations: [] };
 
   const resolvedFromWasm = isWasmReady() ? resolveCommandFromWasm(runtime.mode, rawInput) : null;
-  const resolved = resolvedFromWasm ?? fallbackResolveCommand(runtime.mode, rawInput);
-  if (!resolved) {
-    return { message: `unknown command: ${normalizedInput}`, operations: [] };
-  }
-  const execute = COMMAND_EXECUTORS[resolved];
-  if (!execute) {
+  const command = resolvedFromWasm
+    ? registryAvailableCommands(runtime.mode).find((entry) => entry.value === resolvedFromWasm) ?? null
+    : registryResolveCommand(runtime.mode, rawInput);
+  if (!command) {
     return { message: `unknown command: ${normalizedInput}`, operations: [] };
   }
 
   const ctx = new ResolvedContext(snapshot);
-  return execute(resolved, ctx, runtime);
+  return command.execute(command.value, ctx, runtime);
 }

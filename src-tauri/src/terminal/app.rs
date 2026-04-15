@@ -412,7 +412,7 @@ impl TerminalApp {
         let loading_note = note_begin.elapsed();
 
         let lines = split_lines(&active_note.body);
-        let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id)?;
+        let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
 
         let switcher_begin = Instant::now();
         let switcher_items = load_note_meta(db)?;
@@ -1934,7 +1934,7 @@ impl TerminalApp {
     fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
         self.active_note = note;
         self.lines = split_lines(&self.active_note.body);
-        self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id)?;
+        self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
         self.cursor_line = 0;
         self.cursor_col = 0;
         self.scroll_line = 0;
@@ -3236,17 +3236,88 @@ fn new_note(db: &Db) -> Result<Note, String> {
 fn load_note_reminder_ghosts(
     db: &Db,
     note_id: &str,
+    lines: &[String],
 ) -> Result<HashMap<usize, LineReminderGhost>, String> {
-    let reminders = db.list_reminders(note_id)?;
+    let mut reminders = db.list_reminders(note_id)?;
+    reminders.sort_by_key(|reminder| reminder.line_number);
+
+    let mut text_to_lines: HashMap<String, Vec<usize>> = HashMap::new();
+    for (idx, line) in lines.iter().enumerate() {
+        text_to_lines.entry(line.clone()).or_default().push(idx + 1);
+    }
+
+    let mut used_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut by_line = HashMap::with_capacity(reminders.len());
-    for reminder in reminders {
-        let Some(line_idx) = reminder
-            .line_number
+
+    for mut reminder in reminders {
+        let old_line = reminder.line_number;
+        let old_line_idx = old_line
+            .checked_sub(1)
+            .and_then(|line| usize::try_from(line).ok());
+        let old_text_matches = old_line_idx
+            .and_then(|idx| lines.get(idx))
+            .map(|line| line == &reminder.line_text)
+            .unwrap_or(false);
+
+        let mut final_line = old_line;
+        if old_text_matches
+            && old_line_idx
+                .map(|idx| !used_lines.contains(&(idx + 1)))
+                .unwrap_or(false)
+        {
+            if let Some(idx) = old_line_idx {
+                used_lines.insert(idx + 1);
+            }
+        } else if let Some(candidates) = text_to_lines.get(&reminder.line_text) {
+            let old_line_usize = usize::try_from(old_line.max(1)).unwrap_or(1);
+            let mut best: Option<usize> = None;
+            let mut best_distance = usize::MAX;
+            for &line_number in candidates {
+                if used_lines.contains(&line_number) {
+                    continue;
+                }
+                let distance = line_number.abs_diff(old_line_usize);
+                if distance < best_distance
+                    || (distance == best_distance
+                        && best.map(|current| line_number < current).unwrap_or(true))
+                {
+                    best = Some(line_number);
+                    best_distance = distance;
+                }
+            }
+
+            if let Some(target_line) = best {
+                if target_line != old_line_usize {
+                    let target_text = lines
+                        .get(target_line.saturating_sub(1))
+                        .cloned()
+                        .unwrap_or_default();
+                    if db.move_reminder_line(
+                        note_id,
+                        old_line,
+                        i64::try_from(target_line).unwrap_or(old_line),
+                        &target_text,
+                    )? {
+                        reminder.line_number = i64::try_from(target_line).unwrap_or(old_line);
+                        reminder.line_text = target_text;
+                    }
+                }
+                used_lines.insert(target_line);
+                final_line = reminder.line_number;
+            } else if let Some(idx) = old_line_idx {
+                used_lines.insert(idx + 1);
+            }
+        } else if let Some(idx) = old_line_idx {
+            used_lines.insert(idx + 1);
+        }
+
+        let Some(line_idx) = final_line
             .checked_sub(1)
             .and_then(|line| usize::try_from(line).ok())
         else {
             continue;
         };
+
         by_line.insert(
             line_idx,
             LineReminderGhost {
@@ -3255,6 +3326,7 @@ fn load_note_reminder_ghosts(
             },
         );
     }
+
     Ok(by_line)
 }
 

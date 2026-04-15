@@ -110,6 +110,20 @@ export function deleteNoteReminder(noteId: string, lineNumber: number): Promise<
   return invoke<boolean>("delete_note_reminder", { noteId, lineNumber });
 }
 
+export function moveNoteReminderLine(
+  noteId: string,
+  fromLineNumber: number,
+  toLineNumber: number,
+  lineText: string,
+): Promise<boolean> {
+  return invoke<boolean>("move_note_reminder_line", {
+    noteId,
+    fromLineNumber,
+    toLineNumber,
+    lineText,
+  });
+}
+
 export function markNoteReminderNotified(
   noteId: string,
   lineNumber: number,

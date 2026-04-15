@@ -9,8 +9,10 @@ import type { NoteReminder } from "../api.ts";
 import {
   listNoteReminders,
   markNoteReminderNotified,
+  moveNoteReminderLine,
   sendSystemNotification,
 } from "../api.ts";
+import { reconcileReminderLinesOnOpen, remindersEqual } from "./reminder-reconcile.ts";
 
 interface ReminderState {
   noteId: string | null;
@@ -318,6 +320,25 @@ function buildReminderPlugin(options: NotifyExtensionOptions) {
             ],
             annotations: reminderReloadAnnotation.of(true),
           });
+
+          void reconcileReminderLinesOnOpen(noteId, reminders, view.state.doc, moveNoteReminderLine)
+            .then((reconciled) => {
+              if (destroyed) return;
+              const latestNoteId = options.getActiveNoteId();
+              if (latestNoteId !== noteId) return;
+              if (remindersEqual(reminders, reconciled)) return;
+              view.dispatch({
+                effects: [
+                  replaceRemindersEffect.of({ noteId, reminders: reconciled }),
+                  tickReminderNowEffect.of(Date.now()),
+                ],
+                annotations: reminderReloadAnnotation.of(true),
+              });
+            })
+            .catch((error) => {
+              console.error("Reminder reconcile load failed:", error);
+            });
+
           await triggerDueReminders(noteId);
         } catch (error) {
           console.error("Reminder load failed:", error);

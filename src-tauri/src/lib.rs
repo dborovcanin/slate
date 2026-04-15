@@ -43,6 +43,7 @@ fn run_gui() -> Result<(), String> {
             commands::reminders::list_note_reminders,
             commands::reminders::upsert_note_reminder,
             commands::reminders::delete_note_reminder,
+            commands::reminders::move_note_reminder_line,
             commands::reminders::mark_note_reminder_notified,
             commands::reminders::send_system_notification,
             commands::calc::evaluate_lines,

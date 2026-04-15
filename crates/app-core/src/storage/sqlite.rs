@@ -200,6 +200,52 @@ impl Db {
             .map_err(|e| e.to_string())?;
         Ok(changed > 0)
     }
+
+    pub fn move_reminder_line(
+        &self,
+        note_id: &str,
+        from_line_number: i64,
+        to_line_number: i64,
+        line_text: &str,
+    ) -> Result<bool, String> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let now = now_iso();
+
+        let exists = tx
+            .query_row(
+                "SELECT 1 FROM reminders WHERE note_id = ?1 AND line_number = ?2",
+                rusqlite::params![note_id, from_line_number],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        if !exists {
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(false);
+        }
+
+        if from_line_number != to_line_number {
+            tx.execute(
+                "DELETE FROM reminders WHERE note_id = ?1 AND line_number = ?2",
+                rusqlite::params![note_id, to_line_number],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        let changed = tx
+            .execute(
+                "UPDATE reminders
+                 SET line_number = ?3, line_text = ?4, updated_at = ?5
+                 WHERE note_id = ?1 AND line_number = ?2",
+                rusqlite::params![note_id, from_line_number, to_line_number, line_text, now],
+            )
+            .map_err(|e| e.to_string())?;
+
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(changed > 0)
+    }
 }
 
 fn load_note(conn: &Connection, id: &str) -> Result<Option<Note>, String> {
@@ -429,8 +475,21 @@ mod tests {
             .expect("reminder exists");
         assert_eq!(notified.notified_at_ms, Some(1_900_000_100_000));
 
-        assert!(db.delete_reminder("n1", 3).expect("delete reminder"));
-        assert!(!db.delete_reminder("n1", 3).expect("second delete reminder"));
+        assert!(db
+            .move_reminder_line("n1", 3, 5, "line 5 changed")
+            .expect("move reminder"));
+        let after_move = db.list_reminders("n1").expect("list reminders after move");
+        assert_eq!(after_move.len(), 1);
+        assert_eq!(after_move[0].line_number, 5);
+        assert_eq!(after_move[0].line_text, "line 5 changed");
+        assert_eq!(after_move[0].notified_at_ms, Some(1_900_000_100_000));
+
+        assert!(!db
+            .move_reminder_line("n1", 3, 9, "missing")
+            .expect("move missing reminder"));
+
+        assert!(db.delete_reminder("n1", 5).expect("delete reminder"));
+        assert!(!db.delete_reminder("n1", 5).expect("second delete reminder"));
 
         let after_line_delete = db
             .list_reminders("n1")
