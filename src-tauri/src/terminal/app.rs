@@ -6,6 +6,7 @@ use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use base64::Engine as _;
 use std::cmp::min;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::{self, IsTerminal as _, Write};
 use std::mem::MaybeUninit;
@@ -271,6 +272,12 @@ enum UiMode {
     DatePicker,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DatePickerAction {
+    InsertDate,
+    SetNotify,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Key {
     Char(char),
@@ -317,6 +324,12 @@ struct TerminalStartupMetrics {
     loading_screen: Duration,
 }
 
+#[derive(Debug, Clone)]
+struct LineReminderGhost {
+    remind_at_ms: i64,
+    display_at: String,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -339,6 +352,14 @@ struct TerminalApp {
     date_year: i32,
     date_month: u32, // 1-12
     date_day: u32,
+    date_hour: u32,   // 0-23
+    date_minute: u32, // 0-59
+    date_include_time: bool,
+    date_require_time: bool,
+    date_picker_action: DatePickerAction,
+    date_picker_return_mode: UiMode,
+    date_format: String,
+    date_time_format: String,
     // Vim state
     vim_state: crate::editor_core::vim::VimState,
     clipboard: Vec<String>,
@@ -347,6 +368,7 @@ struct TerminalApp {
     // Calc ghost cache
     calc_engine: CalcEngine,
     calc_results: Vec<Option<String>>,
+    reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
     variable_names: Vec<String>,
     // Snapshot of `lines` taken at the end of the previous `recompute_calc_full`.
     // Used to gate the committed-trailer auto-refresh: a line is eligible only
@@ -380,6 +402,8 @@ impl TerminalApp {
         format_on_save: bool,
         variables_enabled: bool,
         render_palette: render::RenderPalette,
+        date_format: String,
+        date_time_format: String,
     ) -> Result<(Self, TerminalStartupMetrics), String> {
         let startup_begin = Instant::now();
 
@@ -388,6 +412,7 @@ impl TerminalApp {
         let loading_note = note_begin.elapsed();
 
         let lines = split_lines(&active_note.body);
+        let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id)?;
 
         let switcher_begin = Instant::now();
         let switcher_items = load_note_meta(db)?;
@@ -423,12 +448,21 @@ impl TerminalApp {
             date_year: 0,
             date_month: 0,
             date_day: 0,
+            date_hour: 0,
+            date_minute: 0,
+            date_include_time: false,
+            date_require_time: false,
+            date_picker_action: DatePickerAction::InsertDate,
+            date_picker_return_mode: UiMode::Editor,
+            date_format,
+            date_time_format,
             vim_state: crate::editor_core::vim::VimState::default(),
             clipboard: Vec::new(),
             last_clipboard_backend: None,
             selection_anchor: None,
             calc_engine,
             calc_results: calc_data.line_results,
+            reminder_ghosts,
             variable_names: calc_data.variable_names,
             prev_lines: prev_lines_snapshot,
             search_query: String::new(),
@@ -492,12 +526,12 @@ impl TerminalApp {
 
     fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match self.mode {
-            UiMode::DatePicker => self.handle_date_picker_key(key)?,
+            UiMode::DatePicker => self.handle_date_picker_key(db, key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,
             UiMode::Normal => self.handle_normal_key(db, key)?,
             UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
-            UiMode::CommandBar => self.handle_command_bar_key(key)?,
+            UiMode::CommandBar => self.handle_command_bar_key(db, key)?,
             UiMode::Search => self.handle_search_key(key)?,
         }
         Ok(())
@@ -523,7 +557,7 @@ impl TerminalApp {
                 self.save(db)?;
                 let id = Ulid::new().to_string();
                 let note = db.save_note(&id, "")?;
-                self.set_active_note(note);
+                self.set_active_note(db, note)?;
                 self.refresh_switcher_items(db)?;
                 self.status = format!("new note {}", self.active_note.id);
                 return Ok(());
@@ -1416,7 +1450,7 @@ impl TerminalApp {
                     let id = self.switcher_items[idx].id.clone();
                     self.save(db)?;
                     if let Some(note) = db.get_note(&id)? {
-                        self.set_active_note(note);
+                        self.set_active_note(db, note)?;
                         self.status = format!("opened {}", id);
                     } else {
                         self.status = format!("note missing {}", id);
@@ -1458,7 +1492,7 @@ impl TerminalApp {
         }
     }
 
-    fn handle_command_bar_key(&mut self, key: Key) -> Result<(), String> {
+    fn handle_command_bar_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
                 self.mode = if self.command_bar_from_normal {
@@ -1482,7 +1516,7 @@ impl TerminalApp {
                 };
                 self.mode = return_to;
                 self.command_input.clear();
-                self.execute_terminal_command(&cmd);
+                self.execute_terminal_command(db, &cmd);
             }
             Key::Tab => {
                 let suggestions = crate::editor_core::commands::list_command_suggestions(
@@ -1544,16 +1578,47 @@ impl TerminalApp {
         }
     }
 
-    fn execute_terminal_command(&mut self, cmd: &str) {
+    fn execute_terminal_command(&mut self, db: &Db, cmd: &str) {
         if cmd == "q!" || cmd == "q" {
             self.force_quit = cmd == "q!";
             self.quit = true;
             return;
         }
 
-        if cmd == "date" {
-            self.open_date_picker();
-            return;
+        if let Some(command) =
+            crate::editor_core::command_catalog::resolve_command(self.command_mode(), cmd)
+        {
+            match command.id {
+                crate::editor_core::command_catalog::CommandId::Date => {
+                    self.open_date_picker(DatePickerAction::InsertDate, false);
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::Notify => {
+                    self.open_date_picker(DatePickerAction::SetNotify, true);
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::NotifyDelete => {
+                    let line_number = (self.cursor_line + 1) as i64;
+                    match db.delete_reminder(&self.active_note.id, line_number) {
+                        Ok(true) => {
+                            self.reminder_ghosts.remove(&self.cursor_line);
+                            self.status =
+                                format!("notify deleted on line {}", self.cursor_line + 1);
+                        }
+                        Ok(false) => {
+                            self.status = format!(
+                                "notify-delete: no reminder on line {}",
+                                self.cursor_line + 1
+                            );
+                        }
+                        Err(error) => {
+                            self.status = format!("notify-delete failed: {error}");
+                        }
+                    }
+                    return;
+                }
+                _ => {}
+            }
         }
 
         let snapshot = self.build_snapshot();
@@ -1599,29 +1664,130 @@ impl TerminalApp {
         }
     }
 
-    fn open_date_picker(&mut self) {
-        let now = time::OffsetDateTime::now_utc().date();
-        self.date_year = now.year();
-        self.date_month = now.month() as u32;
-        self.date_day = now.day() as u32;
+    fn open_date_picker(&mut self, action: DatePickerAction, require_time: bool) {
+        if let Some((year, month, day, hour, minute)) = current_local_datetime_parts() {
+            self.date_year = year;
+            self.date_month = month;
+            self.date_day = day;
+            self.date_hour = hour;
+            self.date_minute = minute;
+        } else {
+            let now = time::OffsetDateTime::now_utc();
+            let date = now.date();
+            let tod = now.time();
+            self.date_year = date.year();
+            self.date_month = date.month() as u32;
+            self.date_day = date.day() as u32;
+            self.date_hour = u32::from(tod.hour());
+            self.date_minute = u32::from(tod.minute());
+        }
+        self.date_require_time = require_time;
+        self.date_include_time = require_time;
+        self.date_picker_action = action;
+        self.date_picker_return_mode = self.mode;
         self.mode = UiMode::DatePicker;
-        self.status = "Date picker: arrows navigate, Enter insert, Esc cancel".to_string();
+        self.status =
+            "Date picker: arrows days, Ctrl+arrows months, h/l hour, j/k minute, Tab time, Enter confirm"
+                .to_string();
     }
 
-    fn handle_date_picker_key(&mut self, key: Key) -> Result<(), String> {
+    fn close_date_picker(&mut self) {
+        self.mode = self.date_picker_return_mode;
+        self.status = if self.mode == UiMode::Normal {
+            "-- NORMAL --".to_string()
+        } else {
+            format!("editing {}", self.active_note.id)
+        };
+    }
+
+    fn adjust_picker_hour(&mut self, delta: i32) {
+        let mut next = self.date_hour as i32 + delta;
+        while next < 0 {
+            next += 24;
+        }
+        while next >= 24 {
+            next -= 24;
+        }
+        self.date_hour = next as u32;
+    }
+
+    fn adjust_picker_minute(&mut self, delta: i32) {
+        let mut next = self.date_minute as i32 + delta;
+        while next < 0 {
+            next += 60;
+            self.adjust_picker_hour(-1);
+        }
+        while next >= 60 {
+            next -= 60;
+            self.adjust_picker_hour(1);
+        }
+        self.date_minute = next as u32;
+    }
+
+    fn handle_date_picker_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
-                self.mode = UiMode::Editor;
-                self.status = format!("editing {}", self.active_note.id);
+                self.close_date_picker();
             }
             Key::Enter => {
-                let date_str = format!(
-                    "{:04}-{:02}-{:02}",
-                    self.date_year, self.date_month, self.date_day
+                if self.date_picker_action == DatePickerAction::InsertDate {
+                    let inserted = format_datetime_with_pattern(
+                        self.date_year,
+                        self.date_month,
+                        self.date_day,
+                        self.date_hour,
+                        self.date_minute,
+                        if self.date_include_time {
+                            &self.date_time_format
+                        } else {
+                            &self.date_format
+                        },
+                    );
+                    self.close_date_picker();
+                    self.insert_text(&inserted);
+                    self.status = format!("Date inserted: {inserted}");
+                    return Ok(());
+                }
+
+                let remind_at_ms = local_datetime_to_epoch_ms(
+                    self.date_year,
+                    self.date_month,
+                    self.date_day,
+                    self.date_hour,
+                    self.date_minute,
+                )
+                .ok_or_else(|| "failed to convert reminder time".to_string())?;
+                let display_at = format_datetime_with_pattern(
+                    self.date_year,
+                    self.date_month,
+                    self.date_day,
+                    self.date_hour,
+                    self.date_minute,
+                    &self.date_time_format,
                 );
-                self.mode = UiMode::Editor;
-                self.insert_text(&date_str);
-                self.status = "Date inserted".to_string();
+                let line_number = (self.cursor_line + 1) as i64;
+                let line_text = self.current_line().to_string();
+                db.upsert_reminder(
+                    &self.active_note.id,
+                    line_number,
+                    remind_at_ms,
+                    &display_at,
+                    &line_text,
+                )?;
+                if let Some(line_idx) = line_number
+                    .checked_sub(1)
+                    .and_then(|line| usize::try_from(line).ok())
+                {
+                    self.reminder_ghosts.insert(
+                        line_idx,
+                        LineReminderGhost {
+                            remind_at_ms,
+                            display_at: display_at.clone(),
+                        },
+                    );
+                }
+                self.close_date_picker();
+                self.status = format!("notify set ⏰ {display_at}");
             }
             Key::ArrowLeft => {
                 if self.date_day > 1 {
@@ -1687,6 +1853,15 @@ impl TerminalApp {
                 let max = days_in_month(self.date_year, self.date_month);
                 self.date_day = self.date_day.min(max);
             }
+            Key::Home | Key::Char('h') => self.adjust_picker_hour(-1),
+            Key::End | Key::Char('l') => self.adjust_picker_hour(1),
+            Key::PageUp | Key::Char('j') => self.adjust_picker_minute(-1),
+            Key::PageDown | Key::Char('k') => self.adjust_picker_minute(1),
+            Key::Tab | Key::Char('t') | Key::Char('T') => {
+                if !self.date_require_time {
+                    self.date_include_time = !self.date_include_time;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -1730,7 +1905,7 @@ impl TerminalApp {
 
     fn save(&mut self, db: &Db) -> Result<(), String> {
         if self.format_on_save {
-            self.execute_terminal_command("format");
+            self.execute_terminal_command(db, "format");
         }
         if !self.dirty {
             return Ok(());
@@ -1756,9 +1931,10 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn set_active_note(&mut self, note: Note) {
+    fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
         self.active_note = note;
         self.lines = split_lines(&self.active_note.body);
+        self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id)?;
         self.cursor_line = 0;
         self.cursor_col = 0;
         self.scroll_line = 0;
@@ -1777,6 +1953,7 @@ impl TerminalApp {
         self.recompute_calc_full();
         self.adjust_cursor();
         self.adjust_scroll();
+        Ok(())
     }
 
     fn current_line(&self) -> &str {
@@ -2692,6 +2869,7 @@ impl TerminalApp {
         let mut ctx = render::RenderContext::new_with_palette(self.render_palette);
         ctx.advance_lines(&self.lines[..self.scroll_line.min(self.lines.len())]);
         let mut cursor_line_override: Option<(String, usize)> = None;
+        let now_ms = now_epoch_ms();
 
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
@@ -2702,9 +2880,16 @@ impl TerminalApp {
                 let is_cursor_line = line_idx == self.cursor_line;
                 let mut calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
                 let mut calc_ghost_override: Option<String> = None;
+                let mut reminder_ghost_override: Option<String> = None;
+                let mut reminder_strikethrough = false;
                 let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
                 let line_text = &self.lines[line_idx];
                 let mut rendered_line = line_text.to_string();
+
+                if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
+                    reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
+                    reminder_strikethrough = reminder.remind_at_ms <= now_ms;
+                }
 
                 if let Some(formula) = find_table_formula_segment(line_text) {
                     // Formula rows render a marker in-cell (`value*`) and keep
@@ -2762,27 +2947,32 @@ impl TerminalApp {
                 let mut visual_highlight_ranges = Vec::new();
                 self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
                 let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost);
+                let effective_reminder_ghost = reminder_ghost_override.as_deref();
                 let line_scroll_col = self.scroll_col;
                 let line_width = line_display_cols(&rendered_line);
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
                 let rendered_text =
                     if ghost_dim_ranges.is_empty() && visual_highlight_ranges.is_empty() {
-                        ctx.render_line_window(
+                        ctx.render_line_window_with_reminder(
                             &rendered_line,
                             viewport.text_width,
                             viewport.text_window_col,
                             effective_calc_ghost,
+                            effective_reminder_ghost,
+                            reminder_strikethrough,
                             &search_ranges,
                             &current_search_ranges,
                             &self.variable_names,
                         )
                     } else {
-                        ctx.render_line_with_dim_ranges_window(
+                        ctx.render_line_with_dim_ranges_window_with_reminder(
                             &rendered_line,
                             viewport.text_width,
                             viewport.text_window_col,
                             effective_calc_ghost,
+                            effective_reminder_ghost,
+                            reminder_strikethrough,
                             &search_ranges,
                             &current_search_ranges,
                             &self.variable_names,
@@ -2989,6 +3179,8 @@ pub fn run_terminal_session(
         config.format_on_save,
         config.variables_enabled,
         render::RenderPalette::for_color_scheme(&config.color_scheme),
+        config.date_format.clone(),
+        config.date_time_format.clone(),
     )?;
     let line = format!(
         "time:{startup_ts_ms} loading_screen:{} loading_note:{} loading_switcher:{} loading_calc_engine:{}",
@@ -3039,6 +3231,31 @@ fn select_note(db: &Db, opts: &TerminalOptions) -> Result<Note, String> {
 fn new_note(db: &Db) -> Result<Note, String> {
     let id = Ulid::new().to_string();
     db.save_note(&id, "")
+}
+
+fn load_note_reminder_ghosts(
+    db: &Db,
+    note_id: &str,
+) -> Result<HashMap<usize, LineReminderGhost>, String> {
+    let reminders = db.list_reminders(note_id)?;
+    let mut by_line = HashMap::with_capacity(reminders.len());
+    for reminder in reminders {
+        let Some(line_idx) = reminder
+            .line_number
+            .checked_sub(1)
+            .and_then(|line| usize::try_from(line).ok())
+        else {
+            continue;
+        };
+        by_line.insert(
+            line_idx,
+            LineReminderGhost {
+                remind_at_ms: reminder.remind_at_ms,
+                display_at: reminder.display_at,
+            },
+        );
+    }
+    Ok(by_line)
 }
 
 fn split_lines(body: &str) -> Vec<String> {
@@ -3495,6 +3712,10 @@ const MONTH_NAMES: [&str; 12] = [
     "December",
 ];
 
+const MONTH_NAMES_SHORT: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
 fn days_in_month(year: i32, month: u32) -> u32 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
@@ -3527,6 +3748,129 @@ fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
     dow as u32
 }
 
+fn now_epoch_ms() -> i64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    i64::try_from(millis).unwrap_or(i64::MAX)
+}
+
+fn current_local_datetime_parts() -> Option<(i32, u32, u32, u32, u32)> {
+    let epoch_seconds: libc::time_t = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .try_into()
+        .ok()?;
+    let mut local_tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    let ptr = unsafe { libc::localtime_r(&epoch_seconds, &mut local_tm as *mut libc::tm) };
+    if ptr.is_null() {
+        return None;
+    }
+    Some((
+        local_tm.tm_year + 1900,
+        (local_tm.tm_mon + 1) as u32,
+        local_tm.tm_mday as u32,
+        local_tm.tm_hour as u32,
+        local_tm.tm_min as u32,
+    ))
+}
+
+fn local_datetime_to_epoch_ms(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+) -> Option<i64> {
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+    if day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    if hour > 23 || minute > 59 {
+        return None;
+    }
+
+    let mut local_tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    local_tm.tm_year = year - 1900;
+    local_tm.tm_mon = i32::try_from(month).ok()? - 1;
+    local_tm.tm_mday = i32::try_from(day).ok()?;
+    local_tm.tm_hour = i32::try_from(hour).ok()?;
+    local_tm.tm_min = i32::try_from(minute).ok()?;
+    local_tm.tm_sec = 0;
+    local_tm.tm_isdst = -1;
+
+    let epoch_seconds = unsafe { libc::mktime(&mut local_tm as *mut libc::tm) };
+    if epoch_seconds < 0 {
+        return None;
+    }
+    i64::try_from(i128::from(epoch_seconds) * 1000).ok()
+}
+
+fn format_datetime_with_pattern(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    pattern: &str,
+) -> String {
+    let month_idx = month.saturating_sub(1).min(11) as usize;
+    let yyyy = format!("{year:04}");
+    let yy = format!("{:02}", year.rem_euclid(100));
+    let mm = format!("{month:02}");
+    let m = month.to_string();
+    let dd = format!("{day:02}");
+    let d = day.to_string();
+    let hh = format!("{hour:02}");
+    let h = hour.to_string();
+    let min2 = format!("{minute:02}");
+    let mmm = MONTH_NAMES_SHORT[month_idx];
+    let mmmm = MONTH_NAMES[month_idx];
+
+    let mut out = if pattern.trim().is_empty() {
+        "%Y-%m-%d".to_string()
+    } else {
+        pattern.to_string()
+    };
+
+    if out.contains('%') {
+        for (token, value) in [
+            ("%Y", yyyy.as_str()),
+            ("%y", yy.as_str()),
+            ("%m", mm.as_str()),
+            ("%d", dd.as_str()),
+            ("%H", hh.as_str()),
+            ("%M", min2.as_str()),
+            ("%b", mmm),
+            ("%B", mmmm),
+        ] {
+            out = out.replace(token, value);
+        }
+        return out;
+    }
+
+    for (token, value) in [
+        ("YYYY", yyyy.as_str()),
+        ("MMMM", mmmm),
+        ("MMM", mmm),
+        ("MM", mm.as_str()),
+        ("DD", dd.as_str()),
+        ("HH", hh.as_str()),
+        ("mm", min2.as_str()),
+        ("YY", yy.as_str()),
+        ("M", m.as_str()),
+        ("D", d.as_str()),
+        ("H", h.as_str()),
+    ] {
+        out = out.replace(token, value);
+    }
+    out
+}
+
 fn draw_date_picker(
     app: &TerminalApp,
     buf: &mut String,
@@ -3534,8 +3878,8 @@ fn draw_date_picker(
     cols: usize,
     palette: render::RenderPalette,
 ) {
-    let box_w: usize = 30;
-    let box_h: usize = 12;
+    let box_w: usize = 38;
+    let box_h: usize = 15;
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
 
@@ -3567,6 +3911,15 @@ fn draw_date_picker(
     let footer_style = AnsiStyle {
         fg: Some(palette.search_match),
         bold: true,
+        ..Default::default()
+    };
+    let time_style = AnsiStyle {
+        fg: Some(palette.code_string),
+        ..Default::default()
+    };
+    let hint_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        dim: true,
         ..Default::default()
     };
 
@@ -3636,12 +3989,60 @@ fn draw_date_picker(
         }
     }
 
-    // Footer
-    let selected = format!(
-        "{:04}-{:02}-{:02}",
-        app.date_year, app.date_month, app.date_day
+    let action = if app.date_picker_action == DatePickerAction::SetNotify {
+        "notify"
+    } else {
+        "date"
+    };
+    let time_label = if app.date_require_time {
+        format!(
+            "Time {:02}:{:02} (required)",
+            app.date_hour, app.date_minute
+        )
+    } else {
+        let state = if app.date_include_time { "on" } else { "off" };
+        format!(
+            "Time {:02}:{:02} ({state}, Tab toggle)",
+            app.date_hour, app.date_minute
+        )
+    };
+    let selected = if app.date_include_time {
+        format_datetime_with_pattern(
+            app.date_year,
+            app.date_month,
+            app.date_day,
+            app.date_hour,
+            app.date_minute,
+            &app.date_time_format,
+        )
+    } else {
+        format_datetime_with_pattern(
+            app.date_year,
+            app.date_month,
+            app.date_day,
+            app.date_hour,
+            app.date_minute,
+            &app.date_format,
+        )
+    };
+    draw_row_at_styled(
+        buf,
+        y + box_h - 5,
+        x + 2,
+        inner_w.saturating_sub(2),
+        &time_label,
+        time_style,
     );
-    let footer_x = x + 1 + (inner_w.saturating_sub(selected.len())) / 2;
+    let hint = format!("{action}: h/l hour  j/k minute  Enter confirm");
+    draw_row_at_styled(
+        buf,
+        y + box_h - 4,
+        x + 2,
+        inner_w.saturating_sub(2),
+        &hint,
+        hint_style,
+    );
+    let footer_x = x + 1 + (inner_w.saturating_sub(selected.chars().count())) / 2;
     buf.push_str(&goto(y + box_h - 2, footer_x));
     footer_style.write_to(buf);
     buf.push_str(&selected);
@@ -4033,6 +4434,8 @@ mod tests {
             false,
             true,
             super::render::RenderPalette::default(),
+            "%Y-%m-%d".to_string(),
+            "%Y-%m-%d %H:%M".to_string(),
         )
         .expect("terminal app");
         app.mode = UiMode::Editor;

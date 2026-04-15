@@ -1,5 +1,5 @@
 import type { EditorView } from "@codemirror/view";
-import { evaluateLines } from "../api.ts";
+import { deleteNoteReminder, evaluateLines, upsertNoteReminder } from "../api.ts";
 import {
   executeCommand as executeCoreCommand,
   listCommandSuggestions as listCoreCommandSuggestions,
@@ -7,14 +7,17 @@ import {
   type CommandSuggestion,
 } from "./core/commands.ts";
 import { applyEditOperations, snapshotFromView } from "./core/codemirror-adapter.ts";
-import { openDatePicker } from "./date-picker.ts";
+import { openDatePicker, openDateTimePicker } from "./date-picker.ts";
 import { formatMarkdownTextAsync } from "./markdown-format.ts";
+import { state } from "../state.ts";
+import { applyReminderDelete, applyReminderUpsert } from "./notify-decoration.ts";
 
 export type { CommandMode, CommandSuggestion };
 
 export interface CommandExecutionOptions {
   mode: CommandMode;
   dateFormat?: string;
+  dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
 }
 
@@ -40,7 +43,27 @@ export async function executeCommand(
   const result = await executeCoreCommand(snapshot, rawInput, {
     mode: options.mode,
     dateFormat: options.dateFormat,
+    dateTimeFormat: options.dateTimeFormat,
     pickDate: (dateFormat) => openDatePicker(dateFormat),
+    pickDateTime: (pickerOptions) => openDateTimePicker(pickerOptions),
+    activeNoteId: state.activeNote?.id ?? null,
+    upsertReminder: async (reminder) => {
+      const stored = await upsertNoteReminder(
+        reminder.noteId,
+        reminder.lineNumber,
+        reminder.remindAtMs,
+        reminder.displayAt,
+        reminder.lineText,
+      );
+      applyReminderUpsert(view, reminder.noteId, stored);
+    },
+    deleteReminder: async (reminder) => {
+      const deleted = await deleteNoteReminder(reminder.noteId, reminder.lineNumber);
+      if (deleted) {
+        applyReminderDelete(view, reminder.noteId, reminder.lineNumber);
+      }
+      return deleted;
+    },
     evaluateExpression: async (expression) => {
       const [result] = await evaluateLines([expression]);
       return result ?? null;

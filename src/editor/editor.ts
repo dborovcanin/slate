@@ -15,6 +15,7 @@ import { applyEditOperation, snapshotFromView } from "./core/codemirror-adapter"
 import { runTableCellNavigationRules } from "./wasm.ts";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
+import { notifyExtensions } from "./notify-decoration";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
 import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
@@ -56,6 +57,7 @@ interface EditorMountOptions {
   formatOnSave?: boolean;
   vimMode?: boolean;
   dateFormat?: string;
+  dateTimeFormat?: string;
   variablesEnabled?: boolean;
   variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
@@ -222,9 +224,13 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       minChars: options.variableAutocompleteMinChars ?? 3,
     }),
     ...calcExtensions({ variablesEnabled: options.variablesEnabled ?? true }),
+    ...notifyExtensions({
+      getActiveNoteId: () => state.activeNote?.id ?? null,
+    }),
     ...editorSearchExtensions(),
     commandModeExtension({
       dateFormat: options.dateFormat,
+      dateTimeFormat: options.dateTimeFormat,
       vimMode: !!options.vimMode,
       onExitCommand: options.onExitCommand,
     }),
@@ -250,6 +256,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       Prec.highest(
         vimModeExtension({
           dateFormat: options.dateFormat,
+          dateTimeFormat: options.dateTimeFormat,
           onExitCommand: options.onExitCommand,
         }),
       ),

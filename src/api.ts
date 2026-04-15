@@ -7,6 +7,17 @@ export interface Note {
   updated_at: string;
 }
 
+export interface NoteReminder {
+  note_id: string;
+  line_number: number;
+  remind_at_ms: number;
+  display_at: string;
+  line_text: string;
+  notified_at_ms?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ThemeConfig {
   color_scheme: string;
   background: string;
@@ -17,6 +28,7 @@ export interface ThemeConfig {
   terminal_mode: boolean;
   vim_mode: boolean;
   date_format: string;
+  date_time_format: string;
   variables_enabled: boolean;
   variables_autocomplete_min_chars: number;
 }
@@ -31,6 +43,7 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   terminal_mode: false,
   vim_mode: false,
   date_format: "%Y-%m-%d",
+  date_time_format: "%Y-%m-%d %H:%M",
   variables_enabled: true,
   variables_autocomplete_min_chars: 3,
 };
@@ -73,6 +86,46 @@ export function deleteNote(id: string): Promise<boolean> {
   return invoke<boolean>("delete_note", { id });
 }
 
+export function listNoteReminders(noteId: string): Promise<NoteReminder[]> {
+  return invoke<NoteReminder[]>("list_note_reminders", { noteId });
+}
+
+export function upsertNoteReminder(
+  noteId: string,
+  lineNumber: number,
+  remindAtMs: number,
+  displayAt: string,
+  lineText: string,
+): Promise<NoteReminder> {
+  return invoke<NoteReminder>("upsert_note_reminder", {
+    noteId,
+    lineNumber,
+    remindAtMs,
+    displayAt,
+    lineText,
+  });
+}
+
+export function deleteNoteReminder(noteId: string, lineNumber: number): Promise<boolean> {
+  return invoke<boolean>("delete_note_reminder", { noteId, lineNumber });
+}
+
+export function markNoteReminderNotified(
+  noteId: string,
+  lineNumber: number,
+  notifiedAtMs?: number,
+): Promise<NoteReminder | null> {
+  return invoke<NoteReminder | null>("mark_note_reminder_notified", {
+    noteId,
+    lineNumber,
+    notifiedAtMs,
+  });
+}
+
+export function sendSystemNotification(title: string, body: string): Promise<void> {
+  return invoke<void>("send_system_notification", { title, body });
+}
+
 export function evaluateLines(lines: string[]): Promise<(string | null)[]> {
   return invoke<(string | null)[]>("evaluate_lines", { lines });
 }
@@ -89,9 +142,9 @@ export function evaluateNoteContext(
 ): Promise<NoteEvaluationResult> {
   return invoke<NoteEvaluationResult>("evaluate_note_context", {
     lines,
-    variables_enabled: variablesEnabled,
-    eval_from: range?.evalFrom,
-    eval_to: range?.evalTo,
+    variablesEnabled,
+    evalFrom: range?.evalFrom,
+    evalTo: range?.evalTo,
   });
 }
 

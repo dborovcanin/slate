@@ -34,6 +34,7 @@ type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
 
 interface VimOptions {
   dateFormat?: string;
+  dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
 }
 
@@ -714,6 +715,7 @@ export function vimModeExtension(options: VimOptions = {}) {
         openCommandPicker(view, {
           mode: "vim",
           dateFormat: options.dateFormat,
+          dateTimeFormat: options.dateTimeFormat,
           onExitCommand: options.onExitCommand,
           source: "vim-colon",
         });

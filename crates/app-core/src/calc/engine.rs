@@ -356,7 +356,8 @@ impl CalcEngine {
                     evaluate_table_formula(lines, idx, &expression, true, Some(&mut resolver))
                 {
                     Some(value)
-                } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(&expression)
+                } else if let Some((_name, normalized, rhs)) =
+                    parse_variable_assignment(&expression)
                 {
                     let resolved = resolver.resolve(&normalized);
                     if assignment_rhs_is_plain_numeric_literal(&rhs) {
@@ -1221,11 +1222,7 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
             result.line_results,
-            vec![
-                None,
-                Some("2".to_string()),
-                Some("12".to_string())
-            ]
+            vec![None, Some("2".to_string()), Some("12".to_string())]
         );
 
         let vars = result
@@ -1289,11 +1286,7 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(
             result.line_results,
-            vec![
-                None,
-                Some("6".to_string()),
-                Some("7".to_string())
-            ]
+            vec![None, Some("6".to_string()), Some("7".to_string())]
         );
     }
 

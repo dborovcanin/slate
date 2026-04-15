@@ -16,6 +16,8 @@ test("editor mode exposes only editing commands", () => {
     "avg column",
     "avg doc",
     "date",
+    "notify",
+    "notify-delete",
     "format",
     "checklist",
   ]);

@@ -375,6 +375,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     formatOnSave: config.format_on_save,
     vimMode: !!config.vim_mode,
     dateFormat: config.date_format,
+    dateTimeFormat: config.date_time_format,
     variablesEnabled: config.variables_enabled,
     variableAutocompleteMinChars: config.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
@@ -383,7 +384,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   setupKeyboardShortcuts();
 
   if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :format, :q");
+    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :q");
   }
 
   state.on(() => {

@@ -13,6 +13,7 @@ const DEFAULT_VIM_MODE: bool = false;
 const DEFAULT_TERMINAL_MODE: bool = false;
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
+const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
 const DEFAULT_VARIABLES_ENABLED: bool = true;
 const DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 3;
@@ -32,7 +33,7 @@ const DEFAULT_CONFIG: &str = r#"# Note configuration
 #   jetbrains-mono, fira-code, cascadia-code, iosevka, hack, source-code-pro
 #
 # Date format tokens:
-#   %Y, %y, %m, %d, %b, %B
+#   %Y, %y, %m, %d, %b, %B, %H, %M
 # variables.autocomplete_min_chars range:
 #   1..8
 
@@ -53,6 +54,8 @@ terminal_mode = false
 vim_mode = false
 # Date format used by :date and date picker insert
 date_format = "%Y-%m-%d"
+# Date+time format used by :date (when time is included) and :notify
+date_time_format = "%Y-%m-%d %H:%M"
 
 [editor.variables]
 # Enable note-local reactive variables
@@ -72,6 +75,7 @@ pub struct ThemeConfig {
     pub terminal_mode: bool,
     pub vim_mode: bool,
     pub date_format: String,
+    pub date_time_format: String,
     pub variables_enabled: bool,
     pub variables_autocomplete_min_chars: u8,
 }
@@ -88,6 +92,7 @@ impl Default for ThemeConfig {
             terminal_mode: DEFAULT_TERMINAL_MODE,
             vim_mode: DEFAULT_VIM_MODE,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
+            date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
             variables_enabled: DEFAULT_VARIABLES_ENABLED,
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
         }
@@ -117,6 +122,7 @@ struct EditorSection {
     terminal_mode: Option<bool>,
     vim_mode: Option<bool>,
     date_format: Option<String>,
+    date_time_format: Option<String>,
     #[serde(default)]
     variables: VariablesSection,
 }
@@ -169,6 +175,7 @@ pub fn load_theme_config() -> ThemeConfig {
 
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    let date_format = normalize_date_format(raw.editor.date_format);
     Ok(ThemeConfig {
         color_scheme: normalize_name(raw.theme.color_scheme, DEFAULT_COLOR_SCHEME),
         background: normalize_name(raw.theme.background, DEFAULT_BACKGROUND),
@@ -181,7 +188,8 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         terminal_mode: raw.editor.terminal_mode.unwrap_or(DEFAULT_TERMINAL_MODE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
-        date_format: normalize_date_format(raw.editor.date_format),
+        date_time_format: normalize_date_time_format(raw.editor.date_time_format, &date_format),
+        date_format,
         variables_enabled: raw
             .editor
             .variables
@@ -227,6 +235,15 @@ fn normalize_date_format(value: Option<String>) -> String {
     }
 }
 
+fn normalize_date_time_format(value: Option<String>, date_format: &str) -> String {
+    let trimmed = value.as_deref().map(str::trim).unwrap_or("");
+    if trimmed.is_empty() {
+        format!("{date_format} %H:%M")
+    } else {
+        trimmed.to_string()
+    }
+}
+
 fn normalize_variable_autocomplete_min_chars(value: Option<u16>) -> u8 {
     value
         .map(|v| {
@@ -264,6 +281,7 @@ mod tests {
             terminal_mode = true
             vim_mode = true
             date_format = "%d.%m.%Y"
+            date_time_format = "%d.%m.%Y. %H:%M"
 
             [editor.variables]
             enabled = false
@@ -281,6 +299,7 @@ mod tests {
         assert!(cfg.terminal_mode);
         assert!(cfg.vim_mode);
         assert_eq!(cfg.date_format, "%d.%m.%Y");
+        assert_eq!(cfg.date_time_format, "%d.%m.%Y. %H:%M");
         assert!(!cfg.variables_enabled);
         assert_eq!(cfg.variables_autocomplete_min_chars, 5);
     }
@@ -313,6 +332,7 @@ mod tests {
         assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
         assert_eq!(cfg.date_format, "%Y-%m-%d");
+        assert_eq!(cfg.date_time_format, "%Y-%m-%d %H:%M");
         assert!(cfg.variables_enabled);
         assert_eq!(cfg.variables_autocomplete_min_chars, 3);
     }
@@ -336,6 +356,22 @@ mod tests {
         assert_eq!(
             normalize_date_format(Some("%m/%d/%Y".to_string())),
             "%m/%d/%Y"
+        );
+    }
+
+    #[test]
+    fn normalize_date_time_format_defaults_from_date_format() {
+        assert_eq!(
+            normalize_date_time_format(None, "%d.%m.%Y"),
+            "%d.%m.%Y %H:%M"
+        );
+        assert_eq!(
+            normalize_date_time_format(Some(" ".to_string()), "%d.%m.%Y"),
+            "%d.%m.%Y %H:%M"
+        );
+        assert_eq!(
+            normalize_date_time_format(Some("%d.%m.%Y. %H:%M".to_string()), "%Y-%m-%d"),
+            "%d.%m.%Y. %H:%M"
         );
     }
 

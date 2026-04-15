@@ -317,6 +317,33 @@ impl RenderContext {
         )
     }
 
+    pub fn render_line_window_with_reminder(
+        &mut self,
+        text: &str,
+        width: usize,
+        window_col: usize,
+        calc_ghost: Option<&str>,
+        reminder_ghost: Option<&str>,
+        reminder_strikethrough: bool,
+        search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+    ) -> String {
+        self.render_line_with_dim_ranges_window_with_reminder(
+            text,
+            width,
+            window_col,
+            calc_ghost,
+            reminder_ghost,
+            reminder_strikethrough,
+            search_ranges,
+            current_search_ranges,
+            variable_names,
+            &[],
+            &[],
+        )
+    }
+
     #[allow(dead_code)]
     pub fn render_line_with_dim_ranges(
         &mut self,
@@ -348,6 +375,35 @@ impl RenderContext {
         width: usize,
         window_col: usize,
         calc_ghost: Option<&str>,
+        search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+        dim_ranges: &[(usize, usize)],
+        reverse_ranges: &[(usize, usize)],
+    ) -> String {
+        self.render_line_with_dim_ranges_window_with_reminder(
+            text,
+            width,
+            window_col,
+            calc_ghost,
+            None,
+            false,
+            search_ranges,
+            current_search_ranges,
+            variable_names,
+            dim_ranges,
+            reverse_ranges,
+        )
+    }
+
+    pub fn render_line_with_dim_ranges_window_with_reminder(
+        &mut self,
+        text: &str,
+        width: usize,
+        window_col: usize,
+        calc_ghost: Option<&str>,
+        reminder_ghost: Option<&str>,
+        reminder_strikethrough: bool,
         search_ranges: &[(usize, usize)],
         current_search_ranges: &[(usize, usize)],
         variable_names: &[String],
@@ -422,7 +478,16 @@ impl RenderContext {
             " → "
         };
 
-        build_ansi_output_window(&chars, &styles, window_col, width, calc_ghost, calc_prefix)
+        build_ansi_output_window(
+            &chars,
+            &styles,
+            window_col,
+            width,
+            calc_ghost,
+            calc_prefix,
+            reminder_ghost,
+            reminder_strikethrough,
+        )
     }
 }
 
@@ -686,7 +751,16 @@ fn build_ansi_output(
     calc_ghost: Option<&str>,
     calc_prefix: &str,
 ) -> String {
-    build_ansi_output_window(chars, styles, 0, width, calc_ghost, calc_prefix)
+    build_ansi_output_window(
+        chars,
+        styles,
+        0,
+        width,
+        calc_ghost,
+        calc_prefix,
+        None,
+        false,
+    )
 }
 
 fn emit_window_cell(
@@ -718,6 +792,8 @@ fn build_ansi_output_window(
     width: usize,
     calc_ghost: Option<&str>,
     calc_prefix: &str,
+    reminder_ghost: Option<&str>,
+    reminder_strikethrough: bool,
 ) -> String {
     let mut buf = String::with_capacity(width * 4);
     let mut current = CharStyle::default();
@@ -768,6 +844,29 @@ fn build_ansi_output_window(
                 &mut buf,
                 &mut current,
                 ghost_style,
+                ch,
+                &mut stream_col,
+                &mut emitted,
+                window_col,
+                window_end,
+                width,
+            );
+        }
+    }
+
+    if let Some(ghost) = reminder_ghost {
+        let reminder_style = CharStyle {
+            dim: true,
+            italic: true,
+            strikethrough: reminder_strikethrough,
+            ..Default::default()
+        };
+        let reminder_prefix = if calc_ghost.is_some() { "  " } else { " " };
+        for ch in reminder_prefix.chars().chain(ghost.chars()) {
+            emit_window_cell(
+                &mut buf,
+                &mut current,
+                reminder_style,
                 ch,
                 &mut stream_col,
                 &mut emitted,
@@ -891,6 +990,42 @@ mod tests {
         let visible = strip_ansi(&out);
         assert!(visible.contains(" * ➜ avg_col()"));
         assert!(!visible.contains("→ * ➜ avg_col()"));
+    }
+
+    #[test]
+    fn render_reminder_ghost_is_appended_without_calc_prefix() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line_window_with_reminder(
+            "- [ ] task",
+            40,
+            0,
+            None,
+            Some("⏰ 23.04.2026. 14:34"),
+            false,
+            &[],
+            &[],
+            &[],
+        );
+        let visible = strip_ansi(&out);
+        assert!(visible.contains(" ⏰ 23.04.2026. 14:34"));
+        assert!(!visible.contains("→ ⏰"));
+    }
+
+    #[test]
+    fn render_expired_reminder_ghost_uses_strikethrough_style() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line_window_with_reminder(
+            "task",
+            40,
+            0,
+            None,
+            Some("⏰ 23.04.2026. 14:34"),
+            true,
+            &[],
+            &[],
+            &[],
+        );
+        assert!(out.contains("\x1b[0;2;3;9m"));
     }
 
     #[test]

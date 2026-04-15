@@ -137,6 +137,69 @@ fn consume_ascii_whitespace(bytes: &[u8], mut idx: usize) -> usize {
     idx
 }
 
+fn is_digits_bytes(segment: &[u8]) -> bool {
+    !segment.is_empty() && segment.iter().all(|b| b.is_ascii_digit())
+}
+
+fn looks_like_month_name(content: &str) -> bool {
+    let first = content
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+        .to_ascii_lowercase();
+    matches!(
+        first.as_str(),
+        "jan"
+            | "january"
+            | "feb"
+            | "february"
+            | "mar"
+            | "march"
+            | "apr"
+            | "april"
+            | "may"
+            | "jun"
+            | "june"
+            | "jul"
+            | "july"
+            | "aug"
+            | "august"
+            | "sep"
+            | "sept"
+            | "september"
+            | "oct"
+            | "october"
+            | "nov"
+            | "november"
+            | "dec"
+            | "december"
+    )
+}
+
+fn is_probable_numeric_date_marker(marker: &str) -> bool {
+    let base = marker.strip_suffix('.').unwrap_or(marker);
+    let mut iter = base.split('.');
+    let (Some(day_s), Some(month_s), Some(year_s), None) =
+        (iter.next(), iter.next(), iter.next(), iter.next())
+    else {
+        return false;
+    };
+    if !(day_s.as_bytes().iter().all(|b| b.is_ascii_digit())
+        && month_s.as_bytes().iter().all(|b| b.is_ascii_digit())
+        && year_s.as_bytes().iter().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    let day = day_s.parse::<u32>().ok().unwrap_or(0);
+    let month = month_s.parse::<u32>().ok().unwrap_or(0);
+    if !(1..=31).contains(&day) || !(1..=12).contains(&month) {
+        return false;
+    }
+    marker.ends_with('.') || year_s.len() >= 4
+}
+
 fn heading_marker_end(text: &str) -> Option<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut i = consume_ascii_whitespace(bytes, 0);
@@ -211,6 +274,18 @@ pub fn list_marker_end(text: &str) -> Option<usize> {
         }
 
         if j >= len || !bytes[j].is_ascii_whitespace() {
+            return None;
+        }
+        let marker = &text[i..j];
+        let rest = &text[j..];
+        if is_probable_numeric_date_marker(marker) {
+            return None;
+        }
+        if marker
+            .strip_suffix('.')
+            .is_some_and(|base| is_digits_bytes(base.as_bytes()))
+            && looks_like_month_name(rest)
+        {
             return None;
         }
         consume_ascii_whitespace(bytes, j)
@@ -454,7 +529,12 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
             i += 1;
         }
         if let Some(close) = find_backtick_close(&chars, i, tick_count) {
-            push_inline_token(&mut tokens, open, open + tick_count, InlineTokenType::CodeMarker);
+            push_inline_token(
+                &mut tokens,
+                open,
+                open + tick_count,
+                InlineTokenType::CodeMarker,
+            );
             push_inline_token(&mut tokens, open + tick_count, close, InlineTokenType::Code);
             push_inline_token(
                 &mut tokens,
@@ -905,6 +985,15 @@ mod tests {
 
         let list = classify_markdown_line("  -> item");
         assert_eq!(list.list_marker_end, Some(5));
+
+        let ordered = classify_markdown_line("22. task");
+        assert_eq!(ordered.list_marker_end, Some(4));
+
+        let numeric_date = classify_markdown_line("22.04.2026. 14:34");
+        assert_eq!(numeric_date.list_marker_end, None);
+
+        let textual_date = classify_markdown_line("22. April 2026.");
+        assert_eq!(textual_date.list_marker_end, None);
 
         let checklist = classify_markdown_line("- [x] done");
         assert_eq!(checklist.checklist_marker_start, Some(2));

@@ -34,6 +34,62 @@ fn is_digits(segment: &str) -> bool {
     !segment.is_empty() && segment.as_bytes().iter().all(|b| b.is_ascii_digit())
 }
 
+fn looks_like_month_name(content: &str) -> bool {
+    let first = content
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches(|ch: char| !ch.is_ascii_alphabetic())
+        .to_ascii_lowercase();
+    matches!(
+        first.as_str(),
+        "jan"
+            | "january"
+            | "feb"
+            | "february"
+            | "mar"
+            | "march"
+            | "apr"
+            | "april"
+            | "may"
+            | "jun"
+            | "june"
+            | "jul"
+            | "july"
+            | "aug"
+            | "august"
+            | "sep"
+            | "sept"
+            | "september"
+            | "oct"
+            | "october"
+            | "nov"
+            | "november"
+            | "dec"
+            | "december"
+    )
+}
+
+fn is_probable_numeric_date_marker(marker: &str) -> bool {
+    let base = marker.strip_suffix('.').unwrap_or(marker);
+    let mut iter = base.split('.');
+    let (Some(day_s), Some(month_s), Some(year_s), None) =
+        (iter.next(), iter.next(), iter.next(), iter.next())
+    else {
+        return false;
+    };
+    if !is_digits(day_s) || !is_digits(month_s) || !is_digits(year_s) {
+        return false;
+    }
+    let day = day_s.parse::<u32>().ok().unwrap_or(0);
+    let month = month_s.parse::<u32>().ok().unwrap_or(0);
+    if !(1..=31).contains(&day) || !(1..=12).contains(&month) {
+        return false;
+    }
+    marker.ends_with('.') || year_s.len() >= 4
+}
+
 fn is_ordered_marker_token(marker: &str) -> bool {
     if let Some(stripped) = marker.strip_suffix('.') {
         return is_digits(stripped)
@@ -137,6 +193,7 @@ fn parse_list_line_parts(line: &str) -> Option<ListLineParts<'_>> {
     }
 
     let marker_start = i;
+    let mut marker_is_ordered = false;
     let marker_end = if bytes[i] == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'>' {
         i += 2;
         i
@@ -155,6 +212,10 @@ fn parse_list_line_parts(line: &str) -> Option<ListLineParts<'_>> {
         if !is_ordered_marker_token(token) {
             return None;
         }
+        marker_is_ordered = true;
+        if is_probable_numeric_date_marker(token) {
+            return None;
+        }
         i = j;
         j
     };
@@ -166,10 +227,19 @@ fn parse_list_line_parts(line: &str) -> Option<ListLineParts<'_>> {
         i += 1;
     }
 
+    let marker = &line[marker_start..marker_end];
+    let content = &line[i..];
+    if marker_is_ordered
+        && marker.strip_suffix('.').is_some_and(is_digits)
+        && looks_like_month_name(content)
+    {
+        return None;
+    }
+
     Some(ListLineParts {
         indent: &line[..indent_end],
-        marker: &line[marker_start..marker_end],
-        content: &line[i..],
+        marker,
+        content,
         prefix_end: i,
     })
 }
@@ -1264,5 +1334,12 @@ mod tests {
         assert_eq!(increment_ordered_marker("1."), "2.");
         assert_eq!(increment_ordered_marker("1.1"), "1.2");
         assert_eq!(increment_ordered_marker("3.2.9"), "3.2.10");
+    }
+
+    #[test]
+    fn parse_list_line_parts_ignores_date_like_prefixes() {
+        assert!(parse_list_line_parts("22.04.2026. 14:34").is_none());
+        assert!(parse_list_line_parts("22. April 2026.").is_none());
+        assert!(parse_list_line_parts("22. task").is_some());
     }
 }

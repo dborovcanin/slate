@@ -34,6 +34,10 @@ const monthNamesLong = [
 
 const dayHeaders = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
 
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 export function formatDateByPattern(date: Date, pattern: string): string {
   const yyyy = `${date.getFullYear()}`;
   const yy = yyyy.slice(-2);
@@ -41,6 +45,9 @@ export function formatDateByPattern(date: Date, pattern: string): string {
   const m = `${date.getMonth() + 1}`;
   const dd = pad2(date.getDate());
   const d = `${date.getDate()}`;
+  const HH = pad2(date.getHours());
+  const H = `${date.getHours()}`;
+  const Min = pad2(date.getMinutes());
   const MMM = monthNamesShort[date.getMonth()];
   const MMMM = monthNamesLong[date.getMonth()];
 
@@ -52,6 +59,8 @@ export function formatDateByPattern(date: Date, pattern: string): string {
       ["%y", yy],
       ["%m", mm],
       ["%d", dd],
+      ["%H", HH],
+      ["%M", Min],
       ["%b", MMM],
       ["%B", MMMM],
     ];
@@ -68,9 +77,12 @@ export function formatDateByPattern(date: Date, pattern: string): string {
     ["MMM", MMM],
     ["MM", mm],
     ["DD", dd],
+    ["HH", HH],
+    ["mm", Min],
     ["YY", yy],
     ["M", m],
     ["D", d],
+    ["H", H],
   ];
   let result = out;
   for (const [token, value] of replacements) {
@@ -89,11 +101,32 @@ function startDayOfWeek(year: number, month: number): number {
   return (d + 6) % 7;
 }
 
-export function openDatePicker(format: string): Promise<string | null> {
+export interface DateTimePickerOptions {
+  dateFormat: string;
+  dateTimeFormat: string;
+  mode?: "date" | "notify";
+  requireTime?: boolean;
+}
+
+export interface DateTimePickerResult {
+  insertText: string;
+  hasTime: boolean;
+  remindAtMs: number;
+  displayAt: string;
+}
+
+export function openDateTimePicker(
+  options: DateTimePickerOptions,
+): Promise<DateTimePickerResult | null> {
+  const mode = options.mode ?? "date";
+  const requireTime = options.requireTime ?? mode === "notify";
   const now = new Date();
   let year = now.getFullYear();
   let month = now.getMonth(); // 0-based
   let day = now.getDate();
+  let includeTime = requireTime;
+  let hour = now.getHours();
+  let minute = now.getMinutes();
   const restoreTarget =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
@@ -106,9 +139,8 @@ export function openDatePicker(format: string): Promise<string | null> {
     panel.tabIndex = -1;
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-    panel.setAttribute("aria-label", "Date picker");
+    panel.setAttribute("aria-label", mode === "notify" ? "Reminder picker" : "Date picker");
 
-    // Header row: < Month Year >
     const header = document.createElement("div");
     header.className = "date-picker-header";
 
@@ -131,7 +163,6 @@ export function openDatePicker(format: string): Promise<string | null> {
     header.appendChild(monthLabel);
     header.appendChild(nextBtn);
 
-    // Day-of-week header
     const dowRow = document.createElement("div");
     dowRow.className = "date-picker-dow";
     for (const dh of dayHeaders) {
@@ -141,12 +172,63 @@ export function openDatePicker(format: string): Promise<string | null> {
       dowRow.appendChild(cell);
     }
 
-    // Grid
     const grid = document.createElement("div");
     grid.className = "date-picker-grid";
     grid.setAttribute("role", "grid");
 
-    // Footer with selected date + actions
+    const timeRow = document.createElement("div");
+    timeRow.className = "date-picker-time-row";
+
+    const timeLeading = document.createElement("label");
+    timeLeading.className = "date-picker-time-label";
+
+    const timeToggle = document.createElement("input");
+    timeToggle.type = "checkbox";
+    timeToggle.className = "date-picker-time-toggle";
+    timeToggle.checked = includeTime;
+    timeToggle.disabled = requireTime;
+
+    if (requireTime) {
+      timeLeading.textContent = "Time";
+    } else {
+      timeLeading.appendChild(timeToggle);
+      const toggleText = document.createElement("span");
+      toggleText.textContent = "Include time";
+      timeLeading.appendChild(toggleText);
+    }
+
+    const timeFields = document.createElement("div");
+    timeFields.className = "date-picker-time-fields";
+
+    const hourInput = document.createElement("input");
+    hourInput.type = "number";
+    hourInput.className = "date-picker-time-input";
+    hourInput.min = "0";
+    hourInput.max = "23";
+    hourInput.step = "1";
+    hourInput.value = `${hour}`;
+    hourInput.setAttribute("aria-label", "Hour");
+
+    const colon = document.createElement("span");
+    colon.className = "date-picker-time-colon";
+    colon.textContent = ":";
+
+    const minuteInput = document.createElement("input");
+    minuteInput.type = "number";
+    minuteInput.className = "date-picker-time-input";
+    minuteInput.min = "0";
+    minuteInput.max = "59";
+    minuteInput.step = "1";
+    minuteInput.value = `${minute}`;
+    minuteInput.setAttribute("aria-label", "Minute");
+
+    timeFields.appendChild(hourInput);
+    timeFields.appendChild(colon);
+    timeFields.appendChild(minuteInput);
+
+    timeRow.appendChild(timeLeading);
+    timeRow.appendChild(timeFields);
+
     const footer = document.createElement("div");
     footer.className = "date-picker-footer";
 
@@ -162,7 +244,7 @@ export function openDatePicker(format: string): Promise<string | null> {
 
     const insertBtn = document.createElement("button");
     insertBtn.className = "date-picker-btn date-picker-btn-primary";
-    insertBtn.textContent = "Insert";
+    insertBtn.textContent = mode === "notify" ? "Set" : "Insert";
 
     actions.appendChild(cancelBtn);
     actions.appendChild(insertBtn);
@@ -172,9 +254,49 @@ export function openDatePicker(format: string): Promise<string | null> {
     panel.appendChild(header);
     panel.appendChild(dowRow);
     panel.appendChild(grid);
+    panel.appendChild(timeRow);
     panel.appendChild(footer);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
+
+    function parseTimeInputs() {
+      const nextHour = clamp(Number.parseInt(hourInput.value, 10) || 0, 0, 23);
+      const nextMinute = clamp(Number.parseInt(minuteInput.value, 10) || 0, 0, 59);
+      hour = nextHour;
+      minute = nextMinute;
+      hourInput.value = `${hour}`;
+      minuteInput.value = `${minute}`;
+    }
+
+    function setTimeEnabled(enabled: boolean) {
+      hourInput.disabled = !enabled;
+      minuteInput.disabled = !enabled;
+      timeFields.classList.toggle("date-picker-time-fields-disabled", !enabled);
+    }
+
+    function selectedDateTime() {
+      parseTimeInputs();
+      const selected = new Date(
+        year,
+        month,
+        day,
+        includeTime ? hour : 0,
+        includeTime ? minute : 0,
+        0,
+        0,
+      );
+      const insertText = includeTime
+        ? formatDateByPattern(selected, options.dateTimeFormat)
+        : formatDateByPattern(selected, options.dateFormat);
+      return {
+        date: selected,
+        insertText,
+        displayAt: formatDateByPattern(
+          new Date(year, month, day, hour, minute, 0, 0),
+          options.dateTimeFormat,
+        ),
+      };
+    }
 
     function clampDay() {
       const max = daysInMonth(year, month);
@@ -184,7 +306,8 @@ export function openDatePicker(format: string): Promise<string | null> {
 
     function render() {
       monthLabel.textContent = `${monthNamesLong[month]} ${year}`;
-      selectedLabel.textContent = `${year}-${pad2(month + 1)}-${pad2(day)}`;
+      selectedLabel.textContent = selectedDateTime().insertText;
+      setTimeEnabled(includeTime);
 
       grid.replaceChildren();
       const startDow = startDayOfWeek(year, month);
@@ -194,7 +317,6 @@ export function openDatePicker(format: string): Promise<string | null> {
         today.getFullYear() === year && today.getMonth() === month;
       const todayDay = today.getDate();
 
-      // Empty leading cells
       for (let i = 0; i < startDow; i++) {
         const empty = document.createElement("span");
         empty.className = "date-picker-cell date-picker-cell-empty";
@@ -210,9 +332,8 @@ export function openDatePicker(format: string): Promise<string | null> {
         cell.setAttribute("role", "gridcell");
         cell.setAttribute("aria-selected", d === day ? "true" : "false");
         if (d === day) cell.classList.add("date-picker-cell-selected");
-        if (isCurrentMonth && d === todayDay)
-          cell.classList.add("date-picker-cell-today");
         if (isCurrentMonth && d === todayDay) {
+          cell.classList.add("date-picker-cell-today");
           cell.setAttribute("aria-current", "date");
         }
         const dayVal = d;
@@ -250,7 +371,7 @@ export function openDatePicker(format: string): Promise<string | null> {
       render();
     }
 
-    const close = (result: string | null) => {
+    const close = (result: DateTimePickerResult | null) => {
       overlay.remove();
       document.removeEventListener("keydown", onKeyDown);
       if (restoreTarget && restoreTarget.isConnected) {
@@ -260,29 +381,53 @@ export function openDatePicker(format: string): Promise<string | null> {
     };
 
     function confirm() {
-      const parsed = new Date(year, month, day);
-      close(formatDateByPattern(parsed, format));
+      if (requireTime && !includeTime) return;
+      const selection = selectedDateTime();
+      close({
+        insertText: selection.insertText,
+        hasTime: includeTime,
+        remindAtMs: selection.date.getTime(),
+        displayAt: selection.displayAt,
+      });
     }
 
     prevBtn.addEventListener("click", prevMonth);
     nextBtn.addEventListener("click", nextMonth);
     cancelBtn.addEventListener("click", () => close(null));
     insertBtn.addEventListener("click", confirm);
+    timeToggle.addEventListener("change", () => {
+      includeTime = requireTime ? true : timeToggle.checked;
+      render();
+    });
+    hourInput.addEventListener("change", render);
+    minuteInput.addEventListener("change", render);
 
     overlay.addEventListener("mousedown", (e) => {
       if (e.target === overlay) close(null);
     });
 
     function onKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const inTimeInput =
+        target === hourInput ||
+        target === minuteInput;
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close(null);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        confirm();
+        return;
+      }
+
+      if (inTimeInput) {
+        return;
+      }
+
       switch (e.key) {
-        case "Escape":
-          e.preventDefault();
-          close(null);
-          break;
-        case "Enter":
-          e.preventDefault();
-          confirm();
-          break;
         case "ArrowLeft":
           e.preventDefault();
           if (day > 1) {
@@ -323,6 +468,23 @@ export function openDatePicker(format: string): Promise<string | null> {
           }
           render();
           break;
+        case "PageUp":
+          e.preventDefault();
+          prevMonth();
+          break;
+        case "PageDown":
+          e.preventDefault();
+          nextMonth();
+          break;
+        case "t":
+        case "T":
+          if (!requireTime) {
+            e.preventDefault();
+            includeTime = !includeTime;
+            timeToggle.checked = includeTime;
+            render();
+          }
+          break;
       }
     }
 
@@ -330,4 +492,14 @@ export function openDatePicker(format: string): Promise<string | null> {
     render();
     window.setTimeout(() => panel.focus(), 0);
   });
+}
+
+export async function openDatePicker(format: string): Promise<string | null> {
+  const selection = await openDateTimePicker({
+    dateFormat: format,
+    dateTimeFormat: `${format} %H:%M`,
+    mode: "date",
+    requireTime: false,
+  });
+  return selection?.insertText ?? null;
 }

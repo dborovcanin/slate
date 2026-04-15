@@ -213,6 +213,61 @@ html, body {
   font-family: var(--font-mono, monospace);
 }
 
+.date-picker-time-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  padding: 8px 0;
+  margin-top: 2px;
+}
+
+.date-picker-time-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-dim);
+  font-size: 12px;
+  user-select: none;
+}
+
+.date-picker-time-toggle {
+  margin: 0;
+}
+
+.date-picker-time-fields {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.date-picker-time-fields-disabled {
+  opacity: 0.5;
+}
+
+.date-picker-time-input {
+  width: 52px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-overlay);
+  color: var(--fg);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  padding: 4px 6px;
+}
+
+.date-picker-time-input:focus {
+  outline: 1px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.date-picker-time-colon {
+  color: var(--fg-dim);
+  user-select: none;
+}
+
 .date-picker-actions {
   display: flex;
   gap: 8px;
@@ -243,4 +298,3 @@ html, body {
 .date-picker-btn-primary:hover {
   opacity: 0.9;
 }
-

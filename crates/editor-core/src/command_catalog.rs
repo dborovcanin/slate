@@ -13,6 +13,8 @@ pub enum CommandId {
     AvgColumn,
     AvgDoc,
     Date,
+    Notify,
+    NotifyDelete,
     Format,
     Checklist,
     Quit,
@@ -30,7 +32,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 14] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 16] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -106,6 +108,20 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 14] = [
         value: "date",
         aliases: &[],
         description: "insert picked date",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::Notify,
+        value: "notify",
+        aliases: &["alarm", "remind"],
+        description: "set reminder for current line",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::NotifyDelete,
+        value: "notify-delete",
+        aliases: &["notify_delete", "notify-delte"],
+        description: "delete reminder for current line",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -235,6 +251,10 @@ mod tests {
         assert_eq!(
             resolve_command(CommandMode::Editor, "avg_all").map(|cmd| cmd.id),
             Some(CommandId::AvgDoc)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "notify-delte").map(|cmd| cmd.id),
+            Some(CommandId::NotifyDelete)
         );
     }
 

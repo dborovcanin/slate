@@ -293,7 +293,10 @@ fn normalize_checklist_line(line: &str) -> String {
     {
         if let Some(caps) = checklist_re.captures(body) {
             let marker = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
-            let content = caps.get(2).map(|m| m.as_str().trim_start()).unwrap_or_default();
+            let content = caps
+                .get(2)
+                .map(|m| m.as_str().trim_start())
+                .unwrap_or_default();
             return if content.is_empty() {
                 format!("{indent}{marker}[ ]")
             } else {
@@ -305,7 +308,10 @@ fn normalize_checklist_line(line: &str) -> String {
     if let Ok(list_re) = Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+)\s+)(.*)$") {
         if let Some(caps) = list_re.captures(body) {
             let marker = caps.get(1).map(|m| m.as_str()).unwrap_or_default();
-            let content = caps.get(2).map(|m| m.as_str().trim_start()).unwrap_or_default();
+            let content = caps
+                .get(2)
+                .map(|m| m.as_str().trim_start())
+                .unwrap_or_default();
             return if content.is_empty() {
                 format!("{indent}{marker}[ ]")
             } else {
@@ -502,6 +508,8 @@ pub fn execute_command(
                 .push(insert_value_at_selection(snapshot, &date_str));
             result
         }
+        CommandId::Notify => result_with_message("notify handled by host"),
+        CommandId::NotifyDelete => result_with_message("notify-delete handled by host"),
         CommandId::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
@@ -603,6 +611,8 @@ mod tests {
                 "avg column",
                 "avg doc",
                 "date",
+                "notify",
+                "notify-delete",
                 "format",
                 "checklist",
             ]

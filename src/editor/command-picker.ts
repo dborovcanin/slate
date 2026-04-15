@@ -6,6 +6,7 @@ import { createListOverlay, type ListOverlay, type ListOverlayState } from "../o
 interface CommandPickerOptions {
   mode: CommandMode;
   dateFormat?: string;
+  dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
   source?: "vim-colon" | "shortcut";
 }
@@ -13,6 +14,7 @@ interface CommandPickerOptions {
 interface CommandModeExtensionOptions {
   vimMode?: boolean;
   dateFormat?: string;
+  dateTimeFormat?: string;
   onExitCommand?: () => Promise<void> | void;
 }
 
@@ -93,6 +95,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
       const message = await executeCommand(view, command, {
         mode: options.mode,
         dateFormat: options.dateFormat,
+        dateTimeFormat: options.dateTimeFormat,
         onExitCommand: options.onExitCommand,
       });
       if (message) showStatus(view, message);
@@ -165,6 +168,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
       openCommandPicker(view, {
         mode: "editor",
         dateFormat: options.dateFormat,
+        dateTimeFormat: options.dateTimeFormat,
         onExitCommand: options.onExitCommand,
         source: "shortcut",
       });

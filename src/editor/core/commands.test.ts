@@ -104,6 +104,8 @@ test("core command suggestions are mode-aware", () => {
     "avg column",
     "avg doc",
     "date",
+    "notify",
+    "notify-delete",
     "format",
     "checklist",
   ]);
@@ -143,6 +145,100 @@ test("core executeCommand handles date and mode-gated q", async () => {
   });
   assert.equal(vimQ.message, "quit");
   assert.equal(quitCalled, true);
+});
+
+test("core executeCommand handles notify with one-line reminder payload", async () => {
+  let payload:
+    | {
+      noteId: string;
+      lineNumber: number;
+      remindAtMs: number;
+      displayAt: string;
+      lineText: string;
+    }
+    | null = null;
+
+  const result = await executeCommand(snapshot("alpha\nbeta", 6), "notify", {
+    mode: "editor",
+    activeNoteId: "note-1",
+    pickDateTime: async () => ({
+      insertText: "2026-04-15 14:34",
+      remindAtMs: 1_776_000_000_000,
+      displayAt: "15.04.2026. 14:34",
+      hasTime: true,
+    }),
+    upsertReminder: async (reminder) => {
+      payload = reminder;
+    },
+  });
+
+  assert.equal(result.operations.length, 0);
+  assert.equal(result.message, "notify set ⏰ 15.04.2026. 14:34");
+  assert.deepEqual(payload, {
+    noteId: "note-1",
+    lineNumber: 2,
+    remindAtMs: 1_776_000_000_000,
+    displayAt: "15.04.2026. 14:34",
+    lineText: "beta",
+  });
+});
+
+test("core executeCommand surfaces notify persistence errors from non-Error rejects", async () => {
+  const result = await executeCommand(snapshot("alpha", 0), "notify", {
+    mode: "editor",
+    activeNoteId: "note-1",
+    pickDateTime: async () => ({
+      insertText: "2026-04-15 14:34",
+      remindAtMs: 1_776_000_000_000,
+      displayAt: "15.04.2026. 14:34",
+      hasTime: true,
+    }),
+    upsertReminder: async () => {
+      throw { message: "table reminders has no column named line_text" };
+    },
+  });
+
+  assert.equal(
+    result.message,
+    "notify failed: table reminders has no column named line_text",
+  );
+  assert.equal(result.operations.length, 0);
+});
+
+test("core executeCommand handles notify-delete for current line", async () => {
+  let payload:
+    | {
+      noteId: string;
+      lineNumber: number;
+    }
+    | null = null;
+
+  const result = await executeCommand(snapshot("alpha\nbeta", 6), "notify-delete", {
+    mode: "editor",
+    activeNoteId: "note-1",
+    deleteReminder: async (reminder) => {
+      payload = reminder;
+      return true;
+    },
+  });
+
+  assert.equal(result.operations.length, 0);
+  assert.equal(result.message, "notify deleted on line 2");
+  assert.deepEqual(payload, {
+    noteId: "note-1",
+    lineNumber: 2,
+  });
+});
+
+test("core executeCommand handles notify-delete miss", async () => {
+  const result = await executeCommand(snapshot("alpha", 0), "notify-delete", {
+    mode: "editor",
+    activeNoteId: "note-1",
+    deleteReminder: async () => false,
+  });
+
+  assert.equal(result.operations.length, 0);
+  assert.equal(result.message, "notify-delete: no reminder on line 1");
 });
 
 test("core executeCommand supports unit-aware sum row", async () => {

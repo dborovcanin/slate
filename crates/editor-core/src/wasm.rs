@@ -126,16 +126,28 @@ fn calc_segment_to_js(segment: &CalcSegment) -> JsValue {
     let _ = set_prop(&out, "expr", JsValue::from_str(&segment.expr));
     let _ = set_prop(&out, "fromCol", JsValue::from_f64(segment.from_col as f64));
     let _ = set_prop(&out, "toCol", JsValue::from_f64(segment.to_col as f64));
-    let _ = set_prop(&out, "fromByte", JsValue::from_f64(segment.from_byte as f64));
+    let _ = set_prop(
+        &out,
+        "fromByte",
+        JsValue::from_f64(segment.from_byte as f64),
+    );
     let _ = set_prop(&out, "toByte", JsValue::from_f64(segment.to_byte as f64));
     out.into()
 }
 
 fn table_formula_segment_to_js(segment: &TableFormulaSegment) -> JsValue {
     let out = Object::new();
-    let _ = set_prop(&out, "fromByte", JsValue::from_f64(segment.from_byte as f64));
+    let _ = set_prop(
+        &out,
+        "fromByte",
+        JsValue::from_f64(segment.from_byte as f64),
+    );
     let _ = set_prop(&out, "toByte", JsValue::from_f64(segment.to_byte as f64));
-    let _ = set_prop(&out, "fromChar", JsValue::from_f64(segment.from_char as f64));
+    let _ = set_prop(
+        &out,
+        "fromChar",
+        JsValue::from_f64(segment.from_char as f64),
+    );
     let _ = set_prop(&out, "toChar", JsValue::from_f64(segment.to_char as f64));
     let _ = set_prop(&out, "label", JsValue::from_str(&segment.label));
     out.into()
@@ -350,7 +362,11 @@ fn markdown_analyzed_line_to_js(line: &MarkdownAnalyzedLine) -> JsValue {
             .map(JsValue::from_str)
             .unwrap_or(JsValue::NULL),
     );
-    let _ = set_prop(&out, "inlineTokens", inline_tokens_to_js(&line.inline_tokens));
+    let _ = set_prop(
+        &out,
+        "inlineTokens",
+        inline_tokens_to_js(&line.inline_tokens),
+    );
     let _ = set_prop(&out, "codeTokens", code_tokens_to_js(&line.code_tokens));
     out.into()
 }
@@ -391,7 +407,10 @@ pub fn wasm_markdown_find_inline_tokens(line_text: &str) -> JsValue {
 
 #[wasm_bindgen]
 pub fn wasm_markdown_tokenize_code_line(line_text: &str, lang: Option<String>) -> JsValue {
-    code_tokens_to_js(&markdown_tokens::tokenize_code_line(line_text, lang.as_deref()))
+    code_tokens_to_js(&markdown_tokens::tokenize_code_line(
+        line_text,
+        lang.as_deref(),
+    ))
 }
 
 #[wasm_bindgen]

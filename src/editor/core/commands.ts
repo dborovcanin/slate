@@ -19,7 +19,31 @@ export type { CommandMode, CommandSuggestion } from "./types.ts";
 export interface CommandRuntime {
   mode: CommandMode;
   dateFormat?: string;
+  dateTimeFormat?: string;
   pickDate?: (dateFormat: string) => Promise<string | null>;
+  pickDateTime?: (options: {
+    dateFormat: string;
+    dateTimeFormat: string;
+    mode: "date" | "notify";
+    requireTime: boolean;
+  }) => Promise<{
+    insertText: string;
+    remindAtMs: number;
+    displayAt: string;
+    hasTime: boolean;
+  } | null>;
+  activeNoteId?: string | null;
+  upsertReminder?: (reminder: {
+    noteId: string;
+    lineNumber: number;
+    remindAtMs: number;
+    displayAt: string;
+    lineText: string;
+  }) => Promise<void> | void;
+  deleteReminder?: (reminder: {
+    noteId: string;
+    lineNumber: number;
+  }) => Promise<boolean> | boolean;
   evaluateExpression?: SumExpressionEvaluator;
   copyText?: (text: string) => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
@@ -39,11 +63,47 @@ interface CommandDefinition {
   ) => Promise<CommandExecutionResult>;
 }
 
+function errorToMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return error;
+  }
+  if (error && typeof error === "object") {
+    const maybeMessage = (error as { message?: unknown }).message;
+    if (typeof maybeMessage === "string" && maybeMessage.trim().length > 0) {
+      return maybeMessage;
+    }
+  }
+  return fallback;
+}
+
 async function runDateCommand(
   _normalizedInput: string,
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
+  if (runtime.pickDateTime) {
+    const picked = await runtime.pickDateTime({
+      dateFormat: runtime.dateFormat ?? "%Y-%m-%d",
+      dateTimeFormat:
+        runtime.dateTimeFormat ?? `${runtime.dateFormat ?? "%Y-%m-%d"} %H:%M`,
+      mode: "date",
+      requireTime: false,
+    });
+    if (!picked) return { message: "date cancelled", operations: [] };
+    const value = picked.insertText;
+    const selection = ctx.selection();
+    const operation = replaceRange(selection.from, selection.to, value, {
+      anchor: selection.from + value.length,
+    });
+    return {
+      message: `inserted ${value}`,
+      operations: [operation],
+    };
+  }
+
   if (!runtime.pickDate) {
     return { message: "date unavailable", operations: [] };
   }
@@ -58,6 +118,71 @@ async function runDateCommand(
   return {
     message: `inserted ${value}`,
     operations: [operation],
+  };
+}
+
+async function runNotifyCommand(
+  _normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  if (!runtime.pickDateTime || !runtime.upsertReminder || !runtime.activeNoteId) {
+    return { message: "notify unavailable", operations: [] };
+  }
+
+  const picked = await runtime.pickDateTime({
+    dateFormat: runtime.dateFormat ?? "%Y-%m-%d",
+    dateTimeFormat:
+      runtime.dateTimeFormat ?? `${runtime.dateFormat ?? "%Y-%m-%d"} %H:%M`,
+    mode: "notify",
+    requireTime: true,
+  });
+  if (!picked) return { message: "notify cancelled", operations: [] };
+
+  const line = ctx.currentLine();
+  try {
+    await runtime.upsertReminder({
+      noteId: runtime.activeNoteId,
+      lineNumber: line.number,
+      remindAtMs: picked.remindAtMs,
+      displayAt: picked.displayAt,
+      lineText: line.text,
+    });
+  } catch (error) {
+    const message = errorToMessage(error, "failed to persist reminder");
+    return { message: `notify failed: ${message}`, operations: [] };
+  }
+  return {
+    message: `notify set ${String.fromCodePoint(0x23f0)} ${picked.displayAt}`,
+    operations: [],
+  };
+}
+
+async function runNotifyDeleteCommand(
+  _normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  if (!runtime.deleteReminder || !runtime.activeNoteId) {
+    return { message: "notify-delete unavailable", operations: [] };
+  }
+
+  const line = ctx.currentLine();
+  try {
+    const deleted = await runtime.deleteReminder({
+      noteId: runtime.activeNoteId,
+      lineNumber: line.number,
+    });
+    if (!deleted) {
+      return { message: `notify-delete: no reminder on line ${line.number}`, operations: [] };
+    }
+  } catch (error) {
+    const message = errorToMessage(error, "failed to delete reminder");
+    return { message: `notify-delete failed: ${message}`, operations: [] };
+  }
+  return {
+    message: `notify deleted on line ${line.number}`,
+    operations: [],
   };
 }
 
@@ -202,6 +327,8 @@ const COMMAND_EXECUTORS: Record<string, CommandDefinition["execute"]> = {
   "avg column": runAvgCommand,
   "avg doc": runAvgCommand,
   date: runDateCommand,
+  notify: runNotifyCommand,
+  "notify-delete": runNotifyDeleteCommand,
   format: runFormatCommand,
   checklist: runChecklistCommand,
   q: runQuitCommand,
@@ -226,6 +353,8 @@ const FALLBACK_COMMANDS: FallbackCommand[] = [
   { value: "avg column", aliases: ["avg_column"], description: "average markdown table per column at cursor", modes: ["vim", "editor"] },
   { value: "avg doc", aliases: ["avg_all", "avg all"], description: "average whole document", modes: ["vim", "editor"] },
   { value: "date", description: "insert picked date", modes: ["vim", "editor"] },
+  { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: ["vim", "editor"] },
+  { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: ["vim", "editor"] },
   { value: "format", aliases: ["fmt"], description: "format markdown document", modes: ["vim", "editor"] },
   { value: "checklist", aliases: ["checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: ["vim", "editor"] },
   { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"] },
@@ -271,10 +400,21 @@ function fallbackListSuggestions(mode: CommandMode, rawInput: string): CommandSu
 }
 
 export function listCommandSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
+  const fallback = fallbackListSuggestions(mode, rawInput);
   if (!isWasmReady()) {
-    return fallbackListSuggestions(mode, rawInput);
+    return fallback;
   }
-  return listCommandSuggestionsFromWasm(mode, rawInput);
+  const wasm = listCommandSuggestionsFromWasm(mode, rawInput);
+  if (wasm.length === 0) return fallback;
+
+  const merged: CommandSuggestion[] = [...fallback];
+  const seen = new Set(fallback.map((entry) => entry.value));
+  for (const entry of wasm) {
+    if (seen.has(entry.value)) continue;
+    seen.add(entry.value);
+    merged.push(entry);
+  }
+  return merged;
 }
 
 export async function executeCommand(
@@ -285,9 +425,8 @@ export async function executeCommand(
   const normalizedInput = normalizeCommand(rawInput);
   if (!normalizedInput) return { message: "", operations: [] };
 
-  const resolved = isWasmReady()
-    ? resolveCommandFromWasm(runtime.mode, rawInput)
-    : fallbackResolveCommand(runtime.mode, rawInput);
+  const resolvedFromWasm = isWasmReady() ? resolveCommandFromWasm(runtime.mode, rawInput) : null;
+  const resolved = resolvedFromWasm ?? fallbackResolveCommand(runtime.mode, rawInput);
   if (!resolved) {
     return { message: `unknown command: ${normalizedInput}`, operations: [] };
   }
