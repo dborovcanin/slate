@@ -275,6 +275,30 @@ test("buildMarkdownDecorationsForSpans hides unordered checklist list marker pre
   );
 });
 
+test("buildMarkdownDecorationsForSpans reveals checklist syntax when cursor is in marker", () => {
+  const doc = Text.of(["- [ ] checklist"]);
+  const line = doc.line(1);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 1, to: line.from + 1, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  assert.equal(
+    flat.some((d) => d.from === line.from && d.to === line.from + 2),
+    false,
+    "prefix replacement should be disabled when caret is in checklist marker region",
+  );
+  assert.equal(
+    flat.some((d) => d.from === line.from + 2 && d.to === line.from + 5),
+    false,
+    "checkbox replacement should be disabled when caret is in checklist marker region",
+  );
+});
+
 test("findVariableNameRanges is case-insensitive and prefers longest overlap", () => {
   const ranges = findVariableNameRanges("Tax Rate + tax + tax_rate", [
     { normalized: "tax" },

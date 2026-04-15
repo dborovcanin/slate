@@ -186,15 +186,23 @@ function toggleChecklistAtPos(view: EditorView, pos: number): boolean {
     return false;
   }
 
+  const prevSelection = view.state.selection;
   view.dispatch({
     changes: { from: markFrom, to: markTo, insert: info.checklistChecked ? " " : "x" },
-    scrollIntoView: true,
+    selection: prevSelection,
   });
   return true;
 }
 
 function checklistClickHandlers() {
   return EditorView.domEventHandlers({
+    mousedown(event) {
+      const target = event.target;
+      if (!(target instanceof Element)) return false;
+      if (!target.closest(".md-checklist-mark")) return false;
+      event.preventDefault();
+      return true;
+    },
     click(event, view) {
       const target = event.target;
       if (!(target instanceof Element)) return false;

@@ -249,10 +249,17 @@ export interface VisibleLineSpan {
   toLine: number;
 }
 
+interface ActiveSelection {
+  from: number;
+  to: number;
+  empty: boolean;
+}
+
 export function buildMarkdownDecorationsForSpans(
   doc: Text,
   spans: readonly VisibleLineSpan[],
   variableIndex: readonly Pick<VariableIndexEntry, "normalized">[],
+  activeSelection?: ActiveSelection,
 ): DecorationSet {
   if (spans.length === 0) return Decoration.none;
 
@@ -297,7 +304,14 @@ export function buildMarkdownDecorationsForSpans(
         continue;
       }
 
-      decorateContentLine(builder, line, info, matcher, lineAnalysis.inlineTokens);
+      decorateContentLine(
+        builder,
+        line,
+        info,
+        matcher,
+        lineAnalysis.inlineTokens,
+        activeSelection,
+      );
     }
     fenceState.inCodeBlock = analysis.finalInCodeBlock;
     fenceState.codeFenceLang = analysis.finalCodeFenceLang;
@@ -310,11 +324,28 @@ export function buildMarkdownDecorationsForSpans(
 function buildMarkdownDecorations(view: EditorView): DecorationSet {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
+  const selection = view.state.selection.main;
   const spans: VisibleLineSpan[] = view.visibleRanges.map(({ from, to }) => ({
     fromLine: doc.lineAt(from).number,
     toLine: doc.lineAt(to).number,
   }));
-  return buildMarkdownDecorationsForSpans(doc, spans, variableIndex);
+  return buildMarkdownDecorationsForSpans(doc, spans, variableIndex, {
+    from: selection.from,
+    to: selection.to,
+    empty: selection.empty,
+  });
+}
+
+function selectionTouchesRange(
+  selection: ActiveSelection | undefined,
+  from: number,
+  to: number,
+): boolean {
+  if (!selection) return false;
+  if (selection.empty) {
+    return selection.from >= from && selection.from <= to;
+  }
+  return selection.from < to && from < selection.to;
 }
 
 function decorateContentLine(
@@ -323,6 +354,7 @@ function decorateContentLine(
   info: MarkdownLineInfo,
   matcher: VariableMatcher,
   inlineTokens: readonly InlineToken[],
+  activeSelection?: ActiveSelection,
 ): void {
   if (info.headingLevel) {
     builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
@@ -345,6 +377,7 @@ function decorateContentLine(
   if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
     try {
       builder.add(line.from, line.from, decChecklistLine);
+      let hiddenPrefixRange: TextRange | null = null;
 
       // Hide unordered checklist list markers ("- ", "* ", "+ ", "-> ")
       // while keeping indentation and source text intact.
@@ -356,14 +389,23 @@ function decorateContentLine(
           const prefixFrom = line.from + indentLen;
           const prefixTo = line.from + info.checklistMarkerStart;
           if (prefixFrom < prefixTo) {
-            builder.add(prefixFrom, prefixTo, decChecklistHiddenPrefix);
+            hiddenPrefixRange = { from: prefixFrom, to: prefixTo };
           }
         }
       }
 
       const markerFrom = line.from + info.checklistMarkerStart;
       const markerTo = line.from + info.checklistMarkerEnd;
-      if (markerFrom < markerTo) {
+      const revealChecklistSyntax =
+        selectionTouchesRange(activeSelection, markerFrom, markerTo) ||
+        (hiddenPrefixRange !== null &&
+          selectionTouchesRange(activeSelection, hiddenPrefixRange.from, hiddenPrefixRange.to));
+
+      if (!revealChecklistSyntax && hiddenPrefixRange !== null) {
+        builder.add(hiddenPrefixRange.from, hiddenPrefixRange.to, decChecklistHiddenPrefix);
+      }
+
+      if (!revealChecklistSyntax && markerFrom < markerTo) {
         builder.add(
           markerFrom,
           markerTo,
@@ -437,6 +479,11 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       const varsChanged = prevVars !== nextVars;
 
       if (varsChanged || update.viewportChanged) {
+        this.decorations = this.safeBuild(update.view, this.decorations);
+        return;
+      }
+
+      if (update.selectionSet) {
         this.decorations = this.safeBuild(update.view, this.decorations);
         return;
       }
