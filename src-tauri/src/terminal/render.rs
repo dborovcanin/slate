@@ -273,6 +273,7 @@ impl RenderContext {
 
     /// Render a single line with ANSI markdown formatting.
     /// Returns an ANSI string occupying exactly `width` visible characters.
+    #[allow(dead_code)]
     pub fn render_line(
         &mut self,
         text: &str,
@@ -282,9 +283,31 @@ impl RenderContext {
         current_search_ranges: &[(usize, usize)],
         variable_names: &[String],
     ) -> String {
-        self.render_line_with_dim_ranges(
+        self.render_line_window(
             text,
             width,
+            0,
+            calc_ghost,
+            search_ranges,
+            current_search_ranges,
+            variable_names,
+        )
+    }
+
+    pub fn render_line_window(
+        &mut self,
+        text: &str,
+        width: usize,
+        window_col: usize,
+        calc_ghost: Option<&str>,
+        search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+    ) -> String {
+        self.render_line_with_dim_ranges_window(
+            text,
+            width,
+            window_col,
             calc_ghost,
             search_ranges,
             current_search_ranges,
@@ -294,10 +317,36 @@ impl RenderContext {
         )
     }
 
+    #[allow(dead_code)]
     pub fn render_line_with_dim_ranges(
         &mut self,
         text: &str,
         width: usize,
+        calc_ghost: Option<&str>,
+        search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+        dim_ranges: &[(usize, usize)],
+        reverse_ranges: &[(usize, usize)],
+    ) -> String {
+        self.render_line_with_dim_ranges_window(
+            text,
+            width,
+            0,
+            calc_ghost,
+            search_ranges,
+            current_search_ranges,
+            variable_names,
+            dim_ranges,
+            reverse_ranges,
+        )
+    }
+
+    pub fn render_line_with_dim_ranges_window(
+        &mut self,
+        text: &str,
+        width: usize,
+        window_col: usize,
         calc_ghost: Option<&str>,
         search_ranges: &[(usize, usize)],
         current_search_ranges: &[(usize, usize)],
@@ -373,7 +422,7 @@ impl RenderContext {
             " → "
         };
 
-        build_ansi_output(&chars, &styles, width, calc_ghost, calc_prefix)
+        build_ansi_output_window(&chars, &styles, window_col, width, calc_ghost, calc_prefix)
     }
 }
 
@@ -629,6 +678,7 @@ fn apply_code_token_styles(
 
 // --- Output ---
 
+#[allow(dead_code)]
 fn build_ansi_output(
     chars: &[char],
     styles: &[CharStyle],
@@ -636,63 +686,105 @@ fn build_ansi_output(
     calc_ghost: Option<&str>,
     calc_prefix: &str,
 ) -> String {
+    build_ansi_output_window(chars, styles, 0, width, calc_ghost, calc_prefix)
+}
+
+fn emit_window_cell(
+    buf: &mut String,
+    current: &mut CharStyle,
+    style: CharStyle,
+    ch: char,
+    stream_col: &mut usize,
+    emitted: &mut usize,
+    window_col: usize,
+    window_end: usize,
+    width: usize,
+) {
+    if *stream_col >= window_col && *stream_col < window_end && *emitted < width {
+        if style != *current {
+            style.write_ansi(buf);
+            *current = style;
+        }
+        buf.push(ch);
+        *emitted += 1;
+    }
+    *stream_col += 1;
+}
+
+fn build_ansi_output_window(
+    chars: &[char],
+    styles: &[CharStyle],
+    window_col: usize,
+    width: usize,
+    calc_ghost: Option<&str>,
+    calc_prefix: &str,
+) -> String {
     let mut buf = String::with_capacity(width * 4);
     let mut current = CharStyle::default();
-    let mut visible = 0;
+    let mut stream_col = 0usize;
+    let mut emitted = 0usize;
+    let window_end = window_col.saturating_add(width);
 
     for (i, &ch) in chars.iter().enumerate() {
-        if visible >= width {
-            break;
-        }
         let s = styles[i];
-        if s != current {
-            s.write_ansi(&mut buf);
-            current = s;
-        }
         if ch == '\t' {
-            let tab_spaces = TAB_WIDTH - (visible % TAB_WIDTH);
+            let tab_spaces = TAB_WIDTH - (stream_col % TAB_WIDTH);
             for _ in 0..tab_spaces {
-                if visible >= width {
-                    break;
-                }
-                buf.push(' ');
-                visible += 1;
+                emit_window_cell(
+                    &mut buf,
+                    &mut current,
+                    s,
+                    ' ',
+                    &mut stream_col,
+                    &mut emitted,
+                    window_col,
+                    window_end,
+                    width,
+                );
             }
         } else {
-            buf.push(ch);
-            visible += 1;
+            emit_window_cell(
+                &mut buf,
+                &mut current,
+                s,
+                ch,
+                &mut stream_col,
+                &mut emitted,
+                window_col,
+                window_end,
+                width,
+            );
         }
     }
 
     if let Some(ghost) = calc_ghost {
-        if visible < width {
-            let ghost_style = CharStyle {
-                dim: true,
-                italic: true,
-                ..Default::default()
-            };
-            if current != ghost_style {
-                ghost_style.write_ansi(&mut buf);
-                current = ghost_style;
-            }
-            for ch in calc_prefix.chars().chain(ghost.chars()) {
-                if visible >= width {
-                    break;
-                }
-                buf.push(ch);
-                visible += 1;
-            }
+        let ghost_style = CharStyle {
+            dim: true,
+            italic: true,
+            ..Default::default()
+        };
+        for ch in calc_prefix.chars().chain(ghost.chars()) {
+            emit_window_cell(
+                &mut buf,
+                &mut current,
+                ghost_style,
+                ch,
+                &mut stream_col,
+                &mut emitted,
+                window_col,
+                window_end,
+                width,
+            );
         }
     }
 
     if !current.is_plain() {
         buf.push_str(RESET);
     }
-    while visible < width {
+    while emitted < width {
         buf.push(' ');
-        visible += 1;
+        emitted += 1;
     }
-
     buf
 }
 
@@ -760,6 +852,20 @@ mod tests {
         let visible: String = strip_ansi(&out);
         assert_eq!(visible.len(), 10);
         assert!(visible.starts_with("hi"));
+    }
+
+    #[test]
+    fn render_window_skips_prefix_columns() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line_window("abcdef", 4, 2, None, &[], &[], &[]);
+        assert_eq!(strip_ansi(&out), "cdef");
+    }
+
+    #[test]
+    fn render_window_respects_tab_expansion() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line_window("\tabcd", 4, 2, None, &[], &[], &[]);
+        assert_eq!(strip_ansi(&out), "  ab");
     }
 
     #[test]

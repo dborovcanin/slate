@@ -17,6 +17,9 @@ const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
 const TITLE_ROW: usize = 1;
 const EDITOR_TOP_ROW: usize = 2;
 const GUTTER_WIDTH: usize = 6;
+const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
+const OVERFLOW_LEFT_MARKER: char = '<';
+const OVERFLOW_RIGHT_MARKER: char = '>';
 
 fn is_word_char(ch: char) -> bool {
     ch.is_alphanumeric() || ch == '_'
@@ -320,6 +323,7 @@ struct TerminalApp {
     cursor_line: usize,
     cursor_col: usize, // char index
     scroll_line: usize,
+    scroll_col: usize,
     mode: UiMode,
     switcher_query: String,
     switcher_items: Vec<NoteMeta>,
@@ -403,6 +407,7 @@ impl TerminalApp {
             cursor_line: 0,
             cursor_col: 0,
             scroll_line: 0,
+            scroll_col: 0,
             mode: UiMode::Normal,
             switcher_query: String::new(),
             switcher_items,
@@ -873,7 +878,8 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::MoveLineStart => self.cursor_col = 0,
                 crate::editor_core::vim::VimIntent::MoveLineEnd => {
-                    self.cursor_col = line_char_len(self.current_line())
+                    let line_len = line_char_len(self.current_line());
+                    self.cursor_col = line_len.saturating_sub(1);
                 }
                 crate::editor_core::vim::VimIntent::MoveDocStart => self.cursor_line = 0,
                 crate::editor_core::vim::VimIntent::MoveDocEnd => {
@@ -888,7 +894,10 @@ impl TerminalApp {
                     self.status = "-- INSERT --".to_string();
                 }
                 crate::editor_core::vim::VimIntent::AppendInsert => {
-                    self.move_cursor_right();
+                    let line_len = line_char_len(self.current_line());
+                    if self.cursor_col < line_len {
+                        self.cursor_col += 1;
+                    }
                     self.mode = UiMode::Editor;
                     self.status = "-- INSERT --".to_string();
                 }
@@ -1243,7 +1252,7 @@ impl TerminalApp {
                 'l' => self.move_cursor_right(),
                 'w' => self.move_cursor_right_word(),
                 'b' => self.move_cursor_left_word(),
-                '$' => self.cursor_col = line_char_len(self.current_line()),
+                '$' => self.cursor_col = line_char_len(self.current_line()).saturating_sub(1),
                 '0' => self.cursor_col = 0,
                 'y' | 'd' | 'x' => {
                     let is_delete = c == 'd' || c == 'x';
@@ -1753,6 +1762,7 @@ impl TerminalApp {
         self.cursor_line = 0;
         self.cursor_col = 0;
         self.scroll_line = 0;
+        self.scroll_col = 0;
         self.dirty = false;
         self.last_edit = Instant::now();
         self.search_query.clear();
@@ -2601,6 +2611,43 @@ impl TerminalApp {
         } else if self.cursor_line >= self.scroll_line + height {
             self.scroll_line = self.cursor_line + 1 - height;
         }
+
+        let (_, cols) = terminal_size();
+        let available = cols.saturating_sub(GUTTER_WIDTH);
+        if available == 0 {
+            self.scroll_col = 0;
+            return;
+        }
+
+        let (cursor_display_col, max_scroll) = {
+            let line_text = self.current_line();
+            let line_len = line_char_len(line_text);
+            let logical_col = min(self.cursor_col, line_len);
+            let render_col = cursor_render_char_col(line_text, self.cursor_col, self.mode);
+            let line_width = line_display_cols(line_text);
+            let end_slot = usize::from(
+                self.mode == UiMode::Editor && logical_col == line_len && line_width > available,
+            );
+            let target_col = if self.mode == UiMode::Editor {
+                logical_col
+            } else {
+                render_col
+            };
+            (
+                display_cols_for_prefix(line_text, target_col),
+                line_width
+                    .saturating_sub(available)
+                    .saturating_add(end_slot),
+            )
+        };
+
+        if cursor_display_col < self.scroll_col {
+            self.scroll_col = cursor_display_col.saturating_sub(HORIZONTAL_SCROLL_LEFT_CONTEXT);
+        } else if cursor_display_col >= self.scroll_col + available {
+            self.scroll_col = cursor_display_col + 1 - available;
+        }
+
+        self.scroll_col = self.scroll_col.min(max_scroll);
     }
 
     fn draw(&self, out: &mut impl Write) -> Result<(), String> {
@@ -2714,22 +2761,28 @@ impl TerminalApp {
                     self.search_highlights_for_line(line_idx);
                 let mut visual_highlight_ranges = Vec::new();
                 self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
+                let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost);
+                let line_scroll_col = self.scroll_col;
+                let line_width = line_display_cols(&rendered_line);
+                let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
                 let rendered_text =
                     if ghost_dim_ranges.is_empty() && visual_highlight_ranges.is_empty() {
-                        ctx.render_line(
+                        ctx.render_line_window(
                             &rendered_line,
-                            available,
-                            calc_ghost_override.as_deref().or(calc_ghost),
+                            viewport.text_width,
+                            viewport.text_window_col,
+                            effective_calc_ghost,
                             &search_ranges,
                             &current_search_ranges,
                             &self.variable_names,
                         )
                     } else {
-                        ctx.render_line_with_dim_ranges(
+                        ctx.render_line_with_dim_ranges_window(
                             &rendered_line,
-                            available,
-                            calc_ghost_override.as_deref().or(calc_ghost),
+                            viewport.text_width,
+                            viewport.text_window_col,
+                            effective_calc_ghost,
                             &search_ranges,
                             &current_search_ranges,
                             &self.variable_names,
@@ -2754,7 +2807,27 @@ impl TerminalApp {
                 gutter_style.write_to(&mut buf);
                 buf.push_str(&format!("{line_no:>4}  "));
                 buf.push_str(render::RESET);
+                if viewport.has_left_overflow {
+                    let indicator_style = AnsiStyle {
+                        fg: Some(self.render_palette.code_comment),
+                        dim: true,
+                        ..Default::default()
+                    };
+                    indicator_style.write_to(&mut buf);
+                    buf.push(OVERFLOW_LEFT_MARKER);
+                    buf.push_str(render::RESET);
+                }
                 buf.push_str(&rendered_text);
+                if viewport.has_right_overflow {
+                    let indicator_style = AnsiStyle {
+                        fg: Some(self.render_palette.code_comment),
+                        dim: true,
+                        ..Default::default()
+                    };
+                    indicator_style.write_to(&mut buf);
+                    buf.push(OVERFLOW_RIGHT_MARKER);
+                    buf.push_str(render::RESET);
+                }
             } else {
                 buf.push_str(&goto(row, 1));
                 AnsiStyle {
@@ -2808,10 +2881,15 @@ impl TerminalApp {
                 self.mode,
                 UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
             ) {
-                let visible_col = visible_display_cols_for_prefix(
-                    &line_text,
-                    mapped_col,
-                    cols.saturating_sub(GUTTER_WIDTH),
+                let available = cols.saturating_sub(GUTTER_WIDTH);
+                let display_char_col = cursor_render_char_col(&line_text, mapped_col, self.mode);
+                let display_col = display_cols_for_prefix(&line_text, display_char_col);
+                let line_width = line_display_cols(&line_text);
+                let visible_col = viewport_col_for_display_col(
+                    display_col,
+                    line_width,
+                    self.scroll_col,
+                    available,
                 );
                 cursor_col = (GUTTER_WIDTH + visible_col + 1).min(cols.max(1)).max(1);
             }
@@ -2858,11 +2936,16 @@ impl TerminalApp {
                         .saturating_sub(self.scroll_line)
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
-                let clamped_col = min(self.cursor_col, line_char_len(line_text));
-                let visible_col = visible_display_cols_for_prefix(
-                    line_text,
-                    clamped_col,
-                    cols.saturating_sub(GUTTER_WIDTH),
+                let display_char_col =
+                    cursor_render_char_col(line_text, self.cursor_col, self.mode);
+                let available = cols.saturating_sub(GUTTER_WIDTH);
+                let display_col = display_cols_for_prefix(line_text, display_char_col);
+                let line_width = line_display_cols(line_text);
+                let visible_col = viewport_col_for_display_col(
+                    display_col,
+                    line_width,
+                    self.scroll_col,
+                    available,
                 );
                 let col = (GUTTER_WIDTH + visible_col + 1).min(cols.max(1));
                 (row.max(1), col.max(1))
@@ -2978,20 +3061,106 @@ fn line_char_len(text: &str) -> usize {
     text.chars().count()
 }
 
-fn visible_display_cols_for_prefix(text: &str, prefix_chars: usize, max_cols: usize) -> usize {
+fn display_cols_for_prefix(text: &str, prefix_chars: usize) -> usize {
     let mut visible = 0usize;
     for ch in text.chars().take(prefix_chars) {
-        if visible >= max_cols {
-            break;
-        }
         if ch == '\t' {
             let tab = render::TAB_WIDTH - (visible % render::TAB_WIDTH);
-            visible = (visible + tab).min(max_cols);
+            visible += tab;
         } else {
             visible += 1;
         }
     }
-    visible.min(max_cols)
+    visible
+}
+
+fn line_display_cols(text: &str) -> usize {
+    display_cols_for_prefix(text, line_char_len(text))
+}
+
+fn cursor_render_char_col(text: &str, cursor_col: usize, mode: UiMode) -> usize {
+    let line_len = line_char_len(text);
+    let clamped_col = min(cursor_col, line_len);
+    if matches!(mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine)
+        && line_len > 0
+        && clamped_col == line_len
+    {
+        line_len - 1
+    } else {
+        clamped_col
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct LineViewport {
+    has_left_overflow: bool,
+    has_right_overflow: bool,
+    text_window_col: usize,
+    text_width: usize,
+}
+
+fn compute_line_viewport(
+    line_width: usize,
+    scroll_col: usize,
+    available_cols: usize,
+) -> LineViewport {
+    if available_cols == 0 {
+        return LineViewport::default();
+    }
+
+    let has_left_overflow = scroll_col > 0;
+    let has_right_overflow = line_width > scroll_col.saturating_add(available_cols);
+    let reserved = (has_left_overflow as usize) + (has_right_overflow as usize);
+    let text_width = available_cols.saturating_sub(reserved);
+    let text_window_col = scroll_col.saturating_add(has_left_overflow as usize);
+
+    LineViewport {
+        has_left_overflow,
+        has_right_overflow,
+        text_window_col,
+        text_width,
+    }
+}
+
+#[cfg(test)]
+fn calc_ghost_prefix(text: &str, calc_ghost: Option<&str>) -> &'static str {
+    if calc_ghost
+        .map(|ghost| ghost.trim_start().starts_with('*'))
+        .unwrap_or(false)
+    {
+        " "
+    } else if contains_assignment_operator(text) {
+        " = "
+    } else {
+        " → "
+    }
+}
+
+#[cfg(test)]
+fn rendered_line_display_cols(text: &str, calc_ghost: Option<&str>) -> usize {
+    let mut width = line_display_cols(text);
+    if let Some(ghost) = calc_ghost {
+        width += calc_ghost_prefix(text, Some(ghost)).chars().count();
+        width += ghost.chars().count();
+    }
+    width
+}
+
+fn viewport_col_for_display_col(
+    display_col: usize,
+    line_width: usize,
+    scroll_col: usize,
+    available_cols: usize,
+) -> usize {
+    let viewport = compute_line_viewport(line_width, scroll_col, available_cols);
+    if viewport.text_width == 0 {
+        return 0;
+    }
+
+    let text_rel = display_col
+        .saturating_sub(viewport.text_window_col)
+        .min(viewport.text_width.saturating_sub(1));
+    (viewport.has_left_overflow as usize).saturating_add(text_rel)
 }
 
 fn byte_index(text: &str, char_idx: usize) -> usize {
@@ -3829,7 +3998,8 @@ fn contains_assignment_operator(text: &str) -> bool {
 mod tests {
     use super::{
         builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
-        find_calc_segment_range, find_table_formula_segment, format_formula_display_value,
+        display_cols_for_prefix, find_calc_segment_range, find_table_formula_segment,
+        format_formula_display_value, rendered_line_display_cols,
     };
     use super::{line_char_len, Key, TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
@@ -3874,6 +4044,249 @@ mod tests {
             app.handle_key(db, key.clone())
                 .expect("key sequence should apply");
         }
+    }
+
+    #[test]
+    fn display_cols_for_prefix_expands_tabs_without_clamping() {
+        assert_eq!(display_cols_for_prefix("\tabc", 1), 4);
+        assert_eq!(display_cols_for_prefix("\tabc", 4), 7);
+    }
+
+    #[test]
+    fn rendered_line_display_cols_accounts_for_calc_ghost() {
+        assert_eq!(rendered_line_display_cols("2 + 2", Some("4")), 9);
+        assert_eq!(rendered_line_display_cols("x := 1", Some("2")), 10);
+    }
+
+    #[test]
+    fn horizontal_scroll_clamps_to_last_visible_window_at_line_end_in_normal_mode() {
+        let long = "a".repeat(200);
+        let (_db, mut app, path) = app_with_note(&long);
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+
+        let (_rows, cols) = super::terminal_size();
+        let available = cols.saturating_sub(super::GUTTER_WIDTH);
+        let expected = super::line_display_cols(app.current_line()).saturating_sub(available);
+
+        assert_eq!(app.scroll_col, expected);
+
+        drop(app);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn horizontal_scroll_allows_insert_end_slot_on_overflow_line_end() {
+        let long = "a".repeat(200);
+        let (_db, mut app, path) = app_with_note(&long);
+        app.mode = UiMode::Editor;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+
+        let (_rows, cols) = super::terminal_size();
+        let available = cols.saturating_sub(super::GUTTER_WIDTH);
+        let expected = super::line_display_cols(app.current_line())
+            .saturating_sub(available)
+            .saturating_add(1);
+
+        assert_eq!(app.scroll_col, expected);
+
+        let line_width = super::line_display_cols(app.current_line());
+        let viewport = super::compute_line_viewport(line_width, app.scroll_col, available);
+        assert!(!viewport.has_right_overflow);
+        assert_eq!(
+            viewport.text_window_col + viewport.text_width,
+            line_width + 1
+        );
+
+        drop(app);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn sample_overflow_line_places_cursor_on_last_screen_cell_in_insert_and_normal() {
+        let sample = "- [ ] Automatic link handling in the form of [link](link) with optional [link] text update. Show only [link] by default. dfsasjf hsjabshga sfhdghksaghkdfgbghb ahgbsadfhgkbfa ghbf";
+        let (_db, mut app, path) = app_with_note(sample);
+        let (rows, cols) = super::terminal_size();
+        let available = cols.saturating_sub(super::GUTTER_WIDTH);
+        let line_width = super::line_display_cols(app.current_line());
+
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.mode = UiMode::Editor;
+        app.adjust_scroll();
+        let (_row, col_insert) = app.cursor_position(rows, cols);
+        assert_eq!(col_insert, cols);
+        assert!(line_width <= app.scroll_col.saturating_add(available));
+
+        app.mode = UiMode::Normal;
+        app.adjust_scroll();
+        let (_row, col_normal) = app.cursor_position(rows, cols);
+        assert_eq!(col_normal, cols);
+        assert!(line_width <= app.scroll_col.saturating_add(available));
+
+        drop(app);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn normal_mode_cursor_at_logical_line_end_renders_on_last_character_cell() {
+        let (_db, mut app, path) = app_with_note("UI settings page");
+        let (rows, cols) = super::terminal_size();
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+
+        let (_row, cursor_col) = app.cursor_position(rows, cols);
+        let expected = super::GUTTER_WIDTH + line_char_len(app.current_line());
+        assert_eq!(cursor_col, expected);
+
+        drop(app);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn append_line_end_on_overflow_keeps_last_character_visible_and_cursor_at_screen_edge() {
+        let sample = "- [ ] Automatic link handling in the form of [link](link) with optional [link] text update. Show only [link] by default. dfsasjf hsjabshga sfhdghksaghkdfgbghb ahgbsadfhgkbfa ghbf";
+        let (db, mut app, path) = app_with_note(sample);
+        app.mode = UiMode::Normal;
+        app.vim_state = crate::editor_core::vim::VimState::default();
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.scroll_col = 0;
+
+        run_keys(&mut app, &db, &[Key::Char('A')]);
+
+        let (rows, cols) = super::terminal_size();
+        let available = cols.saturating_sub(super::GUTTER_WIDTH);
+        let line_width = super::line_display_cols(app.current_line());
+        let viewport = super::compute_line_viewport(line_width, app.scroll_col, available);
+        let (_row, cursor_col) = app.cursor_position(rows, cols);
+
+        assert_eq!(app.mode, UiMode::Editor);
+        assert_eq!(app.cursor_col, line_char_len(app.current_line()));
+        assert_eq!(cursor_col, cols);
+        assert_eq!(
+            viewport.text_window_col + viewport.text_width,
+            line_width + 1,
+            "insert mode should reserve one visual end-slot past final character",
+        );
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn normal_mode_dollar_then_a_stays_on_same_line_and_enters_insert_at_line_end() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+
+        run_keys(&mut app, &db, &[Key::Char('$'), Key::Char('a')]);
+
+        assert_eq!(app.mode, UiMode::Editor);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, line_char_len("alpha"));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn enter_from_overflowing_checklist_repositions_cursor_and_resets_horizontal_scroll() {
+        let long = format!("- [ ] {}", "a".repeat(200));
+        let (db, mut app, path) = app_with_note(&long);
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+        assert!(app.scroll_col > 0);
+
+        app.handle_editor_key(&db, Key::Enter)
+            .expect("enter applies");
+
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.lines[1], "- [ ] ");
+        assert_eq!(app.cursor_col, line_char_len("- [ ] "));
+        assert_eq!(app.scroll_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn enter_from_overflowing_unordered_list_repositions_cursor_and_resets_horizontal_scroll() {
+        let long = format!("- {}", "a".repeat(200));
+        let (db, mut app, path) = app_with_note(&long);
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+        assert!(app.scroll_col > 0);
+
+        app.handle_editor_key(&db, Key::Enter)
+            .expect("enter applies");
+
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.lines[1], "- ");
+        assert_eq!(app.cursor_col, line_char_len("- "));
+        assert_eq!(app.scroll_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn enter_from_overflowing_ordered_list_repositions_cursor_and_resets_horizontal_scroll() {
+        let long = format!("9. {}", "a".repeat(200));
+        let (db, mut app, path) = app_with_note(&long);
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+        assert!(app.scroll_col > 0);
+
+        app.handle_editor_key(&db, Key::Enter)
+            .expect("enter applies");
+
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.lines[1], "10. ");
+        assert_eq!(app.cursor_col, line_char_len("10. "));
+        assert_eq!(app.scroll_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn enter_from_overflowing_table_row_repositions_cursor_and_resets_horizontal_scroll() {
+        let long_cell = "a".repeat(180);
+        let row = format!("| col |\n| --- |\n| {} |", long_cell);
+        let (db, mut app, path) = app_with_note(&row);
+        app.cursor_line = 2;
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+        assert!(app.scroll_col > 0);
+
+        app.handle_editor_key(&db, Key::Enter)
+            .expect("enter applies");
+
+        assert_eq!(app.cursor_line, 3);
+        assert!(app.lines[3].starts_with("| "));
+        assert!(app.lines[3].ends_with(" |"));
+        assert_eq!(app.cursor_col, 2);
+        assert_eq!(app.scroll_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
     }
 
     #[test]
