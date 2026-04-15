@@ -1230,6 +1230,11 @@ impl TerminalApp {
     }
 
     fn handle_normal_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if key == Key::Ctrl('q') {
+            self.quit = true;
+            return Ok(());
+        }
+
         if key == Key::Ctrl('p') {
             self.open_switcher(db)?;
             return Ok(());
@@ -5344,6 +5349,19 @@ mod tests {
         );
         assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
         assert_eq!(app.cursor_line, 1);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_q_quits_from_normal_mode() {
+        let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+        app.mode = UiMode::Normal;
+
+        run_keys(&mut app, &db, &[Key::Ctrl('q')]);
+        assert!(app.quit);
 
         drop(app);
         drop(db);
