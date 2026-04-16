@@ -506,12 +506,11 @@ fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, us
         return Vec::new();
     }
 
-    let lower = text.to_ascii_lowercase();
-    let bytes = lower.as_bytes();
+    let bytes = text.as_bytes();
     let mut matches: Vec<(usize, usize)> = Vec::new();
 
     for raw in variable_names {
-        let needle_text = raw.trim().to_ascii_lowercase();
+        let needle_text = raw.trim();
         if needle_text.is_empty() {
             continue;
         }
@@ -1062,6 +1061,19 @@ mod tests {
         let vars = vec!["subtotal".to_string(), "tax rate".to_string()];
         let out = ctx.render_line("total = subtotal + tax rate", 80, None, &[], &[], &vars);
         assert!(out.contains(&format!("0;1;38;5;{}", palette.variable)));
+    }
+
+    #[test]
+    fn render_variable_highlighting_is_case_sensitive() {
+        let mut ctx = RenderContext::new();
+        let palette = RenderPalette::default();
+        let vars = vec!["daily".to_string()];
+
+        let exact = ctx.render_line("daily = 1", 40, None, &[], &[], &vars);
+        assert!(exact.contains(&format!("0;1;38;5;{}", palette.variable)));
+
+        let different_case = ctx.render_line("Daily note", 40, None, &[], &[], &vars);
+        assert!(!different_case.contains(&format!("0;1;38;5;{}", palette.variable)));
     }
 
     #[test]
