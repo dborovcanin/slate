@@ -157,6 +157,9 @@ struct TerminalApp {
     undo_stack: Vec<UndoEntry>,
     redo_stack: Vec<UndoEntry>,
     last_undo_snapshot: UndoEntry,
+    // Cached calc flags — avoid O(n) full-doc scans on every keystroke
+    cached_has_builtin_formula: bool,
+    cached_has_variable_assignment: bool,
 }
 
 impl TerminalApp {
@@ -265,8 +268,11 @@ impl TerminalApp {
                 cursor_line: 0,
                 cursor_col: 0,
             },
+            cached_has_builtin_formula: false,
+            cached_has_variable_assignment: false,
         };
 
+        app.rescan_calc_flags();
         app.recompute_folding();
         app.adjust_cursor();
         app.adjust_scroll();
@@ -2018,6 +2024,7 @@ impl TerminalApp {
             cursor_line: self.cursor_line,
             cursor_col: self.cursor_col,
         };
+        self.rescan_calc_flags();
         self.recompute_calc_full();
         self.recompute_folding();
         self.adjust_cursor();
@@ -2037,6 +2044,88 @@ impl TerminalApp {
             self.lines.push(String::new());
         }
         &mut self.lines[self.cursor_line]
+    }
+
+    fn rescan_calc_flags(&mut self) {
+        self.cached_has_builtin_formula =
+            crate::editor_core::calc_plan::contains_builtin_formula(&self.lines);
+        self.cached_has_variable_assignment =
+            crate::editor_core::calc_plan::contains_variable_assignment(&self.lines);
+    }
+
+    fn update_calc_flags_incremental(&mut self) {
+        // If a flag is already true, only a full rescan can turn it off. We
+        // only rescan when line count changes (structural edit), since
+        // single-line edits that remove the last `:=` or formula are rare
+        // and the flag being stale-true just means we fall back to full calc
+        // (correct, slightly slower) until the next structural edit.
+        if self.lines.len() != self.prev_lines.len() {
+            self.rescan_calc_flags();
+            return;
+        }
+        // Flag is false — check only the edited line for a new signal.
+        let line = self.cursor_line;
+        if !self.cached_has_variable_assignment {
+            if let Some(text) = self.lines.get(line) {
+                if crate::editor_core::calc_plan::contains_variable_assignment(
+                    std::slice::from_ref(text),
+                ) {
+                    self.cached_has_variable_assignment = true;
+                }
+            }
+        }
+        if !self.cached_has_builtin_formula {
+            if let Some(text) = self.lines.get(line) {
+                if crate::editor_core::calc_plan::contains_builtin_formula(
+                    std::slice::from_ref(text),
+                ) {
+                    self.cached_has_builtin_formula = true;
+                }
+            }
+        }
+    }
+
+    fn line_has_fold_structure(text: &str) -> bool {
+        let trimmed = text.trim_start();
+        trimmed.starts_with('#')
+            || trimmed.starts_with("```")
+            || trimmed.starts_with("~~~")
+            || (trimmed.starts_with('|') && trimmed.ends_with('|'))
+            || crate::editor_core::markdown_tokens::list_marker_end(text).is_some()
+    }
+
+    fn recompute_folding_if_needed(&mut self) {
+        if self.lines.len() != self.prev_lines.len() {
+            self.recompute_folding();
+            return;
+        }
+        // Fast path: check cursor line first (covers ~95% of edits).
+        let cl = self.cursor_line;
+        if cl < self.lines.len()
+            && cl < self.prev_lines.len()
+            && self.lines[cl] != self.prev_lines[cl]
+        {
+            if Self::line_has_fold_structure(&self.lines[cl])
+                || Self::line_has_fold_structure(&self.prev_lines[cl])
+            {
+                self.recompute_folding();
+                return;
+            }
+        }
+        // Scan remaining lines for multi-line edits (replace-all, format, etc.).
+        for i in 0..self.lines.len() {
+            if i == cl {
+                continue;
+            }
+            if self.lines[i] != self.prev_lines[i] {
+                if Self::line_has_fold_structure(&self.lines[i])
+                    || Self::line_has_fold_structure(&self.prev_lines[i])
+                {
+                    self.recompute_folding();
+                    return;
+                }
+            }
+        }
     }
 
     fn recompute_folding(&mut self) {
@@ -2249,8 +2338,9 @@ impl TerminalApp {
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
         }
+        self.update_calc_flags_incremental();
         self.recompute_calc_full();
-        self.recompute_folding();
+        self.recompute_folding_if_needed();
         self.last_undo_snapshot = UndoEntry {
             lines: self.lines.clone(),
             cursor_line: self.cursor_line,
@@ -2325,12 +2415,9 @@ impl TerminalApp {
             &self.lines,
         );
         let has_prev = !self.prev_lines.is_empty();
-        let has_builtin_formula =
-            crate::editor_core::calc_plan::contains_builtin_formula(&self.lines)
-                || crate::editor_core::calc_plan::contains_builtin_formula(&self.prev_lines);
+        let has_builtin_formula = self.cached_has_builtin_formula;
 
-        // Prev-side changed slice mirrors the next-side plan by preserving
-        // the shared suffix length.
+        // Only scan the changed region for variable assignments (not all lines).
         let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
         let prev_changed_from = plan.eval_from.min(self.prev_lines.len());
         let prev_changed_to = self
@@ -2339,9 +2426,9 @@ impl TerminalApp {
             .saturating_sub(suffix_len)
             .max(prev_changed_from);
         let prev_changed_lines = &self.prev_lines[prev_changed_from..prev_changed_to];
-        let touches_any_assignment =
-            crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
-                || crate::editor_core::calc_plan::contains_variable_assignment(prev_changed_lines);
+        let touches_any_assignment = self.cached_has_variable_assignment
+            && (crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
+                || crate::editor_core::calc_plan::contains_variable_assignment(prev_changed_lines));
         let can_use_partial = has_prev && !touches_any_assignment && !has_builtin_formula;
 
         let (mut new_results, variable_names) = if can_use_partial {

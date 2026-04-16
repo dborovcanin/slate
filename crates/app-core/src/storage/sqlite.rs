@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use time::OffsetDateTime;
 
-use super::models::{Note, Reminder};
+use super::models::{Note, NoteSummary, Reminder};
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -86,6 +86,28 @@ impl Db {
                     body: row.get(1)?,
                     created_at: row.get(2)?,
                     updated_at: row.get(3)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        Ok(notes)
+    }
+
+    pub fn list_notes_meta(&self) -> Result<Vec<NoteSummary>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, substr(body, 1, 200) FROM notes ORDER BY updated_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let notes = stmt
+            .query_map([], |row| {
+                Ok(NoteSummary {
+                    id: row.get(0)?,
+                    body_prefix: row.get(1)?,
                 })
             })
             .map_err(|e| e.to_string())?

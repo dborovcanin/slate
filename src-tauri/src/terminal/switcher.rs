@@ -2,8 +2,6 @@ use std::cmp::min;
 
 use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, AnsiStyle};
 use super::render::{self, RenderPalette};
-use crate::storage::Note;
-
 #[derive(Debug, Clone)]
 pub struct NoteMeta {
     pub id: String,
@@ -12,18 +10,17 @@ pub struct NoteMeta {
 
 pub fn load_note_meta(db: &crate::storage::Db) -> Result<Vec<NoteMeta>, String> {
     Ok(db
-        .list_notes()?
+        .list_notes_meta()?
         .into_iter()
         .map(|n| NoteMeta {
-            id: n.id.clone(),
-            title: note_title(&n),
+            title: title_from_body(&n.body_prefix),
+            id: n.id,
         })
         .collect())
 }
 
-pub fn note_title(note: &Note) -> String {
-    let first = note
-        .body
+pub fn title_from_body(body: &str) -> String {
+    let first = body
         .lines()
         .find(|l| !l.trim().is_empty())
         .unwrap_or("Untitled")
@@ -37,13 +34,18 @@ pub fn note_title(note: &Note) -> String {
 }
 
 pub fn print_note_list(db: &crate::storage::Db) -> Result<(), String> {
-    let notes = db.list_notes()?;
+    let notes = db.list_notes_meta()?;
     if notes.is_empty() {
         println!("No notes");
         return Ok(());
     }
     for (idx, note) in notes.iter().enumerate() {
-        println!("{:>3}. {}  {}", idx + 1, note.id, note_title(note));
+        println!(
+            "{:>3}. {}  {}",
+            idx + 1,
+            note.id,
+            title_from_body(&note.body_prefix)
+        );
     }
     Ok(())
 }

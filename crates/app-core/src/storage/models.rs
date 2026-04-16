@@ -9,6 +9,12 @@ pub struct Note {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteSummary {
+    pub id: String,
+    pub body_prefix: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reminder {
     pub note_id: String,
     pub line_number: i64,
