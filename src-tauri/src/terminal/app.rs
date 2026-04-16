@@ -65,8 +65,6 @@ enum UiMode {
     DatePicker,
 }
 
-
-
 #[derive(Debug, Clone, Copy, Default)]
 struct TerminalStartupMetrics {
     loading_note: Duration,
@@ -76,7 +74,6 @@ struct TerminalStartupMetrics {
 }
 
 const MAX_UNDO_ENTRIES: usize = 500;
-
 
 #[derive(Debug, Clone)]
 struct LineReminderGhost {
@@ -249,10 +246,13 @@ impl TerminalApp {
             .map(|line| Self::line_has_fold_structure(line))
             .collect::<Vec<_>>();
         let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
-        let initial_mode = if vim_mode { UiMode::Normal } else { UiMode::Editor };
+        let initial_mode = if vim_mode {
+            UiMode::Normal
+        } else {
+            UiMode::Editor
+        };
         let initial_status = if vim_mode {
-            "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit"
-                .to_string()
+            "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit".to_string()
         } else {
             format!("editing {}", active_note.id)
         };
@@ -1716,7 +1716,8 @@ impl TerminalApp {
     }
 
     fn open_date_picker(&mut self, action: DatePickerAction, require_time: bool) {
-        if let Some((year, month, day, hour, minute)) = date_picker::current_local_datetime_parts() {
+        if let Some((year, month, day, hour, minute)) = date_picker::current_local_datetime_parts()
+        {
             self.date_year = year;
             self.date_month = month;
             self.date_day = day;
@@ -2144,9 +2145,9 @@ impl TerminalApp {
         }
         if !self.cached_has_builtin_formula {
             if let Some(text) = self.lines.get(line) {
-                if crate::editor_core::calc_plan::contains_builtin_formula(
-                    std::slice::from_ref(text),
-                ) {
+                if crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(
+                    text,
+                )) {
                     self.cached_has_builtin_formula = true;
                 }
             }
@@ -2187,9 +2188,7 @@ impl TerminalApp {
     }
 
     fn recompute_folding_if_needed(&mut self) {
-        if self.fold_rescan_pending
-            || self.lines.len() != self.line_has_fold_structure.len()
-        {
+        if self.fold_rescan_pending || self.lines.len() != self.line_has_fold_structure.len() {
             self.fold_rescan_pending = false;
             self.recompute_folding();
             return;
@@ -2202,7 +2201,11 @@ impl TerminalApp {
             return;
         };
         let next_flag = Self::line_has_fold_structure(current_line);
-        let prev_flag = self.line_has_fold_structure.get(cl).copied().unwrap_or(false);
+        let prev_flag = self
+            .line_has_fold_structure
+            .get(cl)
+            .copied()
+            .unwrap_or(false);
         if next_flag || prev_flag {
             // Edits within fold-relevant lines (e.g. heading level changes)
             // can alter fold ranges even when the flag itself doesn't change.
@@ -2424,8 +2427,12 @@ impl TerminalApp {
         } else {
             self.recompute_calc_full();
         }
-        self.history
-            .record_edit(&self.lines, self.cursor_line, self.cursor_col, coalesce_undo);
+        self.history.record_edit(
+            &self.lines,
+            self.cursor_line,
+            self.cursor_col,
+            coalesce_undo,
+        );
         self.last_edit = Instant::now();
     }
 
@@ -3329,7 +3336,14 @@ impl TerminalApp {
             let line_text = self.current_line();
             let line_len = line_char_len(line_text);
             let logical_col = min(self.cursor_col, line_len);
-            let render_col = cursor_render_char_col(line_text, self.cursor_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
+            let render_col = cursor_render_char_col(
+                line_text,
+                self.cursor_col,
+                matches!(
+                    self.mode,
+                    UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+                ),
+            );
             let line_width = line_display_cols(line_text);
             let end_slot = usize::from(
                 self.mode == UiMode::Editor && logical_col == line_len && line_width > available,
@@ -3461,15 +3475,18 @@ impl TerminalApp {
                                 && self.cursor_col <= formula.to_char)
                             {
                                 let formatted = format_formula_display_value(result);
+                                let marker_suffix = formula_marker_suffix(formula.labels.len());
                                 let marker_char = formula.from_char + formatted.chars().count();
-                                let mut replacement = format!("{formatted}*");
+                                let marker_end = marker_char + marker_suffix.chars().count();
+                                let mut replacement = format!("{formatted}{marker_suffix}");
                                 let old_len = formula.to_char.saturating_sub(formula.from_char);
                                 let new_len = replacement.chars().count();
                                 if new_len < old_len {
                                     replacement.push_str(&" ".repeat(old_len - new_len));
                                 }
-                                calc_ghost_override = Some(format!("* ➜ {}", formula.label));
-                                ghost_dim_ranges.push((marker_char, marker_char + 1));
+                                calc_ghost_override =
+                                    Some(formula_explanation_ghost(&formula.labels));
+                                ghost_dim_ranges.push((marker_char, marker_end));
 
                                 let mut out = String::with_capacity(
                                     line_text
@@ -3669,7 +3686,14 @@ impl TerminalApp {
                 UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
             ) {
                 let available = cols.saturating_sub(gutter_width);
-                let display_char_col = cursor_render_char_col(&line_text, mapped_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
+                let display_char_col = cursor_render_char_col(
+                    &line_text,
+                    mapped_col,
+                    matches!(
+                        self.mode,
+                        UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+                    ),
+                );
                 let display_col = display_cols_for_prefix(&line_text, display_char_col);
                 let line_width = line_display_cols(&line_text);
                 let visible_col = viewport_col_for_display_col(
@@ -3723,8 +3747,14 @@ impl TerminalApp {
                         .saturating_sub(self.scroll_line)
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
-                let display_char_col =
-                    cursor_render_char_col(line_text, self.cursor_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
+                let display_char_col = cursor_render_char_col(
+                    line_text,
+                    self.cursor_col,
+                    matches!(
+                        self.mode,
+                        UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+                    ),
+                );
                 let gutter_width = self.gutter_width();
                 let available = cols.saturating_sub(gutter_width);
                 let display_col = display_cols_for_prefix(line_text, display_char_col);
@@ -4057,8 +4087,6 @@ fn rendered_line_display_cols(text: &str, calc_ghost: Option<&str>) -> usize {
     width
 }
 
-
-
 struct CalcData {
     line_results: Vec<Option<String>>,
     variable_names: Vec<String>,
@@ -4132,7 +4160,7 @@ struct TableFormulaSegment {
     to_byte: usize,
     from_char: usize,
     to_char: usize,
-    label: String,
+    labels: Vec<String>,
 }
 
 #[cfg(test)]
@@ -4141,14 +4169,38 @@ fn builtin_formula_label(text: &str) -> Option<String> {
 }
 
 fn find_table_formula_segment(text: &str) -> Option<TableFormulaSegment> {
-    let segment = crate::editor_core::calc_plan::find_table_formula_segment(text)?;
+    let segment = crate::editor_core::calc_plan::find_calc_segment(text)?;
+    let labels = crate::editor_core::calc_plan::builtin_formula_labels_in_text(&segment.expr);
+    if labels.is_empty() {
+        return None;
+    }
     Some(TableFormulaSegment {
         from_byte: segment.from_byte,
         to_byte: segment.to_byte,
-        from_char: segment.from_char,
-        to_char: segment.to_char,
-        label: segment.label,
+        from_char: segment.from_col,
+        to_char: segment.to_col,
+        labels,
     })
+}
+
+fn formula_marker_token(index: usize) -> String {
+    "*".repeat(index + 1)
+}
+
+fn formula_marker_suffix(count: usize) -> String {
+    (0..count)
+        .map(formula_marker_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn formula_explanation_ghost(labels: &[String]) -> String {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(index, label)| format!("{} ➜ {}", formula_marker_token(index), label))
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 fn format_formula_display_value(raw: &str) -> String {
@@ -4161,15 +4213,15 @@ fn contains_assignment_operator(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
-        find_calc_segment_range,
-        find_table_formula_segment, format_formula_display_value, rendered_line_display_cols,
-    };
-    use super::{TerminalApp, TerminalOptions, UiMode};
     use super::folding::describe_fold_ranges;
     use super::input::Key;
+    use super::{
+        builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
+        find_calc_segment_range, find_table_formula_segment, format_formula_display_value,
+        rendered_line_display_cols,
+    };
     use super::{display_cols_for_prefix, line_char_len};
+    use super::{TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
     use std::fs;
     use std::path::PathBuf;
@@ -4521,13 +4573,8 @@ mod tests {
 
     #[test]
     fn heading_folds_stop_at_same_level_only() {
-        let ranges = describe_fold_ranges(&[
-            "## parent",
-            "### child",
-            "details",
-            "## sibling",
-            "tail",
-        ]);
+        let ranges =
+            describe_fold_ranges(&["## parent", "### child", "details", "## sibling", "tail"]);
 
         assert!(ranges.contains(&(0, 2, "heading")));
         assert!(ranges.contains(&(1, 4, "heading")));
@@ -4839,8 +4886,21 @@ mod tests {
             panic!("expected table formula segment");
         };
         assert_eq!(&line[seg.from_byte..seg.to_byte], "=sum_column()");
-        assert_eq!(seg.label, "sum_col()");
+        assert_eq!(seg.labels, vec!["sum_col()"]);
         assert!(seg.from_char < seg.to_char);
+    }
+
+    #[test]
+    fn find_table_formula_segment_extracts_chained_formula_labels_in_order() {
+        let line = "| sum_col() * a + avg_col() |";
+        let Some(seg) = find_table_formula_segment(line) else {
+            panic!("expected table formula segment");
+        };
+        assert_eq!(
+            &line[seg.from_byte..seg.to_byte],
+            "sum_col() * a + avg_col()"
+        );
+        assert_eq!(seg.labels, vec!["sum_col()", "avg_col()"]);
     }
 
     #[test]

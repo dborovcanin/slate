@@ -2,6 +2,7 @@ import {
   calcFindListSegment,
   calcFindSegment,
   calcFindSingleTableCell,
+  calcBuiltinFormulaLabels,
   calcIsBuiltinFormula,
   calcLineForEvaluation,
 } from "./wasm.ts";
@@ -25,6 +26,10 @@ function mapSegment(
 
 export function isBuiltinFormula(text: string): boolean {
   return calcIsBuiltinFormula(text);
+}
+
+export function builtinFormulaLabels(text: string): string[] {
+  return calcBuiltinFormulaLabels(text);
 }
 
 export function findSingleCalcTableCell(lineText: string): TableCalcCell | null {

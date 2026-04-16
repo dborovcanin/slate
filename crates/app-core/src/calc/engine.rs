@@ -85,6 +85,19 @@ struct FormulaSpec {
     scope: FormulaScope,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LineExpression {
+    expression: String,
+    table_cell_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FormulaCallSpan {
+    start: usize,
+    end: usize,
+    spec: FormulaSpec,
+}
+
 struct VariableResolver<'a> {
     defs: &'a HashMap<String, VariableDefinition>,
     variable_regex: Option<Regex>,
@@ -334,22 +347,23 @@ impl CalcEngine {
             .skip(eval_from)
             .take(eval_to.saturating_sub(eval_from))
         {
-            let Some(expression) = extract_line_expression(line) else {
+            let Some(line_expr) = extract_line_expression(line) else {
                 continue;
             };
+            let expression = line_expr.expression.as_str();
 
             let result = if options.variables_enabled {
                 if let Some(value) = evaluate_table_formula(
                     lines,
                     idx,
-                    &expression,
+                    expression,
+                    line_expr.table_cell_index,
                     true,
                     Some(&mut resolver),
                     &mut ctx,
                 ) {
                     Some(value)
-                } else if let Some((_name, normalized, rhs)) =
-                    parse_variable_assignment(&expression)
+                } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(expression)
                 {
                     let resolved = resolver.resolve(&normalized, &mut ctx);
                     if assignment_rhs_is_plain_numeric_literal(&rhs) {
@@ -358,15 +372,21 @@ impl CalcEngine {
                         resolved
                     }
                 } else {
-                    evaluate_expression_with_variables(&expression, &mut resolver, &mut ctx)
+                    evaluate_expression_with_variables(expression, &mut resolver, &mut ctx)
                 }
             } else {
-                if let Some(value) =
-                    evaluate_table_formula(lines, idx, &expression, false, None, &mut ctx)
-                {
+                if let Some(value) = evaluate_table_formula(
+                    lines,
+                    idx,
+                    expression,
+                    line_expr.table_cell_index,
+                    false,
+                    None,
+                    &mut ctx,
+                ) {
                     Some(value)
                 } else {
-                    evaluate_single(&expression, &mut ctx)
+                    evaluate_single(expression, &mut ctx)
                 }
             };
 
@@ -634,23 +654,10 @@ fn table_block_range(lines: &[String], line_idx: usize) -> Option<(usize, usize)
     Some((start, end))
 }
 
-fn formula_cell_index(cells: &[String]) -> Option<usize> {
-    let mut idx = None;
-    for (cell_idx, cell) in cells.iter().enumerate() {
-        if parse_builtin_formula(cell).is_none() {
-            continue;
-        }
-        if idx.is_some() {
-            return None;
-        }
-        idx = Some(cell_idx);
-    }
-    idx
-}
-
 fn collect_table_formula_terms(
     lines: &[String],
     line_idx: usize,
+    formula_col: usize,
     spec: FormulaSpec,
 ) -> Option<Vec<String>> {
     let current_line = lines.get(line_idx)?;
@@ -662,8 +669,9 @@ fn collect_table_formula_terms(
     if is_table_delimiter_row(&current_cells) {
         return None;
     }
-
-    let formula_col = formula_cell_index(&current_cells)?;
+    if formula_col >= current_cells.len() {
+        return None;
+    }
     let mut terms = Vec::new();
 
     match spec.scope {
@@ -772,16 +780,104 @@ fn evaluate_formula_term_with_variables(
     resolver.eval_raw(&substituted, ctx)
 }
 
-fn evaluate_table_formula(
+fn find_builtin_formula_calls(expression: &str) -> Vec<FormulaCallSpan> {
+    let bytes = expression.as_bytes();
+    let mut calls = Vec::new();
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        if !bytes[idx].is_ascii_alphabetic() && bytes[idx] != b'=' {
+            idx += 1;
+            continue;
+        }
+
+        let mut start = idx;
+        let mut cursor = idx;
+        if bytes[cursor] == b'=' {
+            if cursor > 0
+                && (bytes[cursor - 1].is_ascii_alphanumeric()
+                    || bytes[cursor - 1] == b'_'
+                    || matches!(bytes[cursor - 1], b':' | b'!' | b'<' | b'>' | b'='))
+            {
+                idx += 1;
+                continue;
+            }
+            cursor += 1;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= bytes.len() || !bytes[cursor].is_ascii_alphabetic() {
+                idx += 1;
+                continue;
+            }
+        } else {
+            if cursor > 0
+                && (bytes[cursor - 1].is_ascii_alphanumeric() || bytes[cursor - 1] == b'_')
+            {
+                idx += 1;
+                continue;
+            }
+            start = cursor;
+        }
+
+        let ident_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'(' {
+            idx = ident_start.saturating_add(1);
+            continue;
+        }
+        cursor += 1;
+
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b')' {
+            idx = ident_start.saturating_add(1);
+            continue;
+        }
+        cursor += 1;
+
+        if cursor < bytes.len() && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            idx = ident_start.saturating_add(1);
+            continue;
+        }
+
+        let candidate = &expression[start..cursor];
+        if let Some(spec) = parse_builtin_formula(candidate) {
+            calls.push(FormulaCallSpan {
+                start,
+                end: cursor,
+                spec,
+            });
+            idx = cursor;
+            continue;
+        }
+
+        idx = ident_start.saturating_add(1);
+    }
+
+    calls
+}
+
+fn evaluate_table_formula_call(
     lines: &[String],
     line_idx: usize,
-    expression: &str,
+    formula_col: usize,
+    spec: FormulaSpec,
     variables_enabled: bool,
     resolver: Option<&mut VariableResolver<'_>>,
     ctx: &mut fend_core::Context,
 ) -> Option<String> {
-    let spec = parse_builtin_formula(expression)?;
-    let terms = collect_table_formula_terms(lines, line_idx, spec)?;
+    let terms = collect_table_formula_terms(lines, line_idx, formula_col, spec)?;
 
     let mut values = Vec::new();
     if variables_enabled {
@@ -800,6 +896,49 @@ fn evaluate_table_formula(
     }
 
     reduce_formula_values(&values, spec.op, ctx)
+}
+
+fn evaluate_table_formula(
+    lines: &[String],
+    line_idx: usize,
+    expression: &str,
+    table_cell_index: Option<usize>,
+    variables_enabled: bool,
+    mut resolver: Option<&mut VariableResolver<'_>>,
+    ctx: &mut fend_core::Context,
+) -> Option<String> {
+    let formula_col = table_cell_index?;
+    let calls = find_builtin_formula_calls(expression);
+    if calls.is_empty() {
+        return None;
+    }
+
+    let mut rewritten = String::with_capacity(expression.len() + calls.len() * 4);
+    let mut cursor = 0usize;
+    for call in calls {
+        rewritten.push_str(&expression[cursor..call.start]);
+        let value = evaluate_table_formula_call(
+            lines,
+            line_idx,
+            formula_col,
+            call.spec,
+            variables_enabled,
+            resolver.as_deref_mut(),
+            ctx,
+        )?;
+        rewritten.push('(');
+        rewritten.push_str(&value);
+        rewritten.push(')');
+        cursor = call.end;
+    }
+    rewritten.push_str(&expression[cursor..]);
+
+    if variables_enabled {
+        let resolver = resolver?;
+        evaluate_expression_with_variables(&rewritten, resolver, ctx)
+    } else {
+        evaluate_single(&rewritten, ctx)
+    }
 }
 
 fn is_table_line(line: &str) -> bool {
@@ -897,7 +1036,7 @@ fn list_body_segment(line: &str) -> Option<String> {
     Some(line[i..end].to_string())
 }
 
-fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<String> {
+fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<(String, usize)> {
     if !is_table_line(line) {
         return None;
     }
@@ -913,9 +1052,9 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
         return None;
     }
 
-    let mut formula_candidates = Vec::new();
-    let mut candidates = Vec::new();
-    for pair in pipes.windows(2) {
+    let mut formula_candidates: Vec<(String, usize)> = Vec::new();
+    let mut candidates: Vec<(String, usize)> = Vec::new();
+    for (cell_idx, pair) in pipes.windows(2).enumerate() {
         let start = pair[0] + 1;
         let end = pair[1];
         if start >= end {
@@ -929,7 +1068,7 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
         }
 
         if parse_builtin_formula(trimmed).is_some() {
-            formula_candidates.push(trimmed.to_string());
+            formula_candidates.push((trimmed.to_string(), cell_idx));
             continue;
         }
 
@@ -939,7 +1078,7 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
             continue;
         }
 
-        candidates.push(trimmed.to_string());
+        candidates.push((trimmed.to_string(), cell_idx));
     }
 
     if formula_candidates.len() == 1 {
@@ -956,9 +1095,13 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
     candidates.pop()
 }
 
-fn extract_line_expression(line: &str) -> Option<String> {
+fn extract_line_expression(line: &str) -> Option<LineExpression> {
     if is_table_line(line) {
-        return table_expression_segment(line, true);
+        let (expression, table_cell_index) = table_expression_segment(line, true)?;
+        return Some(LineExpression {
+            expression,
+            table_cell_index: Some(table_cell_index),
+        });
     }
 
     if let Some(body) = list_body_segment(line) {
@@ -966,14 +1109,20 @@ fn extract_line_expression(line: &str) -> Option<String> {
         if trimmed.is_empty() {
             return None;
         }
-        return Some(trimmed.to_string());
+        return Some(LineExpression {
+            expression: trimmed.to_string(),
+            table_cell_index: None,
+        });
     }
 
     let trimmed = line.trim();
     if trimmed.is_empty() {
         None
     } else {
-        Some(trimmed.to_string())
+        Some(LineExpression {
+            expression: trimmed.to_string(),
+            table_cell_index: None,
+        })
     }
 }
 
@@ -981,9 +1130,10 @@ fn collect_variable_definitions(lines: &[String]) -> HashMap<String, VariableDef
     let mut defs = HashMap::new();
 
     for (line_idx, line) in lines.iter().enumerate() {
-        let Some(expression) = extract_line_expression(line) else {
+        let Some(line_expr) = extract_line_expression(line) else {
             continue;
         };
+        let expression = line_expr.expression;
 
         let Some((name, normalized, rhs)) = parse_variable_assignment(&expression) else {
             continue;
@@ -1357,6 +1507,52 @@ mod tests {
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(result.line_results, vec![Some("4".to_string())]);
+    }
+
+    #[test]
+    fn note_eval_table_allows_chained_column_formula_with_variable() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "a := 22.5".to_string(),
+            "| value | note |".to_string(),
+            "| --- | --- |".to_string(),
+            "| 2 | ok |".to_string(),
+            "| 4 | ok |".to_string(),
+            "| 6 | ok |".to_string(),
+            "| sum_col() * a + 5 | done |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[6], Some("275".to_string()));
+    }
+
+    #[test]
+    fn note_eval_table_allows_multiple_formula_calls_in_same_cell() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 2 |".to_string(),
+            "| 4 |".to_string(),
+            "| 6 |".to_string(),
+            "| sum_col() + avg_col() |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[5], Some("16".to_string()));
+    }
+
+    #[test]
+    fn note_eval_table_allows_multiple_row_formula_calls_in_same_cell() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| left | right | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| 2 | 4 | sum_row() + avg_row() |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[2], Some("9".to_string()));
     }
 
     #[test]

@@ -484,6 +484,15 @@ pub fn wasm_calc_builtin_formula_label(text: &str) -> Option<String> {
 }
 
 #[wasm_bindgen]
+pub fn wasm_calc_builtin_formula_labels(text: &str) -> JsValue {
+    calc_plan::builtin_formula_labels_in_text(text)
+        .into_iter()
+        .map(|label| JsValue::from_str(&label))
+        .collect::<Array>()
+        .into()
+}
+
+#[wasm_bindgen]
 pub fn wasm_calc_format_formula_display_value(raw: &str) -> String {
     calc_plan::format_formula_display_value(raw)
 }

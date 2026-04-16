@@ -2,6 +2,7 @@ import init, {
   WasmVimSession,
   initSync,
   wasm_calc_builtin_formula_label,
+  wasm_calc_builtin_formula_labels,
   wasm_calc_compute_refresh,
   wasm_calc_contains_builtin_formula,
   wasm_calc_contains_variable_assignment,
@@ -683,6 +684,11 @@ export function calcIsBuiltinFormula(text: string): boolean {
 export function calcBuiltinFormulaLabel(text: string): string | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_calc_builtin_formula_label(text) ?? null;
+}
+
+export function calcBuiltinFormulaLabels(text: string): string[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  return (wasm_calc_builtin_formula_labels(text) as string[] | null | undefined) ?? [];
 }
 
 export function calcFormatFormulaDisplayValue(raw: string): string {

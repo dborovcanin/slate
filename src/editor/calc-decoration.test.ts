@@ -151,6 +151,7 @@ test("containsBuiltinFormula detects builtin formulas from calc segments", () =>
     true,
   );
   assert.equal(containsBuiltinFormula(["- [ ] =sum_row()"]), true);
+  assert.equal(containsBuiltinFormula(["| total | sum_col() * a + 5 |"]), true);
 });
 
 test("containsBuiltinFormula ignores non-formula lines", () => {

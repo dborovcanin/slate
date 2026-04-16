@@ -18,9 +18,9 @@ import {
 } from "@codemirror/state";
 import { evaluateNoteContext, type VariableIndexEntry } from "../api.ts";
 import {
+  builtinFormulaLabels,
   findCalcSegment,
   findSingleCalcTableCell,
-  isBuiltinFormula,
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
@@ -201,6 +201,24 @@ function selectionTouchesSegment(
 
 const FORMULA_GHOST_MARKER = "*";
 
+function formulaMarkerToken(index: number): string {
+  return FORMULA_GHOST_MARKER.repeat(index + 1);
+}
+
+function formulaMarkerSuffix(count: number): string {
+  const parts: string[] = [];
+  for (let i = 0; i < count; i++) {
+    parts.push(formulaMarkerToken(i));
+  }
+  return parts.join(" ");
+}
+
+function formulaGhostExplanation(labels: readonly string[]): string {
+  return labels
+    .map((label, index) => `${formulaMarkerToken(index)} \u279c ${label}`)
+    .join("  ");
+}
+
 // Decoration set derived from the calc results field
 const calcDecorations = EditorView.decorations.compute(
   [calcResultsField, "doc", "selection"],
@@ -215,9 +233,8 @@ const calcDecorations = EditorView.decorations.compute(
       const line = state.doc.line(lineNumber); // 1-based
 
       const cell = findSingleCalcTableCell(line.text);
-      const explanation =
-        cell && isBuiltinFormula(cell.expr) ? builtinFormulaExplanation(cell.expr) : null;
-      if (cell && explanation) {
+      const labels = cell ? builtinFormulaLabels(cell.expr) : [];
+      if (cell && labels.length > 0) {
         const editingCell = selectionTouchesSegment(
           selection,
           line.from,
@@ -227,10 +244,11 @@ const calcDecorations = EditorView.decorations.compute(
         if (editingCell) continue;
 
         const formatted = formatFormulaDisplayValue(result);
+        const marker = formulaMarkerSuffix(labels.length);
         const minWidthCh = Math.max(
           1,
           cell.toCol - cell.fromCol,
-          formatted.length + FORMULA_GHOST_MARKER.length,
+          formatted.length + marker.length,
         );
 
         builder.add(
@@ -239,7 +257,7 @@ const calcDecorations = EditorView.decorations.compute(
           Decoration.replace({
             widget: new FormulaCellWidget(
               formatted,
-              FORMULA_GHOST_MARKER,
+              marker,
               minWidthCh,
             ),
           }),
@@ -250,7 +268,7 @@ const calcDecorations = EditorView.decorations.compute(
           line.to,
           Decoration.widget({
             widget: new CalcResultWidget(
-              `${FORMULA_GHOST_MARKER} \u279c ${explanation}`,
+              formulaGhostExplanation(labels),
               " ",
             ),
             side: 1,
@@ -838,7 +856,7 @@ export function getCalcResultAtCursor(view: EditorView): string | null {
   const cursor = view.state.selection.main.head;
   const line = view.state.doc.lineAt(cursor);
   const segment = findCalcSegment(line.text);
-  if (segment && isBuiltinFormula(segment.expr)) return null;
+  if (segment && builtinFormulaLabels(segment.expr).length > 0) return null;
   return results.get(line.number - 1) ?? null;
 }
 
@@ -864,7 +882,7 @@ const calcTabKeymap = keymap.of([
       // check if line already has " = <result>" at the end
       const segment = findCalcSegment(lineText);
       if (segment) {
-        if (isBuiltinFormula(segment.expr)) return false;
+        if (builtinFormulaLabels(segment.expr).length > 0) return false;
         const replaceFrom = line.from + segment.fromCol;
         const replaceTo = line.from + segment.toCol;
         const nextResults = new Map(results);

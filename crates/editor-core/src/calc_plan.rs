@@ -268,6 +268,102 @@ pub fn is_builtin_formula(text: &str) -> bool {
     builtin_formula_label(text).is_some()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BuiltinFormulaCallSpan {
+    start: usize,
+    end: usize,
+}
+
+fn find_builtin_formula_call_spans(text: &str) -> Vec<BuiltinFormulaCallSpan> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let mut idx = 0usize;
+
+    while idx < bytes.len() {
+        if !bytes[idx].is_ascii_alphabetic() && bytes[idx] != b'=' {
+            idx += 1;
+            continue;
+        }
+
+        let mut start = idx;
+        let mut cursor = idx;
+        if bytes[cursor] == b'=' {
+            if cursor > 0
+                && (bytes[cursor - 1].is_ascii_alphanumeric()
+                    || bytes[cursor - 1] == b'_'
+                    || matches!(bytes[cursor - 1], b':' | b'!' | b'<' | b'>' | b'='))
+            {
+                idx += 1;
+                continue;
+            }
+            cursor += 1;
+            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+                cursor += 1;
+            }
+            if cursor >= bytes.len() || !bytes[cursor].is_ascii_alphabetic() {
+                idx += 1;
+                continue;
+            }
+        } else {
+            if cursor > 0
+                && (bytes[cursor - 1].is_ascii_alphanumeric() || bytes[cursor - 1] == b'_')
+            {
+                idx += 1;
+                continue;
+            }
+            start = cursor;
+        }
+
+        let ident_start = cursor;
+        while cursor < bytes.len()
+            && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            cursor += 1;
+        }
+
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b'(' {
+            idx = ident_start.saturating_add(1);
+            continue;
+        }
+        cursor += 1;
+
+        while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
+            cursor += 1;
+        }
+        if cursor >= bytes.len() || bytes[cursor] != b')' {
+            idx = ident_start.saturating_add(1);
+            continue;
+        }
+        cursor += 1;
+
+        if cursor < bytes.len() && (bytes[cursor].is_ascii_alphanumeric() || bytes[cursor] == b'_')
+        {
+            idx = ident_start.saturating_add(1);
+            continue;
+        }
+
+        if builtin_formula_label(&text[start..cursor]).is_some() {
+            spans.push(BuiltinFormulaCallSpan { start, end: cursor });
+            idx = cursor;
+            continue;
+        }
+
+        idx = ident_start.saturating_add(1);
+    }
+
+    spans
+}
+
+pub fn builtin_formula_labels_in_text(text: &str) -> Vec<String> {
+    find_builtin_formula_call_spans(text)
+        .into_iter()
+        .filter_map(|span| builtin_formula_label(&text[span.start..span.end]))
+        .collect()
+}
+
 fn has_numeric_or_space_math_neighbors(bytes: &[u8], idx: usize) -> bool {
     let left = idx.checked_sub(1).and_then(|i| bytes.get(i)).copied();
     let right = bytes.get(idx + 1).copied();
@@ -468,7 +564,7 @@ pub fn contains_builtin_formula(lines: &[String]) -> bool {
     lines.iter().any(|line| {
         let eval_target = line_for_calc_evaluation(line);
         let trimmed = eval_target.trim();
-        !trimmed.is_empty() && is_builtin_formula(trimmed)
+        !trimmed.is_empty() && !builtin_formula_labels_in_text(trimmed).is_empty()
     })
 }
 
@@ -478,7 +574,9 @@ pub fn find_table_formula_segment(line: &str) -> Option<TableFormulaSegment> {
     }
 
     let segment = find_calc_segment(line)?;
-    let label = builtin_formula_label(&segment.expr)?;
+    let label = builtin_formula_labels_in_text(&segment.expr)
+        .into_iter()
+        .next()?;
     Some(TableFormulaSegment {
         from_byte: segment.from_byte,
         to_byte: segment.to_byte,
@@ -746,6 +844,40 @@ mod tests {
         let line = "- total / 2";
         let seg = find_list_calc_segment(line).expect("segment");
         assert_eq!(seg.expr, "total / 2");
+    }
+
+    #[test]
+    fn builtin_formula_labels_in_text_detects_multiple_calls_in_expression_order() {
+        let labels = builtin_formula_labels_in_text("sum_col() * a + avg_col() - sum_row()");
+        assert_eq!(
+            labels,
+            vec![
+                "sum_col()".to_string(),
+                "avg_col()".to_string(),
+                "sum_row()".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn contains_builtin_formula_detects_formula_calls_inside_expressions() {
+        let lines = vec![
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| sum_col() * a + 5 |".to_string(),
+        ];
+        assert!(contains_builtin_formula(&lines));
+    }
+
+    #[test]
+    fn find_table_formula_segment_detects_chained_formula_expression_cell() {
+        let line = "| sum_col() * a + avg_col() |";
+        let seg = find_table_formula_segment(line).expect("formula");
+        assert_eq!(seg.label, "sum_col()");
+        assert_eq!(
+            &line[seg.from_byte..seg.to_byte],
+            "sum_col() * a + avg_col()"
+        );
     }
 
     #[test]
