@@ -272,6 +272,7 @@ export function vimModeExtension(options: VimOptions = {}) {
   const session = new VimSession("insert");
   let currentMode: VimUiMode = "insert";
   let unnamedRegister = "";
+  let swallowVisualDdUntilMs = 0;
 
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
@@ -619,6 +620,58 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
+  const deleteVisualSelection = (view: EditorView) => {
+    if (mode() === "visual-line") {
+      const main = view.state.selection.main;
+      let startLine = visualAnchorLine ?? view.state.doc.lineAt(main.from).number;
+      let endLine = visualHeadLine ?? view.state.doc.lineAt(main.to).number;
+      if (endLine < startLine) {
+        [startLine, endLine] = [endLine, startLine];
+      }
+
+      const parts: string[] = [];
+      for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
+        parts.push(view.state.doc.line(lineNo).text);
+      }
+      setRegister(parts.join("\n"));
+
+      let from = view.state.doc.line(startLine).from;
+      let to = view.state.doc.line(endLine).to;
+      if (endLine < view.state.doc.lines) {
+        // Remove trailing line break to delete whole selected lines cleanly.
+        to += 1;
+      } else if (startLine > 1) {
+        // Last line selection: remove the preceding line break.
+        from = view.state.doc.line(startLine - 1).to;
+      }
+
+      view.dispatch({
+        changes: { from, to, insert: "" },
+        selection: { anchor: from },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+
+    const main = view.state.selection.main;
+    let from = main.from;
+    let to = main.to;
+    if (from === to) {
+      const line = view.state.doc.lineAt(main.head);
+      from = Math.min(main.head, line.to);
+      to = Math.min(from + 1, line.to);
+      if (to <= from) return false;
+    }
+
+    setRegister(view.state.sliceDoc(from, to));
+    view.dispatch({
+      changes: { from, to, insert: "" },
+      selection: { anchor: from },
+      scrollIntoView: true,
+    });
+    return true;
+  };
+
   const yankCurrentLines = (view: EditorView, count: number) => {
     const current = view.state.doc.lineAt(view.state.selection.main.head).number;
     const end = Math.min(view.state.doc.lines, current + count - 1);
@@ -794,6 +847,20 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const activeMode = mode();
+      const now = Date.now();
+
+      if (
+        activeMode === "normal"
+        && now <= swallowVisualDdUntilMs
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.metaKey
+        && event.key === "d"
+      ) {
+        swallowVisualDdUntilMs = 0;
+        event.preventDefault();
+        return true;
+      }
 
       // Hard guarantee for visual behavior: both hjkl and arrow keys move the
       // selection, and Esc exits to normal in a single press.
@@ -807,6 +874,20 @@ export function vimModeExtension(options: VimOptions = {}) {
 
         const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
         if (plain) {
+          if (event.key === "x" || event.key === "d") {
+            event.preventDefault();
+            const deleted = deleteVisualSelection(view);
+            if (event.key === "d") {
+              // Let `dd` in visual modes behave like single delete by swallowing
+              // the immediate follow-up `d` from that key sequence.
+              swallowVisualDdUntilMs = now + 180;
+            }
+            if (deleted) {
+              setModeLocally(view, "normal");
+              session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: view.state.doc.lines });
+            }
+            return true;
+          }
           if (event.key === "h" || event.key === "ArrowLeft" || event.key === "Left") {
             event.preventDefault();
             return runMove(view, cursorCharLeft, 1);
