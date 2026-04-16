@@ -28,6 +28,21 @@ const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
 
+fn decimal_digit_count(mut value: usize) -> usize {
+    let mut digits = 1usize;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
+}
+
+fn gutter_width_for_visible_lines(visible_lines: usize) -> usize {
+    // Keep the legacy 4-digit gutter (+2 spaces), but expand once line numbers
+    // outgrow it so rendering/cursor math stay aligned at 10k+ lines.
+    (decimal_digit_count(visible_lines.max(1)) + 2).max(GUTTER_WIDTH)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalOptions {
     pub create_new: bool,
@@ -3203,6 +3218,10 @@ impl TerminalApp {
         rows.saturating_sub(2).max(1)
     }
 
+    fn gutter_width(&self) -> usize {
+        gutter_width_for_visible_lines(self.visible_line_count())
+    }
+
     fn adjust_scroll(&mut self) {
         let height = self.editor_height();
         let cursor_virtual = self.current_virtual_line();
@@ -3216,7 +3235,7 @@ impl TerminalApp {
             .min(self.visible_line_count().saturating_sub(1));
 
         let (_, cols) = input::terminal_size();
-        let available = cols.saturating_sub(GUTTER_WIDTH);
+        let available = cols.saturating_sub(self.gutter_width());
         if available == 0 {
             self.scroll_col = 0;
             return;
@@ -3256,6 +3275,8 @@ impl TerminalApp {
     fn draw(&self, out: &mut impl Write) -> Result<(), String> {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
+        let gutter_width = self.gutter_width();
+        let line_number_width = gutter_width.saturating_sub(2);
         let mut buf = String::with_capacity(rows.saturating_mul(cols.saturating_add(8)));
 
         // Hide cursor, move home. No \x1b[2J — we overwrite every row to full width.
@@ -3317,7 +3338,7 @@ impl TerminalApp {
                 last_rendered_real = Some(line_idx);
 
                 let line_no = virtual_line + 1;
-                let available = cols.saturating_sub(GUTTER_WIDTH);
+                let available = cols.saturating_sub(gutter_width);
                 let is_cursor_line = line_idx == self.cursor_line;
                 let mut calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
                 let mut calc_ghost_override: Option<String> = None;
@@ -3459,7 +3480,7 @@ impl TerminalApp {
                     }
                 };
                 gutter_style.write_to(&mut buf);
-                buf.push_str(&format!("{line_no:>4}  "));
+                buf.push_str(&format!("{line_no:>line_number_width$}  "));
                 buf.push_str(render::RESET);
                 if viewport.has_left_overflow {
                     let indicator_style = AnsiStyle {
@@ -3563,7 +3584,7 @@ impl TerminalApp {
                 self.mode,
                 UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
             ) {
-                let available = cols.saturating_sub(GUTTER_WIDTH);
+                let available = cols.saturating_sub(gutter_width);
                 let display_char_col = cursor_render_char_col(&line_text, mapped_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
                 let display_col = display_cols_for_prefix(&line_text, display_char_col);
                 let line_width = line_display_cols(&line_text);
@@ -3573,7 +3594,7 @@ impl TerminalApp {
                     self.scroll_col,
                     available,
                 );
-                cursor_col = (GUTTER_WIDTH + visible_col + 1).min(cols.max(1)).max(1);
+                cursor_col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
             }
         }
         buf.push_str(&goto(cursor_row, cursor_col));
@@ -3620,7 +3641,8 @@ impl TerminalApp {
                 let line_text = self.current_line();
                 let display_char_col =
                     cursor_render_char_col(line_text, self.cursor_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
-                let available = cols.saturating_sub(GUTTER_WIDTH);
+                let gutter_width = self.gutter_width();
+                let available = cols.saturating_sub(gutter_width);
                 let display_col = display_cols_for_prefix(line_text, display_char_col);
                 let line_width = line_display_cols(line_text);
                 let visible_col = viewport_col_for_display_col(
@@ -3629,7 +3651,7 @@ impl TerminalApp {
                     self.scroll_col,
                     available,
                 );
-                let col = (GUTTER_WIDTH + visible_col + 1).min(cols.max(1));
+                let col = (gutter_width + visible_col + 1).min(cols.max(1));
                 (row.max(1), col.max(1))
             }
             UiMode::Switcher => {
@@ -4169,6 +4191,33 @@ mod tests {
     fn display_cols_for_prefix_expands_tabs_without_clamping() {
         assert_eq!(display_cols_for_prefix("\tabc", 1), 4);
         assert_eq!(display_cols_for_prefix("\tabc", 4), 7);
+    }
+
+    #[test]
+    fn gutter_width_expands_after_four_digit_line_numbers() {
+        assert_eq!(super::gutter_width_for_visible_lines(1), 6);
+        assert_eq!(super::gutter_width_for_visible_lines(9_999), 6);
+        assert_eq!(super::gutter_width_for_visible_lines(10_000), 7);
+        assert_eq!(super::gutter_width_for_visible_lines(100_000), 8);
+    }
+
+    #[test]
+    fn cursor_position_respects_expanded_gutter_width() {
+        let body = vec!["x"; 10_000].join("\n");
+        let (_db, mut app, path) = app_with_note(&body);
+        app.cursor_line = 9_999;
+        app.cursor_col = 0;
+        app.adjust_scroll();
+
+        let (rows, cols) = super::input::terminal_size();
+        let (_row, cursor_col) = app.cursor_position(rows, cols);
+        let expected = super::gutter_width_for_visible_lines(app.visible_line_count()) + 1;
+
+        assert_eq!(expected, 8);
+        assert_eq!(cursor_col, expected);
+
+        drop(app);
+        cleanup_db_files(&path);
     }
 
     #[test]
