@@ -419,7 +419,12 @@ export function executeFoldCommand(view: EditorView, action: FoldCommandAction):
 
 const foldMouseHandlers = EditorView.domEventHandlers({
   mousedown: (event, view) => {
-    const target = event.target as Element | null;
+    const rawTarget = event.target;
+    const target = rawTarget instanceof Element
+      ? rawTarget
+      : rawTarget instanceof Node
+      ? rawTarget.parentElement
+      : null;
     if (!target) return false;
     const foldTarget = target.closest(".cm-fold-placeholder, .cm-fold-toggle") as HTMLElement | null;
     if (!foldTarget) return false;

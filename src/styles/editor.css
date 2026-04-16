@@ -356,6 +356,22 @@
   padding-left: 16px;
 }
 
+.calc-formula-inline {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.calc-formula-value {
+  white-space: pre;
+}
+
+.calc-formula-marker {
+  color: var(--fg-dim);
+  font-style: italic;
+}
+
 .notify-ghost {
   color: var(--fg-dim);
   font-style: italic;
