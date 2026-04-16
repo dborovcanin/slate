@@ -2,6 +2,7 @@ use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, goto, pad_right, AnsiS
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::{self, DatePickerAction, DatePickerView};
 use super::folding::{self, FoldKind, FoldRange};
+use super::history::LineHistory;
 use super::input::{self, Key, TerminalGuard};
 use super::notifications;
 use super::render;
@@ -19,6 +20,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
+const UNDO_DEBOUNCE_MS: u64 = 300;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
 const TITLE_ROW: usize = 1;
@@ -75,13 +77,6 @@ struct TerminalStartupMetrics {
 
 const MAX_UNDO_ENTRIES: usize = 500;
 
-#[derive(Debug, Clone)]
-struct UndoEntry {
-    lines: Vec<String>,
-    cursor_line: usize,
-    cursor_col: usize,
-}
-
 
 #[derive(Debug, Clone)]
 struct LineReminderGhost {
@@ -135,11 +130,17 @@ struct TerminalApp {
     reminders_dirty: bool,
     last_reminder_check: Instant,
     variable_names: Vec<String>,
-    // Snapshot of `lines` taken at the end of the previous `recompute_calc_full`.
-    // Used to gate the committed-trailer auto-refresh: a line is eligible only
-    // if it is byte-identical to this snapshot and its previous calc result
-    // was `None` (meaning the trailer was in sync with the backend last time).
-    prev_lines: Vec<String>,
+    // Per-line hashes of `lines` taken at the end of the previous
+    // `recompute_calc_full`. Used to detect changed regions (instead of
+    // keeping a full clone of lines — saves ~1 String per line) and to gate
+    // the committed-trailer auto-refresh: a line is eligible only if its hash
+    // matches this snapshot and its previous calc result was `None` (meaning
+    // the trailer was in sync with the backend last time).
+    prev_line_hashes: Vec<u64>,
+    // Parallel to `prev_line_hashes`: tracks which lines in the previous
+    // snapshot contained `:=`. Needed to decide if incremental calc is safe
+    // without holding the full prev lines.
+    prev_line_has_assignment: Vec<bool>,
     calc_state_stale: bool,
     // Search state
     search_query: String,
@@ -173,9 +174,7 @@ struct TerminalApp {
     clipboard_watch_last_text: Option<String>,
     clipboard_watch_last_poll: Instant,
     // Undo/redo
-    undo_stack: Vec<UndoEntry>,
-    redo_stack: Vec<UndoEntry>,
-    last_undo_snapshot: UndoEntry,
+    history: LineHistory,
     // Cached calc flags — avoid O(n) full-doc scans on every keystroke
     cached_has_builtin_formula: bool,
     cached_has_variable_assignment: bool,
@@ -185,6 +184,7 @@ impl TerminalApp {
     fn new_with_startup_metrics(
         db: &Db,
         opts: &TerminalOptions,
+        vim_mode: bool,
         format_on_save: bool,
         markdown_autoformat: bool,
         checklist_auto_reorder: bool,
@@ -196,10 +196,13 @@ impl TerminalApp {
         let startup_begin = Instant::now();
 
         let note_begin = Instant::now();
-        let active_note = select_note(db, opts)?;
+        let mut active_note = select_note(db, opts)?;
         let loading_note = note_begin.elapsed();
 
         let lines = split_lines(&active_note.body);
+        // The body has been split into `lines`; release the contiguous copy
+        // to avoid carrying ~N bytes twice for large documents.
+        active_note.body = String::new();
         let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
 
         let switcher_begin = Instant::now();
@@ -230,16 +233,29 @@ impl TerminalApp {
         };
         let loading_calc_engine = calc_begin.elapsed();
 
-        let prev_lines_snapshot = if defer_initial_calc {
-            Vec::new()
+        let (prev_line_hashes, prev_line_has_assignment) = if defer_initial_calc {
+            (Vec::new(), Vec::new())
         } else {
-            lines.clone()
+            (
+                crate::editor_core::calc_plan::hash_lines(&lines),
+                lines
+                    .iter()
+                    .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
+                    .collect::<Vec<_>>(),
+            )
         };
         let line_has_fold_structure = lines
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect::<Vec<_>>();
-        let undo_seed = lines.clone();
+        let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
+        let initial_mode = if vim_mode { UiMode::Normal } else { UiMode::Editor };
+        let initial_status = if vim_mode {
+            "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit"
+                .to_string()
+        } else {
+            format!("editing {}", active_note.id)
+        };
 
         let mut app = Self {
             active_note,
@@ -248,15 +264,14 @@ impl TerminalApp {
             cursor_col: 0,
             scroll_line: 0,
             scroll_col: 0,
-            mode: UiMode::Normal,
+            mode: initial_mode,
             switcher_query: String::new(),
             switcher_items,
             switcher_matches: Vec::new(),
             switcher_selected: 0,
             dirty: false,
             last_edit: Instant::now(),
-            status: "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit"
-                .to_string(),
+            status: initial_status,
             command_input: String::new(),
             quit: false,
             force_quit: false,
@@ -283,7 +298,8 @@ impl TerminalApp {
             reminders_dirty: false,
             last_reminder_check: Instant::now(),
             variable_names: calc_data.variable_names,
-            prev_lines: prev_lines_snapshot,
+            prev_line_hashes,
+            prev_line_has_assignment,
             calc_state_stale: defer_initial_calc,
             search_query: String::new(),
             search_matches: Vec::new(),
@@ -310,13 +326,7 @@ impl TerminalApp {
             clipboard_watch_enabled: false,
             clipboard_watch_last_text: None,
             clipboard_watch_last_poll: Instant::now(),
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            last_undo_snapshot: UndoEntry {
-                lines: undo_seed,
-                cursor_line: 0,
-                cursor_col: 0,
-            },
+            history,
             cached_has_builtin_formula: initial_has_builtin_formula,
             cached_has_variable_assignment: initial_has_variable_assignment,
         };
@@ -1955,14 +1965,14 @@ impl TerminalApp {
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
         let body = join_lines(&self.lines);
-        let saved = db.save_note(&self.active_note.id, &body)?;
+        let mut saved = db.save_note(&self.active_note.id, &body)?;
+        // The returned body duplicates what we already hold in `self.lines`;
+        // drop it to keep memory usage flat.
+        saved.body = String::new();
         self.active_note = saved;
         self.dirty = false;
-        self.last_undo_snapshot = UndoEntry {
-            lines: self.lines.clone(),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        };
+        self.history
+            .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
         self.refresh_switcher_items(db)?;
         Ok(())
     }
@@ -2058,6 +2068,7 @@ impl TerminalApp {
     fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
         self.active_note = note;
         self.lines = split_lines(&self.active_note.body);
+        self.active_note.body = String::new();
         self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
         self.reminders_dirty = false;
         self.last_reminder_check = Instant::now();
@@ -2069,18 +2080,14 @@ impl TerminalApp {
         self.last_edit = Instant::now();
         self.search_query.clear();
         self.search_matches.clear();
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.last_undo_snapshot = UndoEntry {
-            lines: self.lines.clone(),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        };
+        self.history
+            .reset(&self.lines, self.cursor_line, self.cursor_col);
         self.rescan_calc_flags();
         if self.should_defer_calc_recompute() {
             self.calc_results = vec![None; self.lines.len()];
             self.variable_names.clear();
-            self.prev_lines.clear();
+            self.prev_line_hashes.clear();
+            self.prev_line_has_assignment.clear();
             self.calc_state_stale = true;
         } else {
             self.recompute_calc_full();
@@ -2088,6 +2095,8 @@ impl TerminalApp {
         self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
+        self.history
+            .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
         Ok(())
     }
 
@@ -2403,17 +2412,8 @@ impl TerminalApp {
     }
 
     fn mark_edited(&mut self) {
-        // Push undo snapshot if enough time elapsed since last edit (debounce).
-        // The snapshot represents the state *before* the current mutation.
-        self.redo_stack.clear();
-        if self.last_edit.elapsed() >= Duration::from_millis(300) || self.undo_stack.is_empty() {
-            self.undo_stack.push(self.last_undo_snapshot.clone());
-            if self.undo_stack.len() > MAX_UNDO_ENTRIES {
-                self.undo_stack.remove(0);
-            }
-        }
+        let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         self.dirty = true;
-        self.last_edit = Instant::now();
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
         }
@@ -2424,23 +2424,22 @@ impl TerminalApp {
         } else {
             self.recompute_calc_full();
         }
-        self.last_undo_snapshot = UndoEntry {
-            lines: self.lines.clone(),
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
-        };
+        self.history
+            .record_edit(&self.lines, self.cursor_line, self.cursor_col, coalesce_undo);
+        self.last_edit = Instant::now();
     }
 
     fn undo(&mut self) {
-        if let Some(entry) = self.undo_stack.pop() {
-            self.redo_stack.push(UndoEntry {
-                lines: self.lines.clone(),
-                cursor_line: self.cursor_line,
-                cursor_col: self.cursor_col,
-            });
-            self.lines = entry.lines;
-            self.cursor_line = entry.cursor_line.min(self.lines.len().saturating_sub(1));
-            self.cursor_col = entry.cursor_col;
+        let keep_cursor_on_exhaust = self.history.undo_depth() == 1;
+        let cursor_before_undo = (self.cursor_line, self.cursor_col);
+        if let Some(cursor) = self.history.undo(&mut self.lines) {
+            if keep_cursor_on_exhaust {
+                self.cursor_line = cursor_before_undo.0.min(self.lines.len().saturating_sub(1));
+                self.cursor_col = cursor_before_undo.1;
+            } else {
+                self.cursor_line = cursor.line.min(self.lines.len().saturating_sub(1));
+                self.cursor_col = cursor.col;
+            }
             self.dirty = true;
             self.last_edit = Instant::now();
             if !self.reminder_ghosts.is_empty() {
@@ -2450,27 +2449,18 @@ impl TerminalApp {
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
-            self.last_undo_snapshot = UndoEntry {
-                lines: self.lines.clone(),
-                cursor_line: self.cursor_line,
-                cursor_col: self.cursor_col,
-            };
-            self.status = format!("undo ({} left)", self.undo_stack.len());
+            self.history
+                .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+            self.status = format!("undo ({} left)", self.history.undo_depth());
         } else {
             self.status = "already at oldest change".to_string();
         }
     }
 
     fn redo(&mut self) {
-        if let Some(entry) = self.redo_stack.pop() {
-            self.undo_stack.push(UndoEntry {
-                lines: self.lines.clone(),
-                cursor_line: self.cursor_line,
-                cursor_col: self.cursor_col,
-            });
-            self.lines = entry.lines;
-            self.cursor_line = entry.cursor_line.min(self.lines.len().saturating_sub(1));
-            self.cursor_col = entry.cursor_col;
+        if let Some(cursor) = self.history.redo(&mut self.lines) {
+            self.cursor_line = cursor.line.min(self.lines.len().saturating_sub(1));
+            self.cursor_col = cursor.col;
             self.dirty = true;
             self.last_edit = Instant::now();
             if !self.reminder_ghosts.is_empty() {
@@ -2480,12 +2470,9 @@ impl TerminalApp {
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
-            self.last_undo_snapshot = UndoEntry {
-                lines: self.lines.clone(),
-                cursor_line: self.cursor_line,
-                cursor_col: self.cursor_col,
-            };
-            self.status = format!("redo ({} left)", self.redo_stack.len());
+            self.history
+                .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+            self.status = format!("redo ({} left)", self.history.redo_depth());
         } else {
             self.status = "already at newest change".to_string();
         }
@@ -2496,33 +2483,44 @@ impl TerminalApp {
         if self.calc_state_stale {
             let calc_data =
                 compute_calc_data(&self.calc_engine, &self.lines, calc_variables_enabled, None);
-            self.prev_lines = self.lines.clone();
+            self.prev_line_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
+            self.prev_line_has_assignment = self
+                .lines
+                .iter()
+                .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
+                .collect();
             self.calc_results = calc_data.line_results;
             self.variable_names = calc_data.variable_names;
             self.calc_state_stale = false;
             return;
         }
 
-        let plan = crate::editor_core::calc_plan::plan_incremental_calc(
-            &self.prev_lines,
+        let next_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
+        let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_hashes(
+            &self.prev_line_hashes,
             &self.calc_results,
             &self.lines,
+            &next_hashes,
         );
-        let has_prev = !self.prev_lines.is_empty();
+        let has_prev = !self.prev_line_hashes.is_empty();
         let has_builtin_formula = self.cached_has_builtin_formula;
 
         // Only scan the changed region for variable assignments (not all lines).
         let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
-        let prev_changed_from = plan.eval_from.min(self.prev_lines.len());
+        let prev_changed_from = plan.eval_from.min(self.prev_line_hashes.len());
         let prev_changed_to = self
-            .prev_lines
+            .prev_line_hashes
             .len()
             .saturating_sub(suffix_len)
             .max(prev_changed_from);
-        let prev_changed_lines = &self.prev_lines[prev_changed_from..prev_changed_to];
+        let prev_changed_had_assignment = self
+            .prev_line_has_assignment
+            .get(prev_changed_from..prev_changed_to)
+            .map(|slice| slice.iter().any(|&flag| flag))
+            .unwrap_or(false);
         let touches_any_assignment = calc_variables_enabled
             && (crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
-                || crate::editor_core::calc_plan::contains_variable_assignment(prev_changed_lines));
+                || prev_changed_had_assignment);
         let can_use_partial = has_prev && !touches_any_assignment && !has_builtin_formula;
 
         let (mut new_results, variable_names) = if can_use_partial {
@@ -2570,9 +2568,10 @@ impl TerminalApp {
         // delete) invalidate per-index alignment; we skip the pass and
         // reseed the snapshot below, so eligibility returns on the next
         // recompute once the user resumes normal in-line editing.
-        let aligned = self.prev_lines.len() == self.lines.len()
+        let aligned = self.prev_line_hashes.len() == self.lines.len()
             && self.calc_results.len() == self.lines.len();
 
+        let mut final_hashes = next_hashes;
         if aligned {
             let cursor_line = self.cursor_line;
             let cursor_col = self.cursor_col;
@@ -2593,7 +2592,7 @@ impl TerminalApp {
                 let Some(new_result) = new_results[i].as_deref() else {
                     continue;
                 };
-                if self.prev_lines[i] != self.lines[i] {
+                if self.prev_line_hashes[i] != final_hashes[i] {
                     continue;
                 }
                 if self.calc_results[i].is_some() {
@@ -2619,11 +2618,19 @@ impl TerminalApp {
                     // the cached result so the ghost widget disappears and
                     // the next eligibility round still sees prev-None here.
                     new_results[i] = None;
+                    // Trailer rewrite changed the line bytes; rehash so the
+                    // snapshot stays in sync for the next recompute.
+                    final_hashes[i] = crate::editor_core::calc_plan::hash_line(&self.lines[i]);
                 }
             }
         }
 
-        self.prev_lines = self.lines.clone();
+        self.prev_line_hashes = final_hashes;
+        self.prev_line_has_assignment = self
+            .lines
+            .iter()
+            .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
+            .collect();
         self.calc_results = new_results;
         self.variable_names = variable_names;
         self.calc_state_stale = false;
@@ -3767,6 +3774,7 @@ pub fn run_terminal_session(
     let (mut app, metrics) = TerminalApp::new_with_startup_metrics(
         db,
         opts,
+        config.vim_mode,
         config.format_on_save,
         config.markdown_autoformat,
         config.checklist_auto_reorder,
@@ -4190,6 +4198,7 @@ mod tests {
         let (mut app, _) = TerminalApp::new_with_startup_metrics(
             &db,
             &opts,
+            true,
             false,
             true,
             true,
@@ -4466,7 +4475,8 @@ mod tests {
 
         assert!(app.cached_has_variable_assignment);
         assert!(!app.calc_state_stale);
-        assert!(app.prev_lines.len() == app.lines.len());
+        assert_eq!(app.prev_line_hashes.len(), app.lines.len());
+        assert_eq!(app.prev_line_has_assignment.len(), app.lines.len());
         assert!(app.variable_names.iter().any(|name| name == "total"));
 
         drop(app);
@@ -5399,6 +5409,30 @@ mod tests {
         app.save(&db).expect("save succeeds");
         run_keys(&mut app, &db, &[Key::Char('u')]);
         assert_eq!(app.lines, vec!["one".to_string(), "two".to_string()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn undo_exhaustion_keeps_latest_cursor_location() {
+        let (db, mut app, path) = app_with_note("one\ntwo");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 1;
+        app.cursor_col = 1;
+
+        app.handle_editor_key(&db, Key::Char('x'))
+            .expect("insert char");
+        assert_eq!(app.lines[1], "txwo");
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 2);
+
+        app.undo();
+
+        assert_eq!(app.lines, vec!["one".to_string(), "two".to_string()]);
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 2);
 
         drop(app);
         drop(db);

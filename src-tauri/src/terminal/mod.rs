@@ -3,6 +3,7 @@ mod app;
 mod clipboard;
 mod date_picker;
 mod folding;
+mod history;
 mod input;
 mod notifications;
 pub mod render;
