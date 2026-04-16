@@ -3521,8 +3521,9 @@ impl TerminalApp {
 
                 if let Some(hidden_count) = collapsed_hidden_count {
                     let suffix = if hidden_count == 1 { "" } else { "s" };
-                    rendered_line = format!("▶ {hidden_count} line{suffix} folded");
+                    rendered_line = "▶".to_string();
                     calc_ghost = None;
+                    reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
                 } else {
                     if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
                         reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
@@ -4118,7 +4119,7 @@ fn build_fold_ranges(lines: &[String]) -> Vec<FoldRange> {
     let line_count = lines.len();
     let mut ranges = Vec::new();
 
-    // Headings fold until the next heading (any level).
+    // Headings fold until the next heading of the same level.
     for line_idx in 0..line_count {
         let line = &analyzed[line_idx];
         if line.in_code_block || line.info.heading_level.is_none() {
@@ -4130,7 +4131,7 @@ fn build_fold_ranges(lines: &[String]) -> Vec<FoldRange> {
             if next.in_code_block {
                 continue;
             }
-            if next.info.heading_level.is_some() {
+            if next.info.heading_level == line.info.heading_level {
                 end_line = next_idx.saturating_sub(1);
                 break;
             }
@@ -5630,13 +5631,28 @@ mod tests {
             "",
         ]);
 
-        assert!(ranges.contains(&(0, 2, "heading")));
+        assert!(ranges.contains(&(0, 14, "heading")));
         assert!(ranges.contains(&(3, 14, "heading")));
         assert!(ranges.contains(&(4, 6, "fence")));
         assert!(ranges.contains(&(7, 8, "list")));
         assert!(ranges.contains(&(9, 11, "table")));
         assert!(ranges.contains(&(1, 2, "paragraph")));
         assert!(ranges.contains(&(12, 13, "paragraph")));
+    }
+
+    #[test]
+    fn heading_folds_stop_at_same_level_only() {
+        let ranges = describe_fold_ranges(&[
+            "## parent",
+            "### child",
+            "details",
+            "## sibling",
+            "tail",
+        ]);
+
+        assert!(ranges.contains(&(0, 2, "heading")));
+        assert!(ranges.contains(&(1, 4, "heading")));
+        assert!(ranges.contains(&(3, 4, "heading")));
     }
 
     #[test]

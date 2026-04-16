@@ -202,23 +202,20 @@
 }
 
 .cm-editor .cm-fold-placeholder {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0.12em 0 0.12em 0;
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-overlay);
+  display: inline;
+  margin: 0.12em 0;
+  padding-left: 16px;
   color: var(--fg-dim);
-  font-size: 0.86em;
+  font-size: 0.9em;
+  font-style: italic;
   cursor: pointer;
   user-select: none;
 }
 
 .cm-editor .cm-fold-placeholder:hover {
-  border-color: var(--accent);
   color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .cm-editor .cm-line.md-hr {

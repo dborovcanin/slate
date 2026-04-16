@@ -60,7 +60,7 @@ class FoldPlaceholderWidget extends WidgetType {
     span.className = "cm-fold-placeholder";
     span.dataset.foldLine = `${this.foldLine}`;
     span.dataset.foldKind = this.kind;
-    span.textContent = `⯈ ${this.hiddenLineCount} line${this.hiddenLineCount === 1 ? "" : "s"}`;
+    span.textContent = `⯈ ${this.hiddenLineCount} line${this.hiddenLineCount === 1 ? "" : "s"} folded`;
     span.title = "Click to unfold";
     span.setAttribute("aria-label", "Folded section. Click to unfold.");
     return span;
@@ -100,7 +100,7 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
       const next = analyzed[nextLine - 1];
       if (!next || next.inCodeBlock) continue;
       const nextLevel = next.info.headingLevel;
-      if (nextLevel !== null && nextLevel <= level) {
+      if (nextLevel === level) {
         endLine = nextLine - 1;
         break;
       }

@@ -16,8 +16,25 @@ test("describeFoldRanges finds heading folds", async () => {
 
   assert.deepEqual(describeFoldRanges(text), [
     { startLine: 1, endLine: 4, kind: "heading" },
-    { startLine: 3, endLine: 4, kind: "heading" },
+    { startLine: 3, endLine: 6, kind: "heading" },
     { startLine: 5, endLine: 6, kind: "heading" },
+  ]);
+});
+
+test("describeFoldRanges stops heading folds at same level only", async () => {
+  await ensureWasmReady();
+  const text = [
+    "## Parent",
+    "### Child",
+    "details",
+    "## Sibling",
+    "tail",
+  ].join("\n");
+
+  assert.deepEqual(describeFoldRanges(text), [
+    { startLine: 1, endLine: 3, kind: "heading" },
+    { startLine: 2, endLine: 5, kind: "heading" },
+    { startLine: 4, endLine: 5, kind: "heading" },
   ]);
 });
 
