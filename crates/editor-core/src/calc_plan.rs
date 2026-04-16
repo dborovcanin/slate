@@ -1,4 +1,19 @@
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+
+/// Compute a deterministic 64-bit hash for a line. `DefaultHasher` uses
+/// SipHash-1-3 with fixed keys, so the result is stable across calls within
+/// the same process and across builds.
+pub fn hash_line(line: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    line.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub fn hash_lines(lines: &[String]) -> Vec<u64> {
+    lines.iter().map(|line| hash_line(line)).collect()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalcSegment {
@@ -525,7 +540,7 @@ pub fn compute_calc_trailer_refresh(
     })
 }
 
-fn shared_prefix_len(a: &[String], b: &[String]) -> usize {
+fn shared_prefix_len_hashed(a: &[u64], b: &[u64]) -> usize {
     let max = a.len().min(b.len());
     let mut i = 0;
     while i < max && a[i] == b[i] {
@@ -534,7 +549,7 @@ fn shared_prefix_len(a: &[String], b: &[String]) -> usize {
     i
 }
 
-fn shared_suffix_len(a: &[String], b: &[String], prefix_len: usize) -> usize {
+fn shared_suffix_len_hashed(a: &[u64], b: &[u64], prefix_len: usize) -> usize {
     let max = a.len().min(b.len()).saturating_sub(prefix_len);
     let mut i = 0;
     while i < max && a[a.len() - 1 - i] == b[b.len() - 1 - i] {
@@ -543,12 +558,13 @@ fn shared_suffix_len(a: &[String], b: &[String], prefix_len: usize) -> usize {
     i
 }
 
-pub fn plan_incremental_calc(
-    prev_lines: &[String],
+pub fn plan_incremental_calc_from_hashes(
+    prev_hashes: &[u64],
     prev_results: &[Option<String>],
     next_lines: &[String],
+    next_hashes: &[u64],
 ) -> IncrementalCalcPlan {
-    if prev_lines.is_empty() {
+    if prev_hashes.is_empty() {
         return IncrementalCalcPlan {
             base_results: Vec::new(),
             eval_from: 0,
@@ -557,10 +573,10 @@ pub fn plan_incremental_calc(
         };
     }
 
-    let prefix = shared_prefix_len(prev_lines, next_lines);
-    let suffix = shared_suffix_len(prev_lines, next_lines, prefix);
+    let prefix = shared_prefix_len_hashed(prev_hashes, next_hashes);
+    let suffix = shared_suffix_len_hashed(prev_hashes, next_hashes, prefix);
     let next_len = next_lines.len();
-    let prev_len = prev_lines.len();
+    let prev_len = prev_hashes.len();
     let changed_from = prefix;
     let changed_to = next_len.saturating_sub(suffix);
 
@@ -592,6 +608,16 @@ pub fn plan_incremental_calc(
         eval_to: changed_to,
         eval_lines: next_lines[changed_from..changed_to].to_vec(),
     }
+}
+
+pub fn plan_incremental_calc(
+    prev_lines: &[String],
+    prev_results: &[Option<String>],
+    next_lines: &[String],
+) -> IncrementalCalcPlan {
+    let prev_hashes = hash_lines(prev_lines);
+    let next_hashes = hash_lines(next_lines);
+    plan_incremental_calc_from_hashes(&prev_hashes, prev_results, next_lines, &next_hashes)
 }
 
 fn line_slice_by_char(text: &str, from_col: usize, to_col: usize) -> String {

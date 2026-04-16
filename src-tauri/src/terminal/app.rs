@@ -27,6 +27,7 @@ const GUTTER_WIDTH: usize = 6;
 const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
+const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
 
 fn decimal_digit_count(mut value: usize) -> usize {
     let mut digits = 1usize;
@@ -139,6 +140,7 @@ struct TerminalApp {
     // if it is byte-identical to this snapshot and its previous calc result
     // was `None` (meaning the trailer was in sync with the backend last time).
     prev_lines: Vec<String>,
+    calc_state_stale: bool,
     // Search state
     search_query: String,
     search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
@@ -161,6 +163,8 @@ struct TerminalApp {
     fold_real_to_visible: Vec<usize>,
     fold_hidden_owner: Vec<Option<usize>>,
     fold_placeholder_hidden_lines: Vec<Option<usize>>,
+    line_has_fold_structure: Vec<bool>,
+    fold_rescan_pending: bool,
     pending_fold_prefix_until: Option<Instant>,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
@@ -203,11 +207,38 @@ impl TerminalApp {
         let loading_switcher = switcher_begin.elapsed();
 
         let calc_engine = CalcEngine::new();
+        let initial_has_builtin_formula =
+            crate::editor_core::calc_plan::contains_builtin_formula(&lines);
+        let initial_has_variable_assignment =
+            crate::editor_core::calc_plan::contains_variable_assignment(&lines);
+        let defer_initial_calc = lines.len() >= LARGE_DOC_CALC_DEFER_LINES
+            && !initial_has_builtin_formula
+            && !initial_has_variable_assignment;
         let calc_begin = Instant::now();
-        let calc_data = compute_calc_data(&calc_engine, &lines, variables_enabled, None);
+        let calc_data = if defer_initial_calc {
+            CalcData {
+                line_results: vec![None; lines.len()],
+                variable_names: Vec::new(),
+            }
+        } else {
+            compute_calc_data(
+                &calc_engine,
+                &lines,
+                variables_enabled && initial_has_variable_assignment,
+                None,
+            )
+        };
         let loading_calc_engine = calc_begin.elapsed();
 
-        let prev_lines_snapshot = lines.clone();
+        let prev_lines_snapshot = if defer_initial_calc {
+            Vec::new()
+        } else {
+            lines.clone()
+        };
+        let line_has_fold_structure = lines
+            .iter()
+            .map(|line| Self::line_has_fold_structure(line))
+            .collect::<Vec<_>>();
         let undo_seed = lines.clone();
 
         let mut app = Self {
@@ -253,6 +284,7 @@ impl TerminalApp {
             last_reminder_check: Instant::now(),
             variable_names: calc_data.variable_names,
             prev_lines: prev_lines_snapshot,
+            calc_state_stale: defer_initial_calc,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
@@ -271,6 +303,8 @@ impl TerminalApp {
             fold_real_to_visible: Vec::new(),
             fold_hidden_owner: Vec::new(),
             fold_placeholder_hidden_lines: Vec::new(),
+            line_has_fold_structure,
+            fold_rescan_pending: false,
             pending_fold_prefix_until: None,
             command_bar_from_normal: false,
             clipboard_watch_enabled: false,
@@ -283,11 +317,10 @@ impl TerminalApp {
                 cursor_line: 0,
                 cursor_col: 0,
             },
-            cached_has_builtin_formula: false,
-            cached_has_variable_assignment: false,
+            cached_has_builtin_formula: initial_has_builtin_formula,
+            cached_has_variable_assignment: initial_has_variable_assignment,
         };
 
-        app.rescan_calc_flags();
         app.recompute_folding();
         app.adjust_cursor();
         app.adjust_scroll();
@@ -2044,7 +2077,14 @@ impl TerminalApp {
             cursor_col: self.cursor_col,
         };
         self.rescan_calc_flags();
-        self.recompute_calc_full();
+        if self.should_defer_calc_recompute() {
+            self.calc_results = vec![None; self.lines.len()];
+            self.variable_names.clear();
+            self.prev_lines.clear();
+            self.calc_state_stale = true;
+        } else {
+            self.recompute_calc_full();
+        }
         self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
@@ -2078,7 +2118,7 @@ impl TerminalApp {
         // single-line edits that remove the last `:=` or formula are rare
         // and the flag being stale-true just means we fall back to full calc
         // (correct, slightly slower) until the next structural edit.
-        if self.lines.len() != self.prev_lines.len() {
+        if self.lines.len() != self.calc_results.len() {
             self.rescan_calc_flags();
             return;
         }
@@ -2113,41 +2153,61 @@ impl TerminalApp {
             || crate::editor_core::markdown_tokens::list_marker_end(text).is_some()
     }
 
+    fn calc_variables_enabled(&self) -> bool {
+        self.variables_enabled && self.cached_has_variable_assignment
+    }
+
+    fn should_defer_calc_recompute(&self) -> bool {
+        self.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
+            && !self.cached_has_builtin_formula
+            && !self.cached_has_variable_assignment
+    }
+
+    fn defer_calc_state_after_edit(&mut self) {
+        // Large docs without explicit calc syntax should not recompute calc
+        // state on every keystroke.
+        // Clear the full cache so same-line-count multi-line edits cannot
+        // leave stale calc ghosts on non-cursor lines.
+        if self.calc_results.len() != self.lines.len() {
+            self.calc_results = vec![None; self.lines.len()];
+        } else {
+            self.calc_results.fill(None);
+        }
+        self.variable_names.clear();
+        self.calc_state_stale = true;
+    }
+
     fn recompute_folding_if_needed(&mut self) {
-        if self.lines.len() != self.prev_lines.len() {
+        if self.fold_rescan_pending
+            || self.lines.len() != self.line_has_fold_structure.len()
+        {
+            self.fold_rescan_pending = false;
             self.recompute_folding();
             return;
         }
-        // Fast path: check cursor line first (covers ~95% of edits).
-        let cl = self.cursor_line;
-        if cl < self.lines.len()
-            && cl < self.prev_lines.len()
-            && self.lines[cl] != self.prev_lines[cl]
-        {
-            if Self::line_has_fold_structure(&self.lines[cl])
-                || Self::line_has_fold_structure(&self.prev_lines[cl])
-            {
-                self.recompute_folding();
-                return;
-            }
-        }
-        // Scan remaining lines for multi-line edits (replace-all, format, etc.).
-        for i in 0..self.lines.len() {
-            if i == cl {
-                continue;
-            }
-            if self.lines[i] != self.prev_lines[i] {
-                if Self::line_has_fold_structure(&self.lines[i])
-                    || Self::line_has_fold_structure(&self.prev_lines[i])
-                {
-                    self.recompute_folding();
-                    return;
-                }
-            }
+
+        // Fast path: only the cursor line can affect folding for single-line edits.
+        let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let Some(current_line) = self.lines.get(cl) else {
+            self.recompute_folding();
+            return;
+        };
+        let next_flag = Self::line_has_fold_structure(current_line);
+        let prev_flag = self.line_has_fold_structure.get(cl).copied().unwrap_or(false);
+        if next_flag || prev_flag {
+            // Edits within fold-relevant lines (e.g. heading level changes)
+            // can alter fold ranges even when the flag itself doesn't change.
+            self.recompute_folding();
         }
     }
 
     fn recompute_folding(&mut self) {
+        self.fold_rescan_pending = false;
+        self.line_has_fold_structure = self
+            .lines
+            .iter()
+            .map(|line| Self::line_has_fold_structure(line))
+            .collect();
         self.fold_ranges = folding::build_fold_ranges(&self.lines);
         self.fold_range_by_start = vec![None; self.lines.len()];
         for range in &self.fold_ranges {
@@ -2358,8 +2418,12 @@ impl TerminalApp {
             self.reminders_dirty = true;
         }
         self.update_calc_flags_incremental();
-        self.recompute_calc_full();
         self.recompute_folding_if_needed();
+        if self.should_defer_calc_recompute() {
+            self.defer_calc_state_after_edit();
+        } else {
+            self.recompute_calc_full();
+        }
         self.last_undo_snapshot = UndoEntry {
             lines: self.lines.clone(),
             cursor_line: self.cursor_line,
@@ -2428,6 +2492,17 @@ impl TerminalApp {
     }
 
     fn recompute_calc_full(&mut self) {
+        let calc_variables_enabled = self.calc_variables_enabled();
+        if self.calc_state_stale {
+            let calc_data =
+                compute_calc_data(&self.calc_engine, &self.lines, calc_variables_enabled, None);
+            self.prev_lines = self.lines.clone();
+            self.calc_results = calc_data.line_results;
+            self.variable_names = calc_data.variable_names;
+            self.calc_state_stale = false;
+            return;
+        }
+
         let plan = crate::editor_core::calc_plan::plan_incremental_calc(
             &self.prev_lines,
             &self.calc_results,
@@ -2445,7 +2520,7 @@ impl TerminalApp {
             .saturating_sub(suffix_len)
             .max(prev_changed_from);
         let prev_changed_lines = &self.prev_lines[prev_changed_from..prev_changed_to];
-        let touches_any_assignment = self.cached_has_variable_assignment
+        let touches_any_assignment = calc_variables_enabled
             && (crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
                 || crate::editor_core::calc_plan::contains_variable_assignment(prev_changed_lines));
         let can_use_partial = has_prev && !touches_any_assignment && !has_builtin_formula;
@@ -2462,7 +2537,7 @@ impl TerminalApp {
                 let calc_data = compute_calc_data(
                     &self.calc_engine,
                     &self.lines,
-                    self.variables_enabled,
+                    calc_variables_enabled,
                     Some((plan.eval_from, plan.eval_to)),
                 );
                 for idx in plan.eval_from..plan.eval_to {
@@ -2476,7 +2551,7 @@ impl TerminalApp {
             }
         } else {
             let calc_data =
-                compute_calc_data(&self.calc_engine, &self.lines, self.variables_enabled, None);
+                compute_calc_data(&self.calc_engine, &self.lines, calc_variables_enabled, None);
             (calc_data.line_results, calc_data.variable_names)
         };
 
@@ -2551,6 +2626,7 @@ impl TerminalApp {
         self.prev_lines = self.lines.clone();
         self.calc_results = new_results;
         self.variable_names = variable_names;
+        self.calc_state_stale = false;
     }
 
     // --- Search ---
@@ -3101,6 +3177,7 @@ impl TerminalApp {
             }
             offset = line_end + 1;
         }
+        self.fold_rescan_pending = true;
         self.mark_edited();
         self.adjust_cursor();
         self.adjust_scroll();
@@ -4221,6 +4298,183 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "Temporarily disabled heavy large-file load tests"]
+    fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
+        let body = vec!["alpha"; 100_000].join("\n");
+        let (db, mut app, path) = app_with_note(&body);
+
+        app.mode = UiMode::Editor;
+        app.cursor_line = app.lines.len().saturating_sub(1);
+        app.cursor_col = line_char_len(app.current_line());
+        app.adjust_scroll();
+        let insert_scroll_before = app.scroll_line;
+
+        run_keys(&mut app, &db, &[Key::Enter]);
+
+        assert_eq!(app.lines.len(), 100_001);
+        assert_eq!(app.fold_real_to_visible.len(), app.lines.len());
+        assert_eq!(app.fold_hidden_owner.len(), app.lines.len());
+        assert_eq!(app.fold_placeholder_hidden_lines.len(), app.lines.len());
+        assert_eq!(app.fold_range_by_start.len(), app.lines.len());
+        assert!(app.scroll_line > 0);
+        assert!(app.scroll_line >= insert_scroll_before.saturating_sub(1));
+
+        app.mode = UiMode::Normal;
+        app.cursor_line = app.lines.len().saturating_sub(2);
+        app.cursor_col = 0;
+        app.adjust_scroll();
+        let delete_scroll_before = app.scroll_line;
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+
+        assert_eq!(app.lines.len(), 100_000);
+        assert_eq!(app.fold_real_to_visible.len(), app.lines.len());
+        assert_eq!(app.fold_hidden_owner.len(), app.lines.len());
+        assert_eq!(app.fold_placeholder_hidden_lines.len(), app.lines.len());
+        assert_eq!(app.fold_range_by_start.len(), app.lines.len());
+        assert!(app.scroll_line > 0);
+        assert!(app.scroll_line >= delete_scroll_before.saturating_sub(2));
+
+        let mut out = Vec::new();
+        app.draw(&mut out).expect("draw after large-file EOF edits");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    #[ignore = "Temporarily disabled heavy large-file load tests"]
+    fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
+        let body = vec!["tail"; 100_000].join("\n");
+        let (db, mut app, path) = app_with_note(&body);
+
+        let mut seed = 0xA11CE5EED_u64;
+        let mut next_u64 = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+            seed
+        };
+
+        for step_idx in 0..24usize {
+            let len = app.lines.len().max(1);
+            let tail_window = 500usize.min(len.saturating_sub(1)).max(1);
+            let tail_start = len.saturating_sub(tail_window);
+            let span = len.saturating_sub(tail_start).max(1);
+            let target = tail_start + (next_u64() as usize % span);
+
+            app.cursor_line = target.min(app.lines.len().saturating_sub(1));
+            app.cursor_col = 0;
+            app.mode = UiMode::Normal;
+            app.vim_state = crate::editor_core::vim::VimState::default();
+            app.adjust_cursor();
+            app.adjust_scroll();
+
+            let op = (next_u64() % 8) as usize;
+            match op {
+                0 => run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]),
+                1 => run_keys(&mut app, &db, &[Key::Char('o'), Key::Char('x'), Key::Esc]),
+                2 => run_keys(&mut app, &db, &[Key::Char('O'), Key::Char('x'), Key::Esc]),
+                3 => run_keys(&mut app, &db, &[Key::Char('A'), Key::Char('z'), Key::Esc]),
+                4 => run_keys(&mut app, &db, &[Key::Char('x')]),
+                5 => run_keys(&mut app, &db, &[Key::Char('i'), Key::Enter, Key::Esc]),
+                6 => run_keys(&mut app, &db, &[Key::Char('j')]),
+                _ => run_keys(&mut app, &db, &[Key::Char('k')]),
+            }
+
+            assert!(
+                !app.lines.is_empty(),
+                "step {step_idx}: lines unexpectedly empty after op {op}"
+            );
+            assert!(
+                app.cursor_line < app.lines.len(),
+                "step {step_idx}: cursor_line {} out of bounds {} after op {op}",
+                app.cursor_line,
+                app.lines.len()
+            );
+            assert_eq!(
+                app.fold_real_to_visible.len(),
+                app.lines.len(),
+                "step {step_idx}: fold_real_to_visible size mismatch after op {op}"
+            );
+            assert_eq!(
+                app.fold_hidden_owner.len(),
+                app.lines.len(),
+                "step {step_idx}: fold_hidden_owner size mismatch after op {op}"
+            );
+            assert_eq!(
+                app.fold_placeholder_hidden_lines.len(),
+                app.lines.len(),
+                "step {step_idx}: fold_placeholder_hidden_lines size mismatch after op {op}"
+            );
+            assert_eq!(
+                app.fold_range_by_start.len(),
+                app.lines.len(),
+                "step {step_idx}: fold_range_by_start size mismatch after op {op}"
+            );
+            assert!(
+                app.scroll_line < app.visible_line_count(),
+                "step {step_idx}: scroll_line {} out of visible range {} after op {op}",
+                app.scroll_line,
+                app.visible_line_count()
+            );
+
+            if step_idx % 4 == 0 {
+                let mut out = Vec::new();
+                app.draw(&mut out)
+                    .expect("draw during large random tail edit stress");
+            }
+        }
+
+        let mut out = Vec::new();
+        app.draw(&mut out)
+            .expect("draw after large random tail edit stress");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    #[ignore = "Temporarily disabled heavy large-file load tests"]
+    fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
+        let body = vec!["plain"; 25_000].join("\n");
+        let (db, mut app, path) = app_with_note(&body);
+
+        assert!(app.calc_state_stale);
+        assert!(!app.cached_has_builtin_formula);
+        assert!(!app.cached_has_variable_assignment);
+
+        app.mode = UiMode::Editor;
+        app.cursor_line = app.lines.len().saturating_sub(1);
+        app.cursor_col = 0;
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char('t'),
+                Key::Char('o'),
+                Key::Char('t'),
+                Key::Char('a'),
+                Key::Char('l'),
+                Key::Char(' '),
+                Key::Char(':'),
+                Key::Char('='),
+                Key::Char(' '),
+                Key::Char('2'),
+            ],
+        );
+
+        assert!(app.cached_has_variable_assignment);
+        assert!(!app.calc_state_stale);
+        assert!(app.prev_lines.len() == app.lines.len());
+        assert!(app.variable_names.iter().any(|name| name == "total"));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
     fn rendered_line_display_cols_accounts_for_calc_ghost() {
         assert_eq!(rendered_line_display_cols("2 + 2", Some("4")), 9);
         assert_eq!(rendered_line_display_cols("x := 1", Some("2")), 10);
@@ -4725,6 +4979,28 @@ mod tests {
 
         // Untouched because cursor is in the trailer region.
         assert_eq!(app.lines[1], "2 * rate = 20");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn defer_calc_state_after_edit_clears_full_cached_results_vector() {
+        let (db, mut app, path) = app_with_note("1 + 1\n2 + 2\n3 + 3");
+        app.calc_results = vec![
+            Some("2".to_string()),
+            Some("4".to_string()),
+            Some("6".to_string()),
+        ];
+        app.variable_names = vec!["total".to_string()];
+        app.cursor_line = 1;
+
+        app.defer_calc_state_after_edit();
+
+        assert_eq!(app.calc_results, vec![None, None, None]);
+        assert!(app.variable_names.is_empty());
+        assert!(app.calc_state_stale);
 
         drop(app);
         drop(db);
