@@ -141,11 +141,11 @@ impl<'a> VariableResolver<'a> {
             .unwrap_or(false)
     }
 
-    fn eval_raw(&mut self, expr: &str) -> Option<String> {
+    fn eval_raw(&mut self, expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
         if let Some(cached) = self.raw_eval_cache.get(expr) {
             return cached.clone();
         }
-        let result = evaluate_raw_expression(expr);
+        let result = evaluate_raw_expression(expr, ctx);
         self.raw_eval_cache.insert(expr.to_string(), result.clone());
         result
     }
@@ -158,7 +158,7 @@ impl<'a> VariableResolver<'a> {
         }
     }
 
-    fn resolve(&mut self, normalized: &str) -> Option<String> {
+    fn resolve(&mut self, normalized: &str, ctx: &mut fend_core::Context) -> Option<String> {
         if let Some(state) = self.states.get(normalized).copied() {
             return match state {
                 ResolveState::Resolved => self.values.get(normalized).cloned(),
@@ -182,7 +182,7 @@ impl<'a> VariableResolver<'a> {
         self.states
             .insert(normalized.to_string(), ResolveState::Resolving);
 
-        let substituted = match self.substitute_runtime(&def.expression, Some(def.line)) {
+        let substituted = match self.substitute_runtime(&def.expression, Some(def.line), ctx) {
             Some(value) => value,
             None => {
                 self.states
@@ -191,7 +191,7 @@ impl<'a> VariableResolver<'a> {
             }
         };
 
-        let raw_value = match self.eval_raw(&substituted) {
+        let raw_value = match self.eval_raw(&substituted, ctx) {
             Some(value) => value,
             None => {
                 self.push_diagnostic(
@@ -234,6 +234,7 @@ impl<'a> VariableResolver<'a> {
         &mut self,
         expression: &str,
         owner_line: Option<usize>,
+        ctx: &mut fend_core::Context,
     ) -> Option<String> {
         let matches = self.find_matches(expression);
         if matches.is_empty() {
@@ -244,7 +245,7 @@ impl<'a> VariableResolver<'a> {
         let mut cursor = 0usize;
         for span in matches {
             out.push_str(&expression[cursor..span.start]);
-            let Some(value) = self.resolve(&span.normalized) else {
+            let Some(value) = self.resolve(&span.normalized, ctx) else {
                 if let Some(line) = owner_line {
                     self.push_diagnostic(
                         "unresolved-variable",
@@ -286,31 +287,16 @@ impl CalcEngine {
     }
 
     pub fn evaluate(&self, input: &str) -> Option<String> {
-        let trimmed = input.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        if !has_calc_signal(trimmed) {
-            return None;
-        }
-
-        let (expr, applied_result) = split_applied_result(trimmed);
-        let text = evaluate_raw_expression(expr)?;
-        if text == expr {
-            return None;
-        }
-        if applied_result
-            .map(|applied| applied.trim() == text)
-            .unwrap_or(false)
-        {
-            return None;
-        }
-
-        Some(text)
+        let mut ctx = new_context();
+        evaluate_single(input, &mut ctx)
     }
 
     pub fn evaluate_lines(&self, lines: &[String]) -> Vec<Option<String>> {
-        lines.iter().map(|line| self.evaluate(line)).collect()
+        let mut ctx = new_context();
+        lines
+            .iter()
+            .map(|line| evaluate_single(line, &mut ctx))
+            .collect()
     }
 
     pub fn evaluate_note_context(
@@ -318,6 +304,7 @@ impl CalcEngine {
         lines: &[String],
         options: NoteEvaluationOptions,
     ) -> NoteEvaluationResult {
+        let mut ctx = new_context();
         let defs = if options.variables_enabled {
             collect_variable_definitions(lines)
         } else {
@@ -336,7 +323,7 @@ impl CalcEngine {
             let mut names: Vec<String> = defs.keys().cloned().collect();
             names.sort();
             for normalized in names {
-                let _ = resolver.resolve(&normalized);
+                let _ = resolver.resolve(&normalized, &mut ctx);
             }
         }
 
@@ -347,32 +334,39 @@ impl CalcEngine {
             .skip(eval_from)
             .take(eval_to.saturating_sub(eval_from))
         {
-            let Some(expression) = expression_for_ghost_eval(line) else {
+            let Some(expression) = extract_line_expression(line) else {
                 continue;
             };
 
             let result = if options.variables_enabled {
-                if let Some(value) =
-                    evaluate_table_formula(lines, idx, &expression, true, Some(&mut resolver))
-                {
+                if let Some(value) = evaluate_table_formula(
+                    lines,
+                    idx,
+                    &expression,
+                    true,
+                    Some(&mut resolver),
+                    &mut ctx,
+                ) {
                     Some(value)
                 } else if let Some((_name, normalized, rhs)) =
                     parse_variable_assignment(&expression)
                 {
-                    let resolved = resolver.resolve(&normalized);
+                    let resolved = resolver.resolve(&normalized, &mut ctx);
                     if assignment_rhs_is_plain_numeric_literal(&rhs) {
                         None
                     } else {
                         resolved
                     }
                 } else {
-                    evaluate_expression_with_variables(&expression, &mut resolver)
+                    evaluate_expression_with_variables(&expression, &mut resolver, &mut ctx)
                 }
             } else {
-                if let Some(value) = evaluate_table_formula(lines, idx, &expression, false, None) {
+                if let Some(value) =
+                    evaluate_table_formula(lines, idx, &expression, false, None, &mut ctx)
+                {
                     Some(value)
                 } else {
-                    self.evaluate(&expression)
+                    evaluate_single(&expression, &mut ctx)
                 }
             };
 
@@ -390,6 +384,7 @@ impl CalcEngine {
 fn evaluate_expression_with_variables(
     raw_input: &str,
     resolver: &mut VariableResolver<'_>,
+    ctx: &mut fend_core::Context,
 ) -> Option<String> {
     let trimmed = raw_input.trim();
     if trimmed.is_empty() || looks_like_date(trimmed) {
@@ -403,12 +398,12 @@ fn evaluate_expression_with_variables(
     }
 
     let substituted = if has_var_refs {
-        resolver.substitute_runtime(expr, None)?
+        resolver.substitute_runtime(expr, None, ctx)?
     } else {
         expr.to_string()
     };
 
-    let text = resolver.eval_raw(&substituted)?;
+    let text = resolver.eval_raw(&substituted, ctx)?;
     if text == expr {
         return None;
     }
@@ -422,9 +417,32 @@ fn evaluate_expression_with_variables(
     Some(text)
 }
 
-fn evaluate_raw_expression(expr: &str) -> Option<String> {
-    let mut ctx = new_context();
-    match fend_core::evaluate_with_interrupt(expr, &mut ctx, &NO_INTERRUPT) {
+fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if !has_calc_signal(trimmed) {
+        return None;
+    }
+
+    let (expr, applied_result) = split_applied_result(trimmed);
+    let text = evaluate_raw_expression(expr, ctx)?;
+    if text == expr {
+        return None;
+    }
+    if applied_result
+        .map(|applied| applied.trim() == text)
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    Some(text)
+}
+
+fn evaluate_raw_expression(expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
+    match fend_core::evaluate_with_interrupt(expr, ctx, &NO_INTERRUPT) {
         Ok(result) => Some(result.get_main_result().to_string()),
         Err(_) => None,
     }
@@ -690,36 +708,55 @@ fn collect_table_formula_terms(
     Some(terms)
 }
 
-fn reduce_formula_values(values: &[String], op: FormulaOp) -> Option<String> {
+fn reduce_formula_values(
+    values: &[String],
+    op: FormulaOp,
+    ctx: &mut fend_core::Context,
+) -> Option<String> {
     if values.is_empty() {
         return None;
+    }
+
+    // Fast path: if all values are plain numbers, do arithmetic directly.
+    let numeric: Option<Vec<f64>> = values.iter().map(|v| parse_plain_numeric_literal(v)).collect();
+    if let Some(nums) = numeric {
+        let sum: f64 = nums.iter().sum();
+        let result = match op {
+            FormulaOp::Sum => sum,
+            FormulaOp::Avg => sum / nums.len() as f64,
+        };
+        return Some(format_number(result));
     }
 
     let mut acc = values[0].clone();
     for value in values.iter().skip(1) {
         let expr = format!("({acc}) + ({value})");
-        acc = evaluate_raw_expression(&expr)?;
+        acc = evaluate_raw_expression(&expr, ctx)?;
     }
 
     if op == FormulaOp::Avg && values.len() > 1 {
         let avg_expr = format!("({acc}) / {}", values.len());
-        acc = evaluate_raw_expression(&avg_expr)?;
+        acc = evaluate_raw_expression(&avg_expr, ctx)?;
     }
 
     Some(acc)
 }
 
-fn evaluate_formula_term(term: &str) -> Option<String> {
+fn evaluate_formula_term(
+    term: &str,
+    ctx: &mut fend_core::Context,
+) -> Option<String> {
     let trimmed = term.trim();
     if trimmed.is_empty() {
         return None;
     }
-    evaluate_raw_expression(trimmed)
+    evaluate_raw_expression(trimmed, ctx)
 }
 
 fn evaluate_formula_term_with_variables(
     term: &str,
     resolver: &mut VariableResolver<'_>,
+    ctx: &mut fend_core::Context,
 ) -> Option<String> {
     let trimmed = term.trim();
     if trimmed.is_empty() {
@@ -727,12 +764,12 @@ fn evaluate_formula_term_with_variables(
     }
 
     let substituted = if resolver.expression_references_variable(trimmed) {
-        resolver.substitute_runtime(trimmed, None)?
+        resolver.substitute_runtime(trimmed, None, ctx)?
     } else {
         trimmed.to_string()
     };
 
-    resolver.eval_raw(&substituted)
+    resolver.eval_raw(&substituted, ctx)
 }
 
 fn evaluate_table_formula(
@@ -741,6 +778,7 @@ fn evaluate_table_formula(
     expression: &str,
     variables_enabled: bool,
     resolver: Option<&mut VariableResolver<'_>>,
+    ctx: &mut fend_core::Context,
 ) -> Option<String> {
     let spec = parse_builtin_formula(expression)?;
     let terms = collect_table_formula_terms(lines, line_idx, spec)?;
@@ -749,19 +787,19 @@ fn evaluate_table_formula(
     if variables_enabled {
         let resolver = resolver?;
         for term in terms {
-            if let Some(value) = evaluate_formula_term_with_variables(&term, resolver) {
+            if let Some(value) = evaluate_formula_term_with_variables(&term, resolver, ctx) {
                 values.push(value);
             }
         }
     } else {
         for term in terms {
-            if let Some(value) = evaluate_formula_term(&term) {
+            if let Some(value) = evaluate_formula_term(&term, ctx) {
                 values.push(value);
             }
         }
     }
 
-    reduce_formula_values(&values, spec.op)
+    reduce_formula_values(&values, spec.op, ctx)
 }
 
 fn is_table_line(line: &str) -> bool {
@@ -918,28 +956,7 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<Strin
     candidates.pop()
 }
 
-fn expression_for_variable_scan(line: &str) -> Option<String> {
-    if is_table_line(line) {
-        return table_expression_segment(line, true);
-    }
-
-    if let Some(body) = list_body_segment(line) {
-        let trimmed = body.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        return Some(trimmed.to_string());
-    }
-
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn expression_for_ghost_eval(line: &str) -> Option<String> {
+fn extract_line_expression(line: &str) -> Option<String> {
     if is_table_line(line) {
         return table_expression_segment(line, true);
     }
@@ -964,7 +981,7 @@ fn collect_variable_definitions(lines: &[String]) -> HashMap<String, VariableDef
     let mut defs = HashMap::new();
 
     for (line_idx, line) in lines.iter().enumerate() {
-        let Some(expression) = expression_for_variable_scan(line) else {
+        let Some(expression) = extract_line_expression(line) else {
             continue;
         };
 
