@@ -21,6 +21,9 @@ pub enum CommandId {
     OrderedList,
     ClipWatch,
     ClipWatchStop,
+    Fold,
+    Unfold,
+    FoldToggle,
     Quit,
 }
 
@@ -36,7 +39,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 20] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 23] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -147,6 +150,27 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 20] = [
         value: "clip-watch-stop",
         aliases: &["clip_watch_stop"],
         description: "stop clipboard watch",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::Fold,
+        value: "fold",
+        aliases: &["closefold", "zc"],
+        description: "fold block at cursor",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::Unfold,
+        value: "unfold",
+        aliases: &["openfold", "zo"],
+        description: "unfold block at cursor",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::FoldToggle,
+        value: "fold-toggle",
+        aliases: &["fold_toggle", "za"],
+        description: "toggle fold block at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -299,6 +323,18 @@ mod tests {
         assert_eq!(
             resolve_command(CommandMode::Editor, "clip_watch_stop").map(|cmd| cmd.id),
             Some(CommandId::ClipWatchStop)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "fold").map(|cmd| cmd.id),
+            Some(CommandId::Fold)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "openfold").map(|cmd| cmd.id),
+            Some(CommandId::Unfold)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "za").map(|cmd| cmd.id),
+            Some(CommandId::FoldToggle)
         );
     }
 

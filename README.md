@@ -39,6 +39,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
+- Folding: `za` toggles fold at cursor (GUI headings/code fences)
 - Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:q`
 - `:sum` and `:avg` compute from the selected scope, insert only `<value>` at cursor/selection, and copy the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
@@ -50,6 +51,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Built-in editor with note list/switcher and status bar
 - Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
 - Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save, `Ctrl+Q`/`Ctrl+W` quit
+- Terminal folding keymap (normal mode): `za` toggle fold at cursor
+- Terminal folding commands: `:fold`, `:unfold`, `:fold-toggle` (aliases: `:zc`, `:zo`, `:za`)
 - `vim_mode` is optional and independent (GUI-only behavior)
 
 **Inline calculations**
@@ -105,6 +108,7 @@ sqrt(144) + 3^2         → 21
 | Ctrl+I                  | Toggle italic (`*...*`)       |
 | Ctrl+Shift+X            | Toggle strikethrough          |
 | Ctrl+K                  | Insert/wrap markdown link     |
+| Ctrl/Cmd+Alt+Z          | Toggle fold at cursor         |
 | Ctrl++ / Ctrl+-         | Increase / decrease font size |
 | Ctrl+Alt++ / Ctrl+Alt+- | Next / previous font family   |
 | Ctrl+W                  | Hide window                   |

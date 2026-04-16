@@ -413,6 +413,15 @@ struct TerminalApp {
     // Calc/variables behavior
     variables_enabled: bool,
     render_palette: render::RenderPalette,
+    // Folding (real-line indexed, 0-based)
+    fold_ranges: Vec<FoldRange>,
+    fold_range_by_start: Vec<Option<FoldRange>>,
+    collapsed_fold_starts: HashSet<usize>,
+    fold_visible_to_real: Vec<usize>,
+    fold_real_to_visible: Vec<usize>,
+    fold_hidden_owner: Vec<Option<usize>>,
+    fold_placeholder_hidden_lines: Vec<Option<usize>>,
+    pending_fold_prefix_until: Option<Instant>,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
     // Clipboard watch
@@ -458,7 +467,7 @@ impl TerminalApp {
         let prev_lines_snapshot = lines.clone();
         let undo_seed = lines.clone();
 
-        let app = Self {
+        let mut app = Self {
             active_note,
             lines,
             cursor_line: 0,
@@ -512,6 +521,14 @@ impl TerminalApp {
             checklist_auto_reorder,
             variables_enabled,
             render_palette,
+            fold_ranges: Vec::new(),
+            fold_range_by_start: Vec::new(),
+            collapsed_fold_starts: HashSet::new(),
+            fold_visible_to_real: Vec::new(),
+            fold_real_to_visible: Vec::new(),
+            fold_hidden_owner: Vec::new(),
+            fold_placeholder_hidden_lines: Vec::new(),
+            pending_fold_prefix_until: None,
             command_bar_from_normal: false,
             clipboard_watch_enabled: false,
             clipboard_watch_last_text: None,
@@ -524,6 +541,10 @@ impl TerminalApp {
                 cursor_col: 0,
             },
         };
+
+        app.recompute_folding();
+        app.adjust_cursor();
+        app.adjust_scroll();
 
         let metrics = TerminalStartupMetrics {
             loading_note,
@@ -623,6 +644,9 @@ impl TerminalApp {
     }
 
     fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.mode != UiMode::Normal {
+            self.pending_fold_prefix_until = None;
+        }
         match self.mode {
             UiMode::DatePicker => self.handle_date_picker_key(db, key)?,
             UiMode::Editor => self.handle_editor_key(db, key)?,
@@ -1018,11 +1042,15 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::MoveDocStart => self.cursor_line = 0,
                 crate::editor_core::vim::VimIntent::MoveDocEnd => {
-                    self.cursor_line = self.lines.len().saturating_sub(1)
+                    self.cursor_line = self
+                        .real_line_for_virtual(self.visible_line_count().saturating_sub(1))
+                        .unwrap_or_else(|| self.lines.len().saturating_sub(1))
                 }
                 crate::editor_core::vim::VimIntent::MoveToLine => {
-                    let line = count.max(1).min(self.lines.len().max(1));
-                    self.cursor_line = line.saturating_sub(1);
+                    let target_virtual = count.max(1).min(self.visible_line_count()) - 1;
+                    self.cursor_line = self
+                        .real_line_for_virtual(target_virtual)
+                        .unwrap_or_else(|| self.lines.len().saturating_sub(1));
                 }
                 crate::editor_core::vim::VimIntent::EnterInsert => {
                     self.mode = UiMode::Editor;
@@ -1331,6 +1359,27 @@ impl TerminalApp {
 
         if key == Key::Ctrl('p') {
             self.open_switcher(db)?;
+            return Ok(());
+        }
+
+        let now = Instant::now();
+        if self
+            .pending_fold_prefix_until
+            .is_some_and(|until| now > until)
+        {
+            self.pending_fold_prefix_until = None;
+        }
+
+        if self.pending_fold_prefix_until.take().is_some() {
+            if key == Key::Char('a') {
+                self.toggle_fold_at_cursor();
+                return Ok(());
+            }
+        }
+
+        if key == Key::Char('z') {
+            self.pending_fold_prefix_until =
+                Some(now + Duration::from_millis(FOLD_PREFIX_TIMEOUT_MS));
             return Ok(());
         }
 
@@ -1765,6 +1814,18 @@ impl TerminalApp {
                     } else {
                         self.status = "clip-watch not active".to_string();
                     }
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::Fold => {
+                    self.set_fold_collapsed_at_cursor(true);
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::Unfold => {
+                    self.set_fold_collapsed_at_cursor(false);
+                    return;
+                }
+                crate::editor_core::command_catalog::CommandId::FoldToggle => {
+                    self.toggle_fold_at_cursor();
                     return;
                 }
                 _ => {}
@@ -2233,6 +2294,7 @@ impl TerminalApp {
             cursor_col: self.cursor_col,
         };
         self.recompute_calc_full();
+        self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
         Ok(())
@@ -2252,6 +2314,201 @@ impl TerminalApp {
         &mut self.lines[self.cursor_line]
     }
 
+    fn recompute_folding(&mut self) {
+        self.fold_ranges = build_fold_ranges(&self.lines);
+        self.fold_range_by_start = vec![None; self.lines.len()];
+        for range in &self.fold_ranges {
+            if range.start_line < self.fold_range_by_start.len() {
+                self.fold_range_by_start[range.start_line] = Some(*range);
+            }
+        }
+        self.collapsed_fold_starts.retain(|line| {
+            self.fold_range_by_start
+                .get(*line)
+                .is_some_and(|entry| entry.is_some())
+        });
+        self.rebuild_fold_view_map();
+    }
+
+    fn rebuild_fold_view_map(&mut self) {
+        let line_count = self.lines.len();
+        self.fold_visible_to_real.clear();
+        self.fold_visible_to_real.reserve(line_count);
+        self.fold_real_to_visible = vec![0; line_count];
+        self.fold_hidden_owner = vec![None; line_count];
+        self.fold_placeholder_hidden_lines = vec![None; line_count];
+
+        if line_count == 0 {
+            return;
+        }
+
+        let mut collapsed_ranges = self
+            .collapsed_fold_starts
+            .iter()
+            .filter_map(|start| {
+                self.fold_range_by_start
+                    .get(*start)
+                    .and_then(|entry| *entry)
+            })
+            .collect::<Vec<_>>();
+        collapsed_ranges.sort_by_key(|range| (range.start_line, range.end_line));
+
+        let mut effective = Vec::new();
+        let mut covered_to: Option<usize> = None;
+        for range in collapsed_ranges {
+            if range.end_line <= range.start_line {
+                continue;
+            }
+            if covered_to.is_some_and(|last_end| range.start_line <= last_end) {
+                continue;
+            }
+            covered_to = Some(range.end_line);
+            effective.push(range);
+        }
+
+        let mut effective_idx = 0usize;
+        let mut real_line = 0usize;
+        while real_line < line_count {
+            let visible_idx = self.fold_visible_to_real.len();
+            self.fold_visible_to_real.push(real_line);
+            self.fold_real_to_visible[real_line] = visible_idx;
+
+            let collapse_here = effective
+                .get(effective_idx)
+                .copied()
+                .filter(|range| range.start_line == real_line);
+            if let Some(range) = collapse_here {
+                let hidden_end = range.end_line.min(line_count.saturating_sub(1));
+                if hidden_end > real_line {
+                    self.fold_placeholder_hidden_lines[real_line] =
+                        Some(hidden_end.saturating_sub(real_line));
+                    for hidden_line in (real_line + 1)..=hidden_end {
+                        self.fold_hidden_owner[hidden_line] = Some(real_line);
+                        self.fold_real_to_visible[hidden_line] = visible_idx;
+                    }
+                    real_line = hidden_end + 1;
+                } else {
+                    real_line += 1;
+                }
+                effective_idx += 1;
+            } else {
+                real_line += 1;
+            }
+        }
+
+        if self.fold_visible_to_real.is_empty() {
+            self.fold_visible_to_real.push(0);
+        }
+    }
+
+    fn visible_line_count(&self) -> usize {
+        self.fold_visible_to_real.len().max(1)
+    }
+
+    fn current_virtual_line(&self) -> usize {
+        self.fold_real_to_visible
+            .get(self.cursor_line)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn real_line_for_virtual(&self, virtual_line: usize) -> Option<usize> {
+        self.fold_visible_to_real.get(virtual_line).copied()
+    }
+
+    fn fold_hidden_owner_for_line(&self, line: usize) -> Option<usize> {
+        self.fold_hidden_owner.get(line).and_then(|owner| *owner)
+    }
+
+    fn fold_start_for_line(&self, line: usize) -> Option<usize> {
+        if let Some(owner) = self.fold_hidden_owner_for_line(line) {
+            return Some(owner);
+        }
+        if self
+            .fold_range_by_start
+            .get(line)
+            .is_some_and(|entry| entry.is_some())
+        {
+            return Some(line);
+        }
+
+        let mut best_start = None;
+        let mut best_span = usize::MAX;
+        for range in &self.fold_ranges {
+            if range.start_line < line && line <= range.end_line {
+                let span = range.end_line.saturating_sub(range.start_line);
+                if span < best_span {
+                    best_span = span;
+                    best_start = Some(range.start_line);
+                }
+            }
+        }
+        best_start
+    }
+
+    fn toggle_fold_at_cursor(&mut self) -> bool {
+        let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let Some(start_line) = self.fold_start_for_line(line) else {
+            self.status = "fold: no foldable block at cursor".to_string();
+            return false;
+        };
+        let next_collapsed = !self.collapsed_fold_starts.contains(&start_line);
+        self.set_fold_collapsed_at_line(start_line, next_collapsed)
+    }
+
+    fn set_fold_collapsed_at_cursor(&mut self, collapsed: bool) -> bool {
+        let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let Some(start_line) = self.fold_start_for_line(line) else {
+            self.status = "fold: no foldable block at cursor".to_string();
+            return false;
+        };
+        self.set_fold_collapsed_at_line(start_line, collapsed)
+    }
+
+    fn set_fold_collapsed_at_line(&mut self, start_line: usize, collapsed: bool) -> bool {
+        let Some(range) = self
+            .fold_range_by_start
+            .get(start_line)
+            .and_then(|entry| *entry)
+        else {
+            self.status = "fold: no foldable block at cursor".to_string();
+            return false;
+        };
+
+        let was_collapsed = self.collapsed_fold_starts.contains(&start_line);
+        if was_collapsed == collapsed {
+            self.status = if collapsed {
+                "fold: already folded".to_string()
+            } else {
+                "fold: already unfolded".to_string()
+            };
+            return false;
+        }
+
+        let action = if collapsed {
+            self.collapsed_fold_starts.insert(start_line);
+            "folded"
+        } else {
+            self.collapsed_fold_starts.remove(&start_line);
+            "unfolded"
+        };
+
+        self.rebuild_fold_view_map();
+        self.adjust_cursor();
+        self.adjust_scroll();
+
+        let kind = match range.kind {
+            FoldKind::Heading => "heading",
+            FoldKind::Fence => "code block",
+            FoldKind::List => "list",
+            FoldKind::Table => "table",
+            FoldKind::Paragraph => "paragraph",
+        };
+        let hidden = range.end_line.saturating_sub(range.start_line);
+        self.status = format!("fold: {action} {kind} ({hidden} lines)");
+        true
+    }
+
     fn mark_edited(&mut self) {
         // Push undo snapshot if enough time elapsed since last edit (debounce).
         // The snapshot represents the state *before* the current mutation.
@@ -2268,6 +2525,7 @@ impl TerminalApp {
             self.reminders_dirty = true;
         }
         self.recompute_calc_full();
+        self.recompute_folding();
         self.last_undo_snapshot = UndoEntry {
             lines: self.lines.clone(),
             cursor_line: self.cursor_line,
@@ -2291,6 +2549,7 @@ impl TerminalApp {
                 self.reminders_dirty = true;
             }
             self.recompute_calc_full();
+            self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
             self.last_undo_snapshot = UndoEntry {
@@ -2320,6 +2579,7 @@ impl TerminalApp {
                 self.reminders_dirty = true;
             }
             self.recompute_calc_full();
+            self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
             self.last_undo_snapshot = UndoEntry {
@@ -2481,6 +2741,10 @@ impl TerminalApp {
                 self.cursor_line = self.search_orig_line;
                 self.cursor_col = self.search_orig_col;
                 self.scroll_line = self.search_orig_scroll;
+                self.adjust_cursor();
+                self.scroll_line = self
+                    .scroll_line
+                    .min(self.visible_line_count().saturating_sub(1));
                 self.mode = UiMode::Normal;
                 self.search_query.clear();
                 self.search_matches.clear();
@@ -2601,6 +2865,7 @@ impl TerminalApp {
         if let Some(&(line, col, _)) = self.search_matches.get(self.search_current) {
             self.cursor_line = line;
             self.cursor_col = col;
+            self.adjust_cursor();
             self.adjust_scroll();
         }
     }
@@ -2641,6 +2906,22 @@ impl TerminalApp {
             }
         }
         (matches, current)
+    }
+
+    fn line_is_in_visual_selection(&self, line_idx: usize) -> bool {
+        let Some(anchor) = self.selection_anchor else {
+            return false;
+        };
+        let has_visual_selection = self.mode == UiMode::Visual
+            || self.mode == UiMode::VisualLine
+            || (self.mode == UiMode::CommandBar && self.command_selection.is_some());
+        if !has_visual_selection {
+            return false;
+        }
+
+        let start_line = min(anchor.0, self.cursor_line);
+        let end_line = std::cmp::max(anchor.0, self.cursor_line);
+        line_idx >= start_line && line_idx <= end_line
     }
 
     fn append_visual_highlights(&self, line_idx: usize, ranges: &mut Vec<(usize, usize)>) {
@@ -2695,9 +2976,12 @@ impl TerminalApp {
 
     fn move_cursor_left_word(&mut self) {
         if self.cursor_col == 0 {
-            if self.cursor_line > 0 {
-                self.cursor_line -= 1;
-                self.cursor_col = line_char_len(self.current_line());
+            let current_virtual = self.current_virtual_line();
+            if current_virtual > 0 {
+                if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
+                    self.cursor_line = prev_real;
+                    self.cursor_col = line_char_len(self.current_line());
+                }
             }
             return;
         }
@@ -2718,9 +3002,12 @@ impl TerminalApp {
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
         if self.cursor_col == len {
-            if self.cursor_line + 1 < self.lines.len() {
-                self.cursor_line += 1;
-                self.cursor_col = 0;
+            let current_virtual = self.current_virtual_line();
+            if current_virtual + 1 < self.visible_line_count() {
+                if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
+                    self.cursor_line = next_real;
+                    self.cursor_col = 0;
+                }
             }
             return;
         }
@@ -3035,9 +3322,12 @@ impl TerminalApp {
             self.cursor_col -= 1;
             return;
         }
-        if self.cursor_line > 0 {
-            self.cursor_line -= 1;
-            self.cursor_col = line_char_len(self.current_line());
+        let current_virtual = self.current_virtual_line();
+        if current_virtual > 0 {
+            if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
+                self.cursor_line = prev_real;
+                self.cursor_col = line_char_len(self.current_line());
+            }
         }
     }
 
@@ -3047,9 +3337,12 @@ impl TerminalApp {
             self.cursor_col += 1;
             return;
         }
-        if self.cursor_line + 1 < self.lines.len() {
-            self.cursor_line += 1;
-            self.cursor_col = 0;
+        let current_virtual = self.current_virtual_line();
+        if current_virtual + 1 < self.visible_line_count() {
+            if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
+                self.cursor_line = next_real;
+                self.cursor_col = 0;
+            }
         }
     }
 
@@ -3057,14 +3350,23 @@ impl TerminalApp {
         if count == 0 {
             return;
         }
-        self.cursor_line = self.cursor_line.saturating_sub(count);
+        let current_virtual = self.current_virtual_line();
+        let target_virtual = current_virtual.saturating_sub(count);
+        self.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
     }
 
     fn move_cursor_down(&mut self, count: usize) {
         if count == 0 {
             return;
         }
-        self.cursor_line = min(self.cursor_line + count, self.lines.len().saturating_sub(1));
+        let current_virtual = self.current_virtual_line();
+        let target_virtual = min(
+            current_virtual.saturating_add(count),
+            self.visible_line_count().saturating_sub(1),
+        );
+        self.cursor_line = self
+            .real_line_for_virtual(target_virtual)
+            .unwrap_or_else(|| self.lines.len().saturating_sub(1));
     }
 
     fn adjust_cursor(&mut self) {
@@ -3073,6 +3375,9 @@ impl TerminalApp {
         }
         if self.cursor_line >= self.lines.len() {
             self.cursor_line = self.lines.len() - 1;
+        }
+        if let Some(owner) = self.fold_hidden_owner_for_line(self.cursor_line) {
+            self.cursor_line = owner.min(self.lines.len().saturating_sub(1));
         }
         let len = line_char_len(self.current_line());
         if self.cursor_col > len {
@@ -3087,11 +3392,15 @@ impl TerminalApp {
 
     fn adjust_scroll(&mut self) {
         let height = self.editor_height();
-        if self.cursor_line < self.scroll_line {
-            self.scroll_line = self.cursor_line;
-        } else if self.cursor_line >= self.scroll_line + height {
-            self.scroll_line = self.cursor_line + 1 - height;
+        let cursor_virtual = self.current_virtual_line();
+        if cursor_virtual < self.scroll_line {
+            self.scroll_line = cursor_virtual;
+        } else if cursor_virtual >= self.scroll_line + height {
+            self.scroll_line = cursor_virtual + 1 - height;
         }
+        self.scroll_line = self
+            .scroll_line
+            .min(self.visible_line_count().saturating_sub(1));
 
         let (_, cols) = terminal_size();
         let available = cols.saturating_sub(GUTTER_WIDTH);
@@ -3171,15 +3480,30 @@ impl TerminalApp {
         );
 
         let mut ctx = render::RenderContext::new_with_palette(self.render_palette);
-        ctx.advance_lines(&self.lines[..self.scroll_line.min(self.lines.len())]);
+        let first_real_line = self
+            .real_line_for_virtual(self.scroll_line)
+            .unwrap_or(self.lines.len());
+        ctx.advance_lines(&self.lines[..first_real_line.min(self.lines.len())]);
+        let mut last_rendered_real = if first_real_line > 0 {
+            Some(first_real_line - 1)
+        } else {
+            None
+        };
         let mut cursor_line_override: Option<(String, usize)> = None;
         let now_ms = now_epoch_ms();
 
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
-            let line_idx = self.scroll_line + i;
-            if line_idx < self.lines.len() {
-                let line_no = line_idx + 1;
+            let virtual_line = self.scroll_line + i;
+            if let Some(line_idx) = self.real_line_for_virtual(virtual_line) {
+                if let Some(prev_real) = last_rendered_real {
+                    if line_idx > prev_real + 1 {
+                        ctx.advance_lines(&self.lines[(prev_real + 1)..line_idx]);
+                    }
+                }
+                last_rendered_real = Some(line_idx);
+
+                let line_no = virtual_line + 1;
                 let available = cols.saturating_sub(GUTTER_WIDTH);
                 let is_cursor_line = line_idx == self.cursor_line;
                 let mut calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
@@ -3189,67 +3513,89 @@ impl TerminalApp {
                 let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
                 let line_text = &self.lines[line_idx];
                 let mut rendered_line = line_text.to_string();
+                let collapsed_hidden_count = self
+                    .fold_placeholder_hidden_lines
+                    .get(line_idx)
+                    .and_then(|entry| *entry);
+                let is_fold_placeholder = collapsed_hidden_count.is_some();
 
-                if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
-                    reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
-                    reminder_strikethrough = reminder.remind_at_ms <= now_ms;
-                }
-
-                if let Some(formula) = find_table_formula_segment(line_text) {
-                    // Formula rows render a marker in-cell (`value*`) and keep
-                    // the detailed explanation as a line-end ghost.
+                if let Some(hidden_count) = collapsed_hidden_count {
+                    let suffix = if hidden_count == 1 { "" } else { "s" };
+                    rendered_line = format!("▶ {hidden_count} line{suffix} folded");
                     calc_ghost = None;
+                } else {
+                    if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
+                        reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
+                        reminder_strikethrough = reminder.remind_at_ms <= now_ms;
+                    }
 
-                    if let Some(result) = self.calc_results.get(line_idx).and_then(|r| r.as_deref())
-                    {
-                        if !(is_cursor_line
-                            && self.cursor_col >= formula.from_char
-                            && self.cursor_col <= formula.to_char)
+                    if let Some(formula) = find_table_formula_segment(line_text) {
+                        // Formula rows render a marker in-cell (`value*`) and keep
+                        // the detailed explanation as a line-end ghost.
+                        calc_ghost = None;
+
+                        if let Some(result) =
+                            self.calc_results.get(line_idx).and_then(|r| r.as_deref())
                         {
-                            let formatted = format_formula_display_value(result);
-                            let marker_char = formula.from_char + formatted.chars().count();
-                            let mut replacement = format!("{formatted}*");
-                            let old_len = formula.to_char.saturating_sub(formula.from_char);
-                            let new_len = replacement.chars().count();
-                            if new_len < old_len {
-                                replacement.push_str(&" ".repeat(old_len - new_len));
-                            }
-                            calc_ghost_override = Some(format!("* ➜ {}", formula.label));
-                            ghost_dim_ranges.push((marker_char, marker_char + 1));
+                            if !(is_cursor_line
+                                && self.cursor_col >= formula.from_char
+                                && self.cursor_col <= formula.to_char)
+                            {
+                                let formatted = format_formula_display_value(result);
+                                let marker_char = formula.from_char + formatted.chars().count();
+                                let mut replacement = format!("{formatted}*");
+                                let old_len = formula.to_char.saturating_sub(formula.from_char);
+                                let new_len = replacement.chars().count();
+                                if new_len < old_len {
+                                    replacement.push_str(&" ".repeat(old_len - new_len));
+                                }
+                                calc_ghost_override = Some(format!("* ➜ {}", formula.label));
+                                ghost_dim_ranges.push((marker_char, marker_char + 1));
 
-                            let mut out = String::with_capacity(
-                                line_text
-                                    .len()
-                                    .saturating_sub(formula.to_byte - formula.from_byte)
-                                    + replacement.len(),
-                            );
-                            out.push_str(&line_text[..formula.from_byte]);
-                            out.push_str(&replacement);
-                            out.push_str(&line_text[formula.to_byte..]);
-                            rendered_line = out;
+                                let mut out = String::with_capacity(
+                                    line_text
+                                        .len()
+                                        .saturating_sub(formula.to_byte - formula.from_byte)
+                                        + replacement.len(),
+                                );
+                                out.push_str(&line_text[..formula.from_byte]);
+                                out.push_str(&replacement);
+                                out.push_str(&line_text[formula.to_byte..]);
+                                rendered_line = out;
 
-                            if is_cursor_line {
-                                let mapped_col = if self.cursor_col <= formula.from_char {
-                                    self.cursor_col
-                                } else if self.cursor_col >= formula.to_char {
-                                    if new_len >= old_len {
-                                        self.cursor_col + (new_len - old_len)
+                                if is_cursor_line {
+                                    let mapped_col = if self.cursor_col <= formula.from_char {
+                                        self.cursor_col
+                                    } else if self.cursor_col >= formula.to_char {
+                                        if new_len >= old_len {
+                                            self.cursor_col + (new_len - old_len)
+                                        } else {
+                                            self.cursor_col.saturating_sub(old_len - new_len)
+                                        }
                                     } else {
-                                        self.cursor_col.saturating_sub(old_len - new_len)
-                                    }
-                                } else {
-                                    self.cursor_col
-                                };
-                                cursor_line_override = Some((rendered_line.clone(), mapped_col));
+                                        self.cursor_col
+                                    };
+                                    cursor_line_override =
+                                        Some((rendered_line.clone(), mapped_col));
+                                }
                             }
                         }
                     }
                 }
 
-                let (search_ranges, current_search_ranges) =
-                    self.search_highlights_for_line(line_idx);
+                let (search_ranges, current_search_ranges) = if is_fold_placeholder {
+                    (Vec::new(), Vec::new())
+                } else {
+                    self.search_highlights_for_line(line_idx)
+                };
                 let mut visual_highlight_ranges = Vec::new();
-                self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
+                if is_fold_placeholder {
+                    if self.line_is_in_visual_selection(line_idx) {
+                        visual_highlight_ranges.push((0, rendered_line.chars().count().max(1)));
+                    }
+                } else {
+                    self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
+                }
                 let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost);
                 let effective_reminder_ghost = reminder_ghost_override.as_deref();
                 let line_scroll_col = self.scroll_col;
@@ -3424,9 +3770,9 @@ impl TerminalApp {
                 (1, 1)
             }
             UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine => {
+                let cursor_virtual = self.current_virtual_line();
                 let row = EDITOR_TOP_ROW
-                    + self
-                        .cursor_line
+                    + cursor_virtual
                         .saturating_sub(self.scroll_line)
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
@@ -3752,6 +4098,204 @@ fn join_lines(lines: &[String]) -> String {
     } else {
         lines.join("\n")
     }
+}
+
+fn is_table_fold_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.ends_with('|')
+}
+
+fn is_list_fold_line(line: &str) -> bool {
+    crate::editor_core::markdown_tokens::list_marker_end(line).is_some()
+}
+
+fn build_fold_ranges(lines: &[String]) -> Vec<FoldRange> {
+    if lines.len() <= 1 {
+        return Vec::new();
+    }
+
+    let analyzed = crate::editor_core::markdown_tokens::analyze_lines(lines, false, None).lines;
+    let line_count = lines.len();
+    let mut ranges = Vec::new();
+
+    // Headings fold until the next heading (any level).
+    for line_idx in 0..line_count {
+        let line = &analyzed[line_idx];
+        if line.in_code_block || line.info.heading_level.is_none() {
+            continue;
+        }
+        let mut end_line = line_count - 1;
+        for next_idx in (line_idx + 1)..line_count {
+            let next = &analyzed[next_idx];
+            if next.in_code_block {
+                continue;
+            }
+            if next.info.heading_level.is_some() {
+                end_line = next_idx.saturating_sub(1);
+                break;
+            }
+        }
+        if end_line > line_idx {
+            ranges.push(FoldRange {
+                start_line: line_idx,
+                end_line,
+                kind: FoldKind::Heading,
+            });
+        }
+    }
+
+    // Fenced code blocks fold from opening fence through closing fence.
+    let mut open_fence_line: Option<usize> = None;
+    for line_idx in 0..line_count {
+        let line = &analyzed[line_idx];
+        if !line.info.is_code_fence {
+            continue;
+        }
+        if !line.in_code_block {
+            open_fence_line = Some(line_idx);
+            continue;
+        }
+
+        if let Some(start_line) = open_fence_line.take() {
+            if line_idx > start_line {
+                ranges.push(FoldRange {
+                    start_line,
+                    end_line: line_idx,
+                    kind: FoldKind::Fence,
+                });
+            }
+        }
+    }
+    if let Some(start_line) = open_fence_line {
+        if start_line + 1 < line_count {
+            ranges.push(FoldRange {
+                start_line,
+                end_line: line_count - 1,
+                kind: FoldKind::Fence,
+            });
+        }
+    }
+
+    // List/table/paragraph block folds.
+    let mut line_idx = 0usize;
+    while line_idx < line_count {
+        let line = &analyzed[line_idx];
+        let text = lines[line_idx].as_str();
+        let trimmed = text.trim();
+
+        if line.in_code_block || line.info.is_code_fence || trimmed.is_empty() {
+            line_idx += 1;
+            continue;
+        }
+
+        if is_list_fold_line(text) {
+            let start_line = line_idx;
+            line_idx += 1;
+            while line_idx < line_count {
+                let next = &analyzed[line_idx];
+                let next_text = lines[line_idx].as_str();
+                if next.in_code_block
+                    || next.info.is_code_fence
+                    || next_text.trim().is_empty()
+                    || !is_list_fold_line(next_text)
+                {
+                    break;
+                }
+                line_idx += 1;
+            }
+            let end_line = line_idx.saturating_sub(1);
+            if end_line > start_line {
+                ranges.push(FoldRange {
+                    start_line,
+                    end_line,
+                    kind: FoldKind::List,
+                });
+            }
+            continue;
+        }
+
+        if is_table_fold_line(text) {
+            let start_line = line_idx;
+            line_idx += 1;
+            while line_idx < line_count {
+                let next = &analyzed[line_idx];
+                let next_text = lines[line_idx].as_str();
+                if next.in_code_block
+                    || next.info.is_code_fence
+                    || next_text.trim().is_empty()
+                    || !is_table_fold_line(next_text)
+                {
+                    break;
+                }
+                line_idx += 1;
+            }
+            let end_line = line_idx.saturating_sub(1);
+            if end_line > start_line {
+                ranges.push(FoldRange {
+                    start_line,
+                    end_line,
+                    kind: FoldKind::Table,
+                });
+            }
+            continue;
+        }
+
+        if line.info.heading_level.is_some() || line.info.is_horizontal_rule {
+            line_idx += 1;
+            continue;
+        }
+
+        let start_line = line_idx;
+        line_idx += 1;
+        while line_idx < line_count {
+            let next = &analyzed[line_idx];
+            let next_text = lines[line_idx].as_str();
+            let next_trimmed = next_text.trim();
+            if next_trimmed.is_empty()
+                || next.in_code_block
+                || next.info.is_code_fence
+                || next.info.heading_level.is_some()
+                || next.info.is_horizontal_rule
+                || is_list_fold_line(next_text)
+                || is_table_fold_line(next_text)
+            {
+                break;
+            }
+            line_idx += 1;
+        }
+        let end_line = line_idx.saturating_sub(1);
+        if end_line > start_line {
+            ranges.push(FoldRange {
+                start_line,
+                end_line,
+                kind: FoldKind::Paragraph,
+            });
+        }
+    }
+
+    ranges.sort_by_key(|range| (range.start_line, range.end_line));
+    ranges
+}
+
+#[cfg(test)]
+fn describe_fold_ranges(lines: &[&str]) -> Vec<(usize, usize, &'static str)> {
+    let owned = lines
+        .iter()
+        .map(|line| (*line).to_string())
+        .collect::<Vec<_>>();
+    build_fold_ranges(&owned)
+        .into_iter()
+        .map(|range| {
+            let kind = match range.kind {
+                FoldKind::Heading => "heading",
+                FoldKind::Fence => "fence",
+                FoldKind::List => "list",
+                FoldKind::Table => "table",
+                FoldKind::Paragraph => "paragraph",
+            };
+            (range.start_line, range.end_line, kind)
+        })
+        .collect()
 }
 
 fn line_char_len(text: &str) -> usize {
@@ -4948,8 +5492,8 @@ fn contains_assignment_operator(text: &str) -> bool {
 mod tests {
     use super::{
         builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
-        display_cols_for_prefix, find_calc_segment_range, find_table_formula_segment,
-        format_formula_display_value, rendered_line_display_cols,
+        describe_fold_ranges, display_cols_for_prefix, find_calc_segment_range,
+        find_table_formula_segment, format_formula_display_value, rendered_line_display_cols,
     };
     use super::{line_char_len, Key, TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
@@ -5064,6 +5608,63 @@ mod tests {
     fn rendered_line_display_cols_accounts_for_calc_ghost() {
         assert_eq!(rendered_line_display_cols("2 + 2", Some("4")), 9);
         assert_eq!(rendered_line_display_cols("x := 1", Some("2")), 10);
+    }
+
+    #[test]
+    fn fold_range_builder_detects_heading_fence_list_table_and_paragraph_blocks() {
+        let ranges = describe_fold_ranges(&[
+            "# top",
+            "para one",
+            "para two",
+            "## sub",
+            "```rs",
+            "let total = 1;",
+            "```",
+            "- first",
+            "- second",
+            "| a |",
+            "| - |",
+            "| b |",
+            "plain one",
+            "plain two",
+            "",
+        ]);
+
+        assert!(ranges.contains(&(0, 2, "heading")));
+        assert!(ranges.contains(&(3, 14, "heading")));
+        assert!(ranges.contains(&(4, 6, "fence")));
+        assert!(ranges.contains(&(7, 8, "list")));
+        assert!(ranges.contains(&(9, 11, "table")));
+        assert!(ranges.contains(&(1, 2, "paragraph")));
+        assert!(ranges.contains(&(12, 13, "paragraph")));
+    }
+
+    #[test]
+    fn normal_mode_za_toggles_fold_and_vertical_navigation_uses_virtual_lines() {
+        let (db, mut app, path) = app_with_note("# h1\none\ntwo\n# h2\nthree");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+
+        run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
+
+        assert!(app.collapsed_fold_starts.contains(&0));
+        assert_eq!(app.fold_visible_to_real, vec![0, 3, 4]);
+        assert_eq!(app.fold_placeholder_hidden_lines[0], Some(2));
+
+        run_keys(&mut app, &db, &[Key::Char('j')]);
+        assert_eq!(app.cursor_line, 3);
+        assert_eq!(app.current_virtual_line(), 1);
+
+        app.cursor_line = 1;
+        app.adjust_cursor();
+        assert_eq!(app.cursor_line, 0);
+
+        run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
+        assert!(!app.collapsed_fold_starts.contains(&0));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
     }
 
     #[test]
@@ -5588,6 +6189,33 @@ mod tests {
         app.execute_terminal_command(&db, "clip-watch-stop");
         assert!(!app.clipboard_watch_enabled);
         assert_eq!(app.status, "clip-watch not active");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn fold_commands_toggle_terminal_folds_and_aliases() {
+        let (db, mut app, path) = app_with_note("# h1\none\ntwo\n# h2\nthree");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+
+        app.execute_terminal_command(&db, "fold");
+        assert!(app.collapsed_fold_starts.contains(&0));
+        assert_eq!(app.fold_visible_to_real, vec![0, 3, 4]);
+
+        app.execute_terminal_command(&db, "fold");
+        assert_eq!(app.status, "fold: already folded");
+
+        app.execute_terminal_command(&db, "unfold");
+        assert!(!app.collapsed_fold_starts.contains(&0));
+
+        app.execute_terminal_command(&db, "za");
+        assert!(app.collapsed_fold_starts.contains(&0));
+
+        app.execute_terminal_command(&db, "zo");
+        assert!(!app.collapsed_fold_starts.contains(&0));
 
         drop(app);
         drop(db);
