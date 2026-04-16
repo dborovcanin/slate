@@ -718,7 +718,10 @@ fn reduce_formula_values(
     }
 
     // Fast path: if all values are plain numbers, do arithmetic directly.
-    let numeric: Option<Vec<f64>> = values.iter().map(|v| parse_plain_numeric_literal(v)).collect();
+    let numeric: Option<Vec<f64>> = values
+        .iter()
+        .map(|v| parse_plain_numeric_literal(v))
+        .collect();
     if let Some(nums) = numeric {
         let sum: f64 = nums.iter().sum();
         let result = match op {
@@ -742,10 +745,7 @@ fn reduce_formula_values(
     Some(acc)
 }
 
-fn evaluate_formula_term(
-    term: &str,
-    ctx: &mut fend_core::Context,
-) -> Option<String> {
+fn evaluate_formula_term(term: &str, ctx: &mut fend_core::Context) -> Option<String> {
     let trimmed = term.trim();
     if trimmed.is_empty() {
         return None;
@@ -1071,13 +1071,44 @@ fn has_calc_signal(s: &str) -> bool {
         return false;
     }
 
-    s.bytes().any(|b| {
-        matches!(
-            b,
-            b'+' | b'-' | b'*' | b'/' | b'^' | b'%' | b'(' | b'0'..=b'9'
-        )
-    }) || s.contains(" to ")
-        || s.contains(" in ")
+    let trimmed = s.trim();
+    let bytes = s.as_bytes();
+    if bytes
+        .iter()
+        .any(|&b| matches!(b, b'+' | b'*' | b'^' | b'%' | b'('))
+    {
+        return true;
+    }
+
+    if bytes.iter().enumerate().any(|(idx, &b)| {
+        matches!(b, b'-' | b'/') && has_numeric_or_space_math_neighbors(bytes, idx)
+    }) {
+        return true;
+    }
+
+    let has_digit = s.bytes().any(|b| b.is_ascii_digit());
+    let has_alpha = s.bytes().any(|b| b.is_ascii_alphabetic());
+    if has_digit && (s.contains(" to ") || s.contains(" in ")) {
+        return true;
+    }
+
+    // Keep mixed digit+alpha shorthand like `5km`, but avoid prose such as
+    // `Task 5 update` being interpreted as a formula.
+    has_digit && has_alpha && !trimmed.contains(char::is_whitespace)
+}
+
+fn has_numeric_or_space_math_neighbors(bytes: &[u8], idx: usize) -> bool {
+    let left = idx.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+    let right = bytes.get(idx + 1).copied();
+    let is_mathish_neighbor = |b: u8| {
+        b.is_ascii_digit()
+            || b.is_ascii_whitespace()
+            || matches!(
+                b,
+                b'(' | b')' | b'=' | b'+' | b'-' | b'*' | b'/' | b'^' | b'%'
+            )
+    };
+    left.is_some_and(is_mathish_neighbor) || right.is_some_and(is_mathish_neighbor)
 }
 
 fn split3(s: &str, delim: char) -> Option<(&str, &str, &str)> {
@@ -1305,6 +1336,27 @@ mod tests {
             result.line_results,
             vec![None, Some("6".to_string()), Some("7".to_string())]
         );
+    }
+
+    #[test]
+    fn note_eval_ignores_ordered_list_prose_with_hyphenated_words_and_slashes() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "5. Dedup: Unify the text-object methods, undo/redo, and VimIntent line-range"
+                .to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results, vec![None]);
+    }
+
+    #[test]
+    fn note_eval_keeps_division_signal_in_list_items() {
+        let engine = CalcEngine::new();
+        let lines = vec!["- 12 / 3".to_string()];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results, vec![Some("4".to_string())]);
     }
 
     #[test]

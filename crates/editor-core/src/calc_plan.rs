@@ -268,6 +268,20 @@ pub fn is_builtin_formula(text: &str) -> bool {
     builtin_formula_label(text).is_some()
 }
 
+fn has_numeric_or_space_math_neighbors(bytes: &[u8], idx: usize) -> bool {
+    let left = idx.checked_sub(1).and_then(|i| bytes.get(i)).copied();
+    let right = bytes.get(idx + 1).copied();
+    let is_mathish_neighbor = |b: u8| {
+        b.is_ascii_digit()
+            || b.is_ascii_whitespace()
+            || matches!(
+                b,
+                b'(' | b')' | b'=' | b'+' | b'-' | b'*' | b'/' | b'^' | b'%'
+            )
+    };
+    left.is_some_and(is_mathish_neighbor) || right.is_some_and(is_mathish_neighbor)
+}
+
 pub fn has_calc_signal(text: &str) -> bool {
     let trimmed = text.trim();
     if is_builtin_formula(trimmed) {
@@ -278,20 +292,29 @@ pub fn has_calc_signal(text: &str) -> bool {
         return false;
     }
 
-    if text
-        .bytes()
-        .any(|b| matches!(b, b'+' | b'-' | b'*' | b'/' | b'^' | b'%' | b'('))
+    let bytes = text.as_bytes();
+    if bytes
+        .iter()
+        .any(|&b| matches!(b, b'+' | b'*' | b'^' | b'%' | b'('))
     {
         return true;
     }
 
-    if text.contains(" to ") || text.contains(" in ") {
+    if bytes.iter().enumerate().any(|(idx, &b)| {
+        matches!(b, b'-' | b'/') && has_numeric_or_space_math_neighbors(bytes, idx)
+    }) {
         return true;
     }
 
     let has_digit = text.bytes().any(|b| b.is_ascii_digit());
     let has_alpha = text.bytes().any(|b| b.is_ascii_alphabetic());
-    has_digit && has_alpha
+    if has_digit && (text.contains(" to ") || text.contains(" in ")) {
+        return true;
+    }
+
+    // Keep mixed digit+alpha shorthand like `5km`, but avoid prose such as
+    // `Task 5 update` being interpreted as a formula.
+    has_digit && has_alpha && !trimmed.contains(char::is_whitespace)
 }
 
 pub fn contains_assignment_operator(text: &str) -> bool {
@@ -709,6 +732,20 @@ mod tests {
         let line = "- [ ]  2+2   ";
         let seg = find_list_calc_segment(line).expect("segment");
         assert_eq!(seg.expr, "2+2");
+    }
+
+    #[test]
+    fn list_body_calc_segment_ignores_ordered_list_prose_with_hyphenated_words_and_slashes() {
+        let line = "5. Dedup: Unify the text-object methods, undo/redo, and VimIntent line-range";
+        assert!(find_list_calc_segment(line).is_none());
+        assert_eq!(line_for_calc_evaluation(line), "");
+    }
+
+    #[test]
+    fn list_body_calc_segment_keeps_division_expressions() {
+        let line = "- total / 2";
+        let seg = find_list_calc_segment(line).expect("segment");
+        assert_eq!(seg.expr, "total / 2");
     }
 
     #[test]
