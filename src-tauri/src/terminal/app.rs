@@ -1,16 +1,20 @@
+use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, goto, pad_right, AnsiStyle};
+use super::clipboard::{self, ClipboardWriteBackend};
+use super::date_picker::{self, DatePickerAction, DatePickerView};
+use super::folding::{self, FoldKind, FoldRange};
+use super::input::{self, Key, TerminalGuard};
+use super::notifications;
 use super::render;
+use super::switcher::{self, NoteMeta, SwitcherView};
+use super::text_utils::*;
 
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
-use base64::Engine as _;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
-use std::io::{self, IsTerminal as _, Write};
-use std::mem::MaybeUninit;
-use std::process::{Command, Stdio};
+use std::io::{self, Write};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
@@ -23,237 +27,6 @@ const GUTTER_WIDTH: usize = 6;
 const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
-
-fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ClipboardWriteBackend {
-    Arboard,
-    Tmux,
-    WlCopy,
-    Xclip,
-    Xsel,
-    Pbcopy,
-    ClipExe,
-    Osc52,
-}
-
-impl ClipboardWriteBackend {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Arboard => "native",
-            Self::Tmux => "tmux",
-            Self::WlCopy => "wl-copy",
-            Self::Xclip => "xclip",
-            Self::Xsel => "xsel",
-            Self::Pbcopy => "pbcopy",
-            Self::ClipExe => "clip.exe",
-            Self::Osc52 => "osc52",
-        }
-    }
-}
-
-fn copy_text_to_clipboard(text: &str) -> Option<ClipboardWriteBackend> {
-    if text.is_empty() {
-        return None;
-    }
-
-    // In terminal mode prefer explicit system/terminal clipboard transports.
-    // `arboard` can report success in environments where the desktop clipboard
-    // is not actually reachable from this terminal session.
-    if let Some(backend) = write_clipboard_via_commands(text) {
-        return Some(backend);
-    }
-
-    // Fallback for terminal environments where native/system providers are
-    // unavailable. Many terminals support OSC 52 copy sequences.
-    if write_clipboard_via_osc52(text) {
-        return Some(ClipboardWriteBackend::Osc52);
-    }
-
-    if let Ok(mut ctx) = arboard::Clipboard::new() {
-        if ctx.set_text(text.to_string()).is_ok() {
-            return Some(ClipboardWriteBackend::Arboard);
-        }
-    }
-
-    None
-}
-
-fn write_terminal_sequence(sequence: &str) -> bool {
-    if io::stdout().is_terminal() {
-        let mut out = io::stdout();
-        if write!(out, "{sequence}").and_then(|_| out.flush()).is_ok() {
-            return true;
-        }
-    }
-
-    #[cfg(unix)]
-    {
-        if let Ok(mut tty) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
-            if tty
-                .write_all(sequence.as_bytes())
-                .and_then(|_| tty.flush())
-                .is_ok()
-            {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-fn run_clipboard_write_command(bin: &str, args: &[&str], text: &str) -> bool {
-    let mut child = match Command::new(bin)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(_) => return false,
-    };
-
-    if let Some(mut stdin) = child.stdin.take() {
-        if stdin.write_all(text.as_bytes()).is_err() {
-            let _ = child.kill();
-            let _ = child.wait();
-            return false;
-        }
-    } else {
-        return false;
-    }
-
-    matches!(child.wait(), Ok(status) if status.success())
-}
-
-fn run_clipboard_write_command_with_arg(bin: &str, args: &[&str], text: &str) -> bool {
-    matches!(
-        Command::new(bin)
-            .args(args)
-            .arg(text)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status(),
-        Ok(status) if status.success()
-    )
-}
-
-fn run_clipboard_read_command(bin: &str, args: &[&str]) -> Option<String> {
-    let output = Command::new(bin)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let text = String::from_utf8(output.stdout).ok()?;
-    let trimmed = text.trim_end_matches('\n').trim_end_matches('\r');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn write_clipboard_via_tmux(text: &str) -> bool {
-    if run_clipboard_write_command("tmux", &["load-buffer", "-w", "-"], text) {
-        return true;
-    }
-    if run_clipboard_write_command_with_arg("tmux", &["set-buffer", "-w", "--"], text) {
-        return true;
-    }
-    if run_clipboard_write_command("tmux", &["load-buffer", "-"], text) {
-        return true;
-    }
-    run_clipboard_write_command_with_arg("tmux", &["set-buffer", "--"], text)
-}
-
-fn write_clipboard_via_commands(text: &str) -> Option<ClipboardWriteBackend> {
-    if run_clipboard_write_command("wl-copy", &[], text) {
-        return Some(ClipboardWriteBackend::WlCopy);
-    }
-    if run_clipboard_write_command("xclip", &["-selection", "clipboard"], text) {
-        return Some(ClipboardWriteBackend::Xclip);
-    }
-    if run_clipboard_write_command("xsel", &["--clipboard", "--input"], text) {
-        return Some(ClipboardWriteBackend::Xsel);
-    }
-    if run_clipboard_write_command("pbcopy", &[], text) {
-        return Some(ClipboardWriteBackend::Pbcopy);
-    }
-    if run_clipboard_write_command("clip.exe", &[], text) {
-        return Some(ClipboardWriteBackend::ClipExe);
-    }
-    if run_clipboard_write_command("clip", &[], text) {
-        return Some(ClipboardWriteBackend::ClipExe);
-    }
-    if std::env::var_os("TMUX").is_some() && write_clipboard_via_tmux(text) {
-        return Some(ClipboardWriteBackend::Tmux);
-    }
-
-    None
-}
-
-fn build_osc52_sequence(encoded: &str, terminator: &str) -> String {
-    // tmux/screen usually require DCS passthrough for OSC sequences.
-    if std::env::var_os("TMUX").is_some() {
-        return format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}{terminator}\x1b\\");
-    }
-    if std::env::var_os("STY").is_some() {
-        return format!("\x1bP\x1b]52;c;{encoded}{terminator}\x1b\\");
-    }
-    format!("\x1b]52;c;{encoded}{terminator}")
-}
-
-fn write_clipboard_via_osc52(text: &str) -> bool {
-    let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
-    let bel = build_osc52_sequence(&encoded, "\x07");
-    let st = build_osc52_sequence(&encoded, "\x1b\\");
-
-    // Emit both BEL- and ST-terminated forms for wider terminal compatibility.
-    let wrote_bel = write_terminal_sequence(&bel);
-    let wrote_st = write_terminal_sequence(&st);
-    wrote_bel || wrote_st
-}
-
-fn read_clipboard_via_commands() -> Option<String> {
-    if let Some(text) = run_clipboard_read_command("wl-paste", &["-n"]) {
-        return Some(text);
-    }
-    if let Some(text) = run_clipboard_read_command("xclip", &["-selection", "clipboard", "-o"]) {
-        return Some(text);
-    }
-    if let Some(text) = run_clipboard_read_command("xsel", &["--clipboard", "--output"]) {
-        return Some(text);
-    }
-    if let Some(text) = run_clipboard_read_command("pbpaste", &[]) {
-        return Some(text);
-    }
-    if let Some(text) = run_clipboard_read_command(
-        "powershell",
-        &["-NoProfile", "-Command", "Get-Clipboard -Raw"],
-    ) {
-        return Some(text);
-    }
-    if let Some(text) =
-        run_clipboard_read_command("pwsh", &["-NoProfile", "-Command", "Get-Clipboard -Raw"])
-    {
-        return Some(text);
-    }
-    if std::env::var_os("TMUX").is_some() {
-        if let Some(text) = run_clipboard_read_command("tmux", &["save-buffer", "-"]) {
-            return Some(text);
-        }
-    }
-    None
-}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalOptions {
@@ -274,39 +47,14 @@ enum UiMode {
     DatePicker,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DatePickerAction {
-    InsertDate,
-    SetNotify,
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Key {
-    Char(char),
-    Paste(String),
-    Enter,
-    Backspace,
-    Delete,
-    Tab,
-    BackTab,
-    Esc,
-    ArrowUp,
-    ArrowDown,
-    ArrowLeft,
-    ArrowRight,
-    CtrlArrowLeft,
-    CtrlArrowRight,
-    Home,
-    End,
-    PageUp,
-    PageDown,
-    Ctrl(char),
-}
 
-#[derive(Debug, Clone)]
-struct NoteMeta {
-    id: String,
-    title: String,
+#[derive(Debug, Clone, Copy, Default)]
+struct TerminalStartupMetrics {
+    loading_note: Duration,
+    loading_switcher: Duration,
+    loading_calc_engine: Duration,
+    loading_screen: Duration,
 }
 
 const MAX_UNDO_ENTRIES: usize = 500;
@@ -318,29 +66,6 @@ struct UndoEntry {
     cursor_col: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FoldKind {
-    Heading,
-    Fence,
-    List,
-    Table,
-    Paragraph,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FoldRange {
-    start_line: usize,
-    end_line: usize,
-    kind: FoldKind,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct TerminalStartupMetrics {
-    loading_note: Duration,
-    loading_switcher: Duration,
-    loading_calc_engine: Duration,
-    loading_screen: Duration,
-}
 
 #[derive(Debug, Clone)]
 struct LineReminderGhost {
@@ -456,7 +181,7 @@ impl TerminalApp {
         let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
 
         let switcher_begin = Instant::now();
-        let switcher_items = load_note_meta(db)?;
+        let switcher_items = switcher::load_note_meta(db)?;
         let loading_switcher = switcher_begin.elapsed();
 
         let calc_engine = CalcEngine::new();
@@ -566,7 +291,7 @@ impl TerminalApp {
                 break;
             }
 
-            match read_key()? {
+            match input::read_key()? {
                 Some(key) => self.handle_key(db, key)?,
                 None => self.maybe_autosave(db)?,
             }
@@ -595,7 +320,7 @@ impl TerminalApp {
             return false;
         }
         self.clipboard_watch_enabled = true;
-        self.clipboard_watch_last_text = read_clipboard_via_commands();
+        self.clipboard_watch_last_text = clipboard::read_clipboard_via_commands();
         self.clipboard_watch_last_poll =
             Instant::now() - Duration::from_millis(CLIPBOARD_WATCH_POLL_MS);
         true
@@ -622,7 +347,7 @@ impl TerminalApp {
         }
         self.clipboard_watch_last_poll = Instant::now();
 
-        let Some(text) = read_clipboard_via_commands() else {
+        let Some(text) = clipboard::read_clipboard_via_commands() else {
             return;
         };
         if text.is_empty() {
@@ -784,7 +509,7 @@ impl TerminalApp {
         }
         let joined = lines.join("\n");
         self.clipboard_watch_last_text = Some(joined.clone());
-        let backend = copy_text_to_clipboard(&joined);
+        let backend = clipboard::copy_text_to_clipboard(&joined);
         self.last_clipboard_backend = backend;
         self.clipboard = lines;
         backend
@@ -799,7 +524,7 @@ impl TerminalApp {
     }
 
     fn read_system_clipboard_lines(&self) -> Option<Vec<String>> {
-        let text = read_clipboard_via_commands().or_else(|| {
+        let text = clipboard::read_clipboard_via_commands().or_else(|| {
             if let Ok(mut ctx) = arboard::Clipboard::new() {
                 ctx.get_text().ok()
             } else {
@@ -1923,7 +1648,7 @@ impl TerminalApp {
     }
 
     fn open_date_picker(&mut self, action: DatePickerAction, require_time: bool) {
-        if let Some((year, month, day, hour, minute)) = current_local_datetime_parts() {
+        if let Some((year, month, day, hour, minute)) = date_picker::current_local_datetime_parts() {
             self.date_year = year;
             self.date_month = month;
             self.date_day = day;
@@ -1989,7 +1714,7 @@ impl TerminalApp {
             }
             Key::Enter => {
                 if self.date_picker_action == DatePickerAction::InsertDate {
-                    let inserted = format_datetime_with_pattern(
+                    let inserted = date_picker::format_datetime_with_pattern(
                         self.date_year,
                         self.date_month,
                         self.date_day,
@@ -2007,7 +1732,7 @@ impl TerminalApp {
                     return Ok(());
                 }
 
-                let remind_at_ms = local_datetime_to_epoch_ms(
+                let remind_at_ms = date_picker::local_datetime_to_epoch_ms(
                     self.date_year,
                     self.date_month,
                     self.date_day,
@@ -2015,7 +1740,7 @@ impl TerminalApp {
                     self.date_minute,
                 )
                 .ok_or_else(|| "failed to convert reminder time".to_string())?;
-                let display_at = format_datetime_with_pattern(
+                let display_at = date_picker::format_datetime_with_pattern(
                     self.date_year,
                     self.date_month,
                     self.date_day,
@@ -2055,7 +1780,7 @@ impl TerminalApp {
                 }
             }
             Key::ArrowRight => {
-                let max = days_in_month(self.date_year, self.date_month);
+                let max = date_picker::days_in_month(self.date_year, self.date_month);
                 if self.date_day < max {
                     self.date_day += 1;
                 }
@@ -2071,12 +1796,12 @@ impl TerminalApp {
                     } else {
                         self.date_month -= 1;
                     }
-                    let max = days_in_month(self.date_year, self.date_month);
+                    let max = date_picker::days_in_month(self.date_year, self.date_month);
                     self.date_day = max.min(self.date_day);
                 }
             }
             Key::ArrowDown => {
-                let max = days_in_month(self.date_year, self.date_month);
+                let max = date_picker::days_in_month(self.date_year, self.date_month);
                 if self.date_day + 7 <= max {
                     self.date_day += 7;
                 } else {
@@ -2087,7 +1812,7 @@ impl TerminalApp {
                     } else {
                         self.date_month += 1;
                     }
-                    let new_max = days_in_month(self.date_year, self.date_month);
+                    let new_max = date_picker::days_in_month(self.date_year, self.date_month);
                     self.date_day = new_max.min(self.date_day);
                 }
             }
@@ -2099,7 +1824,7 @@ impl TerminalApp {
                 } else {
                     self.date_month -= 1;
                 }
-                let max = days_in_month(self.date_year, self.date_month);
+                let max = date_picker::days_in_month(self.date_year, self.date_month);
                 self.date_day = self.date_day.min(max);
             }
             Key::CtrlArrowRight => {
@@ -2110,7 +1835,7 @@ impl TerminalApp {
                 } else {
                     self.date_month += 1;
                 }
-                let max = days_in_month(self.date_year, self.date_month);
+                let max = date_picker::days_in_month(self.date_year, self.date_month);
                 self.date_day = self.date_day.min(max);
             }
             Key::Home | Key::Char('h') => self.adjust_picker_hour(-1),
@@ -2154,7 +1879,7 @@ impl TerminalApp {
 
         let mut scored: Vec<(usize, i32)> = Vec::new();
         for (idx, item) in self.switcher_items.iter().enumerate() {
-            if let Some(score) = fuzzy_score(query, &item.title) {
+            if let Some(score) = switcher::fuzzy_score(query, &item.title) {
                 scored.push((idx, score));
             }
         }
@@ -2203,7 +1928,7 @@ impl TerminalApp {
             return;
         }
 
-        let now_ms = now_epoch_ms();
+        let now_ms = notifications::now_epoch_ms();
         let mut due_lines = self
             .reminder_ghosts
             .iter()
@@ -2237,7 +1962,7 @@ impl TerminalApp {
                 })
                 .unwrap_or_else(|| "Reminder".to_string());
 
-            if let Err(error) = send_system_notification("Note reminder", &body) {
+            if let Err(error) = notifications::send_system_notification("Note reminder", &body) {
                 eprintln!("Reminder notification failed: {error}");
                 continue;
             }
@@ -2265,7 +1990,7 @@ impl TerminalApp {
     }
 
     fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
-        self.switcher_items = load_note_meta(db)?;
+        self.switcher_items = switcher::load_note_meta(db)?;
         if self.mode == UiMode::Switcher {
             self.recompute_switcher_matches();
         }
@@ -2315,7 +2040,7 @@ impl TerminalApp {
     }
 
     fn recompute_folding(&mut self) {
-        self.fold_ranges = build_fold_ranges(&self.lines);
+        self.fold_ranges = folding::build_fold_ranges(&self.lines);
         self.fold_range_by_start = vec![None; self.lines.len()];
         for range in &self.fold_ranges {
             if range.start_line < self.fold_range_by_start.len() {
@@ -3386,7 +3111,7 @@ impl TerminalApp {
     }
 
     fn editor_height(&self) -> usize {
-        let (rows, _) = terminal_size();
+        let (rows, _) = input::terminal_size();
         rows.saturating_sub(2).max(1)
     }
 
@@ -3402,7 +3127,7 @@ impl TerminalApp {
             .scroll_line
             .min(self.visible_line_count().saturating_sub(1));
 
-        let (_, cols) = terminal_size();
+        let (_, cols) = input::terminal_size();
         let available = cols.saturating_sub(GUTTER_WIDTH);
         if available == 0 {
             self.scroll_col = 0;
@@ -3413,7 +3138,7 @@ impl TerminalApp {
             let line_text = self.current_line();
             let line_len = line_char_len(line_text);
             let logical_col = min(self.cursor_col, line_len);
-            let render_col = cursor_render_char_col(line_text, self.cursor_col, self.mode);
+            let render_col = cursor_render_char_col(line_text, self.cursor_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
             let line_width = line_display_cols(line_text);
             let end_slot = usize::from(
                 self.mode == UiMode::Editor && logical_col == line_len && line_width > available,
@@ -3441,7 +3166,7 @@ impl TerminalApp {
     }
 
     fn draw(&self, out: &mut impl Write) -> Result<(), String> {
-        let (rows, cols) = terminal_size();
+        let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
         let mut buf = String::with_capacity(rows.saturating_mul(cols.saturating_add(8)));
 
@@ -3490,7 +3215,7 @@ impl TerminalApp {
             None
         };
         let mut cursor_line_override: Option<(String, usize)> = None;
-        let now_ms = now_epoch_ms();
+        let now_ms = notifications::now_epoch_ms();
 
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
@@ -3709,11 +3434,39 @@ impl TerminalApp {
         );
 
         if self.mode == UiMode::Switcher {
-            draw_switcher(self, &mut buf, rows, cols, self.render_palette);
+            switcher::draw_switcher(
+                &SwitcherView {
+                    query: &self.switcher_query,
+                    items: &self.switcher_items,
+                    matches: &self.switcher_matches,
+                    selected: self.switcher_selected,
+                },
+                &mut buf,
+                rows,
+                cols,
+                self.render_palette,
+            );
         }
 
         if self.mode == UiMode::DatePicker {
-            draw_date_picker(self, &mut buf, rows, cols, self.render_palette);
+            date_picker::draw_date_picker(
+                &DatePickerView {
+                    year: self.date_year,
+                    month: self.date_month,
+                    day: self.date_day,
+                    hour: self.date_hour,
+                    minute: self.date_minute,
+                    include_time: self.date_include_time,
+                    require_time: self.date_require_time,
+                    is_notify: self.date_picker_action == DatePickerAction::SetNotify,
+                    date_format: &self.date_format,
+                    date_time_format: &self.date_time_format,
+                },
+                &mut buf,
+                rows,
+                cols,
+                self.render_palette,
+            );
         }
 
         let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
@@ -3723,7 +3476,7 @@ impl TerminalApp {
                 UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
             ) {
                 let available = cols.saturating_sub(GUTTER_WIDTH);
-                let display_char_col = cursor_render_char_col(&line_text, mapped_col, self.mode);
+                let display_char_col = cursor_render_char_col(&line_text, mapped_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
                 let display_col = display_cols_for_prefix(&line_text, display_char_col);
                 let line_width = line_display_cols(&line_text);
                 let visible_col = viewport_col_for_display_col(
@@ -3778,7 +3531,7 @@ impl TerminalApp {
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
                 let display_char_col =
-                    cursor_render_char_col(line_text, self.cursor_col, self.mode);
+                    cursor_render_char_col(line_text, self.cursor_col, matches!(self.mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine));
                 let available = cols.saturating_sub(GUTTER_WIDTH);
                 let display_col = display_cols_for_prefix(line_text, display_char_col);
                 let line_width = line_display_cols(line_text);
@@ -3816,7 +3569,7 @@ pub fn run_terminal_session(
         .as_millis();
 
     if opts.list_only {
-        print_note_list(db)?;
+        switcher::print_note_list(db)?;
         let line = format!("time:{startup_ts_ms} loading_screen:0ms list_notes:0ms");
         if let Err(err) = append_startup_log_line("tui", &line) {
             eprintln!("Startup diagnostics: {err}");
@@ -4085,285 +3838,6 @@ fn load_note_reminder_ghosts(
     Ok(by_line)
 }
 
-fn split_lines(body: &str) -> Vec<String> {
-    if body.is_empty() {
-        vec![String::new()]
-    } else {
-        body.split('\n').map(|l| l.to_string()).collect()
-    }
-}
-
-fn join_lines(lines: &[String]) -> String {
-    if lines.len() == 1 && lines[0].is_empty() {
-        String::new()
-    } else {
-        lines.join("\n")
-    }
-}
-
-fn is_table_fold_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
-}
-
-fn is_list_fold_line(line: &str) -> bool {
-    crate::editor_core::markdown_tokens::list_marker_end(line).is_some()
-}
-
-fn build_fold_ranges(lines: &[String]) -> Vec<FoldRange> {
-    if lines.len() <= 1 {
-        return Vec::new();
-    }
-
-    let analyzed = crate::editor_core::markdown_tokens::analyze_lines(lines, false, None).lines;
-    let line_count = lines.len();
-    let mut ranges = Vec::new();
-
-    // Headings fold until the next heading of the same level.
-    for line_idx in 0..line_count {
-        let line = &analyzed[line_idx];
-        if line.in_code_block || line.info.heading_level.is_none() {
-            continue;
-        }
-        let mut end_line = line_count - 1;
-        for next_idx in (line_idx + 1)..line_count {
-            let next = &analyzed[next_idx];
-            if next.in_code_block {
-                continue;
-            }
-            if next.info.heading_level == line.info.heading_level {
-                end_line = next_idx.saturating_sub(1);
-                break;
-            }
-        }
-        if end_line > line_idx {
-            ranges.push(FoldRange {
-                start_line: line_idx,
-                end_line,
-                kind: FoldKind::Heading,
-            });
-        }
-    }
-
-    // Fenced code blocks fold from opening fence through closing fence.
-    let mut open_fence_line: Option<usize> = None;
-    for line_idx in 0..line_count {
-        let line = &analyzed[line_idx];
-        if !line.info.is_code_fence {
-            continue;
-        }
-        if !line.in_code_block {
-            open_fence_line = Some(line_idx);
-            continue;
-        }
-
-        if let Some(start_line) = open_fence_line.take() {
-            if line_idx > start_line {
-                ranges.push(FoldRange {
-                    start_line,
-                    end_line: line_idx,
-                    kind: FoldKind::Fence,
-                });
-            }
-        }
-    }
-    if let Some(start_line) = open_fence_line {
-        if start_line + 1 < line_count {
-            ranges.push(FoldRange {
-                start_line,
-                end_line: line_count - 1,
-                kind: FoldKind::Fence,
-            });
-        }
-    }
-
-    // List/table/paragraph block folds.
-    let mut line_idx = 0usize;
-    while line_idx < line_count {
-        let line = &analyzed[line_idx];
-        let text = lines[line_idx].as_str();
-        let trimmed = text.trim();
-
-        if line.in_code_block || line.info.is_code_fence || trimmed.is_empty() {
-            line_idx += 1;
-            continue;
-        }
-
-        if is_list_fold_line(text) {
-            let start_line = line_idx;
-            line_idx += 1;
-            while line_idx < line_count {
-                let next = &analyzed[line_idx];
-                let next_text = lines[line_idx].as_str();
-                if next.in_code_block
-                    || next.info.is_code_fence
-                    || next_text.trim().is_empty()
-                    || !is_list_fold_line(next_text)
-                {
-                    break;
-                }
-                line_idx += 1;
-            }
-            let end_line = line_idx.saturating_sub(1);
-            if end_line > start_line {
-                ranges.push(FoldRange {
-                    start_line,
-                    end_line,
-                    kind: FoldKind::List,
-                });
-            }
-            continue;
-        }
-
-        if is_table_fold_line(text) {
-            let start_line = line_idx;
-            line_idx += 1;
-            while line_idx < line_count {
-                let next = &analyzed[line_idx];
-                let next_text = lines[line_idx].as_str();
-                if next.in_code_block
-                    || next.info.is_code_fence
-                    || next_text.trim().is_empty()
-                    || !is_table_fold_line(next_text)
-                {
-                    break;
-                }
-                line_idx += 1;
-            }
-            let end_line = line_idx.saturating_sub(1);
-            if end_line > start_line {
-                ranges.push(FoldRange {
-                    start_line,
-                    end_line,
-                    kind: FoldKind::Table,
-                });
-            }
-            continue;
-        }
-
-        if line.info.heading_level.is_some() || line.info.is_horizontal_rule {
-            line_idx += 1;
-            continue;
-        }
-
-        let start_line = line_idx;
-        line_idx += 1;
-        while line_idx < line_count {
-            let next = &analyzed[line_idx];
-            let next_text = lines[line_idx].as_str();
-            let next_trimmed = next_text.trim();
-            if next_trimmed.is_empty()
-                || next.in_code_block
-                || next.info.is_code_fence
-                || next.info.heading_level.is_some()
-                || next.info.is_horizontal_rule
-                || is_list_fold_line(next_text)
-                || is_table_fold_line(next_text)
-            {
-                break;
-            }
-            line_idx += 1;
-        }
-        let end_line = line_idx.saturating_sub(1);
-        if end_line > start_line {
-            ranges.push(FoldRange {
-                start_line,
-                end_line,
-                kind: FoldKind::Paragraph,
-            });
-        }
-    }
-
-    ranges.sort_by_key(|range| (range.start_line, range.end_line));
-    ranges
-}
-
-#[cfg(test)]
-fn describe_fold_ranges(lines: &[&str]) -> Vec<(usize, usize, &'static str)> {
-    let owned = lines
-        .iter()
-        .map(|line| (*line).to_string())
-        .collect::<Vec<_>>();
-    build_fold_ranges(&owned)
-        .into_iter()
-        .map(|range| {
-            let kind = match range.kind {
-                FoldKind::Heading => "heading",
-                FoldKind::Fence => "fence",
-                FoldKind::List => "list",
-                FoldKind::Table => "table",
-                FoldKind::Paragraph => "paragraph",
-            };
-            (range.start_line, range.end_line, kind)
-        })
-        .collect()
-}
-
-fn line_char_len(text: &str) -> usize {
-    text.chars().count()
-}
-
-fn display_cols_for_prefix(text: &str, prefix_chars: usize) -> usize {
-    let mut visible = 0usize;
-    for ch in text.chars().take(prefix_chars) {
-        if ch == '\t' {
-            let tab = render::TAB_WIDTH - (visible % render::TAB_WIDTH);
-            visible += tab;
-        } else {
-            visible += 1;
-        }
-    }
-    visible
-}
-
-fn line_display_cols(text: &str) -> usize {
-    display_cols_for_prefix(text, line_char_len(text))
-}
-
-fn cursor_render_char_col(text: &str, cursor_col: usize, mode: UiMode) -> usize {
-    let line_len = line_char_len(text);
-    let clamped_col = min(cursor_col, line_len);
-    if matches!(mode, UiMode::Normal | UiMode::Visual | UiMode::VisualLine)
-        && line_len > 0
-        && clamped_col == line_len
-    {
-        line_len - 1
-    } else {
-        clamped_col
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct LineViewport {
-    has_left_overflow: bool,
-    has_right_overflow: bool,
-    text_window_col: usize,
-    text_width: usize,
-}
-
-fn compute_line_viewport(
-    line_width: usize,
-    scroll_col: usize,
-    available_cols: usize,
-) -> LineViewport {
-    if available_cols == 0 {
-        return LineViewport::default();
-    }
-
-    let has_left_overflow = scroll_col > 0;
-    let has_right_overflow = line_width > scroll_col.saturating_add(available_cols);
-    let reserved = (has_left_overflow as usize) + (has_right_overflow as usize);
-    let text_width = available_cols.saturating_sub(reserved);
-    let text_window_col = scroll_col.saturating_add(has_left_overflow as usize);
-
-    LineViewport {
-        has_left_overflow,
-        has_right_overflow,
-        text_window_col,
-        text_width,
-    }
-}
-
 #[cfg(test)]
 fn calc_ghost_prefix(text: &str, calc_ghost: Option<&str>) -> &'static str {
     if calc_ghost
@@ -4388,1006 +3862,7 @@ fn rendered_line_display_cols(text: &str, calc_ghost: Option<&str>) -> usize {
     width
 }
 
-fn viewport_col_for_display_col(
-    display_col: usize,
-    line_width: usize,
-    scroll_col: usize,
-    available_cols: usize,
-) -> usize {
-    let viewport = compute_line_viewport(line_width, scroll_col, available_cols);
-    if viewport.text_width == 0 {
-        return 0;
-    }
 
-    let text_rel = display_col
-        .saturating_sub(viewport.text_window_col)
-        .min(viewport.text_width.saturating_sub(1));
-    (viewport.has_left_overflow as usize).saturating_add(text_rel)
-}
-
-fn byte_index(text: &str, char_idx: usize) -> usize {
-    if char_idx == 0 {
-        return 0;
-    }
-    text.char_indices()
-        .nth(char_idx)
-        .map(|(idx, _)| idx)
-        .unwrap_or(text.len())
-}
-
-fn remove_char_at(text: &mut String, char_idx: usize) {
-    let start = byte_index(text, char_idx);
-    let end = byte_index(text, char_idx + 1);
-    if start < end && end <= text.len() {
-        text.replace_range(start..end, "");
-    }
-}
-
-fn derive_title_from_lines(lines: &[String]) -> String {
-    let line = lines
-        .iter()
-        .find(|l| !l.trim().is_empty())
-        .map(|s| s.trim())
-        .unwrap_or("Untitled");
-    if line.chars().count() > 70 {
-        let truncated: String = line.chars().take(70).collect();
-        format!("{truncated}...")
-    } else {
-        line.to_string()
-    }
-}
-
-fn load_note_meta(db: &Db) -> Result<Vec<NoteMeta>, String> {
-    Ok(db
-        .list_notes()?
-        .into_iter()
-        .map(|n| NoteMeta {
-            id: n.id.clone(),
-            title: note_title(&n),
-        })
-        .collect())
-}
-
-fn note_title(note: &Note) -> String {
-    let first = note
-        .body
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("Untitled")
-        .trim();
-    if first.chars().count() > 60 {
-        let truncated: String = first.chars().take(60).collect();
-        format!("{truncated}...")
-    } else {
-        first.to_string()
-    }
-}
-
-fn print_note_list(db: &Db) -> Result<(), String> {
-    let notes = db.list_notes()?;
-    if notes.is_empty() {
-        println!("No notes");
-        return Ok(());
-    }
-    for (idx, note) in notes.iter().enumerate() {
-        println!("{:>3}. {}  {}", idx + 1, note.id, note_title(note));
-    }
-    Ok(())
-}
-
-fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
-    if query.is_empty() {
-        return Some(0);
-    }
-    let q = query.to_lowercase();
-    let t = text.to_lowercase();
-    let q_chars: Vec<char> = q.chars().collect();
-    let t_chars: Vec<char> = t.chars().collect();
-    let raw_chars: Vec<char> = text.chars().collect();
-
-    let mut qi = 0usize;
-    let mut score = 0i32;
-    let mut prev_match = -2isize;
-    for (ti, ch) in t_chars.iter().enumerate() {
-        if qi >= q_chars.len() {
-            break;
-        }
-        if *ch == q_chars[qi] {
-            score += if prev_match == ti as isize - 1 { 2 } else { 1 };
-            if ti == 0
-                || raw_chars
-                    .get(ti - 1)
-                    .map(|c| c.is_whitespace())
-                    .unwrap_or(false)
-            {
-                score += 1;
-            }
-            prev_match = ti as isize;
-            qi += 1;
-        }
-    }
-
-    if qi == q_chars.len() {
-        Some(score)
-    } else {
-        None
-    }
-}
-
-fn pad_right(text: &str, width: usize) -> String {
-    let mut out: String = text.chars().take(width).collect();
-    let current = out.chars().count();
-    if current < width {
-        out.push_str(&" ".repeat(width - current));
-    }
-    out
-}
-
-#[derive(Clone, Copy, Default)]
-struct AnsiStyle {
-    fg: Option<u8>,
-    bg: Option<u8>,
-    bold: bool,
-    dim: bool,
-    reverse: bool,
-}
-
-impl AnsiStyle {
-    fn write_to(self, buf: &mut String) {
-        buf.push_str("\x1b[0");
-        if self.bold {
-            buf.push_str(";1");
-        }
-        if self.dim {
-            buf.push_str(";2");
-        }
-        if self.reverse {
-            buf.push_str(";7");
-        }
-        if let Some(fg) = self.fg {
-            let _ = write!(buf, ";38;5;{fg}");
-        }
-        if let Some(bg) = self.bg {
-            let _ = write!(buf, ";48;5;{bg}");
-        }
-        buf.push('m');
-    }
-}
-
-fn ansi_256_rgb(index: u8) -> (u8, u8, u8) {
-    if index < 16 {
-        const ANSI16: [(u8, u8, u8); 16] = [
-            (0, 0, 0),
-            (128, 0, 0),
-            (0, 128, 0),
-            (128, 128, 0),
-            (0, 0, 128),
-            (128, 0, 128),
-            (0, 128, 128),
-            (192, 192, 192),
-            (128, 128, 128),
-            (255, 0, 0),
-            (0, 255, 0),
-            (255, 255, 0),
-            (0, 0, 255),
-            (255, 0, 255),
-            (0, 255, 255),
-            (255, 255, 255),
-        ];
-        return ANSI16[index as usize];
-    }
-
-    if index <= 231 {
-        let idx = index - 16;
-        let r = idx / 36;
-        let g = (idx % 36) / 6;
-        let b = idx % 6;
-        let level = |v: u8| if v == 0 { 0 } else { 55 + 40 * v };
-        return (level(r), level(g), level(b));
-    }
-
-    let gray = 8 + (index - 232) * 10;
-    (gray, gray, gray)
-}
-
-fn contrast_fg_for_bg(bg: u8) -> u8 {
-    let (r, g, b) = ansi_256_rgb(bg);
-    // Relative luminance approximation in integer space.
-    let luminance = (299u32 * r as u32 + 587u32 * g as u32 + 114u32 * b as u32) / 1000u32;
-    if luminance >= 140 {
-        16 // dark text on light background
-    } else {
-        231 // light text on dark background
-    }
-}
-
-fn draw_row_at_styled(
-    buf: &mut String,
-    row: usize,
-    col: usize,
-    width: usize,
-    text: &str,
-    style: AnsiStyle,
-) {
-    buf.push_str(&goto(row, col));
-    style.write_to(buf);
-    buf.push_str(&pad_right(text, width));
-    buf.push_str(render::RESET);
-}
-
-fn draw_switcher(
-    app: &TerminalApp,
-    buf: &mut String,
-    rows: usize,
-    cols: usize,
-    palette: render::RenderPalette,
-) {
-    let box_w = min(cols.saturating_sub(4).max(30), 72);
-    let box_h = min(rows.saturating_sub(4).max(8), 14);
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-
-    let border_style = AnsiStyle {
-        fg: Some(palette.code_type),
-        ..Default::default()
-    };
-    let prompt_style = AnsiStyle {
-        fg: Some(palette.code_keyword),
-        bold: true,
-        ..Default::default()
-    };
-    let label_style = AnsiStyle {
-        fg: Some(palette.code_comment),
-        dim: true,
-        ..Default::default()
-    };
-    let row_style = AnsiStyle {
-        fg: Some(palette.variable),
-        ..Default::default()
-    };
-    let selected_bg = palette.search_current;
-    let selected_style = AnsiStyle {
-        fg: Some(contrast_fg_for_bg(selected_bg)),
-        bg: Some(selected_bg),
-        bold: true,
-        ..Default::default()
-    };
-
-    // Border
-    border_style.write_to(buf);
-    for dx in 0..box_w {
-        let ch_top = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
-        buf.push_str(&goto(y, x + dx));
-        buf.push(ch_top);
-        buf.push_str(&goto(y + box_h - 1, x + dx));
-        buf.push(ch_top);
-    }
-    for dy in 1..box_h.saturating_sub(1) {
-        buf.push_str(&goto(y + dy, x));
-        buf.push('|');
-        buf.push_str(&goto(y + dy, x + box_w - 1));
-        buf.push('|');
-    }
-    buf.push_str(render::RESET);
-
-    let prompt = format!(" search: {}", app.switcher_query);
-    draw_row_at_styled(
-        buf,
-        y + 1,
-        x + 1,
-        box_w.saturating_sub(2),
-        &prompt,
-        prompt_style,
-    );
-    draw_row_at_styled(
-        buf,
-        y + 2,
-        x + 1,
-        box_w.saturating_sub(2),
-        " results:",
-        label_style,
-    );
-
-    let max_rows = box_h.saturating_sub(4);
-    let mut start = 0usize;
-    if app.switcher_selected >= max_rows {
-        start = app.switcher_selected + 1 - max_rows;
-    }
-
-    for i in 0..max_rows {
-        let row = y + 3 + i;
-        if let Some(match_idx) = app.switcher_matches.get(start + i).copied() {
-            let item = &app.switcher_items[match_idx];
-            let marker = if start + i == app.switcher_selected {
-                ">"
-            } else {
-                " "
-            };
-            let text = format!("{marker} {}  {}", item.id, item.title);
-            if start + i == app.switcher_selected {
-                draw_row_at_styled(
-                    buf,
-                    row,
-                    x + 1,
-                    box_w.saturating_sub(2),
-                    &text,
-                    selected_style,
-                );
-            } else {
-                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
-            }
-        } else {
-            draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
-        }
-    }
-}
-
-const MONTH_NAMES: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-
-const MONTH_NAMES_SHORT: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-
-fn days_in_month(year: i32, month: u32) -> u32 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            if (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 30,
-    }
-}
-
-/// Zeller-style day of week: 0=Mon, 1=Tue, ..., 6=Sun
-fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
-    let (y, m) = if month <= 2 {
-        (year - 1, month + 12)
-    } else {
-        (year, month)
-    };
-    let q = day as i32;
-    let k = y % 100;
-    let j = y / 100;
-    let m = m as i32;
-    let h = (q + (13 * (m + 1)) / 5 + k + k / 4 + j / 4 - 2 * j) % 7;
-    // h: 0=Sat, 1=Sun, 2=Mon, ...
-    let dow = ((h + 5) % 7 + 7) % 7;
-    dow as u32
-}
-
-fn now_epoch_ms() -> i64 {
-    let millis = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    i64::try_from(millis).unwrap_or(i64::MAX)
-}
-
-#[cfg(target_os = "macos")]
-fn escape_applescript(value: &str) -> String {
-    value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', " ")
-}
-
-fn send_system_notification(title: &str, body: &str) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    {
-        let status = Command::new("notify-send")
-            .args(["--", title, body])
-            .status()
-            .map_err(|e| format!("notify-send unavailable: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("notify-send exited with status {status}"));
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let script = format!(
-            "display notification \"{}\" with title \"{}\"",
-            escape_applescript(body),
-            escape_applescript(title)
-        );
-        let status = Command::new("osascript")
-            .args(["-e", script.as_str()])
-            .status()
-            .map_err(|e| format!("osascript unavailable: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("osascript exited with status {status}"));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let escaped_title = title.replace('\'', "''");
-        let escaped_body = body.replace('\'', "''");
-        let command = format!(
-            "$null=[Windows.UI.Notifications.ToastNotificationManager,Windows.UI.Notifications,ContentType=WindowsRuntime];\
-             $null=[Windows.Data.Xml.Dom.XmlDocument,Windows.Data.Xml.Dom.XmlDocument,ContentType=WindowsRuntime];\
-             $xml=New-Object Windows.Data.Xml.Dom.XmlDocument;\
-             $xml.LoadXml(\"<toast><visual><binding template='ToastGeneric'><text>{escaped_title}</text><text>{escaped_body}</text></binding></visual></toast>\");\
-             $toast=[Windows.UI.Notifications.ToastNotification]::new($xml);\
-             [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('slate').Show($toast);"
-        );
-        let status = Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                command.as_str(),
-            ])
-            .status()
-            .map_err(|e| format!("powershell unavailable: {e}"))?;
-        if status.success() {
-            return Ok(());
-        }
-        return Err(format!("powershell exited with status {status}"));
-    }
-
-    #[allow(unreachable_code)]
-    Err("system notifications are not supported on this platform".to_string())
-}
-
-fn current_local_datetime_parts() -> Option<(i32, u32, u32, u32, u32)> {
-    let epoch_seconds: libc::time_t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs()
-        .try_into()
-        .ok()?;
-    let mut local_tm = unsafe { std::mem::zeroed::<libc::tm>() };
-    let ptr = unsafe { libc::localtime_r(&epoch_seconds, &mut local_tm as *mut libc::tm) };
-    if ptr.is_null() {
-        return None;
-    }
-    Some((
-        local_tm.tm_year + 1900,
-        (local_tm.tm_mon + 1) as u32,
-        local_tm.tm_mday as u32,
-        local_tm.tm_hour as u32,
-        local_tm.tm_min as u32,
-    ))
-}
-
-fn local_datetime_to_epoch_ms(
-    year: i32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-) -> Option<i64> {
-    if !(1..=12).contains(&month) {
-        return None;
-    }
-    if day == 0 || day > days_in_month(year, month) {
-        return None;
-    }
-    if hour > 23 || minute > 59 {
-        return None;
-    }
-
-    let mut local_tm = unsafe { std::mem::zeroed::<libc::tm>() };
-    local_tm.tm_year = year - 1900;
-    local_tm.tm_mon = i32::try_from(month).ok()? - 1;
-    local_tm.tm_mday = i32::try_from(day).ok()?;
-    local_tm.tm_hour = i32::try_from(hour).ok()?;
-    local_tm.tm_min = i32::try_from(minute).ok()?;
-    local_tm.tm_sec = 0;
-    local_tm.tm_isdst = -1;
-
-    let epoch_seconds = unsafe { libc::mktime(&mut local_tm as *mut libc::tm) };
-    if epoch_seconds < 0 {
-        return None;
-    }
-    i64::try_from(i128::from(epoch_seconds) * 1000).ok()
-}
-
-fn format_datetime_with_pattern(
-    year: i32,
-    month: u32,
-    day: u32,
-    hour: u32,
-    minute: u32,
-    pattern: &str,
-) -> String {
-    let month_idx = month.saturating_sub(1).min(11) as usize;
-    let yyyy = format!("{year:04}");
-    let yy = format!("{:02}", year.rem_euclid(100));
-    let mm = format!("{month:02}");
-    let m = month.to_string();
-    let dd = format!("{day:02}");
-    let d = day.to_string();
-    let hh = format!("{hour:02}");
-    let h = hour.to_string();
-    let min2 = format!("{minute:02}");
-    let mmm = MONTH_NAMES_SHORT[month_idx];
-    let mmmm = MONTH_NAMES[month_idx];
-
-    let mut out = if pattern.trim().is_empty() {
-        "%Y-%m-%d".to_string()
-    } else {
-        pattern.to_string()
-    };
-
-    if out.contains('%') {
-        for (token, value) in [
-            ("%Y", yyyy.as_str()),
-            ("%y", yy.as_str()),
-            ("%m", mm.as_str()),
-            ("%d", dd.as_str()),
-            ("%H", hh.as_str()),
-            ("%M", min2.as_str()),
-            ("%b", mmm),
-            ("%B", mmmm),
-        ] {
-            out = out.replace(token, value);
-        }
-        return out;
-    }
-
-    for (token, value) in [
-        ("YYYY", yyyy.as_str()),
-        ("MMMM", mmmm),
-        ("MMM", mmm),
-        ("MM", mm.as_str()),
-        ("DD", dd.as_str()),
-        ("HH", hh.as_str()),
-        ("mm", min2.as_str()),
-        ("YY", yy.as_str()),
-        ("M", m.as_str()),
-        ("D", d.as_str()),
-        ("H", h.as_str()),
-    ] {
-        out = out.replace(token, value);
-    }
-    out
-}
-
-fn draw_date_picker(
-    app: &TerminalApp,
-    buf: &mut String,
-    rows: usize,
-    cols: usize,
-    palette: render::RenderPalette,
-) {
-    let box_w: usize = 38;
-    let box_h: usize = 15;
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-
-    let border_style = AnsiStyle {
-        fg: Some(palette.code_type),
-        ..Default::default()
-    };
-    let title_style = AnsiStyle {
-        fg: Some(palette.code_keyword),
-        bold: true,
-        ..Default::default()
-    };
-    let header_style = AnsiStyle {
-        fg: Some(palette.code_comment),
-        dim: true,
-        ..Default::default()
-    };
-    let day_style = AnsiStyle {
-        fg: Some(palette.variable),
-        ..Default::default()
-    };
-    let selected_bg = palette.search_current;
-    let selected_day_style = AnsiStyle {
-        fg: Some(contrast_fg_for_bg(selected_bg)),
-        bg: Some(selected_bg),
-        bold: true,
-        ..Default::default()
-    };
-    let footer_style = AnsiStyle {
-        fg: Some(palette.search_match),
-        bold: true,
-        ..Default::default()
-    };
-    let time_style = AnsiStyle {
-        fg: Some(palette.code_string),
-        ..Default::default()
-    };
-    let hint_style = AnsiStyle {
-        fg: Some(palette.code_comment),
-        dim: true,
-        ..Default::default()
-    };
-
-    // Clear box area
-    for dy in 0..box_h {
-        draw_row_at_styled(buf, y + dy, x, box_w, "", AnsiStyle::default());
-    }
-
-    // Border
-    border_style.write_to(buf);
-    for dx in 0..box_w {
-        let ch = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
-        buf.push_str(&goto(y, x + dx));
-        buf.push(ch);
-        buf.push_str(&goto(y + box_h - 1, x + dx));
-        buf.push(ch);
-    }
-    for dy in 1..box_h.saturating_sub(1) {
-        buf.push_str(&goto(y + dy, x));
-        buf.push('|');
-        buf.push_str(&goto(y + dy, x + box_w - 1));
-        buf.push('|');
-    }
-    buf.push_str(render::RESET);
-
-    // Title: month + year
-    let month_name = MONTH_NAMES[app.date_month.saturating_sub(1).min(11) as usize];
-    let title = format!("< {} {} >", month_name, app.date_year);
-    let title_x = x + 1 + (box_w.saturating_sub(2).saturating_sub(title.len())) / 2;
-    draw_row_at_styled(buf, y + 1, title_x, title.len(), &title, title_style);
-
-    // Day headers
-    let header = " Mo Tu We Th Fr Sa Su ";
-    let inner_w = box_w.saturating_sub(2);
-    let hdr_text: String = header.chars().take(inner_w).collect();
-    buf.push_str(&goto(y + 2, x + 1));
-    header_style.write_to(buf);
-    buf.push_str(&hdr_text);
-    buf.push_str(render::RESET);
-
-    // Calendar grid
-    let first_dow = day_of_week(app.date_year, app.date_month, 1);
-    let max_days = days_in_month(app.date_year, app.date_month);
-
-    let mut row_idx = 0;
-    let mut col_idx = first_dow as usize;
-
-    for day in 1..=max_days {
-        let grid_row = y + 3 + row_idx;
-        let grid_col = x + 1 + col_idx * 3;
-
-        if grid_row < y + box_h - 1 {
-            buf.push_str(&goto(grid_row, grid_col));
-            if day == app.date_day {
-                selected_day_style.write_to(buf);
-            } else {
-                day_style.write_to(buf);
-            }
-            buf.push_str(&format!("{:>2}", day));
-            buf.push_str(render::RESET);
-        }
-
-        col_idx += 1;
-        if col_idx >= 7 {
-            col_idx = 0;
-            row_idx += 1;
-        }
-    }
-
-    let action = if app.date_picker_action == DatePickerAction::SetNotify {
-        "notify"
-    } else {
-        "date"
-    };
-    let time_label = if app.date_require_time {
-        format!(
-            "Time {:02}:{:02} (required)",
-            app.date_hour, app.date_minute
-        )
-    } else {
-        let state = if app.date_include_time { "on" } else { "off" };
-        format!(
-            "Time {:02}:{:02} ({state}, Tab toggle)",
-            app.date_hour, app.date_minute
-        )
-    };
-    let selected = if app.date_include_time {
-        format_datetime_with_pattern(
-            app.date_year,
-            app.date_month,
-            app.date_day,
-            app.date_hour,
-            app.date_minute,
-            &app.date_time_format,
-        )
-    } else {
-        format_datetime_with_pattern(
-            app.date_year,
-            app.date_month,
-            app.date_day,
-            app.date_hour,
-            app.date_minute,
-            &app.date_format,
-        )
-    };
-    draw_row_at_styled(
-        buf,
-        y + box_h - 5,
-        x + 2,
-        inner_w.saturating_sub(2),
-        &time_label,
-        time_style,
-    );
-    let hint = format!("{action}: h/l hour  j/k minute  Enter confirm");
-    draw_row_at_styled(
-        buf,
-        y + box_h - 4,
-        x + 2,
-        inner_w.saturating_sub(2),
-        &hint,
-        hint_style,
-    );
-    let footer_x = x + 1 + (inner_w.saturating_sub(selected.chars().count())) / 2;
-    buf.push_str(&goto(y + box_h - 2, footer_x));
-    footer_style.write_to(buf);
-    buf.push_str(&selected);
-    buf.push_str(render::RESET);
-}
-
-fn goto(row: usize, col: usize) -> String {
-    format!("\x1b[{};{}H", row.max(1), col.max(1))
-}
-
-fn terminal_size() -> (usize, usize) {
-    let mut ws = MaybeUninit::<libc::winsize>::zeroed();
-    let ok = unsafe {
-        libc::ioctl(
-            libc::STDOUT_FILENO,
-            libc::TIOCGWINSZ,
-            ws.as_mut_ptr() as *mut libc::c_void,
-        )
-    };
-    if ok == 0 {
-        let ws = unsafe { ws.assume_init() };
-        let rows = usize::from(ws.ws_row.max(1));
-        let cols = usize::from(ws.ws_col.max(1));
-        (rows, cols)
-    } else {
-        (24, 80)
-    }
-}
-
-fn read_key() -> Result<Option<Key>, String> {
-    let Some(first) = read_byte()? else {
-        return Ok(None);
-    };
-
-    if first == b'\x1b' {
-        return parse_escape_sequence();
-    }
-    if first == b'\r' || first == b'\n' {
-        return Ok(Some(Key::Enter));
-    }
-    if first == b'\t' {
-        return Ok(Some(Key::Tab));
-    }
-    if first == 127 || first == 8 {
-        return Ok(Some(Key::Backspace));
-    }
-    if (1..=26).contains(&first) {
-        let c = (b'a' + (first - 1)) as char;
-        return Ok(Some(Key::Ctrl(c)));
-    }
-    if first.is_ascii() {
-        return Ok(Some(Key::Char(first as char)));
-    }
-
-    let needed = utf8_continuation_count(first);
-    if needed == 0 {
-        return Ok(None);
-    }
-
-    let mut bytes = vec![first];
-    for _ in 0..needed {
-        if let Some(b) = read_byte()? {
-            bytes.push(b);
-        } else {
-            return Ok(None);
-        }
-    }
-    if let Ok(text) = std::str::from_utf8(&bytes) {
-        if let Some(ch) = text.chars().next() {
-            return Ok(Some(Key::Char(ch)));
-        }
-    }
-    Ok(None)
-}
-
-fn utf8_continuation_count(first: u8) -> usize {
-    if first & 0b1110_0000 == 0b1100_0000 {
-        1
-    } else if first & 0b1111_0000 == 0b1110_0000 {
-        2
-    } else if first & 0b1111_1000 == 0b1111_0000 {
-        3
-    } else {
-        0
-    }
-}
-
-fn read_bracketed_paste_payload() -> Result<String, String> {
-    const END: &[u8] = b"\x1b[201~";
-    let mut payload = Vec::new();
-    let mut idle_ticks = 0usize;
-
-    loop {
-        match read_byte()? {
-            Some(byte) => {
-                idle_ticks = 0;
-                payload.push(byte);
-                if payload.len() >= END.len() && payload.ends_with(END) {
-                    payload.truncate(payload.len() - END.len());
-                    break;
-                }
-            }
-            None => {
-                // VTIME=1 means 100ms per empty read; bail out after a short
-                // idle window so malformed/partial sequences don't hang input.
-                idle_ticks += 1;
-                if idle_ticks >= 8 {
-                    break;
-                }
-            }
-        }
-    }
-
-    Ok(String::from_utf8_lossy(&payload).into_owned())
-}
-
-fn parse_escape_sequence() -> Result<Option<Key>, String> {
-    let Some(second) = read_byte()? else {
-        return Ok(Some(Key::Esc));
-    };
-    if second != b'[' && second != b'O' {
-        return Ok(Some(Key::Esc));
-    }
-
-    let mut seq = Vec::new();
-    loop {
-        let Some(b) = read_byte()? else {
-            break;
-        };
-        seq.push(b);
-        if b.is_ascii_alphabetic() || b == b'~' {
-            break;
-        }
-    }
-
-    if seq.is_empty() {
-        return Ok(Some(Key::Esc));
-    }
-
-    let last = seq[seq.len() - 1];
-    if seq.len() == 1 {
-        match last {
-            b'A' => return Ok(Some(Key::ArrowUp)),
-            b'B' => return Ok(Some(Key::ArrowDown)),
-            b'C' => return Ok(Some(Key::ArrowRight)),
-            b'D' => return Ok(Some(Key::ArrowLeft)),
-            b'H' => return Ok(Some(Key::Home)),
-            b'F' => return Ok(Some(Key::End)),
-            b'Z' => return Ok(Some(Key::BackTab)),
-            _ => return Ok(Some(Key::Esc)),
-        }
-    } else {
-        let s = std::str::from_utf8(&seq).unwrap_or("");
-        if s == "200~" {
-            let pasted = read_bracketed_paste_payload()?;
-            return Ok(Some(Key::Paste(pasted)));
-        }
-        if s == "201~" {
-            return Ok(None);
-        }
-        if s == "1;5C" || s == "5C" {
-            return Ok(Some(Key::CtrlArrowRight));
-        }
-        if s == "1;5D" || s == "5D" {
-            return Ok(Some(Key::CtrlArrowLeft));
-        }
-        if s == "1~" || s == "7~" {
-            return Ok(Some(Key::Home));
-        }
-        if s == "4~" || s == "8~" {
-            return Ok(Some(Key::End));
-        }
-        if s == "3~" {
-            return Ok(Some(Key::Delete));
-        }
-        if s == "5~" {
-            return Ok(Some(Key::PageUp));
-        }
-        if s == "6~" {
-            return Ok(Some(Key::PageDown));
-        }
-    }
-
-    Ok(Some(Key::Esc))
-}
-
-fn read_byte() -> Result<Option<u8>, String> {
-    let mut buf = [0u8; 1];
-    let n = unsafe { libc::read(libc::STDIN_FILENO, buf.as_mut_ptr() as *mut libc::c_void, 1) };
-    if n == 0 {
-        return Ok(None);
-    }
-    if n < 0 {
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock {
-            return Ok(None);
-        }
-        return Err(format!("Failed to read stdin: {err}"));
-    }
-    Ok(Some(buf[0]))
-}
-
-struct TerminalGuard {
-    original: libc::termios,
-}
-
-impl TerminalGuard {
-    fn enter() -> Result<Self, String> {
-        let mut term = MaybeUninit::<libc::termios>::zeroed();
-        let ok = unsafe { libc::tcgetattr(libc::STDIN_FILENO, term.as_mut_ptr()) };
-        if ok != 0 {
-            return Err(format!(
-                "Failed to read terminal attributes: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        let original = unsafe { term.assume_init() };
-        let mut raw = original;
-
-        raw.c_iflag &= !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON);
-        raw.c_oflag &= !(libc::OPOST);
-        raw.c_cflag |= libc::CS8;
-        raw.c_lflag &= !(libc::ECHO | libc::ICANON | libc::IEXTEN | libc::ISIG);
-        raw.c_cc[libc::VMIN] = 0;
-        raw.c_cc[libc::VTIME] = 1;
-
-        let ok = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) };
-        if ok != 0 {
-            return Err(format!(
-                "Failed to enable raw terminal mode: {}",
-                io::Error::last_os_error()
-            ));
-        }
-
-        let mut out = io::stdout();
-        out.write_all(b"\x1b[?1049h\x1b[?2004h\x1b[?25l\x1b[H\x1b[2J")
-            .and_then(|_| out.flush())
-            .map_err(|e| format!("Failed to initialize terminal screen: {e}"))?;
-
-        Ok(Self { original })
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original) };
-        let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[0m\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0 q");
-        let _ = out.flush();
-    }
-}
 
 struct CalcData {
     line_results: Vec<Option<String>>,
@@ -5493,10 +3968,13 @@ fn contains_assignment_operator(text: &str) -> bool {
 mod tests {
     use super::{
         builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
-        describe_fold_ranges, display_cols_for_prefix, find_calc_segment_range,
+        find_calc_segment_range,
         find_table_formula_segment, format_formula_display_value, rendered_line_display_cols,
     };
-    use super::{line_char_len, Key, TerminalApp, TerminalOptions, UiMode};
+    use super::{TerminalApp, TerminalOptions, UiMode};
+    use super::folding::describe_fold_ranges;
+    use super::input::Key;
+    use super::{display_cols_for_prefix, line_char_len};
     use crate::storage::Db;
     use std::fs;
     use std::path::PathBuf;
@@ -5692,7 +4170,7 @@ mod tests {
         app.cursor_col = line_char_len(app.current_line());
         app.adjust_scroll();
 
-        let (_rows, cols) = super::terminal_size();
+        let (_rows, cols) = super::input::terminal_size();
         let available = cols.saturating_sub(super::GUTTER_WIDTH);
         let expected = super::line_display_cols(app.current_line()).saturating_sub(available);
 
@@ -5711,7 +4189,7 @@ mod tests {
         app.cursor_col = line_char_len(app.current_line());
         app.adjust_scroll();
 
-        let (_rows, cols) = super::terminal_size();
+        let (_rows, cols) = super::input::terminal_size();
         let available = cols.saturating_sub(super::GUTTER_WIDTH);
         let expected = super::line_display_cols(app.current_line())
             .saturating_sub(available)
@@ -5735,7 +4213,7 @@ mod tests {
     fn sample_overflow_line_places_cursor_on_last_screen_cell_in_insert_and_normal() {
         let sample = "- [ ] Automatic link handling in the form of [link](link) with optional [link] text update. Show only [link] by default. dfsasjf hsjabshga sfhdghksaghkdfgbghb ahgbsadfhgkbfa ghbf";
         let (_db, mut app, path) = app_with_note(sample);
-        let (rows, cols) = super::terminal_size();
+        let (rows, cols) = super::input::terminal_size();
         let available = cols.saturating_sub(super::GUTTER_WIDTH);
         let line_width = super::line_display_cols(app.current_line());
 
@@ -5760,7 +4238,7 @@ mod tests {
     #[test]
     fn normal_mode_cursor_at_logical_line_end_renders_on_last_character_cell() {
         let (_db, mut app, path) = app_with_note("UI settings page");
-        let (rows, cols) = super::terminal_size();
+        let (rows, cols) = super::input::terminal_size();
         app.mode = UiMode::Normal;
         app.cursor_line = 0;
         app.cursor_col = line_char_len(app.current_line());
@@ -5786,7 +4264,7 @@ mod tests {
 
         run_keys(&mut app, &db, &[Key::Char('A')]);
 
-        let (rows, cols) = super::terminal_size();
+        let (rows, cols) = super::input::terminal_size();
         let available = cols.saturating_sub(super::GUTTER_WIDTH);
         let line_width = super::line_display_cols(app.current_line());
         let viewport = super::compute_line_viewport(line_width, app.scroll_col, available);
