@@ -1139,13 +1139,17 @@ impl TerminalApp {
         self.adjust_cursor();
         self.adjust_scroll();
 
-        let snapshot = self.build_snapshot();
-        let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: self.markdown_autoformat,
-            checklist_auto_reorder: self.checklist_auto_reorder,
-        };
-        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
-            self.apply_edit_operation(&op);
+        if Self::line_might_trigger_doc_change_rules(self.current_line()) {
+            let snapshot = self.build_snapshot();
+            let options = crate::editor_core::text_rules::TextRuleOptions {
+                markdown_autoformat: self.markdown_autoformat,
+                checklist_auto_reorder: self.checklist_auto_reorder,
+            };
+            if let Some(op) =
+                crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options)
+            {
+                self.apply_edit_operation(&op);
+            }
         }
 
         Ok(())
@@ -2928,10 +2932,9 @@ impl TerminalApp {
 
     fn insert_newline(&mut self) {
         let col = self.cursor_col;
-        let line = self.current_line_mut();
-        let idx = byte_index(line, col);
-        let right = line[idx..].to_string();
-        line.truncate(idx);
+        let idx = byte_index(self.current_line(), col);
+        let right = self.lines[self.cursor_line][idx..].to_string();
+        self.lines[self.cursor_line].truncate(idx);
         let insert_at = self.cursor_line + 1;
         self.lines.insert(insert_at, right);
         self.cursor_line += 1;
@@ -2966,10 +2969,7 @@ impl TerminalApp {
         true
     }
 
-    fn try_autoformat_rules(&mut self) {
-        // Fast path: skip the expensive build_snapshot/parse round trip
-        // when the current line can't trigger any doc-change rules.
-        let line = self.current_line();
+    fn line_might_trigger_doc_change_rules(line: &str) -> bool {
         let trimmed = line.trim_start();
         let might_be_list = trimmed.starts_with('-')
             || trimmed.starts_with('*')
@@ -2977,8 +2977,11 @@ impl TerminalApp {
             || trimmed.starts_with("->")
             || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
         let might_be_table = trimmed.starts_with('|') && line.trim_end().ends_with('|');
-        let might_be_checklist = might_be_list && line.contains("/x");
-        if !might_be_list && !might_be_checklist && !might_be_table {
+        might_be_list || might_be_table
+    }
+
+    fn try_autoformat_rules(&mut self) {
+        if !Self::line_might_trigger_doc_change_rules(self.current_line()) {
             return;
         }
 
@@ -3091,8 +3094,7 @@ impl TerminalApp {
     fn backspace(&mut self) {
         if self.cursor_col > 0 {
             let new_col = self.cursor_col - 1;
-            let line = self.current_line_mut();
-            remove_char_at(line, new_col);
+            remove_char_at(&mut self.lines[self.cursor_line], new_col);
             self.cursor_col = new_col;
             self.mark_edited();
             return;
@@ -3114,8 +3116,7 @@ impl TerminalApp {
         let line_len = line_char_len(self.current_line());
         if self.cursor_col < line_len {
             let col = self.cursor_col;
-            let line = self.current_line_mut();
-            remove_char_at(line, col);
+            remove_char_at(&mut self.lines[self.cursor_line], col);
             self.mark_edited();
             return;
         }
