@@ -107,6 +107,9 @@ test("core command suggestions are mode-aware", () => {
     "notify",
     "notify-delete",
     "format",
+    "fold",
+    "unfold",
+    "fold-toggle",
     "clip-watch",
     "clip-watch-stop",
     "clist",
@@ -281,6 +284,37 @@ test("core executeCommand handles clip-watch start/stop", async () => {
     stopClipboardWatch: async () => false,
   });
   assert.equal(notActive.message, "clip-watch not active");
+});
+
+test("core executeCommand handles fold/unfold/toggle via runtime", async () => {
+  const actions: string[] = [];
+  const runFoldCommand = (action: "fold" | "unfold" | "fold-toggle") => {
+    actions.push(action);
+    return { changed: true, message: `fold: ${action}` };
+  };
+
+  const folded = await executeCommand(snapshot("# h\nx", 0), "fold", {
+    mode: "editor",
+    runFoldCommand,
+  });
+  assert.equal(folded.message, "fold: fold");
+  assert.equal(folded.operations.length, 0);
+
+  const toggled = await executeCommand(snapshot("# h\nx", 0), "za", {
+    mode: "editor",
+    runFoldCommand,
+  });
+  assert.equal(toggled.message, "fold: fold-toggle");
+  assert.equal(toggled.operations.length, 0);
+
+  const unfolded = await executeCommand(snapshot("# h\nx", 0), "unfold", {
+    mode: "editor",
+    runFoldCommand,
+  });
+  assert.equal(unfolded.message, "fold: unfold");
+  assert.equal(unfolded.operations.length, 0);
+
+  assert.deepEqual(actions, ["fold", "fold-toggle", "unfold"]);
 });
 
 test("core executeCommand supports unit-aware sum row", async () => {

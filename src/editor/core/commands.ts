@@ -16,6 +16,8 @@ import type {
 
 export type { CommandMode, CommandSuggestion } from "./types.ts";
 
+export type FoldCommandAction = "fold" | "unfold" | "fold-toggle";
+
 export interface CommandRuntime {
   mode: CommandMode;
   dateFormat?: string;
@@ -50,6 +52,10 @@ export interface CommandRuntime {
   formatMarkdown?: (input: string) => string | Promise<string>;
   startClipboardWatch?: () => Promise<boolean> | boolean;
   stopClipboardWatch?: () => Promise<boolean> | boolean;
+  runFoldCommand?: (action: FoldCommandAction) => {
+    changed: boolean;
+    message: string;
+  };
 }
 
 export interface CommandExecutionResult {
@@ -292,6 +298,21 @@ async function runClipWatchStopCommand(
   };
 }
 
+async function runFoldCommand(
+  normalizedInput: string,
+  _ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  if (!runtime.runFoldCommand) {
+    return { message: "fold unavailable", operations: [] };
+  }
+  const result = runtime.runFoldCommand(normalizedInput as FoldCommandAction);
+  return {
+    message: result.message,
+    operations: [],
+  };
+}
+
 type ListConversionKind = "checklist" | "unordered" | "ordered";
 
 function convertLineToList(
@@ -429,6 +450,9 @@ const COMMAND_REGISTRY: CommandRegistryEntry[] = [
   { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: MODES_BOTH, execute: runNotifyCommand },
   { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: MODES_BOTH, execute: runNotifyDeleteCommand },
   { value: "format", aliases: ["fmt"], description: "format markdown document", modes: MODES_BOTH, execute: runFormatCommand },
+  { value: "fold", aliases: ["zc"], description: "fold at cursor", modes: MODES_BOTH, execute: runFoldCommand },
+  { value: "unfold", aliases: ["zo"], description: "unfold at cursor", modes: MODES_BOTH, execute: runFoldCommand },
+  { value: "fold-toggle", aliases: ["za"], description: "toggle fold at cursor", modes: MODES_BOTH, execute: runFoldCommand },
   { value: "clip-watch", aliases: ["clip_watch"], description: "watch clipboard and paste text at cursor", modes: MODES_BOTH, execute: runClipWatchCommand },
   { value: "clip-watch-stop", aliases: ["clip_watch_stop"], description: "stop clipboard watch", modes: MODES_BOTH, execute: runClipWatchStopCommand },
   { value: "clist", aliases: ["checklist", "checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: MODES_BOTH, execute: runChecklistCommand },

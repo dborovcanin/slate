@@ -7,6 +7,7 @@ import {
 } from "../api.ts";
 import {
   executeCommand as executeCoreCommand,
+  type FoldCommandAction,
   listCommandSuggestions as listCoreCommandSuggestions,
   type CommandMode,
   type CommandSuggestion,
@@ -16,6 +17,7 @@ import { openDatePicker, openDateTimePicker } from "./date-picker.ts";
 import { formatMarkdownTextAsync } from "./markdown-format.ts";
 import { state } from "../state.ts";
 import { applyReminderDelete, applyReminderUpsert } from "./notify-decoration.ts";
+import { executeFoldCommand } from "./folding.ts";
 
 export type { CommandMode, CommandSuggestion };
 
@@ -193,6 +195,7 @@ export async function executeCommand(
     stopClipboardWatch: canClipboardWatch || isClipboardWatchActive()
       ? () => stopClipboardWatch()
       : undefined,
+    runFoldCommand: (action: FoldCommandAction) => executeFoldCommand(view, action),
     onQuit: options.onExitCommand,
     formatMarkdown: formatMarkdownTextAsync,
   });

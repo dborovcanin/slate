@@ -29,6 +29,13 @@ interface FoldStateValue {
   decorations: DecorationSet;
 }
 
+export type FoldCommandAction = "fold" | "unfold" | "fold-toggle";
+
+export interface FoldCommandResult {
+  changed: boolean;
+  message: string;
+}
+
 export interface FoldRangeDescriptor {
   startLine: number;
   endLine: number;
@@ -36,6 +43,40 @@ export interface FoldRangeDescriptor {
 }
 
 const toggleFoldAtLineEffect = StateEffect.define<number>();
+
+class FoldToggleWidget extends WidgetType {
+  readonly foldLine: number;
+  readonly collapsed: boolean;
+
+  constructor(foldLine: number, collapsed: boolean) {
+    super();
+    this.foldLine = foldLine;
+    this.collapsed = collapsed;
+  }
+
+  eq(other: FoldToggleWidget): boolean {
+    return other.foldLine === this.foldLine && other.collapsed === this.collapsed;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = `cm-fold-toggle${this.collapsed ? " cm-fold-toggle-collapsed" : ""}`;
+    span.dataset.foldLine = `${this.foldLine}`;
+    span.textContent = this.collapsed ? "▸" : "▾";
+    span.title = this.collapsed ? "Click to unfold" : "Click to fold";
+    span.setAttribute(
+      "aria-label",
+      this.collapsed
+        ? "Folded section toggle. Click to unfold."
+        : "Foldable section toggle. Click to fold.",
+    );
+    return span;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
 
 class FoldPlaceholderWidget extends WidgetType {
   readonly foldLine: number;
@@ -170,8 +211,28 @@ function buildFoldDecorations(
   ranges: Map<number, FoldRange>,
   collapsed: Set<number>,
 ): DecorationSet {
-  if (collapsed.size === 0) return Decoration.none;
+  if (ranges.size === 0) return Decoration.none;
   const builder = new RangeSetBuilder<Decoration>();
+  const allRanges = [...ranges.values()].sort((a, b) =>
+    a.startLine - b.startLine || a.endLine - b.endLine
+  );
+
+  for (const range of allRanges) {
+    const startLine = doc.line(range.startLine);
+    builder.add(
+      startLine.from,
+      startLine.from,
+      Decoration.widget({
+        side: -1,
+        widget: new FoldToggleWidget(range.startLine, collapsed.has(range.startLine)),
+      }),
+    );
+  }
+
+  if (collapsed.size === 0) {
+    return builder.finish();
+  }
+
   const ordered = [...collapsed]
     .map((line) => ranges.get(line))
     .filter((range): range is FoldRange => !!range)
@@ -216,7 +277,7 @@ const foldStateField = StateField.define<FoldStateValue>({
     return {
       ranges,
       collapsed,
-      decorations: Decoration.none,
+      decorations: buildFoldDecorations(state.doc, ranges, collapsed),
     };
   },
   update(value, tr) {
@@ -272,14 +333,15 @@ function findFoldStartForLine(ranges: Map<number, FoldRange>, line: number): num
   return bestStart;
 }
 
-function toggleFoldAtLine(view: EditorView, line: number): boolean {
+function applyFoldStateAtLine(view: EditorView, line: number, nextCollapsed: boolean): boolean {
   const foldState = view.state.field(foldStateField, false);
   if (!foldState || !foldState.ranges.has(line)) return false;
   const range = foldState.ranges.get(line)!;
+  const currentCollapsed = foldState.collapsed.has(line);
+  if (currentCollapsed === nextCollapsed) return false;
   const main = view.state.selection.main;
   const intersectsHidden = main.from < range.to && range.from < main.to;
   const headInsideHidden = main.head >= range.from && main.head < range.to;
-  const nextCollapsed = !foldState.collapsed.has(line);
   const effects = [toggleFoldAtLineEffect.of(line)];
 
   if (nextCollapsed && (headInsideHidden || intersectsHidden)) {
@@ -296,6 +358,19 @@ function toggleFoldAtLine(view: EditorView, line: number): boolean {
   return true;
 }
 
+function toggleFoldAtLine(view: EditorView, line: number): boolean {
+  const foldState = view.state.field(foldStateField, false);
+  if (!foldState || !foldState.ranges.has(line)) return false;
+  return applyFoldStateAtLine(view, line, !foldState.collapsed.has(line));
+}
+
+function formatFoldMessage(action: "folded" | "unfolded", range: FoldRange): string {
+  const hiddenLineCount = range.endLine - range.startLine;
+  const hiddenSuffix = hiddenLineCount === 1 ? "" : "s";
+  const kind = range.kind === "heading" ? "heading" : "code block";
+  return `fold: ${action} ${kind} (${hiddenLineCount} line${hiddenSuffix})`;
+}
+
 export function toggleFoldAtCursor(view: EditorView): boolean {
   const foldState = view.state.field(foldStateField, false);
   if (!foldState) return false;
@@ -305,13 +380,50 @@ export function toggleFoldAtCursor(view: EditorView): boolean {
   return toggleFoldAtLine(view, foldStart);
 }
 
+export function executeFoldCommand(view: EditorView, action: FoldCommandAction): FoldCommandResult {
+  const foldState = view.state.field(foldStateField, false);
+  if (!foldState) {
+    return { changed: false, message: "fold: unavailable" };
+  }
+
+  const line = view.state.doc.lineAt(view.state.selection.main.head).number;
+  const foldStart = findFoldStartForLine(foldState.ranges, line);
+  if (foldStart === null) {
+    return { changed: false, message: "fold: no foldable block at cursor" };
+  }
+
+  const range = foldState.ranges.get(foldStart);
+  if (!range) {
+    return { changed: false, message: "fold: no foldable block at cursor" };
+  }
+  const isCollapsed = foldState.collapsed.has(foldStart);
+
+  if (action === "fold" && isCollapsed) {
+    return { changed: false, message: "fold: already folded" };
+  }
+  if (action === "unfold" && !isCollapsed) {
+    return { changed: false, message: "fold: already unfolded" };
+  }
+
+  const nextCollapsed = action === "fold-toggle" ? !isCollapsed : action === "fold";
+  const changed = applyFoldStateAtLine(view, foldStart, nextCollapsed);
+  if (!changed) {
+    return { changed: false, message: "fold: no foldable block at cursor" };
+  }
+
+  return {
+    changed: true,
+    message: formatFoldMessage(nextCollapsed ? "folded" : "unfolded", range),
+  };
+}
+
 const foldMouseHandlers = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     const target = event.target as Element | null;
     if (!target) return false;
-    const placeholder = target.closest(".cm-fold-placeholder") as HTMLElement | null;
-    if (!placeholder) return false;
-    const lineRaw = placeholder.dataset.foldLine;
+    const foldTarget = target.closest(".cm-fold-placeholder, .cm-fold-toggle") as HTMLElement | null;
+    if (!foldTarget) return false;
+    const lineRaw = foldTarget.dataset.foldLine;
     const line = Number(lineRaw);
     if (!Number.isFinite(line) || line <= 0) return false;
     event.preventDefault();

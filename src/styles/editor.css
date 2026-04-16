@@ -201,6 +201,21 @@
   border-bottom: 1px dashed var(--border);
 }
 
+.cm-editor .cm-fold-toggle {
+  display: inline-block;
+  width: 1.1em;
+  margin-right: 0.2em;
+  color: var(--fg-dim);
+  font-size: 0.85em;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-editor .cm-fold-toggle:hover {
+  color: var(--accent);
+}
+
 .cm-editor .cm-fold-placeholder {
   display: inline;
   margin: 0.12em 0;

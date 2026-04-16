@@ -19,6 +19,9 @@ test("editor mode exposes only editing commands", () => {
     "notify",
     "notify-delete",
     "format",
+    "fold",
+    "unfold",
+    "fold-toggle",
     "clip-watch",
     "clip-watch-stop",
     "clist",
@@ -35,5 +38,5 @@ test("vim mode exposes vim-specific commands", () => {
 
 test("command suggestions filter by query", () => {
   const values = listCommandSuggestions("editor", "fo").map((entry) => entry.value);
-  assert.deepEqual(values, ["format"]);
+  assert.deepEqual(values, ["fold", "fold-toggle", "format"]);
 });
