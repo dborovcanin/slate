@@ -15,6 +15,7 @@ import { applyEditOperation, snapshotFromView } from "./core/codemirror-adapter"
 import { runTableCellNavigationRules } from "./wasm.ts";
 import { markdownRichTextExtensions } from "./markdown-decoration";
 import { markdownEditingExtensions } from "./markdown-editing";
+import { foldingExtensions } from "./folding.ts";
 import { notifyExtensions } from "./notify-decoration";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
 import { editorSearchExtensions } from "./search";
@@ -222,6 +223,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     highlightActiveLine(),
     placeholder("Start typing..."),
     markdownRichTextExtensions(),
+    ...foldingExtensions(),
     markdownEditingExtensions({
       autoformat: markdownAutoformat,
       checklistAutoReorder,

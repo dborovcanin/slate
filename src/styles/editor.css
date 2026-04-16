@@ -197,6 +197,30 @@
   color: var(--fg-dim);
 }
 
+.cm-editor .cm-line.cm-folded-start-line {
+  border-bottom: 1px dashed var(--border);
+}
+
+.cm-editor .cm-fold-placeholder {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0.12em 0 0.12em 0;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-overlay);
+  color: var(--fg-dim);
+  font-size: 0.86em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.cm-editor .cm-fold-placeholder:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .cm-editor .cm-line.md-hr {
   letter-spacing: 0.12em;
 }

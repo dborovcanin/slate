@@ -16,6 +16,7 @@ use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
+const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
 const TITLE_ROW: usize = 1;
 const EDITOR_TOP_ROW: usize = 2;
 const GUTTER_WIDTH: usize = 6;
@@ -315,6 +316,22 @@ struct UndoEntry {
     lines: Vec<String>,
     cursor_line: usize,
     cursor_col: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FoldKind {
+    Heading,
+    Fence,
+    List,
+    Table,
+    Paragraph,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FoldRange {
+    start_line: usize,
+    end_line: usize,
+    kind: FoldKind,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

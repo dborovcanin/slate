@@ -14,6 +14,7 @@ import {
 } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
+import { toggleFoldAtCursor } from "./folding.ts";
 import {
   editorSearchHasMatches,
   editorSearchNext,
@@ -273,6 +274,7 @@ export function vimModeExtension(options: VimOptions = {}) {
   let currentMode: VimUiMode = "insert";
   let unnamedRegister = "";
   let swallowVisualDdUntilMs = 0;
+  let pendingFoldPrefixUntilMs = 0;
 
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
@@ -848,6 +850,28 @@ export function vimModeExtension(options: VimOptions = {}) {
 
       const activeMode = mode();
       const now = Date.now();
+      if (pendingFoldPrefixUntilMs > 0 && now > pendingFoldPrefixUntilMs) {
+        pendingFoldPrefixUntilMs = 0;
+      }
+
+      if (activeMode !== "normal") {
+        pendingFoldPrefixUntilMs = 0;
+      }
+
+      const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
+      if (activeMode === "normal" && plain) {
+        if (pendingFoldPrefixUntilMs > 0) {
+          pendingFoldPrefixUntilMs = 0;
+          if (event.key === "a") {
+            event.preventDefault();
+            return toggleFoldAtCursor(view);
+          }
+        } else if (event.key === "z") {
+          event.preventDefault();
+          pendingFoldPrefixUntilMs = now + 900;
+          return true;
+        }
+      }
 
       if (
         activeMode === "normal"
