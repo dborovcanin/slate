@@ -9,6 +9,8 @@ import {
   runEnterRules,
   runTableBoundaryEditRules,
   runTableCellNavigationRules,
+  runTableHeaderDeleteColumnRule,
+  runTablePipeInsertColumnRule,
   runTabRules,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
@@ -85,6 +87,29 @@ function tableCellNavigationAnchorInLine(cell: TableCellInfo): number {
     return Math.min(cellStart + 1, cell.rightPipe);
   }
   return Math.min(cellStart + cell.trimEnd, cell.rightPipe);
+}
+
+function isSingleSpaceInsertion(update: ViewUpdate): boolean {
+  let inserted = "";
+  let changeCount = 0;
+  let hasDeletion = false;
+  for (const tr of update.transactions) {
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
+      changeCount += 1;
+      if (fromA !== toA) hasDeletion = true;
+      inserted += text.toString();
+    });
+  }
+  return !hasDeletion && changeCount === 1 && inserted === " ";
+}
+
+function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  if (!isSingleSpaceInsertion(update)) return false;
+  const main = update.state.selection.main;
+  if (!main.empty) return false;
+  const line = update.state.doc.lineAt(main.head);
+  return isMarkdownTableLine(line.text);
 }
 
 function clampTableCursorToContent(state: EditorView["state"], pos: number): number | null {
@@ -250,6 +275,31 @@ function tableBoundaryEdit(
   return true;
 }
 
+function tablePipeInsertColumn(view: EditorView): boolean {
+  const operation = runTablePipeInsertColumnRule(snapshotFromView(view));
+  if (!operation) return false;
+  applyEditOperation(view, operation);
+  return true;
+}
+
+function tablePipeInputHandler() {
+  return EditorView.inputHandler.of((view, _from, _to, insert) => {
+    if (insert !== "|") return false;
+    return tablePipeInsertColumn(view);
+  });
+}
+
+function tableHeaderDeleteColumn(view: EditorView): boolean {
+  const operation = runTableHeaderDeleteColumnRule(snapshotFromView(view));
+  if (!operation) return false;
+  applyEditOperation(view, operation);
+  return true;
+}
+
+export function runTableHeaderDeleteColumnCommand(view: EditorView): boolean {
+  return tableHeaderDeleteColumn(view);
+}
+
 function tableCellJump(view: EditorView, autoformat: boolean, outdent: boolean): boolean {
   const operation = runTableCellNavigationRules(snapshotFromView(view), {
     markdownAutoformat: autoformat,
@@ -307,12 +357,12 @@ function tableCursorKeymap(autoformat: boolean): KeyBinding[] {
     {
       key: "Ctrl-Backspace",
       preventDefault: true,
-      run: (view) => tableBoundaryEdit(view, autoformat, true, true),
+      run: (view) => tableHeaderDeleteColumn(view) || tableBoundaryEdit(view, autoformat, true, true),
     },
     {
       key: "Ctrl-Delete",
       preventDefault: true,
-      run: (view) => tableBoundaryEdit(view, autoformat, false, true),
+      run: (view) => tableHeaderDeleteColumn(view) || tableBoundaryEdit(view, autoformat, false, true),
     },
     {
       key: "ArrowLeft",
@@ -341,6 +391,7 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
     return {
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
+        if (shouldDeferTableAutoformatForSpace(update)) return;
         applying = true;
         try {
           const operation = runDocChangeRules(snapshotFromUpdate(update), {
@@ -480,6 +531,7 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   const autoformat = options.autoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
   return [
+    Prec.high(tablePipeInputHandler()),
     Prec.high(keymap.of(tableCursorKeymap(autoformat))),
     Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
     Prec.low(keymap.of(markdownTabKeymap(autoformat))),

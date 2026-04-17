@@ -14,7 +14,7 @@ import { commandModeExtension } from "./command-picker";
 import { applyEditOperation, snapshotFromView } from "./core/codemirror-adapter";
 import { runTableCellNavigationRules } from "./wasm.ts";
 import { markdownRichTextExtensions } from "./markdown-decoration";
-import { markdownEditingExtensions } from "./markdown-editing";
+import { markdownEditingExtensions, runTableHeaderDeleteColumnCommand } from "./markdown-editing";
 import { foldingExtensions } from "./folding.ts";
 import { notifyExtensions } from "./notify-decoration";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
@@ -248,7 +248,17 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     tableCellNavigationDomHandler(),
     snapEditorScrollToPixels(),
     Prec.highest(keymap.of([
+      {
+        key: "Ctrl-w",
+        run: runTableHeaderDeleteColumnCommand,
+        preventDefault: true,
+      },
       { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
+      {
+        key: "Ctrl-Backspace",
+        run: runTableHeaderDeleteColumnCommand,
+        preventDefault: true,
+      },
       { key: "Ctrl-Backspace", run: deleteGroupBackward, preventDefault: true },
       { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
       { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },

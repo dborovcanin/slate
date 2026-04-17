@@ -12,7 +12,8 @@ use crate::markdown_tokens::{
 };
 use crate::text_rules::{
     rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules, run_enter_rules,
-    run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules, TabRuleOptions,
+    run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules,
+    run_table_header_delete_column_rule, run_table_pipe_insert_column_rule, TabRuleOptions,
     TableBoundaryEditOptions, TextRuleOptions,
 };
 use crate::types::{CommandMode, EditorContextSnapshot};
@@ -80,6 +81,24 @@ pub fn wasm_run_table_cell_navigation_rules(
         outdent,
     };
     let op = run_table_cell_navigation_rules(&snapshot, options)?;
+    serde_json::to_string(&op).ok()
+}
+
+/// Insert a new column when `|` is typed in the table header row.
+/// Returns JSON-encoded EditOperation or null when not applicable.
+#[wasm_bindgen]
+pub fn wasm_run_table_pipe_insert_column_rule(snapshot_json: &str) -> Option<String> {
+    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let op = run_table_pipe_insert_column_rule(&snapshot)?;
+    serde_json::to_string(&op).ok()
+}
+
+/// Delete a column when Ctrl+Backspace is pressed inside an empty header cell.
+/// Returns JSON-encoded EditOperation or null when not applicable.
+#[wasm_bindgen]
+pub fn wasm_run_table_header_delete_column_rule(snapshot_json: &str) -> Option<String> {
+    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let op = run_table_header_delete_column_rule(&snapshot)?;
     serde_json::to_string(&op).ok()
 }
 

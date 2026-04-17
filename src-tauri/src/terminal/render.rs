@@ -470,7 +470,30 @@ impl RenderContext {
         } else {
             apply_line_styles_from_info(&info, &mut styles);
             let inline_tokens = markdown_tokens::tokenize_inline_markdown(text);
-            apply_inline_token_styles(&inline_tokens, &mut styles);
+            // Markdown emphasis (`*x*`, `***x***`) inside table rows is
+            // ambiguous with our formula markers (`value*`, `value***`) and
+            // would otherwise leak italic/bold across cell boundaries.
+            // Skip inline emphasis tokens for table rows; keep code, links,
+            // and strikethrough (which are not asterisk-based).
+            let is_table_row = text.trim_start().starts_with('|');
+            let filtered_tokens: Vec<markdown_tokens::InlineToken>;
+            let inline_tokens_to_apply: &[markdown_tokens::InlineToken] = if is_table_row {
+                filtered_tokens = inline_tokens
+                    .iter()
+                    .filter(|t| {
+                        !matches!(
+                            t.kind,
+                            markdown_tokens::InlineTokenType::Strong
+                                | markdown_tokens::InlineTokenType::Emphasis
+                        )
+                    })
+                    .cloned()
+                    .collect();
+                &filtered_tokens
+            } else {
+                &inline_tokens
+            };
+            apply_inline_token_styles(inline_tokens_to_apply, &mut styles);
             apply_variable_styles(&chars, &mut styles, variable_names, self.palette.variable);
         }
 

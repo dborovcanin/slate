@@ -526,7 +526,9 @@ fn table_expression_segments(line: &str, allow_assignments: bool) -> Vec<(String
             continue;
         }
 
-        if parse_builtin_formula(trimmed).is_some() {
+        // A cell is a "formula cell" if it contains *any* builtin formula
+        // call — including compound expressions like `=sum_col() + 3 + a`.
+        if !find_builtin_formula_calls(trimmed).is_empty() {
             formula_segments.push((trimmed.to_string(), cell_idx));
             continue;
         }
@@ -1754,6 +1756,77 @@ mod tests {
         let value = result.line_results[5].as_deref().unwrap_or("");
         let numeric = extract_first_number(value).unwrap_or(f64::NAN);
         assert!((numeric - (14.0 / 3.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn note_eval_table_cell_combines_builtin_with_arithmetic_and_variable() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "a := 3.4".to_string(),
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 1 |".to_string(),
+            "| 2 |".to_string(),
+            "| =sum_col() + 3 + a |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let cells = &res.table_cell_results[5];
+        let val = cells
+            .iter()
+            .find(|c| c.cell_index == 0)
+            .map(|c| c.value.clone())
+            .unwrap_or_default();
+        let n = extract_first_number(&val).unwrap_or(f64::NAN);
+        assert!((n - (3.0 + 3.0 + 3.4)).abs() < 1e-6, "got {}", val);
+    }
+
+    #[test]
+    fn note_eval_table_cell_combines_row_formula_with_arithmetic() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "k := 10".to_string(),
+            "| a | b | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| 2 | 3 | =sum_row() * 2 + k |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let val = res.table_cell_results[3]
+            .iter()
+            .find(|c| c.cell_index == 2)
+            .map(|c| c.value.clone())
+            .unwrap_or_default();
+        let n = extract_first_number(&val).unwrap_or(f64::NAN);
+        assert!((n - ((2.0 + 3.0) * 2.0 + 10.0)).abs() < 1e-6, "got {}", val);
+    }
+
+    #[test]
+    fn note_eval_table_recognizes_compound_formula_cell_alongside_simple_ones() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| g | h | t |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| 4 | 1.94 |  |".to_string(),
+            "| 5 | 1.98 |  |".to_string(),
+            "| =avg_col() | =avg_col()*a+2 | =sum_row() |".to_string(),
+            "a := 4".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let cells = &res.table_cell_results[4];
+        let by_idx: std::collections::HashMap<usize, String> =
+            cells.iter().map(|c| (c.cell_index, c.value.clone())).collect();
+        let avg_g = extract_first_number(by_idx.get(&0).cloned().unwrap_or_default().as_str())
+            .unwrap_or(f64::NAN);
+        let compound = extract_first_number(by_idx.get(&1).cloned().unwrap_or_default().as_str())
+            .unwrap_or(f64::NAN);
+        let total = extract_first_number(by_idx.get(&2).cloned().unwrap_or_default().as_str())
+            .unwrap_or(f64::NAN);
+        assert!((avg_g - 4.5).abs() < 1e-6, "avg_g = {}", avg_g);
+        assert!((compound - (1.96 * 4.0 + 2.0)).abs() < 1e-6, "compound = {}", compound);
+        assert!(
+            (total - (4.5 + (1.96 * 4.0 + 2.0))).abs() < 1e-6,
+            "total = {}",
+            total
+        );
     }
 
     #[test]

@@ -30,6 +30,8 @@ import init, {
   wasm_run_doc_change_rules,
   wasm_run_enter_rules,
   wasm_run_table_boundary_edit_rules,
+  wasm_run_table_header_delete_column_rule,
+  wasm_run_table_pipe_insert_column_rule,
   wasm_run_tab_rules,
   wasm_run_table_cell_navigation_rules,
 } from "../../pkg/editor-core/editor_core.js";
@@ -446,6 +448,26 @@ export function runTableCellNavigationRules(
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
     ),
+    snapshot.text,
+  );
+}
+
+export function runTableHeaderDeleteColumnRule(
+  snapshot: EditorContextSnapshot,
+): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return parseOp(
+    wasm_run_table_header_delete_column_rule(toRustSnapshot(snapshot)),
+    snapshot.text,
+  );
+}
+
+export function runTablePipeInsertColumnRule(
+  snapshot: EditorContextSnapshot,
+): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return parseOp(
+    wasm_run_table_pipe_insert_column_rule(toRustSnapshot(snapshot)),
     snapshot.text,
   );
 }

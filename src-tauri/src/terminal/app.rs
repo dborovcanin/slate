@@ -504,14 +504,20 @@ impl TerminalApp {
                 }
             }
             Key::CtrlBackspace => {
-                if let Some(changed) = self.try_table_boundary_edit_rule(true, true) {
+                if self.try_table_header_delete_column_rule() {
+                    should_autoformat = false;
+                    clamp_table_padding = false;
+                } else if let Some(changed) = self.try_table_boundary_edit_rule(true, true) {
                     should_autoformat = changed;
                 } else {
                     should_autoformat = self.delete_word_backward();
                 }
             }
             Key::CtrlDelete => {
-                if let Some(changed) = self.try_table_boundary_edit_rule(false, true) {
+                if self.try_table_header_delete_column_rule() {
+                    should_autoformat = false;
+                    clamp_table_padding = false;
+                } else if let Some(changed) = self.try_table_boundary_edit_rule(false, true) {
                     should_autoformat = changed;
                 } else {
                     self.delete_forward();
@@ -578,8 +584,13 @@ impl TerminalApp {
                 should_autoformat = false;
             }
             Key::Char(ch) => {
-                self.insert_char(ch);
-                should_autoformat = true;
+                if ch == '|' && self.try_table_pipe_insert_column_rule() {
+                    should_autoformat = false;
+                    clamp_table_padding = false;
+                } else {
+                    self.insert_char(ch);
+                    should_autoformat = true;
+                }
                 if ch == ' ' && is_markdown_table_line(self.current_line()) {
                     // Let users type multi-word table cell content without
                     // instant trim/realign fighting the cursor.
@@ -3263,6 +3274,28 @@ impl TerminalApp {
         false
     }
 
+    fn try_table_pipe_insert_column_rule(&mut self) -> bool {
+        let snapshot = self.build_snapshot();
+        if let Some(op) =
+            crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&snapshot)
+        {
+            self.apply_edit_operation(&op);
+            return true;
+        }
+        false
+    }
+
+    fn try_table_header_delete_column_rule(&mut self) -> bool {
+        let snapshot = self.build_snapshot();
+        if let Some(op) =
+            crate::editor_core::text_rules::run_table_header_delete_column_rule(&snapshot)
+        {
+            self.apply_edit_operation(&op);
+            return true;
+        }
+        false
+    }
+
     fn try_table_boundary_edit_rule(
         &mut self,
         backward: bool,
@@ -5621,6 +5654,40 @@ mod tests {
             .expect("ctrl-delete merges with next cell");
         assert_eq!(app.lines[0], "| aaa bb |");
 
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_backspace_and_ctrl_delete_remove_table_column_when_header_cell_empty() {
+        let text = "| a |  | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        let assert_middle_column_removed = |lines: &[String]| {
+            assert_eq!(lines.len(), 3);
+            for line in lines {
+                assert_eq!(line.matches('|').count(), 3, "line: {:?}", line);
+            }
+            assert!(lines[2].contains("1"));
+            assert!(lines[2].contains("3"));
+            assert!(!lines[2].contains("2"));
+        };
+
+        let (db, mut app, path) = app_with_note(text);
+        app.cursor_line = 0;
+        app.cursor_col = app.lines[0].find("|  |").expect("empty header cell") + 2;
+        app.handle_editor_key(&db, Key::CtrlBackspace)
+            .expect("ctrl-backspace removes empty header column");
+        assert_middle_column_removed(&app.lines);
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+
+        let (db, mut app, path) = app_with_note(text);
+        app.cursor_line = 0;
+        app.cursor_col = app.lines[0].find("|  |").expect("empty header cell") + 2;
+        app.handle_editor_key(&db, Key::CtrlDelete)
+            .expect("ctrl-delete removes empty header column");
+        assert_middle_column_removed(&app.lines);
         drop(app);
         drop(db);
         cleanup_db_files(&path);

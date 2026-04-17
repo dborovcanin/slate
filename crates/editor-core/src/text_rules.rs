@@ -1045,6 +1045,239 @@ pub fn run_table_cell_navigation_rules(
     table_tab_rule(&ctx, &options)
 }
 
+/// When the user types `|` in a table header row, insert a new empty
+/// column at the cursor position across every row of the table (rather
+/// than just inserting a literal pipe in the current row, which would
+/// desynchronize cell counts and produce misaligned padding).
+///
+/// The cursor lands inside the freshly inserted header cell so the user
+/// can immediately type the column title.
+///
+/// Returns `None` when:
+/// - the cursor is not on the header row of a pipe table,
+/// - the table has no recognizable structure,
+/// - or the cursor sits on a pipe character itself.
+pub fn run_table_pipe_insert_column_rule(
+    snapshot: &EditorContextSnapshot,
+) -> Option<EditOperation> {
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+
+    let line = ctx.current_line();
+    if !is_table_line(&line.text) {
+        return None;
+    }
+
+    let block = ctx.table_range_at_line(line.number, 1)?;
+
+    // Find the delimiter row (if any) inside the block. The header is the
+    // row immediately above it; if no delimiter exists yet, the first row
+    // is the header.
+    let mut header_line: Option<usize> = None;
+    for line_no in block.start_line..=block.end_line {
+        if is_table_separator(ctx.line_text(line_no)) {
+            if line_no > block.start_line {
+                header_line = Some(line_no - 1);
+            }
+            break;
+        }
+    }
+    let header_line = header_line.unwrap_or(block.start_line);
+    if line.number != header_line {
+        return None;
+    }
+
+    let pipes = table::table_pipe_positions(&line.text);
+    if pipes.len() < 2 {
+        return None;
+    }
+    let cursor_col = selection.head.saturating_sub(line.from);
+    let current_cell = table::table_cell_index_for_column(&pipes, cursor_col)?;
+
+    // Insert position is *after* the current cell. For each row, pad to
+    // the table-wide column count first so the insert index lines up
+    // across rows that previously had different cell counts.
+    let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
+        .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
+        .collect();
+    let column_count = row_cells.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+    for cells in row_cells.iter_mut() {
+        while cells.len() < column_count {
+            cells.push(String::new());
+        }
+    }
+    let insert_at = (current_cell + 1).min(column_count);
+    for cells in row_cells.iter_mut() {
+        let placeholder = if table::is_delimiter_row(cells) {
+            "---".to_string()
+        } else {
+            String::new()
+        };
+        cells.insert(insert_at, placeholder);
+    }
+
+    let raw_lines: Vec<String> = row_cells
+        .iter()
+        .map(|cells| table::serialize_table_row(cells))
+        .collect();
+    let formatted = table::format_table_lines(&raw_lines);
+
+    let block_from = ctx.line(block.start_line).from;
+    let block_to = ctx.line(block.end_line).to;
+    let insert_text = formatted.join("\n");
+
+    // New cursor: navigation anchor of the inserted cell on the header row.
+    let header_offset_in_block = header_line - block.start_line;
+    let new_header_text = formatted.get(header_offset_in_block)?;
+    let new_header_pipes = table::table_pipe_positions(new_header_text);
+    let anchor_col = table::table_cell_navigation_anchor(
+        new_header_text,
+        &new_header_pipes,
+        insert_at,
+    );
+    let header_line_from =
+        block_from + insert_text[..byte_offset_of_line(&insert_text, header_offset_in_block)].len();
+    let anchor = header_line_from + anchor_col;
+
+    Some(EditOperation {
+        changes: vec![TextChange {
+            from: block_from,
+            to: block_to,
+            insert: insert_text,
+        }],
+        selection: Some(OperationSelection { anchor, head: None }),
+    })
+}
+
+/// Deletes the current column from a Markdown pipe table when the cursor sits
+/// inside an empty header cell. The cell is removed from every row in the
+/// block, the table is reflowed, and the cursor lands on the navigation anchor
+/// of the cell that took its place (or the previous cell if the deleted column
+/// was the last one).
+///
+/// Returns `None` when:
+/// - the cursor is not on the header row of a pipe table,
+/// - the current header cell is non-empty,
+/// - or the table only has a single column (deletion would destroy the table).
+pub fn run_table_header_delete_column_rule(
+    snapshot: &EditorContextSnapshot,
+) -> Option<EditOperation> {
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+
+    let line = ctx.current_line();
+    if !is_table_line(&line.text) {
+        return None;
+    }
+
+    let block = ctx.table_range_at_line(line.number, 1)?;
+
+    let mut header_line: Option<usize> = None;
+    for line_no in block.start_line..=block.end_line {
+        if is_table_separator(ctx.line_text(line_no)) {
+            if line_no > block.start_line {
+                header_line = Some(line_no - 1);
+            }
+            break;
+        }
+    }
+    let header_line = header_line.unwrap_or(block.start_line);
+    if line.number != header_line {
+        return None;
+    }
+
+    let pipes = table::table_pipe_positions(&line.text);
+    if pipes.len() < 2 {
+        return None;
+    }
+    let cursor_col = selection.head.saturating_sub(line.from);
+    let current_cell = table::table_cell_index_for_column(&pipes, cursor_col)?;
+
+    let header_cells = table::split_table_cells(&line.text);
+    let header_cell_text = header_cells.get(current_cell)?;
+    if !header_cell_text.trim().is_empty() {
+        return None;
+    }
+
+    let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
+        .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
+        .collect();
+    let column_count = row_cells.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+    if column_count <= 1 {
+        return None;
+    }
+    for cells in row_cells.iter_mut() {
+        while cells.len() < column_count {
+            cells.push(String::new());
+        }
+    }
+    if current_cell >= column_count {
+        return None;
+    }
+    for cells in row_cells.iter_mut() {
+        cells.remove(current_cell);
+    }
+
+    let raw_lines: Vec<String> = row_cells
+        .iter()
+        .map(|cells| table::serialize_table_row(cells))
+        .collect();
+    let formatted = table::format_table_lines(&raw_lines);
+
+    let block_from = ctx.line(block.start_line).from;
+    let block_to = ctx.line(block.end_line).to;
+    let insert_text = formatted.join("\n");
+
+    let header_offset_in_block = header_line - block.start_line;
+    let new_header_text = formatted.get(header_offset_in_block)?;
+    let new_header_pipes = table::table_pipe_positions(new_header_text);
+    let new_cell_count = new_header_pipes.len().saturating_sub(1);
+    let target_cell = if new_cell_count == 0 {
+        0
+    } else {
+        current_cell.min(new_cell_count - 1)
+    };
+    let anchor_col = table::table_cell_navigation_anchor(
+        new_header_text,
+        &new_header_pipes,
+        target_cell,
+    );
+    let header_line_from =
+        block_from + insert_text[..byte_offset_of_line(&insert_text, header_offset_in_block)].len();
+    let anchor = header_line_from + anchor_col;
+
+    Some(EditOperation {
+        changes: vec![TextChange {
+            from: block_from,
+            to: block_to,
+            insert: insert_text,
+        }],
+        selection: Some(OperationSelection { anchor, head: None }),
+    })
+}
+
+fn byte_offset_of_line(text: &str, line_idx: usize) -> usize {
+    if line_idx == 0 {
+        return 0;
+    }
+    let mut count = 0usize;
+    for (i, ch) in text.char_indices() {
+        if ch == '\n' {
+            count += 1;
+            if count == line_idx {
+                return i + 1;
+            }
+        }
+    }
+    text.len()
+}
+
 fn prev_char_start(text: &str, at: usize) -> Option<usize> {
     if at == 0 || at > text.len() {
         return None;
@@ -1641,6 +1874,102 @@ mod tests {
         assert_eq!(increment_ordered_marker("1."), "2.");
         assert_eq!(increment_ordered_marker("1.1"), "1.2");
         assert_eq!(increment_ordered_marker("3.2.9"), "3.2.10");
+    }
+
+    #[test]
+    fn run_table_pipe_insert_column_inserts_column_in_every_row_when_in_header() {
+        let text = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
+        // Cursor after `b` in header (just before the closing pipe `|`).
+        let head = text.find("b ").unwrap() + 1;
+        let snap = snapshot(text, head, head);
+        let op = run_table_pipe_insert_column_rule(&snap).expect("rule fires");
+        let result = apply_operation(text, &op);
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 4);
+        // Each row gets one extra cell at the same position.
+        for line in &lines {
+            assert_eq!(line.matches('|').count(), 4, "line: {:?}", line);
+        }
+        // Cursor is positioned inside the new (empty) header cell.
+        let new_head = op.selection.as_ref().expect("selection").anchor;
+        let header_line_end = result.find('\n').unwrap();
+        assert!(new_head <= header_line_end);
+    }
+
+    #[test]
+    fn run_table_pipe_insert_column_returns_none_when_not_in_header() {
+        let text = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+        let head = text.find("1").unwrap();
+        let snap = snapshot(text, head, head);
+        assert!(run_table_pipe_insert_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn run_table_pipe_insert_column_returns_none_outside_table() {
+        let text = "hello world";
+        let snap = snapshot(text, 5, 5);
+        assert!(run_table_pipe_insert_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn run_table_header_delete_column_removes_column_in_every_row_when_header_cell_empty() {
+        let text = "| a |  | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        // Cursor inside the empty middle header cell.
+        let header_end = text.find('\n').unwrap();
+        let head = text[..header_end].rfind("|  |").unwrap() + 2; // sits between the `| ` and ` |`
+        let snap = snapshot(text, head, head);
+        let op = run_table_header_delete_column_rule(&snap).expect("rule fires");
+        let result = apply_operation(text, &op);
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 3);
+        for line in &lines {
+            assert_eq!(line.matches('|').count(), 3, "line: {:?}", line);
+        }
+        assert!(lines[2].contains("1") && lines[2].contains("3") && !lines[2].contains("2"));
+    }
+
+    #[test]
+    fn run_table_header_delete_column_returns_none_when_header_cell_not_empty() {
+        let text = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+        let head = text.find('b').unwrap();
+        let snap = snapshot(text, head, head);
+        assert!(run_table_header_delete_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn run_table_header_delete_column_returns_none_when_not_in_header_row() {
+        let text = "| a |  |\n| --- | --- |\n| 1 |  |";
+        // Cursor inside empty body cell on the data row, not the header.
+        let head = text.rfind("|  |").unwrap() + 2;
+        let snap = snapshot(text, head, head);
+        assert!(run_table_header_delete_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn run_table_header_delete_column_fires_after_user_empties_wide_header_cell() {
+        // Table width-padded after prior content.  Middle header was "bbb" and
+        // is now wiped to whitespace, keeping the column width padding.
+        let text =
+            "| aa | bbb | cc |\n| --- | --- | --- |\n| 1  |     | 3  |".to_string();
+        // After "bbb" was deleted the cell is normally reflowed; simulate the
+        // intermediate state where the user's header cell is padded whitespace.
+        let text = text.replace("| bbb ", "|     ");
+        let middle_cell_mid = text.find('\n').unwrap() / 2;
+        let snap = snapshot(&text, middle_cell_mid, middle_cell_mid);
+        let op = run_table_header_delete_column_rule(&snap).expect("rule fires");
+        let result = apply_operation(&text, &op);
+        let lines: Vec<&str> = result.lines().collect();
+        for line in &lines {
+            assert_eq!(line.matches('|').count(), 3, "line: {:?}", line);
+        }
+    }
+
+    #[test]
+    fn run_table_header_delete_column_returns_none_for_single_column_table() {
+        let text = "|  |\n| --- |\n| x |";
+        let head = 2;
+        let snap = snapshot(text, head, head);
+        assert!(run_table_header_delete_column_rule(&snap).is_none());
     }
 
     #[test]
