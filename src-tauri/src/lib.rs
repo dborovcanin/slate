@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 pub mod editor_core;
+mod imap;
 mod ipc;
 mod startup_log;
 mod storage;
@@ -19,6 +20,7 @@ enum Mode {
     Gui,
     #[cfg(unix)]
     Terminal,
+    ImapSync,
 }
 
 fn stdin_is_tty() -> bool {
@@ -68,10 +70,12 @@ fn print_help() {
     println!(
         "note usage:
   note [--gui|--terminal] [--new] [--id <note-id>] [--list]
+  note imap-sync
 
 Modes:
   --gui       Force Tauri GUI mode
   --terminal  Force terminal editor mode (no window UI, Unix only)
+  imap-sync   Pull messages from configured IMAP inbox once
 
 Terminal options:
   --new       Create and edit a new note
@@ -92,6 +96,7 @@ fn parse_args(
 ) -> Result<(Mode, TerminalOptions), String> {
     let mut force_gui = false;
     let mut force_terminal = false;
+    let mut force_imap = false;
     let mut opts = TerminalOptions::default();
 
     let mut i = 0;
@@ -103,6 +108,7 @@ fn parse_args(
             }
             "--gui" => force_gui = true,
             "--terminal" | "-t" => force_terminal = true,
+            "imap-sync" | "--imap-sync" => force_imap = true,
             "--new" => {
                 opts.create_new = true;
                 force_terminal = true;
@@ -129,11 +135,16 @@ fn parse_args(
         i += 1;
     }
 
+    if force_imap && (force_gui || force_terminal) {
+        return Err("Cannot combine imap-sync with GUI or terminal flags".to_string());
+    }
     if force_gui && force_terminal {
         return Err("Cannot combine --gui with terminal flags".to_string());
     }
 
-    let mode = if force_gui {
+    let mode = if force_imap {
+        Mode::ImapSync
+    } else if force_gui {
         Mode::Gui
     } else if force_terminal {
         Mode::Terminal
@@ -159,6 +170,7 @@ fn parse_args(
     _config_terminal_mode: bool,
     _stdin_tty: bool,
 ) -> Result<(Mode, ()), String> {
+    let mut imap = false;
     for arg in args {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -166,6 +178,7 @@ fn parse_args(
                 return Err(String::new());
             }
             "--gui" => {}
+            "imap-sync" | "--imap-sync" => imap = true,
             unknown => {
                 return Err(format!(
                     "Unknown argument: {unknown}. Use --help for usage."
@@ -173,7 +186,11 @@ fn parse_args(
             }
         }
     }
-    Ok((Mode::Gui, ()))
+    if imap {
+        Ok((Mode::ImapSync, ()))
+    } else {
+        Ok((Mode::Gui, ()))
+    }
 }
 
 #[cfg(unix)]
@@ -185,12 +202,27 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     terminal::run_terminal_session(core.db(), theme, opts)
 }
 
+fn run_imap_sync() -> Result<(), String> {
+    if let Err(err) = config::ensure_config_file() {
+        eprintln!("Config: {err}");
+    }
+    let imap_cfg = config::load_imap_config();
+    let special = config::load_special_notes_config();
+    imap::run_imap_sync(imap_cfg, special)
+}
+
 pub fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = config::load_theme_config();
     match parse_args(&args, cfg.terminal_mode, stdin_is_tty()) {
         Ok((Mode::Gui, _)) => {
             if let Err(err) = run_gui() {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+        Ok((Mode::ImapSync, _)) => {
+            if let Err(err) = run_imap_sync() {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
@@ -259,6 +291,12 @@ mod tests {
         let (mode, opts) = parse_args(&["--list".to_string()], false, false).expect("parsed");
         assert_eq!(mode, Mode::Terminal);
         assert!(opts.list_only);
+    }
+
+    #[test]
+    fn parse_supports_imap_mode() {
+        let (mode, _) = parse_args(&["imap-sync".to_string()], false, true).expect("parsed");
+        assert_eq!(mode, Mode::ImapSync);
     }
 
     #[test]

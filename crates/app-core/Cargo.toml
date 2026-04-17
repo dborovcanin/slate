@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 rusqlite = { version = "0.35", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "local-offset"] }
 ulid = "1"
 directories = "6"
 regex = "1"

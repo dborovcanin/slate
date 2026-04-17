@@ -24,6 +24,7 @@ impl Db {
         conn.execute_batch(migration)
             .map_err(|e| format!("Failed to run migration: {e}"))?;
         ensure_reminders_schema(&conn)?;
+        ensure_ingest_schema(&conn)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -48,6 +49,103 @@ impl Db {
         .map_err(|e| e.to_string())?;
 
         load_note(&conn, id)?.ok_or_else(|| "Note not found after save".to_string())
+    }
+
+    pub fn append_note_body(&self, id: &str, body_suffix: &str) -> Result<Note, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+
+        conn.execute(
+            "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                 body = CASE
+                     WHEN notes.body = '' THEN excluded.body
+                     WHEN excluded.body = '' THEN notes.body
+                     WHEN substr(notes.body, -1, 1) = char(10) THEN notes.body || excluded.body
+                     ELSE notes.body || char(10) || excluded.body
+                 END,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![id, body_suffix, now, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        load_note(&conn, id)?.ok_or_else(|| "Note not found after append".to_string())
+    }
+
+    pub fn append_note_with_ingest_event(
+        &self,
+        source: &str,
+        message_id: Option<&str>,
+        note_id: &str,
+        body_suffix: &str,
+        raw_payload: &[u8],
+        body_truncated: bool,
+        message_truncated: bool,
+    ) -> Result<Option<Note>, String> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let now = now_iso();
+
+        let inserted = tx
+            .execute(
+                "INSERT OR IGNORE INTO ingest_events (
+                    source,
+                    message_id,
+                    note_id,
+                    received_at,
+                    raw_payload,
+                    body_truncated,
+                    message_truncated
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    source,
+                    message_id,
+                    note_id,
+                    now,
+                    raw_payload,
+                    if body_truncated { 1 } else { 0 },
+                    if message_truncated { 1 } else { 0 },
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        if message_id.is_some() && inserted == 0 {
+            tx.commit().map_err(|e| e.to_string())?;
+            return Ok(None);
+        }
+
+        tx.execute(
+            "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+                 body = CASE
+                     WHEN notes.body = '' THEN excluded.body
+                     WHEN excluded.body = '' THEN notes.body
+                     WHEN substr(notes.body, -1, 1) = char(10) THEN notes.body || excluded.body
+                     ELSE notes.body || char(10) || excluded.body
+                 END,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![note_id, body_suffix, now, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        let mut stmt = tx
+            .prepare("SELECT id, body, created_at, updated_at FROM notes WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+        let note = stmt
+            .query_row([note_id], |row| {
+                Ok(Note {
+                    id: row.get(0)?,
+                    body: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "Note not found after append".to_string())?;
+        drop(stmt);
+
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(Some(note))
     }
 
     pub fn get_most_recent_note(&self) -> Result<Option<Note>, String> {
@@ -266,6 +364,92 @@ impl Db {
         tx.commit().map_err(|e| e.to_string())?;
         Ok(changed > 0)
     }
+
+    pub fn has_ingest_message_id(&self, source: &str, message_id: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT 1
+                 FROM ingest_events
+                 WHERE source = ?1 AND message_id = ?2
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        let found = stmt
+            .query_row(rusqlite::params![source, message_id], |_| Ok(()))
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some();
+        Ok(found)
+    }
+
+    pub fn record_ingest_event(
+        &self,
+        source: &str,
+        message_id: Option<&str>,
+        note_id: &str,
+        raw_payload: &[u8],
+        body_truncated: bool,
+        message_truncated: bool,
+    ) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+
+        let changed = conn
+            .execute(
+                "INSERT OR IGNORE INTO ingest_events (
+                    source,
+                    message_id,
+                    note_id,
+                    received_at,
+                    raw_payload,
+                    body_truncated,
+                    message_truncated
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    source,
+                    message_id,
+                    note_id,
+                    now,
+                    raw_payload,
+                    if body_truncated { 1 } else { 0 },
+                    if message_truncated { 1 } else { 0 },
+                ],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(changed > 0)
+    }
+
+    pub fn get_ingest_offset(&self, source_key: &str) -> Result<Option<i64>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT last_uid
+                 FROM ingest_offsets
+                 WHERE source_key = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let offset = stmt
+            .query_row([source_key], |row| row.get::<_, i64>(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(offset)
+    }
+
+    pub fn set_ingest_offset(&self, source_key: &str, last_uid: i64) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+        conn.execute(
+            "INSERT INTO ingest_offsets (source_key, last_uid, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(source_key) DO UPDATE SET
+                 last_uid = excluded.last_uid,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![source_key, last_uid, now],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 
 fn load_note(conn: &Connection, id: &str) -> Result<Option<Note>, String> {
@@ -382,6 +566,32 @@ fn ensure_reminders_schema(conn: &Connection) -> Result<(), String> {
     ensure_column(conn, "reminders", "notified_at_ms", "INTEGER")?;
     ensure_column(conn, "reminders", "created_at", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(conn, "reminders", "updated_at", "TEXT NOT NULL DEFAULT ''")?;
+    Ok(())
+}
+
+fn ensure_ingest_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS ingest_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source TEXT NOT NULL,
+            message_id TEXT,
+            note_id TEXT NOT NULL,
+            received_at TEXT NOT NULL,
+            raw_payload BLOB NOT NULL,
+            body_truncated INTEGER NOT NULL DEFAULT 0,
+            message_truncated INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_ingest_events_received_at ON ingest_events(received_at DESC);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_ingest_events_source_message_id
+            ON ingest_events(source, message_id)
+            WHERE message_id IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS ingest_offsets (
+            source_key TEXT PRIMARY KEY,
+            last_uid INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        );",
+    )
+    .map_err(|e| format!("Failed to ensure ingest schema: {e}"))?;
     Ok(())
 }
 
@@ -559,6 +769,168 @@ mod tests {
             .upsert_reminder("n1", 1, 1_900_000_000_000, "13.03.2030. 10:00", "line 1")
             .expect("upsert reminder works");
         assert_eq!(reminder.line_text, "line 1");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn append_note_body_creates_and_appends_with_newline_boundary() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let created = db
+            .append_note_body("n1", "first block")
+            .expect("append creates note");
+        assert_eq!(created.body, "first block");
+
+        let appended = db
+            .append_note_body("n1", "second block")
+            .expect("append updates note");
+        assert_eq!(appended.body, "first block\nsecond block");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ingest_event_dedup_uses_source_and_message_id() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let inserted = db
+            .record_ingest_event(
+                "smtp",
+                Some("<a@b>"),
+                "inbox-email-2026-04-17",
+                b"raw",
+                false,
+                false,
+            )
+            .expect("inserted");
+        assert!(inserted);
+        assert!(db
+            .has_ingest_message_id("smtp", "<a@b>")
+            .expect("dedup lookup"));
+
+        let duplicate = db
+            .record_ingest_event(
+                "smtp",
+                Some("<a@b>"),
+                "inbox-email-2026-04-17",
+                b"raw-duplicate",
+                false,
+                false,
+            )
+            .expect("duplicate insert checked");
+        assert!(!duplicate);
+
+        let other_source = db
+            .record_ingest_event(
+                "imap",
+                Some("<a@b>"),
+                "inbox-email-2026-04-17",
+                b"raw-imap",
+                false,
+                false,
+            )
+            .expect("other source insert");
+        assert!(other_source);
+
+        let no_message_id_1 = db
+            .record_ingest_event(
+                "smtp",
+                None,
+                "inbox-email-2026-04-17",
+                b"raw-1",
+                false,
+                false,
+            )
+            .expect("no message id insert 1");
+        let no_message_id_2 = db
+            .record_ingest_event(
+                "smtp",
+                None,
+                "inbox-email-2026-04-17",
+                b"raw-2",
+                false,
+                false,
+            )
+            .expect("no message id insert 2");
+        assert!(no_message_id_1);
+        assert!(no_message_id_2);
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn append_note_with_ingest_event_is_atomic_and_dedups() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let first = db
+            .append_note_with_ingest_event(
+                "smtp",
+                Some("<abc@id>"),
+                "inbox-email-2026-04-17",
+                "# hello",
+                b"raw message",
+                false,
+                false,
+            )
+            .expect("first ingest succeeds")
+            .expect("note appended");
+        assert_eq!(first.body, "# hello");
+
+        let duplicate = db
+            .append_note_with_ingest_event(
+                "smtp",
+                Some("<abc@id>"),
+                "inbox-email-2026-04-17",
+                "# duplicate",
+                b"raw duplicate",
+                false,
+                false,
+            )
+            .expect("duplicate ingest checked");
+        assert!(duplicate.is_none());
+
+        let note = db
+            .get_note("inbox-email-2026-04-17")
+            .expect("note lookup")
+            .expect("note present");
+        assert_eq!(note.body, "# hello");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn ingest_offsets_can_be_set_and_read() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        assert!(db
+            .get_ingest_offset("imap:example:user:inbox")
+            .expect("lookup")
+            .is_none());
+
+        db.set_ingest_offset("imap:example:user:inbox", 42)
+            .expect("set offset");
+        assert_eq!(
+            db.get_ingest_offset("imap:example:user:inbox")
+                .expect("lookup"),
+            Some(42)
+        );
+
+        db.set_ingest_offset("imap:example:user:inbox", 77)
+            .expect("update offset");
+        assert_eq!(
+            db.get_ingest_offset("imap:example:user:inbox")
+                .expect("lookup"),
+            Some(77)
+        );
 
         drop(db);
         let _ = fs::remove_file(path);

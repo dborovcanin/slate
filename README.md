@@ -55,6 +55,12 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Terminal folding commands: `:fold`, `:unfold`, `:fold-toggle` (aliases: `:zc`, `:zo`, `:za`)
 - `vim_mode` is optional and independent (GUI-only behavior)
 
+**IMAP email sync (special notes)**
+- Run sync once: `slate imap-sync`
+- Pulls from configured IMAP folder and appends messages to daily notes (`inbox-email-YYYY-MM-DD` by default)
+- Works with any provider exposing IMAP over TLS
+- Uses incremental UID checkpointing to avoid reprocessing old messages
+
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
 - Press Tab to apply the result inline
@@ -276,6 +282,20 @@ date_format = "%Y-%m-%d"
 [editor.variables]
 enabled = true
 autocomplete_min_chars = 3
+
+[special_notes]
+email_note_prefix = "inbox-email"
+email_rotation = "daily-local"
+
+[imap]
+host = "imap.example.com"
+port = 993
+username = ""
+password_env = "SLATE_IMAP_PASSWORD"
+folder = "INBOX"
+poll_seconds = 60
+max_message_bytes = 8388608
+max_body_bytes = 524288
 ```
 
 Available `color_scheme` values:
@@ -321,6 +341,20 @@ Editor options:
 Variable options:
 - `[editor.variables] enabled = true` turns note-local variable resolution/autocomplete on or off
 - `[editor.variables] autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
+
+Special notes options:
+- `[special_notes] email_note_prefix` controls daily email note ids (default `inbox-email`)
+- `[special_notes] email_rotation` currently supports `daily-local`
+
+IMAP options:
+- `[imap] host` IMAP server host
+- `[imap] port` IMAP TLS port (typically `993`)
+- `[imap] username` account login name
+- `[imap] password_env` environment variable name containing IMAP password/app password
+- `[imap] folder` folder to sync (`INBOX` by default)
+- `[imap] poll_seconds` polling interval used by watch mode
+- `[imap] max_message_bytes` max raw message bytes stored in sidecar
+- `[imap] max_body_bytes` max message body bytes rendered into note content
 
 Supported `date_format` tokens:
 - `%Y` year (4 digit), `%y` year (2 digit)

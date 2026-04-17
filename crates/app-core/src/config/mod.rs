@@ -2,6 +2,7 @@ use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use time::{Month, OffsetDateTime, UtcOffset};
 
 const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_BACKGROUND: &str = "plain";
@@ -20,6 +21,20 @@ const DEFAULT_VARIABLES_ENABLED: bool = true;
 const DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 3;
 const MIN_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 1;
 const MAX_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 8;
+const DEFAULT_EMAIL_NOTE_PREFIX: &str = "inbox-email";
+const DEFAULT_EMAIL_ROTATION: &str = "daily-local";
+const DEFAULT_IMAP_HOST: &str = "imap.example.com";
+const DEFAULT_IMAP_PORT: u16 = 993;
+const DEFAULT_IMAP_USERNAME: &str = "";
+const DEFAULT_IMAP_PASSWORD_ENV: &str = "SLATE_IMAP_PASSWORD";
+const DEFAULT_IMAP_FOLDER: &str = "INBOX";
+const DEFAULT_IMAP_POLL_SECONDS: u64 = 60;
+const DEFAULT_IMAP_MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
+const MIN_IMAP_MAX_BYTES: usize = 1024;
+const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
+const MIN_IMAP_POLL_SECONDS: u64 = 10;
+const MAX_IMAP_POLL_SECONDS: u64 = 24 * 60 * 60;
 const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Color schemes:
@@ -65,6 +80,29 @@ date_time_format = "%Y-%m-%d %H:%M"
 enabled = true
 # Minimum typed characters to show variable completion suggestions
 autocomplete_min_chars = 3
+
+[special_notes]
+# Prefix for date-partitioned email inbox notes
+email_note_prefix = "inbox-email"
+# Rotation strategy for email captures
+email_rotation = "daily-local"
+
+[imap]
+# IMAP server host and implicit TLS port (993 by default)
+host = "imap.example.com"
+port = 993
+# Account username/login for IMAP
+username = ""
+# Environment variable containing IMAP account password or app password
+password_env = "SLATE_IMAP_PASSWORD"
+# Folder to pull (typically INBOX)
+folder = "INBOX"
+# Poll interval for `slate imap-sync --watch`
+poll_seconds = 60
+# Maximum accepted raw message payload size in bytes
+max_message_bytes = 8388608
+# Maximum stored message body size in bytes (truncated in note body when exceeded)
+max_body_bytes = 524288
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -82,6 +120,89 @@ pub struct ThemeConfig {
     pub date_time_format: String,
     pub variables_enabled: bool,
     pub variables_autocomplete_min_chars: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SpecialNotesConfig {
+    pub email_note_prefix: String,
+    pub email_rotation: String,
+}
+
+impl Default for SpecialNotesConfig {
+    fn default() -> Self {
+        Self {
+            email_note_prefix: DEFAULT_EMAIL_NOTE_PREFIX.to_string(),
+            email_rotation: DEFAULT_EMAIL_ROTATION.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImapConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password_env: String,
+    pub folder: String,
+    pub poll_seconds: u64,
+    pub max_message_bytes: usize,
+    pub max_body_bytes: usize,
+}
+
+impl Default for ImapConfig {
+    fn default() -> Self {
+        Self {
+            host: DEFAULT_IMAP_HOST.to_string(),
+            port: DEFAULT_IMAP_PORT,
+            username: DEFAULT_IMAP_USERNAME.to_string(),
+            password_env: DEFAULT_IMAP_PASSWORD_ENV.to_string(),
+            folder: DEFAULT_IMAP_FOLDER.to_string(),
+            poll_seconds: DEFAULT_IMAP_POLL_SECONDS,
+            max_message_bytes: DEFAULT_IMAP_MAX_MESSAGE_BYTES,
+            max_body_bytes: DEFAULT_IMAP_MAX_BODY_BYTES,
+        }
+    }
+}
+
+impl ImapConfig {
+    pub fn validate_runtime(&self) -> Result<(), String> {
+        if self.host.trim().is_empty() {
+            return Err("imap.host must not be empty".to_string());
+        }
+        if self.port == 0 {
+            return Err("imap.port must be greater than 0".to_string());
+        }
+        if self.username.trim().is_empty() {
+            return Err("imap.username must not be empty".to_string());
+        }
+        if self.password_env.trim().is_empty() {
+            return Err("imap.password_env must not be empty".to_string());
+        }
+        if std::env::var(self.password_env.trim())
+            .map(|value| value.trim().is_empty())
+            .unwrap_or(true)
+        {
+            return Err(format!(
+                "IMAP password env var '{}' is missing or empty",
+                self.password_env
+            ));
+        }
+        if self.folder.trim().is_empty() {
+            return Err("imap.folder must not be empty".to_string());
+        }
+        if self.poll_seconds < MIN_IMAP_POLL_SECONDS {
+            return Err(format!(
+                "imap.poll_seconds must be >= {MIN_IMAP_POLL_SECONDS}"
+            ));
+        }
+        if self.max_body_bytes > self.max_message_bytes {
+            return Err(
+                "imap.max_body_bytes must be less than or equal to imap.max_message_bytes"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 impl Default for ThemeConfig {
@@ -110,6 +231,10 @@ struct FileConfig {
     theme: ThemeSection,
     #[serde(default)]
     editor: EditorSection,
+    #[serde(default)]
+    special_notes: SpecialNotesSection,
+    #[serde(default)]
+    imap: ImapSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -137,6 +262,24 @@ struct EditorSection {
 struct VariablesSection {
     enabled: Option<bool>,
     autocomplete_min_chars: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct SpecialNotesSection {
+    email_note_prefix: Option<String>,
+    email_rotation: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ImapSection {
+    host: Option<String>,
+    port: Option<u16>,
+    username: Option<String>,
+    password_env: Option<String>,
+    folder: Option<String>,
+    poll_seconds: Option<u64>,
+    max_message_bytes: Option<u64>,
+    max_body_bytes: Option<u64>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -179,6 +322,58 @@ pub fn load_theme_config() -> ThemeConfig {
     }
 }
 
+pub fn load_special_notes_config() -> SpecialNotesConfig {
+    let path = match ensure_config_file() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("Config: {err}");
+            return SpecialNotesConfig::default();
+        }
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("Config: failed to read {}: {err}", path.display());
+            return SpecialNotesConfig::default();
+        }
+    };
+
+    match parse_special_notes_config(&text) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            SpecialNotesConfig::default()
+        }
+    }
+}
+
+pub fn load_imap_config() -> ImapConfig {
+    let path = match ensure_config_file() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("Config: {err}");
+            return ImapConfig::default();
+        }
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("Config: failed to read {}: {err}", path.display());
+            return ImapConfig::default();
+        }
+    };
+
+    match parse_imap_config(&text) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            ImapConfig::default()
+        }
+    }
+}
+
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     let date_format = normalize_date_format(raw.editor.date_format);
@@ -211,6 +406,34 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     })
 }
 
+fn parse_special_notes_config(text: &str) -> Result<SpecialNotesConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(SpecialNotesConfig {
+        email_note_prefix: normalize_nonempty(
+            raw.special_notes.email_note_prefix,
+            DEFAULT_EMAIL_NOTE_PREFIX,
+        ),
+        email_rotation: normalize_email_rotation(raw.special_notes.email_rotation),
+    })
+}
+
+fn parse_imap_config(text: &str) -> Result<ImapConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(ImapConfig {
+        host: normalize_nonempty(raw.imap.host, DEFAULT_IMAP_HOST),
+        port: raw.imap.port.unwrap_or(DEFAULT_IMAP_PORT),
+        username: normalize_nonempty(raw.imap.username, DEFAULT_IMAP_USERNAME),
+        password_env: normalize_nonempty(raw.imap.password_env, DEFAULT_IMAP_PASSWORD_ENV),
+        folder: normalize_nonempty(raw.imap.folder, DEFAULT_IMAP_FOLDER),
+        poll_seconds: normalize_imap_poll_seconds(raw.imap.poll_seconds),
+        max_message_bytes: normalize_imap_max_bytes(
+            raw.imap.max_message_bytes,
+            DEFAULT_IMAP_MAX_MESSAGE_BYTES,
+        ),
+        max_body_bytes: normalize_imap_max_bytes(raw.imap.max_body_bytes, DEFAULT_IMAP_MAX_BODY_BYTES),
+    })
+}
+
 fn normalize_name(value: Option<String>, fallback: &str) -> String {
     let name = value
         .as_deref()
@@ -226,6 +449,15 @@ fn normalize_name(value: Option<String>, fallback: &str) -> String {
     } else {
         name
     }
+}
+
+fn normalize_nonempty(value: Option<String>, fallback: &str) -> String {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(fallback)
+        .to_string()
 }
 
 fn normalize_font_size(value: Option<u16>) -> u8 {
@@ -263,6 +495,65 @@ fn normalize_variable_autocomplete_min_chars(value: Option<u16>) -> u8 {
             ) as u8
         })
         .unwrap_or(DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS)
+}
+
+fn normalize_imap_max_bytes(value: Option<u64>, fallback: usize) -> usize {
+    value
+        .map(|raw| raw.clamp(MIN_IMAP_MAX_BYTES as u64, MAX_IMAP_MAX_BYTES as u64) as usize)
+        .unwrap_or(fallback)
+}
+
+fn normalize_imap_poll_seconds(value: Option<u64>) -> u64 {
+    value
+        .map(|raw| raw.clamp(MIN_IMAP_POLL_SECONDS, MAX_IMAP_POLL_SECONDS))
+        .unwrap_or(DEFAULT_IMAP_POLL_SECONDS)
+}
+
+fn normalize_email_rotation(value: Option<String>) -> String {
+    let normalized = value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(DEFAULT_EMAIL_ROTATION)
+        .to_lowercase();
+    match normalized.as_str() {
+        "daily-local" => normalized,
+        _ => DEFAULT_EMAIL_ROTATION.to_string(),
+    }
+}
+
+pub fn resolve_email_note_id(special: &SpecialNotesConfig, now_utc: OffsetDateTime) -> String {
+    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+    resolve_email_note_id_with_offset(special, now_utc, offset)
+}
+
+fn resolve_email_note_id_with_offset(
+    special: &SpecialNotesConfig,
+    now_utc: OffsetDateTime,
+    offset: UtcOffset,
+) -> String {
+    let local = now_utc.to_offset(offset);
+    let month_number = match local.month() {
+        Month::January => 1,
+        Month::February => 2,
+        Month::March => 3,
+        Month::April => 4,
+        Month::May => 5,
+        Month::June => 6,
+        Month::July => 7,
+        Month::August => 8,
+        Month::September => 9,
+        Month::October => 10,
+        Month::November => 11,
+        Month::December => 12,
+    };
+    format!(
+        "{}-{:04}-{:02}-{:02}",
+        special.email_note_prefix,
+        local.year(),
+        month_number,
+        local.day()
+    )
 }
 
 fn config_file_path() -> Result<PathBuf, String> {
@@ -400,5 +691,54 @@ mod tests {
         assert_eq!(normalize_variable_autocomplete_min_chars(Some(0)), 1);
         assert_eq!(normalize_variable_autocomplete_min_chars(Some(99)), 8);
         assert_eq!(normalize_variable_autocomplete_min_chars(Some(4)), 4);
+    }
+
+    #[test]
+    fn parses_imap_and_special_notes_sections() {
+        let special = parse_special_notes_config(
+            r#"
+            [special_notes]
+            email_note_prefix = "mailbox"
+            email_rotation = "daily-local"
+            "#,
+        )
+        .expect("special notes parsed");
+        assert_eq!(special.email_note_prefix, "mailbox");
+        assert_eq!(special.email_rotation, "daily-local");
+
+        let imap = parse_imap_config(
+            r#"
+            [imap]
+            host = "imap.test.local"
+            port = 993
+            username = "relay"
+            password_env = "IMAP_PASS"
+            folder = "INBOX"
+            poll_seconds = 30
+            max_message_bytes = 4096
+            max_body_bytes = 2048
+            "#,
+        )
+        .expect("imap parsed");
+        assert_eq!(imap.host, "imap.test.local");
+        assert_eq!(imap.port, 993);
+        assert_eq!(imap.username, "relay");
+        assert_eq!(imap.password_env, "IMAP_PASS");
+        assert_eq!(imap.folder, "INBOX");
+        assert_eq!(imap.poll_seconds, 30);
+        assert_eq!(imap.max_message_bytes, 4096);
+        assert_eq!(imap.max_body_bytes, 2048);
+    }
+
+    #[test]
+    fn resolve_email_note_id_uses_prefix_and_local_day() {
+        let special = SpecialNotesConfig {
+            email_note_prefix: "inbox-email".to_string(),
+            email_rotation: "daily-local".to_string(),
+        };
+        let now = OffsetDateTime::from_unix_timestamp(1_714_516_200).expect("fixed ts");
+        let offset = UtcOffset::from_hms(2, 0, 0).expect("offset");
+        let note_id = resolve_email_note_id_with_offset(&special, now, offset);
+        assert_eq!(note_id, "inbox-email-2024-05-01");
     }
 }
