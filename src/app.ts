@@ -112,8 +112,10 @@ async function handleExportClipboard() {
   const note = state.activeNote;
   if (!note) return;
   await flushSave();
+  const latest = state.activeNote;
+  if (!latest) return;
   try {
-    await navigator.clipboard.writeText(note.body);
+    await navigator.clipboard.writeText(latest.body);
     showToast("Copied to clipboard");
   } catch (e) {
     console.error("Clipboard write failed:", e);
@@ -137,8 +139,10 @@ async function handleExportFile() {
   const note = state.activeNote;
   if (!note) return;
   await flushSave();
+  const latest = state.activeNote;
+  if (!latest) return;
 
-  const filename = deriveFilename(note.body);
+  const filename = deriveFilename(latest.body);
   const path = await save({
     defaultPath: `${filename}.md`,
     filters: [

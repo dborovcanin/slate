@@ -886,8 +886,9 @@ export function vimModeExtension(options: VimOptions = {}) {
         return true;
       }
 
-      // Hard guarantee for visual behavior: both hjkl and arrow keys move the
-      // selection, and Esc exits to normal in a single press.
+      // Hard guarantee for visual behavior: Esc exits and x/d delete the
+      // current selection in a single keypress. Navigation remains in the
+      // shared Vim state machine so counts/motions work consistently.
       if (activeMode === "visual" || activeMode === "visual-line") {
         if (event.key === "Escape" || event.key === "Esc" || event.code === "Escape") {
           event.preventDefault();
@@ -911,22 +912,6 @@ export function vimModeExtension(options: VimOptions = {}) {
               session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: view.state.doc.lines });
             }
             return true;
-          }
-          if (event.key === "h" || event.key === "ArrowLeft" || event.key === "Left") {
-            event.preventDefault();
-            return runMove(view, cursorCharLeft, 1);
-          }
-          if (event.key === "l" || event.key === "ArrowRight" || event.key === "Right") {
-            event.preventDefault();
-            return runMove(view, cursorCharRight, 1);
-          }
-          if (event.key === "k" || event.key === "ArrowUp" || event.key === "Up") {
-            event.preventDefault();
-            return runMove(view, cursorLineUp, 1);
-          }
-          if (event.key === "j" || event.key === "ArrowDown" || event.key === "Down") {
-            event.preventDefault();
-            return runMove(view, cursorLineDown, 1);
           }
         }
       }

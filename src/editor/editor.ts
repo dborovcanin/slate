@@ -1,4 +1,4 @@
-import { EditorState, Prec } from "@codemirror/state";
+import { Annotation, EditorState, Prec, type Text } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -27,6 +27,19 @@ import { startupMark } from "../perf/startup.ts";
 let view: EditorView | null = null;
 let saveTimer: number | null = null;
 const SAVE_DEBOUNCE_MS = 500;
+const TITLE_PREVIEW_LIMIT = 60;
+const suppressEditorSyncAnnotation = Annotation.define<boolean>();
+
+function deriveTitleFromDoc(doc: Text): string {
+  for (let i = 1; i <= doc.lines; i++) {
+    const line = doc.line(i).text.trim();
+    if (line.length === 0) continue;
+    return line.length > TITLE_PREVIEW_LIMIT
+      ? `${line.slice(0, TITLE_PREVIEW_LIMIT)}...`
+      : line;
+  }
+  return "Untitled";
+}
 
 function scheduleSave() {
   if (saveTimer !== null) clearTimeout(saveTimer);
@@ -40,8 +53,10 @@ export async function flushSave() {
   }
   const note = state.activeNote;
   if (!note) return;
+  const body = view ? view.state.doc.toString() : note.body;
   try {
-    await saveNote(note.id, note.body);
+    await saveNote(note.id, body);
+    state.updateBody(body);
   } catch (e) {
     console.error("Failed to save note:", e);
   }
@@ -49,8 +64,14 @@ export async function flushSave() {
 
 const onUpdate = EditorView.updateListener.of((update) => {
   if (update.docChanged) {
-    const body = update.state.doc.toString();
-    state.updateBody(body);
+    if (
+      update.transactions.some((transaction) =>
+        transaction.annotation(suppressEditorSyncAnnotation),
+      )
+    ) {
+      return;
+    }
+    state.updateDraftTitle(deriveTitleFromDoc(update.state.doc));
     scheduleSave();
   }
 });
@@ -334,6 +355,7 @@ export function setEditorContent(body: string) {
   if (current === body) return;
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: body },
+    annotations: suppressEditorSyncAnnotation.of(true),
   });
 }
 

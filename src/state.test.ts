@@ -34,6 +34,18 @@ test("updateBody updates active note title and moves note to top", () => {
   assert.ok(events.includes("note-changed"));
 });
 
+test("updateDraftTitle updates note list title without mutating body", () => {
+  const appState = new AppState();
+  const a = note("a", "old body", "2026-01-01T00:00:00Z");
+  appState.setNotes([a]);
+  appState.setActiveNote(a);
+
+  appState.updateDraftTitle("draft title");
+
+  assert.equal(appState.notes[0]?.title, "draft title");
+  assert.equal(appState.activeNote?.body, "old body");
+});
+
 test("getAdjacentNoteId returns null at boundaries", () => {
   const appState = new AppState();
   const a = note("a", "first", "2026-01-01T00:00:00Z");

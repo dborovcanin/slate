@@ -31,6 +31,7 @@ const DEFAULT_IMAP_FOLDER: &str = "INBOX";
 const DEFAULT_IMAP_POLL_SECONDS: u64 = 60;
 const DEFAULT_IMAP_AUTO_SYNC_ON_STARTUP: bool = false;
 const DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 200;
+const DEFAULT_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 1;
 const DEFAULT_IMAP_MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
 const MIN_IMAP_MAX_BYTES: usize = 1024;
@@ -39,6 +40,8 @@ const MIN_IMAP_POLL_SECONDS: u64 = 10;
 const MAX_IMAP_POLL_SECONDS: u64 = 24 * 60 * 60;
 const MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 1;
 const MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 100_000;
+const MIN_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 0;
+const MAX_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 3650;
 const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Color schemes:
@@ -107,6 +110,8 @@ poll_seconds = 60
 auto_sync_on_startup = false
 # On first sync (before a UID checkpoint exists), pull only last N messages
 initial_sync_max_messages = 200
+# On first sync, additionally restrict pull window to recent days (0 disables date filter)
+initial_sync_past_days = 1
 # Maximum accepted raw message payload size in bytes
 max_message_bytes = 8388608
 # Maximum stored message body size in bytes (truncated in note body when exceeded)
@@ -155,6 +160,7 @@ pub struct ImapConfig {
     pub poll_seconds: u64,
     pub auto_sync_on_startup: bool,
     pub initial_sync_max_messages: u32,
+    pub initial_sync_past_days: u16,
     pub max_message_bytes: usize,
     pub max_body_bytes: usize,
 }
@@ -170,6 +176,7 @@ impl Default for ImapConfig {
             poll_seconds: DEFAULT_IMAP_POLL_SECONDS,
             auto_sync_on_startup: DEFAULT_IMAP_AUTO_SYNC_ON_STARTUP,
             initial_sync_max_messages: DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES,
+            initial_sync_past_days: DEFAULT_IMAP_INITIAL_SYNC_PAST_DAYS,
             max_message_bytes: DEFAULT_IMAP_MAX_MESSAGE_BYTES,
             max_body_bytes: DEFAULT_IMAP_MAX_BODY_BYTES,
         }
@@ -209,6 +216,11 @@ impl ImapConfig {
         }
         if self.initial_sync_max_messages == 0 {
             return Err("imap.initial_sync_max_messages must be greater than 0".to_string());
+        }
+        if self.initial_sync_past_days > MAX_IMAP_INITIAL_SYNC_PAST_DAYS {
+            return Err(format!(
+                "imap.initial_sync_past_days must be <= {MAX_IMAP_INITIAL_SYNC_PAST_DAYS}"
+            ));
         }
         if self.max_body_bytes > self.max_message_bytes {
             return Err(
@@ -295,6 +307,7 @@ struct ImapSection {
     poll_seconds: Option<u64>,
     auto_sync_on_startup: Option<bool>,
     initial_sync_max_messages: Option<u32>,
+    initial_sync_past_days: Option<u16>,
     max_message_bytes: Option<u64>,
     max_body_bytes: Option<u64>,
 }
@@ -450,6 +463,7 @@ fn parse_imap_config(text: &str) -> Result<ImapConfig, String> {
         initial_sync_max_messages: normalize_imap_initial_sync_max_messages(
             raw.imap.initial_sync_max_messages,
         ),
+        initial_sync_past_days: normalize_imap_initial_sync_past_days(raw.imap.initial_sync_past_days),
         max_message_bytes: normalize_imap_max_bytes(
             raw.imap.max_message_bytes,
             DEFAULT_IMAP_MAX_MESSAGE_BYTES,
@@ -542,6 +556,17 @@ fn normalize_imap_initial_sync_max_messages(value: Option<u32>) -> u32 {
             )
         })
         .unwrap_or(DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES)
+}
+
+fn normalize_imap_initial_sync_past_days(value: Option<u16>) -> u16 {
+    value
+        .map(|raw| {
+            raw.clamp(
+                MIN_IMAP_INITIAL_SYNC_PAST_DAYS,
+                MAX_IMAP_INITIAL_SYNC_PAST_DAYS,
+            )
+        })
+        .unwrap_or(DEFAULT_IMAP_INITIAL_SYNC_PAST_DAYS)
 }
 
 fn normalize_email_rotation(value: Option<String>) -> String {
@@ -752,6 +777,7 @@ mod tests {
             poll_seconds = 30
             auto_sync_on_startup = true
             initial_sync_max_messages = 75
+            initial_sync_past_days = 3
             max_message_bytes = 4096
             max_body_bytes = 2048
             "#,
@@ -765,8 +791,15 @@ mod tests {
         assert_eq!(imap.poll_seconds, 30);
         assert!(imap.auto_sync_on_startup);
         assert_eq!(imap.initial_sync_max_messages, 75);
+        assert_eq!(imap.initial_sync_past_days, 3);
         assert_eq!(imap.max_message_bytes, 4096);
         assert_eq!(imap.max_body_bytes, 2048);
+    }
+
+    #[test]
+    fn imap_defaults_initial_sync_past_days_to_one() {
+        let imap = parse_imap_config("[imap]\n").expect("imap parsed");
+        assert_eq!(imap.initial_sync_past_days, 1);
     }
 
     #[test]

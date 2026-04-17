@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
-use time::OffsetDateTime;
+use time::{Date, Duration, Month, OffsetDateTime};
 
 const MAX_IMAP_LINE_BYTES: usize = 8 * 1024 * 1024;
 
@@ -81,13 +81,25 @@ fn sync_once(
 
     let last_uid = db.get_ingest_offset(source_key)?.unwrap_or(0);
     let start_uid = determine_start_uid(last_uid, uid_next, imap.initial_sync_max_messages as u64);
+    let initial_sync_since =
+        determine_initial_sync_since_date(last_uid, imap.initial_sync_past_days, OffsetDateTime::now_utc());
     if verbose {
-        println!(
-            "IMAP sync start: folder={} checkpoint_uid={} start_uid={}",
-            imap.folder, last_uid, start_uid
-        );
+        if let Some(since) = initial_sync_since {
+            println!(
+                "IMAP sync start: folder={} checkpoint_uid={} start_uid={} since={}",
+                imap.folder,
+                last_uid,
+                start_uid,
+                format_imap_search_date(since)
+            );
+        } else {
+            println!(
+                "IMAP sync start: folder={} checkpoint_uid={} start_uid={}",
+                imap.folder, last_uid, start_uid
+            );
+        }
     }
-    let mut uids = client.search_uids(start_uid)?;
+    let mut uids = client.search_uids(start_uid, initial_sync_since)?;
     // Fetch newest first so users see latest mail first by default.
     sort_uids_latest_first(&mut uids);
 
@@ -143,6 +155,17 @@ fn determine_start_uid(
         Some(next) if next > 1 => next.saturating_sub(window).max(1),
         _ => 1,
     }
+}
+
+fn determine_initial_sync_since_date(
+    last_uid: i64,
+    initial_sync_past_days: u16,
+    now_utc: OffsetDateTime,
+) -> Option<Date> {
+    if last_uid >= 1 || initial_sync_past_days == 0 {
+        return None;
+    }
+    Some((now_utc - Duration::days(i64::from(initial_sync_past_days))).date())
 }
 
 fn sort_uids_latest_first(uids: &mut [u64]) {
@@ -324,8 +347,8 @@ impl ImapClient {
         Ok(parse_uid_next(&parts))
     }
 
-    fn search_uids(&mut self, start_uid: u64) -> Result<Vec<u64>, String> {
-        let command = format!("UID SEARCH UID {}:*", start_uid);
+    fn search_uids(&mut self, start_uid: u64, since: Option<Date>) -> Result<Vec<u64>, String> {
+        let command = build_uid_search_command(start_uid, since);
         let parts = self.run_command(&command, &command)?;
         let mut out = Vec::new();
         for part in parts {
@@ -479,6 +502,35 @@ fn parse_uid_next(parts: &[ImapResponsePart]) -> Option<u64> {
         }
     }
     None
+}
+
+fn build_uid_search_command(start_uid: u64, since: Option<Date>) -> String {
+    match since {
+        Some(date) => format!(
+            "UID SEARCH UID {}:* SINCE {}",
+            start_uid,
+            format_imap_search_date(date)
+        ),
+        None => format!("UID SEARCH UID {}:*", start_uid),
+    }
+}
+
+fn format_imap_search_date(date: Date) -> String {
+    let month = match date.month() {
+        Month::January => "Jan",
+        Month::February => "Feb",
+        Month::March => "Mar",
+        Month::April => "Apr",
+        Month::May => "May",
+        Month::June => "Jun",
+        Month::July => "Jul",
+        Month::August => "Aug",
+        Month::September => "Sep",
+        Month::October => "Oct",
+        Month::November => "Nov",
+        Month::December => "Dec",
+    };
+    format!("{:02}-{}-{:04}", date.day(), month, date.year())
 }
 
 fn quote_imap_string(value: &str) -> String {
@@ -747,6 +799,29 @@ mod tests {
         assert_eq!(determine_start_uid(0, Some(101), 50), 51);
         assert_eq!(determine_start_uid(0, Some(10), 50), 1);
         assert_eq!(determine_start_uid(77, Some(101), 50), 78);
+    }
+
+    #[test]
+    fn determine_initial_sync_since_date_applies_only_before_checkpoint() {
+        let now = OffsetDateTime::from_unix_timestamp(1_714_516_200).expect("fixed ts");
+        let expected = Date::from_calendar_date(2024, Month::April, 29).expect("date");
+
+        assert_eq!(
+            determine_initial_sync_since_date(0, 1, now),
+            Some(expected)
+        );
+        assert_eq!(determine_initial_sync_since_date(42, 1, now), None);
+        assert_eq!(determine_initial_sync_since_date(0, 0, now), None);
+    }
+
+    #[test]
+    fn build_uid_search_command_includes_optional_since_clause() {
+        let date = Date::from_calendar_date(2026, Month::April, 17).expect("date");
+        assert_eq!(
+            build_uid_search_command(101, Some(date)),
+            "UID SEARCH UID 101:* SINCE 17-Apr-2026"
+        );
+        assert_eq!(build_uid_search_command(101, None), "UID SEARCH UID 101:*");
     }
 
     #[test]

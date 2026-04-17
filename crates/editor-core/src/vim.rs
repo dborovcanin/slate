@@ -225,6 +225,50 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
     }
 
     if matches!(next.mode, VimMode::Visual | VimMode::VisualLine) {
+        if let VimKey::Char(digit) = key {
+            if digit.is_ascii_digit() && next.pending.is_none() {
+                if digit == '0' && !has_count(&next) {
+                    actions.push(make_action(VimIntent::MoveLineStart, 1));
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
+                next.count_buffer.push(digit);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+        }
+
+        if let Some(pending) = next.pending.take() {
+            match (pending, key) {
+                (VimPending::Go, VimKey::Char('g')) => {
+                    let count = consume_count(&mut next);
+                    if count > 1 {
+                        actions.push(make_action(
+                            VimIntent::MoveToLine,
+                            count.min(ctx.line_count.max(1)),
+                        ));
+                    } else {
+                        actions.push(make_action(VimIntent::MoveDocStart, 1));
+                    }
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
+                _ => {}
+            }
+        }
+
         match key {
             VimKey::Char('v') if next.mode == VimMode::Visual => {
                 next.mode = VimMode::Normal;
@@ -246,20 +290,55 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 actions.push(make_action(VimIntent::OpenCommandBar, 1));
                 handled = true;
             }
+            VimKey::Char('g') => {
+                next.pending = Some(VimPending::Go);
+                handled = true;
+            }
             VimKey::ArrowLeft | VimKey::Char('h') => {
-                actions.push(make_action(VimIntent::MoveLeft, 1));
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::MoveLeft, count));
                 handled = true;
             }
             VimKey::ArrowRight | VimKey::Char('l') => {
-                actions.push(make_action(VimIntent::MoveRight, 1));
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::MoveRight, count));
                 handled = true;
             }
             VimKey::ArrowUp | VimKey::Char('k') => {
-                actions.push(make_action(VimIntent::MoveUp, 1));
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::MoveUp, count));
                 handled = true;
             }
             VimKey::ArrowDown | VimKey::Char('j') => {
-                actions.push(make_action(VimIntent::MoveDown, 1));
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::MoveDown, count));
+                handled = true;
+            }
+            VimKey::Char('w') => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::MoveWordForward, count));
+                handled = true;
+            }
+            VimKey::Char('b') => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::MoveWordBackward, count));
+                handled = true;
+            }
+            VimKey::Char('$') => {
+                actions.push(make_action(VimIntent::MoveLineEnd, 1));
+                next.count_buffer.clear();
+                handled = true;
+            }
+            VimKey::Char('G') => {
+                let count = consume_count(&mut next);
+                if count > 1 {
+                    actions.push(make_action(
+                        VimIntent::MoveToLine,
+                        count.min(ctx.line_count.max(1)),
+                    ));
+                } else {
+                    actions.push(make_action(VimIntent::MoveDocEnd, 1));
+                }
                 handled = true;
             }
             _ => {}
@@ -719,6 +798,49 @@ mod tests {
         assert_eq!(step.state.mode, VimMode::Normal);
         assert_eq!(step.actions.len(), 1);
         assert_eq!(step.actions[0].intent, VimIntent::OpenCommandBar);
+    }
+
+    #[test]
+    fn visual_mode_supports_counted_vertical_motion() {
+        let state = VimState {
+            mode: VimMode::Visual,
+            ..VimState::default()
+        };
+        let one = step_token(&state, "char:1");
+        let two = step_token(&one.state, "char:0");
+        let three = step_token(&two.state, "char:j");
+        assert!(three.handled);
+        assert_eq!(three.actions.len(), 1);
+        assert_eq!(three.actions[0].intent, VimIntent::MoveDown);
+        assert_eq!(three.actions[0].count, 10);
+    }
+
+    #[test]
+    fn visual_mode_supports_g_movements_and_line_end() {
+        let state = VimState {
+            mode: VimMode::VisualLine,
+            ..VimState::default()
+        };
+
+        let end_step = step_token(&state, "char:G");
+        assert!(end_step.handled);
+        assert_eq!(end_step.actions[0].intent, VimIntent::MoveDocEnd);
+
+        let g1 = step_token(&state, "char:g");
+        let g2 = step_token(&g1.state, "char:g");
+        assert!(g2.handled);
+        assert_eq!(g2.actions[0].intent, VimIntent::MoveDocStart);
+
+        let c1 = step_token(&state, "char:3");
+        let c2 = step_token(&c1.state, "char:0");
+        let c3 = step_token(&c2.state, "char:G");
+        assert!(c3.handled);
+        assert_eq!(c3.actions[0].intent, VimIntent::MoveToLine);
+        assert_eq!(c3.actions[0].count, 30);
+
+        let dollar = step_token(&state, "char:$");
+        assert!(dollar.handled);
+        assert_eq!(dollar.actions[0].intent, VimIntent::MoveLineEnd);
     }
 
     #[test]

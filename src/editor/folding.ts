@@ -14,6 +14,7 @@ import {
 import { markdownAnalyzeLines } from "./wasm.ts";
 
 type FoldKind = "heading" | "fence";
+const MAX_FOLD_ANALYSIS_LINES = 20_000;
 
 interface FoldRange {
   startLine: number;
@@ -120,6 +121,7 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
   const lineCount = doc.lines;
   const ranges = new Map<number, FoldRange>();
   if (lineCount <= 1) return ranges;
+  if (lineCount > MAX_FOLD_ANALYSIS_LINES) return ranges;
 
   const lines: string[] = [];
   for (let lineNo = 1; lineNo <= lineCount; lineNo++) {
@@ -130,34 +132,29 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
     codeFenceLang: null,
   }).lines;
 
-  for (let lineNo = 1; lineNo <= lineCount; lineNo++) {
+  const nextHeadingAtLevel: number[] = Array(7).fill(lineCount + 1);
+  for (let lineNo = lineCount; lineNo >= 1; lineNo--) {
     const current = analyzed[lineNo - 1];
     if (!current) continue;
     const level = current.info.headingLevel;
     if (level === null || current.inCodeBlock) continue;
 
-    let endLine = lineCount;
-    for (let nextLine = lineNo + 1; nextLine <= lineCount; nextLine++) {
-      const next = analyzed[nextLine - 1];
-      if (!next || next.inCodeBlock) continue;
-      const nextLevel = next.info.headingLevel;
-      if (nextLevel === level) {
-        endLine = nextLine - 1;
-        break;
+    const nextHeading = nextHeadingAtLevel[level];
+    const endLine = nextHeading <= lineCount ? nextHeading - 1 : lineCount;
+    if (endLine > lineNo) {
+      const from = doc.line(lineNo + 1).from;
+      const to = endLine < lineCount ? doc.line(endLine + 1).from : doc.line(endLine).to;
+      if (from < to) {
+        ranges.set(lineNo, {
+          startLine: lineNo,
+          endLine,
+          from,
+          to,
+          kind: "heading",
+        });
       }
     }
-
-    if (endLine <= lineNo) continue;
-    const from = doc.line(lineNo + 1).from;
-    const to = endLine < lineCount ? doc.line(endLine + 1).from : doc.line(endLine).to;
-    if (from >= to) continue;
-    ranges.set(lineNo, {
-      startLine: lineNo,
-      endLine,
-      from,
-      to,
-      kind: "heading",
-    });
+    nextHeadingAtLevel[level] = lineNo;
   }
 
   let openFenceLine: number | null = null;

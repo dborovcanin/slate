@@ -3,11 +3,27 @@ import type { Note } from "./api";
 export type EventType = "note-changed" | "notes-updated";
 type Listener = (event: EventType) => void;
 
-export function deriveTitle(body: string): string {
-  const line = body.split("\n").find((l) => l.trim().length > 0);
-  if (!line) return "Untitled";
+const TITLE_PREVIEW_LIMIT = 60;
+
+function normalizeTitle(line: string): string {
   const trimmed = line.trim();
-  return trimmed.length > 60 ? trimmed.slice(0, 60) + "..." : trimmed;
+  if (trimmed.length === 0) return "Untitled";
+  return trimmed.length > TITLE_PREVIEW_LIMIT
+    ? trimmed.slice(0, TITLE_PREVIEW_LIMIT) + "..."
+    : trimmed;
+}
+
+export function deriveTitle(body: string): string {
+  let lineStart = 0;
+  while (lineStart <= body.length) {
+    const newline = body.indexOf("\n", lineStart);
+    const lineEnd = newline >= 0 ? newline : body.length;
+    const title = normalizeTitle(body.slice(lineStart, lineEnd));
+    if (title !== "Untitled") return title;
+    if (newline < 0) break;
+    lineStart = newline + 1;
+  }
+  return "Untitled";
 }
 
 export interface NoteEntry {
@@ -31,6 +47,24 @@ export class AppState {
 
   setActiveNote(note: Note) {
     this._activeNote = note;
+    this.emit("note-changed");
+  }
+
+  updateDraftTitle(title: string) {
+    const active = this._activeNote;
+    if (!active) return;
+
+    const idx = this._notes.findIndex((n) => n.id === active.id);
+    if (idx < 0) return;
+
+    const current = this._notes[idx];
+    if (!current) return;
+    const nextTitle = normalizeTitle(title);
+    if (idx === 0 && current.title === nextTitle) return;
+
+    const updated: NoteEntry = { ...current, title: nextTitle };
+    this._notes.splice(idx, 1);
+    this._notes.unshift(updated);
     this.emit("note-changed");
   }
 

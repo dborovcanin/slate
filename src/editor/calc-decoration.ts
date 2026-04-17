@@ -42,6 +42,8 @@ export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
 }
 
+const MAX_CALC_EVAL_LINES = 20_000;
+
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
 const setCellCalcResults = StateEffect.define<Map<number, TableCellEvaluation[]>>();
@@ -856,6 +858,21 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
         rerunRequested = false;
         try {
           const doc = view.state.doc;
+          if (doc.lines > MAX_CALC_EVAL_LINES) {
+            const prevCellResults = view.state.field(cellCalcResultsField);
+            const prevVars = view.state.field(variableIndexField);
+            const effects: StateEffect<unknown>[] = [];
+            if (prevResults.size > 0) effects.push(setCalcResults.of(new Map()));
+            if (prevCellResults.size > 0) effects.push(setCellCalcResults.of(new Map()));
+            if (prevVars.length > 0) effects.push(setVariableIndex.of([]));
+            if (effects.length > 0) {
+              view.dispatch({ effects });
+            }
+            prevLines = [];
+            prevResults = new Map();
+            prevVariables = [];
+            continue;
+          }
           const snapshot = doc.toString();
           const nextLines: string[] = [];
           const lineStarts: number[] = [];

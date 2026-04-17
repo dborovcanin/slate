@@ -62,6 +62,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Works with any provider exposing IMAP over TLS
 - Uses incremental UID checkpointing to avoid reprocessing old messages
 - Fetches newest messages first by default
+- First sync defaults to recent mail only (`[imap] initial_sync_past_days = 1`) to avoid flooding
 - Shows a system notification when background sync appends new emails
 
 **Inline calculations**
@@ -301,6 +302,7 @@ folder = "INBOX"
 poll_seconds = 60
 auto_sync_on_startup = false
 initial_sync_max_messages = 200
+initial_sync_past_days = 1
 max_message_bytes = 8388608
 max_body_bytes = 524288
 ```
@@ -362,6 +364,7 @@ IMAP options:
 - `[imap] poll_seconds` polling interval used by background sync loop
 - `[imap] auto_sync_on_startup` run IMAP polling in background during GUI/terminal sessions
 - `[imap] initial_sync_max_messages` first-run window: only last N messages are pulled before checkpoint exists
+- `[imap] initial_sync_past_days` first-run recency filter in days (`1` by default, `0` disables date filter)
 - `[imap] max_message_bytes` max raw message bytes stored in sidecar
 - `[imap] max_body_bytes` max message body bytes rendered into note content
 
