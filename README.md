@@ -122,6 +122,8 @@ sqrt(144) + 3^2         → 21
 | Ctrl+Z / Ctrl+Y         | Undo / redo                   |
 | Escape                  | Close switcher                |
 
+- In the `Ctrl+P` switcher (GUI and terminal): `Delete` or `Ctrl+Backspace` prompts to delete the selected note.
+
 **Storage**
 - SQLite with WAL mode in `~/.local/share/slate/notes.db`
 - Config file is auto-generated on first run (`~/.config/slate/config.toml`)

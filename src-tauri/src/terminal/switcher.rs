@@ -199,3 +199,68 @@ pub fn draw_switcher(
         }
     }
 }
+
+pub fn draw_delete_confirm(
+    note_title: &str,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    let title = truncate_title_for_confirm(note_title);
+    let message = format!(" Delete \"{title}\"? ");
+    let hint = " Enter/Y confirm, Esc/N cancel ";
+    let inner_w = message.chars().count().max(hint.chars().count()).max(30);
+    let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
+    let box_h = 5usize.min(rows.saturating_sub(2).max(5));
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+
+    let border_style = AnsiStyle {
+        fg: Some(palette.search_current),
+        bold: true,
+        ..Default::default()
+    };
+    let message_style = AnsiStyle {
+        fg: Some(palette.search_current),
+        bold: true,
+        ..Default::default()
+    };
+    let hint_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        dim: true,
+        ..Default::default()
+    };
+
+    border_style.write_to(buf);
+    for dx in 0..box_w {
+        let ch = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
+        buf.push_str(&super::ansi::goto(y, x + dx));
+        buf.push(ch);
+        buf.push_str(&super::ansi::goto(y + box_h - 1, x + dx));
+        buf.push(ch);
+    }
+    for dy in 1..box_h.saturating_sub(1) {
+        buf.push_str(&super::ansi::goto(y + dy, x));
+        buf.push('|');
+        buf.push_str(&super::ansi::goto(y + dy, x + box_w - 1));
+        buf.push('|');
+    }
+    buf.push_str(render::RESET);
+
+    draw_row_at_styled(buf, y + 1, x + 1, box_w.saturating_sub(2), &message, message_style);
+    draw_row_at_styled(buf, y + 2, x + 1, box_w.saturating_sub(2), &hint, hint_style);
+}
+
+fn truncate_title_for_confirm(value: &str) -> String {
+    const MAX_CHARS: usize = 48;
+    let mut out = String::new();
+    for (idx, ch) in value.chars().enumerate() {
+        if idx >= MAX_CHARS {
+            out.push_str("...");
+            return out;
+        }
+        out.push(ch);
+    }
+    out
+}

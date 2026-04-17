@@ -51,14 +51,31 @@ async function handleCreateNote() {
 async function handleDeleteNote() {
   const active = state.activeNote;
   if (!active) return;
-  const activeTitle = state.notes.find((n) => n.id === active.id)?.title ?? "Untitled";
-  if (!window.confirm(`Delete "${activeTitle}"? This cannot be undone.`)) {
+  await handleDeleteNoteById(active.id);
+}
+
+async function handleDeleteNoteById(noteId: string) {
+  const noteEntry = state.notes.find((n) => n.id === noteId);
+  if (!noteEntry) return;
+
+  if (!window.confirm(`Delete "${noteEntry.title}"? This cannot be undone.`)) {
     return;
   }
-  const adjacentId = state.getAdjacentNoteId(1) ?? state.getAdjacentNoteId(-1);
-  await flushSave();
-  await deleteNote(active.id);
-  state.removeNote(active.id);
+
+  const deletingActive = state.activeNote?.id === noteId;
+  const adjacentId =
+    deletingActive ? state.getAdjacentNoteId(1) ?? state.getAdjacentNoteId(-1) : null;
+
+  if (deletingActive) {
+    await flushSave();
+  }
+
+  await deleteNote(noteId);
+  state.removeNote(noteId);
+
+  if (!deletingActive) {
+    return;
+  }
 
   if (adjacentId) {
     await switchToNote(adjacentId);
@@ -211,7 +228,9 @@ function setupKeyboardShortcuts() {
         closeSwitcher();
         focusEditor();
       } else {
-        openSwitcher(switchToNote);
+        openSwitcher(switchToNote, (noteId) => {
+          runAction(() => handleDeleteNoteById(noteId));
+        });
       }
       return;
     }

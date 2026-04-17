@@ -83,6 +83,12 @@ struct LineReminderGhost {
     notified_at_ms: Option<i64>,
 }
 
+#[derive(Debug, Clone)]
+struct SwitcherDeleteConfirm {
+    note_id: String,
+    note_title: String,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -95,6 +101,7 @@ struct TerminalApp {
     switcher_items: Vec<NoteMeta>,
     switcher_matches: Vec<usize>,
     switcher_selected: usize,
+    switcher_delete_confirm: Option<SwitcherDeleteConfirm>,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -276,6 +283,7 @@ impl TerminalApp {
             switcher_items,
             switcher_matches: Vec::new(),
             switcher_selected: 0,
+            switcher_delete_confirm: None,
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -1447,6 +1455,10 @@ impl TerminalApp {
     }
 
     fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.switcher_delete_confirm.is_some() {
+            return self.handle_switcher_delete_confirm_key(db, key);
+        }
+
         match key {
             Key::Esc | Key::Ctrl('p') => {
                 self.close_switcher();
@@ -1490,6 +1502,9 @@ impl TerminalApp {
                 self.switcher_query.pop();
                 self.recompute_switcher_matches();
             }
+            Key::Delete | Key::CtrlBackspace => {
+                self.request_switcher_delete_confirmation();
+            }
             Key::Enter => {
                 if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
                     let id = self.switcher_items[idx].id.clone();
@@ -1514,9 +1529,7 @@ impl TerminalApp {
                 self.recompute_switcher_matches();
             }
             Key::Tab
-            | Key::Delete
             | Key::CtrlDelete
-            | Key::CtrlBackspace
             | Key::BackTab
             | Key::ArrowLeft
             | Key::ArrowRight
@@ -1528,6 +1541,67 @@ impl TerminalApp {
             | Key::PageDown
             | Key::Ctrl(_) => {}
         }
+        Ok(())
+    }
+
+    fn handle_switcher_delete_confirm_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        match key {
+            Key::Ctrl('q') => {
+                self.quit = true;
+            }
+            Key::Ctrl('p') => {
+                self.close_switcher();
+            }
+            Key::Esc | Key::Char('n') | Key::Char('N') => {
+                self.switcher_delete_confirm = None;
+            }
+            Key::Enter | Key::Char('y') | Key::Char('Y') => {
+                if let Some(confirm) = self.switcher_delete_confirm.take() {
+                    self.delete_note_from_switcher(db, &confirm.note_id, &confirm.note_title)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn request_switcher_delete_confirmation(&mut self) {
+        if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
+            let item = &self.switcher_items[idx];
+            self.switcher_delete_confirm = Some(SwitcherDeleteConfirm {
+                note_id: item.id.clone(),
+                note_title: item.title.clone(),
+            });
+        }
+    }
+
+    fn delete_note_from_switcher(
+        &mut self,
+        db: &Db,
+        note_id: &str,
+        note_title: &str,
+    ) -> Result<(), String> {
+        let deleting_active = self.active_note.id == note_id;
+        let deleted = db.delete_note(note_id)?;
+        if !deleted {
+            self.status = format!("note missing {}", note_id);
+            self.refresh_switcher_items(db)?;
+            return Ok(());
+        }
+
+        if deleting_active {
+            if let Some(note) = db.get_most_recent_note()? {
+                self.set_active_note(db, note)?;
+            } else {
+                let id = Ulid::new().to_string();
+                let note = db.save_note(&id, "")?;
+                self.set_active_note(db, note)?;
+            }
+        } else {
+            self.refresh_switcher_items(db)?;
+        }
+
+        self.status = format!("deleted {}", note_title);
         Ok(())
     }
 
@@ -2003,7 +2077,10 @@ impl TerminalApp {
         self.mode = UiMode::Switcher;
         self.switcher_query.clear();
         self.recompute_switcher_matches();
-        self.status = "Switcher: type to filter, Enter open, Esc close".to_string();
+        self.switcher_delete_confirm = None;
+        self.status =
+            "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
+                .to_string();
         Ok(())
     }
 
@@ -2012,6 +2089,7 @@ impl TerminalApp {
         self.switcher_query.clear();
         self.switcher_matches.clear();
         self.switcher_selected = 0;
+        self.switcher_delete_confirm = None;
         self.status = format!("editing {}", self.active_note.id);
     }
 
@@ -4047,7 +4125,13 @@ impl TerminalApp {
             | UiMode::Search
             | UiMode::Visual
             | UiMode::VisualLine => &self.status,
-            UiMode::Switcher => "Switcher: type to filter, Enter open, Esc close",
+            UiMode::Switcher => {
+                if self.switcher_delete_confirm.is_some() {
+                    "Confirm delete: Enter/Y confirm, Esc/N cancel"
+                } else {
+                    "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
+                }
+            }
             UiMode::DatePicker => {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
@@ -4079,6 +4163,15 @@ impl TerminalApp {
                 cols,
                 self.render_palette,
             );
+            if let Some(confirm) = self.switcher_delete_confirm.as_ref() {
+                switcher::draw_delete_confirm(
+                    &confirm.note_title,
+                    &mut buf,
+                    rows,
+                    cols,
+                    self.render_palette,
+                );
+            }
         }
 
         if self.mode == UiMode::DatePicker {
@@ -5954,6 +6047,63 @@ mod tests {
         app.execute_terminal_command(&db, "clip-watch-stop");
         assert!(!app.clipboard_watch_enabled);
         assert_eq!(app.status, "clip-watch not active");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn switcher_delete_cancel_keeps_note() {
+        let (db, mut app, path) = app_with_note("first note");
+        db.save_note("n2", "second note").expect("second note saved");
+        app.refresh_switcher_items(&db)
+            .expect("switcher items refreshed");
+
+        run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Char('s'), Key::Delete]);
+        assert_eq!(app.mode, UiMode::Switcher);
+        assert!(app.switcher_delete_confirm.is_some());
+
+        run_keys(&mut app, &db, &[Key::Char('n')]);
+        assert!(app.switcher_delete_confirm.is_none());
+        assert!(db.get_note("n2").expect("lookup works").is_some());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn switcher_ctrl_backspace_delete_removes_active_after_confirmation() {
+        let (db, mut app, path) = app_with_note("first note");
+        db.save_note("n2", "second note").expect("second note saved");
+        app.refresh_switcher_items(&db)
+            .expect("switcher items refreshed");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Ctrl('p'),
+                Key::Paste("first".to_string()),
+                Key::CtrlBackspace,
+            ],
+        );
+        assert_eq!(app.mode, UiMode::Switcher);
+        let pending = app
+            .switcher_delete_confirm
+            .as_ref()
+            .expect("delete confirmation requested");
+        assert_eq!(pending.note_id, "n1");
+
+        run_keys(&mut app, &db, &[Key::Enter]);
+        assert!(app.switcher_delete_confirm.is_none());
+        assert!(db.get_note("n1").expect("lookup works").is_none());
+        assert_ne!(app.active_note.id, "n1");
+        assert!(db
+            .get_note(&app.active_note.id)
+            .expect("active note lookup")
+            .is_some());
 
         drop(app);
         drop(db);

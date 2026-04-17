@@ -4,9 +4,11 @@ import { createListOverlay, type ListOverlay } from "../overlays/overlay.ts";
 import { fuzzyFilter } from "./fuzzy";
 
 type SwitcherItem = { item: NoteEntry; positions: number[] };
+type DeleteCallback = (id: string) => void;
 
 let overlay: ListOverlay | null = null;
 let onSelectCallback: ((id: string) => void) | null = null;
+let onDeleteCallback: DeleteCallback | null = null;
 
 function buildItems(query: string): SwitcherItem[] {
   const notes = state.notes.filter((n) => n.id !== state.activeNote?.id);
@@ -51,8 +53,9 @@ export function isSwitcherOpen(): boolean {
   return overlay?.isOpen() ?? false;
 }
 
-export function openSwitcher(selectCallback: (id: string) => void) {
+export function openSwitcher(selectCallback: (id: string) => void, deleteCallback?: DeleteCallback) {
   onSelectCallback = selectCallback;
+  onDeleteCallback = deleteCallback ?? null;
 
   if (!overlay) {
     overlay = createListOverlay<SwitcherItem>({
@@ -62,6 +65,17 @@ export function openSwitcher(selectCallback: (id: string) => void) {
       getItems: buildItems,
       renderItem: renderSwitcherItem,
       onSelect: ({ item }) => onSelectCallback?.(item.id),
+      onKeydown: (event, state) => {
+        const wantsDelete =
+          event.key === "Delete" || (event.ctrlKey && !event.shiftKey && event.key === "Backspace");
+        if (!wantsDelete || !onDeleteCallback) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        const selected = state.items[state.selectedIndex];
+        if (!selected) return true;
+        onDeleteCallback(selected.item.id);
+        return true;
+      },
       emptyMessage: "No notes found",
     });
   }
@@ -71,6 +85,7 @@ export function openSwitcher(selectCallback: (id: string) => void) {
 
 export function closeSwitcher() {
   overlay?.close();
+  onDeleteCallback = null;
 }
 
 export function refreshSwitcher() {
