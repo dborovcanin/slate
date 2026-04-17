@@ -108,29 +108,6 @@ function clampTableCursorToContent(state: EditorView["state"], pos: number): num
   return null;
 }
 
-function isSingleSpaceInsertion(update: ViewUpdate): boolean {
-  let inserted = "";
-  let changeCount = 0;
-  let hasDeletion = false;
-  for (const tr of update.transactions) {
-    tr.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
-      changeCount += 1;
-      if (fromA !== toA) hasDeletion = true;
-      inserted += text.toString();
-    });
-  }
-  return !hasDeletion && changeCount === 1 && inserted === " ";
-}
-
-function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
-  if (!update.docChanged) return false;
-  if (!isSingleSpaceInsertion(update)) return false;
-  const main = update.state.selection.main;
-  if (!main.empty) return false;
-  const line = update.state.doc.lineAt(main.head);
-  return isMarkdownTableLine(line.text);
-}
-
 function toggleWrap(view: EditorView, left: string, right = left): boolean {
   const main = view.state.selection.main;
   const from = main.from;
@@ -364,7 +341,6 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
     return {
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
-        if (shouldDeferTableAutoformatForSpace(update)) return;
         applying = true;
         try {
           const operation = runDocChangeRules(snapshotFromUpdate(update), {

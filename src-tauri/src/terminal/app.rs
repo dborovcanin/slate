@@ -3787,11 +3787,20 @@ impl TerminalApp {
                             let marker = formula_marker_token(fi);
                             let value = value_for_cell(seg.cell_index)
                                 .unwrap_or_else(|| String::from("…"));
-                            trailer_parts.push(format!("{marker} ➜ {value}"));
+                            let source_text =
+                                line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
                             let is_focused = is_cursor_line
                                 && self.cursor_col >= seg.cell_from_char
                                 && self.cursor_col < seg.cell_to_char;
+
+                            // Ghost trailer: focused cell shows the value
+                            // (so the user can see the result while editing),
+                            // resting cells show the formula source.
+                            let trailer_text = if is_focused { value.clone() } else { source_text };
+                            if !trailer_text.is_empty() {
+                                trailer_parts.push(format!("{marker} ➜ {trailer_text}"));
+                            }
 
                             out.push_str(&line_text[last_byte..seg.from_byte]);
 
@@ -4645,8 +4654,7 @@ struct TableFormulaSegment {
     cell_from_char: usize,
     cell_to_char: usize,
     cell_index: usize,
-    cell_left_pipe_char: usize,
-    cell_right_pipe_char: usize,
+    #[cfg(test)]
     labels: Vec<String>,
 }
 
@@ -4655,6 +4663,7 @@ fn builtin_formula_label(text: &str) -> Option<String> {
     crate::editor_core::calc_plan::builtin_formula_label(text)
 }
 
+#[cfg(test)]
 fn find_table_formula_segment(text: &str) -> Option<TableFormulaSegment> {
     find_table_formula_segments(text).into_iter().next()
 }
@@ -4670,8 +4679,7 @@ fn find_table_formula_segments(text: &str) -> Vec<TableFormulaSegment> {
             cell_from_char: seg.cell_left_pipe_char + 1,
             cell_to_char: seg.cell_right_pipe_char,
             cell_index: seg.cell_index,
-            cell_left_pipe_char: seg.cell_left_pipe_char,
-            cell_right_pipe_char: seg.cell_right_pipe_char,
+            #[cfg(test)]
             labels: seg.labels,
         })
         .collect()
@@ -4681,22 +4689,7 @@ fn formula_marker_token(index: usize) -> String {
     "*".repeat(index + 1)
 }
 
-fn formula_marker_suffix(count: usize) -> String {
-    (0..count)
-        .map(formula_marker_token)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn formula_explanation_ghost(labels: &[String]) -> String {
-    labels
-        .iter()
-        .enumerate()
-        .map(|(index, label)| format!("{} ➜ {}", formula_marker_token(index), label))
-        .collect::<Vec<_>>()
-        .join("  ")
-}
-
+#[cfg(test)]
 fn should_mask_formula_cell(
     is_cursor_line: bool,
     cursor_col: usize,

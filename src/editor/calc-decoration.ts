@@ -331,9 +331,7 @@ const calcDecorations = EditorView.decorations.compute(
         segments.forEach((seg, fi) => {
           const marker = formulaMarkerToken(fi);
           const computed = valueForCell(seg.cellIndex);
-          if (computed == null) return;
-          const value = computed;
-          trailerParts.push(`${marker} \u279c ${value}`);
+          const sourceText = line.text.slice(seg.fromChar, seg.toChar).trim();
 
           const cellFrom = seg.cellLeftPipeChar + 1;
           const cellTo = seg.cellRightPipeChar;
@@ -343,8 +341,20 @@ const calcDecorations = EditorView.decorations.compute(
             cellFrom,
             cellTo,
           );
-          if (editingCell) return;
 
+          // Ghost trailer: when the cell is being edited the trailer shows
+          // the computed value (so the user sees the result without leaving
+          // the cell). When the cell is at rest the trailer shows the
+          // formula source (the user can see what formula produced the
+          // displayed value).
+          const trailerText = editingCell ? computed : sourceText;
+          if (trailerText) {
+            trailerParts.push(`${marker} \u279c ${trailerText}`);
+          }
+
+          if (editingCell) return;
+          if (computed == null) return;
+          const value = computed;
           const minWidthCh = Math.max(
             1,
             seg.toChar - seg.fromChar,
