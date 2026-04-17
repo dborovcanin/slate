@@ -98,9 +98,7 @@ impl Db {
     pub fn list_notes_meta(&self) -> Result<Vec<NoteSummary>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare(
-                "SELECT id, substr(body, 1, 200) FROM notes ORDER BY updated_at DESC",
-            )
+            .prepare("SELECT id, substr(body, 1, 200) FROM notes ORDER BY updated_at DESC")
             .map_err(|e| e.to_string())?;
 
         let notes = stmt

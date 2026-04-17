@@ -29,7 +29,12 @@ pub struct LineHistory {
 }
 
 impl LineHistory {
-    pub fn new(max_entries: usize, lines: &[String], cursor_line: usize, cursor_col: usize) -> Self {
+    pub fn new(
+        max_entries: usize,
+        lines: &[String],
+        cursor_line: usize,
+        cursor_col: usize,
+    ) -> Self {
         Self {
             entries: Vec::new(),
             pos: 0,
@@ -112,7 +117,8 @@ impl LineHistory {
             }
         }
 
-        let Some(entry) = build_history_entry(&self.snapshot, lines, cursor_line, cursor_col) else {
+        let Some(entry) = build_history_entry(&self.snapshot, lines, cursor_line, cursor_col)
+        else {
             self.snapshot = HistorySnapshot {
                 lines: lines.to_vec(),
                 cursor: HistoryCursor {
@@ -155,7 +161,12 @@ impl LineHistory {
 
         self.pos -= 1;
         let entry = &self.entries[self.pos];
-        apply_line_replace(lines, entry.start_line, entry.inserted_lines.len(), &entry.removed_lines);
+        apply_line_replace(
+            lines,
+            entry.start_line,
+            entry.inserted_lines.len(),
+            &entry.removed_lines,
+        );
         let cursor = entry.cursor_before;
         self.snapshot = HistorySnapshot {
             lines: lines.clone(),
@@ -171,7 +182,12 @@ impl LineHistory {
         }
 
         let entry = &self.entries[self.pos];
-        apply_line_replace(lines, entry.start_line, entry.removed_lines.len(), &entry.inserted_lines);
+        apply_line_replace(
+            lines,
+            entry.start_line,
+            entry.removed_lines.len(),
+            &entry.inserted_lines,
+        );
         self.pos += 1;
         let cursor = entry.cursor_after;
         self.snapshot = HistorySnapshot {
@@ -247,7 +263,12 @@ fn shared_suffix_lines_len(a: &[String], b: &[String], prefix_len: usize) -> usi
     i
 }
 
-fn apply_line_replace(lines: &mut Vec<String>, start: usize, remove_len: usize, inserted: &[String]) {
+fn apply_line_replace(
+    lines: &mut Vec<String>,
+    start: usize,
+    remove_len: usize,
+    inserted: &[String],
+) {
     let range_start = start.min(lines.len());
     let range_end = start.saturating_add(remove_len).min(lines.len());
     lines.splice(range_start..range_end, inserted.iter().cloned());

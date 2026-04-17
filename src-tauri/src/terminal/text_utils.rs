@@ -79,11 +79,7 @@ pub fn line_display_cols(text: &str) -> usize {
 ///
 /// When `clamp_to_last_char` is true (normal/visual modes), the cursor is
 /// clamped to the last character instead of one-past-end.
-pub fn cursor_render_char_col(
-    text: &str,
-    cursor_col: usize,
-    clamp_to_last_char: bool,
-) -> usize {
+pub fn cursor_render_char_col(text: &str, cursor_col: usize, clamp_to_last_char: bool) -> usize {
     let line_len = line_char_len(text);
     let clamped_col = min(cursor_col, line_len);
     if clamp_to_last_char && line_len > 0 && clamped_col == line_len {

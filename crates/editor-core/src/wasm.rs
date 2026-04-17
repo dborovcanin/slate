@@ -12,7 +12,8 @@ use crate::markdown_tokens::{
 };
 use crate::text_rules::{
     rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules, run_enter_rules,
-    run_tab_rules, run_table_cell_navigation_rules, TabRuleOptions, TextRuleOptions,
+    run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules, TabRuleOptions,
+    TableBoundaryEditOptions, TextRuleOptions,
 };
 use crate::types::{CommandMode, EditorContextSnapshot};
 use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
@@ -79,6 +80,25 @@ pub fn wasm_run_table_cell_navigation_rules(
         outdent,
     };
     let op = run_table_cell_navigation_rules(&snapshot, options)?;
+    serde_json::to_string(&op).ok()
+}
+
+/// Run table boundary edit rules (Backspace/Delete and explicit merge commands).
+/// Returns JSON-encoded EditOperation or null.
+#[wasm_bindgen]
+pub fn wasm_run_table_boundary_edit_rules(
+    snapshot_json: &str,
+    markdown_autoformat: bool,
+    backward: bool,
+    structural_merge: bool,
+) -> Option<String> {
+    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let options = TableBoundaryEditOptions {
+        markdown_autoformat,
+        backward,
+        structural_merge,
+    };
+    let op = run_table_boundary_edit_rules(&snapshot, options)?;
     serde_json::to_string(&op).ok()
 }
 
@@ -155,7 +175,26 @@ fn table_formula_segment_to_js(segment: &TableFormulaSegment) -> JsValue {
         JsValue::from_f64(segment.from_char as f64),
     );
     let _ = set_prop(&out, "toChar", JsValue::from_f64(segment.to_char as f64));
-    let _ = set_prop(&out, "label", JsValue::from_str(&segment.label));
+    let _ = set_prop(
+        &out,
+        "cellLeftPipeChar",
+        JsValue::from_f64(segment.cell_left_pipe_char as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "cellRightPipeChar",
+        JsValue::from_f64(segment.cell_right_pipe_char as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "cellIndex",
+        JsValue::from_f64(segment.cell_index as f64),
+    );
+    let labels = Array::new();
+    for label in &segment.labels {
+        labels.push(&JsValue::from_str(label));
+    }
+    let _ = set_prop(&out, "labels", labels.into());
     out.into()
 }
 
@@ -466,6 +505,16 @@ pub fn wasm_calc_find_segment(line_text: &str) -> Option<JsValue> {
 pub fn wasm_calc_find_table_formula_segment(line_text: &str) -> Option<JsValue> {
     let segment: TableFormulaSegment = calc_plan::find_table_formula_segment(line_text)?;
     Some(table_formula_segment_to_js(&segment))
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_find_table_formula_segments(line_text: &str) -> JsValue {
+    let segments = calc_plan::find_table_formula_segments(line_text);
+    let out = Array::new();
+    for segment in &segments {
+        out.push(&table_formula_segment_to_js(segment));
+    }
+    out.into()
 }
 
 #[wasm_bindgen]

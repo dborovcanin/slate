@@ -123,6 +123,12 @@ struct TerminalApp {
     // Calc ghost cache
     calc_engine: CalcEngine,
     calc_results: Vec<Option<String>>,
+    /// Per-line list of `(cell_index, formatted_value)` for table rows
+    /// containing one or more `=…` formula cells. Parallel to `calc_results`
+    /// (`calc_results[i]` carries the *first* formula value for backward
+    /// compatibility); `cell_calc_results[i]` carries every formula cell in
+    /// that row in left-to-right order.
+    cell_calc_results: Vec<Vec<(usize, String)>>,
     reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
     reminders_dirty: bool,
     last_reminder_check: Instant,
@@ -218,6 +224,7 @@ impl TerminalApp {
         let calc_data = if defer_initial_calc {
             CalcData {
                 line_results: vec![None; lines.len()],
+                cell_results: vec![Vec::new(); lines.len()],
                 variable_names: Vec::new(),
             }
         } else {
@@ -294,6 +301,7 @@ impl TerminalApp {
             command_selection_linewise: false,
             calc_engine,
             calc_results: calc_data.line_results,
+            cell_calc_results: calc_data.cell_results,
             reminder_ghosts,
             reminders_dirty: false,
             last_reminder_check: Instant::now(),
@@ -449,15 +457,15 @@ impl TerminalApp {
     }
 
     fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
-        let mut should_autoformat = true;
+        let mut should_autoformat = false;
+        let mut clamp_table_padding = true;
         match key {
             Key::Ctrl('q') => {
                 self.quit = true;
                 return Ok(());
             }
             Key::Ctrl('w') => {
-                self.delete_word_backward();
-                return Ok(());
+                should_autoformat = self.delete_word_backward();
             }
             Key::Ctrl('s') => {
                 self.save(db)?;
@@ -482,35 +490,73 @@ impl TerminalApp {
             Key::ArrowLeft => self.move_cursor_left(),
             Key::ArrowRight => self.move_cursor_right(),
             Key::CtrlArrowLeft => {
-                if !self.try_table_navigation_rule(true) {
+                if !self.try_table_navigation_rule(true)
+                    && !is_markdown_table_line(self.current_line())
+                {
                     self.move_cursor_left_word();
                 }
             }
             Key::CtrlArrowRight => {
-                if !self.try_table_navigation_rule(false) {
+                if !self.try_table_navigation_rule(false)
+                    && !is_markdown_table_line(self.current_line())
+                {
                     self.move_cursor_right_word();
+                }
+            }
+            Key::CtrlBackspace => {
+                if let Some(changed) = self.try_table_boundary_edit_rule(true, true) {
+                    should_autoformat = changed;
+                } else {
+                    should_autoformat = self.delete_word_backward();
+                }
+            }
+            Key::CtrlDelete => {
+                if let Some(changed) = self.try_table_boundary_edit_rule(false, true) {
+                    should_autoformat = changed;
+                } else {
+                    self.delete_forward();
+                    should_autoformat = true;
                 }
             }
             Key::PageUp => self.move_cursor_up(self.editor_height().saturating_sub(1)),
             Key::PageDown => self.move_cursor_down(self.editor_height().saturating_sub(1)),
             Key::Home => self.cursor_col = 0,
             Key::End => self.cursor_col = line_char_len(self.current_line()),
-            Key::Backspace => self.backspace(),
-            Key::Delete => self.delete_forward(),
+            Key::Backspace => {
+                if let Some(changed) = self.try_table_boundary_edit_rule(true, false) {
+                    should_autoformat = changed;
+                } else {
+                    self.backspace();
+                    should_autoformat = true;
+                }
+            }
+            Key::Delete => {
+                if let Some(changed) = self.try_table_boundary_edit_rule(false, false) {
+                    should_autoformat = changed;
+                } else {
+                    self.delete_forward();
+                    should_autoformat = true;
+                }
+            }
             Key::Enter => {
                 if !self.try_enter_rule() {
                     self.insert_newline();
                 }
+                should_autoformat = true;
             }
             Key::Tab => {
                 if self.apply_calc_tab() {
+                    should_autoformat = true;
                     // handled
-                } else if !self.try_tab_rule(false) {
+                } else if !self.try_table_navigation_rule(false) && !self.try_tab_rule(false) {
                     self.insert_text("  ");
+                    should_autoformat = true;
                 }
             }
             Key::BackTab => {
-                self.try_tab_rule(true);
+                if !self.try_table_navigation_rule(true) && self.try_tab_rule(true) {
+                    should_autoformat = true;
+                }
             }
             Key::Ctrl('e') => {
                 self.command_input.clear();
@@ -531,7 +577,18 @@ impl TerminalApp {
                 // autoformat pass that would otherwise scan the full document.
                 should_autoformat = false;
             }
-            Key::Char(ch) => self.insert_char(ch),
+            Key::Char(ch) => {
+                self.insert_char(ch);
+                should_autoformat = true;
+                if ch == ' ' && is_markdown_table_line(self.current_line()) {
+                    // Let users type multi-word table cell content without
+                    // instant trim/realign fighting the cursor.
+                    should_autoformat = false;
+                    // Keep right-padding clamp relaxed for this keystroke so
+                    // the next word can continue after the inserted space.
+                    clamp_table_padding = false;
+                }
+            }
             Key::Esc => {
                 self.mode = UiMode::Normal;
                 self.vim_state = crate::editor_core::vim::VimState::default();
@@ -540,7 +597,7 @@ impl TerminalApp {
             Key::Ctrl(_) => {}
         }
 
-        self.adjust_cursor();
+        self.adjust_cursor_with_table_padding_guard(clamp_table_padding);
         self.adjust_scroll();
 
         if should_autoformat {
@@ -1440,6 +1497,8 @@ impl TerminalApp {
             }
             Key::Tab
             | Key::Delete
+            | Key::CtrlDelete
+            | Key::CtrlBackspace
             | Key::BackTab
             | Key::ArrowLeft
             | Key::ArrowRight
@@ -2086,6 +2145,7 @@ impl TerminalApp {
         self.rescan_calc_flags();
         if self.should_defer_calc_recompute() {
             self.calc_results = vec![None; self.lines.len()];
+            self.cell_calc_results = vec![Vec::new(); self.lines.len()];
             self.variable_names.clear();
             self.prev_line_hashes.clear();
             self.prev_line_has_assignment.clear();
@@ -2182,6 +2242,13 @@ impl TerminalApp {
             self.calc_results = vec![None; self.lines.len()];
         } else {
             self.calc_results.fill(None);
+        }
+        if self.cell_calc_results.len() != self.lines.len() {
+            self.cell_calc_results = vec![Vec::new(); self.lines.len()];
+        } else {
+            for row in &mut self.cell_calc_results {
+                row.clear();
+            }
         }
         self.variable_names.clear();
         self.calc_state_stale = true;
@@ -2497,6 +2564,7 @@ impl TerminalApp {
                 .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
                 .collect();
             self.calc_results = calc_data.line_results;
+            self.cell_calc_results = calc_data.cell_results;
             self.variable_names = calc_data.variable_names;
             self.calc_state_stale = false;
             return;
@@ -2530,11 +2598,22 @@ impl TerminalApp {
                 || prev_changed_had_assignment);
         let can_use_partial = has_prev && !touches_any_assignment && !has_builtin_formula;
 
-        let (mut new_results, variable_names) = if can_use_partial {
+        let (mut new_results, mut new_cell_results, variable_names) = if can_use_partial {
             let mut merged_results = vec![None; self.lines.len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_results.get_mut(entry.line_idx) {
                     *slot = Some(entry.result.clone());
+                }
+            }
+            // Carry forward cached cell results for unchanged lines (same
+            // alignment as base_results, which the planner already validated).
+            let mut merged_cells: Vec<Vec<(usize, String)>> =
+                vec![Vec::new(); self.lines.len()];
+            for entry in &plan.base_results {
+                if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
+                    if let Some(cached) = self.cell_calc_results.get(entry.line_idx) {
+                        *slot = cached.clone();
+                    }
                 }
             }
 
@@ -2549,15 +2628,26 @@ impl TerminalApp {
                     if let Some(slot) = merged_results.get_mut(idx) {
                         *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
                     }
+                    if let Some(slot) = merged_cells.get_mut(idx) {
+                        *slot = calc_data
+                            .cell_results
+                            .get(idx)
+                            .cloned()
+                            .unwrap_or_default();
+                    }
                 }
-                (merged_results, calc_data.variable_names)
+                (merged_results, merged_cells, calc_data.variable_names)
             } else {
-                (merged_results, self.variable_names.clone())
+                (merged_results, merged_cells, self.variable_names.clone())
             }
         } else {
             let calc_data =
                 compute_calc_data(&self.calc_engine, &self.lines, calc_variables_enabled, None);
-            (calc_data.line_results, calc_data.variable_names)
+            (
+                calc_data.line_results,
+                calc_data.cell_results,
+                calc_data.variable_names,
+            )
         };
 
         // Auto-refresh committed-style trailers. Eligibility is deliberately
@@ -2625,6 +2715,9 @@ impl TerminalApp {
                     // the cached result so the ghost widget disappears and
                     // the next eligibility round still sees prev-None here.
                     new_results[i] = None;
+                    if let Some(slot) = new_cell_results.get_mut(i) {
+                        slot.clear();
+                    }
                     // Trailer rewrite changed the line bytes; rehash so the
                     // snapshot stays in sync for the next recompute.
                     final_hashes[i] = crate::editor_core::calc_plan::hash_line(&self.lines[i]);
@@ -2639,6 +2732,7 @@ impl TerminalApp {
             .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
             .collect();
         self.calc_results = new_results;
+        self.cell_calc_results = new_cell_results;
         self.variable_names = variable_names;
         self.calc_state_stale = false;
     }
@@ -2942,12 +3036,39 @@ impl TerminalApp {
         self.cursor_col = col;
     }
 
-    fn delete_word_backward(&mut self) {
+    fn delete_word_backward(&mut self) -> bool {
         if self.cursor_col == 0 {
             if self.cursor_line > 0 {
                 self.backspace();
+                return true;
             }
-            return;
+            return false;
+        }
+        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            let edit_start = table_cell_edit_start(&cell);
+            let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
+            if self.cursor_col <= edit_start {
+                return false;
+            }
+            let mut col = self.cursor_col.min(edit_end);
+            let line = self.current_line();
+            let chars: Vec<char> = line.chars().collect();
+            while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
+                col -= 1;
+            }
+            while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
+                col -= 1;
+            }
+            if col == self.cursor_col {
+                return false;
+            }
+            let start_byte = byte_index(self.current_line(), col);
+            let end_byte = byte_index(self.current_line(), self.cursor_col);
+            let text = self.current_line_mut();
+            text.replace_range(start_byte..end_byte, "");
+            self.cursor_col = col;
+            self.mark_edited();
+            return true;
         }
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
@@ -2965,6 +3086,7 @@ impl TerminalApp {
         text.replace_range(start_byte..end_byte, "");
         self.cursor_col = col;
         self.mark_edited();
+        true
     }
 
     fn insert_char(&mut self, ch: char) {
@@ -3141,7 +3263,43 @@ impl TerminalApp {
         false
     }
 
+    fn try_table_boundary_edit_rule(
+        &mut self,
+        backward: bool,
+        structural_merge: bool,
+    ) -> Option<bool> {
+        let snapshot = self.build_snapshot();
+        let options = crate::editor_core::text_rules::TableBoundaryEditOptions {
+            markdown_autoformat: self.markdown_autoformat,
+            backward,
+            structural_merge,
+        };
+        let op = crate::editor_core::text_rules::run_table_boundary_edit_rules(&snapshot, options)?;
+        let changed = !op.changes.is_empty();
+        self.apply_edit_operation(&op);
+        Some(changed)
+    }
+
     fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
+        if op.changes.is_empty() {
+            if let Some(sel) = &op.selection {
+                let mut offset = 0usize;
+                let target = sel.anchor.min(join_lines(&self.lines).len());
+                for (i, line) in self.lines.iter().enumerate() {
+                    let line_end = offset + line.len();
+                    if target <= line_end {
+                        self.cursor_line = i;
+                        self.cursor_col = line[..target.saturating_sub(offset)].chars().count();
+                        break;
+                    }
+                    offset = line_end + 1;
+                }
+                self.adjust_cursor();
+                self.adjust_scroll();
+            }
+            return;
+        }
+
         let mut text = join_lines(&self.lines);
 
         // Track initial cursor byte offset
@@ -3168,7 +3326,10 @@ impl TerminalApp {
                     let added = change.insert.len();
                     mapped_anchor = mapped_anchor + added - removed;
                 } else {
-                    mapped_anchor = from + change.insert.len();
+                    // Keep cursor stable relative to the replacement start
+                    // when it falls inside the replaced span.
+                    let inside = mapped_anchor.saturating_sub(from);
+                    mapped_anchor = from + inside.min(change.insert.len());
                 }
             }
         }
@@ -3198,6 +3359,26 @@ impl TerminalApp {
     }
 
     fn backspace(&mut self) {
+        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            let edit_start = table_cell_edit_start(&cell);
+            let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
+            if self.cursor_col <= edit_start {
+                return;
+            }
+            if self.cursor_col > edit_end {
+                self.cursor_col = edit_end;
+                return;
+            }
+            let new_col = self.cursor_col - 1;
+            if new_col < edit_start {
+                return;
+            }
+            remove_char_at(&mut self.lines[self.cursor_line], new_col);
+            self.cursor_col = new_col;
+            self.mark_edited();
+            return;
+        }
+
         if self.cursor_col > 0 {
             let new_col = self.cursor_col - 1;
             remove_char_at(&mut self.lines[self.cursor_line], new_col);
@@ -3219,6 +3400,22 @@ impl TerminalApp {
     }
 
     fn delete_forward(&mut self) {
+        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            let edit_start = table_cell_edit_start(&cell);
+            let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
+            if self.cursor_col < edit_start {
+                self.cursor_col = edit_start;
+                return;
+            }
+            if self.cursor_col >= edit_end {
+                return;
+            }
+            let col = self.cursor_col;
+            remove_char_at(&mut self.lines[self.cursor_line], col);
+            self.mark_edited();
+            return;
+        }
+
         let line_len = line_char_len(self.current_line());
         if self.cursor_col < line_len {
             let col = self.cursor_col;
@@ -3237,6 +3434,31 @@ impl TerminalApp {
     }
 
     fn move_cursor_left(&mut self) {
+        let table_target_col = {
+            let line_text = self.current_line();
+            if let Some(current_cell) = table_cell_info_at_char(line_text, self.cursor_col) {
+                let anchor = table_cell_navigation_anchor(line_text, &current_cell);
+                let edit_start = table_cell_edit_start(&current_cell);
+                if table_cell_is_empty(&current_cell) {
+                    Some(anchor)
+                } else if self.cursor_col > anchor {
+                    // Entering left/right padding is not allowed; snap back to content anchor.
+                    Some(anchor)
+                } else if self.cursor_col <= edit_start {
+                    // Regular arrows do not cross cell boundaries.
+                    Some(edit_start)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(target_col) = table_target_col {
+            self.cursor_col = target_col;
+            return;
+        }
+
         if self.cursor_col > 0 {
             self.cursor_col -= 1;
             return;
@@ -3251,6 +3473,33 @@ impl TerminalApp {
     }
 
     fn move_cursor_right(&mut self) {
+        let table_target_col = {
+            let line_text = self.current_line();
+            if let Some(current_cell) = table_cell_info_at_char(line_text, self.cursor_col) {
+                let anchor = table_cell_navigation_anchor(line_text, &current_cell);
+                let edit_start = table_cell_edit_start(&current_cell);
+                if table_cell_is_empty(&current_cell) {
+                    Some(anchor)
+                } else if self.cursor_col < edit_start {
+                    Some(edit_start)
+                } else if self.cursor_col > anchor {
+                    // Entering padding is not allowed; snap back.
+                    Some(anchor)
+                } else if self.cursor_col == anchor {
+                    // Regular arrows do not cross cell boundaries.
+                    Some(anchor)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(target_col) = table_target_col {
+            self.cursor_col = target_col;
+            return;
+        }
+
         let line_len = line_char_len(self.current_line());
         if self.cursor_col < line_len {
             self.cursor_col += 1;
@@ -3272,6 +3521,9 @@ impl TerminalApp {
         let current_virtual = self.current_virtual_line();
         let target_virtual = current_virtual.saturating_sub(count);
         self.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
+        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+        }
     }
 
     fn move_cursor_down(&mut self, count: usize) {
@@ -3286,9 +3538,12 @@ impl TerminalApp {
         self.cursor_line = self
             .real_line_for_virtual(target_virtual)
             .unwrap_or_else(|| self.lines.len().saturating_sub(1));
+        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+        }
     }
 
-    fn adjust_cursor(&mut self) {
+    fn adjust_cursor_with_table_padding_guard(&mut self, clamp_table_padding: bool) {
         if self.lines.is_empty() {
             self.lines.push(String::new());
         }
@@ -3302,6 +3557,33 @@ impl TerminalApp {
         if self.cursor_col > len {
             self.cursor_col = len;
         }
+        let table_anchor = {
+            let line_text = self.current_line();
+            if let Some(cell) = table_cell_info_at_char(line_text, self.cursor_col) {
+                let anchor = table_cell_navigation_anchor(line_text, &cell);
+                let edit_start = table_cell_edit_start(&cell);
+                if table_cell_is_empty(&cell) {
+                    Some(anchor)
+                } else if self.cursor_col < edit_start
+                    || (clamp_table_padding && self.cursor_col > anchor)
+                {
+                    // Keep the cursor inside content; right padding is
+                    // reserved for alignment only.
+                    Some(anchor)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(anchor) = table_anchor {
+            self.cursor_col = anchor;
+        }
+    }
+
+    fn adjust_cursor(&mut self) {
+        self.adjust_cursor_with_table_padding_guard(true);
     }
 
     fn editor_height(&self) -> usize {
@@ -3443,6 +3725,7 @@ impl TerminalApp {
                 let mut reminder_ghost_override: Option<String> = None;
                 let mut reminder_strikethrough = false;
                 let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
+                let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
                 let line_text = &self.lines[line_idx];
                 let mut rendered_line = line_text.to_string();
                 let collapsed_hidden_count = self
@@ -3462,59 +3745,114 @@ impl TerminalApp {
                         reminder_strikethrough = reminder.remind_at_ms <= now_ms;
                     }
 
-                    if let Some(formula) = find_table_formula_segment(line_text) {
-                        // Formula rows render a marker in-cell (`value*`) and keep
-                        // the detailed explanation as a line-end ghost.
+                    formula_segments = find_table_formula_segments(line_text);
+                    if !formula_segments.is_empty() {
+                        // Formula rows render a marker in-cell (`value*`,
+                        // `value**`, …) and keep the detailed per-formula
+                        // explanation as a line-end ghost. The first formula
+                        // value in the row is also stored in `calc_results`
+                        // for backward compatibility; per-cell values come
+                        // from `cell_calc_results`.
                         calc_ghost = None;
 
-                        if let Some(result) =
-                            self.calc_results.get(line_idx).and_then(|r| r.as_deref())
-                        {
-                            if !(is_cursor_line
-                                && self.cursor_col >= formula.from_char
-                                && self.cursor_col <= formula.to_char)
-                            {
-                                let formatted = format_formula_display_value(result);
-                                let marker_suffix = formula_marker_suffix(formula.labels.len());
-                                let marker_char = formula.from_char + formatted.chars().count();
-                                let marker_end = marker_char + marker_suffix.chars().count();
-                                let mut replacement = format!("{formatted}{marker_suffix}");
-                                let old_len = formula.to_char.saturating_sub(formula.from_char);
-                                let new_len = replacement.chars().count();
-                                if new_len < old_len {
-                                    replacement.push_str(&" ".repeat(old_len - new_len));
+                        let cell_results = self
+                            .cell_calc_results
+                            .get(line_idx)
+                            .cloned()
+                            .unwrap_or_default();
+                        let value_for_cell = |cell_index: usize| -> Option<String> {
+                            cell_results
+                                .iter()
+                                .find(|(idx, _)| *idx == cell_index)
+                                .map(|(_, v)| format_formula_display_value(v))
+                                .or_else(|| {
+                                    // Fallback: legacy single-result path.
+                                    self.calc_results
+                                        .get(line_idx)
+                                        .and_then(|r| r.as_deref())
+                                        .map(format_formula_display_value)
+                                })
+                        };
+
+                        let mut out = String::with_capacity(line_text.len() + 16);
+                        let mut last_byte = 0usize;
+                        let mut char_delta: isize = 0;
+                        let mut trailer_parts: Vec<String> = Vec::new();
+                        // Char position of the cursor in the rendered line; we
+                        // collect this only when the cursor sits inside a
+                        // focused (un-masked) formula cell.
+                        let mut focused_cursor_col: Option<usize> = None;
+
+                        for (fi, seg) in formula_segments.iter().enumerate() {
+                            let marker = formula_marker_token(fi);
+                            let value = value_for_cell(seg.cell_index)
+                                .unwrap_or_else(|| String::from("…"));
+                            trailer_parts.push(format!("{marker} ➜ {value}"));
+
+                            let is_focused = is_cursor_line
+                                && self.cursor_col >= seg.cell_from_char
+                                && self.cursor_col < seg.cell_to_char;
+
+                            out.push_str(&line_text[last_byte..seg.from_byte]);
+
+                            if is_focused {
+                                out.push_str(&line_text[seg.from_byte..seg.to_byte]);
+                                let mapped = (self.cursor_col as isize + char_delta)
+                                    .max(0) as usize;
+                                focused_cursor_col = Some(mapped);
+                            } else {
+                                let mut replacement = format!("{value}{marker}");
+                                let old_chars =
+                                    seg.to_char.saturating_sub(seg.from_char);
+                                let new_chars = replacement.chars().count();
+                                if new_chars < old_chars {
+                                    replacement
+                                        .push_str(&" ".repeat(old_chars - new_chars));
                                 }
-                                calc_ghost_override =
-                                    Some(formula_explanation_ghost(&formula.labels));
+                                let rendered_chars = replacement.chars().count();
+                                let marker_char =
+                                    ((seg.from_char as isize) + char_delta) as usize
+                                        + value.chars().count();
+                                let marker_end = marker_char + marker.chars().count();
                                 ghost_dim_ranges.push((marker_char, marker_end));
-
-                                let mut out = String::with_capacity(
-                                    line_text
-                                        .len()
-                                        .saturating_sub(formula.to_byte - formula.from_byte)
-                                        + replacement.len(),
-                                );
-                                out.push_str(&line_text[..formula.from_byte]);
+                                char_delta += rendered_chars as isize - old_chars as isize;
                                 out.push_str(&replacement);
-                                out.push_str(&line_text[formula.to_byte..]);
-                                rendered_line = out;
-
-                                if is_cursor_line {
-                                    let mapped_col = if self.cursor_col <= formula.from_char {
-                                        self.cursor_col
-                                    } else if self.cursor_col >= formula.to_char {
-                                        if new_len >= old_len {
-                                            self.cursor_col + (new_len - old_len)
-                                        } else {
-                                            self.cursor_col.saturating_sub(old_len - new_len)
-                                        }
-                                    } else {
-                                        self.cursor_col
-                                    };
-                                    cursor_line_override =
-                                        Some((rendered_line.clone(), mapped_col));
-                                }
                             }
+                            last_byte = seg.to_byte;
+                        }
+                        out.push_str(&line_text[last_byte..]);
+                        rendered_line = out;
+
+                        calc_ghost_override = Some(trailer_parts.join("  "));
+
+                        if is_cursor_line {
+                            let mapped_col = focused_cursor_col.unwrap_or_else(|| {
+                                // Cursor is outside every formula cell. Walk
+                                // the segments that lie entirely before the
+                                // cursor and accumulate their rendered-vs-
+                                // source char delta.
+                                let mut delta: isize = 0;
+                                for (fi, seg) in formula_segments.iter().enumerate() {
+                                    if seg.cell_to_char <= self.cursor_col {
+                                        let value = value_for_cell(seg.cell_index)
+                                            .unwrap_or_else(|| String::from("…"));
+                                        let marker = formula_marker_token(fi);
+                                        let mut rep = format!("{value}{marker}");
+                                        let old_chars =
+                                            seg.to_char.saturating_sub(seg.from_char);
+                                        let new_chars = rep.chars().count();
+                                        if new_chars < old_chars {
+                                            rep.push_str(
+                                                &" ".repeat(old_chars - new_chars),
+                                            );
+                                        }
+                                        delta += rep.chars().count() as isize
+                                            - old_chars as isize;
+                                    }
+                                }
+                                ((self.cursor_col as isize) + delta).max(0) as usize
+                            });
+                            cursor_line_override = Some((rendered_line.clone(), mapped_col));
                         }
                     }
                 }
@@ -3538,34 +3876,78 @@ impl TerminalApp {
                 let line_width = line_display_cols(&rendered_line);
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
-                let rendered_text =
-                    if ghost_dim_ranges.is_empty() && visual_highlight_ranges.is_empty() {
-                        ctx.render_line_window_with_reminder(
-                            &rendered_line,
-                            viewport.text_width,
-                            viewport.text_window_col,
-                            effective_calc_ghost,
-                            effective_reminder_ghost,
-                            reminder_strikethrough,
-                            &search_ranges,
-                            &current_search_ranges,
-                            &self.variable_names,
-                        )
-                    } else {
-                        ctx.render_line_with_dim_ranges_window_with_reminder(
-                            &rendered_line,
-                            viewport.text_width,
-                            viewport.text_window_col,
-                            effective_calc_ghost,
-                            effective_reminder_ghost,
-                            reminder_strikethrough,
-                            &search_ranges,
-                            &current_search_ranges,
-                            &self.variable_names,
-                            &ghost_dim_ranges,
-                            &visual_highlight_ranges,
-                        )
-                    };
+                // Highlight the focused table cell's pipe characters in red so
+                // the active cell is obvious. Pipe positions are taken from
+                // the source `line_text` and translated to rendered char
+                // positions using the formula-mask delta accumulated above.
+                let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
+                if is_cursor_line && !is_fold_placeholder {
+                    if let Some(info) = table_cell_info_at_char(line_text, self.cursor_col) {
+                        let left_pipe_char = line_text[..info.left_pipe].chars().count();
+                        let right_pipe_char = line_text[..info.right_pipe].chars().count();
+                        let translate = |src_col: usize| -> usize {
+                            let mut delta: isize = 0;
+                            for (fi, seg) in formula_segments.iter().enumerate() {
+                                if seg.cell_to_char <= src_col {
+                                    let value = self
+                                        .cell_calc_results
+                                        .get(line_idx)
+                                        .and_then(|row| {
+                                            row.iter()
+                                                .find(|(idx, _)| *idx == seg.cell_index)
+                                                .map(|(_, v)| format_formula_display_value(v))
+                                        })
+                                        .unwrap_or_else(|| String::from("…"));
+                                    let marker = formula_marker_token(fi);
+                                    let mut rep = format!("{value}{marker}");
+                                    let old_chars = seg.to_char.saturating_sub(seg.from_char);
+                                    let new_chars = rep.chars().count();
+                                    if new_chars < old_chars {
+                                        rep.push_str(&" ".repeat(old_chars - new_chars));
+                                    }
+                                    delta += rep.chars().count() as isize - old_chars as isize;
+                                }
+                            }
+                            ((src_col as isize) + delta).max(0) as usize
+                        };
+                        let lp = translate(left_pipe_char);
+                        let rp = translate(right_pipe_char);
+                        focused_pipe_ranges.push((lp, lp + 1));
+                        focused_pipe_ranges.push((rp, rp + 1));
+                    }
+                }
+
+                let rendered_text = if ghost_dim_ranges.is_empty()
+                    && visual_highlight_ranges.is_empty()
+                    && focused_pipe_ranges.is_empty()
+                {
+                    ctx.render_line_window_with_reminder(
+                        &rendered_line,
+                        viewport.text_width,
+                        viewport.text_window_col,
+                        effective_calc_ghost,
+                        effective_reminder_ghost,
+                        reminder_strikethrough,
+                        &search_ranges,
+                        &current_search_ranges,
+                        &self.variable_names,
+                    )
+                } else {
+                    ctx.render_line_full(
+                        &rendered_line,
+                        viewport.text_width,
+                        viewport.text_window_col,
+                        effective_calc_ghost,
+                        effective_reminder_ghost,
+                        reminder_strikethrough,
+                        &search_ranges,
+                        &current_search_ranges,
+                        &self.variable_names,
+                        &ghost_dim_ranges,
+                        &visual_highlight_ranges,
+                        &focused_pipe_ranges,
+                    )
+                };
                 buf.push_str(&goto(row, 1));
                 let gutter_style = if is_cursor_line {
                     AnsiStyle {
@@ -4089,6 +4471,7 @@ fn rendered_line_display_cols(text: &str, calc_ghost: Option<&str>) -> usize {
 
 struct CalcData {
     line_results: Vec<Option<String>>,
+    cell_results: Vec<Vec<(usize, String)>>,
     variable_names: Vec<String>,
 }
 
@@ -4113,8 +4496,19 @@ fn compute_calc_data(
     variable_names.sort();
     variable_names.dedup();
 
+    let cell_results = result
+        .table_cell_results
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|entry| (entry.cell_index, entry.value))
+                .collect()
+        })
+        .collect();
+
     CalcData {
         line_results: result.line_results,
+        cell_results,
         variable_names,
     }
 }
@@ -4155,11 +4549,104 @@ fn find_calc_segment_range(text: &str) -> Option<(usize, usize)> {
     Some((segment.from_byte, segment.to_byte))
 }
 
+#[derive(Clone, Copy)]
+struct TableCellInfo {
+    left_pipe: usize,
+    right_pipe: usize,
+    trim_start: usize,
+    trim_end: usize,
+}
+
+fn first_non_space_offset(text: &str) -> usize {
+    text.as_bytes()
+        .iter()
+        .position(|b| *b != b' ')
+        .unwrap_or(text.len())
+}
+
+fn last_non_space_end_offset(text: &str) -> usize {
+    text.as_bytes()
+        .iter()
+        .rposition(|b| *b != b' ')
+        .map(|idx| idx + 1)
+        .unwrap_or(0)
+}
+
+fn is_markdown_table_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with('|') && trimmed.ends_with('|')
+}
+
+fn table_cell_info_at_char(line: &str, col_char: usize) -> Option<TableCellInfo> {
+    if !is_markdown_table_line(line) {
+        return None;
+    }
+
+    let col_byte = byte_index(line, col_char);
+    let mut prev_pipe: Option<usize> = None;
+    let mut cell_index = 0usize;
+    let mut selected: Option<(usize, usize, usize, usize, usize)> = None;
+    let mut fallback: Option<(usize, usize, usize, usize, usize)> = None;
+
+    for (idx, b) in line.as_bytes().iter().enumerate() {
+        if *b != b'|' {
+            continue;
+        }
+        if let Some(left_pipe) = prev_pipe {
+            let raw = &line[left_pipe + 1..idx];
+            let tuple = (
+                cell_index,
+                left_pipe,
+                idx,
+                first_non_space_offset(raw),
+                last_non_space_end_offset(raw),
+            );
+            if selected.is_none() && col_byte <= idx {
+                selected = Some(tuple);
+            }
+            fallback = Some(tuple);
+            cell_index += 1;
+        }
+        prev_pipe = Some(idx);
+    }
+
+    let (_, left_pipe, right_pipe, trim_start, trim_end) = selected.or(fallback)?;
+    Some(TableCellInfo {
+        left_pipe,
+        right_pipe,
+        trim_start,
+        trim_end,
+    })
+}
+
+fn table_cell_is_empty(cell: &TableCellInfo) -> bool {
+    cell.trim_end <= cell.trim_start
+}
+
+fn table_cell_edit_start(cell: &TableCellInfo) -> usize {
+    (cell.left_pipe + 2).min(cell.right_pipe)
+}
+
+fn table_cell_navigation_anchor(line: &str, cell: &TableCellInfo) -> usize {
+    let edit_start = table_cell_edit_start(cell);
+    let anchor_byte = if table_cell_is_empty(cell) {
+        edit_start
+    } else {
+        ((cell.left_pipe + 1) + cell.trim_end).min(cell.right_pipe)
+    };
+    line[..anchor_byte].chars().count()
+}
+
 struct TableFormulaSegment {
     from_byte: usize,
     to_byte: usize,
     from_char: usize,
     to_char: usize,
+    cell_from_char: usize,
+    cell_to_char: usize,
+    cell_index: usize,
+    cell_left_pipe_char: usize,
+    cell_right_pipe_char: usize,
     labels: Vec<String>,
 }
 
@@ -4169,18 +4656,25 @@ fn builtin_formula_label(text: &str) -> Option<String> {
 }
 
 fn find_table_formula_segment(text: &str) -> Option<TableFormulaSegment> {
-    let segment = crate::editor_core::calc_plan::find_calc_segment(text)?;
-    let labels = crate::editor_core::calc_plan::builtin_formula_labels_in_text(&segment.expr);
-    if labels.is_empty() {
-        return None;
-    }
-    Some(TableFormulaSegment {
-        from_byte: segment.from_byte,
-        to_byte: segment.to_byte,
-        from_char: segment.from_col,
-        to_char: segment.to_col,
-        labels,
-    })
+    find_table_formula_segments(text).into_iter().next()
+}
+
+fn find_table_formula_segments(text: &str) -> Vec<TableFormulaSegment> {
+    crate::editor_core::calc_plan::find_table_formula_segments(text)
+        .into_iter()
+        .map(|seg| TableFormulaSegment {
+            from_byte: seg.from_byte,
+            to_byte: seg.to_byte,
+            from_char: seg.from_char,
+            to_char: seg.to_char,
+            cell_from_char: seg.cell_left_pipe_char + 1,
+            cell_to_char: seg.cell_right_pipe_char,
+            cell_index: seg.cell_index,
+            cell_left_pipe_char: seg.cell_left_pipe_char,
+            cell_right_pipe_char: seg.cell_right_pipe_char,
+            labels: seg.labels,
+        })
+        .collect()
 }
 
 fn formula_marker_token(index: usize) -> String {
@@ -4203,6 +4697,14 @@ fn formula_explanation_ghost(labels: &[String]) -> String {
         .join("  ")
 }
 
+fn should_mask_formula_cell(
+    is_cursor_line: bool,
+    cursor_col: usize,
+    formula: &TableFormulaSegment,
+) -> bool {
+    !(is_cursor_line && cursor_col >= formula.cell_from_char && cursor_col < formula.cell_to_char)
+}
+
 fn format_formula_display_value(raw: &str) -> String {
     crate::editor_core::calc_plan::format_formula_display_value(raw)
 }
@@ -4218,7 +4720,8 @@ mod tests {
     use super::{
         builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
         find_calc_segment_range, find_table_formula_segment, format_formula_display_value,
-        rendered_line_display_cols,
+        rendered_line_display_cols, should_mask_formula_cell, table_cell_info_at_char,
+        table_cell_is_empty, table_cell_navigation_anchor,
     };
     use super::{display_cols_for_prefix, line_char_len};
     use super::{TerminalApp, TerminalOptions, UiMode};
@@ -4904,6 +5407,46 @@ mod tests {
     }
 
     #[test]
+    fn find_table_formula_segment_tracks_full_cell_bounds() {
+        let line = "| a | =sum_col() | 9 |";
+        let Some(seg) = find_table_formula_segment(line) else {
+            panic!("expected table formula segment");
+        };
+        assert!(seg.cell_from_char < seg.from_char);
+        assert!(seg.to_char < seg.cell_to_char);
+    }
+
+    #[test]
+    fn should_mask_formula_cell_reveals_when_cursor_is_anywhere_in_formula_cell() {
+        let line = "| a | =sum_col() |";
+        let seg = find_table_formula_segment(line).expect("formula segment");
+        assert!(should_mask_formula_cell(false, seg.from_char, &seg));
+        assert!(!should_mask_formula_cell(true, seg.cell_from_char, &seg));
+        assert!(!should_mask_formula_cell(
+            true,
+            seg.cell_to_char.saturating_sub(1),
+            &seg
+        ));
+        assert!(should_mask_formula_cell(true, seg.cell_to_char, &seg));
+    }
+
+    #[test]
+    fn table_cell_navigation_anchor_uses_padding_for_empty_and_word_end_for_non_empty() {
+        let line = "| aaa |     | bb  |";
+        let first_cell = table_cell_info_at_char(line, 2).expect("first cell");
+        assert!(!table_cell_is_empty(&first_cell));
+        assert_eq!(table_cell_navigation_anchor(line, &first_cell), 5);
+
+        let empty_cell = table_cell_info_at_char(line, 8).expect("empty cell");
+        assert!(table_cell_is_empty(&empty_cell));
+        assert_eq!(table_cell_navigation_anchor(line, &empty_cell), 8);
+
+        let third_cell = table_cell_info_at_char(line, 14).expect("third cell");
+        assert!(!table_cell_is_empty(&third_cell));
+        assert_eq!(table_cell_navigation_anchor(line, &third_cell), 16);
+    }
+
+    #[test]
     fn find_calc_segment_range_detects_list_body() {
         let line = "- [ ] subtotal + tax";
         let Some((from, to)) = find_calc_segment_range(line) else {
@@ -4947,6 +5490,199 @@ mod tests {
         let expected_byte = app.lines[1].find("6").expect("result exists") + "6".len();
         let expected_col = app.lines[1][..expected_byte].chars().count();
         assert_eq!(app.cursor_col, expected_col);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn adjust_cursor_snaps_empty_table_cells_to_padding_start() {
+        let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
+        app.cursor_col = 9;
+        app.adjust_cursor();
+        assert_eq!(app.cursor_col, 8);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn arrow_navigation_does_not_jump_across_empty_table_cells() {
+        let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
+        app.cursor_col = 9;
+        app.handle_editor_key(&db, Key::ArrowRight)
+            .expect("move to empty anchor");
+        assert_eq!(app.cursor_col, 8);
+
+        app.handle_editor_key(&db, Key::ArrowRight)
+            .expect("regular right stays in current cell");
+        assert_eq!(app.cursor_col, 8);
+
+        app.cursor_col = 8;
+        app.handle_editor_key(&db, Key::ArrowLeft)
+            .expect("regular left stays in current cell");
+        assert_eq!(app.cursor_col, 8);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn arrow_right_from_content_end_does_not_jump_to_next_cell() {
+        let (db, mut app, path) = app_with_note("| aaa | bb  |");
+        app.cursor_col = 5; // end of first cell content
+        app.handle_editor_key(&db, Key::ArrowRight)
+            .expect("stay at current cell content end");
+        assert_eq!(app.cursor_col, 5);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_arrow_moves_between_table_cells() {
+        let (db, mut app, path) = app_with_note("| aaa | bb  |");
+        app.cursor_col = 5; // first cell end
+        app.handle_editor_key(&db, Key::CtrlArrowRight)
+            .expect("ctrl-right jumps to next cell");
+        assert_eq!(app.cursor_col, 10);
+
+        app.handle_editor_key(&db, Key::CtrlArrowLeft)
+            .expect("ctrl-left jumps to previous cell");
+        assert_eq!(app.cursor_col, 5);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_arrow_does_not_fallback_to_word_motion_inside_table() {
+        let (db, mut app, path) = app_with_note("| aaa | bb  |");
+        app.cursor_col = 5; // first cell end
+        app.handle_editor_key(&db, Key::CtrlArrowLeft)
+            .expect("ctrl-left in first cell is constrained");
+        assert_eq!(app.cursor_col, 5);
+
+        app.cursor_col = 10; // last cell end
+        app.handle_editor_key(&db, Key::CtrlArrowRight)
+            .expect("ctrl-right in last cell is constrained");
+        assert_eq!(app.cursor_col, 10);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn backspace_and_delete_are_isolated_within_table_cell() {
+        let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
+        let original = app.lines[0].clone();
+        app.cursor_col = 8; // empty middle cell anchor
+        app.handle_editor_key(&db, Key::Backspace)
+            .expect("backspace in empty cell");
+        assert_eq!(app.lines[0], original);
+        assert_eq!(app.cursor_col, 8);
+
+        app.handle_editor_key(&db, Key::Delete)
+            .expect("delete in empty cell");
+        assert_eq!(app.lines[0], original);
+        assert_eq!(app.cursor_col, 8);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_w_word_delete_is_isolated_within_table_cell() {
+        let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
+        let original = app.lines[0].clone();
+        app.cursor_col = 8; // empty middle cell anchor
+        app.handle_editor_key(&db, Key::Ctrl('w'))
+            .expect("ctrl-w in empty cell");
+        assert_eq!(app.lines[0], original);
+        assert_eq!(app.cursor_col, 8);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_backspace_and_ctrl_delete_merge_adjacent_table_cells() {
+        let (db, mut app, path) = app_with_note("| aaa | bb |");
+
+        app.cursor_col = 8; // start of second cell content
+        app.handle_editor_key(&db, Key::CtrlBackspace)
+            .expect("ctrl-backspace merges with previous cell");
+        assert_eq!(app.lines[0], "| aaa bb |");
+
+        app.lines[0] = "| aaa | bb |".to_string();
+        app.cursor_col = 5; // end of first cell content
+        app.handle_editor_key(&db, Key::CtrlDelete)
+            .expect("ctrl-delete merges with next cell");
+        assert_eq!(app.lines[0], "| aaa bb |");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vertical_movement_into_table_cell_snaps_to_cell_end() {
+        let (db, mut app, path) = app_with_note("plain\n| aaa | bb  |");
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+        app.handle_editor_key(&db, Key::ArrowDown)
+            .expect("move into table row");
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 5);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn typing_space_in_table_cell_allows_followup_word_input() {
+        let (db, mut app, path) = app_with_note("| aaa |");
+        app.cursor_col = 5; // end of content
+        app.handle_editor_key(&db, Key::Char(' '))
+            .expect("insert space");
+        app.handle_editor_key(&db, Key::Char('b'))
+            .expect("insert next word char");
+        assert_eq!(app.lines[0], "| aaa b |");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn typing_in_table_cell_reflows_column_when_cell_becomes_widest() {
+        let (db, mut app, path) = app_with_note("| a | b |\n| --- | --- |\n| 1 | 2 |");
+        app.cursor_line = 2;
+        app.cursor_col = 3; // end of first cell content in row 3
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char('2'),
+                Key::Char('3'),
+                Key::Char('4'),
+                Key::Char('5'),
+            ],
+        );
+
+        assert_eq!(app.lines[0], "| a     | b   |");
+        assert_eq!(app.lines[1], "| ----- | --- |");
+        assert_eq!(app.lines[2], "| 12345 | 2   |");
 
         drop(app);
         drop(db);
@@ -5333,8 +6069,8 @@ mod tests {
             &[Key::Char('d'), Key::Char('i'), Key::Char('|')],
         );
 
-        assert_eq!(app.lines, vec!["|| two |".to_string()]);
-        assert_eq!(app.cursor_col, 1);
+        assert_eq!(app.lines, vec!["|  | two |".to_string()]);
+        assert_eq!(app.cursor_col, 2);
 
         drop(app);
         drop(db);

@@ -62,10 +62,16 @@ export interface NoteEvaluationDiagnostic {
   message: string;
 }
 
+export interface TableCellEvaluation {
+  cell_index: number;
+  value: string;
+}
+
 export interface NoteEvaluationResult {
   line_results: (string | null)[];
   variables: VariableIndexEntry[];
   diagnostics?: NoteEvaluationDiagnostic[] | null;
+  table_cell_results?: TableCellEvaluation[][];
 }
 
 export function getOrCreateNote(): Promise<Note> {

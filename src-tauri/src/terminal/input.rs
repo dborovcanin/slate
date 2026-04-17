@@ -8,6 +8,8 @@ pub enum Key {
     Enter,
     Backspace,
     Delete,
+    CtrlDelete,
+    CtrlBackspace,
     Tab,
     BackTab,
     Esc,
@@ -252,6 +254,12 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
         }
         if s == "3~" {
             return Ok(Some(Key::Delete));
+        }
+        if s == "3;5~" {
+            return Ok(Some(Key::CtrlDelete));
+        }
+        if s == "127;5u" || s == "8;5u" {
+            return Ok(Some(Key::CtrlBackspace));
         }
         if s == "5~" {
             return Ok(Some(Key::PageUp));

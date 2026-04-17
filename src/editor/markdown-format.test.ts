@@ -13,7 +13,7 @@ test("formatMarkdownText normalizes markdown basics", () => {
   assert.equal(out, "## Title\n- item\n1. task\n");
 });
 
-test("formatMarkdownText aligns markdown tables", () => {
+test("formatMarkdownText normalizes markdown table padding", () => {
   const input = "| a | b |\n| --- | --- |\n| 1 | 2 |\n";
   const out = formatMarkdownText(input);
   assert.equal(out, "| a   | b   |\n| --- | --- |\n| 1   | 2   |\n");

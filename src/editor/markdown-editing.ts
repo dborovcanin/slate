@@ -7,12 +7,129 @@ import {
   markdownClassifyLine,
   runDocChangeRules,
   runEnterRules,
+  runTableBoundaryEditRules,
+  runTableCellNavigationRules,
   runTabRules,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix };
+
+interface TableCellInfo {
+  index: number;
+  cellCount: number;
+  leftPipe: number;
+  rightPipe: number;
+  trimStart: number;
+  trimEnd: number;
+}
+
+function isMarkdownTableLine(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|");
+}
+
+function firstNonSpaceOffset(text: string): number {
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== " ") return i;
+  }
+  return text.length;
+}
+
+function lastNonSpaceEndOffset(text: string): number {
+  for (let i = text.length - 1; i >= 0; i -= 1) {
+    if (text[i] !== " ") return i + 1;
+  }
+  return 0;
+}
+
+function tableCellAtColumn(lineText: string, col: number): TableCellInfo | null {
+  if (!isMarkdownTableLine(lineText)) return null;
+  const colInLine = Math.max(0, Math.min(col, lineText.length));
+  let prevPipe = -1;
+  let cellIndex = 0;
+  let selected: TableCellInfo | null = null;
+  let fallback: TableCellInfo | null = null;
+
+  for (let i = 0; i < lineText.length; i += 1) {
+    if (lineText[i] !== "|") continue;
+    if (prevPipe >= 0) {
+      const raw = lineText.slice(prevPipe + 1, i);
+      const cell: TableCellInfo = {
+        index: cellIndex,
+        cellCount: 0,
+        leftPipe: prevPipe,
+        rightPipe: i,
+        trimStart: firstNonSpaceOffset(raw),
+        trimEnd: lastNonSpaceEndOffset(raw),
+      };
+      if (selected === null && colInLine <= i) {
+        selected = cell;
+      }
+      fallback = cell;
+      cellIndex += 1;
+    }
+    prevPipe = i;
+  }
+
+  const picked = selected ?? fallback;
+  if (!picked) return null;
+  picked.cellCount = cellIndex;
+  return picked;
+}
+
+function tableCellNavigationAnchorInLine(cell: TableCellInfo): number {
+  const cellStart = cell.leftPipe + 1;
+  if (cell.trimEnd <= cell.trimStart) {
+    return Math.min(cellStart + 1, cell.rightPipe);
+  }
+  return Math.min(cellStart + cell.trimEnd, cell.rightPipe);
+}
+
+function clampTableCursorToContent(state: EditorView["state"], pos: number): number | null {
+  const line = state.doc.lineAt(pos);
+  if (!isMarkdownTableLine(line.text)) return null;
+  const cell = tableCellAtColumn(line.text, pos - line.from);
+  if (!cell) return null;
+
+  const cellStart = cell.leftPipe + 1;
+  const contentStart = Math.min(cellStart + 1, cell.rightPipe);
+  const contentEnd = cellStart + cell.trimEnd;
+  const anchor = line.from + tableCellNavigationAnchorInLine(cell);
+  const colInLine = pos - line.from;
+
+  if (cell.trimEnd <= cell.trimStart) {
+    return anchor;
+  }
+  if (colInLine < contentStart || colInLine > contentEnd) {
+    return anchor;
+  }
+  return null;
+}
+
+function isSingleSpaceInsertion(update: ViewUpdate): boolean {
+  let inserted = "";
+  let changeCount = 0;
+  let hasDeletion = false;
+  for (const tr of update.transactions) {
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
+      changeCount += 1;
+      if (fromA !== toA) hasDeletion = true;
+      inserted += text.toString();
+    });
+  }
+  return !hasDeletion && changeCount === 1 && inserted === " ";
+}
+
+function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  if (!isSingleSpaceInsertion(update)) return false;
+  const main = update.state.selection.main;
+  if (!main.empty) return false;
+  const line = update.state.doc.lineAt(main.head);
+  return isMarkdownTableLine(line.text);
+}
 
 function toggleWrap(view: EditorView, left: string, right = left): boolean {
   const main = view.state.selection.main;
@@ -103,6 +220,69 @@ function indentListOnTab(view: EditorView, autoformat: boolean, outdent = false)
   return true;
 }
 
+function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  const cell = tableCellAtColumn(line.text, main.head - line.from);
+  if (!cell) return false;
+
+  const cellStart = cell.leftPipe + 1;
+  const contentStart = line.from + Math.min(cellStart + 1, cell.rightPipe);
+  const contentEnd = line.from + tableCellNavigationAnchorInLine(cell);
+  let target = main.head;
+
+  if (cell.trimEnd <= cell.trimStart) {
+    target = contentEnd;
+  } else if (main.head > contentEnd) {
+    target = contentEnd;
+  } else if (direction === -1) {
+    if (main.head > contentStart) {
+      target = main.head - 1;
+    } else {
+      target = contentStart;
+    }
+  } else if (main.head < contentEnd) {
+    target = main.head + 1;
+  } else {
+    target = contentEnd;
+  }
+
+  if (target !== main.head) {
+    view.dispatch({
+      selection: { anchor: target },
+      scrollIntoView: true,
+    });
+  }
+  return true;
+}
+
+function tableBoundaryEdit(
+  view: EditorView,
+  autoformat: boolean,
+  backward: boolean,
+  structuralMerge = false,
+): boolean {
+  const operation = runTableBoundaryEditRules(snapshotFromView(view), {
+    markdownAutoformat: autoformat,
+    backward,
+    structuralMerge,
+  });
+  if (!operation) return false;
+  applyEditOperation(view, operation);
+  return true;
+}
+
+function tableCellJump(view: EditorView, autoformat: boolean, outdent: boolean): boolean {
+  const operation = runTableCellNavigationRules(snapshotFromView(view), {
+    markdownAutoformat: autoformat,
+    outdent,
+  });
+  if (!operation) return false;
+  applyEditOperation(view, operation);
+  return true;
+}
+
 function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
   const keys: KeyBinding[] = [
     { key: "Mod-b", preventDefault: true, run: (view) => toggleWrap(view, "**") },
@@ -137,12 +317,54 @@ function markdownTabKeymap(autoformat: boolean): KeyBinding[] {
   ];
 }
 
+function tableCursorKeymap(autoformat: boolean): KeyBinding[] {
+  return [
+    {
+      key: "Backspace",
+      run: (view) => tableBoundaryEdit(view, autoformat, true),
+    },
+    {
+      key: "Delete",
+      run: (view) => tableBoundaryEdit(view, autoformat, false),
+    },
+    {
+      key: "Ctrl-Backspace",
+      preventDefault: true,
+      run: (view) => tableBoundaryEdit(view, autoformat, true, true),
+    },
+    {
+      key: "Ctrl-Delete",
+      preventDefault: true,
+      run: (view) => tableBoundaryEdit(view, autoformat, false, true),
+    },
+    {
+      key: "ArrowLeft",
+      run: (view) => tableArrowMove(view, -1),
+    },
+    {
+      key: "ArrowRight",
+      run: (view) => tableArrowMove(view, 1),
+    },
+    {
+      key: "Ctrl-ArrowLeft",
+      preventDefault: true,
+      run: (view) => tableCellJump(view, autoformat, true),
+    },
+    {
+      key: "Ctrl-ArrowRight",
+      preventDefault: true,
+      run: (view) => tableCellJump(view, autoformat, false),
+    },
+  ];
+}
+
 function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
   return ViewPlugin.define(() => {
     let applying = false;
     return {
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
+        if (shouldDeferTableAutoformatForSpace(update)) return;
         applying = true;
         try {
           const operation = runDocChangeRules(snapshotFromUpdate(update), {
@@ -171,6 +393,55 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
     };
   });
 }
+
+function tableCursorGuards() {
+  return ViewPlugin.define(() => {
+    let syncing = false;
+    let lastCellKey: string | null = null;
+    return {
+      update(update: ViewUpdate) {
+        if (syncing || update.docChanged || !update.selectionSet) return;
+        const main = update.state.selection.main;
+        if (!main.empty) {
+          lastCellKey = null;
+          return;
+        }
+        const line = update.state.doc.lineAt(main.head);
+        const cell = tableCellAtColumn(line.text, main.head - line.from);
+        if (!cell) {
+          lastCellKey = null;
+          return;
+        }
+
+        const cellKey = `${line.from}:${cell.index}`;
+        const pointerSelection = update.transactions.some((tr) => tr.isUserEvent("select.pointer"));
+        const anchor = line.from + tableCellNavigationAnchorInLine(cell);
+        const clamped = clampTableCursorToContent(update.state, main.head);
+        const shouldSnapToEnd = clamped === null && (lastCellKey !== cellKey || pointerSelection);
+        const target = clamped ?? (shouldSnapToEnd ? anchor : null);
+
+        lastCellKey = cellKey;
+        if (target === null || target === main.head) return;
+
+        syncing = true;
+        try {
+          update.view.dispatch({
+            selection: { anchor: target },
+            scrollIntoView: true,
+          });
+        } finally {
+          syncing = false;
+        }
+      },
+    };
+  });
+}
+
+export const __tableCursorInternals = {
+  tableCellAtColumn,
+  tableCellNavigationAnchorInLine,
+  clampTableCursorToContent,
+};
 
 function toggleChecklistAtPos(view: EditorView, pos: number): boolean {
   const line = view.state.doc.lineAt(pos);
@@ -233,9 +504,11 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   const autoformat = options.autoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
   return [
+    Prec.high(keymap.of(tableCursorKeymap(autoformat))),
     Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
     Prec.low(keymap.of(markdownTabKeymap(autoformat))),
     checklistClickHandlers(),
+    tableCursorGuards(),
     textRulesPlugin(autoformat, checklistAutoReorder),
   ];
 }

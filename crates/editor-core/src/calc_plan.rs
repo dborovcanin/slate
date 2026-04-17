@@ -26,11 +26,21 @@ pub struct CalcSegment {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TableFormulaSegment {
+    /// Byte range of the formula expression inside the cell (excludes pipes/padding).
     pub from_byte: usize,
     pub to_byte: usize,
+    /// Char range of the formula expression.
     pub from_char: usize,
     pub to_char: usize,
-    pub label: String,
+    /// Char range of the enclosing cell, including the leading and trailing pipes.
+    /// `cell_left_pipe_char` is the column of the `|` to the left of the cell;
+    /// `cell_right_pipe_char` is the column of the `|` to the right.
+    pub cell_left_pipe_char: usize,
+    pub cell_right_pipe_char: usize,
+    /// 0-based cell index within the row.
+    pub cell_index: usize,
+    /// Builtin formula labels invoked inside this cell, in left-to-right order.
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -569,21 +579,66 @@ pub fn contains_builtin_formula(lines: &[String]) -> bool {
 }
 
 pub fn find_table_formula_segment(line: &str) -> Option<TableFormulaSegment> {
+    find_table_formula_segments(line).into_iter().next()
+}
+
+/// Return every formula cell in the row, ordered left-to-right.
+pub fn find_table_formula_segments(line: &str) -> Vec<TableFormulaSegment> {
     if !is_table_line(line) {
-        return None;
+        return Vec::new();
     }
 
-    let segment = find_calc_segment(line)?;
-    let label = builtin_formula_labels_in_text(&segment.expr)
-        .into_iter()
-        .next()?;
-    Some(TableFormulaSegment {
-        from_byte: segment.from_byte,
-        to_byte: segment.to_byte,
-        from_char: segment.from_col,
-        to_char: segment.to_col,
-        label,
-    })
+    let mut pipes = Vec::new();
+    for (idx, b) in line.as_bytes().iter().enumerate() {
+        if *b == b'|' {
+            pipes.push(idx);
+        }
+    }
+    if pipes.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+    for (cell_index, pair) in pipes.windows(2).enumerate() {
+        let left_pipe = pair[0];
+        let right_pipe = pair[1];
+        if right_pipe <= left_pipe + 1 {
+            continue;
+        }
+
+        let cell_start = left_pipe + 1;
+        let raw = &line[cell_start..right_pipe];
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let labels = builtin_formula_labels_in_text(trimmed);
+        if labels.is_empty() {
+            continue;
+        }
+
+        let leading_ws = raw.len() - raw.trim_start().len();
+        let trailing_ws = raw.len() - raw.trim_end().len();
+        let from_byte = cell_start + leading_ws;
+        let to_byte = right_pipe.saturating_sub(trailing_ws);
+        if from_byte >= to_byte {
+            continue;
+        }
+
+        out.push(TableFormulaSegment {
+            from_byte,
+            to_byte,
+            from_char: count_chars(line, from_byte),
+            to_char: count_chars(line, to_byte),
+            cell_left_pipe_char: count_chars(line, left_pipe),
+            cell_right_pipe_char: count_chars(line, right_pipe),
+            cell_index,
+            labels,
+        });
+    }
+
+    out
 }
 
 pub fn format_formula_display_value(raw: &str) -> String {
@@ -821,8 +876,20 @@ mod tests {
     fn table_formula_segment_detects_avg_col() {
         let line = "| dsad | dsdsd | =avg_col() | 1.91 | |";
         let seg = find_table_formula_segment(line).expect("formula");
-        assert_eq!(seg.label, "avg_col()");
+        assert_eq!(seg.labels, vec!["avg_col()".to_string()]);
         assert_eq!(&line[seg.from_byte..seg.to_byte], "=avg_col()");
+        assert_eq!(seg.cell_index, 2);
+    }
+
+    #[test]
+    fn find_table_formula_segments_returns_each_formula_cell_left_to_right() {
+        let line = "| =sum_col() | x | =sum_row() |";
+        let segments = find_table_formula_segments(line);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].labels, vec!["sum_col()".to_string()]);
+        assert_eq!(segments[0].cell_index, 0);
+        assert_eq!(segments[1].labels, vec!["sum_row()".to_string()]);
+        assert_eq!(segments[1].cell_index, 2);
     }
 
     #[test]
@@ -873,7 +940,7 @@ mod tests {
     fn find_table_formula_segment_detects_chained_formula_expression_cell() {
         let line = "| sum_col() * a + avg_col() |";
         let seg = find_table_formula_segment(line).expect("formula");
-        assert_eq!(seg.label, "sum_col()");
+        assert_eq!(seg.labels, vec!["sum_col()", "avg_col()"]);
         assert_eq!(
             &line[seg.from_byte..seg.to_byte],
             "sum_col() * a + avg_col()"

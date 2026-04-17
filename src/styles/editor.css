@@ -372,6 +372,11 @@
   font-style: italic;
 }
 
+.cm-table-pipe-focused {
+  color: var(--color-error, #e06c75);
+  font-weight: bold;
+}
+
 .notify-ghost {
   color: var(--fg-dim);
   font-style: italic;

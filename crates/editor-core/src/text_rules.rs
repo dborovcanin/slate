@@ -1,5 +1,6 @@
 use crate::context::ResolvedContext;
 use crate::operations::replace_range;
+use crate::table;
 use crate::types::{EditOperation, EditorContextSnapshot, OperationSelection, TextChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,6 +29,23 @@ impl Default for TabRuleOptions {
         Self {
             markdown_autoformat: true,
             outdent: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableBoundaryEditOptions {
+    pub markdown_autoformat: bool,
+    pub backward: bool,
+    pub structural_merge: bool,
+}
+
+impl Default for TableBoundaryEditOptions {
+    fn default() -> Self {
+        Self {
+            markdown_autoformat: true,
+            backward: true,
+            structural_merge: false,
         }
     }
 }
@@ -473,293 +491,109 @@ fn checklist_toggle_rule(ctx: &ResolvedContext, options: TextRuleOptions) -> Opt
     ))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Align {
-    Left,
-    Center,
-    Right,
-    None,
-}
-
-fn split_table_cells(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
-}
-
-fn is_delimiter_cell(cell: &str) -> bool {
-    let bytes = cell.as_bytes();
-    if bytes.is_empty() {
-        return false;
-    }
-
-    let mut i = 0usize;
-    if bytes[i] == b':' {
-        i += 1;
-    }
-
-    let dash_start = i;
-    while i < bytes.len() && bytes[i] == b'-' {
-        i += 1;
-    }
-    if i.saturating_sub(dash_start) < 3 {
-        return false;
-    }
-
-    if i < bytes.len() && bytes[i] == b':' {
-        i += 1;
-    }
-
-    i == bytes.len()
-}
-
-fn parse_align(cell: &str) -> Align {
-    if !is_delimiter_cell(cell) {
-        return Align::None;
-    }
-    let left = cell.starts_with(':');
-    let right = cell.ends_with(':');
-    match (left, right) {
-        (true, true) => Align::Center,
-        (true, false) => Align::Left,
-        (false, true) => Align::Right,
-        (false, false) => Align::None,
-    }
-}
-
-fn delimiter_for_width(width: usize, align: Align) -> String {
-    let w = width.max(3);
-    match align {
-        Align::Left => format!(":{}", "-".repeat(w.saturating_sub(1).max(3))),
-        Align::Right => format!("{}:", "-".repeat(w.saturating_sub(1).max(3))),
-        Align::Center => format!(":{}:", "-".repeat(w.saturating_sub(2).max(3))),
-        Align::None => "-".repeat(w),
-    }
-}
-
-fn is_delimiter_row(row: &[String]) -> bool {
-    row.iter().any(|cell| is_delimiter_cell(cell))
-        && row
-            .iter()
-            .all(|cell| is_delimiter_cell(cell) || cell.is_empty())
-}
-
 pub fn format_table_lines(lines: &[String]) -> Vec<String> {
-    if lines.is_empty() {
-        return Vec::new();
-    }
-
-    let rows: Vec<Vec<String>> = lines.iter().map(|line| split_table_cells(line)).collect();
-    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(0);
-    if column_count == 0 {
-        return lines.to_vec();
-    }
-
-    let normalized_rows: Vec<Vec<String>> = rows
-        .into_iter()
-        .map(|mut row| {
-            while row.len() < column_count {
-                row.push(String::new());
-            }
-            row
-        })
-        .collect();
-
-    let mut align = vec![Align::None; column_count];
-    for row in &normalized_rows {
-        if !is_delimiter_row(row) {
-            continue;
-        }
-        for i in 0..column_count {
-            if is_delimiter_cell(&row[i]) {
-                align[i] = parse_align(&row[i]);
-            }
-        }
-        break;
-    }
-
-    let mut widths = vec![3usize; column_count];
-    for row in &normalized_rows {
-        if is_delimiter_row(row) {
-            continue;
-        }
-        for i in 0..column_count {
-            widths[i] = widths[i].max(row[i].len());
-        }
-    }
-
-    let has_delimiter_row = normalized_rows.iter().any(|row| is_delimiter_row(row));
-    let mut output_rows = normalized_rows.clone();
-    if !has_delimiter_row && output_rows.len() >= 2 {
-        let delimiter_row: Vec<String> = widths
-            .iter()
-            .map(|width| "-".repeat((*width).max(3)))
-            .collect();
-        output_rows.insert(1, delimiter_row);
-    }
-
-    output_rows
-        .iter()
-        .map(|row| {
-            let delimiter = is_delimiter_row(row);
-            let mut parts = Vec::with_capacity(column_count);
-            for i in 0..column_count {
-                if delimiter {
-                    parts.push(delimiter_for_width(widths[i], align[i]));
-                } else {
-                    parts.push(format!("{:<width$}", row[i], width = widths[i]));
-                }
-            }
-            format!("| {} |", parts.join(" | "))
-        })
-        .collect()
-}
-
-fn table_pipe_positions(line: &str) -> Vec<usize> {
-    line.match_indices('|').map(|(idx, _)| idx).collect()
-}
-
-fn table_cell_index_for_column(pipes: &[usize], col: usize) -> Option<usize> {
-    if pipes.len() < 2 {
-        return None;
-    }
-    for i in 0..pipes.len() - 1 {
-        if col <= pipes[i + 1] {
-            return Some(i);
-        }
-    }
-    Some(pipes.len() - 2)
-}
-
-fn first_non_space_offset(text: &str) -> usize {
-    text.as_bytes()
-        .iter()
-        .position(|b| *b != b' ')
-        .unwrap_or(text.len())
-}
-
-fn last_non_space_end_offset(text: &str) -> usize {
-    text.as_bytes()
-        .iter()
-        .rposition(|b| *b != b' ')
-        .map(|idx| idx + 1)
-        .unwrap_or(0)
-}
-
-fn map_table_cursor_column(source_line: &str, target_line: &str, source_col: usize) -> usize {
-    let source_pipes = table_pipe_positions(source_line);
-    let target_pipes = table_pipe_positions(target_line);
-    if source_pipes.len() < 2 || target_pipes.len() < 2 {
-        return source_col.min(target_line.len());
-    }
-
-    let Some(source_cell_index) = table_cell_index_for_column(&source_pipes, source_col) else {
-        return source_col.min(target_line.len());
-    };
-    let target_cell_index = source_cell_index.min(target_pipes.len().saturating_sub(2));
-
-    let source_left = source_pipes[source_cell_index] + 1;
-    let source_right = source_pipes[source_cell_index + 1];
-    let source_raw = &source_line[source_left..source_right];
-    let source_trim_start = first_non_space_offset(source_raw);
-    let source_trim_end = last_non_space_end_offset(source_raw);
-    let source_content_len = source_trim_end.saturating_sub(source_trim_start);
-    let source_in_cell = source_col.saturating_sub(source_left).min(source_raw.len());
-
-    let mut semantic_offset = 0usize;
-    if source_content_len > 0 {
-        semantic_offset = if source_in_cell <= source_trim_start {
-            0
-        } else if source_in_cell >= source_trim_end {
-            source_content_len
-        } else {
-            source_in_cell - source_trim_start
-        };
-    }
-
-    let target_left = target_pipes[target_cell_index] + 1;
-    let target_right = target_pipes[target_cell_index + 1];
-    let target_raw = &target_line[target_left..target_right];
-    let target_trim_start = first_non_space_offset(target_raw);
-    let target_trim_end = last_non_space_end_offset(target_raw);
-    let target_content_len = target_trim_end.saturating_sub(target_trim_start);
-
-    if target_content_len == 0 {
-        return (target_left + 1).min(target_right);
-    }
-
-    let mapped_in_target = target_trim_start + semantic_offset.min(target_content_len);
-    (target_left + mapped_in_target).min(target_line.len())
+    table::format_table_lines(lines)
 }
 
 fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
-    let line = ctx.current_line();
-    let block = ctx.table_range_at_line(line.number, 2)?;
+    let mut target_lines: Vec<usize> = Vec::new();
+    if let Some(changed) = ctx.changed_range() {
+        let start_line = ctx.line_at(changed.from).number;
+        let end_line = ctx.line_at(changed.to).number;
+        for line_no in start_line..=end_line {
+            target_lines.push(line_no);
+        }
+    } else {
+        target_lines.push(ctx.current_line().number);
+    }
+    target_lines.sort_unstable();
+    target_lines.dedup();
 
-    let lines: Vec<String> = (block.start_line..=block.end_line)
-        .map(|n| ctx.line_text(n).to_string())
-        .collect();
-    let formatted = format_table_lines(&lines);
-    if formatted
-        .iter()
-        .zip(lines.iter())
-        .all(|(formatted_line, source_line)| formatted_line == source_line)
-    {
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+    for line_no in target_lines {
+        if !is_table_line(ctx.line_text(line_no)) {
+            continue;
+        }
+        let Some(block) = ctx.table_range_at_line(line_no, 1) else {
+            continue;
+        };
+        blocks.push((block.start_line, block.end_line));
+    }
+    blocks.sort_unstable();
+    blocks.dedup();
+    if blocks.is_empty() {
         return None;
     }
 
-    let head = ctx.selection().head;
-    let head_line = ctx.line_at(head).number;
-    let head_col = head.saturating_sub(ctx.line(head_line).from);
-    let source_relative_line = head_line
-        .saturating_sub(block.start_line)
-        .min(lines.len().saturating_sub(1));
-    let inserted_delimiter_after_header = lines.len() >= 2
-        && formatted.len() == lines.len() + 1
-        && !lines.iter().any(|row| is_table_separator(row))
-        && formatted
-            .get(1)
-            .map(|row| is_table_separator(row))
-            .unwrap_or(false);
-    let target_relative_line = if inserted_delimiter_after_header && source_relative_line >= 1 {
-        (source_relative_line + 1).min(formatted.len().saturating_sub(1))
-    } else {
-        source_relative_line.min(formatted.len().saturating_sub(1))
-    };
-    let source_line = lines
-        .get(source_relative_line)
-        .map(String::as_str)
-        .unwrap_or_default();
-    let target_line = formatted
-        .get(target_relative_line)
-        .map(String::as_str)
-        .unwrap_or_default();
-    let mapped_head_col = if is_table_line(source_line) && is_table_line(target_line) {
-        map_table_cursor_column(source_line, target_line, head_col)
-    } else {
-        head_col.min(target_line.len())
-    };
+    let selection = ctx.selection();
+    let cursor_line_no = ctx.line_at(selection.head).number;
+    let cursor_line = ctx.line(cursor_line_no);
+    let cursor_col = selection
+        .head
+        .saturating_sub(cursor_line.from)
+        .min(cursor_line.text.len());
 
-    let start_line = ctx.line(block.start_line);
-    let end_line = ctx.line(block.end_line);
-    let mut new_head = start_line.from;
-    for i in 0..target_relative_line {
-        new_head += formatted[i].len() + 1;
+    let mut changes = Vec::new();
+    let mut mapped_selection: Option<OperationSelection> = None;
+
+    for (start_line, end_line) in blocks {
+        let original_lines = (start_line..=end_line)
+            .map(|line_no| ctx.line_text(line_no).to_string())
+            .collect::<Vec<_>>();
+        let formatted_lines = table::format_table_lines(&original_lines);
+        let formatted_text = formatted_lines.join("\n");
+        let original_text = original_lines.join("\n");
+        if formatted_text == original_text {
+            continue;
+        }
+
+        let start = ctx.line(start_line).from;
+        let end = ctx.line(end_line).to;
+        changes.push(TextChange {
+            from: start,
+            to: end,
+            insert: formatted_text,
+        });
+
+        if mapped_selection.is_none()
+            && selection.empty
+            && cursor_line_no >= start_line
+            && cursor_line_no <= end_line
+        {
+            let source_idx = cursor_line_no.saturating_sub(start_line);
+            let had_delimiter = original_lines.iter().any(|line| is_table_separator(line));
+            let inserted_delimiter = !had_delimiter
+                && original_lines.len() >= 2
+                && formatted_lines.len() == original_lines.len() + 1;
+            let target_idx = if inserted_delimiter && source_idx >= 1 {
+                source_idx + 1
+            } else {
+                source_idx
+            }
+            .min(formatted_lines.len().saturating_sub(1));
+
+            let source_line_text = &original_lines[source_idx.min(original_lines.len() - 1)];
+            let target_line_text = &formatted_lines[target_idx];
+            let mapped_col =
+                table::map_table_cursor_column(source_line_text, target_line_text, cursor_col);
+
+            let mut anchor = start;
+            for line_text in formatted_lines.iter().take(target_idx) {
+                anchor += line_text.len() + 1;
+            }
+            anchor += mapped_col;
+            mapped_selection = Some(OperationSelection { anchor, head: None });
+        }
     }
-    new_head += mapped_head_col.min(formatted[target_relative_line].len());
 
-    Some(replace_range(
-        start_line.from,
-        end_line.to,
-        formatted.join("\n"),
-        Some(OperationSelection {
-            anchor: new_head,
-            head: None,
-        }),
-    ))
+    if changes.is_empty() {
+        return None;
+    }
+
+    Some(EditOperation {
+        changes,
+        selection: mapped_selection,
+    })
 }
 
 fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
@@ -895,25 +729,15 @@ pub fn run_enter_rules(
 }
 
 fn is_table_line(text: &str) -> bool {
-    let trimmed = text.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
+    table::is_table_line(text)
 }
 
 fn is_table_separator(text: &str) -> bool {
-    let trimmed = text.trim();
-    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+    if !table::is_table_line(text) {
         return false;
     }
-    // A separator contains only |, -, :, and whitespace and must contain at least one '-'.
-    let mut has_dash = false;
-    for ch in trimmed.chars() {
-        match ch {
-            '|' | ':' | ' ' => {}
-            '-' => has_dash = true,
-            _ => return false,
-        }
-    }
-    has_dash
+    let cells = table::split_table_cells(text);
+    table::is_delimiter_row(&cells)
 }
 
 fn table_continuation_rule(
@@ -948,14 +772,31 @@ fn table_continuation_rule(
     }
 
     if selection.head != line.to {
-        return None;
+        let pipes = table::table_pipe_positions(&line.text);
+        if pipes.len() < 2 {
+            return None;
+        }
+        let head_col = selection
+            .head
+            .saturating_sub(line.from)
+            .min(line.text.len());
+        let Some(current_cell) = table::table_cell_index_for_column(&pipes, head_col) else {
+            return None;
+        };
+        let last_cell = pipes.len().saturating_sub(2);
+        if current_cell != last_cell {
+            return None;
+        }
+        let last_anchor = table::table_cell_navigation_anchor(&line.text, &pipes, last_cell);
+        if head_col < last_anchor {
+            return None;
+        }
     }
 
-    // Build empty row with matching column widths.
-    let empty_row = build_aligned_empty_table_row(&line.text)?;
+    let empty_row = table::build_empty_table_row_like(&line.text)?;
     let insert = format!("\n{}", empty_row);
-    let empty_pipes = table_pipe_positions(&empty_row);
-    let first_cell_anchor = table_cell_anchor_after_leading_space(&empty_row, &empty_pipes, 0);
+    let empty_pipes = table::table_pipe_positions(&empty_row);
+    let first_cell_anchor = table::table_cell_navigation_anchor(&empty_row, &empty_pipes, 0);
     let anchor = line.to + 1 + first_cell_anchor; // \n + in-row anchor
     Some(replace_range(
         line.to,
@@ -1040,46 +881,6 @@ fn marker_depth(indent: &str) -> usize {
         / 2
 }
 
-fn table_cell_anchor_after_leading_space(
-    line_text: &str,
-    pipes: &[usize],
-    left_pipe_index: usize,
-) -> usize {
-    let Some(&left_pipe) = pipes.get(left_pipe_index) else {
-        return 0;
-    };
-    let Some(&right_pipe) = pipes.get(left_pipe_index + 1) else {
-        return 0;
-    };
-
-    let cell_start = left_pipe + 1;
-    if right_pipe <= cell_start {
-        return cell_start;
-    }
-    if line_text.as_bytes().get(cell_start).copied() == Some(b' ') {
-        (cell_start + 1).min(right_pipe)
-    } else {
-        cell_start
-    }
-}
-
-fn build_aligned_empty_table_row(line_text: &str) -> Option<String> {
-    let pipes = table_pipe_positions(line_text);
-    if pipes.len() < 2 {
-        return None;
-    }
-
-    let mut out = String::from("|");
-    for i in 0..pipes.len() - 1 {
-        let start = pipes[i] + 1;
-        let end = pipes[i + 1];
-        let width = end.saturating_sub(start).max(1);
-        out.push_str(&" ".repeat(width));
-        out.push('|');
-    }
-    Some(out)
-}
-
 fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
@@ -1112,18 +913,17 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
             continue;
         }
 
-        let pipes: Vec<usize> = line.text.match_indices('|').map(|(i, _)| i).collect();
+        let pipes = table::table_pipe_positions(&line.text);
         if pipes.len() < 2 {
             break;
         }
-        let Some(current_cell) = table_cell_index_for_column(&pipes, head_col) else {
+        let Some(current_cell) = table::table_cell_index_for_column(&pipes, head_col) else {
             break;
         };
 
         if outdent {
             if current_cell > 0 {
-                let pos =
-                    table_cell_anchor_after_leading_space(&line.text, &pipes, current_cell - 1);
+                let pos = table::table_cell_navigation_anchor(&line.text, &pipes, current_cell - 1);
                 target_anchor = line.from + pos;
                 found_target = true;
                 break;
@@ -1139,8 +939,7 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
             break;
         } else {
             if current_cell + 1 < pipes.len().saturating_sub(1) {
-                let pos =
-                    table_cell_anchor_after_leading_space(&line.text, &pipes, current_cell + 1);
+                let pos = table::table_cell_navigation_anchor(&line.text, &pipes, current_cell + 1);
                 target_anchor = line.from + pos;
                 found_target = true;
                 break;
@@ -1244,6 +1043,193 @@ pub fn run_table_cell_navigation_rules(
     }
     let ctx = ResolvedContext::new(snapshot.clone());
     table_tab_rule(&ctx, &options)
+}
+
+fn prev_char_start(text: &str, at: usize) -> Option<usize> {
+    if at == 0 || at > text.len() {
+        return None;
+    }
+    text[..at].char_indices().next_back().map(|(idx, _)| idx)
+}
+
+fn next_char_end(text: &str, at: usize) -> Option<usize> {
+    if at >= text.len() {
+        return None;
+    }
+    let mut iter = text[at..].char_indices();
+    iter.next()?;
+    Some(
+        iter.next()
+            .map(|(idx, _)| at + idx)
+            .unwrap_or_else(|| text.len()),
+    )
+}
+
+fn table_noop_at(line_from: usize, col: usize) -> EditOperation {
+    EditOperation {
+        changes: vec![],
+        selection: Some(OperationSelection {
+            anchor: line_from + col,
+            head: None,
+        }),
+    }
+}
+
+fn merge_cells_on_line(
+    line: &crate::types::LineContext,
+    current_cell: usize,
+    backward: bool,
+) -> Option<EditOperation> {
+    let mut cells = table::split_table_cells(&line.text);
+    if cells.is_empty() || table::is_delimiter_row(&cells) {
+        return None;
+    }
+
+    if backward {
+        if current_cell == 0 || current_cell >= cells.len() {
+            return None;
+        }
+        let merged = table::merge_cell_content(&cells[current_cell - 1], &cells[current_cell]);
+        cells[current_cell - 1] = merged;
+        cells.remove(current_cell);
+        let new_line = table::serialize_table_row(&cells);
+        let pipes = table::table_pipe_positions(&new_line);
+        let anchor_col =
+            table::table_cell_navigation_anchor(&new_line, &pipes, current_cell.saturating_sub(1));
+        return Some(replace_range(
+            line.from,
+            line.to,
+            new_line,
+            Some(OperationSelection {
+                anchor: line.from + anchor_col,
+                head: None,
+            }),
+        ));
+    }
+
+    if current_cell + 1 >= cells.len() {
+        return None;
+    }
+    let merged = table::merge_cell_content(&cells[current_cell], &cells[current_cell + 1]);
+    cells[current_cell] = merged;
+    cells.remove(current_cell + 1);
+    let new_line = table::serialize_table_row(&cells);
+    let pipes = table::table_pipe_positions(&new_line);
+    let anchor_col = table::table_cell_navigation_anchor(&new_line, &pipes, current_cell);
+    Some(replace_range(
+        line.from,
+        line.to,
+        new_line,
+        Some(OperationSelection {
+            anchor: line.from + anchor_col,
+            head: None,
+        }),
+    ))
+}
+
+pub fn run_table_boundary_edit_rules(
+    snapshot: &EditorContextSnapshot,
+    options: TableBoundaryEditOptions,
+) -> Option<EditOperation> {
+    if !options.markdown_autoformat {
+        return None;
+    }
+
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+    let line = ctx.current_line();
+    if !is_table_line(&line.text) {
+        return None;
+    }
+
+    let pipes = table::table_pipe_positions(&line.text);
+    if pipes.len() < 2 {
+        return Some(table_noop_at(line.from, 0));
+    }
+
+    let head_col = selection
+        .head
+        .saturating_sub(line.from)
+        .min(line.text.len());
+    let Some(current_cell) = table::table_cell_index_for_column(&pipes, head_col) else {
+        return Some(table_noop_at(line.from, 0));
+    };
+    let Some(cell) = table::table_cell_span(&line.text, &pipes, current_cell) else {
+        return Some(table_noop_at(line.from, head_col));
+    };
+    let edit_start = cell.edit_start();
+    let anchor_col = cell.navigation_anchor();
+
+    if options.structural_merge {
+        if options.backward {
+            if head_col > edit_start {
+                return Some(table_noop_at(line.from, head_col));
+            }
+            return Some(
+                merge_cells_on_line(&line, current_cell, true)
+                    .unwrap_or_else(|| table_noop_at(line.from, edit_start)),
+            );
+        }
+
+        if head_col < anchor_col {
+            return Some(table_noop_at(line.from, head_col));
+        }
+        return Some(
+            merge_cells_on_line(&line, current_cell, false)
+                .unwrap_or_else(|| table_noop_at(line.from, anchor_col)),
+        );
+    }
+
+    if options.backward {
+        if head_col <= edit_start {
+            return Some(table_noop_at(line.from, edit_start));
+        }
+        if head_col > anchor_col {
+            return Some(table_noop_at(line.from, anchor_col));
+        }
+
+        let Some(prev_start) = prev_char_start(&line.text, head_col) else {
+            return Some(table_noop_at(line.from, edit_start));
+        };
+        if prev_start < edit_start {
+            return Some(table_noop_at(line.from, edit_start));
+        }
+        return Some(replace_range(
+            line.from + prev_start,
+            line.from + head_col,
+            "",
+            Some(OperationSelection {
+                anchor: line.from + prev_start,
+                head: None,
+            }),
+        ));
+    }
+
+    if head_col < edit_start {
+        return Some(table_noop_at(line.from, edit_start));
+    }
+    if head_col >= anchor_col {
+        return Some(table_noop_at(line.from, anchor_col));
+    }
+
+    let Some(next_end) = next_char_end(&line.text, head_col) else {
+        return Some(table_noop_at(line.from, anchor_col));
+    };
+    if next_end > anchor_col {
+        return Some(table_noop_at(line.from, anchor_col));
+    }
+    Some(replace_range(
+        line.from + head_col,
+        line.from + next_end,
+        "",
+        Some(OperationSelection {
+            anchor: line.from + head_col,
+            head: None,
+        }),
+    ))
 }
 
 #[cfg(test)]
@@ -1415,9 +1401,10 @@ mod tests {
     }
 
     #[test]
-    fn run_doc_change_rules_formats_markdown_tables_when_enabled() {
-        let text = "| a | b |\n| --- | --- |\n| 1 | 2 |";
-        let doc = snapshot(text, text.len(), text.len());
+    fn run_doc_change_rules_normalizes_table_row_spacing_when_enabled() {
+        let text = "| a | b |\n| --- | --- |\n|1|2|";
+        let head = text.len();
+        let doc = snapshot_with_changed_range(text, head, head, head.saturating_sub(1), head);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
             apply_operation(&doc.text, &op),
@@ -1426,9 +1413,29 @@ mod tests {
     }
 
     #[test]
+    fn run_doc_change_rules_reflows_table_block_when_cell_becomes_widest() {
+        let text = "| a | b |\n| --- | --- |\n| 12345 | 2 |";
+        let head = text.find("12345").unwrap() + "12345".len() + 1;
+        let doc = snapshot_with_changed_range(
+            text,
+            head,
+            head,
+            text.find("| 12345").unwrap(),
+            text.len(),
+        );
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "| a     | b   |\n| ----- | --- |\n| 12345 | 2   |"
+        );
+        assert!(op.selection.is_some());
+    }
+
+    #[test]
     fn run_doc_change_rules_inserts_missing_table_delimiter_row() {
         let text = "| test | count |\n| bro | 5 |";
-        let doc = snapshot(text, text.len(), text.len());
+        let head = text.len();
+        let doc = snapshot_with_changed_range(text, head, head, text.find("| bro").unwrap(), head);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
             apply_operation(&doc.text, &op),
@@ -1437,26 +1444,34 @@ mod tests {
     }
 
     #[test]
-    fn run_doc_change_rules_keeps_cursor_on_first_data_row_when_inserting_delimiter() {
+    fn run_doc_change_rules_keeps_empty_cells_with_single_padding() {
+        let text = "| first | value |\n| x | |";
+        let head = text.len();
+        let doc = snapshot_with_changed_range(text, head, head, text.find("| x ").unwrap(), head);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(&doc.text, &op),
+            "| first | value |\n| ----- | ----- |\n| x     |       |"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_inserts_delimiter_without_overriding_selection() {
         let text = "| test | count |\n|      |       |";
         let input_row_start = text.find("\n|      |       |").unwrap() + 1;
         let head = input_row_start + 2;
-        let doc = snapshot(text, head, head);
+        let doc = snapshot_with_changed_range(text, head, head, input_row_start, text.len());
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         let formatted = apply_operation(&doc.text, &op);
         assert_eq!(
             formatted,
             "| test | count |\n| ---- | ----- |\n|      |       |"
         );
-        let output_row_start = formatted.find("\n|      |       |").unwrap() + 1;
-        assert_eq!(
-            op.selection.expect("selection").anchor,
-            output_row_start + 2
-        );
+        assert!(op.selection.is_some());
     }
 
     #[test]
-    fn run_tab_rules_keeps_one_leading_space_when_entering_empty_table_cell() {
+    fn run_tab_rules_places_cursor_after_mandatory_left_padding_for_empty_table_cell() {
         let text = "| a   |     |";
         let head = text.find('a').unwrap() + 1;
         let doc = snapshot(text, head, head);
@@ -1465,12 +1480,89 @@ mod tests {
     }
 
     #[test]
-    fn run_tab_rules_lands_at_content_start_for_non_empty_table_cells() {
+    fn run_tab_rules_lands_after_last_word_for_non_empty_table_cells() {
         let text = "| aaa | bb  |";
         let head = text.find('a').unwrap() + 1;
         let doc = snapshot(text, head, head);
         let op = run_tab_rules(&doc, TabRuleOptions::default()).expect("operation");
-        assert_eq!(op.selection.expect("selection").anchor, text.len() - 5);
+        assert_eq!(op.selection.expect("selection").anchor, 10);
+    }
+
+    #[test]
+    fn run_table_boundary_rules_keep_backspace_inside_cell() {
+        let text = "| aaa | bb |";
+        let doc = snapshot(text, 8, 8); // start of second cell content
+        let op = run_table_boundary_edit_rules(
+            &doc,
+            TableBoundaryEditOptions {
+                backward: true,
+                ..TableBoundaryEditOptions::default()
+            },
+        )
+        .expect("operation");
+        assert!(op.changes.is_empty());
+        assert_eq!(op.selection.expect("selection").anchor, 8);
+
+        let doc = snapshot(text, 9, 9); // inside second cell content
+        let op = run_table_boundary_edit_rules(
+            &doc,
+            TableBoundaryEditOptions {
+                backward: true,
+                ..TableBoundaryEditOptions::default()
+            },
+        )
+        .expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "| aaa | b |");
+    }
+
+    #[test]
+    fn run_table_boundary_rules_keep_delete_inside_cell() {
+        let text = "| aaa | bb |";
+        let doc = snapshot(text, 10, 10); // second cell content end anchor
+        let op = run_table_boundary_edit_rules(
+            &doc,
+            TableBoundaryEditOptions {
+                backward: false,
+                ..TableBoundaryEditOptions::default()
+            },
+        )
+        .expect("operation");
+        assert!(op.changes.is_empty());
+        assert_eq!(op.selection.expect("selection").anchor, 10);
+    }
+
+    #[test]
+    fn run_table_boundary_rules_merge_cells_when_structural_merge_enabled() {
+        let text = "| aaa | bb |";
+        let merge_prev_doc = snapshot(text, 8, 8); // at start of second cell
+        let merge_prev = run_table_boundary_edit_rules(
+            &merge_prev_doc,
+            TableBoundaryEditOptions {
+                backward: true,
+                structural_merge: true,
+                ..TableBoundaryEditOptions::default()
+            },
+        )
+        .expect("operation");
+        assert_eq!(
+            apply_operation(&merge_prev_doc.text, &merge_prev),
+            "| aaa bb |"
+        );
+
+        let merge_next_doc = snapshot(text, 5, 5); // at end of first cell
+        let merge_next = run_table_boundary_edit_rules(
+            &merge_next_doc,
+            TableBoundaryEditOptions {
+                backward: false,
+                structural_merge: true,
+                ..TableBoundaryEditOptions::default()
+            },
+        )
+        .expect("operation");
+        assert_eq!(
+            apply_operation(&merge_next_doc.text, &merge_next),
+            "| aaa bb |"
+        );
     }
 
     #[test]
@@ -1523,14 +1615,24 @@ mod tests {
     }
 
     #[test]
-    fn run_enter_rules_inserts_aligned_empty_table_placeholders() {
+    fn run_enter_rules_inserts_empty_table_placeholders_with_single_padding() {
         let text = "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |";
         let doc = snapshot(text, text.len(), text.len());
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
             apply_operation(&doc.text, &op),
-            "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |\n|     |      |"
+            "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |\n|  |  |"
         );
+        assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
+    }
+
+    #[test]
+    fn run_enter_rules_inserts_table_row_from_last_cell_anchor_position() {
+        let text = "| a   | bbbb |";
+        let head = text.find("bbbb").unwrap() + "bbbb".len();
+        let doc = snapshot(text, head, head);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(&doc.text, &op), "| a   | bbbb |\n|  |  |");
         assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
     }
 

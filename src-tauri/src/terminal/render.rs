@@ -410,6 +410,38 @@ impl RenderContext {
         dim_ranges: &[(usize, usize)],
         reverse_ranges: &[(usize, usize)],
     ) -> String {
+        self.render_line_full(
+            text,
+            width,
+            window_col,
+            calc_ghost,
+            reminder_ghost,
+            reminder_strikethrough,
+            search_ranges,
+            current_search_ranges,
+            variable_names,
+            dim_ranges,
+            reverse_ranges,
+            &[],
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_line_full(
+        &mut self,
+        text: &str,
+        width: usize,
+        window_col: usize,
+        calc_ghost: Option<&str>,
+        reminder_ghost: Option<&str>,
+        reminder_strikethrough: bool,
+        search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+        dim_ranges: &[(usize, usize)],
+        reverse_ranges: &[(usize, usize)],
+        red_ranges: &[(usize, usize)],
+    ) -> String {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut styles = vec![CharStyle::default(); len];
@@ -464,6 +496,14 @@ impl RenderContext {
         for &(start, end) in reverse_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start) {
                 s.reverse = true;
+            }
+        }
+
+        for &(start, end) in red_ranges {
+            for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
+                s.fg = Some(196);
+                s.bold = true;
+                s.dim = false;
             }
         }
 

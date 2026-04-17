@@ -10,6 +10,7 @@ import init, {
   wasm_calc_find_segment,
   wasm_calc_find_single_table_cell,
   wasm_calc_find_table_formula_segment,
+  wasm_calc_find_table_formula_segments,
   wasm_calc_format_formula_display_value,
   wasm_calc_is_builtin_formula,
   wasm_calc_line_for_eval,
@@ -28,6 +29,7 @@ import init, {
   wasm_resolve_command,
   wasm_run_doc_change_rules,
   wasm_run_enter_rules,
+  wasm_run_table_boundary_edit_rules,
   wasm_run_tab_rules,
   wasm_run_table_cell_navigation_rules,
 } from "../../pkg/editor-core/editor_core.js";
@@ -103,6 +105,12 @@ export interface TabRuleOptions {
   outdent?: boolean;
 }
 
+export interface TableBoundaryEditOptions {
+  markdownAutoformat?: boolean;
+  backward?: boolean;
+  structuralMerge?: boolean;
+}
+
 export type VimMode = "insert" | "normal" | "visual" | "visual_line";
 
 export interface VimContext {
@@ -160,7 +168,10 @@ export interface TableFormulaSegment {
   toByte: number;
   fromChar: number;
   toChar: number;
-  label: string;
+  cellLeftPipeChar: number;
+  cellRightPipeChar: number;
+  cellIndex: number;
+  labels: string[];
 }
 
 export interface CommitMarkerLoc {
@@ -439,6 +450,22 @@ export function runTableCellNavigationRules(
   );
 }
 
+export function runTableBoundaryEditRules(
+  snapshot: EditorContextSnapshot,
+  options: TableBoundaryEditOptions = {},
+): EditOperation | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return parseOp(
+    wasm_run_table_boundary_edit_rules(
+      toRustSnapshot(snapshot),
+      options.markdownAutoformat ?? true,
+      options.backward ?? true,
+      options.structuralMerge ?? false,
+    ),
+    snapshot.text,
+  );
+}
+
 export function rewriteLineWithChecklistToggleSuffix(lineText: string): string | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_rewrite_line_with_checklist_toggle_suffix(lineText) ?? null;
@@ -669,6 +696,13 @@ export function calcFindTableFormulaSegment(lineText: string): TableFormulaSegme
   return (
     wasm_calc_find_table_formula_segment(lineText) as TableFormulaSegment | null | undefined
   ) ?? null;
+}
+
+export function calcFindTableFormulaSegments(lineText: string): TableFormulaSegment[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  return (
+    wasm_calc_find_table_formula_segments(lineText) as TableFormulaSegment[] | null | undefined
+  ) ?? [];
 }
 
 export function calcLineForEvaluation(lineText: string): string {

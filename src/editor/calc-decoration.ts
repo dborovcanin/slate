@@ -16,13 +16,18 @@ import {
   type ChangeDesc,
   type Text,
 } from "@codemirror/state";
-import { evaluateNoteContext, type VariableIndexEntry } from "../api.ts";
+import {
+  evaluateNoteContext,
+  type TableCellEvaluation,
+  type VariableIndexEntry,
+} from "../api.ts";
 import {
   builtinFormulaLabels,
   findCalcSegment,
   findSingleCalcTableCell,
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
+import { calcFindTableFormulaSegments } from "./wasm.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
 import {
   calcBuiltinFormulaLabel,
@@ -39,6 +44,7 @@ export interface CalcExtensionOptions {
 
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
+const setCellCalcResults = StateEffect.define<Map<number, TableCellEvaluation[]>>();
 const setVariableIndex = StateEffect.define<VariableIndexEntry[]>();
 
 // Marks transactions originating from the refresh pass so the plugin does not
@@ -105,6 +111,50 @@ const calcResultsField = StateField.define<Map<number, string>>({
     return remapCalcResultsForDocChange(value, tr.startState.doc, tr.changes, tr.newDoc);
   },
 });
+
+// Per-cell results for table rows containing one or more `=…` formula cells.
+// Parallel to `calcResultsField`. `calcResultsField` continues to hold the
+// first formula's value for backward compatibility (committed-trailer refresh,
+// non-table calc ghost), while this field carries every formula cell in the
+// row in left-to-right order.
+const cellCalcResultsField = StateField.define<Map<number, TableCellEvaluation[]>>({
+  create() {
+    return new Map();
+  },
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setCellCalcResults)) return e.value;
+    }
+    if (!tr.docChanged) return value;
+    // Re-key by tracking line index drift through the change set.
+    return remapPerLineMapForDocChange(
+      value,
+      tr.startState.doc,
+      tr.changes,
+      tr.newDoc,
+    );
+  },
+});
+
+function remapPerLineMapForDocChange<T>(
+  value: Map<number, T>,
+  oldDoc: Text,
+  changes: ChangeDesc,
+  newDoc: Text,
+): Map<number, T> {
+  if (value.size === 0) return value;
+  const next = new Map<number, T>();
+  for (const [lineIdx, entry] of value) {
+    const lineNumber = lineIdx + 1;
+    if (lineNumber < 1 || lineNumber > oldDoc.lines) continue;
+    const oldLine = oldDoc.line(lineNumber);
+    const mappedFrom = changes.mapPos(oldLine.from, 1);
+    if (mappedFrom < 0 || mappedFrom > newDoc.length) continue;
+    const newLine = newDoc.lineAt(mappedFrom);
+    next.set(newLine.number - 1, entry);
+  }
+  return next;
+}
 
 export const variableIndexField = StateField.define<VariableIndexEntry[]>({
   create() {
@@ -178,6 +228,12 @@ class FormulaCellWidget extends WidgetType {
       this.minWidthCh === other.minWidthCh
     );
   }
+
+  override ignoreEvent(): boolean {
+    // Allow pointer events so clicking a masked formula cell can place the
+    // caret and reveal the source expression.
+    return false;
+  }
 }
 
 export function builtinFormulaExplanation(expression: string): string | null {
@@ -197,6 +253,21 @@ function selectionTouchesSegment(
   const from = lineFrom + fromCol;
   const to = lineFrom + toCol;
   return selection.from <= to && selection.to >= from;
+}
+
+interface TableCellBounds {
+  fromCol: number;
+  toCol: number;
+}
+
+function tableCellBoundsForSegment(
+  lineText: string,
+  segment: { fromCol: number; toCol: number },
+): TableCellBounds | null {
+  const leftPipe = lineText.lastIndexOf("|", Math.max(0, segment.fromCol - 1));
+  const rightPipe = lineText.indexOf("|", segment.toCol);
+  if (leftPipe < 0 || rightPipe < 0 || rightPipe <= leftPipe + 1) return null;
+  return { fromCol: leftPipe + 1, toCol: rightPipe };
 }
 
 const FORMULA_GHOST_MARKER = "*";
@@ -219,27 +290,103 @@ function formulaGhostExplanation(labels: readonly string[]): string {
     .join("  ");
 }
 
+const focusedPipeMark = Decoration.mark({ class: "cm-table-pipe-focused" });
+
 // Decoration set derived from the calc results field
 const calcDecorations = EditorView.decorations.compute(
-  [calcResultsField, "doc", "selection"],
+  [calcResultsField, cellCalcResultsField, "doc", "selection"],
   (state) => {
     const results = state.field(calcResultsField);
-    const builder = new RangeSetBuilder<Decoration>();
+    const cellResults = state.field(cellCalcResultsField);
+    const linesWithResults = new Set<number>([
+      ...results.keys(),
+      ...cellResults.keys(),
+    ]);
+    // Range additions must be sorted by from-position. Collect them in a
+    // throwaway list then add to the builder in document order at the end.
+    const items: { from: number; to: number; deco: Decoration }[] = [];
     const selection = state.selection.main;
 
-    for (const [lineIndex, result] of results) {
+    for (const lineIndex of linesWithResults) {
       const lineNumber = lineIndex + 1;
       if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
       const line = state.doc.line(lineNumber); // 1-based
+      const result = results.get(lineIndex);
 
+      const segments = calcFindTableFormulaSegments(line.text);
+      if (segments.length > 0) {
+        const cells = cellResults.get(lineIndex) ?? [];
+        const valueForCell = (cellIndex: number): string | null => {
+          const hit = cells.find((c) => c.cell_index === cellIndex);
+          if (hit) return formatFormulaDisplayValue(hit.value);
+          // Backward-compat fallback: when only the legacy single result is
+          // available, attribute it to the first formula cell.
+          if (result != null && cellIndex === segments[0]?.cellIndex) {
+            return formatFormulaDisplayValue(result);
+          }
+          return null;
+        };
+
+        const trailerParts: string[] = [];
+        segments.forEach((seg, fi) => {
+          const marker = formulaMarkerToken(fi);
+          const computed = valueForCell(seg.cellIndex);
+          if (computed == null) return;
+          const value = computed;
+          trailerParts.push(`${marker} \u279c ${value}`);
+
+          const cellFrom = seg.cellLeftPipeChar + 1;
+          const cellTo = seg.cellRightPipeChar;
+          const editingCell = selectionTouchesSegment(
+            selection,
+            line.from,
+            cellFrom,
+            cellTo,
+          );
+          if (editingCell) return;
+
+          const minWidthCh = Math.max(
+            1,
+            seg.toChar - seg.fromChar,
+            value.length + marker.length,
+          );
+          items.push({
+            from: line.from + seg.fromChar,
+            to: line.from + seg.toChar,
+            deco: Decoration.replace({
+              widget: new FormulaCellWidget(value, marker, minWidthCh),
+            }),
+          });
+        });
+
+        if (trailerParts.length > 0) {
+          items.push({
+            from: line.to,
+            to: line.to,
+            deco: Decoration.widget({
+              widget: new CalcResultWidget(trailerParts.join("  "), " "),
+              side: 1,
+            }),
+          });
+        }
+
+        continue;
+      }
+
+      // Non-formula line: legacy single calc-ghost trailer.
+      if (result == null) continue;
       const cell = findSingleCalcTableCell(line.text);
       const labels = cell ? builtinFormulaLabels(cell.expr) : [];
       if (cell && labels.length > 0) {
+        const revealBounds = tableCellBoundsForSegment(line.text, cell) ?? {
+          fromCol: cell.fromCol,
+          toCol: cell.toCol,
+        };
         const editingCell = selectionTouchesSegment(
           selection,
           line.from,
-          cell.fromCol,
-          cell.toCol,
+          revealBounds.fromCol,
+          revealBounds.toCol,
         );
         if (editingCell) continue;
 
@@ -251,43 +398,64 @@ const calcDecorations = EditorView.decorations.compute(
           formatted.length + marker.length,
         );
 
-        builder.add(
-          line.from + cell.fromCol,
-          line.from + cell.toCol,
-          Decoration.replace({
-            widget: new FormulaCellWidget(
-              formatted,
-              marker,
-              minWidthCh,
-            ),
+        items.push({
+          from: line.from + cell.fromCol,
+          to: line.from + cell.toCol,
+          deco: Decoration.replace({
+            widget: new FormulaCellWidget(formatted, marker, minWidthCh),
           }),
-        );
-
-        builder.add(
-          line.to,
-          line.to,
-          Decoration.widget({
-            widget: new CalcResultWidget(
-              formulaGhostExplanation(labels),
-              " ",
-            ),
+        });
+        items.push({
+          from: line.to,
+          to: line.to,
+          deco: Decoration.widget({
+            widget: new CalcResultWidget(formulaGhostExplanation(labels), " "),
             side: 1,
           }),
-        );
-
+        });
         continue;
       }
       const prefix = lineUsesAssignmentGhostPrefix(line.text) ? " = " : " \u2192 ";
-      builder.add(
-        line.to,
-        line.to,
-        Decoration.widget({
+      items.push({
+        from: line.to,
+        to: line.to,
+        deco: Decoration.widget({
           widget: new CalcResultWidget(result, prefix),
           side: 1,
         }),
-      );
+      });
     }
 
+    // Highlight the focused table cell's pipe characters.
+    const cursor = selection.head;
+    if (cursor >= 0 && cursor <= state.doc.length) {
+      const cursorLine = state.doc.lineAt(cursor);
+      const text = cursorLine.text;
+      const trimmed = text.trim();
+      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
+        const col = cursor - cursorLine.from;
+        const leftPipe = text.lastIndexOf("|", Math.max(0, col - 1));
+        const rightPipe = text.indexOf("|", Math.max(col, leftPipe + 1));
+        if (leftPipe >= 0 && rightPipe > leftPipe) {
+          items.push({
+            from: cursorLine.from + leftPipe,
+            to: cursorLine.from + leftPipe + 1,
+            deco: focusedPipeMark,
+          });
+          items.push({
+            from: cursorLine.from + rightPipe,
+            to: cursorLine.from + rightPipe + 1,
+            deco: focusedPipeMark,
+          });
+        }
+      }
+    }
+
+    items.sort((a, b) => a.from - b.from || a.to - b.to);
+    const builder = new RangeSetBuilder<Decoration>();
+    for (const item of items) {
+      builder.add(item.from, item.to, item.deco);
+    }
     return builder.finish();
   },
 );
@@ -608,6 +776,26 @@ function calcResultMapsEqual(
   return true;
 }
 
+function perLineMapsEqual(
+  a: ReadonlyMap<number, TableCellEvaluation[]>,
+  b: ReadonlyMap<number, TableCellEvaluation[]>,
+): boolean {
+  if (a.size !== b.size) return false;
+  for (const [key, left] of a) {
+    const right = b.get(key);
+    if (!right || right.length !== left.length) return false;
+    for (let i = 0; i < left.length; i++) {
+      if (
+        left[i]!.cell_index !== right[i]!.cell_index ||
+        left[i]!.value !== right[i]!.value
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function variableIndexEqual(
   a: readonly VariableIndexEntry[],
   b: readonly VariableIndexEntry[],
@@ -728,6 +916,30 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
                 return m;
               })();
 
+          // Per-cell formula values for table rows. We update the *eval range*
+          // when partial, otherwise replace the whole map. Lines outside the
+          // eval range carry their previous per-cell values (kept in the
+          // state field and remapped through doc changes).
+          const evalCellResults = evaluated.table_cell_results ?? [];
+          const prevCellResults = view.state.field(cellCalcResultsField);
+          const nextCellMap = canUsePartial ? new Map(prevCellResults) : new Map();
+          if (canUsePartial) {
+            for (let i = evalFrom; i < evalTo; i++) {
+              const cells = evalCellResults[i];
+              if (cells && cells.length > 0) {
+                nextCellMap.set(i, cells);
+              } else {
+                nextCellMap.delete(i);
+              }
+            }
+          } else {
+            evalCellResults.forEach((cells, lineIndex) => {
+              if (cells && cells.length > 0) {
+                nextCellMap.set(lineIndex, cells);
+              }
+            });
+          }
+
           // Compute refresh plan for committed trailers. Collect markers in
           // doc order (which is line order) via RangeSet.between so the
           // resulting changes are already sorted for CodeMirror's dispatch.
@@ -766,6 +978,9 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const effects: StateEffect<unknown>[] = [];
           if (resultsChanged) {
             effects.push(setCalcResults.of(nextMap));
+          }
+          if (!perLineMapsEqual(prevCellResults, nextCellMap)) {
+            effects.push(setCellCalcResults.of(nextCellMap));
           }
           if (variablesChanged) {
             effects.push(setVariableIndex.of(nextVariables));
@@ -924,6 +1139,7 @@ const calcTabKeymap = keymap.of([
 export function calcExtensions(options: CalcExtensionOptions = {}) {
   return [
     calcResultsField,
+    cellCalcResultsField,
     variableIndexField,
     commitMarksField,
     calcDecorations,

@@ -180,11 +180,7 @@ pub fn draw_switcher(
         let row = y + 3 + i;
         if let Some(match_idx) = view.matches.get(start + i).copied() {
             let item = &view.items[match_idx];
-            let marker = if start + i == view.selected {
-                ">"
-            } else {
-                " "
-            };
+            let marker = if start + i == view.selected { ">" } else { " " };
             let text = format!("{marker} {}  {}", item.id, item.title);
             if start + i == view.selected {
                 draw_row_at_styled(

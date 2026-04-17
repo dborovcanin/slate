@@ -43,6 +43,18 @@ pub struct NoteEvaluationResult {
     pub line_results: Vec<Option<String>>,
     pub variables: Vec<VariableIndexEntry>,
     pub diagnostics: Option<Vec<NoteEvaluationDiagnostic>>,
+    /// Per-line list of (cell_index, value) for every formula cell that produced
+    /// a result. Lines without table formulas have an empty inner Vec.
+    /// Within a row, cells are evaluated left-to-right; rows are evaluated
+    /// top-to-bottom and earlier results are visible to subsequent formulas.
+    #[serde(default)]
+    pub table_cell_results: Vec<Vec<TableCellEvaluation>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TableCellEvaluation {
+    pub cell_index: usize,
+    pub value: String,
 }
 
 #[derive(Debug, Clone)]
@@ -341,20 +353,72 @@ impl CalcEngine {
         }
 
         let mut line_results: Vec<Option<String>> = vec![None; line_count];
-        for (idx, line) in lines
-            .iter()
-            .enumerate()
-            .skip(eval_from)
-            .take(eval_to.saturating_sub(eval_from))
-        {
-            let Some(line_expr) = extract_line_expression(line) else {
+        let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); line_count];
+
+        // Working copy of the document. As we evaluate formula cells L→R T→B
+        // we substitute computed values back into this working copy so
+        // subsequent formulas see prior results when they reference the row
+        // or column.
+        let mut working_lines: Vec<String> = lines.to_vec();
+
+        for idx in eval_from..eval_to {
+            let line = working_lines[idx].clone();
+            let table_segments = if is_table_line(&line) {
+                table_expression_segments(&line, true)
+            } else {
+                Vec::new()
+            };
+
+            // Multi-cell table evaluation: walk every formula cell L→R.
+            if table_segments.iter().any(|(expr, _)| {
+                find_builtin_formula_calls(expr).first().is_some()
+            }) {
+                let mut first_value: Option<String> = None;
+                for (expression, cell_idx) in table_segments {
+                    let value = evaluate_table_formula(
+                        &working_lines,
+                        idx,
+                        &expression,
+                        Some(cell_idx),
+                        options.variables_enabled,
+                        if options.variables_enabled {
+                            Some(&mut resolver)
+                        } else {
+                            None
+                        },
+                        &mut ctx,
+                    );
+                    let Some(value) = value else { continue };
+
+                    if first_value.is_none() {
+                        first_value = Some(value.clone());
+                    }
+                    table_cell_results[idx].push(TableCellEvaluation {
+                        cell_index: cell_idx,
+                        value: value.clone(),
+                    });
+
+                    // Substitute the formatted value back into the working line so
+                    // subsequent formulas (this row, later rows) see it.
+                    if let Some(updated) =
+                        substitute_table_cell_value(&working_lines[idx], cell_idx, &value)
+                    {
+                        working_lines[idx] = updated;
+                    }
+                }
+                line_results[idx] = first_value;
+                continue;
+            }
+
+            // Single-expression path (preserves original behavior).
+            let Some(line_expr) = extract_line_expression(&line) else {
                 continue;
             };
             let expression = line_expr.expression.as_str();
 
             let result = if options.variables_enabled {
                 if let Some(value) = evaluate_table_formula(
-                    lines,
+                    &working_lines,
                     idx,
                     expression,
                     line_expr.table_cell_index,
@@ -376,7 +440,7 @@ impl CalcEngine {
                 }
             } else {
                 if let Some(value) = evaluate_table_formula(
-                    lines,
+                    &working_lines,
                     idx,
                     expression,
                     line_expr.table_cell_index,
@@ -397,8 +461,92 @@ impl CalcEngine {
             line_results,
             variables,
             diagnostics: resolver.diagnostics(),
+            table_cell_results,
         }
     }
+}
+
+/// Replace the contents of `cell_index` in a pipe-table line with `value`,
+/// preserving surrounding pipes and a single leading/trailing space.
+/// Returns the updated line, or None if the line does not contain enough
+/// pipes to address the cell.
+fn substitute_table_cell_value(line: &str, cell_index: usize, value: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut pipes = Vec::new();
+    for (idx, b) in bytes.iter().enumerate() {
+        if *b == b'|' {
+            pipes.push(idx);
+        }
+    }
+    let left_pipe = *pipes.get(cell_index)?;
+    let right_pipe = *pipes.get(cell_index + 1)?;
+    if right_pipe <= left_pipe + 1 {
+        return None;
+    }
+    let mut out = String::with_capacity(line.len() + value.len());
+    out.push_str(&line[..=left_pipe]);
+    out.push(' ');
+    out.push_str(value);
+    out.push(' ');
+    out.push_str(&line[right_pipe..]);
+    Some(out)
+}
+
+/// Like `table_expression_segment` but returns *every* candidate formula cell
+/// in the row (left-to-right). When no formula cells exist, falls back to the
+/// single non-formula candidate to preserve existing single-line behavior.
+fn table_expression_segments(line: &str, allow_assignments: bool) -> Vec<(String, usize)> {
+    if !is_table_line(line) {
+        return Vec::new();
+    }
+
+    let bytes = line.as_bytes();
+    let mut pipes = Vec::new();
+    for (idx, b) in bytes.iter().enumerate() {
+        if *b == b'|' {
+            pipes.push(idx);
+        }
+    }
+    if pipes.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut formula_segments: Vec<(String, usize)> = Vec::new();
+    let mut other_candidates: Vec<(String, usize)> = Vec::new();
+    for (cell_idx, pair) in pipes.windows(2).enumerate() {
+        let start = pair[0] + 1;
+        let end = pair[1];
+        if start >= end {
+            continue;
+        }
+
+        let raw = &line[start..end];
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if parse_builtin_formula(trimmed).is_some() {
+            formula_segments.push((trimmed.to_string(), cell_idx));
+            continue;
+        }
+
+        let qualifies =
+            has_calc_signal(trimmed) || (allow_assignments && looks_like_assignment(trimmed));
+        if !qualifies {
+            continue;
+        }
+        other_candidates.push((trimmed.to_string(), cell_idx));
+    }
+
+    if !formula_segments.is_empty() {
+        return formula_segments;
+    }
+
+    if other_candidates.len() == 1 {
+        return other_candidates;
+    }
+    Vec::new()
 }
 
 fn evaluate_expression_with_variables(
@@ -677,7 +825,14 @@ fn collect_table_formula_terms(
     match spec.scope {
         FormulaScope::Row => {
             for cell in current_cells.iter().take(formula_col) {
-                if cell.trim().is_empty() || is_table_delimiter_cell(cell) {
+                let trimmed = cell.trim();
+                if trimmed.is_empty() || is_table_delimiter_cell(cell) {
+                    continue;
+                }
+                // Skip cells that contain no digits — otherwise fend may
+                // interpret bare identifiers like `s` (seconds) or `m`
+                // (meters) as units and poison the row sum.
+                if !trimmed.chars().any(|c| c.is_ascii_digit()) {
                     continue;
                 }
                 terms.push(cell.clone());
@@ -1599,6 +1754,38 @@ mod tests {
         let value = result.line_results[5].as_deref().unwrap_or("");
         let numeric = extract_first_number(value).unwrap_or(f64::NAN);
         assert!((numeric - (14.0 / 3.0)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn note_eval_table_two_avg_cols_then_sum_row_in_same_row() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| name  | last | grade | height | total |".to_string(),
+            "| ----- | ---- | ----- | ------ | ----- |".to_string(),
+            "| Dusan | B    | 5     | 1.94   |       |".to_string(),
+            "| Dusan | B    | 4     | 1.98   |       |".to_string(),
+            "| asds  | s    | =avg_col() | =avg_col() | =sum_row() |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let cells = &res.table_cell_results[4];
+        let by_idx: std::collections::HashMap<usize, String> = cells
+            .iter()
+            .map(|c| (c.cell_index, c.value.clone()))
+            .collect();
+        eprintln!("cells: {:?}", cells);
+        let avg_grade = by_idx.get(&2).cloned().unwrap_or_default();
+        let avg_height = by_idx.get(&3).cloned().unwrap_or_default();
+        let total = by_idx.get(&4).cloned().unwrap_or_default();
+        let n_grade = extract_first_number(&avg_grade).unwrap_or(f64::NAN);
+        let n_height = extract_first_number(&avg_height).unwrap_or(f64::NAN);
+        let n_total = extract_first_number(&total).unwrap_or(f64::NAN);
+        assert!((n_grade - 4.5).abs() < 1e-6, "grade avg = {}", avg_grade);
+        assert!((n_height - 1.96).abs() < 1e-6, "height avg = {}", avg_height);
+        assert!(
+            (n_total - (4.5 + 1.96)).abs() < 1e-6,
+            "sum_row = {}",
+            total
+        );
     }
 
     #[test]
