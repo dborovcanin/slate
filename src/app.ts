@@ -5,6 +5,7 @@ import {
   deleteNote,
   exportToFile,
   getThemeConfigOrDefault,
+  getRuntimeFlagsOrDefault,
   type ThemeConfig,
 } from "./api";
 import {
@@ -404,10 +405,11 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   editorEl.style.overflow = "hidden";
   container.appendChild(editorEl);
 
-  const [note, notes, config] = await Promise.all([
+  const [note, notes, config, runtimeFlags] = await Promise.all([
     getOrCreateNote(),
     listNotes(),
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
+    getRuntimeFlagsOrDefault(),
   ]);
   startupMark("ui_data_loaded");
   state.setActiveNote(note);
@@ -415,6 +417,13 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
 
   createStatusBar(container);
   mountEditor(editorEl, {
+    plainTextMode: runtimeFlags.plain_text_mode,
+    detachBackend: runtimeFlags.backend_detach,
+    disableCalc: runtimeFlags.calc_disable,
+    disableMarkdownDecorations: runtimeFlags.markdown_disable,
+    disableFolding: runtimeFlags.folding_disable,
+    disableNotify: runtimeFlags.notify_disable,
+    disableAutocomplete: runtimeFlags.autocomplete_disable,
     markdownAutoformat: config.markdown_autoformat,
     checklistAutoReorder: config.checklist_auto_reorder,
     formatOnSave: config.format_on_save,
@@ -436,7 +445,17 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   startupMark("ui_editor_mounted");
   setupKeyboardShortcuts();
 
-  if (config.vim_mode) {
+  const activeFlags: string[] = [];
+  if (runtimeFlags.plain_text_mode) activeFlags.push("PLAIN_TEXT_MODE");
+  if (runtimeFlags.backend_detach) activeFlags.push("BACKEND_DETACH");
+  if (runtimeFlags.calc_disable) activeFlags.push("CALC_DISABLE");
+  if (runtimeFlags.markdown_disable) activeFlags.push("MARKDOWN_DISABLE");
+  if (runtimeFlags.folding_disable) activeFlags.push("FOLDING_DISABLE");
+  if (runtimeFlags.notify_disable) activeFlags.push("NOTIFY_DISABLE");
+  if (runtimeFlags.autocomplete_disable) activeFlags.push("AUTOCOMPLETE_DISABLE");
+  if (activeFlags.length > 0) {
+    showToast(`Runtime flags: ${activeFlags.join(", ")}`);
+  } else if (config.vim_mode) {
     showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch, :clip-watch-stop, :q");
   }
 

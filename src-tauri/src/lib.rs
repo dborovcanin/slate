@@ -55,6 +55,7 @@ fn run_gui() -> Result<(), String> {
             commands::calc::evaluate_note_context,
             commands::perf::append_startup_log,
             commands::config::get_theme_config,
+            commands::config::get_runtime_flags,
             commands::export::export_to_file,
             commands::clipboard::read_clipboard_text,
         ])

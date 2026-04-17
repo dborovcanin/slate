@@ -34,6 +34,16 @@ export interface ThemeConfig {
   variables_autocomplete_min_chars: number;
 }
 
+export interface RuntimeFlags {
+  plain_text_mode: boolean;
+  backend_detach: boolean;
+  calc_disable: boolean;
+  markdown_disable: boolean;
+  folding_disable: boolean;
+  notify_disable: boolean;
+  autocomplete_disable: boolean;
+}
+
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   color_scheme: "gruvbox-light",
   background: "plain",
@@ -48,6 +58,16 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   date_time_format: "%Y-%m-%d %H:%M",
   variables_enabled: true,
   variables_autocomplete_min_chars: 3,
+};
+
+export const DEFAULT_RUNTIME_FLAGS: RuntimeFlags = {
+  plain_text_mode: false,
+  backend_detach: false,
+  calc_disable: false,
+  markdown_disable: false,
+  folding_disable: false,
+  notify_disable: false,
+  autocomplete_disable: false,
 };
 
 export interface VariableIndexEntry {
@@ -186,6 +206,10 @@ export function getThemeConfig(): Promise<ThemeConfig> {
   return invoke<ThemeConfig>("get_theme_config");
 }
 
+export function getRuntimeFlags(): Promise<RuntimeFlags> {
+  return invoke<RuntimeFlags>("get_runtime_flags");
+}
+
 export function appendStartupLog(mode: string, line: string): Promise<void> {
   return invoke<void>("append_startup_log", { mode, line });
 }
@@ -195,5 +219,13 @@ export async function getThemeConfigOrDefault(): Promise<ThemeConfig> {
     return await getThemeConfig();
   } catch {
     return { ...DEFAULT_THEME_CONFIG };
+  }
+}
+
+export async function getRuntimeFlagsOrDefault(): Promise<RuntimeFlags> {
+  try {
+    return await getRuntimeFlags();
+  } catch {
+    return { ...DEFAULT_RUNTIME_FLAGS };
   }
 }

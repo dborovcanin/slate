@@ -51,6 +51,7 @@ export async function flushSave() {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
+  if (backendDetached) return;
   const note = state.activeNote;
   if (!note) return;
   const body = view ? view.state.doc.toString() : note.body;
@@ -64,6 +65,7 @@ export async function flushSave() {
 
 const onUpdate = EditorView.updateListener.of((update) => {
   if (update.docChanged) {
+    if (backendDetached) return;
     if (
       update.transactions.some((transaction) =>
         transaction.annotation(suppressEditorSyncAnnotation),
@@ -77,6 +79,13 @@ const onUpdate = EditorView.updateListener.of((update) => {
 });
 
 interface EditorMountOptions {
+  plainTextMode?: boolean;
+  detachBackend?: boolean;
+  disableCalc?: boolean;
+  disableMarkdownDecorations?: boolean;
+  disableFolding?: boolean;
+  disableNotify?: boolean;
+  disableAutocomplete?: boolean;
   markdownAutoformat?: boolean;
   checklistAutoReorder?: boolean;
   formatOnSave?: boolean;
@@ -92,6 +101,7 @@ interface EditorMountOptions {
 
 let currentFormatOnSave = false;
 let currentDateFormat = "%Y-%m-%d";
+let backendDetached = false;
 
 function isLeftArrowKey(key: string): boolean {
   return key === "ArrowLeft" || key === "Left";
@@ -239,9 +249,16 @@ export async function performFormatAndSave() {
 export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
   const note = state.activeNote;
   const doc = note?.body ?? "";
+  const plainTextMode = !!options.plainTextMode;
+  const disableCalc = plainTextMode || !!options.disableCalc;
+  const disableMarkdownDecorations = plainTextMode || !!options.disableMarkdownDecorations;
+  const disableFolding = plainTextMode || !!options.disableFolding;
+  const disableNotify = plainTextMode || !!options.disableNotify;
+  const disableAutocomplete = plainTextMode || !!options.disableAutocomplete;
   const markdownAutoformat = options.markdownAutoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
 
+  backendDetached = plainTextMode || !!options.detachBackend;
   currentFormatOnSave = !!options.formatOnSave;
   currentDateFormat = options.dateFormat || "%Y-%m-%d";
 
@@ -251,51 +268,67 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     drawSelection(),
     highlightActiveLine(),
     placeholder("Start typing..."),
-    markdownRichTextExtensions(),
-    ...foldingExtensions(),
-    markdownEditingExtensions({
-      autoformat: markdownAutoformat,
-      checklistAutoReorder,
-    }),
-    ...variableAutocompleteExtensions({
-      enabled: options.variablesEnabled ?? true,
-      minChars: options.variableAutocompleteMinChars ?? 3,
-    }),
-    ...calcExtensions({ variablesEnabled: options.variablesEnabled ?? true }),
-    ...notifyExtensions({
-      getActiveNoteId: () => state.activeNote?.id ?? null,
-    }),
-    ...editorSearchExtensions(),
-    commandModeExtension({
-      dateFormat: options.dateFormat,
-      dateTimeFormat: options.dateTimeFormat,
-      vimMode: !!options.vimMode,
-      onExitCommand: options.onExitCommand,
-      onClipWatchStateChange: options.onClipWatchStateChange,
-      onClipWatchPaste: options.onClipWatchPaste,
-    }),
-    tableCellNavigationDomHandler(),
-    snapEditorScrollToPixels(),
-    Prec.highest(keymap.of([
-      {
-        key: "Ctrl-w",
-        run: runTableHeaderDeleteColumnCommand,
-        preventDefault: true,
-      },
-      { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
-      { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
-      { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
-      { key: "Mod-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
-      { key: "Mod-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
-      { key: "Ctrl-s", run: () => { performFormatAndSave(); return true; }, preventDefault: true },
-    ])),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     onUpdate,
-    EditorView.lineWrapping,
     EditorView.contentAttributes.of({ "aria-label": "Note editor" }),
   ];
 
-  if (options.vimMode) {
+  if (!plainTextMode) {
+    extensions.push(
+      ...(disableMarkdownDecorations ? [] : markdownRichTextExtensions()),
+      ...(disableFolding ? [] : foldingExtensions()),
+      markdownEditingExtensions({
+        autoformat: markdownAutoformat,
+        checklistAutoReorder,
+      }),
+      ...variableAutocompleteExtensions({
+        enabled: !disableAutocomplete && (options.variablesEnabled ?? true),
+        minChars: options.variableAutocompleteMinChars ?? 3,
+      }),
+      ...(disableCalc
+        ? []
+        : calcExtensions({ variablesEnabled: options.variablesEnabled ?? true })),
+      ...(disableNotify
+        ? []
+        : notifyExtensions({
+            getActiveNoteId: () => state.activeNote?.id ?? null,
+          })),
+      ...editorSearchExtensions(),
+      commandModeExtension({
+        dateFormat: options.dateFormat,
+        dateTimeFormat: options.dateTimeFormat,
+        vimMode: !!options.vimMode,
+        onExitCommand: options.onExitCommand,
+        onClipWatchStateChange: options.onClipWatchStateChange,
+        onClipWatchPaste: options.onClipWatchPaste,
+      }),
+      tableCellNavigationDomHandler(),
+      snapEditorScrollToPixels(),
+      Prec.highest(keymap.of([
+        {
+          key: "Ctrl-w",
+          run: runTableHeaderDeleteColumnCommand,
+          preventDefault: true,
+        },
+        { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
+        { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
+        { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
+        { key: "Mod-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
+        { key: "Mod-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
+        {
+          key: "Ctrl-s",
+          run: () => {
+            performFormatAndSave();
+            return true;
+          },
+          preventDefault: true,
+        },
+      ])),
+      EditorView.lineWrapping,
+    );
+  }
+
+  if (options.vimMode && !plainTextMode) {
     extensions.push(
       Prec.highest(
         vimModeExtension({
@@ -313,35 +346,37 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
 
   view = new EditorView({ state: startState, parent });
   startupMark("ui_codemirror_ready");
-  if (!options.vimMode) {
+  if (!options.vimMode || plainTextMode) {
     view.dom.classList.remove("cm-vim-normal", "cm-vim-insert", "cm-vim-visual");
     delete view.dom.dataset.vimMode;
   }
   view.focus();
 
-  // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is
-  // always available when the editor has focus.
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (!view || !view.hasFocus) return;
-      const isMod = event.ctrlKey || event.metaKey;
-      if (!isMod || event.altKey || event.shiftKey) return;
+  if (!plainTextMode) {
+    // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is
+    // always available when the editor has focus.
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        if (!view || !view.hasFocus) return;
+        const isMod = event.ctrlKey || event.metaKey;
+        if (!isMod || event.altKey || event.shiftKey) return;
 
-      if (isLeftArrowEvent(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        moveTableCellOrWord(view, true, true);
-        return;
-      }
-      if (isRightArrowEvent(event)) {
-        event.preventDefault();
-        event.stopPropagation();
-        moveTableCellOrWord(view, false, false);
-      }
-    },
-    true,
-  );
+        if (isLeftArrowEvent(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          moveTableCellOrWord(view, true, true);
+          return;
+        }
+        if (isRightArrowEvent(event)) {
+          event.preventDefault();
+          event.stopPropagation();
+          moveTableCellOrWord(view, false, false);
+        }
+      },
+      true,
+    );
+  }
 
   window.addEventListener("beforeunload", flushSave);
   document.addEventListener("visibilitychange", () => {

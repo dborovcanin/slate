@@ -3554,6 +3554,7 @@ dependencies = [
  "regex",
  "rustls",
  "rustls-native-certs",
+ "serde",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
