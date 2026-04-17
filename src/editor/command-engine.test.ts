@@ -38,5 +38,5 @@ test("vim mode exposes vim-specific commands", () => {
 
 test("command suggestions filter by query", () => {
   const values = listCommandSuggestions("editor", "fo").map((entry) => entry.value);
-  assert.deepEqual(values, ["fold", "fold-toggle", "format"]);
+  assert.deepEqual(values, ["fold", "fold-toggle", "format", "unfold"]);
 });

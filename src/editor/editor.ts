@@ -11,10 +11,12 @@ import { state } from "../state";
 import { saveNote } from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
-import { applyEditOperation, snapshotFromView } from "./core/codemirror-adapter";
-import { runTableCellNavigationRules } from "./wasm.ts";
 import { markdownRichTextExtensions } from "./markdown-decoration";
-import { markdownEditingExtensions, runTableHeaderDeleteColumnCommand } from "./markdown-editing";
+import {
+  markdownEditingExtensions,
+  runTableCellNavigationCommand,
+  runTableHeaderDeleteColumnCommand,
+} from "./markdown-editing";
 import { foldingExtensions } from "./folding.ts";
 import { notifyExtensions } from "./notify-decoration";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
@@ -187,14 +189,20 @@ function moveTableCellOrWord(
   tableOutdent: boolean,
   fallbackLeft: boolean,
 ): boolean {
-  const operation = runTableCellNavigationRules(snapshotFromView(view), {
+  const main = view.state.selection.main;
+  if (!main.empty) {
+    return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
+  }
+  const line = view.state.doc.lineAt(main.head);
+  const trimmed = line.text.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) {
+    return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
+  }
+  const moved = runTableCellNavigationCommand(view, {
     markdownAutoformat: true,
     outdent: tableOutdent,
   });
-  if (operation) {
-    applyEditOperation(view, operation);
-    return true;
-  }
+  if (moved) return true;
   return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
 }
 
@@ -254,12 +262,6 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
         preventDefault: true,
       },
       { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
-      {
-        key: "Ctrl-Backspace",
-        run: runTableHeaderDeleteColumnCommand,
-        preventDefault: true,
-      },
-      { key: "Ctrl-Backspace", run: deleteGroupBackward, preventDefault: true },
       { key: "Ctrl-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },
       { key: "Ctrl-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
       { key: "Mod-ArrowLeft", run: (view) => moveTableCellOrWord(view, true, true), preventDefault: true },

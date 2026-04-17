@@ -2,6 +2,16 @@ import type { ChangeDesc } from "@codemirror/state";
 import type { EditorView, ViewUpdate } from "@codemirror/view";
 import type { EditOperation, EditorContextSnapshot, TextRange } from "./types.ts";
 
+interface ScopedSnapshot {
+  snapshot: EditorContextSnapshot;
+  offset: number;
+}
+
+function isMarkdownTableLine(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith("|") && trimmed.endsWith("|");
+}
+
 export function changedRangeFromChanges(changes: ChangeDesc): TextRange | undefined {
   let from = Number.POSITIVE_INFINITY;
   let to = Number.NEGATIVE_INFINITY;
@@ -32,6 +42,61 @@ export function snapshotFromView(
 
 export function snapshotFromUpdate(update: ViewUpdate): EditorContextSnapshot {
   return snapshotFromView(update.view, changedRangeFromChanges(update.changes));
+}
+
+export function snapshotFromViewTableBlock(view: EditorView): ScopedSnapshot | null {
+  const selection = view.state.selection.main;
+  const current = view.state.doc.lineAt(selection.head);
+  if (!isMarkdownTableLine(current.text)) return null;
+
+  const lineCount = view.state.doc.lines;
+  let startLine = current.number;
+  let endLine = current.number;
+
+  while (startLine > 1 && isMarkdownTableLine(view.state.doc.line(startLine - 1).text)) {
+    startLine -= 1;
+  }
+  while (endLine < lineCount && isMarkdownTableLine(view.state.doc.line(endLine + 1).text)) {
+    endLine += 1;
+  }
+
+  const from = view.state.doc.line(startLine).from;
+  const to = view.state.doc.line(endLine).to;
+  const localMax = to - from;
+  const localAnchor = Math.max(0, Math.min(localMax, selection.anchor - from));
+  const localHead = Math.max(0, Math.min(localMax, selection.head - from));
+
+  return {
+    offset: from,
+    snapshot: {
+      text: view.state.doc.sliceString(from, to),
+      selection: {
+        anchor: localAnchor,
+        head: localHead,
+      },
+    },
+  };
+}
+
+export function offsetEditOperation(operation: EditOperation, offset: number): EditOperation {
+  if (offset === 0) return operation;
+  return {
+    ...operation,
+    changes: operation.changes.map((change) => ({
+      ...change,
+      from: change.from + offset,
+      to: change.to + offset,
+    })),
+    selection: operation.selection
+      ? {
+          anchor: operation.selection.anchor + offset,
+          head:
+            operation.selection.head === undefined || operation.selection.head === null
+              ? operation.selection.head
+              : operation.selection.head + offset,
+        }
+      : undefined,
+  };
 }
 
 export function applyEditOperation(view: EditorView, operation: EditOperation): void {

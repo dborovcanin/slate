@@ -495,32 +495,39 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     table::format_table_lines(lines)
 }
 
-fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
-    let mut target_lines: Vec<usize> = Vec::new();
+fn collect_table_blocks_for_autoformat(ctx: &ResolvedContext) -> Vec<(usize, usize)> {
+    let mut blocks: Vec<(usize, usize)> = Vec::new();
+
     if let Some(changed) = ctx.changed_range() {
         let start_line = ctx.line_at(changed.from).number;
         let end_line = ctx.line_at(changed.to).number;
-        for line_no in start_line..=end_line {
-            target_lines.push(line_no);
+        let mut line_no = start_line;
+        while line_no <= end_line {
+            if !is_table_line(ctx.line_text(line_no)) {
+                line_no += 1;
+                continue;
+            }
+            let Some(block) = ctx.table_range_at_line(line_no, 1) else {
+                line_no += 1;
+                continue;
+            };
+            blocks.push((block.start_line, block.end_line));
+            line_no = block.end_line.saturating_add(1);
         }
-    } else {
-        target_lines.push(ctx.current_line().number);
+        return blocks;
     }
-    target_lines.sort_unstable();
-    target_lines.dedup();
 
-    let mut blocks: Vec<(usize, usize)> = Vec::new();
-    for line_no in target_lines {
-        if !is_table_line(ctx.line_text(line_no)) {
-            continue;
+    let line_no = ctx.current_line().number;
+    if is_table_line(ctx.line_text(line_no)) {
+        if let Some(block) = ctx.table_range_at_line(line_no, 1) {
+            blocks.push((block.start_line, block.end_line));
         }
-        let Some(block) = ctx.table_range_at_line(line_no, 1) else {
-            continue;
-        };
-        blocks.push((block.start_line, block.end_line));
     }
-    blocks.sort_unstable();
-    blocks.dedup();
+    blocks
+}
+
+fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+    let blocks = collect_table_blocks_for_autoformat(ctx);
     if blocks.is_empty() {
         return None;
     }
@@ -541,11 +548,10 @@ fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
             .map(|line_no| ctx.line_text(line_no).to_string())
             .collect::<Vec<_>>();
         let formatted_lines = table::format_table_lines(&original_lines);
-        let formatted_text = formatted_lines.join("\n");
-        let original_text = original_lines.join("\n");
-        if formatted_text == original_text {
+        if formatted_lines == original_lines {
             continue;
         }
+        let formatted_text = formatted_lines.join("\n");
 
         let start = ctx.line(start_line).from;
         let end = ctx.line(end_line).to;
@@ -738,6 +744,18 @@ fn is_table_separator(text: &str) -> bool {
     }
     let cells = table::split_table_cells(text);
     table::is_delimiter_row(&cells)
+}
+
+fn table_header_line_number(ctx: &ResolvedContext, start_line: usize, end_line: usize) -> usize {
+    for line_no in start_line..=end_line {
+        if is_table_separator(ctx.line_text(line_no)) {
+            if line_no > start_line {
+                return line_no - 1;
+            }
+            break;
+        }
+    }
+    start_line
 }
 
 fn table_continuation_rule(
@@ -1073,19 +1091,7 @@ pub fn run_table_pipe_insert_column_rule(
 
     let block = ctx.table_range_at_line(line.number, 1)?;
 
-    // Find the delimiter row (if any) inside the block. The header is the
-    // row immediately above it; if no delimiter exists yet, the first row
-    // is the header.
-    let mut header_line: Option<usize> = None;
-    for line_no in block.start_line..=block.end_line {
-        if is_table_separator(ctx.line_text(line_no)) {
-            if line_no > block.start_line {
-                header_line = Some(line_no - 1);
-            }
-            break;
-        }
-    }
-    let header_line = header_line.unwrap_or(block.start_line);
+    let header_line = table_header_line_number(&ctx, block.start_line, block.end_line);
     if line.number != header_line {
         return None;
     }
@@ -1133,11 +1139,8 @@ pub fn run_table_pipe_insert_column_rule(
     let header_offset_in_block = header_line - block.start_line;
     let new_header_text = formatted.get(header_offset_in_block)?;
     let new_header_pipes = table::table_pipe_positions(new_header_text);
-    let anchor_col = table::table_cell_navigation_anchor(
-        new_header_text,
-        &new_header_pipes,
-        insert_at,
-    );
+    let anchor_col =
+        table::table_cell_navigation_anchor(new_header_text, &new_header_pipes, insert_at);
     let header_line_from =
         block_from + insert_text[..byte_offset_of_line(&insert_text, header_offset_in_block)].len();
     let anchor = header_line_from + anchor_col;
@@ -1178,16 +1181,7 @@ pub fn run_table_header_delete_column_rule(
 
     let block = ctx.table_range_at_line(line.number, 1)?;
 
-    let mut header_line: Option<usize> = None;
-    for line_no in block.start_line..=block.end_line {
-        if is_table_separator(ctx.line_text(line_no)) {
-            if line_no > block.start_line {
-                header_line = Some(line_no - 1);
-            }
-            break;
-        }
-    }
-    let header_line = header_line.unwrap_or(block.start_line);
+    let header_line = table_header_line_number(&ctx, block.start_line, block.end_line);
     if line.number != header_line {
         return None;
     }
@@ -1243,11 +1237,8 @@ pub fn run_table_header_delete_column_rule(
     } else {
         current_cell.min(new_cell_count - 1)
     };
-    let anchor_col = table::table_cell_navigation_anchor(
-        new_header_text,
-        &new_header_pipes,
-        target_cell,
-    );
+    let anchor_col =
+        table::table_cell_navigation_anchor(new_header_text, &new_header_pipes, target_cell);
     let header_line_from =
         block_from + insert_text[..byte_offset_of_line(&insert_text, header_offset_in_block)].len();
     let anchor = header_line_from + anchor_col;
@@ -1949,8 +1940,7 @@ mod tests {
     fn run_table_header_delete_column_fires_after_user_empties_wide_header_cell() {
         // Table width-padded after prior content.  Middle header was "bbb" and
         // is now wiped to whitespace, keeping the column width padding.
-        let text =
-            "| aa | bbb | cc |\n| --- | --- | --- |\n| 1  |     | 3  |".to_string();
+        let text = "| aa | bbb | cc |\n| --- | --- | --- |\n| 1  |     | 3  |".to_string();
         // After "bbb" was deleted the cell is normally reflowed; simulate the
         // intermediate state where the user's header cell is padded whitespace.
         let text = text.replace("| bbb ", "|     ");

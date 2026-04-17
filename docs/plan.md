@@ -72,6 +72,7 @@ Non-goals:
 - [ ] *Multicursor support*
 - [ ] Context menu - choose simple formatting and options to convert
 - [ ] Select - right click for context menu - convert to checklist, ordered list, unordered list
+- [ ] Allow assigning variables to a := sum_column() kind of values so later it can be reused.
 - [ ] UI settings page
 - [ ] Code folding
 - [ ] Search notes content
@@ -100,6 +101,7 @@ Non-goals:
 - [ ] Checkbox UI style performance check
 - [ ] Fix TUI shortcuts in non-vim
 - [ ] Fix "db" command in TUI
+- [ ] Visual and v-line modes do not accept 10k 10j commands keeping selection
 - [ ] Notification handling (cross platform)
 - [ ] Improve folding
 - [ ] Fix terminal handling of auto-reordering checklist (cursor should not follow the list)

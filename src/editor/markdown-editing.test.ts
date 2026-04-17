@@ -4,9 +4,12 @@ import { EditorState } from "@codemirror/state";
 import {
   __tableCursorInternals,
   formatTableLines,
+  runTableCellNavigationCommand,
+  runTableHeaderDeleteColumnCommand,
   rewriteLineWithChecklistToggleSuffix,
 } from "./markdown-editing.ts";
 import { ensureWasmReady, runDocChangeRules, runTableBoundaryEditRules } from "./wasm.ts";
+import type { EditorView } from "@codemirror/view";
 
 before(async () => {
   await ensureWasmReady();
@@ -137,4 +140,58 @@ test("runTableBoundaryEditRules supports explicit structural merges", () => {
     to: text.length,
     insert: "| aaa bb |",
   });
+});
+
+function createTestEditorView(doc: string, cursor: number): {
+  view: EditorView;
+  getState: () => EditorState;
+} {
+  let state = EditorState.create({
+    doc,
+    selection: { anchor: cursor },
+  });
+  const view = {
+    get state() {
+      return state;
+    },
+    dispatch(spec: unknown) {
+      state = state.update(spec as never).state;
+    },
+  } as unknown as EditorView;
+  return { view, getState: () => state };
+}
+
+test("table scoped snapshot remaps edit operation back to document offsets", () => {
+  const doc = [
+    "alpha",
+    "beta",
+    "| a |   | c |",
+    "| --- | --- | --- |",
+    "| 1 | 2 | 3 |",
+    "omega",
+  ].join("\n");
+  const cursor = doc.indexOf("|   |") + 2;
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  assert.equal(runTableHeaderDeleteColumnCommand(view), true);
+  assert.equal(
+    getState().doc.toString(),
+    ["alpha", "beta", "| a   | c   |", "| --- | --- |", "| 1   | 3   |", "omega"].join("\n"),
+  );
+});
+
+test("table scoped snapshot remaps navigation selection back to document offsets", () => {
+  const doc = ["alpha", "beta", "| a | b | c |", "| --- | --- | --- |", "| 1 | 2 | 3 |"].join("\n");
+  const tableStart = doc.indexOf("| a | b | c |");
+  const cursor = tableStart + 3;
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  assert.equal(
+    runTableCellNavigationCommand(view, {
+      markdownAutoformat: true,
+      outdent: false,
+    }),
+    true,
+  );
+  assert.equal(getState().selection.main.head, tableStart + 7);
 });

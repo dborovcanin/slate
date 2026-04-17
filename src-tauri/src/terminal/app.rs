@@ -4599,21 +4599,6 @@ struct TableCellInfo {
     trim_end: usize,
 }
 
-fn first_non_space_offset(text: &str) -> usize {
-    text.as_bytes()
-        .iter()
-        .position(|b| *b != b' ')
-        .unwrap_or(text.len())
-}
-
-fn last_non_space_end_offset(text: &str) -> usize {
-    text.as_bytes()
-        .iter()
-        .rposition(|b| *b != b' ')
-        .map(|idx| idx + 1)
-        .unwrap_or(0)
-}
-
 fn is_markdown_table_line(line: &str) -> bool {
     let trimmed = line.trim();
     trimmed.starts_with('|') && trimmed.ends_with('|')
@@ -4625,39 +4610,17 @@ fn table_cell_info_at_char(line: &str, col_char: usize) -> Option<TableCellInfo>
     }
 
     let col_byte = byte_index(line, col_char);
-    let mut prev_pipe: Option<usize> = None;
-    let mut cell_index = 0usize;
-    let mut selected: Option<(usize, usize, usize, usize, usize)> = None;
-    let mut fallback: Option<(usize, usize, usize, usize, usize)> = None;
-
-    for (idx, b) in line.as_bytes().iter().enumerate() {
-        if *b != b'|' {
-            continue;
-        }
-        if let Some(left_pipe) = prev_pipe {
-            let raw = &line[left_pipe + 1..idx];
-            let tuple = (
-                cell_index,
-                left_pipe,
-                idx,
-                first_non_space_offset(raw),
-                last_non_space_end_offset(raw),
-            );
-            if selected.is_none() && col_byte <= idx {
-                selected = Some(tuple);
-            }
-            fallback = Some(tuple);
-            cell_index += 1;
-        }
-        prev_pipe = Some(idx);
+    let pipes = crate::editor_core::table::table_pipe_positions(line);
+    if pipes.len() < 2 {
+        return None;
     }
-
-    let (_, left_pipe, right_pipe, trim_start, trim_end) = selected.or(fallback)?;
+    let cell_index = crate::editor_core::table::table_cell_index_for_column(&pipes, col_byte)?;
+    let span = crate::editor_core::table::table_cell_span(line, &pipes, cell_index)?;
     Some(TableCellInfo {
-        left_pipe,
-        right_pipe,
-        trim_start,
-        trim_end,
+        left_pipe: span.left_pipe,
+        right_pipe: span.right_pipe,
+        trim_start: span.trim_start,
+        trim_end: span.trim_end,
     })
 }
 

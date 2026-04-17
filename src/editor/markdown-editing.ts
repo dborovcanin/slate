@@ -2,7 +2,13 @@ import { Prec } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import { getCalcResultAtCursor } from "./calc-decoration.ts";
-import { applyEditOperation, snapshotFromUpdate, snapshotFromView } from "./core/codemirror-adapter.ts";
+import {
+  applyEditOperation,
+  offsetEditOperation,
+  snapshotFromUpdate,
+  snapshotFromView,
+  snapshotFromViewTableBlock,
+} from "./core/codemirror-adapter.ts";
 import {
   markdownClassifyLine,
   runDocChangeRules,
@@ -328,20 +334,32 @@ function tableBoundaryEdit(
   backward: boolean,
   structuralMerge = false,
 ): boolean {
-  const operation = runTableBoundaryEditRules(snapshotFromView(view), {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const scoped = snapshotFromViewTableBlock(view);
+  if (!scoped) return false;
+  const operation = runTableBoundaryEditRules(scoped.snapshot, {
     markdownAutoformat: autoformat,
     backward,
     structuralMerge,
   });
   if (!operation) return false;
-  applyEditOperation(view, operation);
+  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
 function tablePipeInsertColumn(view: EditorView): boolean {
-  const operation = runTablePipeInsertColumnRule(snapshotFromView(view));
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const scoped = snapshotFromViewTableBlock(view);
+  if (!scoped) return false;
+  const operation = runTablePipeInsertColumnRule(scoped.snapshot);
   if (!operation) return false;
-  applyEditOperation(view, operation);
+  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
@@ -353,9 +371,15 @@ function tablePipeInputHandler() {
 }
 
 function tableHeaderDeleteColumn(view: EditorView): boolean {
-  const operation = runTableHeaderDeleteColumnRule(snapshotFromView(view));
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const scoped = snapshotFromViewTableBlock(view);
+  if (!scoped) return false;
+  const operation = runTableHeaderDeleteColumnRule(scoped.snapshot);
   if (!operation) return false;
-  applyEditOperation(view, operation);
+  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
@@ -363,14 +387,35 @@ export function runTableHeaderDeleteColumnCommand(view: EditorView): boolean {
   return tableHeaderDeleteColumn(view);
 }
 
+interface TableCellNavigationCommandOptions {
+  markdownAutoformat?: boolean;
+  outdent?: boolean;
+}
+
+export function runTableCellNavigationCommand(
+  view: EditorView,
+  options: TableCellNavigationCommandOptions = {},
+): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const scoped = snapshotFromViewTableBlock(view);
+  if (!scoped) return false;
+  const operation = runTableCellNavigationRules(scoped.snapshot, {
+    markdownAutoformat: options.markdownAutoformat ?? true,
+    outdent: options.outdent ?? false,
+  });
+  if (!operation) return false;
+  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  return true;
+}
+
 function tableCellJump(view: EditorView, autoformat: boolean, outdent: boolean): boolean {
-  const operation = runTableCellNavigationRules(snapshotFromView(view), {
+  return runTableCellNavigationCommand(view, {
     markdownAutoformat: autoformat,
     outdent,
   });
-  if (!operation) return false;
-  applyEditOperation(view, operation);
-  return true;
 }
 
 function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
