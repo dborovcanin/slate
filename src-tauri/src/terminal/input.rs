@@ -60,7 +60,8 @@ pub fn read_key() -> Result<Option<Key>, String> {
         return Ok(Some(Key::Tab));
     }
     if first == 127 || first == 8 {
-        return Ok(Some(Key::Backspace));
+        let erase = terminal_erase_byte().unwrap_or(127);
+        return Ok(Some(classify_backspace_byte(first, erase)));
     }
     if (1..=26).contains(&first) {
         let c = (b'a' + (first - 1)) as char;
@@ -200,6 +201,9 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
     let Some(second) = read_byte()? else {
         return Ok(Some(Key::Esc));
     };
+    if second == 127 || second == 8 {
+        return Ok(Some(Key::CtrlBackspace));
+    }
     if second != b'[' && second != b'O' {
         return Ok(Some(Key::Esc));
     }
@@ -240,34 +244,89 @@ fn parse_escape_sequence() -> Result<Option<Key>, String> {
         if s == "201~" {
             return Ok(None);
         }
-        if s == "1;5C" || s == "5C" {
-            return Ok(Some(Key::CtrlArrowRight));
-        }
-        if s == "1;5D" || s == "5D" {
-            return Ok(Some(Key::CtrlArrowLeft));
-        }
-        if s == "1~" || s == "7~" {
-            return Ok(Some(Key::Home));
-        }
-        if s == "4~" || s == "8~" {
-            return Ok(Some(Key::End));
-        }
-        if s == "3~" {
-            return Ok(Some(Key::Delete));
-        }
-        if s == "3;5~" {
-            return Ok(Some(Key::CtrlDelete));
-        }
-        if s == "127;5u" || s == "8;5u" {
-            return Ok(Some(Key::CtrlBackspace));
-        }
-        if s == "5~" {
-            return Ok(Some(Key::PageUp));
-        }
-        if s == "6~" {
-            return Ok(Some(Key::PageDown));
+        if let Some(key) = parse_csi_key(s) {
+            return Ok(Some(key));
         }
     }
 
     Ok(Some(Key::Esc))
+}
+
+fn terminal_erase_byte() -> Option<u8> {
+    let mut term = MaybeUninit::<libc::termios>::zeroed();
+    let ok = unsafe { libc::tcgetattr(libc::STDIN_FILENO, term.as_mut_ptr()) };
+    if ok != 0 {
+        return None;
+    }
+    let term = unsafe { term.assume_init() };
+    Some(term.c_cc[libc::VERASE] as u8)
+}
+
+fn classify_backspace_byte(byte: u8, erase: u8) -> Key {
+    if byte == erase {
+        Key::Backspace
+    } else {
+        Key::CtrlBackspace
+    }
+}
+
+fn parse_csi_key(s: &str) -> Option<Key> {
+    match s {
+        "1;5C" | "5C" => return Some(Key::CtrlArrowRight),
+        "1;5D" | "5D" => return Some(Key::CtrlArrowLeft),
+        "1~" | "7~" => return Some(Key::Home),
+        "4~" | "8~" => return Some(Key::End),
+        "3~" => return Some(Key::Delete),
+        "3;5~" => return Some(Key::CtrlDelete),
+        "5~" => return Some(Key::PageUp),
+        "6~" => return Some(Key::PageDown),
+        _ => {}
+    }
+    if is_ctrl_backspace_csi_sequence(s) {
+        return Some(Key::CtrlBackspace);
+    }
+    None
+}
+
+fn is_ctrl_backspace_csi_sequence(s: &str) -> bool {
+    let Some(body) = s.strip_suffix('u').or_else(|| s.strip_suffix('~')) else {
+        return false;
+    };
+    if let Some(code) = body.strip_prefix("27;5;") {
+        return code == "8" || code == "127";
+    }
+    let mut fields = body.split(';');
+    let Some(codepoint) = fields.next() else {
+        return false;
+    };
+    let Some(mods) = fields.next() else {
+        return false;
+    };
+    let primary_mod = mods.split(':').next().unwrap_or("");
+    (codepoint == "8" || codepoint == "127") && primary_mod == "5"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_backspace_byte_uses_erase_value() {
+        assert_eq!(classify_backspace_byte(127, 127), Key::Backspace);
+        assert_eq!(classify_backspace_byte(8, 127), Key::CtrlBackspace);
+        assert_eq!(classify_backspace_byte(8, 8), Key::Backspace);
+        assert_eq!(classify_backspace_byte(127, 8), Key::CtrlBackspace);
+    }
+
+    #[test]
+    fn parse_csi_key_maps_common_ctrl_backspace_variants() {
+        assert_eq!(parse_csi_key("127;5u"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("8;5u"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("127;5:1u"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("8;5:1u"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("127;5~"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("8;5~"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("27;5;8~"), Some(Key::CtrlBackspace));
+        assert_eq!(parse_csi_key("27;5;127~"), Some(Key::CtrlBackspace));
+    }
 }

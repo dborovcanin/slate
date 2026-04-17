@@ -1157,9 +1157,9 @@ pub fn run_table_pipe_insert_column_rule(
 
 /// Deletes the current column from a Markdown pipe table when the cursor sits
 /// inside an empty header cell. The cell is removed from every row in the
-/// block, the table is reflowed, and the cursor lands on the navigation anchor
-/// of the cell that took its place (or the previous cell if the deleted column
-/// was the last one).
+/// block, the table is reflowed, and the cursor lands on the previous column's
+/// navigation anchor when possible; when deleting the first column, it lands on
+/// the next column (which becomes the new first column).
 ///
 /// Returns `None` when:
 /// - the cursor is not on the header row of a pipe table,
@@ -1234,8 +1234,10 @@ pub fn run_table_header_delete_column_rule(
     let new_cell_count = new_header_pipes.len().saturating_sub(1);
     let target_cell = if new_cell_count == 0 {
         0
+    } else if current_cell == 0 {
+        0
     } else {
-        current_cell.min(new_cell_count - 1)
+        (current_cell - 1).min(new_cell_count - 1)
     };
     let anchor_col =
         table::table_cell_navigation_anchor(new_header_text, &new_header_pipes, target_cell);
@@ -1917,6 +1919,28 @@ mod tests {
             assert_eq!(line.matches('|').count(), 3, "line: {:?}", line);
         }
         assert!(lines[2].contains("1") && lines[2].contains("3") && !lines[2].contains("2"));
+    }
+
+    #[test]
+    fn run_table_header_delete_column_prefers_previous_column_for_cursor() {
+        let text = "| a |  | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        let head = text.find("|  |").unwrap() + 2;
+        let snap = snapshot(text, head, head);
+        let op = run_table_header_delete_column_rule(&snap).expect("rule fires");
+        let result = apply_operation(text, &op);
+        let anchor = op.selection.expect("selection").anchor;
+        assert_eq!(anchor, result.find('a').expect("a in header") + 1);
+    }
+
+    #[test]
+    fn run_table_header_delete_column_uses_next_column_when_first_deleted() {
+        let text = "|  | b | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        let head = text.find("|  |").unwrap() + 2;
+        let snap = snapshot(text, head, head);
+        let op = run_table_header_delete_column_rule(&snap).expect("rule fires");
+        let result = apply_operation(text, &op);
+        let anchor = op.selection.expect("selection").anchor;
+        assert_eq!(anchor, result.find('b').expect("b in header") + 1);
     }
 
     #[test]

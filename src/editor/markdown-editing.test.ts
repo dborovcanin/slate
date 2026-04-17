@@ -174,10 +174,36 @@ test("table scoped snapshot remaps edit operation back to document offsets", () 
   const { view, getState } = createTestEditorView(doc, cursor);
 
   assert.equal(runTableHeaderDeleteColumnCommand(view), true);
+  const result = getState().doc.toString();
   assert.equal(
-    getState().doc.toString(),
+    result,
     ["alpha", "beta", "| a   | c   |", "| --- | --- |", "| 1   | 3   |", "omega"].join("\n"),
   );
+  const headerStart = result.indexOf("| a   | c   |");
+  assert.notEqual(headerStart, -1);
+  assert.equal(getState().selection.main.head, headerStart + 3);
+});
+
+test("table column delete lands on next column when removing first column", () => {
+  const doc = [
+    "alpha",
+    "|   | b | c |",
+    "| --- | --- | --- |",
+    "| 1 | 2 | 3 |",
+    "omega",
+  ].join("\n");
+  const cursor = doc.indexOf("|   |") + 2;
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  assert.equal(runTableHeaderDeleteColumnCommand(view), true);
+  const result = getState().doc.toString();
+  assert.equal(
+    result,
+    ["alpha", "| b   | c   |", "| --- | --- |", "| 2   | 3   |", "omega"].join("\n"),
+  );
+  const headerStart = result.indexOf("| b   | c   |");
+  assert.notEqual(headerStart, -1);
+  assert.equal(getState().selection.main.head, headerStart + 3);
 });
 
 test("table scoped snapshot remaps navigation selection back to document offsets", () => {

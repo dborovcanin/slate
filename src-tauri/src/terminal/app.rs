@@ -465,7 +465,14 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::Ctrl('w') => {
-                should_autoformat = self.delete_word_backward();
+                if self.try_table_header_delete_column_rule() {
+                    should_autoformat = false;
+                    clamp_table_padding = false;
+                } else if let Some(changed) = self.try_table_boundary_edit_rule(true, true) {
+                    should_autoformat = changed;
+                } else {
+                    should_autoformat = self.delete_word_backward();
+                }
             }
             Key::Ctrl('s') => {
                 self.save(db)?;
@@ -2618,8 +2625,7 @@ impl TerminalApp {
             }
             // Carry forward cached cell results for unchanged lines (same
             // alignment as base_results, which the planner already validated).
-            let mut merged_cells: Vec<Vec<(usize, String)>> =
-                vec![Vec::new(); self.lines.len()];
+            let mut merged_cells: Vec<Vec<(usize, String)>> = vec![Vec::new(); self.lines.len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
                     if let Some(cached) = self.cell_calc_results.get(entry.line_idx) {
@@ -2640,11 +2646,7 @@ impl TerminalApp {
                         *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
                     }
                     if let Some(slot) = merged_cells.get_mut(idx) {
-                        *slot = calc_data
-                            .cell_results
-                            .get(idx)
-                            .cloned()
-                            .unwrap_or_default();
+                        *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
                     }
                 }
                 (merged_results, merged_cells, calc_data.variable_names)
@@ -3818,8 +3820,8 @@ impl TerminalApp {
 
                         for (fi, seg) in formula_segments.iter().enumerate() {
                             let marker = formula_marker_token(fi);
-                            let value = value_for_cell(seg.cell_index)
-                                .unwrap_or_else(|| String::from("…"));
+                            let value =
+                                value_for_cell(seg.cell_index).unwrap_or_else(|| String::from("…"));
                             let source_text =
                                 line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
@@ -3830,7 +3832,11 @@ impl TerminalApp {
                             // Ghost trailer: focused cell shows the value
                             // (so the user can see the result while editing),
                             // resting cells show the formula source.
-                            let trailer_text = if is_focused { value.clone() } else { source_text };
+                            let trailer_text = if is_focused {
+                                value.clone()
+                            } else {
+                                source_text
+                            };
                             if !trailer_text.is_empty() {
                                 trailer_parts.push(format!("{marker} ➜ {trailer_text}"));
                             }
@@ -3839,22 +3845,19 @@ impl TerminalApp {
 
                             if is_focused {
                                 out.push_str(&line_text[seg.from_byte..seg.to_byte]);
-                                let mapped = (self.cursor_col as isize + char_delta)
-                                    .max(0) as usize;
+                                let mapped =
+                                    (self.cursor_col as isize + char_delta).max(0) as usize;
                                 focused_cursor_col = Some(mapped);
                             } else {
                                 let mut replacement = format!("{value}{marker}");
-                                let old_chars =
-                                    seg.to_char.saturating_sub(seg.from_char);
+                                let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                 let new_chars = replacement.chars().count();
                                 if new_chars < old_chars {
-                                    replacement
-                                        .push_str(&" ".repeat(old_chars - new_chars));
+                                    replacement.push_str(&" ".repeat(old_chars - new_chars));
                                 }
                                 let rendered_chars = replacement.chars().count();
-                                let marker_char =
-                                    ((seg.from_char as isize) + char_delta) as usize
-                                        + value.chars().count();
+                                let marker_char = ((seg.from_char as isize) + char_delta) as usize
+                                    + value.chars().count();
                                 let marker_end = marker_char + marker.chars().count();
                                 ghost_dim_ranges.push((marker_char, marker_end));
                                 char_delta += rendered_chars as isize - old_chars as isize;
@@ -3880,16 +3883,12 @@ impl TerminalApp {
                                             .unwrap_or_else(|| String::from("…"));
                                         let marker = formula_marker_token(fi);
                                         let mut rep = format!("{value}{marker}");
-                                        let old_chars =
-                                            seg.to_char.saturating_sub(seg.from_char);
+                                        let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                         let new_chars = rep.chars().count();
                                         if new_chars < old_chars {
-                                            rep.push_str(
-                                                &" ".repeat(old_chars - new_chars),
-                                            );
+                                            rep.push_str(&" ".repeat(old_chars - new_chars));
                                         }
-                                        delta += rep.chars().count() as isize
-                                            - old_chars as isize;
+                                        delta += rep.chars().count() as isize - old_chars as isize;
                                     }
                                 }
                                 ((self.cursor_col as isize) + delta).max(0) as usize
@@ -5588,14 +5587,40 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_w_word_delete_is_isolated_within_table_cell() {
-        let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
-        let original = app.lines[0].clone();
-        app.cursor_col = 8; // empty middle cell anchor
+    fn ctrl_w_removes_table_column_when_header_cell_empty() {
+        let text = "| a |  | c |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        let (db, mut app, path) = app_with_note(text);
+        app.cursor_line = 0;
+        app.cursor_col = app.lines[0].find("|  |").expect("empty header cell") + 2;
+
         app.handle_editor_key(&db, Key::Ctrl('w'))
-            .expect("ctrl-w in empty cell");
-        assert_eq!(app.lines[0], original);
-        assert_eq!(app.cursor_col, 8);
+            .expect("ctrl-w removes empty header column");
+
+        assert_eq!(app.lines.len(), 3);
+        for line in &app.lines {
+            assert_eq!(line.matches('|').count(), 3, "line: {:?}", line);
+        }
+        assert!(app.lines[2].contains("1"));
+        assert!(app.lines[2].contains("3"));
+        assert!(!app.lines[2].contains("2"));
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 3);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn ctrl_w_deletes_word_outside_table() {
+        let (db, mut app, path) = app_with_note("alpha beta");
+        app.cursor_col = app.lines[0].len();
+
+        app.handle_editor_key(&db, Key::Ctrl('w'))
+            .expect("ctrl-w deletes previous word");
+
+        assert_eq!(app.lines[0], "alpha ");
+        assert_eq!(app.cursor_col, "alpha ".len());
 
         drop(app);
         drop(db);
@@ -5641,6 +5666,8 @@ mod tests {
         app.handle_editor_key(&db, Key::CtrlBackspace)
             .expect("ctrl-backspace removes empty header column");
         assert_middle_column_removed(&app.lines);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 3);
         drop(app);
         drop(db);
         cleanup_db_files(&path);
@@ -5651,6 +5678,8 @@ mod tests {
         app.handle_editor_key(&db, Key::CtrlDelete)
             .expect("ctrl-delete removes empty header column");
         assert_middle_column_removed(&app.lines);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 3);
         drop(app);
         drop(db);
         cleanup_db_files(&path);
