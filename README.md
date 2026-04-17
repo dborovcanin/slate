@@ -57,6 +57,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 
 **IMAP email sync (special notes)**
 - Run sync once: `slate imap-sync`
+- Enable background polling in app sessions: set `[imap] auto_sync_on_startup = true`
 - Pulls from configured IMAP folder and appends messages to daily notes (`inbox-email-YYYY-MM-DD` by default)
 - Works with any provider exposing IMAP over TLS
 - Uses incremental UID checkpointing to avoid reprocessing old messages
@@ -294,6 +295,8 @@ username = ""
 password_env = "SLATE_IMAP_PASSWORD"
 folder = "INBOX"
 poll_seconds = 60
+auto_sync_on_startup = false
+initial_sync_max_messages = 200
 max_message_bytes = 8388608
 max_body_bytes = 524288
 ```
@@ -352,7 +355,9 @@ IMAP options:
 - `[imap] username` account login name
 - `[imap] password_env` environment variable name containing IMAP password/app password
 - `[imap] folder` folder to sync (`INBOX` by default)
-- `[imap] poll_seconds` polling interval used by watch mode
+- `[imap] poll_seconds` polling interval used by background sync loop
+- `[imap] auto_sync_on_startup` run IMAP polling in background during GUI/terminal sessions
+- `[imap] initial_sync_max_messages` first-run window: only last N messages are pulled before checkpoint exists
 - `[imap] max_message_bytes` max raw message bytes stored in sidecar
 - `[imap] max_body_bytes` max message body bytes rendered into note content
 

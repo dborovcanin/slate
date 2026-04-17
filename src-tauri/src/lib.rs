@@ -11,6 +11,8 @@ mod terminal;
 use app_core::AppCore;
 use ipc::server;
 use std::io::IsTerminal as _;
+use std::thread;
+use std::time::Duration;
 
 #[cfg(unix)]
 use terminal::TerminalOptions;
@@ -32,6 +34,7 @@ fn run_gui() -> Result<(), String> {
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
+    maybe_start_background_imap_sync();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -198,6 +201,7 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
+    maybe_start_background_imap_sync();
     let core = AppCore::open_default()?;
     terminal::run_terminal_session(core.db(), theme, opts)
 }
@@ -209,6 +213,26 @@ fn run_imap_sync() -> Result<(), String> {
     let imap_cfg = config::load_imap_config();
     let special = config::load_special_notes_config();
     imap::run_imap_sync(imap_cfg, special)
+}
+
+fn maybe_start_background_imap_sync() {
+    let imap_cfg = config::load_imap_config();
+    if !imap_cfg.auto_sync_on_startup {
+        return;
+    }
+    if let Err(err) = imap_cfg.validate_runtime() {
+        eprintln!("IMAP background sync disabled: {err}");
+        return;
+    }
+    let special = config::load_special_notes_config();
+    let poll_seconds = imap_cfg.poll_seconds.max(10);
+
+    thread::spawn(move || {
+        loop {
+            let _ = imap::run_imap_sync_silent(imap_cfg.clone(), special.clone());
+            thread::sleep(Duration::from_secs(poll_seconds));
+        }
+    });
 }
 
 pub fn run() {
@@ -297,6 +321,17 @@ mod tests {
     fn parse_supports_imap_mode() {
         let (mode, _) = parse_args(&["imap-sync".to_string()], false, true).expect("parsed");
         assert_eq!(mode, Mode::ImapSync);
+    }
+
+    #[test]
+    fn parse_rejects_imap_with_terminal_flags() {
+        let err = parse_args(
+            &["imap-sync".to_string(), "--terminal".to_string()],
+            false,
+            true,
+        )
+        .expect_err("expected err");
+        assert!(err.contains("Cannot combine imap-sync"));
     }
 
     #[test]

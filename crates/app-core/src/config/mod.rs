@@ -29,12 +29,16 @@ const DEFAULT_IMAP_USERNAME: &str = "";
 const DEFAULT_IMAP_PASSWORD_ENV: &str = "SLATE_IMAP_PASSWORD";
 const DEFAULT_IMAP_FOLDER: &str = "INBOX";
 const DEFAULT_IMAP_POLL_SECONDS: u64 = 60;
+const DEFAULT_IMAP_AUTO_SYNC_ON_STARTUP: bool = false;
+const DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 200;
 const DEFAULT_IMAP_MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
 const MIN_IMAP_MAX_BYTES: usize = 1024;
 const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MIN_IMAP_POLL_SECONDS: u64 = 10;
 const MAX_IMAP_POLL_SECONDS: u64 = 24 * 60 * 60;
+const MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 1;
+const MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 100_000;
 const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Color schemes:
@@ -97,8 +101,12 @@ username = ""
 password_env = "SLATE_IMAP_PASSWORD"
 # Folder to pull (typically INBOX)
 folder = "INBOX"
-# Poll interval for `slate imap-sync --watch`
+# Poll interval for background IMAP sync loop
 poll_seconds = 60
+# Enable background IMAP polling when running GUI/terminal modes
+auto_sync_on_startup = false
+# On first sync (before a UID checkpoint exists), pull only last N messages
+initial_sync_max_messages = 200
 # Maximum accepted raw message payload size in bytes
 max_message_bytes = 8388608
 # Maximum stored message body size in bytes (truncated in note body when exceeded)
@@ -145,6 +153,8 @@ pub struct ImapConfig {
     pub password_env: String,
     pub folder: String,
     pub poll_seconds: u64,
+    pub auto_sync_on_startup: bool,
+    pub initial_sync_max_messages: u32,
     pub max_message_bytes: usize,
     pub max_body_bytes: usize,
 }
@@ -158,6 +168,8 @@ impl Default for ImapConfig {
             password_env: DEFAULT_IMAP_PASSWORD_ENV.to_string(),
             folder: DEFAULT_IMAP_FOLDER.to_string(),
             poll_seconds: DEFAULT_IMAP_POLL_SECONDS,
+            auto_sync_on_startup: DEFAULT_IMAP_AUTO_SYNC_ON_STARTUP,
+            initial_sync_max_messages: DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES,
             max_message_bytes: DEFAULT_IMAP_MAX_MESSAGE_BYTES,
             max_body_bytes: DEFAULT_IMAP_MAX_BODY_BYTES,
         }
@@ -194,6 +206,9 @@ impl ImapConfig {
             return Err(format!(
                 "imap.poll_seconds must be >= {MIN_IMAP_POLL_SECONDS}"
             ));
+        }
+        if self.initial_sync_max_messages == 0 {
+            return Err("imap.initial_sync_max_messages must be greater than 0".to_string());
         }
         if self.max_body_bytes > self.max_message_bytes {
             return Err(
@@ -278,6 +293,8 @@ struct ImapSection {
     password_env: Option<String>,
     folder: Option<String>,
     poll_seconds: Option<u64>,
+    auto_sync_on_startup: Option<bool>,
+    initial_sync_max_messages: Option<u32>,
     max_message_bytes: Option<u64>,
     max_body_bytes: Option<u64>,
 }
@@ -426,6 +443,13 @@ fn parse_imap_config(text: &str) -> Result<ImapConfig, String> {
         password_env: normalize_nonempty(raw.imap.password_env, DEFAULT_IMAP_PASSWORD_ENV),
         folder: normalize_nonempty(raw.imap.folder, DEFAULT_IMAP_FOLDER),
         poll_seconds: normalize_imap_poll_seconds(raw.imap.poll_seconds),
+        auto_sync_on_startup: raw
+            .imap
+            .auto_sync_on_startup
+            .unwrap_or(DEFAULT_IMAP_AUTO_SYNC_ON_STARTUP),
+        initial_sync_max_messages: normalize_imap_initial_sync_max_messages(
+            raw.imap.initial_sync_max_messages,
+        ),
         max_message_bytes: normalize_imap_max_bytes(
             raw.imap.max_message_bytes,
             DEFAULT_IMAP_MAX_MESSAGE_BYTES,
@@ -507,6 +531,17 @@ fn normalize_imap_poll_seconds(value: Option<u64>) -> u64 {
     value
         .map(|raw| raw.clamp(MIN_IMAP_POLL_SECONDS, MAX_IMAP_POLL_SECONDS))
         .unwrap_or(DEFAULT_IMAP_POLL_SECONDS)
+}
+
+fn normalize_imap_initial_sync_max_messages(value: Option<u32>) -> u32 {
+    value
+        .map(|raw| {
+            raw.clamp(
+                MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES,
+                MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES,
+            )
+        })
+        .unwrap_or(DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES)
 }
 
 fn normalize_email_rotation(value: Option<String>) -> String {
@@ -715,6 +750,8 @@ mod tests {
             password_env = "IMAP_PASS"
             folder = "INBOX"
             poll_seconds = 30
+            auto_sync_on_startup = true
+            initial_sync_max_messages = 75
             max_message_bytes = 4096
             max_body_bytes = 2048
             "#,
@@ -726,6 +763,8 @@ mod tests {
         assert_eq!(imap.password_env, "IMAP_PASS");
         assert_eq!(imap.folder, "INBOX");
         assert_eq!(imap.poll_seconds, 30);
+        assert!(imap.auto_sync_on_startup);
+        assert_eq!(imap.initial_sync_max_messages, 75);
         assert_eq!(imap.max_message_bytes, 4096);
         assert_eq!(imap.max_body_bytes, 2048);
     }

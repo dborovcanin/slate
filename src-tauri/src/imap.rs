@@ -23,6 +23,18 @@ struct SyncSummary {
 }
 
 pub fn run_imap_sync(imap: ImapConfig, special: SpecialNotesConfig) -> Result<(), String> {
+    run_imap_sync_with_verbosity(imap, special, true)
+}
+
+pub fn run_imap_sync_silent(imap: ImapConfig, special: SpecialNotesConfig) -> Result<(), String> {
+    run_imap_sync_with_verbosity(imap, special, false)
+}
+
+fn run_imap_sync_with_verbosity(
+    imap: ImapConfig,
+    special: SpecialNotesConfig,
+    verbose: bool,
+) -> Result<(), String> {
     imap.validate_runtime()?;
 
     let password = std::env::var(imap.password_env.trim())
@@ -35,15 +47,17 @@ pub fn run_imap_sync(imap: ImapConfig, special: SpecialNotesConfig) -> Result<()
     let db = Db::open(db_path)?;
     let source_key = build_source_key(&imap);
 
-    let summary = sync_once(&db, &imap, &special, &source_key, &password)?;
-    println!(
-        "IMAP sync done: fetched={} appended={} duplicates={} body_truncated={} message_truncated={}",
-        summary.fetched,
-        summary.appended,
-        summary.duplicates,
-        summary.body_truncated,
-        summary.message_truncated
-    );
+    let summary = sync_once(&db, &imap, &special, &source_key, &password, verbose)?;
+    if verbose {
+        println!(
+            "IMAP sync done: fetched={} appended={} duplicates={} body_truncated={} message_truncated={}",
+            summary.fetched,
+            summary.appended,
+            summary.duplicates,
+            summary.body_truncated,
+            summary.message_truncated
+        );
+    }
     Ok(())
 }
 
@@ -53,13 +67,20 @@ fn sync_once(
     special: &SpecialNotesConfig,
     source_key: &str,
     password: &str,
+    verbose: bool,
 ) -> Result<SyncSummary, String> {
     let mut client = ImapClient::connect(imap)?;
     client.login(&imap.username, password)?;
-    client.select(&imap.folder)?;
+    let uid_next = client.select(&imap.folder)?;
 
     let last_uid = db.get_ingest_offset(source_key)?.unwrap_or(0);
-    let start_uid = if last_uid < 1 { 1 } else { (last_uid + 1) as u64 };
+    let start_uid = determine_start_uid(last_uid, uid_next, imap.initial_sync_max_messages as u64);
+    if verbose {
+        println!(
+            "IMAP sync start: folder={} checkpoint_uid={} start_uid={}",
+            imap.folder, last_uid, start_uid
+        );
+    }
     let uids = client.search_uids(start_uid)?;
 
     let mut summary = SyncSummary::default();
@@ -95,6 +116,18 @@ fn sync_once(
 
     let _ = client.logout();
     Ok(summary)
+}
+
+fn determine_start_uid(last_uid: i64, uid_next: Option<u64>, initial_sync_max_messages: u64) -> u64 {
+    if last_uid >= 1 {
+        return (last_uid as u64).saturating_add(1);
+    }
+
+    let window = initial_sync_max_messages.max(1);
+    match uid_next {
+        Some(next) if next > 1 => next.saturating_sub(window).max(1),
+        _ => 1,
+    }
 }
 
 fn build_source_key(imap: &ImapConfig) -> String {
@@ -266,9 +299,10 @@ impl ImapClient {
         self.run_command(&command, "LOGIN *** ***").map(|_| ())
     }
 
-    fn select(&mut self, folder: &str) -> Result<(), String> {
+    fn select(&mut self, folder: &str) -> Result<Option<u64>, String> {
         let command = format!("SELECT {}", quote_imap_string(folder));
-        self.run_command(&command, &command).map(|_| ())
+        let parts = self.run_command(&command, &command)?;
+        Ok(parse_uid_next(&parts))
     }
 
     fn search_uids(&mut self, start_uid: u64) -> Result<Vec<u64>, String> {
@@ -405,6 +439,25 @@ fn parse_imap_literal_size(line: &str) -> Option<usize> {
         token = stripped;
     }
     token.parse::<usize>().ok()
+}
+
+fn parse_uid_next(parts: &[ImapResponsePart]) -> Option<u64> {
+    const MARKER: &str = "[UIDNEXT ";
+    for part in parts {
+        let upper = part.line.to_ascii_uppercase();
+        let Some(start) = upper.find(MARKER) else {
+            continue;
+        };
+        let tail = &part.line[start + MARKER.len()..];
+        let digits_len = tail.chars().take_while(|c| c.is_ascii_digit()).count();
+        if digits_len == 0 {
+            continue;
+        }
+        if let Ok(uid_next) = tail[..digits_len].parse::<u64>() {
+            return Some(uid_next);
+        }
+    }
+    None
 }
 
 fn quote_imap_string(value: &str) -> String {
@@ -654,5 +707,21 @@ mod tests {
         assert_eq!(parse_imap_literal_size("* 23 FETCH (RFC822 {123}"), Some(123));
         assert_eq!(parse_imap_literal_size("* 23 FETCH (RFC822 {456+}"), Some(456));
         assert_eq!(parse_imap_literal_size("* NO LITERAL"), None);
+    }
+
+    #[test]
+    fn parse_uid_next_reads_select_response() {
+        let parts = vec![ImapResponsePart {
+            line: "* OK [UIDNEXT 4096] Predicted next UID".to_string(),
+            literal: None,
+        }];
+        assert_eq!(parse_uid_next(&parts), Some(4096));
+    }
+
+    #[test]
+    fn determine_start_uid_uses_recent_window_on_first_sync() {
+        assert_eq!(determine_start_uid(0, Some(101), 50), 51);
+        assert_eq!(determine_start_uid(0, Some(10), 50), 1);
+        assert_eq!(determine_start_uid(77, Some(101), 50), 78);
     }
 }
