@@ -4,6 +4,14 @@ use tauri::State;
 
 #[tauri::command]
 pub fn get_or_create_note(core: State<'_, AppCore>) -> Result<Note, String> {
+    let special = app_core::config::load_special_notes_config();
+    if let Some(note) = core
+        .db()
+        .get_most_recent_note_excluding_prefix(&special.email_note_prefix)?
+    {
+        return Ok(note);
+    }
+
     if let Some(note) = core.db().get_most_recent_note()? {
         return Ok(note);
     }

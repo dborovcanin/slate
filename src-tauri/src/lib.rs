@@ -212,7 +212,31 @@ fn run_imap_sync() -> Result<(), String> {
     }
     let imap_cfg = config::load_imap_config();
     let special = config::load_special_notes_config();
-    imap::run_imap_sync(imap_cfg, special)
+    imap::run_imap_sync(imap_cfg, special).map(|_| ())
+}
+
+fn notify_imap_new_mail(
+    appended: usize,
+    imap_cfg: &config::ImapConfig,
+    special: &config::SpecialNotesConfig,
+) {
+    if appended == 0 {
+        return;
+    }
+    let note_id = config::resolve_email_note_id(special, time::OffsetDateTime::now_utc());
+    let title = if appended == 1 {
+        "New email in Slate"
+    } else {
+        "New emails in Slate"
+    };
+    let body = format!(
+        "{} new email{} synced from {} to {}",
+        appended,
+        if appended == 1 { "" } else { "s" },
+        imap_cfg.folder,
+        note_id
+    );
+    let _ = commands::reminders::send_system_notification(title.to_string(), body);
 }
 
 fn maybe_start_background_imap_sync() {
@@ -227,11 +251,11 @@ fn maybe_start_background_imap_sync() {
     let special = config::load_special_notes_config();
     let poll_seconds = imap_cfg.poll_seconds.max(10);
 
-    thread::spawn(move || {
-        loop {
-            let _ = imap::run_imap_sync_silent(imap_cfg.clone(), special.clone());
-            thread::sleep(Duration::from_secs(poll_seconds));
+    thread::spawn(move || loop {
+        if let Ok(summary) = imap::run_imap_sync_silent(imap_cfg.clone(), special.clone()) {
+            notify_imap_new_mail(summary.appended, &imap_cfg, &special);
         }
+        thread::sleep(Duration::from_secs(poll_seconds));
     });
 }
 

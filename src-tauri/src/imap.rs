@@ -13,20 +13,23 @@ use time::OffsetDateTime;
 
 const MAX_IMAP_LINE_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug, Default)]
-struct SyncSummary {
-    fetched: usize,
-    appended: usize,
-    duplicates: usize,
-    body_truncated: usize,
-    message_truncated: usize,
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SyncSummary {
+    pub fetched: usize,
+    pub appended: usize,
+    pub duplicates: usize,
+    pub body_truncated: usize,
+    pub message_truncated: usize,
 }
 
-pub fn run_imap_sync(imap: ImapConfig, special: SpecialNotesConfig) -> Result<(), String> {
+pub fn run_imap_sync(imap: ImapConfig, special: SpecialNotesConfig) -> Result<SyncSummary, String> {
     run_imap_sync_with_verbosity(imap, special, true)
 }
 
-pub fn run_imap_sync_silent(imap: ImapConfig, special: SpecialNotesConfig) -> Result<(), String> {
+pub fn run_imap_sync_silent(
+    imap: ImapConfig,
+    special: SpecialNotesConfig,
+) -> Result<SyncSummary, String> {
     run_imap_sync_with_verbosity(imap, special, false)
 }
 
@@ -34,13 +37,16 @@ fn run_imap_sync_with_verbosity(
     imap: ImapConfig,
     special: SpecialNotesConfig,
     verbose: bool,
-) -> Result<(), String> {
+) -> Result<SyncSummary, String> {
     imap.validate_runtime()?;
 
     let password = std::env::var(imap.password_env.trim())
         .map_err(|_| format!("Missing IMAP password env var '{}'", imap.password_env))?;
     if password.trim().is_empty() {
-        return Err(format!("IMAP password env var '{}' is empty", imap.password_env));
+        return Err(format!(
+            "IMAP password env var '{}' is empty",
+            imap.password_env
+        ));
     }
 
     let db_path = data_dir()?.join("notes.db");
@@ -58,7 +64,7 @@ fn run_imap_sync_with_verbosity(
             summary.message_truncated
         );
     }
-    Ok(())
+    Ok(summary)
 }
 
 fn sync_once(
@@ -81,10 +87,12 @@ fn sync_once(
             imap.folder, last_uid, start_uid
         );
     }
-    let uids = client.search_uids(start_uid)?;
+    let mut uids = client.search_uids(start_uid)?;
+    // Fetch newest first so users see latest mail first by default.
+    sort_uids_latest_first(&mut uids);
 
     let mut summary = SyncSummary::default();
-    let mut current_uid = last_uid;
+    let mut max_processed_uid = last_uid;
 
     for uid in uids {
         summary.fetched += 1;
@@ -108,17 +116,24 @@ fn sync_once(
             }
         }
 
-        if uid as i64 > current_uid {
-            current_uid = uid as i64;
-            db.set_ingest_offset(source_key, current_uid)?;
+        if uid as i64 > max_processed_uid {
+            max_processed_uid = uid as i64;
         }
+    }
+
+    if max_processed_uid > last_uid {
+        db.set_ingest_offset(source_key, max_processed_uid)?;
     }
 
     let _ = client.logout();
     Ok(summary)
 }
 
-fn determine_start_uid(last_uid: i64, uid_next: Option<u64>, initial_sync_max_messages: u64) -> u64 {
+fn determine_start_uid(
+    last_uid: i64,
+    uid_next: Option<u64>,
+    initial_sync_max_messages: u64,
+) -> u64 {
     if last_uid >= 1 {
         return (last_uid as u64).saturating_add(1);
     }
@@ -128,6 +143,10 @@ fn determine_start_uid(last_uid: i64, uid_next: Option<u64>, initial_sync_max_me
         Some(next) if next > 1 => next.saturating_sub(window).max(1),
         _ => 1,
     }
+}
+
+fn sort_uids_latest_first(uids: &mut [u64]) {
+    uids.sort_unstable_by(|a, b| b.cmp(a));
 }
 
 fn build_source_key(imap: &ImapConfig) -> String {
@@ -334,7 +353,9 @@ impl ImapClient {
                 return Ok(literal);
             }
         }
-        Err(format!("IMAP UID FETCH returned no message payload for UID {uid}"))
+        Err(format!(
+            "IMAP UID FETCH returned no message payload for UID {uid}"
+        ))
     }
 
     fn logout(&mut self) -> Result<(), String> {
@@ -666,10 +687,7 @@ mod tests {
         let markdown = build_email_markdown(
             "Subject line",
             &["sender@example.com".to_string()],
-            &[
-                "a@example.com".to_string(),
-                "b@example.com".to_string(),
-            ],
+            &["a@example.com".to_string(), "b@example.com".to_string()],
             &["c@example.com".to_string()],
             Some("Fri, 17 Apr 2026 10:00:00 +0200"),
             Some("<abc@id>"),
@@ -704,8 +722,14 @@ mod tests {
 
     #[test]
     fn parse_literal_size_handles_suffix_form() {
-        assert_eq!(parse_imap_literal_size("* 23 FETCH (RFC822 {123}"), Some(123));
-        assert_eq!(parse_imap_literal_size("* 23 FETCH (RFC822 {456+}"), Some(456));
+        assert_eq!(
+            parse_imap_literal_size("* 23 FETCH (RFC822 {123}"),
+            Some(123)
+        );
+        assert_eq!(
+            parse_imap_literal_size("* 23 FETCH (RFC822 {456+}"),
+            Some(456)
+        );
         assert_eq!(parse_imap_literal_size("* NO LITERAL"), None);
     }
 
@@ -723,5 +747,12 @@ mod tests {
         assert_eq!(determine_start_uid(0, Some(101), 50), 51);
         assert_eq!(determine_start_uid(0, Some(10), 50), 1);
         assert_eq!(determine_start_uid(77, Some(101), 50), 78);
+    }
+
+    #[test]
+    fn sort_uids_prefers_latest_messages_first() {
+        let mut uids = vec![4, 1, 7, 3];
+        sort_uids_latest_first(&mut uids);
+        assert_eq!(uids, vec![7, 4, 3, 1]);
     }
 }

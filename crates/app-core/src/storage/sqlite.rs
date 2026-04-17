@@ -171,6 +171,42 @@ impl Db {
         Ok(note)
     }
 
+    pub fn get_most_recent_note_excluding_prefix(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<Note>, String> {
+        let trimmed = prefix.trim();
+        if trimmed.is_empty() {
+            return self.get_most_recent_note();
+        }
+
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, body, created_at, updated_at
+                 FROM notes
+                 WHERE id NOT LIKE ?1 ESCAPE '\\'
+                 ORDER BY updated_at DESC
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let pattern = format!("{}-%", escape_like_pattern(trimmed));
+        let note = stmt
+            .query_row([pattern], |row| {
+                Ok(Note {
+                    id: row.get(0)?,
+                    body: row.get(1)?,
+                    created_at: row.get(2)?,
+                    updated_at: row.get(3)?,
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        Ok(note)
+    }
+
     pub fn list_notes(&self) -> Result<Vec<Note>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -415,8 +451,8 @@ impl Db {
                     if body_truncated { 1 } else { 0 },
                     if message_truncated { 1 } else { 0 },
                 ],
-        )
-        .map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
         Ok(changed > 0)
     }
 
@@ -601,6 +637,17 @@ fn now_iso() -> String {
         .unwrap()
 }
 
+fn escape_like_pattern(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch == '\\' || ch == '%' || ch == '_' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -661,6 +708,32 @@ mod tests {
             .expect("note exists");
         assert_eq!(most_recent.id, "a");
         assert_eq!(most_recent.body, "first updated");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn most_recent_note_can_skip_prefixed_special_notes() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("work-note", "normal").expect("save normal");
+        thread::sleep(Duration::from_millis(5));
+        db.save_note("inbox-email-2026-04-17", "special")
+            .expect("save special");
+
+        let most_recent = db
+            .get_most_recent_note()
+            .expect("most recent succeeds")
+            .expect("note exists");
+        assert_eq!(most_recent.id, "inbox-email-2026-04-17");
+
+        let preferred = db
+            .get_most_recent_note_excluding_prefix("inbox-email")
+            .expect("most recent excluding prefix succeeds")
+            .expect("note exists");
+        assert_eq!(preferred.id, "work-note");
 
         drop(db);
         let _ = fs::remove_file(path);

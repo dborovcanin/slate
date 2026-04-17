@@ -61,6 +61,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Pulls from configured IMAP folder and appends messages to daily notes (`inbox-email-YYYY-MM-DD` by default)
 - Works with any provider exposing IMAP over TLS
 - Uses incremental UID checkpointing to avoid reprocessing old messages
+- Fetches newest messages first by default
+- Shows a system notification when background sync appends new emails
 
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line

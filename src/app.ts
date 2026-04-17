@@ -22,7 +22,7 @@ import {
   refreshSwitcher,
 } from "./switcher/switcher";
 import { state } from "./state";
-import { save } from "@tauri-apps/plugin-dialog";
+import { confirm, save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 import { openDatePicker } from "./editor/date-picker";
@@ -58,7 +58,7 @@ async function handleDeleteNoteById(noteId: string) {
   const noteEntry = state.notes.find((n) => n.id === noteId);
   if (!noteEntry) return;
 
-  if (!window.confirm(`Delete "${noteEntry.title}"? This cannot be undone.`)) {
+  if (!(await confirm(`Delete "${noteEntry.title}"? This cannot be undone.`))) {
     return;
   }
 
@@ -229,7 +229,10 @@ function setupKeyboardShortcuts() {
         focusEditor();
       } else {
         openSwitcher(switchToNote, (noteId) => {
-          runAction(() => handleDeleteNoteById(noteId));
+          void handleDeleteNoteById(noteId).catch((e) => {
+            console.error("Action failed:", e);
+            showToast("Action failed");
+          });
         });
       }
       return;

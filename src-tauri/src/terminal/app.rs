@@ -1508,14 +1508,23 @@ impl TerminalApp {
             Key::Enter => {
                 if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
                     let id = self.switcher_items[idx].id.clone();
+                    let mut opened = false;
                     self.save(db)?;
                     if let Some(note) = db.get_note(&id)? {
                         self.set_active_note(db, note)?;
                         self.status = format!("opened {}", id);
+                        opened = true;
                     } else {
                         self.status = format!("note missing {}", id);
                     }
                     self.close_switcher();
+                    if opened {
+                        self.mode = UiMode::Normal;
+                        self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
+                        self.selection_anchor = None;
+                        self.command_selection = None;
+                        self.status = "-- NORMAL --".to_string();
+                    }
                 }
             }
             Key::Char(ch) => {
@@ -4368,6 +4377,11 @@ fn select_note(db: &Db, opts: &TerminalOptions) -> Result<Note, String> {
             .ok_or_else(|| format!("Note not found: {id}"));
     }
 
+    let special = crate::config::load_special_notes_config();
+    if let Some(note) = db.get_most_recent_note_excluding_prefix(&special.email_note_prefix)? {
+        return Ok(note);
+    }
+
     if let Some(note) = db.get_most_recent_note()? {
         return Ok(note);
     }
@@ -6056,11 +6070,16 @@ mod tests {
     #[test]
     fn switcher_delete_cancel_keeps_note() {
         let (db, mut app, path) = app_with_note("first note");
-        db.save_note("n2", "second note").expect("second note saved");
+        db.save_note("n2", "second note")
+            .expect("second note saved");
         app.refresh_switcher_items(&db)
             .expect("switcher items refreshed");
 
-        run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Char('s'), Key::Delete]);
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Ctrl('p'), Key::Char('s'), Key::Delete],
+        );
         assert_eq!(app.mode, UiMode::Switcher);
         assert!(app.switcher_delete_confirm.is_some());
 
@@ -6076,7 +6095,8 @@ mod tests {
     #[test]
     fn switcher_ctrl_backspace_delete_removes_active_after_confirmation() {
         let (db, mut app, path) = app_with_note("first note");
-        db.save_note("n2", "second note").expect("second note saved");
+        db.save_note("n2", "second note")
+            .expect("second note saved");
         app.refresh_switcher_items(&db)
             .expect("switcher items refreshed");
 
@@ -6104,6 +6124,30 @@ mod tests {
             .get_note(&app.active_note.id)
             .expect("active note lookup")
             .is_some());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn switcher_enter_opens_note_in_normal_mode() {
+        let (db, mut app, path) = app_with_note("first note");
+        db.save_note("n2", "second note")
+            .expect("second note saved");
+        app.refresh_switcher_items(&db)
+            .expect("switcher items refreshed");
+        app.mode = UiMode::Editor;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Ctrl('p'), Key::Paste("second".to_string()), Key::Enter],
+        );
+
+        assert_eq!(app.active_note.id, "n2");
+        assert_eq!(app.mode, UiMode::Normal);
+        assert_eq!(app.vim_state.mode, crate::editor_core::vim::VimMode::Normal);
 
         drop(app);
         drop(db);
