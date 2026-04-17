@@ -10,6 +10,7 @@ use crate::format::format_markdown;
 use crate::markdown_tokens::{
     self, CodeToken, InlineToken, MarkdownAnalyzeResult, MarkdownAnalyzedLine, MarkdownLineInfo,
 };
+use crate::table;
 use crate::text_rules::{
     rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules, run_enter_rules,
     run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules,
@@ -131,6 +132,17 @@ pub fn wasm_rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option
 #[wasm_bindgen]
 pub fn wasm_format_markdown(text: &str) -> String {
     format_markdown(text)
+}
+
+/// Format a markdown table block represented as row lines.
+#[wasm_bindgen]
+pub fn wasm_format_table_lines(lines: Vec<String>) -> JsValue {
+    let formatted = table::format_table_lines(&lines);
+    let out = Array::new();
+    for line in formatted {
+        out.push(&JsValue::from_str(&line));
+    }
+    out.into()
 }
 
 fn parse_mode(mode: &str) -> Option<CommandMode> {

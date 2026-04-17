@@ -17,6 +17,7 @@ import init, {
   wasm_calc_line_uses_assignment_prefix,
   wasm_calc_plan_incremental,
   wasm_format_markdown,
+  wasm_format_table_lines,
   wasm_list_command_suggestions,
   wasm_markdown_analyze_lines,
   wasm_markdown_classify_line,
@@ -50,6 +51,7 @@ const _isNode = typeof (globalThis as any).process?.versions?.node === "string";
 let _ready = false;
 let _initPromise: Promise<void> | null = null;
 let _initErrorLogged = false;
+const UTF8_ENCODER = new TextEncoder();
 
 async function initForNode(): Promise<void> {
   const { readFileSync } = await import("fs" as string);
@@ -312,7 +314,7 @@ function modeToId(mode: VimMode): number {
 function utf16ToUtf8Offset(text: string, utf16Offset: number): number {
   const clamped = Math.max(0, Math.min(utf16Offset, text.length));
   if (clamped === 0) return 0;
-  return new TextEncoder().encode(text.slice(0, clamped)).length;
+  return UTF8_ENCODER.encode(text.slice(0, clamped)).length;
 }
 
 function utf8ToUtf16Offset(text: string, utf8Offset: number): number {
@@ -496,6 +498,14 @@ export function rewriteLineWithChecklistToggleSuffix(lineText: string): string |
 export function formatMarkdown(text: string): string {
   if (!ensureWasmReadyNonBlocking()) return text;
   return wasm_format_markdown(text);
+}
+
+export function formatTableLines(lines: readonly string[]): string[] {
+  if (lines.length === 0) return [];
+  if (!ensureWasmReadyNonBlocking()) return [...lines];
+  const raw = wasm_format_table_lines([...lines]) as unknown;
+  if (!Array.isArray(raw)) return [...lines];
+  return raw.map((line) => (typeof line === "string" ? line : String(line)));
 }
 
 export function normalizeCommand(rawInput: string): string {

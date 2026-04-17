@@ -112,6 +112,69 @@ function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
   return isMarkdownTableLine(line.text);
 }
 
+function lineMightTriggerDocChangeRules(line: string): boolean {
+  const trimmed = line.trimStart();
+  if (trimmed.length === 0) return false;
+  const mightBeList = trimmed.startsWith("-")
+    || trimmed.startsWith("*")
+    || trimmed.startsWith("+")
+    || trimmed.startsWith("->")
+    || /^[0-9]/.test(trimmed);
+  const mightBeTable = trimmed.startsWith("|") && line.trimEnd().endsWith("|");
+  return mightBeList || mightBeTable;
+}
+
+function insertedTextMightTriggerDocRules(update: ViewUpdate): boolean {
+  const markerRe = /(?:^|\n)\s*(?:\||->|[-*+]|\d)/;
+  for (const tr of update.transactions) {
+    let matched = false;
+    tr.changes.iterChanges((_fromA, _toA, _fromB, _toB, text) => {
+      if (matched) return;
+      const inserted = text.toString();
+      if (!inserted) return;
+      if (inserted.includes("|") || markerRe.test(inserted)) {
+        matched = true;
+      }
+    });
+    if (matched) return true;
+  }
+  return false;
+}
+
+function rangeMightTriggerDocRules(
+  doc: EditorView["state"]["doc"],
+  from: number,
+  to: number,
+): boolean {
+  const startLine = doc.lineAt(from).number;
+  const endLine = doc.lineAt(Math.max(from, to)).number;
+  // Large edits are likely structural; avoid over-filtering and run rules.
+  if (endLine - startLine > 32) return true;
+  for (let lineNo = startLine; lineNo <= endLine; lineNo += 1) {
+    if (lineMightTriggerDocChangeRules(doc.line(lineNo).text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function updateMightTriggerDocChangeRules(update: ViewUpdate): boolean {
+  if (insertedTextMightTriggerDocRules(update)) return true;
+  let shouldRun = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (shouldRun) return;
+    if (
+      rangeMightTriggerDocRules(update.startState.doc, fromA, toA)
+      || rangeMightTriggerDocRules(update.state.doc, fromB, toB)
+    ) {
+      shouldRun = true;
+    }
+  });
+  if (shouldRun) return true;
+  const main = update.state.selection.main;
+  return lineMightTriggerDocChangeRules(update.state.doc.lineAt(main.head).text);
+}
+
 function clampTableCursorToContent(state: EditorView["state"], pos: number): number | null {
   const line = state.doc.lineAt(pos);
   if (!isMarkdownTableLine(line.text)) return null;
@@ -392,6 +455,7 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
         if (shouldDeferTableAutoformatForSpace(update)) return;
+        if (!updateMightTriggerDocChangeRules(update)) return;
         applying = true;
         try {
           const operation = runDocChangeRules(snapshotFromUpdate(update), {

@@ -16,7 +16,7 @@ test("formatTableLines normalizes cell padding and preserves delimiter alignment
   const input = ["| col | value |", "| :--- | ---: |", "| x | 10 |"];
   const out = formatTableLines(input);
 
-  assert.deepEqual(out, ["| col  | value |", "| :--- | ----: |", "| x    | 10    |"]);
+  assert.deepEqual(out, ["| col | value |", "| :--- | ----: |", "| x   | 10    |"]);
 });
 
 test("formatTableLines fills missing cells in shorter rows", () => {
@@ -35,6 +35,12 @@ test("formatTableLines inserts a delimiter row when missing", () => {
 
 test("formatTableLines returns empty input unchanged", () => {
   assert.deepEqual(formatTableLines([]), []);
+});
+
+test("formatTableLines mirrors rust formatter when delimiter was previously widest", () => {
+  const input = ["| a | hi         |", "| --- | ---------- |", "| 1 | 22         |"];
+  const out = formatTableLines(input);
+  assert.deepEqual(out, ["| a   | hi  |", "| --- | --- |", "| 1   | 22  |"]);
 });
 
 test("rewriteLineWithChecklistToggleSuffix toggles checklist checked state", () => {
