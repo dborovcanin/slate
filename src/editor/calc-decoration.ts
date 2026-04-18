@@ -20,6 +20,8 @@ import {
 } from "@codemirror/state";
 import {
   evaluateNoteContext,
+  evaluateNoteContextDelta,
+  syncNoteLines,
   type TableCellEvaluation,
   type VariableIndexEntry,
 } from "../api.ts";
@@ -29,7 +31,7 @@ import {
   findSingleCalcTableCell,
   lineForCalcEvaluation,
 } from "./calc-line-utils.ts";
-import { calcFindTableFormulaSegments } from "./wasm.ts";
+import { calcFindTableFormulaSegments, type TableFormulaSegment } from "./wasm.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
 import {
   calcBuiltinFormulaLabel,
@@ -42,11 +44,28 @@ import {
 
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
+  getActiveNoteId?: () => string | null;
 }
 
 const MAX_CALC_EVAL_LINES = 200_000;
 const MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE = 512;
 const MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE = 2_000;
+
+// Pure cache: lineText → TableFormulaSegment[]. Results are deterministic so
+// no invalidation is needed — a changed line produces a different key.
+const FORMULA_SEGMENT_CACHE = new Map<string, TableFormulaSegment[]>();
+const FORMULA_SEGMENT_CACHE_MAX = 512;
+
+function cachedCalcFindTableFormulaSegments(lineText: string): TableFormulaSegment[] {
+  const hit = FORMULA_SEGMENT_CACHE.get(lineText);
+  if (hit !== undefined) return hit;
+  const result = calcFindTableFormulaSegments(lineText);
+  if (FORMULA_SEGMENT_CACHE.size >= FORMULA_SEGMENT_CACHE_MAX) {
+    FORMULA_SEGMENT_CACHE.delete(FORMULA_SEGMENT_CACHE.keys().next().value!);
+  }
+  FORMULA_SEGMENT_CACHE.set(lineText, result);
+  return result;
+}
 
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
@@ -360,7 +379,7 @@ function buildCalcDecorationsForSpans(
       const cellsForLine = cellResults.get(lineIndex);
       if (result == null && (!cellsForLine || cellsForLine.length === 0)) continue;
 
-      const segments = calcFindTableFormulaSegments(line.text);
+      const segments = cachedCalcFindTableFormulaSegments(line.text);
       if (segments.length > 0) {
         const cells = cellsForLine ?? [];
         const valueForCell = (cellIndex: number): string | null => {
@@ -577,7 +596,7 @@ export function containsBuiltinFormula(lines: readonly string[]): boolean {
 }
 
 function lineHasBuiltinFormula(lineText: string): boolean {
-  const tableSegments = calcFindTableFormulaSegments(lineText);
+  const tableSegments = cachedCalcFindTableFormulaSegments(lineText);
   if (tableSegments.length > 0) {
     for (const segment of tableSegments) {
       const expr = lineText.slice(segment.fromChar, segment.toChar).trim();
@@ -1029,6 +1048,7 @@ function variableIndexEqual(
 
 function buildCalcPlugin(options: CalcExtensionOptions) {
   const variablesEnabled = options.variablesEnabled ?? true;
+  const getActiveNoteId = options.getActiveNoteId;
 
   return ViewPlugin.define((view) => {
     let timer: number | null = null;
@@ -1039,6 +1059,8 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let prevLines: string[] = [];
     let prevResults: Map<number, string> = new Map();
     let prevVariables: VariableIndexEntry[] = [];
+    // Track whether we've seeded the server-side cache for the current note.
+    let serverCacheSeeded = false;
     // null = needs (re)scan. Cached whenever scan runs.
     let cachedHasGlobalSyntax: boolean | null = null;
 
@@ -1059,6 +1081,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
       prevLines = [];
       prevResults = new Map();
       prevVariables = [];
+      serverCacheSeeded = false;
     }
 
     function scheduleEval() {
@@ -1136,15 +1159,26 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             continue;
           }
 
+          const noteId = getActiveNoteId?.() ?? null;
           if (canUsePartial) {
             evalFrom = plan.evalFrom;
             evalTo = plan.evalFrom + plan.evalLines.length;
-            evaluated = await evaluateNoteContext(nextLines, variablesEnabled, {
-              evalFrom,
-              evalTo,
-            });
+            if (noteId && serverCacheSeeded) {
+              // Delta path: sync only the changed window, then eval.
+              await syncNoteLines(noteId, evalFrom, evalFrom + (prevChangedTo - plan.evalFrom), plan.evalLines);
+              evaluated = await evaluateNoteContextDelta(noteId, variablesEnabled, { evalFrom, evalTo });
+            } else {
+              evaluated = await evaluateNoteContext(nextLines, variablesEnabled, { evalFrom, evalTo });
+            }
           } else {
-            evaluated = await evaluateNoteContext(nextLines, variablesEnabled);
+            if (noteId) {
+              // Full sync — seeds the server cache for future delta calls.
+              await syncNoteLines(noteId, 0, Number.MAX_SAFE_INTEGER, nextLines);
+              serverCacheSeeded = true;
+              evaluated = await evaluateNoteContextDelta(noteId, variablesEnabled);
+            } else {
+              evaluated = await evaluateNoteContext(nextLines, variablesEnabled);
+            }
           }
 
           if (destroyed) break;

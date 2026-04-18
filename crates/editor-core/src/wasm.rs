@@ -12,12 +12,14 @@ use crate::markdown_tokens::{
 };
 use crate::table;
 use crate::text_rules::{
-    rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules, run_enter_rules,
-    run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules,
-    run_table_header_delete_column_rule, run_table_pipe_insert_column_rule, TabRuleOptions,
-    TableBoundaryEditOptions, TextRuleOptions,
+    convert_line_to_list, rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules,
+    run_enter_rules, run_tab_rules, run_table_boundary_edit_rules,
+    run_table_cell_navigation_rules, run_table_header_delete_column_rule,
+    run_table_pipe_insert_column_rule, ListKind, TabRuleOptions, TableBoundaryEditOptions,
+    TextRuleOptions,
 };
-use crate::types::{CommandMode, EditorContextSnapshot, SelectionSnapshot, TextRange};
+use crate::context::ResolvedContext;
+use crate::types::{CommandMode, SelectionSnapshot, TextRange};
 use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
 
 #[wasm_bindgen(start)]
@@ -25,21 +27,21 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
-fn build_snapshot(
+fn build_context(
     text: &str,
     selection_anchor: usize,
     selection_head: usize,
     has_changed_range: bool,
     changed_from: usize,
     changed_to: usize,
-) -> EditorContextSnapshot {
-    EditorContextSnapshot {
-        text: text.to_owned(),
-        selection: SelectionSnapshot {
+) -> ResolvedContext {
+    ResolvedContext::from_parts(
+        text,
+        SelectionSnapshot {
             anchor: selection_anchor,
             head: selection_head,
         },
-        changed_range: if has_changed_range {
+        if has_changed_range {
             Some(TextRange {
                 from: changed_from,
                 to: changed_to,
@@ -47,10 +49,10 @@ fn build_snapshot(
         } else {
             None
         },
-    }
+    )
 }
 
-/// Run document-change text rules. Returns JSON-encoded EditOperation or null.
+/// Run document-change text rules. Returns a structured JsValue {changes, selection?} or null.
 #[wasm_bindgen]
 pub fn wasm_run_doc_change_rules(
     text: &str,
@@ -61,17 +63,14 @@ pub fn wasm_run_doc_change_rules(
     changed_to: usize,
     markdown_autoformat: bool,
     checklist_auto_reorder: bool,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TextRuleOptions {
-        markdown_autoformat,
-        checklist_auto_reorder,
-    };
-    let op = run_doc_change_rules(&snapshot, options)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
+    let options = TextRuleOptions { markdown_autoformat, checklist_auto_reorder };
+    let op = run_doc_change_rules(&ctx, options)?;
+    Some(edit_operation_to_js(&op))
 }
 
-/// Run enter-key text rules. Returns JSON-encoded EditOperation or null.
+/// Run enter-key text rules. Returns a structured JsValue or null.
 #[wasm_bindgen]
 pub fn wasm_run_enter_rules(
     text: &str,
@@ -81,17 +80,14 @@ pub fn wasm_run_enter_rules(
     changed_from: usize,
     changed_to: usize,
     markdown_autoformat: bool,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TextRuleOptions {
-        markdown_autoformat,
-        checklist_auto_reorder: true,
-    };
-    let op = run_enter_rules(&snapshot, options)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
+    let options = TextRuleOptions { markdown_autoformat, checklist_auto_reorder: true };
+    let op = run_enter_rules(&ctx, options)?;
+    Some(edit_operation_to_js(&op))
 }
 
-/// Run tab-key text rules. Returns JSON-encoded EditOperation or null.
+/// Run tab-key text rules. Returns a structured JsValue or null.
 #[wasm_bindgen]
 pub fn wasm_run_tab_rules(
     text: &str,
@@ -102,17 +98,14 @@ pub fn wasm_run_tab_rules(
     changed_to: usize,
     markdown_autoformat: bool,
     outdent: bool,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TabRuleOptions {
-        markdown_autoformat,
-        outdent,
-    };
-    let op = run_tab_rules(&snapshot, options)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
+    let options = TabRuleOptions { markdown_autoformat, outdent };
+    let op = run_tab_rules(&ctx, options)?;
+    Some(edit_operation_to_js(&op))
 }
 
-/// Run table cell navigation rules (Tab/Shift+Tab in tables). Returns JSON-encoded EditOperation or null.
+/// Run table cell navigation rules (Tab/Shift+Tab in tables). Returns a structured JsValue or null.
 #[wasm_bindgen]
 pub fn wasm_run_table_cell_navigation_rules(
     text: &str,
@@ -123,44 +116,41 @@ pub fn wasm_run_table_cell_navigation_rules(
     changed_to: usize,
     markdown_autoformat: bool,
     outdent: bool,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TabRuleOptions {
-        markdown_autoformat,
-        outdent,
-    };
-    let op = run_table_cell_navigation_rules(&snapshot, options)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
+    let options = TabRuleOptions { markdown_autoformat, outdent };
+    let op = run_table_cell_navigation_rules(&ctx, options)?;
+    Some(edit_operation_to_js(&op))
 }
 
 /// Insert a new column when `|` is typed in the table header row.
-/// Returns JSON-encoded EditOperation or null when not applicable.
+/// Returns a structured JsValue or null when not applicable.
 #[wasm_bindgen]
 pub fn wasm_run_table_pipe_insert_column_rule(
     text: &str,
     selection_anchor: usize,
     selection_head: usize,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, false, 0, 0);
-    let op = run_table_pipe_insert_column_rule(&snapshot)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, false, 0, 0);
+    let op = run_table_pipe_insert_column_rule(&ctx)?;
+    Some(edit_operation_to_js(&op))
 }
 
 /// Delete a column when Ctrl+Backspace is pressed inside an empty header cell.
-/// Returns JSON-encoded EditOperation or null when not applicable.
+/// Returns a structured JsValue or null when not applicable.
 #[wasm_bindgen]
 pub fn wasm_run_table_header_delete_column_rule(
     text: &str,
     selection_anchor: usize,
     selection_head: usize,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, false, 0, 0);
-    let op = run_table_header_delete_column_rule(&snapshot)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, false, 0, 0);
+    let op = run_table_header_delete_column_rule(&ctx)?;
+    Some(edit_operation_to_js(&op))
 }
 
 /// Run table boundary edit rules (Backspace/Delete and explicit merge commands).
-/// Returns JSON-encoded EditOperation or null.
+/// Returns a structured JsValue or null.
 #[wasm_bindgen]
 pub fn wasm_run_table_boundary_edit_rules(
     text: &str,
@@ -172,21 +162,31 @@ pub fn wasm_run_table_boundary_edit_rules(
     markdown_autoformat: bool,
     backward: bool,
     structural_merge: bool,
-) -> Option<String> {
-    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TableBoundaryEditOptions {
-        markdown_autoformat,
-        backward,
-        structural_merge,
-    };
-    let op = run_table_boundary_edit_rules(&snapshot, options)?;
-    serde_json::to_string(&op).ok()
+) -> Option<JsValue> {
+    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
+    let options = TableBoundaryEditOptions { markdown_autoformat, backward, structural_merge };
+    let op = run_table_boundary_edit_rules(&ctx, options)?;
+    Some(edit_operation_to_js(&op))
 }
 
 /// Rewrite a list line that ends with /x toggle suffix. Returns the rewritten line or null.
 #[wasm_bindgen]
 pub fn wasm_rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option<String> {
     rewrite_line_with_checklist_toggle_suffix(line_text)
+}
+
+/// Convert a single line to the target list kind.
+/// Returns the converted line, or null if kind is unknown or line is empty.
+#[wasm_bindgen]
+pub fn wasm_convert_line_to_list(line: &str, kind: &str, ordered_index: usize) -> Option<String> {
+    let list_kind = match kind {
+        "checklist" => ListKind::Checklist,
+        "unordered" => ListKind::Unordered,
+        "ordered" => ListKind::Ordered,
+        _ => return None,
+    };
+    let (text, _changed) = convert_line_to_list(line, list_kind, ordered_index);
+    Some(text)
 }
 
 /// Format a markdown document.
@@ -237,6 +237,28 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
 
 fn set_prop(obj: &Object, key: &str, value: JsValue) -> bool {
     Reflect::set(obj, &JsValue::from_str(key), &value).is_ok()
+}
+
+fn edit_operation_to_js(op: &crate::types::EditOperation) -> JsValue {
+    let out = Object::new();
+    let changes = Array::new();
+    for change in &op.changes {
+        let item = Object::new();
+        let _ = set_prop(&item, "from", JsValue::from_f64(change.from as f64));
+        let _ = set_prop(&item, "to", JsValue::from_f64(change.to as f64));
+        let _ = set_prop(&item, "insert", JsValue::from_str(&change.insert));
+        changes.push(&item.into());
+    }
+    let _ = set_prop(&out, "changes", changes.into());
+    if let Some(sel) = &op.selection {
+        let s = Object::new();
+        let _ = set_prop(&s, "anchor", JsValue::from_f64(sel.anchor as f64));
+        if let Some(h) = sel.head {
+            let _ = set_prop(&s, "head", JsValue::from_f64(h as f64));
+        }
+        let _ = set_prop(&out, "selection", s.into());
+    }
+    out.into()
 }
 
 fn calc_segment_to_js(segment: &CalcSegment) -> JsValue {

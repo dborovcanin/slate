@@ -355,14 +355,27 @@ impl CalcEngine {
         let mut line_results: Vec<Option<String>> = vec![None; line_count];
         let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); line_count];
 
-        // Working copy of the document. As we evaluate formula cells L→R T→B
-        // we substitute computed values back into this working copy so
-        // subsequent formulas see prior results when they reference the row
-        // or column.
-        let mut working_lines: Vec<String> = lines.to_vec();
+        // Working copy of the document for formula substitution. Allocated lazily
+        // — only when a table formula cell actually writes a value back.
+        let mut working_lines: Option<Vec<String>> = None;
+
+        // Helper: get a mutable reference to working_lines, cloning from `lines`
+        // on first access. Call this only when a write is needed.
+        macro_rules! ensure_working {
+            () => {{
+                working_lines.get_or_insert_with(|| lines.to_vec())
+            }};
+        }
+
+        // Read a line from working_lines if allocated, otherwise from the input slice.
+        macro_rules! read_line {
+            ($i:expr) => {
+                working_lines.as_ref().map(|w| w[$i].as_str()).unwrap_or(&lines[$i])
+            };
+        }
 
         for idx in eval_from..eval_to {
-            let line = working_lines[idx].clone();
+            let line = read_line!(idx).to_string();
             let table_segments = if is_table_line(&line) {
                 table_expression_segments(&line, true)
             } else {
@@ -373,10 +386,11 @@ impl CalcEngine {
             if table_segments.iter().any(|(expr, _)| {
                 find_builtin_formula_calls(expr).first().is_some()
             }) {
+                let working = ensure_working!();
                 let mut first_value: Option<String> = None;
                 for (expression, cell_idx) in table_segments {
                     let value = evaluate_table_formula(
-                        &working_lines,
+                        working,
                         idx,
                         &expression,
                         Some(cell_idx),
@@ -398,12 +412,10 @@ impl CalcEngine {
                         value: value.clone(),
                     });
 
-                    // Substitute the formatted value back into the working line so
-                    // subsequent formulas (this row, later rows) see it.
                     if let Some(updated) =
-                        substitute_table_cell_value(&working_lines[idx], cell_idx, &value)
+                        substitute_table_cell_value(&working[idx], cell_idx, &value)
                     {
-                        working_lines[idx] = updated;
+                        working[idx] = updated;
                     }
                 }
                 line_results[idx] = first_value;
@@ -418,7 +430,7 @@ impl CalcEngine {
 
             let result = if options.variables_enabled {
                 if let Some(value) = evaluate_table_formula(
-                    &working_lines,
+                    working_lines.as_deref().unwrap_or(lines),
                     idx,
                     expression,
                     line_expr.table_cell_index,
@@ -440,7 +452,7 @@ impl CalcEngine {
                 }
             } else {
                 if let Some(value) = evaluate_table_formula(
-                    &working_lines,
+                    working_lines.as_deref().unwrap_or(lines),
                     idx,
                     expression,
                     line_expr.table_cell_index,
@@ -1378,30 +1390,28 @@ fn has_calc_signal(s: &str) -> bool {
         return false;
     }
 
-    let trimmed = s.trim();
     let bytes = s.as_bytes();
-    if bytes
-        .iter()
-        .any(|&b| matches!(b, b'+' | b'*' | b'^' | b'%' | b'('))
-    {
+    let mut has_digit = false;
+    let mut has_alpha = false;
+    let mut has_space = false;
+
+    for (idx, &b) in bytes.iter().enumerate() {
+        match b {
+            b'+' | b'*' | b'^' | b'%' | b'(' => return true,
+            b'-' | b'/' if has_numeric_or_space_math_neighbors(bytes, idx) => return true,
+            b if b.is_ascii_digit() => has_digit = true,
+            b if b.is_ascii_alphabetic() => has_alpha = true,
+            b if b.is_ascii_whitespace() => has_space = true,
+            _ => {}
+        }
+    }
+
+    if has_digit && has_space && (s.contains(" to ") || s.contains(" in ")) {
         return true;
     }
 
-    if bytes.iter().enumerate().any(|(idx, &b)| {
-        matches!(b, b'-' | b'/') && has_numeric_or_space_math_neighbors(bytes, idx)
-    }) {
-        return true;
-    }
-
-    let has_digit = s.bytes().any(|b| b.is_ascii_digit());
-    let has_alpha = s.bytes().any(|b| b.is_ascii_alphabetic());
-    if has_digit && (s.contains(" to ") || s.contains(" in ")) {
-        return true;
-    }
-
-    // Keep mixed digit+alpha shorthand like `5km`, but avoid prose such as
-    // `Task 5 update` being interpreted as a formula.
-    has_digit && has_alpha && !trimmed.contains(char::is_whitespace)
+    // Mixed digit+alpha shorthand like `5km` — only when no whitespace.
+    has_digit && has_alpha && !has_space
 }
 
 fn has_numeric_or_space_math_neighbors(bytes: &[u8], idx: usize) -> bool {

@@ -212,6 +212,28 @@ export function evaluateNoteContext(
   });
 }
 
+export function syncNoteLines(
+  noteId: string,
+  from: number,
+  to: number,
+  changedLines: string[],
+): Promise<void> {
+  return invoke<void>("sync_note_lines", { noteId, from, to, changedLines });
+}
+
+export function evaluateNoteContextDelta(
+  noteId: string,
+  variablesEnabled = true,
+  range?: NoteEvaluationRange,
+): Promise<NoteEvaluationResult> {
+  return invoke<NoteEvaluationResult>("evaluate_note_context_delta", {
+    noteId,
+    variablesEnabled,
+    evalFrom: range?.evalFrom,
+    evalTo: range?.evalTo,
+  });
+}
+
 export function exportToFile(path: string, content: string): Promise<void> {
   return invoke<void>("export_to_file", { path, content });
 }

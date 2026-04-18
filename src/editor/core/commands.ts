@@ -2,10 +2,12 @@ import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
 import { executeAvgCommand, executeSumCommand, type SumExpressionEvaluator } from "./sum.ts";
 import {
+  convertLineToList,
   isWasmReady,
   listCommandSuggestionsFromWasm,
   normalizeCommand,
   resolveCommandFromWasm,
+  type ListKind,
 } from "../wasm.ts";
 import type {
   CommandMode,
@@ -63,20 +65,11 @@ export interface CommandExecutionResult {
   operations: EditOperation[];
 }
 
-interface CommandDefinition {
-  execute: (
-    normalizedInput: string,
-    ctx: ResolvedContext,
-    runtime: CommandRuntime,
-  ) => Promise<CommandExecutionResult>;
-}
-
-interface CommandRegistryEntry extends CommandDefinition {
-  value: string;
-  aliases?: string[];
-  description: string;
-  modes: CommandMode[];
-}
+type ExecuteFn = (
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+) => Promise<CommandExecutionResult>;
 
 function errorToMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -313,55 +306,14 @@ async function runFoldCommand(
   };
 }
 
-type ListConversionKind = "checklist" | "unordered" | "ordered";
-
-function convertLineToList(
-  line: string,
-  kind: ListConversionKind,
-  orderedIndex: number,
-): { text: string; converted: boolean } {
-  if (line.trim().length === 0) return { text: line, converted: false };
-
-  const indentMatch = line.match(/^\s*/);
-  const indent = indentMatch?.[0] ?? "";
-  const body = line.slice(indent.length);
-  const listMatch = body.match(
-    /^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+))\s+(?:\[(?: |x|X)\]\s*)?(.*)$/,
-  );
-
-  const marker = listMatch?.[1] ?? "";
-  const content = (listMatch?.[2] ?? body).trimStart();
-
-  if (kind === "checklist") {
-    const prefix = marker.length > 0 ? `${marker} [ ]` : "- [ ]";
-    return {
-      text: content.length > 0 ? `${indent}${prefix} ${content}` : `${indent}${prefix}`,
-      converted: true,
-    };
-  }
-
-  if (kind === "unordered") {
-    return {
-      text: content.length > 0 ? `${indent}- ${content}` : `${indent}-`,
-      converted: true,
-    };
-  }
-
-  const orderedMarker = `${orderedIndex}.`;
-  return {
-    text: content.length > 0 ? `${indent}${orderedMarker} ${content}` : `${indent}${orderedMarker}`,
-    converted: true,
-  };
-}
-
-function listConversionLabel(kind: ListConversionKind): string {
+function listConversionLabel(kind: ListKind): string {
   if (kind === "checklist") return "checklist";
   if (kind === "unordered") return "unordered list";
   return "ordered list";
 }
 
 async function runListConvertCommand(
-  kind: ListConversionKind,
+  kind: ListKind,
   _normalizedInput: string,
   ctx: ResolvedContext,
   runtime: CommandRuntime,
@@ -386,12 +338,10 @@ async function runListConvertCommand(
   let orderedIndex = 1;
   for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
     const source = ctx.lineText(lineNo);
-    const lineConversion = convertLineToList(source, kind, orderedIndex);
-    converted.push(lineConversion.text);
-    if (lineConversion.converted && kind === "ordered") {
-      orderedIndex += 1;
-    }
-    if (lineConversion.text !== source) changed += 1;
+    const { text, changed: lineChanged } = convertLineToList(source, kind, orderedIndex);
+    converted.push(text);
+    if (lineChanged && kind === "ordered") orderedIndex += 1;
+    if (text !== source) changed += 1;
   }
 
   if (changed === 0) {
@@ -433,88 +383,37 @@ async function runOrderedListCommand(
   return runListConvertCommand("ordered", normalizedInput, ctx, runtime);
 }
 
-const MODES_BOTH: CommandMode[] = ["vim", "editor"];
-
-const COMMAND_REGISTRY: CommandRegistryEntry[] = [
-  { value: "sum", description: "sum paragraph (default scope)", modes: MODES_BOTH, execute: runSumCommand },
-  { value: "sum list", description: "sum list at cursor", modes: MODES_BOTH, execute: runSumCommand },
-  { value: "sum row", aliases: ["sum_row"], description: "sum markdown table per row at cursor", modes: MODES_BOTH, execute: runSumCommand },
-  { value: "sum column", aliases: ["sum_column"], description: "sum markdown table per column at cursor", modes: MODES_BOTH, execute: runSumCommand },
-  { value: "sum doc", aliases: ["sum_all", "sum all"], description: "sum whole document", modes: MODES_BOTH, execute: runSumCommand },
-  { value: "avg", description: "average paragraph (default scope)", modes: MODES_BOTH, execute: runAvgCommand },
-  { value: "avg list", description: "average list at cursor", modes: MODES_BOTH, execute: runAvgCommand },
-  { value: "avg row", aliases: ["avg_row"], description: "average markdown table per row at cursor", modes: MODES_BOTH, execute: runAvgCommand },
-  { value: "avg column", aliases: ["avg_column"], description: "average markdown table per column at cursor", modes: MODES_BOTH, execute: runAvgCommand },
-  { value: "avg doc", aliases: ["avg_all", "avg all"], description: "average whole document", modes: MODES_BOTH, execute: runAvgCommand },
-  { value: "date", description: "insert picked date", modes: MODES_BOTH, execute: runDateCommand },
-  { value: "notify", aliases: ["alarm", "remind"], description: "set reminder for current line", modes: MODES_BOTH, execute: runNotifyCommand },
-  { value: "notify-delete", aliases: ["notify_delete", "notify-delte"], description: "delete reminder for current line", modes: MODES_BOTH, execute: runNotifyDeleteCommand },
-  { value: "format", aliases: ["fmt"], description: "format markdown document", modes: MODES_BOTH, execute: runFormatCommand },
-  { value: "fold", aliases: ["zc"], description: "fold at cursor", modes: MODES_BOTH, execute: runFoldCommand },
-  { value: "unfold", aliases: ["zo"], description: "unfold at cursor", modes: MODES_BOTH, execute: runFoldCommand },
-  { value: "fold-toggle", aliases: ["za"], description: "toggle fold at cursor", modes: MODES_BOTH, execute: runFoldCommand },
-  { value: "clip-watch", aliases: ["clip_watch"], description: "watch clipboard and paste text at cursor", modes: MODES_BOTH, execute: runClipWatchCommand },
-  { value: "clip-watch-stop", aliases: ["clip_watch_stop"], description: "stop clipboard watch", modes: MODES_BOTH, execute: runClipWatchStopCommand },
-  { value: "clist", aliases: ["checklist", "checkbox", "checkboxes", "todo"], description: "convert selected lines to checklist", modes: MODES_BOTH, execute: runChecklistCommand },
-  { value: "ulist", aliases: ["unordered-list", "unordered"], description: "convert selected lines to unordered list", modes: MODES_BOTH, execute: runUnorderedListCommand },
-  { value: "olist", aliases: ["ordered-list", "ordered"], description: "convert selected lines to ordered list", modes: MODES_BOTH, execute: runOrderedListCommand },
-  { value: "q", aliases: ["q!"], description: "quit", modes: ["vim"], execute: runQuitCommand },
-];
-
-function registryAvailableCommands(mode: CommandMode): CommandRegistryEntry[] {
-  return COMMAND_REGISTRY.filter((command) => command.modes.includes(mode));
-}
-
-function registryResolveCommand(mode: CommandMode, rawInput: string): CommandRegistryEntry | null {
-  const normalized = normalizeCommand(rawInput);
-  if (!normalized) return null;
-  return registryAvailableCommands(mode).find((entry) =>
-    entry.value === normalized || entry.aliases?.includes(normalized),
-  ) ?? null;
-}
-
-function registryListSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
-  const query = normalizeCommand(rawInput);
-  const commands = registryAvailableCommands(mode);
-  if (!query) {
-    return commands.map((command) => ({
-      value: command.value,
-      description: command.description,
-    }));
-  }
-
-  return commands
-    .map((command) => {
-      const value = command.value.toLowerCase();
-      const starts = value.startsWith(query);
-      const includes = value.includes(query);
-      const score = starts ? 0 : includes ? 1 : 2;
-      return { command, score };
-    })
-    .filter((entry) => entry.score < 2)
-    .sort((a, b) => a.score - b.score || a.command.value.localeCompare(b.command.value))
-    .map(({ command }) => ({
-      value: command.value,
-      description: command.description,
-    }));
-}
+// Executor map: canonical command value (from command_catalog.rs) → execute fn.
+// Suggestions, aliases, and resolution come from wasm/command_catalog.rs.
+const EXECUTOR_MAP: Record<string, ExecuteFn> = {
+  "sum": runSumCommand,
+  "sum list": runSumCommand,
+  "sum row": runSumCommand,
+  "sum column": runSumCommand,
+  "sum doc": runSumCommand,
+  "avg": runAvgCommand,
+  "avg list": runAvgCommand,
+  "avg row": runAvgCommand,
+  "avg column": runAvgCommand,
+  "avg doc": runAvgCommand,
+  "date": runDateCommand,
+  "notify": runNotifyCommand,
+  "notify-delete": runNotifyDeleteCommand,
+  "format": runFormatCommand,
+  "fold": runFoldCommand,
+  "unfold": runFoldCommand,
+  "fold-toggle": runFoldCommand,
+  "clip-watch": runClipWatchCommand,
+  "clip-watch-stop": runClipWatchStopCommand,
+  "clist": runChecklistCommand,
+  "ulist": runUnorderedListCommand,
+  "olist": runOrderedListCommand,
+  "q": runQuitCommand,
+};
 
 export function listCommandSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
-  const fallback = registryListSuggestions(mode, rawInput);
-  if (!isWasmReady()) {
-    return fallback;
-  }
-  const wasm = listCommandSuggestionsFromWasm(mode, rawInput);
-  if (wasm.length === 0) return fallback;
-
-  const merged: CommandSuggestion[] = [...fallback];
-  const seen = new Set(fallback.map((entry) => entry.value));
-  for (const entry of wasm) {
-    if (seen.has(entry.value)) continue;
-    seen.add(entry.value);
-    merged.push(entry);
-  }
-  return merged;
+  if (!isWasmReady()) return [];
+  return listCommandSuggestionsFromWasm(mode, rawInput);
 }
 
 export async function executeCommand(
@@ -525,14 +424,16 @@ export async function executeCommand(
   const normalizedInput = normalizeCommand(rawInput);
   if (!normalizedInput) return { message: "", operations: [] };
 
-  const resolvedFromWasm = isWasmReady() ? resolveCommandFromWasm(runtime.mode, rawInput) : null;
-  const command = resolvedFromWasm
-    ? registryAvailableCommands(runtime.mode).find((entry) => entry.value === resolvedFromWasm) ?? null
-    : registryResolveCommand(runtime.mode, rawInput);
-  if (!command) {
+  const canonical = isWasmReady() ? resolveCommandFromWasm(runtime.mode, rawInput) : null;
+  if (!canonical) {
+    return { message: `unknown command: ${normalizedInput}`, operations: [] };
+  }
+
+  const executor = EXECUTOR_MAP[canonical];
+  if (!executor) {
     return { message: `unknown command: ${normalizedInput}`, operations: [] };
   }
 
   const ctx = new ResolvedContext(snapshot);
-  return command.execute(command.value, ctx, runtime);
+  return executor(canonical, ctx, runtime);
 }

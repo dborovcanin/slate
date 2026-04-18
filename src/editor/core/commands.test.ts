@@ -1,6 +1,9 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { executeCommand, listCommandSuggestions } from "./commands.ts";
+import { ensureWasmReady } from "../wasm.ts";
+
+before(async () => { await ensureWasmReady(); });
 
 function snapshot(text: string, head = 0, anchor = head) {
   return { text, selection: { anchor, head } };
@@ -90,7 +93,7 @@ async function numberLeakingEvaluator(expression: string): Promise<string | null
   return formatValue(total);
 }
 
-test("core command suggestions are mode-aware", () => {
+test("core command suggestions are mode-aware", async () => {
   const editorValues = listCommandSuggestions("editor", "").map((entry) => entry.value);
   assert.deepEqual(editorValues, [
     "sum",
@@ -107,11 +110,11 @@ test("core command suggestions are mode-aware", () => {
     "notify",
     "notify-delete",
     "format",
+    "clip-watch",
+    "clip-watch-stop",
     "fold",
     "unfold",
     "fold-toggle",
-    "clip-watch",
-    "clip-watch-stop",
     "clist",
     "ulist",
     "olist",

@@ -84,6 +84,24 @@ impl ResolvedContext {
         Self { snapshot, parsed }
     }
 
+    /// Construct directly from parts, avoiding an intermediate snapshot clone.
+    /// Used by the wasm hot path where `text` arrives as a `&str` borrow.
+    pub fn from_parts(
+        text: &str,
+        selection: crate::types::SelectionSnapshot,
+        changed_range: Option<TextRange>,
+    ) -> Self {
+        let parsed = parse_lines(text);
+        Self {
+            snapshot: EditorContextSnapshot {
+                text: text.to_owned(),
+                selection,
+                changed_range,
+            },
+            parsed,
+        }
+    }
+
     pub fn snapshot(&self) -> &EditorContextSnapshot {
         &self.snapshot
     }

@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 pub mod editor_core;
+#[cfg(feature = "imap")]
 mod imap;
 mod ipc;
 mod startup_log;
@@ -56,6 +57,8 @@ fn run_gui() -> Result<(), String> {
             commands::reminders::send_system_notification,
             commands::calc::evaluate_lines,
             commands::calc::evaluate_note_context,
+            commands::calc::sync_note_lines,
+            commands::calc::evaluate_note_context_delta,
             commands::perf::append_startup_log,
             commands::config::get_theme_config,
             commands::config::get_runtime_flags,
@@ -210,6 +213,7 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     terminal::run_terminal_session(core.db(), theme, opts)
 }
 
+#[cfg(feature = "imap")]
 fn run_imap_sync() -> Result<(), String> {
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
@@ -219,6 +223,7 @@ fn run_imap_sync() -> Result<(), String> {
     imap::run_imap_sync(imap_cfg, special).map(|_| ())
 }
 
+#[cfg(feature = "imap")]
 fn notify_imap_new_mail(
     appended: usize,
     imap_cfg: &config::ImapConfig,
@@ -243,6 +248,7 @@ fn notify_imap_new_mail(
     let _ = commands::reminders::send_system_notification(title.to_string(), body);
 }
 
+#[cfg(feature = "imap")]
 fn maybe_start_background_imap_sync() {
     let imap_cfg = config::load_imap_config();
     if !imap_cfg.auto_sync_on_startup {
@@ -261,6 +267,14 @@ fn maybe_start_background_imap_sync() {
         }
         thread::sleep(Duration::from_secs(poll_seconds));
     });
+}
+
+#[cfg(not(feature = "imap"))]
+fn maybe_start_background_imap_sync() {}
+
+#[cfg(not(feature = "imap"))]
+fn run_imap_sync() -> Result<(), String> {
+    Err("IMAP support not compiled in (missing 'imap' feature)".to_string())
 }
 
 pub fn run() {

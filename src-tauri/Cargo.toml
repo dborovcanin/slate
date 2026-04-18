@@ -23,9 +23,14 @@ libc = "0.2"
 arboard = "3.6.1"
 base64 = "0.22"
 time = { version = "0.3", features = ["formatting"] }
-rustls = "0.23"
-rustls-native-certs = "0.8"
-mailparse = "0.15"
+rustls = { version = "0.23", optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+mailparse = { version = "0.15", optional = true }
 serde = { version = "1", features = ["derive"] }
+
+[features]
+default = ["imap"]
+imap = ["dep:rustls", "dep:rustls-native-certs", "dep:mailparse"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

@@ -1,7 +1,7 @@
 use crate::context::ResolvedContext;
 use crate::operations::replace_range;
 use crate::table;
-use crate::types::{EditOperation, EditorContextSnapshot, OperationSelection, TextChange};
+use crate::types::{EditOperation, OperationSelection, TextChange};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextRuleOptions {
@@ -338,6 +338,75 @@ fn strip_checklist_toggle_suffix(content: &str) -> Option<String> {
         }
     }
     Some(trimmed[..slash_pos].trim_end().to_string())
+}
+
+/// Which list format to convert a line to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListKind {
+    Checklist,
+    Unordered,
+    Ordered,
+}
+
+/// Convert `line` to the target `kind`, using `ordered_index` (1-based) for
+/// `Ordered`. Returns `(new_text, changed)`. When the line is empty the
+/// input is returned unchanged with `changed = false`.
+///
+/// Existing list markers and checklist prefixes are stripped; only the raw
+/// content is preserved and re-wrapped in the new format.
+pub fn convert_line_to_list(line: &str, kind: ListKind, ordered_index: usize) -> (String, bool) {
+    if line.trim().is_empty() {
+        return (line.to_string(), false);
+    }
+
+    // Parse any existing list structure.
+    let parts = parse_list_line_parts(line);
+    let indent = parts.as_ref().map(|p| p.indent).unwrap_or("");
+    let existing_marker = parts.as_ref().map(|p| p.marker).unwrap_or("");
+
+    // Resolve bare content, stripping any checklist prefix.
+    let raw_content = if let Some(ref p) = parts {
+        let after_marker = p.content;
+        if let Some((_checked, content_start)) = parse_checklist_after_prefix(after_marker) {
+            &after_marker[content_start..]
+        } else {
+            after_marker
+        }
+    } else {
+        line.trim()
+    };
+
+    let converted = match kind {
+        ListKind::Checklist => {
+            let prefix = if existing_marker.is_empty() {
+                "- [ ]".to_string()
+            } else {
+                format!("{existing_marker} [ ]")
+            };
+            if raw_content.is_empty() {
+                format!("{indent}{prefix}")
+            } else {
+                format!("{indent}{prefix} {raw_content}")
+            }
+        }
+        ListKind::Unordered => {
+            if raw_content.is_empty() {
+                format!("{indent}-")
+            } else {
+                format!("{indent}- {raw_content}")
+            }
+        }
+        ListKind::Ordered => {
+            if raw_content.is_empty() {
+                format!("{indent}{ordered_index}.")
+            } else {
+                format!("{indent}{ordered_index}. {raw_content}")
+            }
+        }
+    };
+
+    let changed = converted != line;
+    (converted, changed)
 }
 
 pub fn rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option<String> {
@@ -685,12 +754,10 @@ fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
 }
 
 pub fn run_doc_change_rules(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
     options: TextRuleOptions,
 ) -> Option<EditOperation> {
-    let ctx = ResolvedContext::new(snapshot.clone());
-
-    if let Some(op) = checklist_toggle_rule(&ctx, options) {
+    if let Some(op) = checklist_toggle_rule(ctx, options) {
         return Some(op);
     }
 
@@ -698,7 +765,7 @@ pub fn run_doc_change_rules(
         return None;
     }
 
-    if let Some(op) = table_autoformat_rule(&ctx) {
+    if let Some(op) = table_autoformat_rule(ctx) {
         return Some(op);
     }
 
@@ -706,14 +773,13 @@ pub fn run_doc_change_rules(
 }
 
 pub fn run_enter_rules(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
     options: TextRuleOptions,
 ) -> Option<EditOperation> {
     if !options.markdown_autoformat {
         return None;
     }
 
-    let ctx = ResolvedContext::new(snapshot.clone());
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -988,20 +1054,18 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
 }
 
 pub fn run_tab_rules(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
     options: TabRuleOptions,
 ) -> Option<EditOperation> {
     if !options.markdown_autoformat {
         return None;
     }
 
-    let ctx = ResolvedContext::new(snapshot.clone());
-
-    if let Some(op) = table_tab_rule(&ctx, &options) {
+    if let Some(op) = table_tab_rule(ctx, &options) {
         return Some(op);
     }
 
-    let (start_line, end_line) = selection_line_span(&ctx);
+    let (start_line, end_line) = selection_line_span(ctx);
     let mut changes = Vec::new();
 
     for line_no in start_line..=end_line {
@@ -1053,14 +1117,13 @@ pub fn run_tab_rules(
 }
 
 pub fn run_table_cell_navigation_rules(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
     options: TabRuleOptions,
 ) -> Option<EditOperation> {
     if !options.markdown_autoformat {
         return None;
     }
-    let ctx = ResolvedContext::new(snapshot.clone());
-    table_tab_rule(&ctx, &options)
+    table_tab_rule(ctx, &options)
 }
 
 /// When the user types `|` in a table header row, insert a new empty
@@ -1076,9 +1139,8 @@ pub fn run_table_cell_navigation_rules(
 /// - the table has no recognizable structure,
 /// - or the cursor sits on a pipe character itself.
 pub fn run_table_pipe_insert_column_rule(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
 ) -> Option<EditOperation> {
-    let ctx = ResolvedContext::new(snapshot.clone());
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1166,9 +1228,8 @@ pub fn run_table_pipe_insert_column_rule(
 /// - the current header cell is non-empty,
 /// - or the table only has a single column (deletion would destroy the table).
 pub fn run_table_header_delete_column_rule(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
 ) -> Option<EditOperation> {
-    let ctx = ResolvedContext::new(snapshot.clone());
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1354,14 +1415,13 @@ fn merge_cells_on_line(
 }
 
 pub fn run_table_boundary_edit_rules(
-    snapshot: &EditorContextSnapshot,
+    ctx: &ResolvedContext,
     options: TableBoundaryEditOptions,
 ) -> Option<EditOperation> {
     if !options.markdown_autoformat {
         return None;
     }
 
-    let ctx = ResolvedContext::new(snapshot.clone());
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1461,14 +1521,15 @@ pub fn run_table_boundary_edit_rules(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{SelectionSnapshot, TextRange};
+    use crate::context::ResolvedContext;
+    use crate::types::{EditorContextSnapshot, SelectionSnapshot, TextRange};
 
-    fn snapshot(text: &str, head: usize, anchor: usize) -> EditorContextSnapshot {
-        EditorContextSnapshot {
+    fn snapshot(text: &str, head: usize, anchor: usize) -> ResolvedContext {
+        ResolvedContext::new(EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },
             changed_range: None,
-        }
+        })
     }
 
     fn snapshot_with_changed_range(
@@ -1477,12 +1538,12 @@ mod tests {
         anchor: usize,
         from: usize,
         to: usize,
-    ) -> EditorContextSnapshot {
-        EditorContextSnapshot {
+    ) -> ResolvedContext {
+        ResolvedContext::new(EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },
             changed_range: Some(TextRange { from, to }),
-        }
+        })
     }
 
     fn apply_operation(source: &str, operation: &EditOperation) -> String {
@@ -1523,7 +1584,7 @@ mod tests {
         let text = "- [ ] task /x";
         let doc = snapshot(text, text.len(), text.len());
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "- [x] task");
+        assert_eq!(apply_operation(doc.text(), &op), "- [x] task");
     }
 
     #[test]
@@ -1533,7 +1594,7 @@ mod tests {
         let doc = snapshot(text, first_line_end, first_line_end);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "- [ ] second\n- [x] done\n- [x] first"
         );
     }
@@ -1545,7 +1606,7 @@ mod tests {
         let doc = snapshot(text, second_line_end, second_line_end);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "- [ ] second\n- [ ] first\n- [x] third"
         );
     }
@@ -1564,7 +1625,7 @@ mod tests {
         )
         .expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "- [x] first\n- [ ] second\n- [x] done"
         );
     }
@@ -1577,7 +1638,7 @@ mod tests {
         let doc =
             snapshot_with_changed_range(text, marker_from, marker_from, marker_from, marker_to);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "- [ ] second\n- [x] first");
+        assert_eq!(apply_operation(doc.text(), &op), "- [ ] second\n- [x] first");
     }
 
     #[test]
@@ -1585,7 +1646,7 @@ mod tests {
         let doc = snapshot("- parent\n  - child\nplain", 16, 0);
         let indent_op = run_tab_rules(&doc, TabRuleOptions::default()).expect("indent op");
         assert_eq!(
-            apply_operation(&doc.text, &indent_op),
+            apply_operation(doc.text(), &indent_op),
             "  * parent\n    -> child\nplain"
         );
 
@@ -1599,7 +1660,7 @@ mod tests {
         )
         .expect("outdent op");
         assert_eq!(
-            apply_operation(&outdent_doc.text, &outdent_op),
+            apply_operation(outdent_doc.text(), &outdent_op),
             "- parent\n  * child"
         );
     }
@@ -1610,7 +1671,7 @@ mod tests {
         let indent_doc = snapshot(text, text.len(), text.len());
         let indent_op = run_tab_rules(&indent_doc, TabRuleOptions::default()).expect("indent op");
         assert_eq!(
-            apply_operation(&indent_doc.text, &indent_op),
+            apply_operation(indent_doc.text(), &indent_op),
             "  1.1 parent"
         );
 
@@ -1623,7 +1684,7 @@ mod tests {
             },
         )
         .expect("outdent op");
-        assert_eq!(apply_operation(&outdent_doc.text, &outdent_op), "1.2 child");
+        assert_eq!(apply_operation(outdent_doc.text(), &outdent_op), "1.2 child");
     }
 
     #[test]
@@ -1633,7 +1694,7 @@ mod tests {
         let doc = snapshot_with_changed_range(text, head, head, head.saturating_sub(1), head);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "| a   | b   |\n| --- | --- |\n| 1   | 2   |"
         );
     }
@@ -1651,7 +1712,7 @@ mod tests {
         );
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "| a     | b   |\n| ----- | --- |\n| 12345 | 2   |"
         );
         assert!(op.selection.is_some());
@@ -1664,7 +1725,7 @@ mod tests {
         let doc = snapshot_with_changed_range(text, head, head, text.find("| bro").unwrap(), head);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "| test | count |\n| ---- | ----- |\n| bro  | 5     |"
         );
     }
@@ -1676,7 +1737,7 @@ mod tests {
         let doc = snapshot_with_changed_range(text, head, head, text.find("| x ").unwrap(), head);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "| first | value |\n| ----- | ----- |\n| x     |       |"
         );
     }
@@ -1688,7 +1749,7 @@ mod tests {
         let head = input_row_start + 2;
         let doc = snapshot_with_changed_range(text, head, head, input_row_start, text.len());
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
-        let formatted = apply_operation(&doc.text, &op);
+        let formatted = apply_operation(doc.text(), &op);
         assert_eq!(
             formatted,
             "| test | count |\n| ---- | ----- |\n|      |       |"
@@ -1738,7 +1799,7 @@ mod tests {
             },
         )
         .expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "| aaa | b |");
+        assert_eq!(apply_operation(doc.text(), &op), "| aaa | b |");
     }
 
     #[test]
@@ -1771,7 +1832,7 @@ mod tests {
         )
         .expect("operation");
         assert_eq!(
-            apply_operation(&merge_prev_doc.text, &merge_prev),
+            apply_operation(merge_prev_doc.text(), &merge_prev),
             "| aaa bb |"
         );
 
@@ -1786,7 +1847,7 @@ mod tests {
         )
         .expect("operation");
         assert_eq!(
-            apply_operation(&merge_next_doc.text, &merge_next),
+            apply_operation(merge_next_doc.text(), &merge_next),
             "| aaa bb |"
         );
     }
@@ -1795,28 +1856,28 @@ mod tests {
     fn run_enter_rules_generates_next_item() {
         let doc = snapshot("- item", 6, 6);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "- item\n- ");
+        assert_eq!(apply_operation(doc.text(), &op), "- item\n- ");
     }
 
     #[test]
     fn run_enter_rules_exits_empty_checklist_without_trailing_space() {
         let doc = snapshot("- [ ]", 5, 5);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "");
+        assert_eq!(apply_operation(doc.text(), &op), "");
     }
 
     #[test]
     fn run_enter_rules_exits_empty_checklist_with_trailing_space() {
         let doc = snapshot("- [ ] ", 6, 6);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "");
+        assert_eq!(apply_operation(doc.text(), &op), "");
     }
 
     #[test]
     fn run_enter_rules_continues_non_empty_checklist_item() {
         let doc = snapshot("- [ ] task", 10, 10);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "- [ ] task\n- [ ] ");
+        assert_eq!(apply_operation(doc.text(), &op), "- [ ] task\n- [ ] ");
     }
 
     #[test]
@@ -1837,7 +1898,7 @@ mod tests {
         let text = "| a | b |\n| |";
         let doc = snapshot(text, text.len() - 1, text.len() - 1);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "| a | b |\n");
+        assert_eq!(apply_operation(doc.text(), &op), "| a | b |\n");
     }
 
     #[test]
@@ -1846,7 +1907,7 @@ mod tests {
         let doc = snapshot(text, text.len(), text.len());
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(
-            apply_operation(&doc.text, &op),
+            apply_operation(doc.text(), &op),
             "| a   | bbbb |\n| --- | ---- |\n| cc  | d    |\n|  |  |"
         );
         assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
@@ -1858,7 +1919,7 @@ mod tests {
         let head = text.find("bbbb").unwrap() + "bbbb".len();
         let doc = snapshot(text, head, head);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(&doc.text, &op), "| a   | bbbb |\n|  |  |");
+        assert_eq!(apply_operation(doc.text(), &op), "| a   | bbbb |\n|  |  |");
         assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
     }
 

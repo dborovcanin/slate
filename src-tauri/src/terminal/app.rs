@@ -1,7 +1,9 @@
 use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, goto, pad_right, AnsiStyle};
+use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::{self, DatePickerAction, DatePickerView};
 use super::folding::{self, FoldKind, FoldRange};
+use super::folding_state::FoldingState;
 use super::history::LineHistory;
 use super::input::{self, Key, TerminalGuard};
 use super::notifications;
@@ -131,34 +133,10 @@ struct TerminalApp {
     command_selection: Option<crate::editor_core::types::SelectionSnapshot>,
     command_selection_linewise: bool,
     // Calc ghost cache
-    calc_engine: CalcEngine,
-    calc_results: Vec<Option<String>>,
-    /// Per-line list of `(cell_index, formatted_value)` for table rows
-    /// containing one or more `=…` formula cells. Parallel to `calc_results`
-    /// (`calc_results[i]` carries the *first* formula value for backward
-    /// compatibility); `cell_calc_results[i]` carries every formula cell in
-    /// that row in left-to-right order.
-    cell_calc_results: Vec<Vec<(usize, String)>>,
+    calc: CalcCache,
     reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
     reminders_dirty: bool,
     last_reminder_check: Instant,
-    variable_names: Vec<String>,
-    // Per-line hashes of `lines` taken at the end of the previous
-    // `recompute_calc_full`. Used to detect changed regions (instead of
-    // keeping a full clone of lines — saves ~1 String per line) and to gate
-    // the committed-trailer auto-refresh: a line is eligible only if its hash
-    // matches this snapshot and its previous calc result was `None` (meaning
-    // the trailer was in sync with the backend last time).
-    prev_line_hashes: Vec<u64>,
-    // Parallel to `prev_line_hashes`: tracks which lines in the previous
-    // snapshot contained `:=`. Needed to decide if incremental calc is safe
-    // without holding the full prev lines.
-    prev_line_has_assignment: Vec<bool>,
-    // Parallel to `prev_line_hashes`: tracks which lines in the previous
-    // snapshot contained a builtin formula (SUM, AVG, ...). Used to gate
-    // partial calc on edit-range formula presence rather than whole-doc.
-    prev_line_has_builtin_formula: Vec<bool>,
-    calc_state_stale: bool,
     // Search state
     search_query: String,
     search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
@@ -174,16 +152,7 @@ struct TerminalApp {
     variables_enabled: bool,
     render_palette: render::RenderPalette,
     // Folding (real-line indexed, 0-based)
-    fold_ranges: Vec<FoldRange>,
-    fold_range_by_start: Vec<Option<FoldRange>>,
-    collapsed_fold_starts: HashSet<usize>,
-    fold_visible_to_real: Vec<usize>,
-    fold_real_to_visible: Vec<usize>,
-    fold_hidden_owner: Vec<Option<usize>>,
-    fold_placeholder_hidden_lines: Vec<Option<usize>>,
-    line_has_fold_structure: Vec<bool>,
-    fold_rescan_pending: bool,
-    pending_fold_prefix_until: Option<Instant>,
+    folds: FoldingState,
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
     // Clipboard watch
@@ -192,9 +161,6 @@ struct TerminalApp {
     clipboard_watch_last_poll: Instant,
     // Undo/redo
     history: LineHistory,
-    // Cached calc flags — avoid O(n) full-doc scans on every keystroke
-    cached_has_builtin_formula: bool,
-    cached_has_variable_assignment: bool,
     // Fence state checkpoints for draw(). Entry k = fence state BEFORE line
     // k * FENCE_CHECKPOINT_INTERVAL. fence_checkpoints_valid_through is the
     // highest index whose entry is current; all higher indices are stale.
@@ -330,17 +296,21 @@ impl TerminalApp {
             selection_anchor: None,
             command_selection: None,
             command_selection_linewise: false,
-            calc_engine,
-            calc_results: calc_data.line_results,
-            cell_calc_results: calc_data.cell_results,
+            calc: CalcCache {
+                engine: calc_engine,
+                results: calc_data.line_results,
+                cell_results: calc_data.cell_results,
+                variable_names: calc_data.variable_names,
+                prev_line_hashes,
+                prev_line_has_assignment,
+                prev_line_has_builtin_formula,
+                stale: defer_initial_calc,
+                cached_has_builtin_formula: initial_has_builtin_formula,
+                cached_has_variable_assignment: initial_has_variable_assignment,
+            },
             reminder_ghosts,
             reminders_dirty: false,
             last_reminder_check: Instant::now(),
-            variable_names: calc_data.variable_names,
-            prev_line_hashes,
-            prev_line_has_assignment,
-            prev_line_has_builtin_formula,
-            calc_state_stale: defer_initial_calc,
             search_query: String::new(),
             search_matches: Vec::new(),
             search_current: 0,
@@ -352,23 +322,12 @@ impl TerminalApp {
             checklist_auto_reorder,
             variables_enabled,
             render_palette,
-            fold_ranges: Vec::new(),
-            fold_range_by_start: Vec::new(),
-            collapsed_fold_starts: HashSet::new(),
-            fold_visible_to_real: Vec::new(),
-            fold_real_to_visible: Vec::new(),
-            fold_hidden_owner: Vec::new(),
-            fold_placeholder_hidden_lines: Vec::new(),
-            line_has_fold_structure,
-            fold_rescan_pending: false,
-            pending_fold_prefix_until: None,
+            folds: FoldingState::empty(line_has_fold_structure),
             command_bar_from_normal: false,
             clipboard_watch_enabled: false,
             clipboard_watch_last_text: None,
             clipboard_watch_last_poll: Instant::now(),
             history,
-            cached_has_builtin_formula: initial_has_builtin_formula,
-            cached_has_variable_assignment: initial_has_variable_assignment,
             fence_checkpoints: vec![(false, None)],
             fence_checkpoints_valid_through: 0,
         };
@@ -415,8 +374,8 @@ impl TerminalApp {
 
     fn maybe_autosave(&mut self, db: &Db) -> Result<(), String> {
         // Process any deferred fold recompute while the user is not typing.
-        if self.fold_rescan_pending {
-            self.fold_rescan_pending = false;
+        if self.folds.rescan_pending {
+            self.folds.rescan_pending = false;
             self.recompute_folding();
         }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
@@ -481,7 +440,7 @@ impl TerminalApp {
 
     fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.mode != UiMode::Normal {
-            self.pending_fold_prefix_until = None;
+            self.folds.pending_prefix_until = None;
         }
         match self.mode {
             UiMode::DatePicker => self.handle_date_picker_key(db, key)?,
@@ -1267,13 +1226,13 @@ impl TerminalApp {
 
         let now = Instant::now();
         if self
-            .pending_fold_prefix_until
+            .folds.pending_prefix_until
             .is_some_and(|until| now > until)
         {
-            self.pending_fold_prefix_until = None;
+            self.folds.pending_prefix_until = None;
         }
 
-        if self.pending_fold_prefix_until.take().is_some() {
+        if self.folds.pending_prefix_until.take().is_some() {
             if key == Key::Char('a') {
                 self.toggle_fold_at_cursor();
                 return Ok(());
@@ -1281,7 +1240,7 @@ impl TerminalApp {
         }
 
         if key == Key::Char('z') {
-            self.pending_fold_prefix_until =
+            self.folds.pending_prefix_until =
                 Some(now + Duration::from_millis(FOLD_PREFIX_TIMEOUT_MS));
             return Ok(());
         }
@@ -1312,13 +1271,13 @@ impl TerminalApp {
         self.adjust_scroll();
 
         if Self::line_might_trigger_doc_change_rules(self.current_line()) {
-            let snapshot = self.build_snapshot();
+            let ctx = self.build_context();
             let options = crate::editor_core::text_rules::TextRuleOptions {
                 markdown_autoformat: self.markdown_autoformat,
                 checklist_auto_reorder: self.checklist_auto_reorder,
             };
             if let Some(op) =
-                crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options)
+                crate::editor_core::text_rules::run_doc_change_rules(&ctx, options)
             {
                 self.apply_edit_operation(&op);
             }
@@ -1900,6 +1859,10 @@ impl TerminalApp {
         }
     }
 
+    fn build_context(&self) -> crate::editor_core::context::ResolvedContext {
+        crate::editor_core::context::ResolvedContext::new(self.build_snapshot())
+    }
+
     fn open_date_picker(&mut self, action: DatePickerAction, require_time: bool) {
         if let Some((year, month, day, hour, minute)) = date_picker::current_local_datetime_parts()
         {
@@ -2276,13 +2239,13 @@ impl TerminalApp {
         self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();
         if self.should_defer_calc_recompute() {
-            self.calc_results = vec![None; self.lines.len()];
-            self.cell_calc_results = vec![Vec::new(); self.lines.len()];
-            self.variable_names.clear();
-            self.prev_line_hashes.clear();
-            self.prev_line_has_assignment.clear();
-            self.prev_line_has_builtin_formula.clear();
-            self.calc_state_stale = true;
+            self.calc.results = vec![None; self.lines.len()];
+            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+            self.calc.variable_names.clear();
+            self.calc.prev_line_hashes.clear();
+            self.calc.prev_line_has_assignment.clear();
+            self.calc.prev_line_has_builtin_formula.clear();
+            self.calc.stale = true;
         } else {
             self.recompute_calc_full();
         }
@@ -2309,37 +2272,37 @@ impl TerminalApp {
     }
 
     fn rescan_calc_flags(&mut self) {
-        self.cached_has_builtin_formula =
+        self.calc.cached_has_builtin_formula =
             crate::editor_core::calc_plan::contains_builtin_formula(&self.lines);
-        self.cached_has_variable_assignment =
+        self.calc.cached_has_variable_assignment =
             crate::editor_core::calc_plan::contains_variable_assignment(&self.lines);
     }
 
     fn update_calc_flags_incremental(&mut self) {
-        if self.lines.len() != self.calc_results.len() {
+        if self.lines.len() != self.calc.results.len() {
             // Line count changed (Enter, delete-at-boundary).
             // Flags can only go false → true here, never true → false.
             // On delete: the removed line may have been the only one with the
             // syntax, but accepting stale-true is safe — it just means we run
             // calc when not needed, which is correct.
             // On insert: check only the two affected lines (cursor and cursor-1).
-            if self.lines.len() > self.calc_results.len() {
+            if self.lines.len() > self.calc.results.len() {
                 let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
                 for i in cl.saturating_sub(1)..=cl {
                     if let Some(text) = self.lines.get(i) {
-                        if !self.cached_has_variable_assignment
+                        if !self.calc.cached_has_variable_assignment
                             && crate::editor_core::calc_plan::contains_variable_assignment(
                                 std::slice::from_ref(text),
                             )
                         {
-                            self.cached_has_variable_assignment = true;
+                            self.calc.cached_has_variable_assignment = true;
                         }
-                        if !self.cached_has_builtin_formula
+                        if !self.calc.cached_has_builtin_formula
                             && crate::editor_core::calc_plan::contains_builtin_formula(
                                 std::slice::from_ref(text),
                             )
                         {
-                            self.cached_has_builtin_formula = true;
+                            self.calc.cached_has_builtin_formula = true;
                         }
                     }
                 }
@@ -2350,21 +2313,21 @@ impl TerminalApp {
         }
         // Same-line edit: check only the cursor line for new signals.
         let line = self.cursor_line;
-        if !self.cached_has_variable_assignment {
+        if !self.calc.cached_has_variable_assignment {
             if let Some(text) = self.lines.get(line) {
                 if crate::editor_core::calc_plan::contains_variable_assignment(
                     std::slice::from_ref(text),
                 ) {
-                    self.cached_has_variable_assignment = true;
+                    self.calc.cached_has_variable_assignment = true;
                 }
             }
         }
-        if !self.cached_has_builtin_formula {
+        if !self.calc.cached_has_builtin_formula {
             if let Some(text) = self.lines.get(line) {
                 if crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(
                     text,
                 )) {
-                    self.cached_has_builtin_formula = true;
+                    self.calc.cached_has_builtin_formula = true;
                 }
             }
         }
@@ -2380,13 +2343,13 @@ impl TerminalApp {
     }
 
     fn calc_variables_enabled(&self) -> bool {
-        self.variables_enabled && self.cached_has_variable_assignment
+        self.variables_enabled && self.calc.cached_has_variable_assignment
     }
 
     fn should_defer_calc_recompute(&self) -> bool {
         self.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
-            && !self.cached_has_builtin_formula
-            && !self.cached_has_variable_assignment
+            && !self.calc.cached_has_builtin_formula
+            && !self.calc.cached_has_variable_assignment
     }
 
     fn can_skip_calc_recompute(&self) -> bool {
@@ -2395,9 +2358,9 @@ impl TerminalApp {
         // every line — matching the current state. Safe to skip regardless of
         // doc size, which is the biggest input-latency win for notes that
         // don't use calc at all.
-        !self.cached_has_builtin_formula
-            && !self.cached_has_variable_assignment
-            && !self.calc_state_stale
+        !self.calc.cached_has_builtin_formula
+            && !self.calc.cached_has_variable_assignment
+            && !self.calc.stale
     }
 
     fn defer_calc_state_after_edit(&mut self) {
@@ -2405,45 +2368,45 @@ impl TerminalApp {
         // state on every keystroke.
         // Clear the full cache so same-line-count multi-line edits cannot
         // leave stale calc ghosts on non-cursor lines.
-        if self.calc_results.len() != self.lines.len() {
-            self.calc_results = vec![None; self.lines.len()];
+        if self.calc.results.len() != self.lines.len() {
+            self.calc.results = vec![None; self.lines.len()];
         } else {
-            self.calc_results.fill(None);
+            self.calc.results.fill(None);
         }
-        if self.cell_calc_results.len() != self.lines.len() {
-            self.cell_calc_results = vec![Vec::new(); self.lines.len()];
+        if self.calc.cell_results.len() != self.lines.len() {
+            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         } else {
-            for row in &mut self.cell_calc_results {
+            for row in &mut self.calc.cell_results {
                 row.clear();
             }
         }
-        self.variable_names.clear();
-        self.calc_state_stale = true;
+        self.calc.variable_names.clear();
+        self.calc.stale = true;
     }
 
     fn recompute_folding_if_needed(&mut self) {
         // Process any pending deferred recompute first.
-        if self.fold_rescan_pending {
-            self.fold_rescan_pending = false;
+        if self.folds.rescan_pending {
+            self.folds.rescan_pending = false;
             self.recompute_folding();
             return;
         }
 
-        let line_count_changed = self.lines.len() != self.line_has_fold_structure.len();
+        let line_count_changed = self.lines.len() != self.folds.line_has_structure.len();
 
         if line_count_changed {
-            if self.collapsed_fold_starts.is_empty() {
+            if self.folds.collapsed_starts.is_empty() {
                 // No active folds — skip the expensive analyze_lines pass.
                 // Update line_has_fold_structure incrementally (Vec::insert/remove)
                 // instead of rebuilding 106k entries, then rebuild the sequential
                 // view map and defer the full fold analysis to the next idle tick.
                 let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
                 let next_len = self.lines.len();
-                let prev_len = self.line_has_fold_structure.len();
+                let prev_len = self.folds.line_has_structure.len();
                 if next_len == prev_len + 1 {
                     // One line inserted. Update the upper half of the split, insert new entry.
                     if cl > 0 {
-                        if let Some(flag) = self.line_has_fold_structure.get_mut(cl - 1) {
+                        if let Some(flag) = self.folds.line_has_structure.get_mut(cl - 1) {
                             *flag = self
                                 .lines
                                 .get(cl - 1)
@@ -2456,15 +2419,15 @@ impl TerminalApp {
                         .get(cl)
                         .map(|l| Self::line_has_fold_structure(l))
                         .unwrap_or(false);
-                    self.line_has_fold_structure
+                    self.folds.line_has_structure
                         .insert(cl.min(prev_len), new_flag);
                 } else if next_len + 1 == prev_len {
                     // One line deleted. Remove the entry; update the merged line.
                     if cl < prev_len {
-                        self.line_has_fold_structure.remove(cl);
+                        self.folds.line_has_structure.remove(cl);
                     }
                     let update_at = cl.min(next_len.saturating_sub(1));
-                    if let Some(flag) = self.line_has_fold_structure.get_mut(update_at) {
+                    if let Some(flag) = self.folds.line_has_structure.get_mut(update_at) {
                         *flag = self
                             .lines
                             .get(update_at)
@@ -2473,16 +2436,16 @@ impl TerminalApp {
                     }
                 } else {
                     // Bulk change (paste, format, etc.): rebuild entirely.
-                    self.line_has_fold_structure = self
+                    self.folds.line_has_structure = self
                         .lines
                         .iter()
                         .map(|l| Self::line_has_fold_structure(l))
                         .collect();
                 }
-                self.fold_ranges.clear();
-                self.fold_range_by_start = vec![None; self.lines.len()];
+                self.folds.ranges.clear();
+                self.folds.range_by_start = vec![None; self.lines.len()];
                 self.rebuild_fold_view_map();
-                self.fold_rescan_pending = true;
+                self.folds.rescan_pending = true;
             } else {
                 // Active collapsed folds present: must recompute for correctness.
                 self.recompute_folding();
@@ -2495,13 +2458,13 @@ impl TerminalApp {
         let current_text = self.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
         let next_flag = Self::line_has_fold_structure(current_text);
         let prev_flag = self
-            .line_has_fold_structure
+            .folds.line_has_structure
             .get(cl)
             .copied()
             .unwrap_or(false);
 
         if next_flag != prev_flag {
-            if let Some(flag) = self.line_has_fold_structure.get_mut(cl) {
+            if let Some(flag) = self.folds.line_has_structure.get_mut(cl) {
                 *flag = next_flag;
             }
         }
@@ -2509,26 +2472,26 @@ impl TerminalApp {
         if next_flag || prev_flag {
             // Defer: fold analysis is O(N) and doesn't need to block typing.
             // The idle tick (100 ms with no keypress) will run recompute_folding.
-            self.fold_rescan_pending = true;
+            self.folds.rescan_pending = true;
         }
     }
 
     fn recompute_folding(&mut self) {
-        self.fold_rescan_pending = false;
-        self.line_has_fold_structure = self
+        self.folds.rescan_pending = false;
+        self.folds.line_has_structure = self
             .lines
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect();
-        self.fold_ranges = folding::build_fold_ranges(&self.lines);
-        self.fold_range_by_start = vec![None; self.lines.len()];
-        for range in &self.fold_ranges {
-            if range.start_line < self.fold_range_by_start.len() {
-                self.fold_range_by_start[range.start_line] = Some(*range);
+        self.folds.ranges = folding::build_fold_ranges(&self.lines);
+        self.folds.range_by_start = vec![None; self.lines.len()];
+        for range in &self.folds.ranges {
+            if range.start_line < self.folds.range_by_start.len() {
+                self.folds.range_by_start[range.start_line] = Some(*range);
             }
         }
-        self.collapsed_fold_starts.retain(|line| {
-            self.fold_range_by_start
+        self.folds.collapsed_starts.retain(|line| {
+            self.folds.range_by_start
                 .get(*line)
                 .is_some_and(|entry| entry.is_some())
         });
@@ -2537,21 +2500,21 @@ impl TerminalApp {
 
     fn rebuild_fold_view_map(&mut self) {
         let line_count = self.lines.len();
-        self.fold_visible_to_real.clear();
-        self.fold_visible_to_real.reserve(line_count);
-        self.fold_real_to_visible = vec![0; line_count];
-        self.fold_hidden_owner = vec![None; line_count];
-        self.fold_placeholder_hidden_lines = vec![None; line_count];
+        self.folds.visible_to_real.clear();
+        self.folds.visible_to_real.reserve(line_count);
+        self.folds.real_to_visible = vec![0; line_count];
+        self.folds.hidden_owner = vec![None; line_count];
+        self.folds.placeholder_hidden_lines = vec![None; line_count];
 
         if line_count == 0 {
             return;
         }
 
         let mut collapsed_ranges = self
-            .collapsed_fold_starts
+            .folds.collapsed_starts
             .iter()
             .filter_map(|start| {
-                self.fold_range_by_start
+                self.folds.range_by_start
                     .get(*start)
                     .and_then(|entry| *entry)
             })
@@ -2574,9 +2537,9 @@ impl TerminalApp {
         let mut effective_idx = 0usize;
         let mut real_line = 0usize;
         while real_line < line_count {
-            let visible_idx = self.fold_visible_to_real.len();
-            self.fold_visible_to_real.push(real_line);
-            self.fold_real_to_visible[real_line] = visible_idx;
+            let visible_idx = self.folds.visible_to_real.len();
+            self.folds.visible_to_real.push(real_line);
+            self.folds.real_to_visible[real_line] = visible_idx;
 
             let collapse_here = effective
                 .get(effective_idx)
@@ -2585,11 +2548,11 @@ impl TerminalApp {
             if let Some(range) = collapse_here {
                 let hidden_end = range.end_line.min(line_count.saturating_sub(1));
                 if hidden_end > real_line {
-                    self.fold_placeholder_hidden_lines[real_line] =
+                    self.folds.placeholder_hidden_lines[real_line] =
                         Some(hidden_end.saturating_sub(real_line));
                     for hidden_line in (real_line + 1)..=hidden_end {
-                        self.fold_hidden_owner[hidden_line] = Some(real_line);
-                        self.fold_real_to_visible[hidden_line] = visible_idx;
+                        self.folds.hidden_owner[hidden_line] = Some(real_line);
+                        self.folds.real_to_visible[hidden_line] = visible_idx;
                     }
                     real_line = hidden_end + 1;
                 } else {
@@ -2601,8 +2564,8 @@ impl TerminalApp {
             }
         }
 
-        if self.fold_visible_to_real.is_empty() {
-            self.fold_visible_to_real.push(0);
+        if self.folds.visible_to_real.is_empty() {
+            self.folds.visible_to_real.push(0);
         }
     }
 
@@ -2666,22 +2629,22 @@ impl TerminalApp {
     }
 
     fn visible_line_count(&self) -> usize {
-        self.fold_visible_to_real.len().max(1)
+        self.folds.visible_to_real.len().max(1)
     }
 
     fn current_virtual_line(&self) -> usize {
-        self.fold_real_to_visible
+        self.folds.real_to_visible
             .get(self.cursor_line)
             .copied()
             .unwrap_or(0)
     }
 
     fn real_line_for_virtual(&self, virtual_line: usize) -> Option<usize> {
-        self.fold_visible_to_real.get(virtual_line).copied()
+        self.folds.visible_to_real.get(virtual_line).copied()
     }
 
     fn fold_hidden_owner_for_line(&self, line: usize) -> Option<usize> {
-        self.fold_hidden_owner.get(line).and_then(|owner| *owner)
+        self.folds.hidden_owner.get(line).and_then(|owner| *owner)
     }
 
     fn fold_start_for_line(&self, line: usize) -> Option<usize> {
@@ -2689,7 +2652,7 @@ impl TerminalApp {
             return Some(owner);
         }
         if self
-            .fold_range_by_start
+            .folds.range_by_start
             .get(line)
             .is_some_and(|entry| entry.is_some())
         {
@@ -2698,7 +2661,7 @@ impl TerminalApp {
 
         let mut best_start = None;
         let mut best_span = usize::MAX;
-        for range in &self.fold_ranges {
+        for range in &self.folds.ranges {
             if range.start_line < line && line <= range.end_line {
                 let span = range.end_line.saturating_sub(range.start_line);
                 if span < best_span {
@@ -2716,7 +2679,7 @@ impl TerminalApp {
             self.status = "fold: no foldable block at cursor".to_string();
             return false;
         };
-        let next_collapsed = !self.collapsed_fold_starts.contains(&start_line);
+        let next_collapsed = !self.folds.collapsed_starts.contains(&start_line);
         self.set_fold_collapsed_at_line(start_line, next_collapsed)
     }
 
@@ -2731,7 +2694,7 @@ impl TerminalApp {
 
     fn set_fold_collapsed_at_line(&mut self, start_line: usize, collapsed: bool) -> bool {
         let Some(range) = self
-            .fold_range_by_start
+            .folds.range_by_start
             .get(start_line)
             .and_then(|entry| *entry)
         else {
@@ -2739,7 +2702,7 @@ impl TerminalApp {
             return false;
         };
 
-        let was_collapsed = self.collapsed_fold_starts.contains(&start_line);
+        let was_collapsed = self.folds.collapsed_starts.contains(&start_line);
         if was_collapsed == collapsed {
             self.status = if collapsed {
                 "fold: already folded".to_string()
@@ -2750,10 +2713,10 @@ impl TerminalApp {
         }
 
         let action = if collapsed {
-            self.collapsed_fold_starts.insert(start_line);
+            self.folds.collapsed_starts.insert(start_line);
             "folded"
         } else {
-            self.collapsed_fold_starts.remove(&start_line);
+            self.folds.collapsed_starts.remove(&start_line);
             "unfolded"
         };
 
@@ -2867,16 +2830,16 @@ impl TerminalApp {
 
     fn recompute_calc_full(&mut self) {
         let calc_variables_enabled = self.calc_variables_enabled();
-        if self.calc_state_stale {
+        if self.calc.stale {
             let calc_data =
-                compute_calc_data(&self.calc_engine, &self.lines, calc_variables_enabled, None);
-            self.prev_line_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
-            self.prev_line_has_assignment = self
+                compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
+            self.calc.prev_line_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
+            self.calc.prev_line_has_assignment = self
                 .lines
                 .iter()
                 .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
                 .collect();
-            self.prev_line_has_builtin_formula = self
+            self.calc.prev_line_has_builtin_formula = self
                 .lines
                 .iter()
                 .map(|line| {
@@ -2885,40 +2848,40 @@ impl TerminalApp {
                     ))
                 })
                 .collect();
-            self.calc_results = calc_data.line_results;
-            self.cell_calc_results = calc_data.cell_results;
-            self.variable_names = calc_data.variable_names;
-            self.calc_state_stale = false;
+            self.calc.results = calc_data.line_results;
+            self.calc.cell_results = calc_data.cell_results;
+            self.calc.variable_names = calc_data.variable_names;
+            self.calc.stale = false;
             return;
         }
 
         let next_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
         let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_hashes(
-            &self.prev_line_hashes,
-            &self.calc_results,
+            &self.calc.prev_line_hashes,
+            &self.calc.results,
             &self.lines,
             &next_hashes,
         );
-        let has_prev = !self.prev_line_hashes.is_empty();
+        let has_prev = !self.calc.prev_line_hashes.is_empty();
 
         // Only scan the changed region for variable assignments and builtin
         // formulas (not all lines). Partial eval is safe as long as the edit
         // doesn't touch a formula/assignment — whole-doc presence of formulas
         // elsewhere doesn't force recomputation of unchanged lines.
         let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
-        let prev_changed_from = plan.eval_from.min(self.prev_line_hashes.len());
+        let prev_changed_from = plan.eval_from.min(self.calc.prev_line_hashes.len());
         let prev_changed_to = self
-            .prev_line_hashes
+            .calc.prev_line_hashes
             .len()
             .saturating_sub(suffix_len)
             .max(prev_changed_from);
         let prev_changed_had_assignment = self
-            .prev_line_has_assignment
+            .calc.prev_line_has_assignment
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
         let prev_changed_had_builtin_formula = self
-            .prev_line_has_builtin_formula
+            .calc.prev_line_has_builtin_formula
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
@@ -2942,7 +2905,7 @@ impl TerminalApp {
             let mut merged_cells: Vec<Vec<(usize, String)>> = vec![Vec::new(); self.lines.len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
-                    if let Some(cached) = self.cell_calc_results.get(entry.line_idx) {
+                    if let Some(cached) = self.calc.cell_results.get(entry.line_idx) {
                         *slot = cached.clone();
                     }
                 }
@@ -2950,7 +2913,7 @@ impl TerminalApp {
 
             if plan.eval_from < plan.eval_to {
                 let calc_data = compute_calc_data(
-                    &self.calc_engine,
+                    &self.calc.engine,
                     &self.lines,
                     calc_variables_enabled,
                     Some((plan.eval_from, plan.eval_to)),
@@ -2965,11 +2928,11 @@ impl TerminalApp {
                 }
                 (merged_results, merged_cells, calc_data.variable_names)
             } else {
-                (merged_results, merged_cells, self.variable_names.clone())
+                (merged_results, merged_cells, self.calc.variable_names.clone())
             }
         } else {
             let calc_data =
-                compute_calc_data(&self.calc_engine, &self.lines, calc_variables_enabled, None);
+                compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
             (
                 calc_data.line_results,
                 calc_data.cell_results,
@@ -2992,8 +2955,8 @@ impl TerminalApp {
         // delete) invalidate per-index alignment; we skip the pass and
         // reseed the snapshot below, so eligibility returns on the next
         // recompute once the user resumes normal in-line editing.
-        let aligned = self.prev_line_hashes.len() == self.lines.len()
-            && self.calc_results.len() == self.lines.len();
+        let aligned = self.calc.prev_line_hashes.len() == self.lines.len()
+            && self.calc.results.len() == self.lines.len();
 
         let mut final_hashes = next_hashes;
         if aligned {
@@ -3016,10 +2979,10 @@ impl TerminalApp {
                 let Some(new_result) = new_results[i].as_deref() else {
                     continue;
                 };
-                if self.prev_line_hashes[i] != final_hashes[i] {
+                if self.calc.prev_line_hashes[i] != final_hashes[i] {
                     continue;
                 }
-                if self.calc_results[i].is_some() {
+                if self.calc.results[i].is_some() {
                     // Previous recompute already considered this line stale;
                     // not eligible for auto-refresh (user hand-typed or
                     // otherwise never-synced trailer).
@@ -3052,23 +3015,23 @@ impl TerminalApp {
             }
         }
 
-        self.prev_line_hashes = final_hashes;
-        self.prev_line_has_assignment = self
+        self.calc.prev_line_hashes = final_hashes;
+        self.calc.prev_line_has_assignment = self
             .lines
             .iter()
             .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
             .collect();
-        self.prev_line_has_builtin_formula = self
+        self.calc.prev_line_has_builtin_formula = self
             .lines
             .iter()
             .map(|line| {
                 crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(line))
             })
             .collect();
-        self.calc_results = new_results;
-        self.cell_calc_results = new_cell_results;
-        self.variable_names = variable_names;
-        self.calc_state_stale = false;
+        self.calc.results = new_results;
+        self.calc.cell_results = new_cell_results;
+        self.calc.variable_names = variable_names;
+        self.calc.stale = false;
     }
 
     // --- Search ---
@@ -3507,7 +3470,7 @@ impl TerminalApp {
     fn apply_calc_tab(&mut self) -> bool {
         let text = self.current_line().to_string();
         let Some(result) = self
-            .calc_results
+            .calc.results
             .get(self.cursor_line)
             .and_then(|value| value.clone())
         else {
@@ -3547,23 +3510,23 @@ impl TerminalApp {
             return;
         }
 
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: self.markdown_autoformat,
             checklist_auto_reorder: self.checklist_auto_reorder,
         };
-        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&snapshot, options) {
+        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
             self.apply_edit_operation(&op);
         }
     }
 
     fn try_enter_rule(&mut self) -> bool {
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: self.markdown_autoformat,
             checklist_auto_reorder: self.checklist_auto_reorder,
         };
-        if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&snapshot, options) {
+        if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&ctx, options) {
             self.apply_edit_operation(&op);
             return true;
         }
@@ -3571,12 +3534,12 @@ impl TerminalApp {
     }
 
     fn try_tab_rule(&mut self, outdent: bool) -> bool {
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TabRuleOptions {
             markdown_autoformat: self.markdown_autoformat,
             outdent,
         };
-        if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&snapshot, options) {
+        if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&ctx, options) {
             self.apply_edit_operation(&op);
             return true;
         }
@@ -3584,13 +3547,13 @@ impl TerminalApp {
     }
 
     fn try_table_navigation_rule(&mut self, outdent: bool) -> bool {
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TabRuleOptions {
             markdown_autoformat: self.markdown_autoformat,
             outdent,
         };
         if let Some(op) =
-            crate::editor_core::text_rules::run_table_cell_navigation_rules(&snapshot, options)
+            crate::editor_core::text_rules::run_table_cell_navigation_rules(&ctx, options)
         {
             self.apply_edit_operation(&op);
             return true;
@@ -3599,9 +3562,9 @@ impl TerminalApp {
     }
 
     fn try_table_pipe_insert_column_rule(&mut self) -> bool {
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         if let Some(op) =
-            crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&snapshot)
+            crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx)
         {
             self.apply_edit_operation(&op);
             return true;
@@ -3610,9 +3573,9 @@ impl TerminalApp {
     }
 
     fn try_table_header_delete_column_rule(&mut self) -> bool {
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         if let Some(op) =
-            crate::editor_core::text_rules::run_table_header_delete_column_rule(&snapshot)
+            crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
         {
             self.apply_edit_operation(&op);
             return true;
@@ -3625,13 +3588,13 @@ impl TerminalApp {
         backward: bool,
         structural_merge: bool,
     ) -> Option<bool> {
-        let snapshot = self.build_snapshot();
+        let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TableBoundaryEditOptions {
             markdown_autoformat: self.markdown_autoformat,
             backward,
             structural_merge,
         };
-        let op = crate::editor_core::text_rules::run_table_boundary_edit_rules(&snapshot, options)?;
+        let op = crate::editor_core::text_rules::run_table_boundary_edit_rules(&ctx, options)?;
         let changed = !op.changes.is_empty();
         self.apply_edit_operation(&op);
         Some(changed)
@@ -3719,7 +3682,7 @@ impl TerminalApp {
             }
             offset = line_end + 1;
         }
-        self.fold_rescan_pending = true;
+        self.folds.rescan_pending = true;
         self.mark_edited_from_line(changed_from_line);
         self.adjust_cursor();
         self.adjust_scroll();
@@ -4091,7 +4054,7 @@ impl TerminalApp {
                 let line_no = virtual_line + 1;
                 let available = cols.saturating_sub(gutter_width);
                 let is_cursor_line = line_idx == self.cursor_line;
-                let mut calc_ghost = self.calc_results.get(line_idx).and_then(|r| r.as_deref());
+                let mut calc_ghost = self.calc.results.get(line_idx).and_then(|r| r.as_deref());
                 let mut calc_ghost_override: Option<String> = None;
                 let mut reminder_ghost_override: Option<String> = None;
                 let mut reminder_strikethrough = false;
@@ -4100,7 +4063,7 @@ impl TerminalApp {
                 let line_text = &self.lines[line_idx];
                 let mut rendered_line = line_text.to_string();
                 let collapsed_hidden_count = self
-                    .fold_placeholder_hidden_lines
+                    .folds.placeholder_hidden_lines
                     .get(line_idx)
                     .and_then(|entry| *entry);
                 let is_fold_placeholder = collapsed_hidden_count.is_some();
@@ -4127,7 +4090,7 @@ impl TerminalApp {
                         calc_ghost = None;
 
                         let cell_results = self
-                            .cell_calc_results
+                            .calc.cell_results
                             .get(line_idx)
                             .cloned()
                             .unwrap_or_default();
@@ -4138,7 +4101,7 @@ impl TerminalApp {
                                 .map(|(_, v)| format_formula_display_value(v))
                                 .or_else(|| {
                                     // Fallback: legacy single-result path.
-                                    self.calc_results
+                                    self.calc.results
                                         .get(line_idx)
                                         .and_then(|r| r.as_deref())
                                         .map(format_formula_display_value)
@@ -4267,7 +4230,7 @@ impl TerminalApp {
                             for (fi, seg) in formula_segments.iter().enumerate() {
                                 if seg.cell_to_char <= src_col {
                                     let value = self
-                                        .cell_calc_results
+                                        .calc.cell_results
                                         .get(line_idx)
                                         .and_then(|row| {
                                             row.iter()
@@ -4307,7 +4270,7 @@ impl TerminalApp {
                         reminder_strikethrough,
                         &search_ranges,
                         &current_search_ranges,
-                        &self.variable_names,
+                        &self.calc.variable_names,
                     )
                 } else {
                     ctx.render_line_full(
@@ -4319,7 +4282,7 @@ impl TerminalApp {
                         reminder_strikethrough,
                         &search_ranges,
                         &current_search_ranges,
-                        &self.variable_names,
+                        &self.calc.variable_names,
                         &ghost_dim_ranges,
                         &visual_highlight_ranges,
                         &focused_pipe_ranges,
@@ -5276,10 +5239,10 @@ mod tests {
         run_keys(&mut app, &db, &[Key::Enter]);
 
         assert_eq!(app.lines.len(), 100_001);
-        assert_eq!(app.fold_real_to_visible.len(), app.lines.len());
-        assert_eq!(app.fold_hidden_owner.len(), app.lines.len());
-        assert_eq!(app.fold_placeholder_hidden_lines.len(), app.lines.len());
-        assert_eq!(app.fold_range_by_start.len(), app.lines.len());
+        assert_eq!(app.folds.real_to_visible.len(), app.lines.len());
+        assert_eq!(app.folds.hidden_owner.len(), app.lines.len());
+        assert_eq!(app.folds.placeholder_hidden_lines.len(), app.lines.len());
+        assert_eq!(app.folds.range_by_start.len(), app.lines.len());
         assert!(app.scroll_line > 0);
         assert!(app.scroll_line >= insert_scroll_before.saturating_sub(1));
 
@@ -5292,10 +5255,10 @@ mod tests {
         run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
 
         assert_eq!(app.lines.len(), 100_000);
-        assert_eq!(app.fold_real_to_visible.len(), app.lines.len());
-        assert_eq!(app.fold_hidden_owner.len(), app.lines.len());
-        assert_eq!(app.fold_placeholder_hidden_lines.len(), app.lines.len());
-        assert_eq!(app.fold_range_by_start.len(), app.lines.len());
+        assert_eq!(app.folds.real_to_visible.len(), app.lines.len());
+        assert_eq!(app.folds.hidden_owner.len(), app.lines.len());
+        assert_eq!(app.folds.placeholder_hidden_lines.len(), app.lines.len());
+        assert_eq!(app.folds.range_by_start.len(), app.lines.len());
         assert!(app.scroll_line > 0);
         assert!(app.scroll_line >= delete_scroll_before.saturating_sub(2));
 
@@ -5356,22 +5319,22 @@ mod tests {
                 app.lines.len()
             );
             assert_eq!(
-                app.fold_real_to_visible.len(),
+                app.folds.real_to_visible.len(),
                 app.lines.len(),
                 "step {step_idx}: fold_real_to_visible size mismatch after op {op}"
             );
             assert_eq!(
-                app.fold_hidden_owner.len(),
+                app.folds.hidden_owner.len(),
                 app.lines.len(),
                 "step {step_idx}: fold_hidden_owner size mismatch after op {op}"
             );
             assert_eq!(
-                app.fold_placeholder_hidden_lines.len(),
+                app.folds.placeholder_hidden_lines.len(),
                 app.lines.len(),
                 "step {step_idx}: fold_placeholder_hidden_lines size mismatch after op {op}"
             );
             assert_eq!(
-                app.fold_range_by_start.len(),
+                app.folds.range_by_start.len(),
                 app.lines.len(),
                 "step {step_idx}: fold_range_by_start size mismatch after op {op}"
             );
@@ -5404,9 +5367,9 @@ mod tests {
         let body = vec!["plain"; 25_000].join("\n");
         let (db, mut app, path) = app_with_note(&body);
 
-        assert!(app.calc_state_stale);
-        assert!(!app.cached_has_builtin_formula);
-        assert!(!app.cached_has_variable_assignment);
+        assert!(app.calc.stale);
+        assert!(!app.calc.cached_has_builtin_formula);
+        assert!(!app.calc.cached_has_variable_assignment);
 
         app.mode = UiMode::Editor;
         app.cursor_line = app.lines.len().saturating_sub(1);
@@ -5428,11 +5391,11 @@ mod tests {
             ],
         );
 
-        assert!(app.cached_has_variable_assignment);
-        assert!(!app.calc_state_stale);
-        assert_eq!(app.prev_line_hashes.len(), app.lines.len());
-        assert_eq!(app.prev_line_has_assignment.len(), app.lines.len());
-        assert!(app.variable_names.iter().any(|name| name == "total"));
+        assert!(app.calc.cached_has_variable_assignment);
+        assert!(!app.calc.stale);
+        assert_eq!(app.calc.prev_line_hashes.len(), app.lines.len());
+        assert_eq!(app.calc.prev_line_has_assignment.len(), app.lines.len());
+        assert!(app.calc.variable_names.iter().any(|name| name == "total"));
 
         drop(app);
         drop(db);
@@ -5492,9 +5455,9 @@ mod tests {
 
         run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
 
-        assert!(app.collapsed_fold_starts.contains(&0));
-        assert_eq!(app.fold_visible_to_real, vec![0, 3, 4]);
-        assert_eq!(app.fold_placeholder_hidden_lines[0], Some(2));
+        assert!(app.folds.collapsed_starts.contains(&0));
+        assert_eq!(app.folds.visible_to_real, vec![0, 3, 4]);
+        assert_eq!(app.folds.placeholder_hidden_lines[0], Some(2));
 
         run_keys(&mut app, &db, &[Key::Char('j')]);
         assert_eq!(app.cursor_line, 3);
@@ -5505,7 +5468,7 @@ mod tests {
         assert_eq!(app.cursor_line, 0);
 
         run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
-        assert!(!app.collapsed_fold_starts.contains(&0));
+        assert!(!app.folds.collapsed_starts.contains(&0));
 
         drop(app);
         drop(db);
@@ -6258,19 +6221,19 @@ mod tests {
     #[test]
     fn defer_calc_state_after_edit_clears_full_cached_results_vector() {
         let (db, mut app, path) = app_with_note("1 + 1\n2 + 2\n3 + 3");
-        app.calc_results = vec![
+        app.calc.results = vec![
             Some("2".to_string()),
             Some("4".to_string()),
             Some("6".to_string()),
         ];
-        app.variable_names = vec!["total".to_string()];
+        app.calc.variable_names = vec!["total".to_string()];
         app.cursor_line = 1;
 
         app.defer_calc_state_after_edit();
 
-        assert_eq!(app.calc_results, vec![None, None, None]);
-        assert!(app.variable_names.is_empty());
-        assert!(app.calc_state_stale);
+        assert_eq!(app.calc.results, vec![None, None, None]);
+        assert!(app.calc.variable_names.is_empty());
+        assert!(app.calc.stale);
 
         drop(app);
         drop(db);
@@ -6466,20 +6429,20 @@ mod tests {
         app.cursor_line = 0;
 
         app.execute_terminal_command(&db, "fold");
-        assert!(app.collapsed_fold_starts.contains(&0));
-        assert_eq!(app.fold_visible_to_real, vec![0, 3, 4]);
+        assert!(app.folds.collapsed_starts.contains(&0));
+        assert_eq!(app.folds.visible_to_real, vec![0, 3, 4]);
 
         app.execute_terminal_command(&db, "fold");
         assert_eq!(app.status, "fold: already folded");
 
         app.execute_terminal_command(&db, "unfold");
-        assert!(!app.collapsed_fold_starts.contains(&0));
+        assert!(!app.folds.collapsed_starts.contains(&0));
 
         app.execute_terminal_command(&db, "za");
-        assert!(app.collapsed_fold_starts.contains(&0));
+        assert!(app.folds.collapsed_starts.contains(&0));
 
         app.execute_terminal_command(&db, "zo");
-        assert!(!app.collapsed_fold_starts.contains(&0));
+        assert!(!app.folds.collapsed_starts.contains(&0));
 
         drop(app);
         drop(db);

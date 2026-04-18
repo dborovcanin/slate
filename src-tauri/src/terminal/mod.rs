@@ -1,8 +1,10 @@
 mod ansi;
 mod app;
+mod calc_cache;
 mod clipboard;
 mod date_picker;
 mod folding;
+mod folding_state;
 mod history;
 mod input;
 mod notifications;

@@ -1,6 +1,7 @@
 import init, {
   WasmVimSession,
   initSync,
+  wasm_convert_line_to_list,
   wasm_calc_builtin_formula_label,
   wasm_calc_builtin_formula_labels,
   wasm_calc_compute_refresh,
@@ -404,10 +405,31 @@ function snapshotToArgs(snapshot: EditorContextSnapshot): [string, number, numbe
   return [text, anchor!, head!, hasRange, changedFrom!, changedTo!];
 }
 
-function parseOp(json: string | undefined, sourceText: string): EditOperation | null {
-  if (!json) return null;
-  const operation = JSON.parse(json) as EditOperation;
-  return mapOperationFromUtf8ToUtf16(sourceText, operation);
+function decodeEditOperation(raw: unknown, sourceText: string): EditOperation | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const rawChanges = obj["changes"];
+  if (!Array.isArray(rawChanges)) return null;
+  const changes: EditOperation["changes"] = [];
+  for (const c of rawChanges) {
+    if (typeof c !== "object" || c === null) return null;
+    const cc = c as Record<string, unknown>;
+    if (typeof cc["from"] !== "number" || typeof cc["to"] !== "number" || typeof cc["insert"] !== "string") return null;
+    changes.push({ from: cc["from"] as number, to: cc["to"] as number, insert: cc["insert"] as string });
+  }
+  let selection: EditOperation["selection"];
+  const rawSel = obj["selection"];
+  if (rawSel !== null && rawSel !== undefined && typeof rawSel === "object") {
+    const sel = rawSel as Record<string, unknown>;
+    if (typeof sel["anchor"] === "number") {
+      selection = {
+        anchor: sel["anchor"] as number,
+        head: typeof sel["head"] === "number" ? (sel["head"] as number) : undefined,
+      };
+    }
+  }
+  return mapOperationFromUtf8ToUtf16(sourceText, { changes, selection });
 }
 
 export function runDocChangeRules(
@@ -416,7 +438,7 @@ export function runDocChangeRules(
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_doc_change_rules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
@@ -432,7 +454,7 @@ export function runEnterRules(
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_enter_rules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
@@ -447,7 +469,7 @@ export function runTabRules(
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_tab_rules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
@@ -463,7 +485,7 @@ export function runTableCellNavigationRules(
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_table_cell_navigation_rules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
@@ -479,7 +501,7 @@ export function runTableHeaderDeleteColumnRule(
   if (!ensureWasmReadyNonBlocking()) return null;
   const text = snapshot.text;
   const [anchor, head] = batchUtf16ToUtf8(text, [snapshot.selection.anchor, snapshot.selection.head]);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_table_header_delete_column_rule(text, anchor!, head!),
     snapshot.text,
   );
@@ -491,7 +513,7 @@ export function runTablePipeInsertColumnRule(
   if (!ensureWasmReadyNonBlocking()) return null;
   const text = snapshot.text;
   const [anchor, head] = batchUtf16ToUtf8(text, [snapshot.selection.anchor, snapshot.selection.head]);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_table_pipe_insert_column_rule(text, anchor!, head!),
     snapshot.text,
   );
@@ -503,7 +525,7 @@ export function runTableBoundaryEditRules(
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return parseOp(
+  return decodeEditOperation(
     wasm_run_table_boundary_edit_rules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
@@ -517,6 +539,19 @@ export function runTableBoundaryEditRules(
 export function rewriteLineWithChecklistToggleSuffix(lineText: string): string | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_rewrite_line_with_checklist_toggle_suffix(lineText) ?? null;
+}
+
+export type ListKind = "checklist" | "unordered" | "ordered";
+
+export function convertLineToList(
+  line: string,
+  kind: ListKind,
+  orderedIndex: number,
+): { text: string; changed: boolean } {
+  if (!ensureWasmReadyNonBlocking()) return { text: line, changed: false };
+  const result = wasm_convert_line_to_list(line, kind, orderedIndex);
+  if (result === null || result === undefined) return { text: line, changed: false };
+  return { text: result, changed: result !== line };
 }
 
 export function formatMarkdown(text: string): string {

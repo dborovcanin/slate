@@ -1,8 +1,11 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { listCommandSuggestions } from "./command-engine.ts";
+import { ensureWasmReady } from "./wasm.ts";
 
-test("editor mode exposes only editing commands", () => {
+before(async () => { await ensureWasmReady(); });
+
+test("editor mode exposes only editing commands", async () => {
   const values = listCommandSuggestions("editor", "").map((entry) => entry.value);
   assert.deepEqual(values, [
     "sum",
@@ -19,11 +22,11 @@ test("editor mode exposes only editing commands", () => {
     "notify",
     "notify-delete",
     "format",
+    "clip-watch",
+    "clip-watch-stop",
     "fold",
     "unfold",
     "fold-toggle",
-    "clip-watch",
-    "clip-watch-stop",
     "clist",
     "ulist",
     "olist",
@@ -31,12 +34,12 @@ test("editor mode exposes only editing commands", () => {
   assert.equal(values.includes("q"), false);
 });
 
-test("vim mode exposes vim-specific commands", () => {
+test("vim mode exposes vim-specific commands", async () => {
   const values = listCommandSuggestions("vim", "").map((entry) => entry.value);
   assert.equal(values.includes("q"), true);
 });
 
-test("command suggestions filter by query", () => {
+test("command suggestions filter by query", async () => {
   const values = listCommandSuggestions("editor", "fo").map((entry) => entry.value);
   assert.deepEqual(values, ["fold", "fold-toggle", "format", "unfold"]);
 });

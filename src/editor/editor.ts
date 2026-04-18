@@ -314,7 +314,10 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       }),
       ...(disableCalc
         ? []
-        : calcExtensions({ variablesEnabled: options.variablesEnabled ?? true })),
+        : calcExtensions({
+            variablesEnabled: options.variablesEnabled ?? true,
+            getActiveNoteId: () => state.activeNote?.id ?? null,
+          })),
       ...(disableNotify
         ? []
         : notifyExtensions({

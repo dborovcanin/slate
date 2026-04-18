@@ -6,11 +6,12 @@ use super::sum::{
     format_sum_result as format_numeric_result, parse_numbers as parse_numeric_values,
     resolve_scope_range, SumScope,
 };
+use super::text_rules::{convert_line_to_list, ListKind};
+use regex::Regex;
 use super::types::{
     BlockLineRange, CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation,
     EditorContextSnapshot, OperationSelection,
 };
-use regex::Regex;
 
 fn parse_sum_numbers(text: &str) -> Vec<f64> {
     parse_numeric_values(text)
@@ -123,12 +124,41 @@ fn evaluate_cell_term(cell: &str) -> Option<String> {
     Some(format_sum_result(numbers.iter().sum()))
 }
 
+// Mirrors app_core::calc::engine::parse_plain_numeric_literal.
+fn parse_plain_numeric_literal(text: &str) -> Option<f64> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let cleaned: String = trimmed.chars().filter(|ch| !matches!(ch, ',' | '_')).collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    for (idx, ch) in cleaned.chars().enumerate() {
+        if ch.is_ascii_digit() { seen_digit = true; continue; }
+        if ch == '.' && !seen_dot { seen_dot = true; continue; }
+        if matches!(ch, '+' | '-') && idx == 0 { continue; }
+        return None;
+    }
+    if !seen_digit { return None; }
+    cleaned.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
 fn sum_term_values(terms: &[String]) -> Option<String> {
     if terms.is_empty() {
         return None;
     }
     if terms.len() == 1 {
         return Some(terms[0].clone());
+    }
+
+    // Fast path: all plain numerics — sum as f64 directly without fend.
+    let nums: Option<Vec<f64>> = terms.iter().map(|t| parse_plain_numeric_literal(t)).collect();
+    if let Some(ns) = nums {
+        let sum: f64 = ns.iter().sum();
+        return Some(format_sum_result(sum));
     }
 
     let mut acc = terms[0].clone();
@@ -291,68 +321,13 @@ fn list_conversion_label(kind: ListConversionKind) -> &'static str {
     }
 }
 
-fn convert_line_to_list(
-    line: &str,
-    kind: ListConversionKind,
-    ordered_index: usize,
-) -> (String, bool) {
-    if line.trim().is_empty() {
-        return (line.to_string(), false);
-    }
-
-    let indent_len = line
-        .char_indices()
-        .find_map(|(idx, ch)| if ch.is_whitespace() { None } else { Some(idx) })
-        .unwrap_or(line.len());
-    let indent = &line[..indent_len];
-    let body = &line[indent_len..];
-
-    let mut marker = String::new();
-    let mut content = body.trim_start().to_string();
-    if let Ok(list_re) =
-        Regex::new(r"^((?:->|[-*+]|\d+\.|\d+(?:\.\d+)+))\s+(?:\[(?: |x|X)\]\s*)?(.*)$")
-    {
-        if let Some(caps) = list_re.captures(body) {
-            marker = caps
-                .get(1)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
-            content = caps
-                .get(2)
-                .map(|m| m.as_str().trim_start().to_string())
-                .unwrap_or_default();
-        }
-    }
-
-    let converted = match kind {
-        ListConversionKind::Checklist => {
-            let prefix = if marker.is_empty() {
-                "- [ ]".to_string()
-            } else {
-                format!("{marker} [ ]")
-            };
-            if content.is_empty() {
-                format!("{indent}{prefix}")
-            } else {
-                format!("{indent}{prefix} {content}")
-            }
-        }
-        ListConversionKind::Unordered => {
-            if content.is_empty() {
-                format!("{indent}-")
-            } else {
-                format!("{indent}- {content}")
-            }
-        }
-        ListConversionKind::Ordered => {
-            if content.is_empty() {
-                format!("{indent}{ordered_index}.")
-            } else {
-                format!("{indent}{ordered_index}. {content}")
-            }
-        }
+fn convert_line(line: &str, kind: ListConversionKind, ordered_index: usize) -> (String, bool) {
+    let list_kind = match kind {
+        ListConversionKind::Checklist => ListKind::Checklist,
+        ListConversionKind::Unordered => ListKind::Unordered,
+        ListConversionKind::Ordered => ListKind::Ordered,
     };
-    (converted, true)
+    convert_line_to_list(line, list_kind, ordered_index)
 }
 
 fn run_list_convert_command(
@@ -381,7 +356,7 @@ fn run_list_convert_command(
     let mut ordered_index = 1usize;
     for line_no in start_line..=end_line {
         let source = ctx.line_text(line_no);
-        let (next, converted_line) = convert_line_to_list(source, kind, ordered_index);
+        let (next, converted_line) = convert_line(source, kind, ordered_index);
         if kind == ListConversionKind::Ordered && converted_line {
             ordered_index += 1;
         }
