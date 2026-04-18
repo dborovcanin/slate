@@ -151,6 +151,10 @@ struct TerminalApp {
     // snapshot contained `:=`. Needed to decide if incremental calc is safe
     // without holding the full prev lines.
     prev_line_has_assignment: Vec<bool>,
+    // Parallel to `prev_line_hashes`: tracks which lines in the previous
+    // snapshot contained a builtin formula (SUM, AVG, ...). Used to gate
+    // partial calc on edit-range formula presence rather than whole-doc.
+    prev_line_has_builtin_formula: Vec<bool>,
     calc_state_stale: bool,
     // Search state
     search_query: String,
@@ -244,17 +248,28 @@ impl TerminalApp {
         };
         let loading_calc_engine = calc_begin.elapsed();
 
-        let (prev_line_hashes, prev_line_has_assignment) = if defer_initial_calc {
-            (Vec::new(), Vec::new())
-        } else {
-            (
-                crate::editor_core::calc_plan::hash_lines(&lines),
-                lines
-                    .iter()
-                    .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
-                    .collect::<Vec<_>>(),
-            )
-        };
+        let (prev_line_hashes, prev_line_has_assignment, prev_line_has_builtin_formula) =
+            if defer_initial_calc {
+                (Vec::new(), Vec::new(), Vec::new())
+            } else {
+                (
+                    crate::editor_core::calc_plan::hash_lines(&lines),
+                    lines
+                        .iter()
+                        .map(|line| {
+                            crate::editor_core::calc_plan::contains_assignment_operator(line)
+                        })
+                        .collect::<Vec<_>>(),
+                    lines
+                        .iter()
+                        .map(|line| {
+                            crate::editor_core::calc_plan::contains_builtin_formula(
+                                std::slice::from_ref(line),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            };
         let line_has_fold_structure = lines
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
@@ -316,6 +331,7 @@ impl TerminalApp {
             variable_names: calc_data.variable_names,
             prev_line_hashes,
             prev_line_has_assignment,
+            prev_line_has_builtin_formula,
             calc_state_stale: defer_initial_calc,
             search_query: String::new(),
             search_matches: Vec::new(),
@@ -2248,6 +2264,7 @@ impl TerminalApp {
             self.variable_names.clear();
             self.prev_line_hashes.clear();
             self.prev_line_has_assignment.clear();
+            self.prev_line_has_builtin_formula.clear();
             self.calc_state_stale = true;
         } else {
             self.recompute_calc_full();
@@ -2330,6 +2347,17 @@ impl TerminalApp {
         self.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
             && !self.cached_has_builtin_formula
             && !self.cached_has_variable_assignment
+    }
+
+    fn can_skip_calc_recompute(&self) -> bool {
+        // If neither builtin formulas nor variable assignments exist anywhere
+        // in the doc, `compute_calc_data` would produce all-None results for
+        // every line — matching the current state. Safe to skip regardless of
+        // doc size, which is the biggest input-latency win for notes that
+        // don't use calc at all.
+        !self.cached_has_builtin_formula
+            && !self.cached_has_variable_assignment
+            && !self.calc_state_stale
     }
 
     fn defer_calc_state_after_edit(&mut self) {
@@ -2588,7 +2616,13 @@ impl TerminalApp {
         }
         self.update_calc_flags_incremental();
         self.recompute_folding_if_needed();
-        if self.should_defer_calc_recompute() {
+        if self.can_skip_calc_recompute() {
+            // No calc syntax anywhere in the doc and this edit didn't add any —
+            // calc_results are already correct (all None). Skip the scan.
+            // prev_line_hashes may drift from `lines` until the next real
+            // recompute, but the planner falls back to full eval safely when
+            // the diff looks large, so correctness holds.
+        } else if self.should_defer_calc_recompute() {
             self.defer_calc_state_after_edit();
         } else {
             self.recompute_calc_full();
@@ -2662,6 +2696,15 @@ impl TerminalApp {
                 .iter()
                 .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
                 .collect();
+            self.prev_line_has_builtin_formula = self
+                .lines
+                .iter()
+                .map(|line| {
+                    crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(
+                        line,
+                    ))
+                })
+                .collect();
             self.calc_results = calc_data.line_results;
             self.cell_calc_results = calc_data.cell_results;
             self.variable_names = calc_data.variable_names;
@@ -2677,9 +2720,11 @@ impl TerminalApp {
             &next_hashes,
         );
         let has_prev = !self.prev_line_hashes.is_empty();
-        let has_builtin_formula = self.cached_has_builtin_formula;
 
-        // Only scan the changed region for variable assignments (not all lines).
+        // Only scan the changed region for variable assignments and builtin
+        // formulas (not all lines). Partial eval is safe as long as the edit
+        // doesn't touch a formula/assignment — whole-doc presence of formulas
+        // elsewhere doesn't force recomputation of unchanged lines.
         let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
         let prev_changed_from = plan.eval_from.min(self.prev_line_hashes.len());
         let prev_changed_to = self
@@ -2692,10 +2737,18 @@ impl TerminalApp {
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
+        let prev_changed_had_builtin_formula = self
+            .prev_line_has_builtin_formula
+            .get(prev_changed_from..prev_changed_to)
+            .map(|slice| slice.iter().any(|&flag| flag))
+            .unwrap_or(false);
         let touches_any_assignment = calc_variables_enabled
             && (crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
                 || prev_changed_had_assignment);
-        let can_use_partial = has_prev && !touches_any_assignment && !has_builtin_formula;
+        let touches_builtin_formula =
+            crate::editor_core::calc_plan::contains_builtin_formula(&plan.eval_lines)
+                || prev_changed_had_builtin_formula;
+        let can_use_partial = has_prev && !touches_any_assignment && !touches_builtin_formula;
 
         let (mut new_results, mut new_cell_results, variable_names) = if can_use_partial {
             let mut merged_results = vec![None; self.lines.len()];
@@ -2824,6 +2877,13 @@ impl TerminalApp {
             .lines
             .iter()
             .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
+            .collect();
+        self.prev_line_has_builtin_formula = self
+            .lines
+            .iter()
+            .map(|line| {
+                crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(line))
+            })
             .collect();
         self.calc_results = new_results;
         self.cell_calc_results = new_cell_results;
