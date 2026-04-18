@@ -34,6 +34,19 @@ test("updateBody updates active note title and moves note to top", () => {
   assert.ok(events.includes("note-changed"));
 });
 
+test("updateBody can preserve backend updated_at to avoid drift", () => {
+  const appState = new AppState();
+  const a = note("a", "first", "2026-01-01T00:00:00Z");
+  appState.setNotes([a]);
+  appState.setActiveNote(a);
+
+  const backendUpdatedAt = "2026-01-01T00:42:00Z";
+  appState.updateBody("first\nsecond", backendUpdatedAt);
+
+  assert.equal(appState.activeNote?.updated_at, backendUpdatedAt);
+  assert.equal(appState.notes[0]?.updatedAt, backendUpdatedAt);
+});
+
 test("updateDraftTitle updates note list title without mutating body", () => {
   const appState = new AppState();
   const a = note("a", "old body", "2026-01-01T00:00:00Z");

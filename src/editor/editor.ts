@@ -64,8 +64,8 @@ export async function flushSave() {
   const body = view ? view.state.doc.toString() : note.body;
   saveInFlight = true;
   try {
-    await saveNote(note.id, body);
-    state.updateBody(body);
+    const saved = await saveNote(note.id, body);
+    state.updateBody(body, saved.updated_at);
     localDirty = false;
   } catch (e) {
     console.error("Failed to save note:", e);

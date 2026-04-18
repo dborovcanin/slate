@@ -81,9 +81,12 @@ async function syncActiveNoteIfBackendChanged() {
     if (state.activeNote?.id !== activeId || hasPendingLocalChanges()) {
       return;
     }
+    const sameBody = latest.body === active.body;
     state.setActiveNote(latest);
-    setEditorContent(latest.body, { forceStateReset: true });
-    focusEditor();
+    if (!sameBody) {
+      setEditorContent(latest.body, { forceStateReset: true });
+      focusEditor();
+    }
 
     void listNotesMeta()
       .then((summaries) => {

@@ -68,11 +68,11 @@ export class AppState {
     this.emit("note-changed");
   }
 
-  updateBody(body: string) {
+  updateBody(body: string, updatedAtOverride?: string) {
     const active = this._activeNote;
     if (!active) return;
 
-    const updatedAt = new Date().toISOString();
+    const updatedAt = updatedAtOverride ?? new Date().toISOString();
     const updated = { ...active, body, updated_at: updatedAt };
     this._activeNote = updated;
     const idx = this._notes.findIndex((n) => n.id === updated.id);
