@@ -44,6 +44,51 @@ export function snapshotFromUpdate(update: ViewUpdate): EditorContextSnapshot {
   return snapshotFromView(update.view, changedRangeFromChanges(update.changes));
 }
 
+// Extract a windowed snapshot around the cursor (and optionally a changed range),
+// expanded by `marginLines` lines in each direction. Uses doc.sliceString so only
+// the window bytes cross the WASM boundary instead of the full document.
+export function snapshotFromViewLines(
+  view: EditorView,
+  marginLines: number,
+  changedRange?: TextRange,
+): ScopedSnapshot {
+  const doc = view.state.doc;
+  const sel = view.state.selection.main;
+  const curLineNo = doc.lineAt(sel.head).number;
+
+  let startLineNo = Math.max(1, curLineNo - marginLines);
+  let endLineNo = Math.min(doc.lines, curLineNo + marginLines);
+
+  if (changedRange) {
+    const safeFrom = Math.min(changedRange.from, doc.length);
+    const safeTo = Math.min(changedRange.to, doc.length);
+    const changeStart = doc.lineAt(safeFrom).number;
+    const changeEnd = doc.lineAt(safeTo).number;
+    startLineNo = Math.max(1, Math.min(startLineNo, changeStart - marginLines));
+    endLineNo = Math.min(doc.lines, Math.max(endLineNo, changeEnd + marginLines));
+  }
+
+  const windowFrom = doc.line(startLineNo).from;
+  const windowTo = doc.line(endLineNo).to;
+  const localMax = windowTo - windowFrom;
+  const localAnchor = Math.max(0, Math.min(localMax, sel.anchor - windowFrom));
+  const localHead = Math.max(0, Math.min(localMax, sel.head - windowFrom));
+
+  return {
+    offset: windowFrom,
+    snapshot: {
+      text: doc.sliceString(windowFrom, windowTo),
+      selection: { anchor: localAnchor, head: localHead },
+      changedRange: changedRange
+        ? {
+            from: Math.max(0, Math.min(localMax, changedRange.from - windowFrom)),
+            to: Math.max(0, Math.min(localMax, changedRange.to - windowFrom)),
+          }
+        : undefined,
+    },
+  };
+}
+
 export function snapshotFromViewTableBlock(view: EditorView): ScopedSnapshot | null {
   const selection = view.state.selection.main;
   const current = view.state.doc.lineAt(selection.head);

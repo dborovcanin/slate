@@ -4,9 +4,9 @@ import type { ViewUpdate } from "@codemirror/view";
 import { getCalcResultAtCursor } from "./calc-decoration.ts";
 import {
   applyEditOperation,
+  changedRangeFromChanges,
   offsetEditOperation,
-  snapshotFromUpdate,
-  snapshotFromView,
+  snapshotFromViewLines,
   snapshotFromViewTableBlock,
 } from "./core/codemirror-adapter.ts";
 import {
@@ -267,12 +267,18 @@ function wrapLink(view: EditorView): boolean {
   return true;
 }
 
+// Enter rules only inspect the current line — 2-line margin is enough context.
+const ENTER_WINDOW_LINES = 2;
+// Tab/indent rules walk the list block or table block around the cursor.
+const TAB_WINDOW_LINES = 50;
+// Doc-change rules scan the checklist/list block outward from the changed region.
+const DOC_CHANGE_WINDOW_LINES = 200;
+
 function continueListOnEnter(view: EditorView, autoformat: boolean): boolean {
-  const operation = runEnterRules(snapshotFromView(view), {
-    markdownAutoformat: autoformat,
-  });
+  const scoped = snapshotFromViewLines(view, ENTER_WINDOW_LINES);
+  const operation = runEnterRules(scoped.snapshot, { markdownAutoformat: autoformat });
   if (!operation) return false;
-  applyEditOperation(view, operation);
+  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
@@ -282,12 +288,10 @@ function indentListOnTab(view: EditorView, autoformat: boolean, outdent = false)
   // Prefer calc Tab-apply behavior when a ghost result is available.
   if (!outdent && getCalcResultAtCursor(view) !== null) return false;
 
-  const operation = runTabRules(snapshotFromView(view), {
-    markdownAutoformat: autoformat,
-    outdent,
-  });
+  const scoped = snapshotFromViewLines(view, TAB_WINDOW_LINES);
+  const operation = runTabRules(scoped.snapshot, { markdownAutoformat: autoformat, outdent });
   if (!operation) return false;
-  applyEditOperation(view, operation);
+  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
@@ -503,7 +507,9 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
         if (!updateMightTriggerDocChangeRules(update)) return;
         applying = true;
         try {
-          const operation = runDocChangeRules(snapshotFromUpdate(update), {
+          const changedRange = changedRangeFromChanges(update.changes);
+          const scoped = snapshotFromViewLines(update.view, DOC_CHANGE_WINDOW_LINES, changedRange);
+          const operation = runDocChangeRules(scoped.snapshot, {
             markdownAutoformat: autoformat,
             checklistAutoReorder,
           });
@@ -511,7 +517,7 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
             Promise.resolve().then(() => {
               applying = true;
               try {
-                applyEditOperation(update.view, operation);
+                applyEditOperation(update.view, offsetEditOperation(operation, scoped.offset));
               } catch (error) {
                 console.error("Markdown text rule dispatch failed:", error);
               } finally {
