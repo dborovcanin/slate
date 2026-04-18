@@ -239,10 +239,23 @@ impl RenderContext {
         }
     }
 
+    #[cfg(test)]
     pub fn new_with_palette(palette: RenderPalette) -> Self {
         Self {
             in_code_block: false,
             code_fence_lang: None,
+            palette,
+        }
+    }
+
+    pub fn with_fence_state(
+        in_code_block: bool,
+        code_fence_lang: Option<String>,
+        palette: RenderPalette,
+    ) -> Self {
+        Self {
+            in_code_block,
+            code_fence_lang,
             palette,
         }
     }

@@ -30,6 +30,9 @@ const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
 const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
+// Checkpoint every N lines for fence-state lookups in draw().
+// Keeps the per-draw scan to at most INTERVAL line advances.
+const FENCE_CHECKPOINT_INTERVAL: usize = 256;
 
 fn decimal_digit_count(mut value: usize) -> usize {
     let mut digits = 1usize;
@@ -192,6 +195,11 @@ struct TerminalApp {
     // Cached calc flags — avoid O(n) full-doc scans on every keystroke
     cached_has_builtin_formula: bool,
     cached_has_variable_assignment: bool,
+    // Fence state checkpoints for draw(). Entry k = fence state BEFORE line
+    // k * FENCE_CHECKPOINT_INTERVAL. fence_checkpoints_valid_through is the
+    // highest index whose entry is current; all higher indices are stale.
+    fence_checkpoints: Vec<(bool, Option<String>)>,
+    fence_checkpoints_valid_through: usize,
 }
 
 impl TerminalApp {
@@ -361,6 +369,8 @@ impl TerminalApp {
             history,
             cached_has_builtin_formula: initial_has_builtin_formula,
             cached_has_variable_assignment: initial_has_variable_assignment,
+            fence_checkpoints: vec![(false, None)],
+            fence_checkpoints_valid_through: 0,
         };
 
         app.recompute_folding();
@@ -404,6 +414,11 @@ impl TerminalApp {
     }
 
     fn maybe_autosave(&mut self, db: &Db) -> Result<(), String> {
+        // Process any deferred fold recompute while the user is not typing.
+        if self.fold_rescan_pending {
+            self.fold_rescan_pending = false;
+            self.recompute_folding();
+        }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
             self.save(db)?;
             self.status = format!("autosaved {}", self.active_note.id);
@@ -2257,6 +2272,8 @@ impl TerminalApp {
         self.search_matches.clear();
         self.history
             .reset(&self.lines, self.cursor_line, self.cursor_col);
+        self.fence_checkpoints.truncate(1);
+        self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();
         if self.should_defer_calc_recompute() {
             self.calc_results = vec![None; self.lines.len()];
@@ -2382,28 +2399,50 @@ impl TerminalApp {
     }
 
     fn recompute_folding_if_needed(&mut self) {
-        if self.fold_rescan_pending || self.lines.len() != self.line_has_fold_structure.len() {
+        // Process any pending deferred recompute first.
+        if self.fold_rescan_pending {
             self.fold_rescan_pending = false;
             self.recompute_folding();
             return;
         }
 
-        // Fast path: only the cursor line can affect folding for single-line edits.
-        let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        let Some(current_line) = self.lines.get(cl) else {
-            self.recompute_folding();
+        let line_count_changed = self.lines.len() != self.line_has_fold_structure.len();
+
+        if line_count_changed {
+            if self.collapsed_fold_starts.is_empty() {
+                // No active folds — skip the expensive analyze_lines pass.
+                // Rebuild the fold structure flags and a sequential (no-fold)
+                // view map, then defer the full analysis to the next idle tick.
+                self.line_has_fold_structure = self.lines.iter()
+                    .map(|l| Self::line_has_fold_structure(l))
+                    .collect();
+                self.fold_ranges.clear();
+                self.fold_range_by_start = vec![None; self.lines.len()];
+                self.rebuild_fold_view_map();
+                self.fold_rescan_pending = true;
+            } else {
+                // Active collapsed folds present: must recompute for correctness.
+                self.recompute_folding();
+            }
             return;
-        };
-        let next_flag = Self::line_has_fold_structure(current_line);
-        let prev_flag = self
-            .line_has_fold_structure
-            .get(cl)
-            .copied()
-            .unwrap_or(false);
+        }
+
+        // Same-line edit: check whether the current line touches fold structure.
+        let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let current_text = self.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
+        let next_flag = Self::line_has_fold_structure(current_text);
+        let prev_flag = self.line_has_fold_structure.get(cl).copied().unwrap_or(false);
+
+        if next_flag != prev_flag {
+            if let Some(flag) = self.line_has_fold_structure.get_mut(cl) {
+                *flag = next_flag;
+            }
+        }
+
         if next_flag || prev_flag {
-            // Edits within fold-relevant lines (e.g. heading level changes)
-            // can alter fold ranges even when the flag itself doesn't change.
-            self.recompute_folding();
+            // Defer: fold analysis is O(N) and doesn't need to block typing.
+            // The idle tick (100 ms with no keypress) will run recompute_folding.
+            self.fold_rescan_pending = true;
         }
     }
 
@@ -2497,6 +2536,62 @@ impl TerminalApp {
 
         if self.fold_visible_to_real.is_empty() {
             self.fold_visible_to_real.push(0);
+        }
+    }
+
+    // ---- Fence-state checkpoint helpers ----
+
+    // Returns the code-fence parse state that applies BEFORE line `target_line`
+    // (0-based). Uses a sparse checkpoint array so the worst-case scan is at
+    // most FENCE_CHECKPOINT_INTERVAL line advances regardless of doc size.
+    fn fence_state_before_line(&mut self, target_line: usize) -> (bool, Option<String>) {
+        if target_line == 0 {
+            return (false, None);
+        }
+        let target = target_line.min(self.lines.len());
+        let target_ck = target / FENCE_CHECKPOINT_INTERVAL;
+        let start_ck = target_ck.min(self.fence_checkpoints_valid_through);
+        let start_line = start_ck * FENCE_CHECKPOINT_INTERVAL;
+
+        let (mut in_code_block, mut code_fence_lang) = if start_ck == 0 {
+            (false, None)
+        } else {
+            self.fence_checkpoints.get(start_ck).cloned().unwrap_or((false, None))
+        };
+
+        let mut line_idx = start_line;
+        while line_idx < target {
+            // At each new checkpoint boundary, cache the current state.
+            if line_idx > 0 && line_idx % FENCE_CHECKPOINT_INTERVAL == 0 {
+                let ck = line_idx / FENCE_CHECKPOINT_INTERVAL;
+                if ck > self.fence_checkpoints_valid_through {
+                    while self.fence_checkpoints.len() <= ck {
+                        self.fence_checkpoints.push((false, None));
+                    }
+                    self.fence_checkpoints[ck] = (in_code_block, code_fence_lang.clone());
+                    self.fence_checkpoints_valid_through = ck;
+                }
+            }
+            if let Some(line_text) = self.lines.get(line_idx) {
+                let mut state = crate::editor_core::markdown_tokens::FenceState {
+                    in_code_block,
+                    code_fence_lang,
+                };
+                crate::editor_core::markdown_tokens::advance_fence_state(&mut state, line_text);
+                in_code_block = state.in_code_block;
+                code_fence_lang = state.code_fence_lang;
+            }
+            line_idx += 1;
+        }
+        (in_code_block, code_fence_lang)
+    }
+
+    // Invalidate all fence checkpoints that depend on content at or after
+    // `line_idx`. Called whenever lines at or before a checkpoint boundary change.
+    fn invalidate_fence_checkpoints_from_line(&mut self, line_idx: usize) {
+        let keep_through = line_idx / FENCE_CHECKPOINT_INTERVAL;
+        if self.fence_checkpoints_valid_through > keep_through {
+            self.fence_checkpoints_valid_through = keep_through;
         }
     }
 
@@ -2608,12 +2703,18 @@ impl TerminalApp {
         true
     }
 
-    fn mark_edited(&mut self) {
+    fn mark_edited_from_line(&mut self, changed_from_line: usize) {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         self.dirty = true;
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
         }
+        let clamped_changed_line = if self.lines.is_empty() {
+            0
+        } else {
+            changed_from_line.min(self.lines.len().saturating_sub(1))
+        };
+        self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
         self.update_calc_flags_incremental();
         self.recompute_folding_if_needed();
         if self.can_skip_calc_recompute() {
@@ -2636,6 +2737,10 @@ impl TerminalApp {
         self.last_edit = Instant::now();
     }
 
+    fn mark_edited(&mut self) {
+        self.mark_edited_from_line(self.cursor_line);
+    }
+
     fn undo(&mut self) {
         let keep_cursor_on_exhaust = self.history.undo_depth() == 1;
         let cursor_before_undo = (self.cursor_line, self.cursor_col);
@@ -2652,6 +2757,9 @@ impl TerminalApp {
             if !self.reminder_ghosts.is_empty() {
                 self.reminders_dirty = true;
             }
+            // Full lines replacement: invalidate all caches.
+            self.fence_checkpoints.truncate(1);
+            self.fence_checkpoints_valid_through = 0;
             self.recompute_calc_full();
             self.recompute_folding();
             self.adjust_cursor();
@@ -2673,6 +2781,8 @@ impl TerminalApp {
             if !self.reminder_ghosts.is_empty() {
                 self.reminders_dirty = true;
             }
+            self.fence_checkpoints.truncate(1);
+            self.fence_checkpoints_valid_through = 0;
             self.recompute_calc_full();
             self.recompute_folding();
             self.adjust_cursor();
@@ -3293,7 +3403,7 @@ impl TerminalApp {
             self.lines[line_idx] = format!("{left}{}{right}", parts[0]);
             self.cursor_line = line_idx;
             self.cursor_col = col + parts[0].chars().count();
-            self.mark_edited();
+            self.mark_edited_from_line(line_idx);
             return;
         }
 
@@ -3308,10 +3418,11 @@ impl TerminalApp {
         self.lines.insert(insert_at, format!("{tail}{right}"));
         self.cursor_line = insert_at;
         self.cursor_col = tail.chars().count();
-        self.mark_edited();
+        self.mark_edited_from_line(line_idx);
     }
 
     fn insert_newline(&mut self) {
+        let changed_from_line = self.cursor_line;
         let col = self.cursor_col;
         let idx = byte_index(self.current_line(), col);
         let right = self.lines[self.cursor_line][idx..].to_string();
@@ -3320,7 +3431,7 @@ impl TerminalApp {
         self.lines.insert(insert_at, right);
         self.cursor_line += 1;
         self.cursor_col = 0;
-        self.mark_edited();
+        self.mark_edited_from_line(changed_from_line);
     }
 
     fn apply_calc_tab(&mut self) -> bool {
@@ -3477,6 +3588,16 @@ impl TerminalApp {
         }
 
         let mut text = join_lines(&self.lines);
+        let changed_from_offset = op
+            .changes
+            .iter()
+            .map(|change| change.from.min(text.len()))
+            .min()
+            .unwrap_or(0);
+        let changed_from_line = text.as_bytes()[..changed_from_offset]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count();
 
         // Track initial cursor byte offset
         let mut mapped_anchor = 0;
@@ -3529,7 +3650,7 @@ impl TerminalApp {
             offset = line_end + 1;
         }
         self.fold_rescan_pending = true;
-        self.mark_edited();
+        self.mark_edited_from_line(changed_from_line);
         self.adjust_cursor();
         self.adjust_scroll();
     }
@@ -3828,7 +3949,7 @@ impl TerminalApp {
         self.scroll_col = self.scroll_col.min(max_scroll);
     }
 
-    fn draw(&self, out: &mut impl Write) -> Result<(), String> {
+    fn draw(&mut self, out: &mut impl Write) -> Result<(), String> {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
         let gutter_width = self.gutter_width();
@@ -3869,11 +3990,15 @@ impl TerminalApp {
             },
         );
 
-        let mut ctx = render::RenderContext::new_with_palette(self.render_palette);
         let first_real_line = self
             .real_line_for_virtual(self.scroll_line)
             .unwrap_or(self.lines.len());
-        ctx.advance_lines(&self.lines[..first_real_line.min(self.lines.len())]);
+        let (fence_in_code_block, fence_lang) = self.fence_state_before_line(first_real_line);
+        let mut ctx = render::RenderContext::with_fence_state(
+            fence_in_code_block,
+            fence_lang,
+            self.render_palette,
+        );
         let mut last_rendered_real = if first_real_line > 0 {
             Some(first_real_line - 1)
         } else {
@@ -5007,6 +5132,62 @@ mod tests {
         assert_eq!(cursor_col, expected);
 
         drop(app);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn insert_newline_invalidates_fence_checkpoints_from_original_line() {
+        let interval = super::FENCE_CHECKPOINT_INTERVAL;
+        let fence_line = interval - 1;
+        let mut lines = vec!["plain".to_string(); interval + 40];
+        lines[fence_line] = "```".to_string();
+        lines[fence_line + 2] = "```".to_string();
+        let body = lines.join("\n");
+        let (db, mut app, path) = app_with_note(&body);
+
+        let _ = app.fence_state_before_line(interval + 20);
+        assert!(app.fence_checkpoints_valid_through >= 1);
+
+        app.cursor_line = fence_line;
+        app.cursor_col = 0;
+        app.insert_newline();
+
+        assert_eq!(app.cursor_line, interval);
+        assert_eq!(app.fence_checkpoints_valid_through, 0);
+
+        let (in_code_block, _) = app.fence_state_before_line(interval);
+        assert!(!in_code_block);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn insert_paste_multiline_invalidates_fence_checkpoints_from_original_line() {
+        let interval = super::FENCE_CHECKPOINT_INTERVAL;
+        let fence_line = interval - 1;
+        let mut lines = vec!["plain".to_string(); interval + 40];
+        lines[fence_line] = "```".to_string();
+        lines[fence_line + 2] = "```".to_string();
+        let body = lines.join("\n");
+        let (db, mut app, path) = app_with_note(&body);
+
+        let _ = app.fence_state_before_line(interval + 20);
+        assert!(app.fence_checkpoints_valid_through >= 1);
+
+        app.cursor_line = fence_line;
+        app.cursor_col = 0;
+        app.insert_paste("\n");
+
+        assert_eq!(app.cursor_line, interval);
+        assert_eq!(app.fence_checkpoints_valid_through, 0);
+
+        let (in_code_block, _) = app.fence_state_before_line(interval);
+        assert!(!in_code_block);
+
+        drop(app);
+        drop(db);
         cleanup_db_files(&path);
     }
 

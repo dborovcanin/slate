@@ -1087,12 +1087,14 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           }
 
           const snapshotDoc = doc;
-          const nextLines: string[] = [];
-          const lineStarts: number[] = [];
-          for (let i = 1; i <= doc.lines; i++) {
-            const line = doc.line(i);
-            nextLines.push(line.text);
-            lineStarts.push(line.from);
+          // Build lines via a single rope traversal (O(N)) instead of
+          // N × O(log N) doc.line(i) calls. lineStarts computed in one pass.
+          const docText = doc.toString();
+          const nextLines = docText.split('\n');
+          const lineStarts: number[] = new Array(nextLines.length);
+          for (let i = 0, pos = 0; i < nextLines.length; i++) {
+            lineStarts[i] = pos;
+            pos += nextLines[i].length + 1;
           }
 
           const plan = planIncrementalCalc(prevLines, prevResults, nextLines);
