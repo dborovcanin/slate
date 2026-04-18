@@ -17,7 +17,7 @@ use crate::text_rules::{
     run_table_header_delete_column_rule, run_table_pipe_insert_column_rule, TabRuleOptions,
     TableBoundaryEditOptions, TextRuleOptions,
 };
-use crate::types::{CommandMode, EditorContextSnapshot};
+use crate::types::{CommandMode, EditorContextSnapshot, SelectionSnapshot, TextRange};
 use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
 
 #[wasm_bindgen(start)]
@@ -25,14 +25,44 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
+fn build_snapshot(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
+) -> EditorContextSnapshot {
+    EditorContextSnapshot {
+        text: text.to_owned(),
+        selection: SelectionSnapshot {
+            anchor: selection_anchor,
+            head: selection_head,
+        },
+        changed_range: if has_changed_range {
+            Some(TextRange {
+                from: changed_from,
+                to: changed_to,
+            })
+        } else {
+            None
+        },
+    }
+}
+
 /// Run document-change text rules. Returns JSON-encoded EditOperation or null.
 #[wasm_bindgen]
 pub fn wasm_run_doc_change_rules(
-    snapshot_json: &str,
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
     markdown_autoformat: bool,
     checklist_auto_reorder: bool,
 ) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
     let options = TextRuleOptions {
         markdown_autoformat,
         checklist_auto_reorder,
@@ -43,8 +73,16 @@ pub fn wasm_run_doc_change_rules(
 
 /// Run enter-key text rules. Returns JSON-encoded EditOperation or null.
 #[wasm_bindgen]
-pub fn wasm_run_enter_rules(snapshot_json: &str, markdown_autoformat: bool) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+pub fn wasm_run_enter_rules(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
+    markdown_autoformat: bool,
+) -> Option<String> {
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
     let options = TextRuleOptions {
         markdown_autoformat,
         checklist_auto_reorder: true,
@@ -56,11 +94,16 @@ pub fn wasm_run_enter_rules(snapshot_json: &str, markdown_autoformat: bool) -> O
 /// Run tab-key text rules. Returns JSON-encoded EditOperation or null.
 #[wasm_bindgen]
 pub fn wasm_run_tab_rules(
-    snapshot_json: &str,
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
     markdown_autoformat: bool,
     outdent: bool,
 ) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
     let options = TabRuleOptions {
         markdown_autoformat,
         outdent,
@@ -72,11 +115,16 @@ pub fn wasm_run_tab_rules(
 /// Run table cell navigation rules (Tab/Shift+Tab in tables). Returns JSON-encoded EditOperation or null.
 #[wasm_bindgen]
 pub fn wasm_run_table_cell_navigation_rules(
-    snapshot_json: &str,
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
     markdown_autoformat: bool,
     outdent: bool,
 ) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
     let options = TabRuleOptions {
         markdown_autoformat,
         outdent,
@@ -88,8 +136,12 @@ pub fn wasm_run_table_cell_navigation_rules(
 /// Insert a new column when `|` is typed in the table header row.
 /// Returns JSON-encoded EditOperation or null when not applicable.
 #[wasm_bindgen]
-pub fn wasm_run_table_pipe_insert_column_rule(snapshot_json: &str) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+pub fn wasm_run_table_pipe_insert_column_rule(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+) -> Option<String> {
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, false, 0, 0);
     let op = run_table_pipe_insert_column_rule(&snapshot)?;
     serde_json::to_string(&op).ok()
 }
@@ -97,8 +149,12 @@ pub fn wasm_run_table_pipe_insert_column_rule(snapshot_json: &str) -> Option<Str
 /// Delete a column when Ctrl+Backspace is pressed inside an empty header cell.
 /// Returns JSON-encoded EditOperation or null when not applicable.
 #[wasm_bindgen]
-pub fn wasm_run_table_header_delete_column_rule(snapshot_json: &str) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+pub fn wasm_run_table_header_delete_column_rule(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+) -> Option<String> {
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, false, 0, 0);
     let op = run_table_header_delete_column_rule(&snapshot)?;
     serde_json::to_string(&op).ok()
 }
@@ -107,12 +163,17 @@ pub fn wasm_run_table_header_delete_column_rule(snapshot_json: &str) -> Option<S
 /// Returns JSON-encoded EditOperation or null.
 #[wasm_bindgen]
 pub fn wasm_run_table_boundary_edit_rules(
-    snapshot_json: &str,
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
     markdown_autoformat: bool,
     backward: bool,
     structural_merge: bool,
 ) -> Option<String> {
-    let snapshot: EditorContextSnapshot = serde_json::from_str(snapshot_json).ok()?;
+    let snapshot = build_snapshot(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
     let options = TableBoundaryEditOptions {
         markdown_autoformat,
         backward,

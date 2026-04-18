@@ -5,6 +5,7 @@ import {
   drawSelection,
   highlightActiveLine,
   placeholder,
+  type ViewUpdate,
 } from "@codemirror/view";
 import { defaultKeymap, deleteGroupBackward, history, historyKeymap, cursorGroupLeft, cursorGroupRight } from "@codemirror/commands";
 import { state } from "../state";
@@ -63,6 +64,18 @@ export async function flushSave() {
   }
 }
 
+// The title comes from the first non-empty line, so only re-derive when a
+// change touches the opening region of the doc.
+const TITLE_REGION_BYTES = 2000;
+
+function editTouchesTitleRegion(update: ViewUpdate): boolean {
+  let touches = false;
+  update.changes.iterChangedRanges((fromA, _toA, fromB) => {
+    if (fromA < TITLE_REGION_BYTES || fromB < TITLE_REGION_BYTES) touches = true;
+  });
+  return touches;
+}
+
 const onUpdate = EditorView.updateListener.of((update) => {
   if (update.docChanged) {
     if (backendDetached) return;
@@ -73,7 +86,9 @@ const onUpdate = EditorView.updateListener.of((update) => {
     ) {
       return;
     }
-    state.updateDraftTitle(deriveTitleFromDoc(update.state.doc));
+    if (editTouchesTitleRegion(update)) {
+      state.updateDraftTitle(deriveTitleFromDoc(update.state.doc));
+    }
     scheduleSave();
   }
 });

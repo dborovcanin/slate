@@ -36,6 +36,7 @@ import init, {
   wasm_run_tab_rules,
   wasm_run_table_cell_navigation_rules,
 } from "../../pkg/editor-core/editor_core.js";
+// NOTE: wasm functions for text rules now receive direct args instead of JSON snapshots.
 import type {
   CommandMode,
   CommandSuggestion,
@@ -51,7 +52,6 @@ const _isNode = typeof (globalThis as any).process?.versions?.node === "string";
 let _ready = false;
 let _initPromise: Promise<void> | null = null;
 let _initErrorLogged = false;
-const UTF8_ENCODER = new TextEncoder();
 
 async function initForNode(): Promise<void> {
   const { readFileSync } = await import("fs" as string);
@@ -311,10 +311,27 @@ function modeToId(mode: VimMode): number {
   }
 }
 
-function utf16ToUtf8Offset(text: string, utf16Offset: number): number {
-  const clamped = Math.max(0, Math.min(utf16Offset, text.length));
-  if (clamped === 0) return 0;
-  return UTF8_ENCODER.encode(text.slice(0, clamped)).length;
+// Convert multiple UTF-16 char offsets to UTF-8 byte offsets in a single O(max_offset) walk.
+// Avoids N separate TextEncoder.encode(text.slice(0, offset)) calls (each O(offset) + alloc).
+function batchUtf16ToUtf8(text: string, utf16Offsets: readonly number[]): number[] {
+  const len = utf16Offsets.length;
+  if (len === 0) return [];
+  const results = new Array<number>(len).fill(0);
+  // Pair each offset with its original index, sort ascending so we can walk once.
+  const sorted = utf16Offsets.map((o, i) => ({ o: Math.max(0, Math.min(o, text.length)), i }));
+  sorted.sort((a, b) => a.o - b.o);
+  let bytePos = 0;
+  let charPos = 0;
+  for (const { o, i } of sorted) {
+    while (charPos < o) {
+      const cp = text.codePointAt(charPos);
+      if (cp === undefined) break;
+      bytePos += cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+      charPos += cp > 0xffff ? 2 : 1;
+    }
+    results[i] = bytePos;
+  }
+  return results;
 }
 
 function utf8ToUtf16Offset(text: string, utf8Offset: number): number {
@@ -375,21 +392,16 @@ function mapOperationFromUtf8ToUtf16(sourceText: string, operation: EditOperatio
   return mapped;
 }
 
-function toRustSnapshot(snapshot: EditorContextSnapshot): string {
+function snapshotToArgs(snapshot: EditorContextSnapshot): [string, number, number, boolean, number, number] {
   const text = snapshot.text;
-  return JSON.stringify({
-    text,
-    selection: {
-      anchor: utf16ToUtf8Offset(text, snapshot.selection.anchor),
-      head: utf16ToUtf8Offset(text, snapshot.selection.head),
-    },
-    changed_range: snapshot.changedRange
-      ? {
-          from: utf16ToUtf8Offset(text, snapshot.changedRange.from),
-          to: utf16ToUtf8Offset(text, snapshot.changedRange.to),
-        }
-      : undefined,
-  });
+  const hasRange = snapshot.changedRange !== undefined;
+  const [anchor, head, changedFrom, changedTo] = batchUtf16ToUtf8(text, [
+    snapshot.selection.anchor,
+    snapshot.selection.head,
+    snapshot.changedRange?.from ?? 0,
+    snapshot.changedRange?.to ?? 0,
+  ]);
+  return [text, anchor!, head!, hasRange, changedFrom!, changedTo!];
 }
 
 function parseOp(json: string | undefined, sourceText: string): EditOperation | null {
@@ -403,9 +415,10 @@ export function runDocChangeRules(
   options: TextRuleOptions = {},
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
   return parseOp(
     wasm_run_doc_change_rules(
-      toRustSnapshot(snapshot),
+      text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.checklistAutoReorder ?? true,
     ),
@@ -418,8 +431,12 @@ export function runEnterRules(
   options: TextRuleOptions = {},
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
   return parseOp(
-    wasm_run_enter_rules(toRustSnapshot(snapshot), options.markdownAutoformat ?? true),
+    wasm_run_enter_rules(
+      text, anchor, head, hasRange, changedFrom, changedTo,
+      options.markdownAutoformat ?? true,
+    ),
     snapshot.text,
   );
 }
@@ -429,9 +446,10 @@ export function runTabRules(
   options: TabRuleOptions = {},
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
   return parseOp(
     wasm_run_tab_rules(
-      toRustSnapshot(snapshot),
+      text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
     ),
@@ -444,9 +462,10 @@ export function runTableCellNavigationRules(
   options: TabRuleOptions = {},
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
   return parseOp(
     wasm_run_table_cell_navigation_rules(
-      toRustSnapshot(snapshot),
+      text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
     ),
@@ -458,8 +477,10 @@ export function runTableHeaderDeleteColumnRule(
   snapshot: EditorContextSnapshot,
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const text = snapshot.text;
+  const [anchor, head] = batchUtf16ToUtf8(text, [snapshot.selection.anchor, snapshot.selection.head]);
   return parseOp(
-    wasm_run_table_header_delete_column_rule(toRustSnapshot(snapshot)),
+    wasm_run_table_header_delete_column_rule(text, anchor!, head!),
     snapshot.text,
   );
 }
@@ -468,8 +489,10 @@ export function runTablePipeInsertColumnRule(
   snapshot: EditorContextSnapshot,
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const text = snapshot.text;
+  const [anchor, head] = batchUtf16ToUtf8(text, [snapshot.selection.anchor, snapshot.selection.head]);
   return parseOp(
-    wasm_run_table_pipe_insert_column_rule(toRustSnapshot(snapshot)),
+    wasm_run_table_pipe_insert_column_rule(text, anchor!, head!),
     snapshot.text,
   );
 }
@@ -479,9 +502,10 @@ export function runTableBoundaryEditRules(
   options: TableBoundaryEditOptions = {},
 ): EditOperation | null {
   if (!ensureWasmReadyNonBlocking()) return null;
+  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
   return parseOp(
     wasm_run_table_boundary_edit_rules(
-      toRustSnapshot(snapshot),
+      text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.backward ?? true,
       options.structuralMerge ?? false,

@@ -479,6 +479,27 @@ function scheduleIdle(fn: () => void): IdleHandle {
   return { cancel: () => clearTimeout(id) };
 }
 
+// Heading markers (#), code fence markers (`), and newlines are the only characters
+// that can create or destroy a fold boundary. Skip the full re-analysis when the edit
+// contains none of these.
+const FOLD_STRUCTURAL_RE = /[#`\n]/;
+
+function editMightAffectFolds(update: ViewUpdate): boolean {
+  let might = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (might) return;
+    if (toA > fromA) {
+      const deleted = update.startState.doc.sliceString(fromA, toA);
+      if (FOLD_STRUCTURAL_RE.test(deleted)) { might = true; return; }
+    }
+    if (toB > fromB) {
+      const inserted = update.state.doc.sliceString(fromB, toB);
+      if (FOLD_STRUCTURAL_RE.test(inserted)) { might = true; }
+    }
+  });
+  return might;
+}
+
 const foldAnalyzerPlugin = ViewPlugin.define((view) => {
   let generation = 0;
   let scheduled: IdleHandle | null = null;
@@ -514,7 +535,7 @@ const foldAnalyzerPlugin = ViewPlugin.define((view) => {
 
   return {
     update(update: ViewUpdate) {
-      if (update.docChanged) schedule();
+      if (update.docChanged && editMightAffectFolds(update)) schedule();
     },
     destroy() {
       destroyed = true;

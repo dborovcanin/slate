@@ -238,7 +238,7 @@ class ReminderGhostWidget extends WidgetType {
   }
 }
 
-const reminderDecorations = EditorView.decorations.compute([reminderStateField, "doc"], (state) => {
+const reminderDecorations = EditorView.decorations.compute([reminderStateField], (state) => {
   const reminderState = state.field(reminderStateField, false);
   if (!reminderState || reminderState.remindersByLine.size === 0) {
     return Decoration.none;
