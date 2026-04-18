@@ -359,9 +359,17 @@ pub fn convert_line_to_list(line: &str, kind: ListKind, ordered_index: usize) ->
         return (line.to_string(), false);
     }
 
+    let fallback_indent_end = line
+        .char_indices()
+        .find(|(_, ch)| !matches!(*ch, ' ' | '\t'))
+        .map(|(idx, _)| idx)
+        .unwrap_or(line.len());
+    let fallback_indent = &line[..fallback_indent_end];
+    let fallback_content = line[fallback_indent_end..].trim();
+
     // Parse any existing list structure.
     let parts = parse_list_line_parts(line);
-    let indent = parts.as_ref().map(|p| p.indent).unwrap_or("");
+    let indent = parts.as_ref().map(|p| p.indent).unwrap_or(fallback_indent);
     let existing_marker = parts.as_ref().map(|p| p.marker).unwrap_or("");
 
     // Resolve bare content, stripping any checklist prefix.
@@ -373,7 +381,7 @@ pub fn convert_line_to_list(line: &str, kind: ListKind, ordered_index: usize) ->
             after_marker
         }
     } else {
-        line.trim()
+        fallback_content
     };
 
     let converted = match kind {
@@ -2045,6 +2053,17 @@ mod tests {
         let head = 2;
         let snap = snapshot(text, head, head);
         assert!(run_table_header_delete_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn convert_line_to_list_preserves_indent_for_plain_lines() {
+        let (unordered, changed) = convert_line_to_list("  task", ListKind::Unordered, 1);
+        assert_eq!(unordered, "  - task");
+        assert!(changed);
+
+        let (ordered, changed) = convert_line_to_list("\t  task", ListKind::Ordered, 4);
+        assert_eq!(ordered, "\t  4. task");
+        assert!(changed);
     }
 
     #[test]

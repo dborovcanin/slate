@@ -1141,12 +1141,18 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             containsBuiltinFormula(plan.evalLines) ||
             containsBuiltinFormula(prevChangedLines);
           const canUsePartial = hasPrev && !touchesAnyAssignment && !touchesBuiltinFormula;
+          const noteId = getActiveNoteId?.() ?? null;
 
           let evaluated;
           let evalFrom = 0;
           let evalTo = nextLines.length;
 
           if (canUsePartial && plan.evalLines.length === 0) {
+            if (noteId && serverCacheSeeded && prevChangedTo > plan.evalFrom) {
+              // Delete-only delta: keep backend line cache aligned even when no
+              // lines need evaluation.
+              await syncNoteLines(noteId, plan.evalFrom, prevChangedTo, []);
+            }
             // No lines changed in the middle — prefix/suffix cover everything.
             const nextMap = new Map(plan.baseResults);
             if (!calcResultMapsEqual(prevResults, nextMap)) {
@@ -1159,7 +1165,6 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             continue;
           }
 
-          const noteId = getActiveNoteId?.() ?? null;
           if (canUsePartial) {
             evalFrom = plan.evalFrom;
             evalTo = plan.evalFrom + plan.evalLines.length;

@@ -33,6 +33,22 @@ test("planIncrementalCalc shifts suffix results on line insert", () => {
   assert.equal(plan.baseResults.get(3), "10");
 });
 
+test("planIncrementalCalc carries suffix results on delete-only edits", () => {
+  const prevLines = ["head", "drop", "tail"];
+  const prevResults = new Map<number, string>([
+    [1, "4"],
+    [2, "10"],
+  ]);
+  const nextLines = ["head", "tail"];
+
+  const plan = planIncrementalCalc(prevLines, prevResults, nextLines);
+  assert.equal(plan.evalFrom, 1);
+  assert.deepEqual(plan.evalLines, []);
+  assert.equal(plan.baseResults.has(1), true);
+  assert.equal(plan.baseResults.get(1), "10");
+  assert.equal(plan.baseResults.has(2), false);
+});
+
 test("planIncrementalCalc evaluates full doc when there is no previous snapshot", () => {
   const plan = planIncrementalCalc([], new Map(), ["2+2", "3+3"]);
   assert.equal(plan.evalFrom, 0);

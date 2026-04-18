@@ -338,9 +338,9 @@ async function runListConvertCommand(
   let orderedIndex = 1;
   for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
     const source = ctx.lineText(lineNo);
-    const { text, changed: lineChanged } = convertLineToList(source, kind, orderedIndex);
+    const { text } = convertLineToList(source, kind, orderedIndex);
     converted.push(text);
-    if (lineChanged && kind === "ordered") orderedIndex += 1;
+    if (kind === "ordered" && source.trim().length > 0) orderedIndex += 1;
     if (text !== source) changed += 1;
   }
 

@@ -464,6 +464,22 @@ test("core executeCommand olist converts selected lines into ordered items", asy
   });
 });
 
+test("core executeCommand olist advances numbering across already-numbered lines", async () => {
+  const text = ["1. alpha", "3. beta", "tail"].join("\n");
+  const tailStart = text.indexOf("\ntail");
+  const result = await executeCommand(snapshot(text, tailStart, 0), "olist", {
+    mode: "editor",
+  });
+
+  assert.equal(result.message, "converted 1 line to ordered list");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: 0,
+    to: tailStart,
+    insert: "1. alpha\n2. beta",
+  });
+});
+
 test("core executeCommand clist in vim mode treats endpoint lines as selected", async () => {
   const text = ["alpha", "beta", "gamma"].join("\n");
   const betaStart = text.indexOf("beta");
