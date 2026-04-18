@@ -2,6 +2,7 @@ import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { Text } from "@codemirror/state";
 import {
+  FenceCheckpointCache,
   buildMarkdownDecorationsForSpans,
   classifyMarkdownLine,
   findInlineMarkdownTokens,
@@ -182,6 +183,112 @@ test("buildMarkdownDecorationsForSpans recovers fence state when viewport starts
   assert.ok(
     flat.some((d) => d.from === line4.from && d.cls.includes("md-code-block-line")),
     "second body line should also be treated as code",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans uses cached fence state for viewport-only analysis", () => {
+  const doc = Text.of([
+    "before",
+    "```rust",
+    "let x = 1;",
+    "fn main() {}",
+    "```",
+    "after",
+  ]);
+  const cache = new FenceCheckpointCache(2);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 3, toLine: 4 }],
+    [],
+    undefined,
+    {
+      getFenceStateBeforeLine: (lineNumber) =>
+        cache.getStateBeforeLine(doc, lineNumber),
+    },
+  );
+  const flat = collectDecorations(decos);
+  const line3 = doc.line(3);
+
+  assert.ok(
+    flat.some((d) => d.from === line3.from && d.cls.includes("md-code-block-line")),
+    "cached fence state should keep viewport lines inside code block",
+  );
+  assert.ok(
+    flat.some(
+      (d) =>
+        d.from >= line3.from &&
+        d.to <= line3.to &&
+        d.cls.includes("md-code-token-keyword"),
+    ),
+    "cached fence state should preserve fenced language highlighting",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans cached fence state does not leak past closing fence", () => {
+  const doc = Text.of([
+    "```rust",
+    "let x = 1;",
+    "```",
+    "# heading after fence",
+  ]);
+  const cache = new FenceCheckpointCache(2);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 4, toLine: 4 }],
+    [],
+    undefined,
+    {
+      getFenceStateBeforeLine: (lineNumber) =>
+        cache.getStateBeforeLine(doc, lineNumber),
+    },
+  );
+  const flat = collectDecorations(decos);
+  const heading = doc.line(4);
+
+  assert.ok(
+    flat.some(
+      (d) =>
+        d.from >= heading.from &&
+        d.to <= heading.to &&
+        d.cls.includes("md-heading"),
+    ),
+    "line after closing fence should render as heading",
+  );
+  assert.equal(
+    flat.some((d) => d.from === heading.from && d.cls.includes("md-code-block-line")),
+    false,
+    "line after closing fence must not be marked as code block",
+  );
+});
+
+test("FenceCheckpointCache invalidation recomputes state after edits above viewport", () => {
+  const before = Text.of([
+    "intro",
+    "```",
+    "inside",
+    "still inside",
+    "outside later",
+  ]);
+  const after = Text.of([
+    "intro",
+    "plain",
+    "inside",
+    "still inside",
+    "outside later",
+  ]);
+  const cache = new FenceCheckpointCache(2);
+
+  const beforeState = cache.getStateBeforeLine(before, 5);
+  assert.equal(beforeState.inCodeBlock, true, "baseline should be inside fence");
+
+  cache.invalidateFromLine(2);
+  const afterState = cache.getStateBeforeLine(after, 5);
+  assert.equal(
+    afterState.inCodeBlock,
+    false,
+    "state should be recomputed after invalidation from changed line",
   );
 });
 

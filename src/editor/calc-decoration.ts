@@ -1,6 +1,7 @@
 import {
   EditorView,
   Decoration,
+  type DecorationSet,
   ViewPlugin,
   ViewUpdate,
   WidgetType,
@@ -14,6 +15,7 @@ import {
   RangeValue,
   Annotation,
   type ChangeDesc,
+  type EditorState,
   type Text,
 } from "@codemirror/state";
 import {
@@ -42,7 +44,9 @@ export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
 }
 
-const MAX_CALC_EVAL_LINES = 20_000;
+const MAX_CALC_EVAL_LINES = 200_000;
+const MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE = 512;
+const MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE = 2_000;
 
 // Effect to update calc results from backend
 const setCalcResults = StateEffect.define<Map<number, string>>();
@@ -294,30 +298,71 @@ function formulaGhostExplanation(labels: readonly string[]): string {
 
 const focusedPipeMark = Decoration.mark({ class: "cm-table-pipe-focused" });
 
-// Decoration set derived from the calc results field
-const calcDecorations = EditorView.decorations.compute(
-  [calcResultsField, cellCalcResultsField, "doc", "selection"],
-  (state) => {
-    const results = state.field(calcResultsField);
-    const cellResults = state.field(cellCalcResultsField);
-    const linesWithResults = new Set<number>([
-      ...results.keys(),
-      ...cellResults.keys(),
-    ]);
-    // Range additions must be sorted by from-position. Collect them in a
-    // throwaway list then add to the builder in document order at the end.
-    const items: { from: number; to: number; deco: Decoration }[] = [];
-    const selection = state.selection.main;
+const CALC_VIEWPORT_MARGIN_LINES = 80;
 
-    for (const lineIndex of linesWithResults) {
-      const lineNumber = lineIndex + 1;
-      if (lineNumber < 1 || lineNumber > state.doc.lines) continue;
+interface CalcVisibleLineSpan {
+  fromLine: number;
+  toLine: number;
+}
+
+function mergeCalcLineSpans(spans: readonly CalcVisibleLineSpan[]): CalcVisibleLineSpan[] {
+  if (spans.length <= 1) return [...spans];
+  const sorted = [...spans].sort((a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine);
+  const merged: CalcVisibleLineSpan[] = [];
+  for (const span of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last || span.fromLine > last.toLine + 1) {
+      merged.push({ ...span });
+      continue;
+    }
+    last.toLine = Math.max(last.toLine, span.toLine);
+  }
+  return merged;
+}
+
+function expandedCalcVisibleSpans(view: EditorView): CalcVisibleLineSpan[] {
+  if (view.visibleRanges.length === 0) return [];
+  const doc = view.state.doc;
+  const spans = view.visibleRanges.map(({ from, to }) => ({
+    fromLine: Math.max(1, doc.lineAt(from).number - CALC_VIEWPORT_MARGIN_LINES),
+    toLine: Math.min(doc.lines, doc.lineAt(to).number + CALC_VIEWPORT_MARGIN_LINES),
+  }));
+  return mergeCalcLineSpans(spans);
+}
+
+function calcLineInSpans(lineNumber: number, spans: readonly CalcVisibleLineSpan[]): boolean {
+  for (const span of spans) {
+    if (lineNumber < span.fromLine) return false;
+    if (lineNumber <= span.toLine) return true;
+  }
+  return false;
+}
+
+function buildCalcDecorationsForSpans(
+  state: EditorState,
+  spans: readonly CalcVisibleLineSpan[],
+): DecorationSet {
+  if (spans.length === 0) return Decoration.none;
+  const results = state.field(calcResultsField);
+  const cellResults = state.field(cellCalcResultsField);
+  // Range additions must be sorted by from-position. Collect them in a
+  // throwaway list then add to the builder in document order at the end.
+  const items: { from: number; to: number; deco: Decoration }[] = [];
+  const selection = state.selection.main;
+
+  for (const span of spans) {
+    const fromLine = Math.max(1, span.fromLine);
+    const toLine = Math.min(state.doc.lines, span.toLine);
+    for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber++) {
+      const lineIndex = lineNumber - 1;
       const line = state.doc.line(lineNumber); // 1-based
       const result = results.get(lineIndex);
+      const cellsForLine = cellResults.get(lineIndex);
+      if (result == null && (!cellsForLine || cellsForLine.length === 0)) continue;
 
       const segments = calcFindTableFormulaSegments(line.text);
       if (segments.length > 0) {
-        const cells = cellResults.get(lineIndex) ?? [];
+        const cells = cellsForLine ?? [];
         const valueForCell = (cellIndex: number): string | null => {
           const hit = cells.find((c) => c.cell_index === cellIndex);
           if (hit) return formatFormulaDisplayValue(hit.value);
@@ -437,11 +482,13 @@ const calcDecorations = EditorView.decorations.compute(
         }),
       });
     }
+  }
 
-    // Highlight the focused table cell's pipe characters.
-    const cursor = selection.head;
-    if (cursor >= 0 && cursor <= state.doc.length) {
-      const cursorLine = state.doc.lineAt(cursor);
+  // Highlight the focused table cell's pipe characters.
+  const cursor = selection.head;
+  if (cursor >= 0 && cursor <= state.doc.length) {
+    const cursorLine = state.doc.lineAt(cursor);
+    if (calcLineInSpans(cursorLine.number, spans)) {
       const text = cursorLine.text;
       const trimmed = text.trim();
       if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
@@ -462,13 +509,58 @@ const calcDecorations = EditorView.decorations.compute(
         }
       }
     }
+  }
 
-    items.sort((a, b) => a.from - b.from || a.to - b.to);
-    const builder = new RangeSetBuilder<Decoration>();
-    for (const item of items) {
-      builder.add(item.from, item.to, item.deco);
+  items.sort((a, b) => a.from - b.from || a.to - b.to);
+  const builder = new RangeSetBuilder<Decoration>();
+  for (const item of items) {
+    builder.add(item.from, item.to, item.deco);
+  }
+  return builder.finish();
+}
+
+function buildCalcDecorations(view: EditorView): DecorationSet {
+  return buildCalcDecorationsForSpans(view.state, expandedCalcVisibleSpans(view));
+}
+
+const calcDecorationsPlugin = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = this.safeBuild(view, Decoration.none);
     }
-    return builder.finish();
+
+    update(update: ViewUpdate) {
+      const resultsChanged =
+        update.startState.field(calcResultsField) !== update.state.field(calcResultsField);
+      const cellsChanged =
+        update.startState.field(cellCalcResultsField) !== update.state.field(cellCalcResultsField);
+
+      if (
+        !resultsChanged &&
+        !cellsChanged &&
+        !update.docChanged &&
+        !update.selectionSet &&
+        !update.viewportChanged
+      ) {
+        return;
+      }
+
+      this.decorations = this.safeBuild(update.view, this.decorations);
+    }
+
+    private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {
+      try {
+        return buildCalcDecorations(view);
+      } catch (error) {
+        console.error("Calc decoration build failed:", error);
+        return fallback;
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
   },
 );
 
@@ -482,6 +574,113 @@ export function containsVariableAssignment(lines: readonly string[]): boolean {
 
 export function containsBuiltinFormula(lines: readonly string[]): boolean {
   return calcContainsBuiltinFormula(lines);
+}
+
+function lineHasBuiltinFormula(lineText: string): boolean {
+  const tableSegments = calcFindTableFormulaSegments(lineText);
+  if (tableSegments.length > 0) {
+    for (const segment of tableSegments) {
+      const expr = lineText.slice(segment.fromChar, segment.toChar).trim();
+      if (builtinFormulaLabels(expr).length > 0) return true;
+    }
+    return false;
+  }
+
+  const segment = findCalcSegment(lineText);
+  if (!segment) return false;
+  return builtinFormulaLabels(segment.expr).length > 0;
+}
+
+function lineHasCalcGlobalSyntax(lineText: string): boolean {
+  return lineHasBuiltinFormula(lineText) || lineUsesAssignmentGhostPrefix(lineText);
+}
+
+function scanDocHasCalcGlobalSyntax(doc: Text): boolean {
+  for (let i = 1; i <= doc.lines; i++) {
+    if (lineHasCalcGlobalSyntax(doc.line(i).text)) return true;
+  }
+  return false;
+}
+
+function rangeTouchesCalcGlobalSyntax(doc: Text, from: number, to: number): boolean {
+  if (doc.length === 0) return false;
+  const clampedFrom = Math.min(from, doc.length);
+  const clampedTo = Math.min(to, doc.length);
+  const startLine = doc.lineAt(clampedFrom).number;
+  const endPos = clampedTo > clampedFrom ? clampedTo - 1 : clampedFrom;
+  const endLine = doc.lineAt(Math.max(clampedFrom, endPos)).number;
+  if (endLine - startLine > MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE) return true;
+  for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
+    if (lineHasCalcGlobalSyntax(doc.line(lineNo).text)) return true;
+  }
+  return false;
+}
+
+function updateTouchesCalcGlobalSyntax(update: ViewUpdate): boolean {
+  let touches = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (touches) return;
+    if (rangeTouchesCalcGlobalSyntax(update.startState.doc, fromA, toA)) {
+      touches = true;
+      return;
+    }
+    if (rangeTouchesCalcGlobalSyntax(update.state.doc, fromB, toB)) {
+      touches = true;
+    }
+  });
+  return touches;
+}
+
+function lineHasCalcExpression(lineText: string): boolean {
+  return lineForCalcEvaluation(lineText).trim().length > 0;
+}
+
+function visibleSpansTouchCalcSyntax(view: EditorView): boolean {
+  const doc = view.state.doc;
+  const spans = expandedCalcVisibleSpans(view);
+  let scannedLines = 0;
+
+  for (const span of spans) {
+    const fromLine = Math.max(1, span.fromLine);
+    const toLine = Math.min(doc.lines, span.toLine);
+    scannedLines += toLine - fromLine + 1;
+    if (scannedLines > MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE) return true;
+
+    for (let lineNo = fromLine; lineNo <= toLine; lineNo++) {
+      const lineText = doc.line(lineNo).text;
+      if (lineHasCalcExpression(lineText) || calcLineUsesAssignmentPrefix(lineText)) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function rangeTouchesCalcExpression(doc: Text, from: number, to: number): boolean {
+  const startLine = doc.lineAt(from).number;
+  const endPos = to > from ? to - 1 : from;
+  const endLine = doc.lineAt(Math.max(from, endPos)).number;
+  if (endLine - startLine > MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE) return true;
+  for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
+    if (lineHasCalcExpression(doc.line(lineNo).text)) return true;
+  }
+  return false;
+}
+
+function updateTouchesCalcExpression(update: ViewUpdate): boolean {
+  let touches = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (touches) return;
+    if (rangeTouchesCalcExpression(update.startState.doc, fromA, toA)) {
+      touches = true;
+      return;
+    }
+    if (rangeTouchesCalcExpression(update.state.doc, fromB, toB)) {
+      touches = true;
+    }
+  });
+  return touches;
 }
 
 export interface CommitMarkerLoc {
@@ -836,11 +1035,34 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let inFlight = false;
     let rerunRequested = false;
     let destroyed = false;
+    let deferredEval = false;
     let prevLines: string[] = [];
     let prevResults: Map<number, string> = new Map();
     let prevVariables: VariableIndexEntry[] = [];
+    // null = needs (re)scan. Cached whenever scan runs.
+    let cachedHasGlobalSyntax: boolean | null = null;
+
+    function hasGlobalSyntax(doc: Text): boolean {
+      if (cachedHasGlobalSyntax !== null) return cachedHasGlobalSyntax;
+      cachedHasGlobalSyntax = scanDocHasCalcGlobalSyntax(doc);
+      return cachedHasGlobalSyntax;
+    }
+
+    function clearCalcState(view: EditorView) {
+      const prevCellResults = view.state.field(cellCalcResultsField);
+      const prevVars = view.state.field(variableIndexField);
+      const effects: StateEffect<unknown>[] = [];
+      if (prevResults.size > 0) effects.push(setCalcResults.of(new Map()));
+      if (prevCellResults.size > 0) effects.push(setCellCalcResults.of(new Map()));
+      if (prevVars.length > 0) effects.push(setVariableIndex.of([]));
+      if (effects.length > 0) view.dispatch({ effects });
+      prevLines = [];
+      prevResults = new Map();
+      prevVariables = [];
+    }
 
     function scheduleEval() {
+      deferredEval = false;
       if (timer !== null) clearTimeout(timer);
       timer = window.setTimeout(() => {
         void runEval(view);
@@ -859,21 +1081,12 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
         try {
           const doc = view.state.doc;
           if (doc.lines > MAX_CALC_EVAL_LINES) {
-            const prevCellResults = view.state.field(cellCalcResultsField);
-            const prevVars = view.state.field(variableIndexField);
-            const effects: StateEffect<unknown>[] = [];
-            if (prevResults.size > 0) effects.push(setCalcResults.of(new Map()));
-            if (prevCellResults.size > 0) effects.push(setCellCalcResults.of(new Map()));
-            if (prevVars.length > 0) effects.push(setVariableIndex.of([]));
-            if (effects.length > 0) {
-              view.dispatch({ effects });
-            }
-            prevLines = [];
-            prevResults = new Map();
-            prevVariables = [];
+            clearCalcState(view);
+            cachedHasGlobalSyntax = null;
             continue;
           }
-          const snapshot = doc.toString();
+
+          const snapshotDoc = doc;
           const nextLines: string[] = [];
           const lineStarts: number[] = [];
           for (let i = 1; i <= doc.lines; i++) {
@@ -893,9 +1106,16 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const touchesAnyAssignment =
             containsVariableAssignment(plan.evalLines) ||
             containsVariableAssignment(prevChangedLines);
-          const hasBuiltinFormula =
-            containsBuiltinFormula(nextLines) || containsBuiltinFormula(prevLines);
-          const canUsePartial = hasPrev && !touchesAnyAssignment && !hasBuiltinFormula;
+          // Only the edited range matters: inline builtin formulas are
+          // self-contained, so formulas elsewhere in the doc don't need a
+          // full re-eval for an unrelated edit. Table formulas with
+          // cross-row dependencies will briefly show stale results until
+          // the formula row or a variable is touched — acceptable for the
+          // perf win on large prose docs with a handful of formulas.
+          const touchesBuiltinFormula =
+            containsBuiltinFormula(plan.evalLines) ||
+            containsBuiltinFormula(prevChangedLines);
+          const canUsePartial = hasPrev && !touchesAnyAssignment && !touchesBuiltinFormula;
 
           let evaluated;
           let evalFrom = 0;
@@ -928,7 +1148,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           if (destroyed) break;
 
           // If the document changed during async evaluation, drop stale results and rerun.
-          if (view.state.doc.toString() !== snapshot) {
+          if (view.state.doc !== snapshotDoc) {
             rerunRequested = true;
             continue;
           }
@@ -1069,12 +1289,36 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
       inFlight = false;
     }
 
+    function shouldScheduleEval(
+      view: EditorView,
+      touchesCalcExpression: boolean,
+    ): boolean {
+      const doc = view.state.doc;
+      if (doc.lines > MAX_CALC_EVAL_LINES) return false;
+      // Any doc with a builtin formula or variable assignment has global
+      // dependencies — eval the whole doc so results stay consistent.
+      if (hasGlobalSyntax(doc)) return true;
+      // Otherwise, only eval when the edit touches a calc expression or
+      // the viewport shows one.
+      if (touchesCalcExpression) return true;
+      return visibleSpansTouchCalcSyntax(view);
+    }
+
     // initial evaluation
-    scheduleEval();
+    if (shouldScheduleEval(view, false)) {
+      scheduleEval();
+    } else {
+      deferredEval = true;
+    }
 
     return {
       update(update: ViewUpdate) {
-        if (!update.docChanged) return;
+        if (!update.docChanged) {
+          if (deferredEval && update.viewportChanged && shouldScheduleEval(update.view, false)) {
+            scheduleEval();
+          }
+          return;
+        }
         // Refresh-only transactions should not retrigger eval; the rewrites
         // they carry are purely cosmetic and the backend state is already
         // up to date.
@@ -1082,7 +1326,19 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           t.annotation(calcRefreshAnnotation),
         );
         if (isRefresh) return;
-        scheduleEval();
+
+        // Any change that could add or remove a global-syntax line
+        // invalidates the cached presence flag, forcing a rescan next time.
+        if (updateTouchesCalcGlobalSyntax(update)) {
+          cachedHasGlobalSyntax = null;
+        }
+
+        const touchesCalcExpression = updateTouchesCalcExpression(update);
+        if (shouldScheduleEval(update.view, touchesCalcExpression)) {
+          scheduleEval();
+        } else {
+          deferredEval = true;
+        }
       },
       destroy() {
         destroyed = true;
@@ -1169,7 +1425,7 @@ export function calcExtensions(options: CalcExtensionOptions = {}) {
     cellCalcResultsField,
     variableIndexField,
     commitMarksField,
-    calcDecorations,
+    calcDecorationsPlugin,
     buildCalcPlugin(options),
     calcTabKeymap,
   ];

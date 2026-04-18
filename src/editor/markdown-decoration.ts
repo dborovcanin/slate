@@ -18,6 +18,19 @@ type InlineToken = SharedInlineToken;
 type CodeToken = SharedCodeToken;
 export type MarkdownLineInfo = SharedMarkdownLineInfo;
 
+interface FenceState {
+  inCodeBlock: boolean;
+  codeFenceLang: string | null;
+}
+
+const DEFAULT_FENCE_STATE: FenceState = {
+  inCodeBlock: false,
+  codeFenceLang: null,
+};
+
+const VIEWPORT_MARGIN_LINES = 48;
+const FENCE_CHECKPOINT_INTERVAL = 256;
+
 const decHeadingToken = Decoration.mark({ class: "md-token md-token-heading" });
 const decQuoteToken = Decoration.mark({ class: "md-token md-token-quote" });
 const decListToken = Decoration.mark({ class: "md-token md-token-list" });
@@ -255,11 +268,113 @@ interface ActiveSelection {
   empty: boolean;
 }
 
+export interface MarkdownDecorationBuildOptions {
+  getFenceStateBeforeLine?: (lineNumber: number) => FenceState;
+  variableMatcher?: VariableMatcher;
+}
+
+class VariableMatcherCache {
+  private source: readonly Pick<VariableIndexEntry, "normalized">[] | null = null;
+  private matcher: VariableMatcher = EMPTY_MATCHER;
+
+  get(variables: readonly Pick<VariableIndexEntry, "normalized">[]): VariableMatcher {
+    if (this.source === variables) return this.matcher;
+    this.source = variables;
+    this.matcher = createVariableMatcher(variables);
+    return this.matcher;
+  }
+}
+
+function cloneFenceState(state: FenceState): FenceState {
+  return {
+    inCodeBlock: state.inCodeBlock,
+    codeFenceLang: state.codeFenceLang,
+  };
+}
+
+function clampedLineNumber(doc: Text, lineNumber: number): number {
+  const maxLine = doc.lines + 1;
+  return Math.min(maxLine, Math.max(1, Math.floor(lineNumber)));
+}
+
+function fallbackFenceStateBeforeLine(doc: Text, lineNumber: number): FenceState {
+  const targetLine = clampedLineNumber(doc, lineNumber);
+  if (targetLine <= 1) return cloneFenceState(DEFAULT_FENCE_STATE);
+  const lines: string[] = [];
+  for (let lineNo = 1; lineNo < targetLine; lineNo++) {
+    lines.push(doc.line(lineNo).text);
+  }
+  if (lines.length === 0) return cloneFenceState(DEFAULT_FENCE_STATE);
+  const analysis = markdownAnalyzeLines(lines, DEFAULT_FENCE_STATE);
+  return {
+    inCodeBlock: analysis.finalInCodeBlock,
+    codeFenceLang: analysis.finalCodeFenceLang,
+  };
+}
+
+export class FenceCheckpointCache {
+  private readonly interval: number;
+  private checkpoints = new Map<number, FenceState>();
+
+  constructor(interval = FENCE_CHECKPOINT_INTERVAL) {
+    this.interval = Math.max(16, Math.floor(interval));
+    this.reset();
+  }
+
+  reset() {
+    this.checkpoints = new Map<number, FenceState>([
+      [1, cloneFenceState(DEFAULT_FENCE_STATE)],
+    ]);
+  }
+
+  invalidateFromLine(lineNumber: number) {
+    const minLine = Math.max(1, Math.floor(lineNumber));
+    for (const line of [...this.checkpoints.keys()]) {
+      if (line >= minLine && line !== 1) this.checkpoints.delete(line);
+    }
+  }
+
+  getStateBeforeLine(doc: Text, lineNumber: number): FenceState {
+    const targetLine = clampedLineNumber(doc, lineNumber);
+    if (targetLine <= 1) return cloneFenceState(DEFAULT_FENCE_STATE);
+
+    let checkpointLine = 1;
+    for (const line of this.checkpoints.keys()) {
+      if (line <= targetLine && line > checkpointLine) checkpointLine = line;
+    }
+    let state = cloneFenceState(
+      this.checkpoints.get(checkpointLine) ?? DEFAULT_FENCE_STATE,
+    );
+
+    while (checkpointLine < targetLine) {
+      const nextCheckpointLine = Math.min(targetLine, checkpointLine + this.interval);
+      const chunkLines: string[] = [];
+      for (let lineNo = checkpointLine; lineNo < nextCheckpointLine; lineNo++) {
+        if (lineNo < 1 || lineNo > doc.lines) break;
+        chunkLines.push(doc.line(lineNo).text);
+      }
+
+      if (chunkLines.length > 0) {
+        const analysis = markdownAnalyzeLines(chunkLines, state);
+        state = {
+          inCodeBlock: analysis.finalInCodeBlock,
+          codeFenceLang: analysis.finalCodeFenceLang,
+        };
+      }
+      this.checkpoints.set(nextCheckpointLine, cloneFenceState(state));
+      checkpointLine = nextCheckpointLine;
+    }
+
+    return state;
+  }
+}
+
 export function buildMarkdownDecorationsForSpans(
   doc: Text,
   spans: readonly VisibleLineSpan[],
   variableIndex: readonly Pick<VariableIndexEntry, "normalized">[],
   activeSelection?: ActiveSelection,
+  options: MarkdownDecorationBuildOptions = {},
 ): DecorationSet {
   if (spans.length === 0) return Decoration.none;
 
@@ -267,26 +382,25 @@ export function buildMarkdownDecorationsForSpans(
     (a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine,
   );
   const builder = new RangeSetBuilder<Decoration>();
-  const fenceState = { inCodeBlock: false, codeFenceLang: null as string | null };
-  const matcher = createVariableMatcher(variableIndex);
-  let nextLineToProcess = 1;
+  const matcher = options.variableMatcher ?? createVariableMatcher(variableIndex);
 
   for (const span of sortedSpans) {
-    if (nextLineToProcess > span.toLine) {
-      nextLineToProcess = span.toLine + 1;
-      continue;
-    }
+    const fromLine = Math.max(1, span.fromLine);
+    const toLine = Math.min(doc.lines, span.toLine);
+    if (fromLine > toLine) continue;
 
     const chunkLines: string[] = [];
-    for (let lineNo = nextLineToProcess; lineNo <= span.toLine; lineNo++) {
+    for (let lineNo = fromLine; lineNo <= toLine; lineNo++) {
       chunkLines.push(doc.line(lineNo).text);
     }
+    const fenceState = options.getFenceStateBeforeLine
+      ? cloneFenceState(options.getFenceStateBeforeLine(fromLine))
+      : fallbackFenceStateBeforeLine(doc, fromLine);
     const analysis = markdownAnalyzeLines(chunkLines, fenceState);
 
-    const offset = span.fromLine - nextLineToProcess;
-    for (let idx = Math.max(0, offset); idx < analysis.lines.length; idx++) {
-      const lineNo = nextLineToProcess + idx;
-      if (lineNo > span.toLine) break;
+    for (let idx = 0; idx < analysis.lines.length; idx++) {
+      const lineNo = fromLine + idx;
+      if (lineNo > toLine) break;
       const line = doc.line(lineNo);
       const lineAnalysis = analysis.lines[idx];
       if (!lineAnalysis) continue;
@@ -313,27 +427,96 @@ export function buildMarkdownDecorationsForSpans(
         activeSelection,
       );
     }
-    fenceState.inCodeBlock = analysis.finalInCodeBlock;
-    fenceState.codeFenceLang = analysis.finalCodeFenceLang;
-    nextLineToProcess = span.toLine + 1;
   }
 
   return builder.finish();
 }
 
-function buildMarkdownDecorations(view: EditorView): DecorationSet {
+function mergeLineSpans(spans: readonly VisibleLineSpan[]): VisibleLineSpan[] {
+  if (spans.length <= 1) return [...spans];
+  const sorted = [...spans].sort((a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine);
+  const merged: VisibleLineSpan[] = [];
+  for (const span of sorted) {
+    const last = merged[merged.length - 1];
+    if (!last || span.fromLine > last.toLine + 1) {
+      merged.push({ fromLine: span.fromLine, toLine: span.toLine });
+      continue;
+    }
+    last.toLine = Math.max(last.toLine, span.toLine);
+  }
+  return merged;
+}
+
+function expandedVisibleSpans(view: EditorView): VisibleLineSpan[] {
+  const doc = view.state.doc;
+  if (view.visibleRanges.length === 0) return [];
+  const expanded = view.visibleRanges.map(({ from, to }) => ({
+    fromLine: Math.max(1, doc.lineAt(from).number - VIEWPORT_MARGIN_LINES),
+    toLine: Math.min(doc.lines, doc.lineAt(to).number + VIEWPORT_MARGIN_LINES),
+  }));
+  return mergeLineSpans(expanded);
+}
+
+function buildMarkdownDecorations(
+  view: EditorView,
+  fenceCache: FenceCheckpointCache,
+  matcherCache: VariableMatcherCache,
+): DecorationSet {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
   const selection = view.state.selection.main;
-  const spans: VisibleLineSpan[] = view.visibleRanges.map(({ from, to }) => ({
-    fromLine: doc.lineAt(from).number,
-    toLine: doc.lineAt(to).number,
-  }));
+  const spans = expandedVisibleSpans(view);
+  const matcher = matcherCache.get(variableIndex);
   return buildMarkdownDecorationsForSpans(doc, spans, variableIndex, {
     from: selection.from,
     to: selection.to,
     empty: selection.empty,
+  }, {
+    getFenceStateBeforeLine: (lineNumber) =>
+      fenceCache.getStateBeforeLine(doc, lineNumber),
+    variableMatcher: matcher,
   });
+}
+
+function lineChecklistRevealRanges(
+  line: { from: number; text: string },
+): Array<{ from: number; to: number }> {
+  const info = markdownClassifyLine(line.text);
+  if (info.checklistMarkerStart === null || info.checklistMarkerEnd === null) return [];
+
+  const ranges: Array<{ from: number; to: number }> = [
+    {
+      from: line.from + info.checklistMarkerStart,
+      to: line.from + info.checklistMarkerEnd,
+    },
+  ];
+
+  if (info.listMarkerEnd !== null && info.listMarkerEnd === info.checklistMarkerStart) {
+    const beforeChecklist = line.text.slice(0, info.checklistMarkerStart);
+    const markerMatch = beforeChecklist.match(/^(\s*)(->|[-*+])\s+$/);
+    if (markerMatch) {
+      const indentLen = (markerMatch[1] ?? "").length;
+      const prefixFrom = line.from + indentLen;
+      const prefixTo = line.from + info.checklistMarkerStart;
+      if (prefixFrom < prefixTo) {
+        ranges.push({ from: prefixFrom, to: prefixTo });
+      }
+    }
+  }
+  return ranges;
+}
+
+function selectionIntersectsChecklistReveal(
+  doc: Text,
+  selection: ActiveSelection,
+): boolean {
+  if (!selection.empty) return true;
+  const line = doc.lineAt(selection.from);
+  const ranges = lineChecklistRevealRanges(line);
+  for (const range of ranges) {
+    if (selection.from >= range.from && selection.from <= range.to) return true;
+  }
+  return false;
 }
 
 function selectionTouchesRange(
@@ -447,10 +630,48 @@ function decorateContentLine(
 
 const markdownWasmReadyAnnotation = Annotation.define<boolean>();
 
+function earliestChangedLine(update: ViewUpdate): number {
+  let earliest = Number.POSITIVE_INFINITY;
+  update.changes.iterChangedRanges((_fromA, _toA, fromB) => {
+    earliest = Math.min(earliest, fromB);
+  });
+  if (!Number.isFinite(earliest)) return 1;
+  return update.state.doc.lineAt(earliest).number;
+}
+
+// Min of the pre-change affected positions + min of the post-change affected
+// positions. Used to decide whether every edit sits strictly below the
+// current viewport.
+function earliestChangedPos(update: ViewUpdate): number {
+  let earliest = Number.POSITIVE_INFINITY;
+  update.changes.iterChangedRanges((fromA, _toA, fromB) => {
+    earliest = Math.min(earliest, fromA, fromB);
+  });
+  return Number.isFinite(earliest) ? earliest : 0;
+}
+
+function viewportEndPos(view: EditorView): number {
+  const ranges = view.visibleRanges;
+  if (ranges.length === 0) return 0;
+  let max = 0;
+  for (const range of ranges) {
+    if (range.to > max) max = range.to;
+  }
+  return max;
+}
+
+function allChangesBelowViewport(update: ViewUpdate): boolean {
+  const endPos = viewportEndPos(update.view);
+  if (endPos === 0) return false;
+  return earliestChangedPos(update) > endPos;
+}
+
 const markdownRichPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
     private destroyed = false;
+    private readonly fenceCache = new FenceCheckpointCache();
+    private readonly matcherCache = new VariableMatcherCache();
 
     constructor(view: EditorView) {
       this.decorations = this.safeBuild(view, Decoration.none);
@@ -474,6 +695,10 @@ const markdownRichPlugin = ViewPlugin.fromClass(
         return;
       }
 
+      if (update.docChanged) {
+        this.fenceCache.invalidateFromLine(earliestChangedLine(update));
+      }
+
       const prevVars = update.startState.field(variableIndexField, false) ?? [];
       const nextVars = update.state.field(variableIndexField, false) ?? [];
       const varsChanged = prevVars !== nextVars;
@@ -484,17 +709,35 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       }
 
       if (update.selectionSet) {
+        const prevSelection: ActiveSelection = {
+          from: update.startState.selection.main.from,
+          to: update.startState.selection.main.to,
+          empty: update.startState.selection.main.empty,
+        };
+        const nextSelection: ActiveSelection = {
+          from: update.state.selection.main.from,
+          to: update.state.selection.main.to,
+          empty: update.state.selection.main.empty,
+        };
+        const affectsChecklist =
+          selectionIntersectsChecklistReveal(update.startState.doc, prevSelection)
+          || selectionIntersectsChecklistReveal(update.state.doc, nextSelection);
+        if (!affectsChecklist) return;
         this.decorations = this.safeBuild(update.view, this.decorations);
         return;
       }
 
       if (!update.docChanged) return;
+      // If every edit lands strictly below the expanded viewport, the
+      // viewport's text and fence state are both unchanged and CodeMirror
+      // auto-maps the existing decorations through the transaction.
+      if (allChangesBelowViewport(update)) return;
       this.decorations = this.safeBuild(update.view, this.decorations);
     }
 
     private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {
       try {
-        return buildMarkdownDecorations(view);
+        return buildMarkdownDecorations(view, this.fenceCache, this.matcherCache);
       } catch (error) {
         console.error("Markdown decoration build failed:", error);
         return fallback;
