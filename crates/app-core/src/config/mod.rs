@@ -484,12 +484,17 @@ fn parse_imap_config(text: &str) -> Result<ImapConfig, String> {
         initial_sync_max_messages: normalize_imap_initial_sync_max_messages(
             raw.imap.initial_sync_max_messages,
         ),
-        initial_sync_past_days: normalize_imap_initial_sync_past_days(raw.imap.initial_sync_past_days),
+        initial_sync_past_days: normalize_imap_initial_sync_past_days(
+            raw.imap.initial_sync_past_days,
+        ),
         max_message_bytes: normalize_imap_max_bytes(
             raw.imap.max_message_bytes,
             DEFAULT_IMAP_MAX_MESSAGE_BYTES,
         ),
-        max_body_bytes: normalize_imap_max_bytes(raw.imap.max_body_bytes, DEFAULT_IMAP_MAX_BODY_BYTES),
+        max_body_bytes: normalize_imap_max_bytes(
+            raw.imap.max_body_bytes,
+            DEFAULT_IMAP_MAX_BODY_BYTES,
+        ),
     })
 }
 
@@ -767,8 +772,14 @@ mod tests {
             normalize_animation_mode(Some("smooth".to_string())),
             "smooth"
         );
-        assert_eq!(normalize_animation_mode(Some("sping".to_string())), "spring");
-        assert_eq!(normalize_animation_mode(Some("sprinG".to_string())), "spring");
+        assert_eq!(
+            normalize_animation_mode(Some("sping".to_string())),
+            "spring"
+        );
+        assert_eq!(
+            normalize_animation_mode(Some("sprinG".to_string())),
+            "spring"
+        );
         assert_eq!(normalize_animation_mode(Some("ultra".to_string())), "fast");
         assert_eq!(normalize_animation_mode(None), "fast");
     }
@@ -779,10 +790,19 @@ mod tests {
             normalize_animation_style(Some("from_bottom".to_string())),
             "slide-up"
         );
-        assert_eq!(normalize_animation_style(Some("bottom".to_string())), "slide-up");
-        assert_eq!(normalize_animation_style(Some("popUP".to_string())), "pop-up");
+        assert_eq!(
+            normalize_animation_style(Some("bottom".to_string())),
+            "slide-up"
+        );
+        assert_eq!(
+            normalize_animation_style(Some("popUP".to_string())),
+            "pop-up"
+        );
         assert_eq!(normalize_animation_style(Some("fAde".to_string())), "none");
-        assert_eq!(normalize_animation_style(Some("ultra".to_string())), "pop-up");
+        assert_eq!(
+            normalize_animation_style(Some("ultra".to_string())),
+            "pop-up"
+        );
         assert_eq!(normalize_animation_style(None), "pop-up");
     }
 

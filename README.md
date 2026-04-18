@@ -50,6 +50,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Runs as a standalone full-screen terminal app (no Tauri window)
 - Built-in editor with note list/switcher and status bar
 - Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
+- Pipe append mode: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
 - Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save, `Ctrl+Q`/`Ctrl+W` quit
 - Terminal folding keymap (normal mode): `za` toggle fold at cursor
 - Terminal folding commands: `:fold`, `:unfold`, `:fold-toggle` (aliases: `:zc`, `:zo`, `:za`)

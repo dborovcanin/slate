@@ -370,7 +370,10 @@ impl CalcEngine {
         // Read a line from working_lines if allocated, otherwise from the input slice.
         macro_rules! read_line {
             ($i:expr) => {
-                working_lines.as_ref().map(|w| w[$i].as_str()).unwrap_or(&lines[$i])
+                working_lines
+                    .as_ref()
+                    .map(|w| w[$i].as_str())
+                    .unwrap_or(&lines[$i])
             };
         }
 
@@ -383,9 +386,10 @@ impl CalcEngine {
             };
 
             // Multi-cell table evaluation: walk every formula cell L→R.
-            if table_segments.iter().any(|(expr, _)| {
-                find_builtin_formula_calls(expr).first().is_some()
-            }) {
+            if table_segments
+                .iter()
+                .any(|(expr, _)| find_builtin_formula_calls(expr).first().is_some())
+            {
                 let working = ensure_working!();
                 let mut first_value: Option<String> = None;
                 for (expression, cell_idx) in table_segments {
@@ -1822,8 +1826,10 @@ mod tests {
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[4];
-        let by_idx: std::collections::HashMap<usize, String> =
-            cells.iter().map(|c| (c.cell_index, c.value.clone())).collect();
+        let by_idx: std::collections::HashMap<usize, String> = cells
+            .iter()
+            .map(|c| (c.cell_index, c.value.clone()))
+            .collect();
         let avg_g = extract_first_number(by_idx.get(&0).cloned().unwrap_or_default().as_str())
             .unwrap_or(f64::NAN);
         let compound = extract_first_number(by_idx.get(&1).cloned().unwrap_or_default().as_str())
@@ -1831,7 +1837,11 @@ mod tests {
         let total = extract_first_number(by_idx.get(&2).cloned().unwrap_or_default().as_str())
             .unwrap_or(f64::NAN);
         assert!((avg_g - 4.5).abs() < 1e-6, "avg_g = {}", avg_g);
-        assert!((compound - (1.96 * 4.0 + 2.0)).abs() < 1e-6, "compound = {}", compound);
+        assert!(
+            (compound - (1.96 * 4.0 + 2.0)).abs() < 1e-6,
+            "compound = {}",
+            compound
+        );
         assert!(
             (total - (4.5 + (1.96 * 4.0 + 2.0))).abs() < 1e-6,
             "total = {}",
@@ -1863,12 +1873,12 @@ mod tests {
         let n_height = extract_first_number(&avg_height).unwrap_or(f64::NAN);
         let n_total = extract_first_number(&total).unwrap_or(f64::NAN);
         assert!((n_grade - 4.5).abs() < 1e-6, "grade avg = {}", avg_grade);
-        assert!((n_height - 1.96).abs() < 1e-6, "height avg = {}", avg_height);
         assert!(
-            (n_total - (4.5 + 1.96)).abs() < 1e-6,
-            "sum_row = {}",
-            total
+            (n_height - 1.96).abs() < 1e-6,
+            "height avg = {}",
+            avg_height
         );
+        assert!((n_total - (4.5 + 1.96)).abs() < 1e-6, "sum_row = {}", total);
     }
 
     #[test]

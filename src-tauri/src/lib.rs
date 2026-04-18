@@ -12,8 +12,10 @@ mod terminal;
 use app_core::AppCore;
 use ipc::server;
 use std::io::IsTerminal as _;
+use std::io::Read as _;
 use std::thread;
 use std::time::Duration;
+use ulid::Ulid;
 
 #[cfg(unix)]
 use terminal::TerminalOptions;
@@ -24,10 +26,19 @@ enum Mode {
     #[cfg(unix)]
     Terminal,
     ImapSync,
+    Append,
 }
 
 fn stdin_is_tty() -> bool {
     std::io::stdin().is_terminal()
+}
+
+#[cfg(not(unix))]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TerminalOptions {
+    create_new: bool,
+    note_id: Option<String>,
+    list_only: bool,
 }
 
 fn run_gui() -> Result<(), String> {
@@ -78,19 +89,25 @@ fn run_gui() -> Result<(), String> {
 
 fn print_help() {
     println!(
-        "note usage:
-  note [--gui|--terminal] [--new] [--id <note-id>] [--list]
-  note imap-sync
+        "slate usage:
+  slate [--gui|--terminal] [--new] [--id <note-id>] [--list]
+  slate append [--id <note-id>]
+  slate imap-sync
 
 Modes:
   --gui       Force Tauri GUI mode
   --terminal  Force terminal editor mode (no window UI, Unix only)
+  append      Append stdin to a note and exit
   imap-sync   Pull messages from configured IMAP inbox once
 
 Terminal options:
   --new       Create and edit a new note
   --id <id>   Open a specific note id
   --list      List notes and exit
+
+Append mode:
+  cmd | slate append
+  cmd | slate append --id <note-id>
 
 When no explicit mode is passed:
   - terminal mode is used if [editor].terminal_mode = true and stdin is a TTY
@@ -107,7 +124,9 @@ fn parse_args(
     let mut force_gui = false;
     let mut force_terminal = false;
     let mut force_imap = false;
+    let mut force_append = false;
     let mut opts = TerminalOptions::default();
+    let mut saw_id_flag = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -119,6 +138,7 @@ fn parse_args(
             "--gui" => force_gui = true,
             "--terminal" | "-t" => force_terminal = true,
             "imap-sync" | "--imap-sync" => force_imap = true,
+            "append" | "--append" => force_append = true,
             "--new" => {
                 opts.create_new = true;
                 force_terminal = true;
@@ -133,7 +153,7 @@ fn parse_args(
                     .ok_or_else(|| "--id requires a note id".to_string())?
                     .clone();
                 opts.note_id = Some(value);
-                force_terminal = true;
+                saw_id_flag = true;
                 i += 1;
             }
             unknown => {
@@ -145,6 +165,13 @@ fn parse_args(
         i += 1;
     }
 
+    if saw_id_flag && !force_append {
+        force_terminal = true;
+    }
+
+    if force_append && (force_gui || force_imap || force_terminal) {
+        return Err("Cannot combine append with GUI, terminal, or imap-sync flags".to_string());
+    }
     if force_imap && (force_gui || force_terminal) {
         return Err("Cannot combine imap-sync with GUI or terminal flags".to_string());
     }
@@ -152,7 +179,9 @@ fn parse_args(
         return Err("Cannot combine --gui with terminal flags".to_string());
     }
 
-    let mode = if force_imap {
+    let mode = if force_append {
+        Mode::Append
+    } else if force_imap {
         Mode::ImapSync
     } else if force_gui {
         Mode::Gui
@@ -170,6 +199,12 @@ fn parse_args(
                 .to_string(),
         );
     }
+    if mode == Mode::Append && stdin_tty {
+        return Err(
+            "Append mode expects piped stdin (example: cmd | slate append [--id <note-id>])."
+                .to_string(),
+        );
+    }
 
     Ok((mode, opts))
 }
@@ -178,29 +213,94 @@ fn parse_args(
 fn parse_args(
     args: &[String],
     _config_terminal_mode: bool,
-    _stdin_tty: bool,
-) -> Result<(Mode, ()), String> {
+    stdin_tty: bool,
+) -> Result<(Mode, TerminalOptions), String> {
     let mut imap = false;
-    for arg in args {
-        match arg.as_str() {
+    let mut append = false;
+    let mut opts = TerminalOptions::default();
+    let mut i = 0usize;
+    while i < args.len() {
+        match args[i].as_str() {
             "--help" | "-h" => {
                 print_help();
                 return Err(String::new());
             }
             "--gui" => {}
             "imap-sync" | "--imap-sync" => imap = true,
+            "append" | "--append" => append = true,
+            "--id" => {
+                let value = args
+                    .get(i + 1)
+                    .ok_or_else(|| "--id requires a note id".to_string())?
+                    .clone();
+                opts.note_id = Some(value);
+                i += 1;
+            }
             unknown => {
                 return Err(format!(
                     "Unknown argument: {unknown}. Use --help for usage."
                 ));
             }
         }
+        i += 1;
+    }
+    if append && imap {
+        return Err("Cannot combine append with imap-sync".to_string());
+    }
+    if append && stdin_tty {
+        return Err(
+            "Append mode expects piped stdin (example: cmd | slate append [--id <note-id>])."
+                .to_string(),
+        );
+    }
+    if append {
+        return Ok((Mode::Append, opts));
     }
     if imap {
-        Ok((Mode::ImapSync, ()))
-    } else {
-        Ok((Mode::Gui, ()))
+        return Ok((Mode::ImapSync, opts));
     }
+    Ok((Mode::Gui, opts))
+}
+
+fn select_append_note_id(
+    db: &app_core::storage::Db,
+    requested_id: Option<&str>,
+) -> Result<String, String> {
+    if let Some(id) = requested_id {
+        return Ok(id.to_string());
+    }
+
+    let special = crate::config::load_special_notes_config();
+    if let Some(note) = db.get_most_recent_note_excluding_prefix(&special.email_note_prefix)? {
+        return Ok(note.id);
+    }
+
+    if let Some(note) = db.get_most_recent_note()? {
+        return Ok(note.id);
+    }
+
+    Ok(Ulid::new().to_string())
+}
+
+fn run_append(note_id: Option<&str>) -> Result<(), String> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_to_string(&mut input)
+        .map_err(|e| format!("Failed reading stdin: {e}"))?;
+    if input.is_empty() {
+        return Err("Append mode received empty stdin input".to_string());
+    }
+
+    let core = AppCore::open_default()?;
+    let target_id = select_append_note_id(core.db(), note_id)?;
+    core.db().append_note_body(&target_id, &input)?;
+
+    let bytes = input.as_bytes().len();
+    println!(
+        "Appended {bytes} byte{} to note {target_id}",
+        if bytes == 1 { "" } else { "s" }
+    );
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -293,6 +393,12 @@ pub fn run() {
                 std::process::exit(1);
             }
         }
+        Ok((Mode::Append, opts)) => {
+            if let Err(err) = run_append(opts.note_id.as_deref()) {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
         #[cfg(unix)]
         Ok((Mode::Terminal, opts)) => {
             if let Err(err) = run_terminal(&opts, &cfg) {
@@ -366,6 +472,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_supports_append_mode_with_note_id() {
+        let (mode, opts) = parse_args(
+            &["--id".to_string(), "n1".to_string(), "append".to_string()],
+            false,
+            false,
+        )
+        .expect("parsed");
+        assert_eq!(mode, Mode::Append);
+        assert_eq!(opts.note_id.as_deref(), Some("n1"));
+        assert!(!opts.list_only);
+        assert!(!opts.create_new);
+    }
+
+    #[test]
+    fn parse_rejects_append_with_terminal_flags() {
+        let err = parse_args(
+            &["append".to_string(), "--terminal".to_string()],
+            false,
+            false,
+        )
+        .expect_err("expected err");
+        assert!(err.contains("Cannot combine append"));
+    }
+
+    #[test]
     fn parse_rejects_imap_with_terminal_flags() {
         let err = parse_args(
             &["imap-sync".to_string(), "--terminal".to_string()],
@@ -380,5 +511,11 @@ mod tests {
     fn parse_rejects_terminal_edit_without_tty() {
         let err = parse_args(&["--terminal".to_string()], false, false).expect_err("expected err");
         assert!(err.contains("requires a TTY"));
+    }
+
+    #[test]
+    fn parse_rejects_append_without_piped_stdin() {
+        let err = parse_args(&["append".to_string()], false, true).expect_err("expected err");
+        assert!(err.contains("expects piped stdin"));
     }
 }

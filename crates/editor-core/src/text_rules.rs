@@ -780,10 +780,7 @@ pub fn run_doc_change_rules(
     list_autoformat_rule(&ctx)
 }
 
-pub fn run_enter_rules(
-    ctx: &ResolvedContext,
-    options: TextRuleOptions,
-) -> Option<EditOperation> {
+pub fn run_enter_rules(ctx: &ResolvedContext, options: TextRuleOptions) -> Option<EditOperation> {
     if !options.markdown_autoformat {
         return None;
     }
@@ -1061,10 +1058,7 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
     None
 }
 
-pub fn run_tab_rules(
-    ctx: &ResolvedContext,
-    options: TabRuleOptions,
-) -> Option<EditOperation> {
+pub fn run_tab_rules(ctx: &ResolvedContext, options: TabRuleOptions) -> Option<EditOperation> {
     if !options.markdown_autoformat {
         return None;
     }
@@ -1146,9 +1140,7 @@ pub fn run_table_cell_navigation_rules(
 /// - the cursor is not on the header row of a pipe table,
 /// - the table has no recognizable structure,
 /// - or the cursor sits on a pipe character itself.
-pub fn run_table_pipe_insert_column_rule(
-    ctx: &ResolvedContext,
-) -> Option<EditOperation> {
+pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1235,9 +1227,7 @@ pub fn run_table_pipe_insert_column_rule(
 /// - the cursor is not on the header row of a pipe table,
 /// - the current header cell is non-empty,
 /// - or the table only has a single column (deletion would destroy the table).
-pub fn run_table_header_delete_column_rule(
-    ctx: &ResolvedContext,
-) -> Option<EditOperation> {
+pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1646,7 +1636,10 @@ mod tests {
         let doc =
             snapshot_with_changed_range(text, marker_from, marker_from, marker_from, marker_to);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(doc.text(), &op), "- [ ] second\n- [x] first");
+        assert_eq!(
+            apply_operation(doc.text(), &op),
+            "- [ ] second\n- [x] first"
+        );
     }
 
     #[test]
@@ -1692,7 +1685,10 @@ mod tests {
             },
         )
         .expect("outdent op");
-        assert_eq!(apply_operation(outdent_doc.text(), &outdent_op), "1.2 child");
+        assert_eq!(
+            apply_operation(outdent_doc.text(), &outdent_op),
+            "1.2 child"
+        );
     }
 
     #[test]

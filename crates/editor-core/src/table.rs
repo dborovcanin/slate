@@ -290,8 +290,7 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     // Delimiter cells must render at least `---` (3 dashes), so enforce a
     // floor on every column width — but only when the table actually has
     // (or is about to get) a delimiter row.
-    let has_delimiter_after_normalization =
-        normalized_rows.iter().any(|row| is_delimiter_row(row));
+    let has_delimiter_after_normalization = normalized_rows.iter().any(|row| is_delimiter_row(row));
     if has_delimiter_after_normalization {
         for w in widths.iter_mut() {
             *w = (*w).max(3);

@@ -1,6 +1,6 @@
+use super::folding::FoldRange;
 use std::collections::HashSet;
 use std::time::Instant;
-use super::folding::FoldRange;
 
 /// All folding index state, kept separate from the editor cursor/content state.
 pub struct FoldingState {

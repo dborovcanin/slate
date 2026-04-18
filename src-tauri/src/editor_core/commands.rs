@@ -7,11 +7,11 @@ use super::sum::{
     resolve_scope_range, SumScope,
 };
 use super::text_rules::{convert_line_to_list, ListKind};
-use regex::Regex;
 use super::types::{
     BlockLineRange, CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation,
     EditorContextSnapshot, OperationSelection,
 };
+use regex::Regex;
 
 fn parse_sum_numbers(text: &str) -> Vec<f64> {
     parse_numeric_values(text)
@@ -130,19 +130,32 @@ fn parse_plain_numeric_literal(text: &str) -> Option<f64> {
     if trimmed.is_empty() {
         return None;
     }
-    let cleaned: String = trimmed.chars().filter(|ch| !matches!(ch, ',' | '_')).collect();
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|ch| !matches!(ch, ',' | '_'))
+        .collect();
     if cleaned.is_empty() {
         return None;
     }
     let mut seen_digit = false;
     let mut seen_dot = false;
     for (idx, ch) in cleaned.chars().enumerate() {
-        if ch.is_ascii_digit() { seen_digit = true; continue; }
-        if ch == '.' && !seen_dot { seen_dot = true; continue; }
-        if matches!(ch, '+' | '-') && idx == 0 { continue; }
+        if ch.is_ascii_digit() {
+            seen_digit = true;
+            continue;
+        }
+        if ch == '.' && !seen_dot {
+            seen_dot = true;
+            continue;
+        }
+        if matches!(ch, '+' | '-') && idx == 0 {
+            continue;
+        }
         return None;
     }
-    if !seen_digit { return None; }
+    if !seen_digit {
+        return None;
+    }
     cleaned.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
@@ -155,7 +168,10 @@ fn sum_term_values(terms: &[String]) -> Option<String> {
     }
 
     // Fast path: all plain numerics — sum as f64 directly without fend.
-    let nums: Option<Vec<f64>> = terms.iter().map(|t| parse_plain_numeric_literal(t)).collect();
+    let nums: Option<Vec<f64>> = terms
+        .iter()
+        .map(|t| parse_plain_numeric_literal(t))
+        .collect();
     if let Some(ns) = nums {
         let sum: f64 = ns.iter().sum();
         return Some(format_sum_result(sum));

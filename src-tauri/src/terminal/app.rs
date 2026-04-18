@@ -1226,7 +1226,8 @@ impl TerminalApp {
 
         let now = Instant::now();
         if self
-            .folds.pending_prefix_until
+            .folds
+            .pending_prefix_until
             .is_some_and(|until| now > until)
         {
             self.folds.pending_prefix_until = None;
@@ -1276,9 +1277,7 @@ impl TerminalApp {
                 markdown_autoformat: self.markdown_autoformat,
                 checklist_auto_reorder: self.checklist_auto_reorder,
             };
-            if let Some(op) =
-                crate::editor_core::text_rules::run_doc_change_rules(&ctx, options)
-            {
+            if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
                 self.apply_edit_operation(&op);
             }
         }
@@ -2419,7 +2418,8 @@ impl TerminalApp {
                         .get(cl)
                         .map(|l| Self::line_has_fold_structure(l))
                         .unwrap_or(false);
-                    self.folds.line_has_structure
+                    self.folds
+                        .line_has_structure
                         .insert(cl.min(prev_len), new_flag);
                 } else if next_len + 1 == prev_len {
                     // One line deleted. Remove the entry; update the merged line.
@@ -2458,7 +2458,8 @@ impl TerminalApp {
         let current_text = self.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
         let next_flag = Self::line_has_fold_structure(current_text);
         let prev_flag = self
-            .folds.line_has_structure
+            .folds
+            .line_has_structure
             .get(cl)
             .copied()
             .unwrap_or(false);
@@ -2491,7 +2492,8 @@ impl TerminalApp {
             }
         }
         self.folds.collapsed_starts.retain(|line| {
-            self.folds.range_by_start
+            self.folds
+                .range_by_start
                 .get(*line)
                 .is_some_and(|entry| entry.is_some())
         });
@@ -2511,10 +2513,12 @@ impl TerminalApp {
         }
 
         let mut collapsed_ranges = self
-            .folds.collapsed_starts
+            .folds
+            .collapsed_starts
             .iter()
             .filter_map(|start| {
-                self.folds.range_by_start
+                self.folds
+                    .range_by_start
                     .get(*start)
                     .and_then(|entry| *entry)
             })
@@ -2633,7 +2637,8 @@ impl TerminalApp {
     }
 
     fn current_virtual_line(&self) -> usize {
-        self.folds.real_to_visible
+        self.folds
+            .real_to_visible
             .get(self.cursor_line)
             .copied()
             .unwrap_or(0)
@@ -2652,7 +2657,8 @@ impl TerminalApp {
             return Some(owner);
         }
         if self
-            .folds.range_by_start
+            .folds
+            .range_by_start
             .get(line)
             .is_some_and(|entry| entry.is_some())
         {
@@ -2694,7 +2700,8 @@ impl TerminalApp {
 
     fn set_fold_collapsed_at_line(&mut self, start_line: usize, collapsed: bool) -> bool {
         let Some(range) = self
-            .folds.range_by_start
+            .folds
+            .range_by_start
             .get(start_line)
             .and_then(|entry| *entry)
         else {
@@ -2871,17 +2878,20 @@ impl TerminalApp {
         let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
         let prev_changed_from = plan.eval_from.min(self.calc.prev_line_hashes.len());
         let prev_changed_to = self
-            .calc.prev_line_hashes
+            .calc
+            .prev_line_hashes
             .len()
             .saturating_sub(suffix_len)
             .max(prev_changed_from);
         let prev_changed_had_assignment = self
-            .calc.prev_line_has_assignment
+            .calc
+            .prev_line_has_assignment
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
         let prev_changed_had_builtin_formula = self
-            .calc.prev_line_has_builtin_formula
+            .calc
+            .prev_line_has_builtin_formula
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
@@ -2928,7 +2938,11 @@ impl TerminalApp {
                 }
                 (merged_results, merged_cells, calc_data.variable_names)
             } else {
-                (merged_results, merged_cells, self.calc.variable_names.clone())
+                (
+                    merged_results,
+                    merged_cells,
+                    self.calc.variable_names.clone(),
+                )
             }
         } else {
             let calc_data =
@@ -3470,7 +3484,8 @@ impl TerminalApp {
     fn apply_calc_tab(&mut self) -> bool {
         let text = self.current_line().to_string();
         let Some(result) = self
-            .calc.results
+            .calc
+            .results
             .get(self.cursor_line)
             .and_then(|value| value.clone())
         else {
@@ -3563,9 +3578,7 @@ impl TerminalApp {
 
     fn try_table_pipe_insert_column_rule(&mut self) -> bool {
         let ctx = self.build_context();
-        if let Some(op) =
-            crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx)
-        {
+        if let Some(op) = crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx) {
             self.apply_edit_operation(&op);
             return true;
         }
@@ -3574,8 +3587,7 @@ impl TerminalApp {
 
     fn try_table_header_delete_column_rule(&mut self) -> bool {
         let ctx = self.build_context();
-        if let Some(op) =
-            crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
+        if let Some(op) = crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
         {
             self.apply_edit_operation(&op);
             return true;
@@ -4063,7 +4075,8 @@ impl TerminalApp {
                 let line_text = &self.lines[line_idx];
                 let mut rendered_line = line_text.to_string();
                 let collapsed_hidden_count = self
-                    .folds.placeholder_hidden_lines
+                    .folds
+                    .placeholder_hidden_lines
                     .get(line_idx)
                     .and_then(|entry| *entry);
                 let is_fold_placeholder = collapsed_hidden_count.is_some();
@@ -4090,7 +4103,8 @@ impl TerminalApp {
                         calc_ghost = None;
 
                         let cell_results = self
-                            .calc.cell_results
+                            .calc
+                            .cell_results
                             .get(line_idx)
                             .cloned()
                             .unwrap_or_default();
@@ -4101,7 +4115,8 @@ impl TerminalApp {
                                 .map(|(_, v)| format_formula_display_value(v))
                                 .or_else(|| {
                                     // Fallback: legacy single-result path.
-                                    self.calc.results
+                                    self.calc
+                                        .results
                                         .get(line_idx)
                                         .and_then(|r| r.as_deref())
                                         .map(format_formula_display_value)
@@ -4230,7 +4245,8 @@ impl TerminalApp {
                             for (fi, seg) in formula_segments.iter().enumerate() {
                                 if seg.cell_to_char <= src_col {
                                     let value = self
-                                        .calc.cell_results
+                                        .calc
+                                        .cell_results
                                         .get(line_idx)
                                         .and_then(|row| {
                                             row.iter()

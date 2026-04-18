@@ -6,6 +6,7 @@ use crate::calc_plan::{
     self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
 };
 use crate::command_catalog;
+use crate::context::ResolvedContext;
 use crate::format::format_markdown;
 use crate::markdown_tokens::{
     self, CodeToken, InlineToken, MarkdownAnalyzeResult, MarkdownAnalyzedLine, MarkdownLineInfo,
@@ -13,12 +14,10 @@ use crate::markdown_tokens::{
 use crate::table;
 use crate::text_rules::{
     convert_line_to_list, rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules,
-    run_enter_rules, run_tab_rules, run_table_boundary_edit_rules,
-    run_table_cell_navigation_rules, run_table_header_delete_column_rule,
-    run_table_pipe_insert_column_rule, ListKind, TabRuleOptions, TableBoundaryEditOptions,
-    TextRuleOptions,
+    run_enter_rules, run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules,
+    run_table_header_delete_column_rule, run_table_pipe_insert_column_rule, ListKind,
+    TabRuleOptions, TableBoundaryEditOptions, TextRuleOptions,
 };
-use crate::context::ResolvedContext;
 use crate::types::{CommandMode, SelectionSnapshot, TextRange};
 use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
 
@@ -64,8 +63,18 @@ pub fn wasm_run_doc_change_rules(
     markdown_autoformat: bool,
     checklist_auto_reorder: bool,
 ) -> Option<JsValue> {
-    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TextRuleOptions { markdown_autoformat, checklist_auto_reorder };
+    let ctx = build_context(
+        text,
+        selection_anchor,
+        selection_head,
+        has_changed_range,
+        changed_from,
+        changed_to,
+    );
+    let options = TextRuleOptions {
+        markdown_autoformat,
+        checklist_auto_reorder,
+    };
     let op = run_doc_change_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
 }
@@ -81,8 +90,18 @@ pub fn wasm_run_enter_rules(
     changed_to: usize,
     markdown_autoformat: bool,
 ) -> Option<JsValue> {
-    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TextRuleOptions { markdown_autoformat, checklist_auto_reorder: true };
+    let ctx = build_context(
+        text,
+        selection_anchor,
+        selection_head,
+        has_changed_range,
+        changed_from,
+        changed_to,
+    );
+    let options = TextRuleOptions {
+        markdown_autoformat,
+        checklist_auto_reorder: true,
+    };
     let op = run_enter_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
 }
@@ -99,8 +118,18 @@ pub fn wasm_run_tab_rules(
     markdown_autoformat: bool,
     outdent: bool,
 ) -> Option<JsValue> {
-    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TabRuleOptions { markdown_autoformat, outdent };
+    let ctx = build_context(
+        text,
+        selection_anchor,
+        selection_head,
+        has_changed_range,
+        changed_from,
+        changed_to,
+    );
+    let options = TabRuleOptions {
+        markdown_autoformat,
+        outdent,
+    };
     let op = run_tab_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
 }
@@ -117,8 +146,18 @@ pub fn wasm_run_table_cell_navigation_rules(
     markdown_autoformat: bool,
     outdent: bool,
 ) -> Option<JsValue> {
-    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TabRuleOptions { markdown_autoformat, outdent };
+    let ctx = build_context(
+        text,
+        selection_anchor,
+        selection_head,
+        has_changed_range,
+        changed_from,
+        changed_to,
+    );
+    let options = TabRuleOptions {
+        markdown_autoformat,
+        outdent,
+    };
     let op = run_table_cell_navigation_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
 }
@@ -163,8 +202,19 @@ pub fn wasm_run_table_boundary_edit_rules(
     backward: bool,
     structural_merge: bool,
 ) -> Option<JsValue> {
-    let ctx = build_context(text, selection_anchor, selection_head, has_changed_range, changed_from, changed_to);
-    let options = TableBoundaryEditOptions { markdown_autoformat, backward, structural_merge };
+    let ctx = build_context(
+        text,
+        selection_anchor,
+        selection_head,
+        has_changed_range,
+        changed_from,
+        changed_to,
+    );
+    let options = TableBoundaryEditOptions {
+        markdown_autoformat,
+        backward,
+        structural_merge,
+    };
     let op = run_table_boundary_edit_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
 }
