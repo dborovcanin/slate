@@ -110,7 +110,7 @@ poll_seconds = 60
 auto_sync_on_startup = false
 # On first sync (before a UID checkpoint exists), pull only last N messages
 initial_sync_max_messages = 200
-# On first sync, additionally restrict pull window to recent days (0 disables date filter)
+# Restrict every IMAP sync to recent days (0 disables date filter)
 initial_sync_past_days = 1
 # Maximum accepted raw message payload size in bytes
 max_message_bytes = 8388608

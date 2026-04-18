@@ -81,10 +81,9 @@ fn sync_once(
 
     let last_uid = db.get_ingest_offset(source_key)?.unwrap_or(0);
     let start_uid = determine_start_uid(last_uid, uid_next, imap.initial_sync_max_messages as u64);
-    let initial_sync_since =
-        determine_initial_sync_since_date(last_uid, imap.initial_sync_past_days, OffsetDateTime::now_utc());
+    let sync_since = determine_sync_since_date(imap.initial_sync_past_days, OffsetDateTime::now_utc());
     if verbose {
-        if let Some(since) = initial_sync_since {
+        if let Some(since) = sync_since {
             println!(
                 "IMAP sync start: folder={} checkpoint_uid={} start_uid={} since={}",
                 imap.folder,
@@ -99,7 +98,7 @@ fn sync_once(
             );
         }
     }
-    let mut uids = client.search_uids(start_uid, initial_sync_since)?;
+    let mut uids = client.search_uids(start_uid, sync_since)?;
     // We prepend each message block into the note, so ingest oldest->newest
     // to keep the newest message at the very top after every sync cycle.
     sort_uids_oldest_first(&mut uids);
@@ -158,15 +157,11 @@ fn determine_start_uid(
     }
 }
 
-fn determine_initial_sync_since_date(
-    last_uid: i64,
-    initial_sync_past_days: u16,
-    now_utc: OffsetDateTime,
-) -> Option<Date> {
-    if last_uid >= 1 || initial_sync_past_days == 0 {
+fn determine_sync_since_date(sync_past_days: u16, now_utc: OffsetDateTime) -> Option<Date> {
+    if sync_past_days == 0 {
         return None;
     }
-    Some((now_utc - Duration::days(i64::from(initial_sync_past_days))).date())
+    Some((now_utc - Duration::days(i64::from(sync_past_days))).date())
 }
 
 fn sort_uids_oldest_first(uids: &mut [u64]) {
@@ -803,16 +798,15 @@ mod tests {
     }
 
     #[test]
-    fn determine_initial_sync_since_date_applies_only_before_checkpoint() {
+    fn determine_sync_since_date_applies_to_every_sync_when_enabled() {
         let now = OffsetDateTime::from_unix_timestamp(1_714_516_200).expect("fixed ts");
         let expected = Date::from_calendar_date(2024, Month::April, 29).expect("date");
 
         assert_eq!(
-            determine_initial_sync_since_date(0, 1, now),
+            determine_sync_since_date(1, now),
             Some(expected)
         );
-        assert_eq!(determine_initial_sync_since_date(42, 1, now), None);
-        assert_eq!(determine_initial_sync_since_date(0, 0, now), None);
+        assert_eq!(determine_sync_since_date(0, now), None);
     }
 
     #[test]

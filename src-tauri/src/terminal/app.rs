@@ -2316,16 +2316,39 @@ impl TerminalApp {
     }
 
     fn update_calc_flags_incremental(&mut self) {
-        // If a flag is already true, only a full rescan can turn it off. We
-        // only rescan when line count changes (structural edit), since
-        // single-line edits that remove the last `:=` or formula are rare
-        // and the flag being stale-true just means we fall back to full calc
-        // (correct, slightly slower) until the next structural edit.
         if self.lines.len() != self.calc_results.len() {
-            self.rescan_calc_flags();
+            // Line count changed (Enter, delete-at-boundary).
+            // Flags can only go false → true here, never true → false.
+            // On delete: the removed line may have been the only one with the
+            // syntax, but accepting stale-true is safe — it just means we run
+            // calc when not needed, which is correct.
+            // On insert: check only the two affected lines (cursor and cursor-1).
+            if self.lines.len() > self.calc_results.len() {
+                let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
+                for i in cl.saturating_sub(1)..=cl {
+                    if let Some(text) = self.lines.get(i) {
+                        if !self.cached_has_variable_assignment
+                            && crate::editor_core::calc_plan::contains_variable_assignment(
+                                std::slice::from_ref(text),
+                            )
+                        {
+                            self.cached_has_variable_assignment = true;
+                        }
+                        if !self.cached_has_builtin_formula
+                            && crate::editor_core::calc_plan::contains_builtin_formula(
+                                std::slice::from_ref(text),
+                            )
+                        {
+                            self.cached_has_builtin_formula = true;
+                        }
+                    }
+                }
+            }
+            // Delete: accept stale-true; flags reset only via rescan_calc_flags
+            // (called on note switch and explicit rescans).
             return;
         }
-        // Flag is false — check only the edited line for a new signal.
+        // Same-line edit: check only the cursor line for new signals.
         let line = self.cursor_line;
         if !self.cached_has_variable_assignment {
             if let Some(text) = self.lines.get(line) {
@@ -2411,11 +2434,42 @@ impl TerminalApp {
         if line_count_changed {
             if self.collapsed_fold_starts.is_empty() {
                 // No active folds — skip the expensive analyze_lines pass.
-                // Rebuild the fold structure flags and a sequential (no-fold)
-                // view map, then defer the full analysis to the next idle tick.
-                self.line_has_fold_structure = self.lines.iter()
-                    .map(|l| Self::line_has_fold_structure(l))
-                    .collect();
+                // Update line_has_fold_structure incrementally (Vec::insert/remove)
+                // instead of rebuilding 106k entries, then rebuild the sequential
+                // view map and defer the full fold analysis to the next idle tick.
+                let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
+                let next_len = self.lines.len();
+                let prev_len = self.line_has_fold_structure.len();
+                if next_len == prev_len + 1 {
+                    // One line inserted. Update the upper half of the split, insert new entry.
+                    if cl > 0 {
+                        if let Some(flag) = self.line_has_fold_structure.get_mut(cl - 1) {
+                            *flag = self.lines.get(cl - 1)
+                                .map(|l| Self::line_has_fold_structure(l))
+                                .unwrap_or(false);
+                        }
+                    }
+                    let new_flag = self.lines.get(cl)
+                        .map(|l| Self::line_has_fold_structure(l))
+                        .unwrap_or(false);
+                    self.line_has_fold_structure.insert(cl.min(prev_len), new_flag);
+                } else if next_len + 1 == prev_len {
+                    // One line deleted. Remove the entry; update the merged line.
+                    if cl < prev_len {
+                        self.line_has_fold_structure.remove(cl);
+                    }
+                    let update_at = cl.min(next_len.saturating_sub(1));
+                    if let Some(flag) = self.line_has_fold_structure.get_mut(update_at) {
+                        *flag = self.lines.get(update_at)
+                            .map(|l| Self::line_has_fold_structure(l))
+                            .unwrap_or(false);
+                    }
+                } else {
+                    // Bulk change (paste, format, etc.): rebuild entirely.
+                    self.line_has_fold_structure = self.lines.iter()
+                        .map(|l| Self::line_has_fold_structure(l))
+                        .collect();
+                }
                 self.fold_ranges.clear();
                 self.fold_range_by_start = vec![None; self.lines.len()];
                 self.rebuild_fold_view_map();
