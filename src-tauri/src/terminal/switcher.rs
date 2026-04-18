@@ -248,8 +248,22 @@ pub fn draw_delete_confirm(
     }
     buf.push_str(render::RESET);
 
-    draw_row_at_styled(buf, y + 1, x + 1, box_w.saturating_sub(2), &message, message_style);
-    draw_row_at_styled(buf, y + 2, x + 1, box_w.saturating_sub(2), &hint, hint_style);
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        &message,
+        message_style,
+    );
+    draw_row_at_styled(
+        buf,
+        y + 2,
+        x + 1,
+        box_w.saturating_sub(2),
+        &hint,
+        hint_style,
+    );
 }
 
 fn truncate_title_for_confirm(value: &str) -> String {

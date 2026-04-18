@@ -433,15 +433,20 @@
   z-index: 34;
   display: none;
   flex-direction: column;
-  min-width: 200px;
+  min-width: 210px;
   max-width: min(360px, 70vw);
-  max-height: 180px;
+  max-height: 220px;
   overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-surface);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
-  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, var(--accent) 26%);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 40%),
+    var(--bg-surface);
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.28),
+    0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
+  padding: 5px;
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
 }
 
 .variable-autocomplete-item {
@@ -450,18 +455,24 @@
   justify-content: space-between;
   gap: 8px;
   border: 1px solid transparent;
-  border-radius: 4px;
-  padding: 5px 7px;
+  border-radius: 7px;
+  padding: 6px 8px;
   color: inherit;
   background: transparent;
   text-align: left;
   cursor: pointer;
+  animation: ui-popup-item-in var(--motion-duration-item) var(--motion-ease) both;
+  animation-delay: calc(var(--item-index, 0) * var(--motion-stagger-step));
+  transition:
+    background var(--motion-duration-out) var(--motion-ease),
+    border-color var(--motion-duration-out) var(--motion-ease),
+    transform var(--motion-duration-out) var(--motion-ease);
 }
 
-.variable-autocomplete-item:hover,
 .variable-autocomplete-item--active {
-  background: var(--bg-overlay);
-  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-overlay) 84%, var(--accent) 16%);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border) 64%);
+  transform: translateX(1px);
 }
 
 .variable-autocomplete-item-title {
@@ -482,12 +493,23 @@
   bottom: 10px;
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 8px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-surface);
+  gap: 10px;
+  padding: 9px 11px 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, var(--accent) 28%);
+  border-radius: 10px;
+  background:
+    linear-gradient(130deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 44%),
+    var(--bg-surface);
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.26),
+    0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
   z-index: 32;
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
+}
+
+.command-picker-bar.command-picker-bar--closing {
+  pointer-events: none;
+  animation: ui-popup-out var(--motion-duration-out) var(--motion-ease) both;
 }
 
 .command-picker-prefix {
@@ -503,17 +525,19 @@
   background: transparent;
   color: var(--fg);
   font-family: var(--font-mono);
-  font-size: 0.95em;
+  font-size: 0.93em;
 }
 
 .command-picker-list {
   grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  max-height: 170px;
-  overflow: auto;
-  margin-top: 2px;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-top: 4px;
+  padding-top: 2px;
 }
 
 .editor-context-menu {
@@ -522,16 +546,21 @@
   display: none;
   min-width: 196px;
   padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-surface);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  border: 1px solid color-mix(in srgb, var(--border) 74%, var(--accent) 26%);
+  border-radius: 10px;
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 48%),
+    var(--bg-surface);
+  box-shadow:
+    0 16px 32px rgba(0, 0, 0, 0.28),
+    0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .editor-context-menu--open {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
 }
 
 .editor-context-menu-item {
@@ -576,10 +605,14 @@
   display: none;
   min-width: 176px;
   padding: 5px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--bg-surface);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+  border: 1px solid color-mix(in srgb, var(--border) 74%, var(--accent) 26%);
+  border-radius: 10px;
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 48%),
+    var(--bg-surface);
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.28),
+    0 0 0 1px color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
 .editor-context-menu-group:hover > .editor-context-submenu,
@@ -587,6 +620,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
 }
 
 .editor-context-menu--submenu-left .editor-context-submenu {
@@ -599,19 +633,26 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 5px 8px;
+  padding: 6px 9px;
+  margin: 1px 0;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 7px;
   background: transparent;
   color: inherit;
   text-align: left;
   cursor: pointer;
+  animation: ui-popup-item-in var(--motion-duration-item) var(--motion-ease) both;
+  animation-delay: calc(var(--item-index, 0) * var(--motion-stagger-step));
+  transition:
+    background var(--motion-duration-out) var(--motion-ease),
+    border-color var(--motion-duration-out) var(--motion-ease),
+    transform var(--motion-duration-out) var(--motion-ease);
 }
 
-.command-picker-item:hover,
 .command-picker-item--active {
-  background: var(--bg-overlay);
-  border-color: var(--border);
+  background: color-mix(in srgb, var(--bg-overlay) 82%, var(--accent) 18%);
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border) 64%);
+  transform: translateX(1px);
 }
 
 .command-picker-item-title {
@@ -628,7 +669,7 @@
 .command-picker-empty {
   color: var(--fg-dim);
   font-size: 11px;
-  padding: 4px 8px;
+  padding: 6px 10px;
 }
 
 .command-picker-status {
@@ -642,13 +683,46 @@
   color: var(--fg-dim);
   padding: 4px 8px;
   opacity: 0;
-  transition: opacity 0.15s ease-in-out;
+  transition: opacity var(--motion-duration-in) var(--motion-ease);
   pointer-events: none;
   z-index: 30;
 }
 
 .command-picker-status.visible {
   opacity: 1;
+}
+
+@keyframes ui-popup-in {
+  from {
+    opacity: 0;
+    transform: var(--motion-popup-enter-transform);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes ui-popup-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: var(--motion-popup-exit-transform);
+  }
+}
+
+@keyframes ui-popup-item-in {
+  from {
+    opacity: 0;
+    transform: var(--motion-item-enter-transform);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .editor-search-bar {

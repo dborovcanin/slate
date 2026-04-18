@@ -16,6 +16,8 @@ export interface ThemeSelection {
   background: string;
   font: string;
   fontSize: number;
+  animationMode: string;
+  animationStyle: string;
 }
 
 let currentSelection: ThemeSelection | null = null;
@@ -34,6 +36,84 @@ const FALLBACK_FG: Rgb = { r: 205, g: 214, b: 244 };
 const FALLBACK_ACCENT: Rgb = { r: 137, g: 180, b: 250 };
 const FALLBACK_FG_DIM: Rgb = { r: 127, g: 132, b: 156 };
 const BASE_LINE_HEIGHT_RATIO = 1.65;
+const DEFAULT_ANIMATION_MODE = "fast";
+const DEFAULT_ANIMATION_STYLE = "pop-up";
+
+interface MotionPreset {
+  durationInMs: number;
+  durationOutMs: number;
+  listItemMs: number;
+  offsetPx: number;
+  staggerMs: number;
+  easing: string;
+}
+
+interface MotionStylePreset {
+  popupEnterTransform: string;
+  popupExitTransform: string;
+  itemEnterTransform: string;
+}
+
+const MOTION_PRESETS: Record<string, MotionPreset> = {
+  none: {
+    durationInMs: 0,
+    durationOutMs: 0,
+    listItemMs: 0,
+    offsetPx: 0,
+    staggerMs: 0,
+    easing: "linear",
+  },
+  fast: {
+    durationInMs: 110,
+    durationOutMs: 80,
+    listItemMs: 90,
+    offsetPx: 7,
+    staggerMs: 6,
+    easing: "cubic-bezier(0.25, 0.9, 0.38, 1)",
+  },
+  fade: {
+    durationInMs: 170,
+    durationOutMs: 130,
+    listItemMs: 140,
+    offsetPx: 4,
+    staggerMs: 0,
+    easing: "cubic-bezier(0.34, 0.66, 0.42, 1)",
+  },
+  smooth: {
+    durationInMs: 260,
+    durationOutMs: 180,
+    listItemMs: 220,
+    offsetPx: 12,
+    staggerMs: 18,
+    easing: "cubic-bezier(0.16, 0.84, 0.28, 1)",
+  },
+  spring: {
+    durationInMs: 300,
+    durationOutMs: 210,
+    listItemMs: 240,
+    offsetPx: 16,
+    staggerMs: 14,
+    easing: "cubic-bezier(0.15, 1.7, 0.28, 1)",
+  },
+};
+
+const MOTION_STYLE_PRESETS: Record<string, MotionStylePreset> = {
+  "pop-up": {
+    popupEnterTransform: "translateY(calc(var(--motion-offset) * -0.9)) scale(0.86)",
+    popupExitTransform: "translateY(calc(var(--motion-offset) * -0.45)) scale(0.9)",
+    itemEnterTransform: "translateY(calc(var(--motion-offset) * 0.25)) scale(0.95)",
+  },
+  none: {
+    popupEnterTransform: "translateY(0) scale(1)",
+    popupExitTransform: "translateY(0) scale(1)",
+    itemEnterTransform: "translateY(0)",
+  },
+  "slide-up": {
+    popupEnterTransform: "translateY(calc(var(--motion-offset) * 2.2)) scale(1)",
+    popupExitTransform: "translateY(calc(var(--motion-offset) * 1.6)) scale(1)",
+    itemEnterTransform: "translateY(calc(var(--motion-offset) * 1.2))",
+  },
+};
 
 function clampChannel(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
@@ -192,6 +272,30 @@ function normalizeName(value: string | null | undefined): string {
     .replace(/[_\s]+/g, "-");
 }
 
+function normalizeAnimationMode(value: string | null | undefined): string {
+  const mode = normalizeName(value);
+  if (mode === "sping") return "spring";
+  return MOTION_PRESETS[mode] ? mode : DEFAULT_ANIMATION_MODE;
+}
+
+function normalizeAnimationStyle(value: string | null | undefined): string {
+  const style = normalizeName(value);
+  if (style === "bottom" || style === "from-bottom") return "slide-up";
+  if (style === "popup") return "pop-up";
+  if (style === "fade") return "none";
+  return MOTION_STYLE_PRESETS[style] ? style : DEFAULT_ANIMATION_STYLE;
+}
+
+function resolveAnimationPair(
+  modeValue: string | null | undefined,
+  styleValue: string | null | undefined,
+): { mode: string; style: string } {
+  return {
+    mode: normalizeAnimationMode(modeValue),
+    style: normalizeAnimationStyle(styleValue),
+  };
+}
+
 function computeEditorLineHeightPx(fontSize: number): number {
   return Math.max(fontSize + 4, Math.round(fontSize * BASE_LINE_HEIGHT_RATIO));
 }
@@ -227,12 +331,15 @@ export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelecti
   const fontKey = normalizeName(input.font);
   const fontSize =
     typeof input.font_size === "number" ? clampFontSize(input.font_size) : DEFAULT_FONT_SIZE;
+  const animation = resolveAnimationPair(input.animation_mode, input.animation_style);
 
   return {
     colorScheme: COLOR_SCHEMES[colorSchemeKey] ? colorSchemeKey : DEFAULT_COLOR_SCHEME,
     background: BACKGROUND_PRESETS[backgroundKey] ? backgroundKey : DEFAULT_BACKGROUND,
     font: FONT_PRESETS[fontKey] ? fontKey : DEFAULT_FONT,
     fontSize,
+    animationMode: animation.mode,
+    animationStyle: animation.style,
   };
 }
 
@@ -242,6 +349,12 @@ export function applyTheme(selection: ThemeSelection) {
     BACKGROUND_PRESETS[selection.background] ?? BACKGROUND_PRESETS[DEFAULT_BACKGROUND];
   const font = FONT_PRESETS[selection.font] ?? FONT_PRESETS[DEFAULT_FONT];
   const fontSize = clampFontSize(selection.fontSize);
+  const animation = resolveAnimationPair(selection.animationMode, selection.animationStyle);
+  const animationMode = animation.mode;
+  const animationStyle = animation.style;
+  const motion = MOTION_PRESETS[animationMode] ?? MOTION_PRESETS[DEFAULT_ANIMATION_MODE];
+  const motionStyle =
+    MOTION_STYLE_PRESETS[animationStyle] ?? MOTION_STYLE_PRESETS[DEFAULT_ANIMATION_STYLE];
   const lineHeightPx = computeEditorLineHeightPx(fontSize);
   const heading = computeHeadingMetrics(fontSize, lineHeightPx);
   const root = document.documentElement;
@@ -273,12 +386,25 @@ export function applyTheme(selection: ThemeSelection) {
   root.dataset.theme = scheme.id;
   root.dataset.background = background.id;
   root.dataset.font = font.id;
+  root.dataset.motion = animationMode;
+  root.dataset.motionStyle = animationStyle;
+  root.style.setProperty("--motion-duration-in", `${motion.durationInMs}ms`);
+  root.style.setProperty("--motion-duration-out", `${motion.durationOutMs}ms`);
+  root.style.setProperty("--motion-duration-item", `${motion.listItemMs}ms`);
+  root.style.setProperty("--motion-offset", `${motion.offsetPx}px`);
+  root.style.setProperty("--motion-stagger-step", `${motion.staggerMs}ms`);
+  root.style.setProperty("--motion-ease", motion.easing);
+  root.style.setProperty("--motion-popup-enter-transform", motionStyle.popupEnterTransform);
+  root.style.setProperty("--motion-popup-exit-transform", motionStyle.popupExitTransform);
+  root.style.setProperty("--motion-item-enter-transform", motionStyle.itemEnterTransform);
 
   const applied = {
     colorScheme: scheme.id,
     background: background.id,
     font: font.id,
     fontSize,
+    animationMode,
+    animationStyle,
   };
   currentSelection = applied;
   return applied;
@@ -290,7 +416,9 @@ function sameSelection(a: ThemeSelection | null, b: ThemeSelection): boolean {
     a.colorScheme === b.colorScheme &&
     a.background === b.background &&
     a.font === b.font &&
-    a.fontSize === b.fontSize
+    a.fontSize === b.fontSize &&
+    a.animationMode === b.animationMode &&
+    a.animationStyle === b.animationStyle
   );
 }
 

@@ -29,6 +29,8 @@ export interface ThemeConfig {
   background: string;
   font: string;
   font_size: number;
+  animation_mode: string;
+  animation_style: string;
   markdown_autoformat: boolean;
   checklist_auto_reorder: boolean;
   format_on_save?: boolean;
@@ -55,6 +57,8 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   background: "plain",
   font: "jetbrains-mono",
   font_size: 14,
+  animation_mode: "fast",
+  animation_style: "pop-up",
   markdown_autoformat: true,
   checklist_auto_reorder: true,
   format_on_save: false,

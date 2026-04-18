@@ -8,6 +8,8 @@ const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_BACKGROUND: &str = "plain";
 const DEFAULT_FONT: &str = "jetbrains-mono";
 const DEFAULT_FONT_SIZE: u8 = 14;
+const DEFAULT_ANIMATION_MODE: &str = "fast";
+const DEFAULT_ANIMATION_STYLE: &str = "pop-up";
 const MIN_FONT_SIZE: u8 = 11;
 const MAX_FONT_SIZE: u8 = 28;
 const DEFAULT_VIM_MODE: bool = false;
@@ -55,6 +57,13 @@ const DEFAULT_CONFIG: &str = r#"# Note configuration
 # Fonts:
 #   jetbrains-mono, fira-code, cascadia-code, iosevka, hack, source-code-pro
 #
+# Animation modes:
+#   fast, fade, smooth, spring
+#   (compat: none disables all animations)
+#
+# Animation styles:
+#   slide-up, pop-up, none
+#
 # Date format tokens:
 #   %Y, %y, %m, %d, %b, %B, %H, %M
 # variables.autocomplete_min_chars range:
@@ -65,6 +74,8 @@ color_scheme = "gruvbox-light"
 background = "plain"
 font = "jetbrains-mono"
 font_size = 14
+animation_mode = "fast"
+animation_style = "pop-up"
 
 [editor]
 # Enable markdown editing helpers (list continuation, table alignment, etc.)
@@ -124,6 +135,8 @@ pub struct ThemeConfig {
     pub background: String,
     pub font: String,
     pub font_size: u8,
+    pub animation_mode: String,
+    pub animation_style: String,
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
     pub format_on_save: bool,
@@ -239,6 +252,8 @@ impl Default for ThemeConfig {
             background: DEFAULT_BACKGROUND.to_string(),
             font: DEFAULT_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
+            animation_mode: DEFAULT_ANIMATION_MODE.to_string(),
+            animation_style: DEFAULT_ANIMATION_STYLE.to_string(),
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
             checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
@@ -270,6 +285,8 @@ struct ThemeSection {
     background: Option<String>,
     font: Option<String>,
     font_size: Option<u16>,
+    animation_mode: Option<String>,
+    animation_style: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -407,11 +424,15 @@ pub fn load_imap_config() -> ImapConfig {
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     let date_format = normalize_date_format(raw.editor.date_format);
+    let (animation_mode, animation_style) =
+        normalize_animation_pair(raw.theme.animation_mode, raw.theme.animation_style);
     Ok(ThemeConfig {
         color_scheme: normalize_name(raw.theme.color_scheme, DEFAULT_COLOR_SCHEME),
         background: normalize_name(raw.theme.background, DEFAULT_BACKGROUND),
         font: normalize_name(raw.theme.font, DEFAULT_FONT),
         font_size: normalize_font_size(raw.theme.font_size),
+        animation_mode,
+        animation_style,
         markdown_autoformat: raw
             .editor
             .markdown_autoformat
@@ -504,6 +525,53 @@ fn normalize_font_size(value: Option<u16>) -> u8 {
         .unwrap_or(DEFAULT_FONT_SIZE as u16);
 
     size as u8
+}
+
+fn normalize_animation_token(value: Option<String>) -> String {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("")
+        .to_lowercase()
+        .replace('_', "-")
+        .replace(' ', "-")
+}
+
+fn normalize_animation_mode(value: Option<String>) -> String {
+    let normalized = normalize_animation_token(value);
+    if normalized.is_empty() {
+        return DEFAULT_ANIMATION_MODE.to_string();
+    }
+
+    match normalized.as_str() {
+        "none" | "fast" | "fade" | "smooth" | "spring" => normalized,
+        "sping" => "spring".to_string(),
+        _ => DEFAULT_ANIMATION_MODE.to_string(),
+    }
+}
+
+fn normalize_animation_style(value: Option<String>) -> String {
+    let normalized = normalize_animation_token(value);
+    if normalized.is_empty() {
+        return DEFAULT_ANIMATION_STYLE.to_string();
+    }
+
+    match normalized.as_str() {
+        "slide-up" | "from-bottom" | "bottom" => "slide-up".to_string(),
+        "pop-up" | "popup" => "pop-up".to_string(),
+        "none" => "none".to_string(),
+        // Legacy: old style value now maps to no-motion style.
+        "fade" => "none".to_string(),
+        _ => DEFAULT_ANIMATION_STYLE.to_string(),
+    }
+}
+
+fn normalize_animation_pair(mode: Option<String>, style: Option<String>) -> (String, String) {
+    (
+        normalize_animation_mode(mode),
+        normalize_animation_style(style),
+    )
 }
 
 fn normalize_date_format(value: Option<String>) -> String {
@@ -635,6 +703,8 @@ mod tests {
             background = "squares"
             font = "Fira Code"
             font_size = 18
+            animation_mode = "smooth"
+            animation_style = "from bottom"
 
             [editor]
             markdown_autoformat = false
@@ -656,6 +726,8 @@ mod tests {
         assert_eq!(cfg.background, "squares");
         assert_eq!(cfg.font, "fira-code");
         assert_eq!(cfg.font_size, 18);
+        assert_eq!(cfg.animation_mode, "smooth");
+        assert_eq!(cfg.animation_style, "slide-up");
         assert!(!cfg.markdown_autoformat);
         assert!(!cfg.checklist_auto_reorder);
         assert!(cfg.format_on_save);
@@ -688,6 +760,49 @@ mod tests {
     }
 
     #[test]
+    fn normalize_animation_mode_uses_supported_values() {
+        assert_eq!(normalize_animation_mode(Some("fade".to_string())), "fade");
+        assert_eq!(normalize_animation_mode(Some("none".to_string())), "none");
+        assert_eq!(
+            normalize_animation_mode(Some("smooth".to_string())),
+            "smooth"
+        );
+        assert_eq!(normalize_animation_mode(Some("sping".to_string())), "spring");
+        assert_eq!(normalize_animation_mode(Some("sprinG".to_string())), "spring");
+        assert_eq!(normalize_animation_mode(Some("ultra".to_string())), "fast");
+        assert_eq!(normalize_animation_mode(None), "fast");
+    }
+
+    #[test]
+    fn normalize_animation_style_uses_supported_values() {
+        assert_eq!(
+            normalize_animation_style(Some("from_bottom".to_string())),
+            "slide-up"
+        );
+        assert_eq!(normalize_animation_style(Some("bottom".to_string())), "slide-up");
+        assert_eq!(normalize_animation_style(Some("popUP".to_string())), "pop-up");
+        assert_eq!(normalize_animation_style(Some("fAde".to_string())), "none");
+        assert_eq!(normalize_animation_style(Some("ultra".to_string())), "pop-up");
+        assert_eq!(normalize_animation_style(None), "pop-up");
+    }
+
+    #[test]
+    fn normalize_animation_pair_combines_mode_and_style() {
+        assert_eq!(
+            normalize_animation_pair(Some("fade".to_string()), Some("slide-up".to_string())),
+            ("fade".to_string(), "slide-up".to_string())
+        );
+        assert_eq!(
+            normalize_animation_pair(Some("spring".to_string()), Some("from_bottom".to_string())),
+            ("spring".to_string(), "slide-up".to_string())
+        );
+        assert_eq!(
+            normalize_animation_pair(Some("fast".to_string()), Some("fade".to_string())),
+            ("fast".to_string(), "none".to_string())
+        );
+    }
+
+    #[test]
     fn defaults_vim_mode_to_false() {
         let cfg = parse_theme_config("[theme]\ncolor_scheme = 'dark'").expect("config parsed");
         assert!(cfg.markdown_autoformat);
@@ -695,6 +810,8 @@ mod tests {
         assert!(!cfg.format_on_save);
         assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
+        assert_eq!(cfg.animation_mode, "fast");
+        assert_eq!(cfg.animation_style, "pop-up");
         assert_eq!(cfg.date_format, "%Y-%m-%d");
         assert_eq!(cfg.date_time_format, "%Y-%m-%d %H:%M");
         assert!(cfg.variables_enabled);

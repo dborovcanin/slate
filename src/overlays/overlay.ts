@@ -67,12 +67,46 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
   let inputEl: HTMLInputElement | null = null;
   let listEl: HTMLElement | null = null;
   let restoreTarget: HTMLElement | null = null;
+  let closingRoot: HTMLElement | null = null;
+  let closeTimer: number | null = null;
   let items: T[] = [];
   let selectedIndex = 0;
+  let animateItems = true;
   const listboxId = `${p}-listbox-${overlaySequence++}`;
 
   function getQuery(): string {
     return inputEl?.value ?? "";
+  }
+
+  function parseDurationMs(value: string): number {
+    const text = value.trim();
+    if (!text) return 0;
+    const durations = text.split(",").map((part) => part.trim());
+    let maxMs = 0;
+    for (const duration of durations) {
+      if (!duration) continue;
+      if (duration.endsWith("ms")) {
+        const parsed = Number.parseFloat(duration.slice(0, -2));
+        if (Number.isFinite(parsed)) maxMs = Math.max(maxMs, parsed);
+        continue;
+      }
+      if (duration.endsWith("s")) {
+        const parsed = Number.parseFloat(duration.slice(0, -1));
+        if (Number.isFinite(parsed)) maxMs = Math.max(maxMs, parsed * 1000);
+      }
+    }
+    return Math.max(0, Math.round(maxMs));
+  }
+
+  function clearPendingClose() {
+    if (closeTimer !== null) {
+      window.clearTimeout(closeTimer);
+      closeTimer = null;
+    }
+    if (closingRoot?.isConnected) {
+      closingRoot.remove();
+    }
+    closingRoot = null;
   }
 
   function renderList() {
@@ -91,14 +125,14 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     items.forEach((item, i) => {
       const el = renderItem(item, i === selectedIndex, i);
       el.id = `${listboxId}-item-${i}`;
+      el.style.setProperty("--item-index", `${i}`);
+      if (!animateItems) {
+        el.style.animation = "none";
+      }
       if (!el.hasAttribute("role")) {
         el.setAttribute("role", "option");
       }
       el.setAttribute("aria-selected", i === selectedIndex ? "true" : "false");
-      el.addEventListener("mouseenter", () => {
-        selectedIndex = i;
-        renderList();
-      });
       el.addEventListener("mousedown", (e) => e.preventDefault());
       el.addEventListener("click", () => {
         const query = getQuery();
@@ -110,12 +144,14 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
 
     inputEl?.setAttribute("aria-activedescendant", `${listboxId}-item-${selectedIndex}`);
     listEl.querySelector(`.${p}-item--active`)?.scrollIntoView({ block: "nearest" });
+    animateItems = false;
   }
 
   function refresh() {
     const query = getQuery();
     items = getItems(query);
     selectedIndex = Math.min(selectedIndex, Math.max(items.length - 1, 0));
+    animateItems = true;
     renderList();
   }
 
@@ -147,6 +183,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
         if (items.length === 0) break;
         event.preventDefault();
         event.stopPropagation();
+        animateItems = false;
         selectedIndex = (selectedIndex + 1) % items.length;
         renderList();
         break;
@@ -154,6 +191,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
         if (items.length === 0) break;
         event.preventDefault();
         event.stopPropagation();
+        animateItems = false;
         selectedIndex = (selectedIndex - 1 + items.length) % items.length;
         renderList();
         break;
@@ -171,6 +209,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
   }
 
   function open() {
+    clearPendingClose();
     if (root) return;
 
     const parent = container ?? document.body;
@@ -249,13 +288,34 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     inputEl.addEventListener("keydown", handleKeydown);
 
     selectedIndex = 0;
+    animateItems = true;
     refresh();
     window.setTimeout(() => inputEl?.focus(), 0);
   }
 
   function close() {
     if (!root) return;
-    root.remove();
+    const closeTarget = root;
+    const closeClass = backdrop ? `${p}-overlay--closing` : `${p}-bar--closing`;
+    const duration = parseDurationMs(
+      window.getComputedStyle(closeTarget).getPropertyValue("--motion-duration-out"),
+    );
+
+    clearPendingClose();
+    closeTarget.classList.add(closeClass);
+    closeTarget.setAttribute("aria-hidden", "true");
+
+    if (duration <= 0) {
+      closeTarget.remove();
+    } else {
+      closingRoot = closeTarget;
+      closeTimer = window.setTimeout(() => {
+        closeTarget.remove();
+        if (closingRoot === closeTarget) closingRoot = null;
+        closeTimer = null;
+      }, duration);
+    }
+
     root = null;
     inputEl = null;
     listEl = null;

@@ -1,11 +1,20 @@
 .switcher-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.4);
+  background:
+    radial-gradient(circle at 16% 14%, color-mix(in srgb, var(--accent) 10%, transparent) 0, transparent 44%),
+    rgba(8, 10, 16, 0.46);
   display: flex;
   justify-content: center;
-  padding-top: 80px;
+  padding: 72px 16px 16px;
   z-index: 100;
+  backdrop-filter: blur(2px);
+  animation: switcher-overlay-in var(--motion-duration-in) var(--motion-ease);
+}
+
+.switcher-overlay.switcher-overlay--closing {
+  pointer-events: none;
+  animation: switcher-overlay-out var(--motion-duration-out) var(--motion-ease) both;
 }
 
 .switcher-overlay[hidden] {
@@ -14,24 +23,34 @@
 
 .switcher-panel {
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  width: 400px;
-  max-height: 340px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, var(--accent) 26%);
+  border-radius: 14px;
+  width: min(620px, calc(100vw - 32px));
+  max-height: min(72vh, 480px);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow:
+    0 20px 42px rgba(0, 0, 0, 0.32),
+    0 0 0 1px color-mix(in srgb, var(--accent) 13%, transparent);
+  animation: switcher-panel-in var(--motion-duration-in) var(--motion-ease);
+}
+
+.switcher-overlay.switcher-overlay--closing .switcher-panel {
+  animation: switcher-panel-out var(--motion-duration-out) var(--motion-ease) both;
 }
 
 .switcher-input {
-  padding: 12px 16px;
+  padding: 13px 16px;
   border: none;
   border-bottom: 1px solid var(--border);
-  background: transparent;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 46%),
+    transparent;
   color: var(--fg);
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
+  letter-spacing: 0.015em;
   outline: none;
 }
 
@@ -47,18 +66,23 @@
 .switcher-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
+  gap: 10px;
+  padding: 9px 14px;
+  margin: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   cursor: pointer;
-  transition: background 0.1s;
-}
-
-.switcher-item:hover {
-  background: var(--bg-overlay);
+  transition:
+    background var(--motion-duration-out) var(--motion-ease),
+    border-color var(--motion-duration-out) var(--motion-ease),
+    transform var(--motion-duration-out) var(--motion-ease);
+  animation: switcher-item-in var(--motion-duration-item) var(--motion-ease) both;
+  animation-delay: calc(var(--item-index, 0) * var(--motion-stagger-step));
 }
 
 .switcher-item--active {
-  background: var(--bg-overlay);
+  background: color-mix(in srgb, var(--bg-overlay) 78%, var(--accent) 22%);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border) 56%);
 }
 
 .switcher-item-title {
@@ -85,8 +109,59 @@
 }
 
 .switcher-empty {
-  padding: 16px;
+  padding: 18px;
   text-align: center;
   color: var(--fg-muted);
   font-size: 13px;
+}
+
+@keyframes switcher-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes switcher-panel-in {
+  from {
+    opacity: 0;
+    transform: var(--motion-popup-enter-transform);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes switcher-panel-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: var(--motion-popup-exit-transform);
+  }
+}
+
+@keyframes switcher-item-in {
+  from {
+    opacity: 0;
+    transform: var(--motion-item-enter-transform);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes switcher-overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
 }

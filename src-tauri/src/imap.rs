@@ -81,7 +81,8 @@ fn sync_once(
 
     let last_uid = db.get_ingest_offset(source_key)?.unwrap_or(0);
     let start_uid = determine_start_uid(last_uid, uid_next, imap.initial_sync_max_messages as u64);
-    let sync_since = determine_sync_since_date(imap.initial_sync_past_days, OffsetDateTime::now_utc());
+    let sync_since =
+        determine_sync_since_date(imap.initial_sync_past_days, OffsetDateTime::now_utc());
     if verbose {
         if let Some(since) = sync_since {
             println!(
@@ -802,10 +803,7 @@ mod tests {
         let now = OffsetDateTime::from_unix_timestamp(1_714_516_200).expect("fixed ts");
         let expected = Date::from_calendar_date(2024, Month::April, 29).expect("date");
 
-        assert_eq!(
-            determine_sync_since_date(1, now),
-            Some(expected)
-        );
+        assert_eq!(determine_sync_since_date(1, now), Some(expected));
         assert_eq!(determine_sync_since_date(0, now), None);
     }
 

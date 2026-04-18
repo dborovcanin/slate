@@ -2444,15 +2444,20 @@ impl TerminalApp {
                     // One line inserted. Update the upper half of the split, insert new entry.
                     if cl > 0 {
                         if let Some(flag) = self.line_has_fold_structure.get_mut(cl - 1) {
-                            *flag = self.lines.get(cl - 1)
+                            *flag = self
+                                .lines
+                                .get(cl - 1)
                                 .map(|l| Self::line_has_fold_structure(l))
                                 .unwrap_or(false);
                         }
                     }
-                    let new_flag = self.lines.get(cl)
+                    let new_flag = self
+                        .lines
+                        .get(cl)
                         .map(|l| Self::line_has_fold_structure(l))
                         .unwrap_or(false);
-                    self.line_has_fold_structure.insert(cl.min(prev_len), new_flag);
+                    self.line_has_fold_structure
+                        .insert(cl.min(prev_len), new_flag);
                 } else if next_len + 1 == prev_len {
                     // One line deleted. Remove the entry; update the merged line.
                     if cl < prev_len {
@@ -2460,13 +2465,17 @@ impl TerminalApp {
                     }
                     let update_at = cl.min(next_len.saturating_sub(1));
                     if let Some(flag) = self.line_has_fold_structure.get_mut(update_at) {
-                        *flag = self.lines.get(update_at)
+                        *flag = self
+                            .lines
+                            .get(update_at)
                             .map(|l| Self::line_has_fold_structure(l))
                             .unwrap_or(false);
                     }
                 } else {
                     // Bulk change (paste, format, etc.): rebuild entirely.
-                    self.line_has_fold_structure = self.lines.iter()
+                    self.line_has_fold_structure = self
+                        .lines
+                        .iter()
                         .map(|l| Self::line_has_fold_structure(l))
                         .collect();
                 }
@@ -2485,7 +2494,11 @@ impl TerminalApp {
         let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
         let current_text = self.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
         let next_flag = Self::line_has_fold_structure(current_text);
-        let prev_flag = self.line_has_fold_structure.get(cl).copied().unwrap_or(false);
+        let prev_flag = self
+            .line_has_fold_structure
+            .get(cl)
+            .copied()
+            .unwrap_or(false);
 
         if next_flag != prev_flag {
             if let Some(flag) = self.line_has_fold_structure.get_mut(cl) {
@@ -2610,7 +2623,10 @@ impl TerminalApp {
         let (mut in_code_block, mut code_fence_lang) = if start_ck == 0 {
             (false, None)
         } else {
-            self.fence_checkpoints.get(start_ck).cloned().unwrap_or((false, None))
+            self.fence_checkpoints
+                .get(start_ck)
+                .cloned()
+                .unwrap_or((false, None))
         };
 
         let mut line_idx = start_line;
@@ -6604,7 +6620,12 @@ mod tests {
         run_keys(
             &mut app,
             &db,
-            &[Key::Char('v'), Key::Char('1'), Key::Char('0'), Key::Char('j')],
+            &[
+                Key::Char('v'),
+                Key::Char('1'),
+                Key::Char('0'),
+                Key::Char('j'),
+            ],
         );
         assert_eq!(app.mode, UiMode::Visual);
         assert_eq!(app.cursor_line, 10);
@@ -6645,7 +6666,12 @@ mod tests {
         run_keys(
             &mut app,
             &db,
-            &[Key::Char('V'), Key::Char('3'), Key::Char('g'), Key::Char('g')],
+            &[
+                Key::Char('V'),
+                Key::Char('3'),
+                Key::Char('g'),
+                Key::Char('g'),
+            ],
         );
         assert_eq!(app.mode, UiMode::VisualLine);
         assert_eq!(app.cursor_line, 2);

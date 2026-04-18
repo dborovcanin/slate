@@ -86,6 +86,7 @@ class VariableAutocompletePlugin {
   private readonly maxSuggestions: number;
   private readonly menu: HTMLDivElement;
   private active: ActiveCompletion | null = null;
+  private animateItems = true;
 
   constructor(view: EditorView, minChars: number, maxSuggestions: number) {
     this.view = view;
@@ -113,6 +114,7 @@ class VariableAutocompletePlugin {
     if (!this.active || this.active.suggestions.length === 0) return false;
     const len = this.active.suggestions.length;
     this.active.selected = (this.active.selected + delta + len) % len;
+    this.animateItems = false;
     this.render();
     return true;
   }
@@ -198,6 +200,7 @@ class VariableAutocompletePlugin {
     if (!this.active) {
       this.menu.style.display = "none";
       this.menu.replaceChildren();
+      this.animateItems = true;
       return;
     }
 
@@ -207,6 +210,10 @@ class VariableAutocompletePlugin {
       const item = document.createElement("button");
       item.type = "button";
       item.className = "variable-autocomplete-item";
+      item.style.setProperty("--item-index", `${index}`);
+      if (!this.animateItems) {
+        item.style.animation = "none";
+      }
       if (index === this.active?.selected) {
         item.classList.add("variable-autocomplete-item--active");
       }
@@ -222,15 +229,13 @@ class VariableAutocompletePlugin {
       item.appendChild(title);
       item.appendChild(hint);
 
-      item.addEventListener("mouseenter", () => {
-        if (!this.active) return;
-        this.active.selected = index;
-        this.render();
-      });
       item.addEventListener("mousedown", (event) => {
         event.preventDefault();
       });
       item.addEventListener("click", () => {
+        if (this.active) {
+          this.active.selected = index;
+        }
         void this.accept();
       });
 
@@ -245,6 +250,7 @@ class VariableAutocompletePlugin {
     }
 
     this.menu.style.display = "flex";
+    this.animateItems = false;
   }
 }
 

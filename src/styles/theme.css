@@ -34,6 +34,15 @@
   --heading-1-line-height: 33px;
   --heading-2-line-height: 28px;
   --heading-line-height: 23px;
+  --motion-duration-in: 130ms;
+  --motion-duration-out: 90ms;
+  --motion-duration-item: 120ms;
+  --motion-offset: 8px;
+  --motion-stagger-step: 10ms;
+  --motion-ease: cubic-bezier(0.22, 0.9, 0.3, 1);
+  --motion-popup-enter-transform: translateY(calc(var(--motion-offset) * -0.9)) scale(0.86);
+  --motion-popup-exit-transform: translateY(calc(var(--motion-offset) * -0.45)) scale(0.9);
+  --motion-item-enter-transform: translateY(calc(var(--motion-offset) * 0.25)) scale(0.95);
 }
 
 ::-webkit-scrollbar {
@@ -55,4 +64,18 @@
 
 ::selection {
   background: var(--selection-bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-duration-in: 0ms;
+    --motion-duration-out: 0ms;
+    --motion-duration-item: 0ms;
+    --motion-offset: 0px;
+    --motion-stagger-step: 0ms;
+    --motion-ease: linear;
+    --motion-popup-enter-transform: translateY(0) scale(1);
+    --motion-popup-exit-transform: translateY(0) scale(1);
+    --motion-item-enter-transform: translateY(0);
+  }
 }
