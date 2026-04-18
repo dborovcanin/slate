@@ -42,8 +42,11 @@ fn run_gui() -> Result<(), String> {
         .invoke_handler(tauri::generate_handler![
             commands::notes::get_or_create_note,
             commands::notes::save_note,
+            commands::notes::get_note,
             commands::notes::create_note,
             commands::notes::list_notes,
+            commands::notes::list_notes_meta,
+            commands::notes::get_note_meta,
             commands::notes::delete_note,
             commands::reminders::list_note_reminders,
             commands::reminders::upsert_note_reminder,

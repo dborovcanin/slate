@@ -1,18 +1,22 @@
 import {
   getOrCreateNote,
-  listNotes,
+  getNote,
+  getNoteMeta,
+  listNotesMeta,
   createNote,
   deleteNote,
   exportToFile,
   getThemeConfigOrDefault,
   getRuntimeFlagsOrDefault,
   type ThemeConfig,
+  type NoteSummary,
 } from "./api";
 import {
   mountEditor,
   setEditorContent,
   focusEditor,
   flushSave,
+  hasPendingLocalChanges,
   insertTextAtCursor,
   performFormatAndSave,
 } from "./editor/editor";
@@ -23,21 +27,102 @@ import {
   refreshSwitcher,
 } from "./switcher/switcher";
 import { state } from "./state";
-import { confirm, save } from "@tauri-apps/plugin-dialog";
+import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 import { openDatePicker } from "./editor/date-picker";
 import { startupMark } from "./perf/startup.ts";
 
+function ensureSummaryIncludesActive(noteId: string, body: string, summaries: NoteSummary[]): NoteSummary[] {
+  if (summaries.some((summary) => summary.id === noteId)) return summaries;
+  return [
+    {
+      id: noteId,
+      body_prefix: body.slice(0, 200),
+      updated_at: state.activeNote?.id === noteId ? state.activeNote.updated_at : "",
+    },
+    ...summaries,
+  ];
+}
+
+const ACTIVE_NOTE_SYNC_INTERVAL_MS = 2500;
+let activeNoteSyncTimer: number | null = null;
+let activeNoteSyncInFlight = false;
+
+function applyNoteSummaries(summaries: NoteSummary[]) {
+  const active = state.activeNote;
+  if (!active) {
+    state.setNoteSummaries(summaries);
+    return;
+  }
+  state.setNoteSummaries(ensureSummaryIncludesActive(active.id, active.body, summaries));
+}
+
+async function syncActiveNoteIfBackendChanged() {
+  if (activeNoteSyncInFlight) return;
+  const active = state.activeNote;
+  if (!active) return;
+  if (hasPendingLocalChanges()) return;
+
+  const activeId = active.id;
+  const activeUpdatedAt = active.updated_at;
+  activeNoteSyncInFlight = true;
+  try {
+    const remote = await getNoteMeta(activeId);
+    if (state.activeNote?.id !== activeId || hasPendingLocalChanges()) {
+      return;
+    }
+    if (!remote || remote.updated_at === activeUpdatedAt) {
+      return;
+    }
+
+    const latest = await getNote(activeId);
+    if (!latest) return;
+    if (state.activeNote?.id !== activeId || hasPendingLocalChanges()) {
+      return;
+    }
+    state.setActiveNote(latest);
+    setEditorContent(latest.body, { forceStateReset: true });
+    focusEditor();
+
+    void listNotesMeta()
+      .then((summaries) => {
+        applyNoteSummaries(summaries);
+      })
+      .catch(() => {
+        // Best-effort note list refresh after backend sync.
+      });
+  } catch {
+    // Keep current UI state on intermittent refresh failures.
+  } finally {
+    activeNoteSyncInFlight = false;
+  }
+}
+
+function startActiveNoteSyncLoop() {
+  if (activeNoteSyncTimer !== null) {
+    window.clearInterval(activeNoteSyncTimer);
+  }
+  activeNoteSyncTimer = window.setInterval(() => {
+    void syncActiveNoteIfBackendChanged();
+  }, ACTIVE_NOTE_SYNC_INTERVAL_MS);
+}
+
 async function switchToNote(id: string) {
   await flushSave();
-  const notes = await listNotes();
-  const note = notes.find((n) => n.id === id);
+  const note = await getNote(id);
   if (!note) return;
   state.setActiveNote(note);
-  state.setNotes(notes);
-  setEditorContent(note.body);
+  setEditorContent(note.body, { forceStateReset: true });
   focusEditor();
+
+  void listNotesMeta()
+    .then((summaries) => {
+      applyNoteSummaries(summaries);
+    })
+    .catch(() => {
+      // Keep existing note list when metadata refresh fails.
+    });
 }
 
 async function handleCreateNote() {
@@ -59,7 +144,7 @@ async function handleDeleteNoteById(noteId: string) {
   const noteEntry = state.notes.find((n) => n.id === noteId);
   if (!noteEntry) return;
 
-  if (!(await confirm(`Delete "${noteEntry.title}"? This cannot be undone.`))) {
+  if (!(await confirmInApp(`Delete "${noteEntry.title}"? This cannot be undone.`))) {
     return;
   }
 
@@ -173,6 +258,97 @@ async function handleInsertDate() {
   if (!value) return;
   insertTextAtCursor(value);
   focusEditor();
+}
+
+function confirmInApp(
+  message: string,
+  labels: { confirm?: string; cancel?: string } = {},
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const restoreTarget =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const confirmText = labels.confirm ?? "Delete";
+    const cancelText = labels.cancel ?? "Cancel";
+
+    const overlay = document.createElement("div");
+    overlay.className = "app-confirm-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "Confirm action");
+
+    const panel = document.createElement("div");
+    panel.className = "app-confirm-panel";
+
+    const messageEl = document.createElement("p");
+    messageEl.className = "app-confirm-message";
+    messageEl.textContent = message;
+
+    const actions = document.createElement("div");
+    actions.className = "app-confirm-actions";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "app-confirm-btn";
+    cancelBtn.textContent = cancelText;
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "app-confirm-btn app-confirm-btn-danger";
+    confirmBtn.textContent = confirmText;
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    panel.appendChild(messageEl);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    let finished = false;
+
+    const finish = (result: boolean) => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener("keydown", onKeydown, true);
+      overlay.remove();
+      if (restoreTarget && restoreTarget.isConnected) {
+        restoreTarget.focus();
+      }
+      resolve(result);
+    };
+
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key !== "Tab") {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      if (event.key === "Escape") {
+        finish(false);
+        return;
+      }
+
+      if (
+        event.key === "Enter" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        finish(document.activeElement !== cancelBtn);
+      }
+    };
+
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target === overlay) {
+        finish(false);
+      }
+    });
+
+    cancelBtn.addEventListener("click", () => finish(false));
+    confirmBtn.addEventListener("click", () => finish(true));
+    window.addEventListener("keydown", onKeydown, true);
+    cancelBtn.focus();
+  });
 }
 
 function runAction(action: () => Promise<void> | void) {
@@ -405,15 +581,15 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   editorEl.style.overflow = "hidden";
   container.appendChild(editorEl);
 
-  const [note, notes, config, runtimeFlags] = await Promise.all([
-    getOrCreateNote(),
-    listNotes(),
+  const note = await getOrCreateNote();
+  const [summaries, config, runtimeFlags] = await Promise.all([
+    listNotesMeta().catch(() => []),
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
     getRuntimeFlagsOrDefault(),
   ]);
   startupMark("ui_data_loaded");
   state.setActiveNote(note);
-  state.setNotes(notes);
+  applyNoteSummaries(summaries);
 
   createStatusBar(container);
   mountEditor(editorEl, {
@@ -463,4 +639,6 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     updateStatusBar();
     refreshSwitcher();
   });
+
+  startActiveNoteSyncLoop();
 }

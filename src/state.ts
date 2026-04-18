@@ -1,4 +1,4 @@
-import type { Note } from "./api";
+import type { Note, NoteSummary } from "./api";
 
 export type EventType = "note-changed" | "notes-updated";
 type Listener = (event: EventType) => void;
@@ -95,6 +95,15 @@ export class AppState {
       id: n.id,
       title: deriveTitle(n.body),
       updatedAt: n.updated_at,
+    }));
+    this.emit("notes-updated");
+  }
+
+  setNoteSummaries(summaries: NoteSummary[]) {
+    this._notes = summaries.map((summary) => ({
+      id: summary.id,
+      title: deriveTitle(summary.body_prefix),
+      updatedAt: summary.updated_at,
     }));
     this.emit("notes-updated");
   }

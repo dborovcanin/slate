@@ -1,4 +1,4 @@
-import { Annotation, EditorState, Prec, type Text } from "@codemirror/state";
+import { Annotation, EditorState, Prec, type Extension, type Text } from "@codemirror/state";
 import {
   EditorView,
   keymap,
@@ -23,12 +23,18 @@ import { notifyExtensions } from "./notify-decoration";
 import { variableAutocompleteExtensions } from "./variable-autocomplete";
 import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
+import { editorContextMenuExtensions } from "./context-menu";
 import { startupMark } from "../perf/startup.ts";
 
 let view: EditorView | null = null;
 let saveTimer: number | null = null;
+let mountedExtensions: Extension[] = [];
+let suppressProgrammaticDocSync = false;
+let localDirty = false;
+let saveInFlight = false;
 const SAVE_DEBOUNCE_MS = 500;
 const TITLE_PREVIEW_LIMIT = 60;
+const LARGE_DOC_STATE_RESET_THRESHOLD = 200_000;
 const suppressEditorSyncAnnotation = Annotation.define<boolean>();
 
 function deriveTitleFromDoc(doc: Text): string {
@@ -56,11 +62,15 @@ export async function flushSave() {
   const note = state.activeNote;
   if (!note) return;
   const body = view ? view.state.doc.toString() : note.body;
+  saveInFlight = true;
   try {
     await saveNote(note.id, body);
     state.updateBody(body);
+    localDirty = false;
   } catch (e) {
     console.error("Failed to save note:", e);
+  } finally {
+    saveInFlight = false;
   }
 }
 
@@ -79,6 +89,7 @@ function editTouchesTitleRegion(update: ViewUpdate): boolean {
 const onUpdate = EditorView.updateListener.of((update) => {
   if (update.docChanged) {
     if (backendDetached) return;
+    if (suppressProgrammaticDocSync) return;
     if (
       update.transactions.some((transaction) =>
         transaction.annotation(suppressEditorSyncAnnotation),
@@ -86,6 +97,7 @@ const onUpdate = EditorView.updateListener.of((update) => {
     ) {
       return;
     }
+    localDirty = true;
     if (editTouchesTitleRegion(update)) {
       state.updateDraftTitle(deriveTitleFromDoc(update.state.doc));
     }
@@ -317,6 +329,10 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
       }),
+      ...editorContextMenuExtensions({
+        dateFormat: options.dateFormat,
+        dateTimeFormat: options.dateTimeFormat,
+      }),
       tableCellNavigationDomHandler(),
       snapEditorScrollToPixels(),
       Prec.highest(keymap.of([
@@ -358,6 +374,9 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   }
 
   const startState = EditorState.create({ doc, extensions });
+  mountedExtensions = extensions;
+  localDirty = false;
+  saveInFlight = false;
 
   view = new EditorView({ state: startState, parent });
   startupMark("ui_codemirror_ready");
@@ -399,14 +418,36 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   });
 }
 
-export function setEditorContent(body: string) {
+interface SetEditorContentOptions {
+  forceStateReset?: boolean;
+}
+
+export function setEditorContent(body: string, options: SetEditorContentOptions = {}) {
   if (!view) return;
-  const current = view.state.doc.toString();
-  if (current === body) return;
+  const currentDoc = view.state.doc;
+  const shouldResetState =
+    !!options.forceStateReset ||
+    currentDoc.length >= LARGE_DOC_STATE_RESET_THRESHOLD ||
+    body.length >= LARGE_DOC_STATE_RESET_THRESHOLD;
+
+  if (shouldResetState && mountedExtensions.length > 0) {
+    const nextState = EditorState.create({ doc: body, extensions: mountedExtensions });
+    suppressProgrammaticDocSync = true;
+    try {
+      view.setState(nextState);
+      localDirty = false;
+    } finally {
+      suppressProgrammaticDocSync = false;
+    }
+    return;
+  }
+
+  if (currentDoc.length === body.length && currentDoc.toString() === body) return;
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: body },
     annotations: suppressEditorSyncAnnotation.of(true),
   });
+  localDirty = false;
 }
 
 export function focusEditor() {
@@ -415,6 +456,10 @@ export function focusEditor() {
 
 export function getEditorView(): EditorView | null {
   return view;
+}
+
+export function hasPendingLocalChanges(): boolean {
+  return localDirty || saveTimer !== null || saveInFlight;
 }
 
 export function insertTextAtCursor(text: string): boolean {

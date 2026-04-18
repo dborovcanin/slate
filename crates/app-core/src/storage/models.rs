@@ -12,6 +12,7 @@ pub struct Note {
 pub struct NoteSummary {
     pub id: String,
     pub body_prefix: String,
+    pub updated_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

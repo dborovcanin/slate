@@ -90,6 +90,66 @@ html, body {
   opacity: 1;
 }
 
+.app-confirm-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 230;
+}
+
+.app-confirm-panel {
+  width: min(360px, calc(100vw - 32px));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-surface);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.app-confirm-message {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.app-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.app-confirm-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--fg);
+  background: var(--bg-overlay);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.app-confirm-btn:hover {
+  background: var(--bg-surface);
+  border-color: var(--fg-dim);
+}
+
+.app-confirm-btn-danger {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.app-confirm-btn-danger:hover {
+  opacity: 0.9;
+}
+
 .date-picker-overlay {
   position: fixed;
   inset: 0;

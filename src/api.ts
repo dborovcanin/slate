@@ -7,6 +7,12 @@ export interface Note {
   updated_at: string;
 }
 
+export interface NoteSummary {
+  id: string;
+  body_prefix: string;
+  updated_at: string;
+}
+
 export interface NoteReminder {
   note_id: string;
   line_number: number;
@@ -102,12 +108,24 @@ export function saveNote(id: string, body: string): Promise<Note> {
   return invoke<Note>("save_note", { id, body });
 }
 
+export function getNote(id: string): Promise<Note | null> {
+  return invoke<Note | null>("get_note", { id });
+}
+
 export function createNote(): Promise<Note> {
   return invoke<Note>("create_note");
 }
 
 export function listNotes(): Promise<Note[]> {
   return invoke<Note[]>("list_notes");
+}
+
+export function listNotesMeta(): Promise<NoteSummary[]> {
+  return invoke<NoteSummary[]>("list_notes_meta");
+}
+
+export function getNoteMeta(id: string): Promise<NoteSummary | null> {
+  return invoke<NoteSummary | null>("get_note_meta", { id });
 }
 
 export function deleteNote(id: string): Promise<boolean> {

@@ -1,4 +1,4 @@
-use app_core::storage::Note;
+use app_core::storage::{Note, NoteSummary};
 use app_core::AppCore;
 use tauri::State;
 
@@ -25,6 +25,11 @@ pub fn save_note(core: State<'_, AppCore>, id: String, body: String) -> Result<N
 }
 
 #[tauri::command]
+pub fn get_note(core: State<'_, AppCore>, id: String) -> Result<Option<Note>, String> {
+    core.db().get_note(&id)
+}
+
+#[tauri::command]
 pub fn create_note(core: State<'_, AppCore>) -> Result<Note, String> {
     let id = ulid::Ulid::new().to_string();
     core.db().save_note(&id, "")
@@ -33,6 +38,16 @@ pub fn create_note(core: State<'_, AppCore>) -> Result<Note, String> {
 #[tauri::command]
 pub fn list_notes(core: State<'_, AppCore>) -> Result<Vec<Note>, String> {
     core.db().list_notes()
+}
+
+#[tauri::command]
+pub fn list_notes_meta(core: State<'_, AppCore>) -> Result<Vec<NoteSummary>, String> {
+    core.db().list_notes_meta()
+}
+
+#[tauri::command]
+pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<NoteSummary>, String> {
+    core.db().get_note_meta(&id)
 }
 
 #[tauri::command]

@@ -253,7 +253,9 @@ impl Db {
     pub fn list_notes_meta(&self) -> Result<Vec<NoteSummary>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, substr(body, 1, 200) FROM notes ORDER BY updated_at DESC")
+            .prepare(
+                "SELECT id, substr(body, 1, 200), updated_at FROM notes ORDER BY updated_at DESC",
+            )
             .map_err(|e| e.to_string())?;
 
         let notes = stmt
@@ -261,6 +263,7 @@ impl Db {
                 Ok(NoteSummary {
                     id: row.get(0)?,
                     body_prefix: row.get(1)?,
+                    updated_at: row.get(2)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -268,6 +271,26 @@ impl Db {
             .map_err(|e| e.to_string())?;
 
         Ok(notes)
+    }
+
+    pub fn get_note_meta(&self, id: &str) -> Result<Option<NoteSummary>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT id, substr(body, 1, 200), updated_at FROM notes WHERE id = ?1")
+            .map_err(|e| e.to_string())?;
+
+        let meta = stmt
+            .query_row([id], |row| {
+                Ok(NoteSummary {
+                    id: row.get(0)?,
+                    body_prefix: row.get(1)?,
+                    updated_at: row.get(2)?,
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+
+        Ok(meta)
     }
 
     pub fn delete_note(&self, id: &str) -> Result<bool, String> {
