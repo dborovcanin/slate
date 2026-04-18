@@ -72,12 +72,33 @@ impl Db {
         load_note(&conn, id)?.ok_or_else(|| "Note not found after append".to_string())
     }
 
-    pub fn append_note_with_ingest_event(
+    pub fn prepend_note_with_ingest_event(
         &self,
         source: &str,
         message_id: Option<&str>,
         note_id: &str,
-        body_suffix: &str,
+        body_prefix: &str,
+        raw_payload: &[u8],
+        body_truncated: bool,
+        message_truncated: bool,
+    ) -> Result<Option<Note>, String> {
+        self.write_note_with_ingest_event(
+            source,
+            message_id,
+            note_id,
+            body_prefix,
+            raw_payload,
+            body_truncated,
+            message_truncated,
+        )
+    }
+
+    fn write_note_with_ingest_event(
+        &self,
+        source: &str,
+        message_id: Option<&str>,
+        note_id: &str,
+        body: &str,
         raw_payload: &[u8],
         body_truncated: bool,
         message_truncated: bool,
@@ -119,11 +140,11 @@ impl Db {
                  body = CASE
                      WHEN notes.body = '' THEN excluded.body
                      WHEN excluded.body = '' THEN notes.body
-                     WHEN substr(notes.body, -1, 1) = char(10) THEN notes.body || excluded.body
-                     ELSE notes.body || char(10) || excluded.body
+                     WHEN substr(excluded.body, -1, 1) = char(10) THEN excluded.body || notes.body
+                     ELSE excluded.body || char(10) || notes.body
                  END,
                  updated_at = excluded.updated_at",
-            rusqlite::params![note_id, body_suffix, now, now],
+            rusqlite::params![note_id, body, now, now],
         )
         .map_err(|e| e.to_string())?;
 
@@ -141,7 +162,7 @@ impl Db {
             })
             .optional()
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Note not found after append".to_string())?;
+            .ok_or_else(|| "Note not found after write".to_string())?;
         drop(stmt);
 
         tx.commit().map_err(|e| e.to_string())?;
@@ -938,28 +959,42 @@ mod tests {
     }
 
     #[test]
-    fn append_note_with_ingest_event_is_atomic_and_dedups() {
+    fn prepend_note_with_ingest_event_is_atomic_keeps_latest_at_top_and_dedups() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
 
         let first = db
-            .append_note_with_ingest_event(
-                "smtp",
-                Some("<abc@id>"),
+            .prepend_note_with_ingest_event(
+                "imap",
+                Some("<older@id>"),
                 "inbox-email-2026-04-17",
-                "# hello",
-                b"raw message",
+                "# older",
+                b"raw older",
                 false,
                 false,
             )
             .expect("first ingest succeeds")
-            .expect("note appended");
-        assert_eq!(first.body, "# hello");
+            .expect("note written");
+        assert_eq!(first.body, "# older");
+
+        let second = db
+            .prepend_note_with_ingest_event(
+                "imap",
+                Some("<newer@id>"),
+                "inbox-email-2026-04-17",
+                "# newer",
+                b"raw newer",
+                false,
+                false,
+            )
+            .expect("second ingest succeeds")
+            .expect("note written");
+        assert_eq!(second.body, "# newer\n# older");
 
         let duplicate = db
-            .append_note_with_ingest_event(
-                "smtp",
-                Some("<abc@id>"),
+            .prepend_note_with_ingest_event(
+                "imap",
+                Some("<newer@id>"),
                 "inbox-email-2026-04-17",
                 "# duplicate",
                 b"raw duplicate",
@@ -973,7 +1008,7 @@ mod tests {
             .get_note("inbox-email-2026-04-17")
             .expect("note lookup")
             .expect("note present");
-        assert_eq!(note.body, "# hello");
+        assert_eq!(note.body, "# newer\n# older");
 
         drop(db);
         let _ = fs::remove_file(path);

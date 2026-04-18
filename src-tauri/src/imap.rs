@@ -100,8 +100,9 @@ fn sync_once(
         }
     }
     let mut uids = client.search_uids(start_uid, initial_sync_since)?;
-    // Fetch newest first so users see latest mail first by default.
-    sort_uids_latest_first(&mut uids);
+    // We prepend each message block into the note, so ingest oldest->newest
+    // to keep the newest message at the very top after every sync cycle.
+    sort_uids_oldest_first(&mut uids);
 
     let mut summary = SyncSummary::default();
     let mut max_processed_uid = last_uid;
@@ -168,8 +169,8 @@ fn determine_initial_sync_since_date(
     Some((now_utc - Duration::days(i64::from(initial_sync_past_days))).date())
 }
 
-fn sort_uids_latest_first(uids: &mut [u64]) {
-    uids.sort_unstable_by(|a, b| b.cmp(a));
+fn sort_uids_oldest_first(uids: &mut [u64]) {
+    uids.sort_unstable();
 }
 
 fn build_source_key(imap: &ImapConfig) -> String {
@@ -265,7 +266,7 @@ fn ingest_message(
     );
 
     let note_id = resolve_email_note_id(special, OffsetDateTime::now_utc());
-    let appended = db.append_note_with_ingest_event(
+    let appended = db.prepend_note_with_ingest_event(
         source_key,
         message_id.as_deref(),
         &note_id,
@@ -825,9 +826,9 @@ mod tests {
     }
 
     #[test]
-    fn sort_uids_prefers_latest_messages_first() {
+    fn sort_uids_prefers_oldest_messages_first_for_prepend_flow() {
         let mut uids = vec![4, 1, 7, 3];
-        sort_uids_latest_first(&mut uids);
-        assert_eq!(uids, vec![7, 4, 3, 1]);
+        sort_uids_oldest_first(&mut uids);
+        assert_eq!(uids, vec![1, 3, 4, 7]);
     }
 }
