@@ -1,0 +1,23 @@
+<svg width="256" height="256" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M67 18
+           H45
+           Q41 18 38 21
+           L24 34
+           Q21 37 25 39
+           L54 54
+           H38
+           Q34 54 31 57
+           L23 65
+           Q19 69 24 69
+           H55
+           Q59 69 62 66
+           L75 54
+           Q78 51 74 49
+           L45 34
+           H61
+           Q65 34 67 30
+           L70 22
+           Q72 18 67 18Z"
+        fill="#46607A"/>
+  <rect x="57" y="37" width="5" height="20" rx="2.5" fill="#EFE6D6"/>
+</svg>
