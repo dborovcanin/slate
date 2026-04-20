@@ -5158,6 +5158,16 @@ mod tests {
     }
 
     #[test]
+    fn display_cols_for_prefix_counts_wide_chars_as_two_columns() {
+        // Each emoji occupies 2 terminal columns.
+        assert_eq!(display_cols_for_prefix("😀", 1), 2);
+        assert_eq!(display_cols_for_prefix("😀a", 1), 2);
+        assert_eq!(display_cols_for_prefix("😀a", 2), 3);
+        assert_eq!(display_cols_for_prefix("a😀b", 2), 3);
+        assert_eq!(display_cols_for_prefix("a😀b", 3), 4);
+    }
+
+    #[test]
     fn gutter_width_expands_after_four_digit_line_numbers() {
         assert_eq!(super::gutter_width_for_visible_lines(1), 6);
         assert_eq!(super::gutter_width_for_visible_lines(9_999), 6);

@@ -849,15 +849,33 @@ fn emit_window_cell(
     window_end: usize,
     width: usize,
 ) {
-    if *stream_col >= window_col && *stream_col < window_end && *emitted < width {
+    use unicode_width::UnicodeWidthChar;
+    let ch_width = ch.width().unwrap_or(0).max(1);
+    let ch_end = *stream_col + ch_width;
+
+    // Compute which portion of this char's columns fall inside [window_col, window_end).
+    let visible_start = (*stream_col).max(window_col);
+    let visible_end = ch_end.min(window_end);
+
+    if visible_start < visible_end && *emitted < width {
+        let slots = (visible_end - visible_start).min(width - *emitted);
         if style != *current {
             style.write_ansi(buf);
             *current = style;
         }
-        buf.push(ch);
-        *emitted += 1;
+        if *stream_col >= window_col && ch_end <= window_end && *emitted + ch_width <= width {
+            buf.push(ch);
+            *emitted += ch_width;
+        } else {
+            // Wide char clips a window boundary — fill the visible slots with spaces.
+            for _ in 0..slots {
+                buf.push(' ');
+            }
+            *emitted += slots;
+        }
     }
-    *stream_col += 1;
+
+    *stream_col += ch_width;
 }
 
 fn build_ansi_output_window(

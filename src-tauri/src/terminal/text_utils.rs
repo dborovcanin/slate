@@ -1,5 +1,7 @@
 use std::cmp::min;
 
+use unicode_width::UnicodeWidthChar;
+
 use super::render;
 
 pub fn is_word_char(ch: char) -> bool {
@@ -65,7 +67,7 @@ pub fn display_cols_for_prefix(text: &str, prefix_chars: usize) -> usize {
             let tab = render::TAB_WIDTH - (visible % render::TAB_WIDTH);
             visible += tab;
         } else {
-            visible += 1;
+            visible += ch.width().unwrap_or(0);
         }
     }
     visible

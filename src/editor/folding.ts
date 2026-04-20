@@ -1,4 +1,5 @@
 import {
+  Annotation,
   type ChangeSet,
   RangeSetBuilder,
   StateEffect,
@@ -14,7 +15,7 @@ import {
   WidgetType,
   keymap,
 } from "@codemirror/view";
-import { markdownAnalyzeLines } from "./wasm.ts";
+import { ensureWasmReady, markdownAnalyzeLines } from "./wasm.ts";
 
 type FoldKind = "heading" | "fence";
 const MAX_FOLD_ANALYSIS_LINES = 20_000;
@@ -56,6 +57,7 @@ interface FoldRangesReplacement {
 }
 
 const setFoldRangesEffect = StateEffect.define<FoldRangesReplacement>();
+const foldWasmReadyAnnotation = Annotation.define<boolean>();
 
 class FoldToggleWidget extends WidgetType {
   readonly foldLine: number;
@@ -75,7 +77,7 @@ class FoldToggleWidget extends WidgetType {
     const span = document.createElement("span");
     span.className = `cm-fold-toggle${this.collapsed ? " cm-fold-toggle-collapsed" : ""}`;
     span.dataset.foldLine = `${this.foldLine}`;
-    span.textContent = this.collapsed ? "▸" : "▾";
+    span.textContent = this.collapsed ? "" : "";
     span.title = this.collapsed ? "Click to unfold" : "Click to fold";
     span.setAttribute(
       "aria-label",
@@ -114,7 +116,7 @@ class FoldPlaceholderWidget extends WidgetType {
     span.className = "cm-fold-placeholder";
     span.dataset.foldLine = `${this.foldLine}`;
     span.dataset.foldKind = this.kind;
-    span.textContent = `⯈ ${this.hiddenLineCount} line${this.hiddenLineCount === 1 ? "" : "s"} folded`;
+    span.textContent = ` ${this.hiddenLineCount} line${this.hiddenLineCount === 1 ? "" : "s"} folded`;
     span.title = "Click to unfold";
     span.setAttribute("aria-label", "Folded section. Click to unfold.");
     return span;
@@ -533,8 +535,27 @@ const foldAnalyzerPlugin = ViewPlugin.define((view) => {
     });
   }
 
+  // Build fold ranges once on mount, then rebuild once wasm parser is ready.
+  schedule();
+  void ensureWasmReady()
+    .then(() => {
+      if (destroyed) return;
+      view.dispatch({ annotations: foldWasmReadyAnnotation.of(true) });
+    })
+    .catch((error) => {
+      console.error("Fold wasm init failed:", error);
+    });
+
   return {
     update(update: ViewUpdate) {
+      if (
+        update.transactions.some((transaction) =>
+          transaction.annotation(foldWasmReadyAnnotation),
+        )
+      ) {
+        schedule();
+        return;
+      }
       if (update.docChanged && editMightAffectFolds(update)) schedule();
     },
     destroy() {
@@ -689,7 +710,23 @@ export function executeFoldCommand(view: EditorView, action: FoldCommandAction):
 }
 
 const foldMouseHandlers = EditorView.domEventHandlers({
-  mousedown: (event, view) => {
+  mousedown: (event) => {
+    if (event.button !== 0) return false;
+    const rawTarget = event.target;
+    const target = rawTarget instanceof Element
+      ? rawTarget
+      : rawTarget instanceof Node
+      ? rawTarget.parentElement
+      : null;
+    if (!target) return false;
+    const foldTarget = target.closest(".cm-fold-placeholder, .cm-fold-toggle") as HTMLElement | null;
+    if (!foldTarget) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    return true;
+  },
+  click: (event, view) => {
+    if (event.button !== 0) return false;
     const rawTarget = event.target;
     const target = rawTarget instanceof Element
       ? rawTarget
