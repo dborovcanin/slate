@@ -4086,7 +4086,7 @@ impl TerminalApp {
 
                 if let Some(hidden_count) = collapsed_hidden_count {
                     let suffix = if hidden_count == 1 { "" } else { "s" };
-                    rendered_line = "▶".to_string();
+                    rendered_line = "".to_string();
                     calc_ghost = None;
                     reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
                 } else {
