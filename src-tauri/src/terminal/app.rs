@@ -709,6 +709,65 @@ impl TerminalApp {
         Some(deleted)
     }
 
+    fn line_col_lt(left_line: usize, left_col: usize, right_line: usize, right_col: usize) -> bool {
+        left_line < right_line || (left_line == right_line && left_col < right_col)
+    }
+
+    fn slice_cols_range(
+        &self,
+        from_line: usize,
+        from_col: usize,
+        to_line: usize,
+        to_col: usize,
+    ) -> Option<String> {
+        if !Self::line_col_lt(from_line, from_col, to_line, to_col) {
+            return None;
+        }
+        if from_line == to_line {
+            let line = self.lines.get(from_line)?;
+            let start = byte_index(line, from_col);
+            let end = byte_index(line, to_col);
+            if start >= end || end > line.len() {
+                return None;
+            }
+            return Some(line[start..end].to_string());
+        }
+        let text = join_lines(&self.lines);
+        let start = self.byte_offset_for_line_col(from_line, from_col);
+        let end = self.byte_offset_for_line_col(to_line, to_col);
+        if start >= end || end > text.len() {
+            return None;
+        }
+        Some(text[start..end].to_string())
+    }
+
+    fn delete_cols_range(
+        &mut self,
+        from_line: usize,
+        from_col: usize,
+        to_line: usize,
+        to_col: usize,
+    ) -> Option<String> {
+        if !Self::line_col_lt(from_line, from_col, to_line, to_col) {
+            return None;
+        }
+        if from_line == to_line {
+            return self.delete_current_line_cols(from_col, to_col);
+        }
+        let mut text = join_lines(&self.lines);
+        let start = self.byte_offset_for_line_col(from_line, from_col);
+        let end = self.byte_offset_for_line_col(to_line, to_col);
+        if start >= end || end > text.len() {
+            return None;
+        }
+        let deleted = text[start..end].to_string();
+        text.replace_range(start..end, "");
+        self.lines = split_lines(&text);
+        self.cursor_line = from_line.min(self.lines.len().saturating_sub(1));
+        self.cursor_col = from_col;
+        Some(deleted)
+    }
+
     fn find_word_object_bounds(&self, around: bool) -> Option<(usize, usize)> {
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
@@ -1187,6 +1246,120 @@ impl TerminalApp {
                             format!("yanked around {} pipe ranges", applied)
                         };
                         self.status = self.with_clipboard_status(msg);
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteWordForward => {
+                    let mut deleted = Vec::new();
+                    for _ in 0..count {
+                        let from_line = self.cursor_line;
+                        let from_col = self.cursor_col;
+                        self.move_cursor_right_word();
+                        let to_line = self.cursor_line;
+                        let to_col = self.cursor_col;
+                        if Self::line_col_lt(from_line, from_col, to_line, to_col) {
+                            if let Some(chunk) =
+                                self.delete_cols_range(from_line, from_col, to_line, to_col)
+                            {
+                                deleted.push(chunk);
+                            }
+                        } else {
+                            self.cursor_line = from_line;
+                            self.cursor_col = from_col;
+                            break;
+                        }
+                    }
+                    if !deleted.is_empty() {
+                        self.set_clipboard_lines(deleted);
+                        self.status = self.with_clipboard_status("deleted word forward");
+                        self.mark_edited();
+                        self.adjust_cursor();
+                    }
+                }
+                crate::editor_core::vim::VimIntent::DeleteWordBackward => {
+                    let mut deleted = Vec::new();
+                    for _ in 0..count {
+                        let from_line = self.cursor_line;
+                        let from_col = self.cursor_col;
+                        self.move_cursor_left_word();
+                        let to_line = self.cursor_line;
+                        let to_col = self.cursor_col;
+                        if Self::line_col_lt(to_line, to_col, from_line, from_col) {
+                            if let Some(chunk) =
+                                self.delete_cols_range(to_line, to_col, from_line, from_col)
+                            {
+                                deleted.push(chunk);
+                            }
+                        } else {
+                            self.cursor_line = from_line;
+                            self.cursor_col = from_col;
+                            break;
+                        }
+                    }
+                    if !deleted.is_empty() {
+                        deleted.reverse();
+                        self.set_clipboard_lines(deleted);
+                        self.status = self.with_clipboard_status("deleted word backward");
+                        self.mark_edited();
+                        self.adjust_cursor();
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankWordForward => {
+                    let mut yanked = Vec::new();
+                    let origin_line = self.cursor_line;
+                    let origin_col = self.cursor_col;
+                    for _ in 0..count {
+                        let from_line = self.cursor_line;
+                        let from_col = self.cursor_col;
+                        self.move_cursor_right_word();
+                        let to_line = self.cursor_line;
+                        let to_col = self.cursor_col;
+                        if Self::line_col_lt(from_line, from_col, to_line, to_col) {
+                            if let Some(chunk) =
+                                self.slice_cols_range(from_line, from_col, to_line, to_col)
+                            {
+                                yanked.push(chunk);
+                            }
+                        } else {
+                            self.cursor_line = from_line;
+                            self.cursor_col = from_col;
+                            break;
+                        }
+                    }
+                    self.cursor_line = origin_line;
+                    self.cursor_col = origin_col;
+                    if !yanked.is_empty() {
+                        self.set_clipboard_lines(yanked);
+                        self.status = self.with_clipboard_status("yanked word forward");
+                    }
+                }
+                crate::editor_core::vim::VimIntent::YankWordBackward => {
+                    let mut yanked = Vec::new();
+                    let origin_line = self.cursor_line;
+                    let origin_col = self.cursor_col;
+                    for _ in 0..count {
+                        let from_line = self.cursor_line;
+                        let from_col = self.cursor_col;
+                        self.move_cursor_left_word();
+                        let to_line = self.cursor_line;
+                        let to_col = self.cursor_col;
+                        if Self::line_col_lt(to_line, to_col, from_line, from_col) {
+                            if let Some(chunk) =
+                                self.slice_cols_range(to_line, to_col, from_line, from_col)
+                            {
+                                yanked.push(chunk);
+                            }
+                        } else {
+                            self.cursor_line = from_line;
+                            self.cursor_col = from_col;
+                            break;
+                        }
+                    }
+                    self.cursor_line = origin_line;
+                    self.cursor_col = origin_col;
+                    if !yanked.is_empty() {
+                        yanked.reverse();
+                        self.set_clipboard_lines(yanked);
+                        self.status = self.with_clipboard_status("yanked word backward");
                     }
                 }
                 crate::editor_core::vim::VimIntent::Undo => {
@@ -3315,12 +3488,44 @@ impl TerminalApp {
         }
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+
         let mut col = self.cursor_col;
-        while col > 0 && chars.get(col - 1).map_or(false, |c| !c.is_alphanumeric()) {
+        if col > len {
+            col = len;
+        }
+        if col == 0 {
+            self.cursor_col = 0;
+            return;
+        }
+
+        col -= 1;
+        while col > 0 && chars.get(col).map_or(false, |c| c.is_whitespace()) {
             col -= 1;
         }
-        while col > 0 && chars.get(col - 1).map_or(false, |c| c.is_alphanumeric()) {
-            col -= 1;
+
+        let target_class = chars.get(col).map_or(0, |c| {
+            if c.is_alphanumeric() || *c == '_' {
+                1
+            } else {
+                2
+            }
+        });
+        while col > 0 {
+            let prev_class = chars.get(col - 1).map_or(0, |c| {
+                if c.is_whitespace() {
+                    0
+                } else if c.is_alphanumeric() || *c == '_' {
+                    1
+                } else {
+                    2
+                }
+            });
+            if prev_class == target_class {
+                col -= 1;
+            } else {
+                break;
+            }
         }
         self.cursor_col = col;
     }
@@ -3329,7 +3534,7 @@ impl TerminalApp {
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
-        if self.cursor_col == len {
+        if self.cursor_col >= len {
             let current_virtual = self.current_virtual_line();
             if current_virtual + 1 < self.visible_line_count() {
                 if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
@@ -3340,12 +3545,39 @@ impl TerminalApp {
             return;
         }
         let mut col = self.cursor_col;
-        while col < len && chars.get(col).map_or(false, |c| c.is_alphanumeric()) {
-            col += 1;
+        let start_class = chars.get(col).map_or(0, |c| {
+            if c.is_whitespace() {
+                0
+            } else if c.is_alphanumeric() || *c == '_' {
+                1
+            } else {
+                2
+            }
+        });
+
+        while col < len {
+            let current_class = chars.get(col).map_or(0, |c| {
+                if c.is_whitespace() {
+                    0
+                } else if c.is_alphanumeric() || *c == '_' {
+                    1
+                } else {
+                    2
+                }
+            });
+            if current_class == start_class {
+                col += 1;
+            } else {
+                break;
+            }
         }
-        while col < len && chars.get(col).map_or(false, |c| !c.is_alphanumeric()) {
-            col += 1;
+
+        if start_class != 0 {
+            while col < len && chars.get(col).map_or(false, |c| c.is_whitespace()) {
+                col += 1;
+            }
         }
+
         self.cursor_col = col;
     }
 
@@ -6757,6 +6989,80 @@ mod tests {
         app.cursor_col = 6;
         run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('0')]);
         assert_eq!(app.lines, vec!["beta".to_string()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn move_cursor_left_word_clamps_empty_line_cursor_without_underflow() {
+        let (db, mut app, path) = app_with_note("alpha\n\nbeta");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 1;
+        app.cursor_col = 4;
+
+        app.move_cursor_left_word();
+
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn counted_yank_word_forward_advances_across_words() {
+        let (db, mut app, path) = app_with_note("one two three");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 0;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('2'), Key::Char('y'), Key::Char('w')],
+        );
+
+        assert_eq!(app.clipboard, vec!["one ".to_string(), "two ".to_string()]);
+        assert_eq!(app.cursor_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_dw_deletes_across_newline_when_motion_crosses_lines() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('w')]);
+
+        assert_eq!(app.lines, vec!["alphabeta".to_string()]);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 5);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_yw_yanks_across_newline_when_motion_crosses_lines() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+
+        run_keys(&mut app, &db, &[Key::Char('y'), Key::Char('w')]);
+
+        assert_eq!(app.lines, vec!["alpha".to_string(), "beta".to_string()]);
+        assert_eq!(app.clipboard, vec!["\n".to_string()]);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 5);
 
         drop(app);
         drop(db);

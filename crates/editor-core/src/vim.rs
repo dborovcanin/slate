@@ -100,8 +100,12 @@ pub enum VimIntent {
     SearchPrev,
     DeleteInsideWord,
     DeleteAroundWord,
+    DeleteWordForward,
+    DeleteWordBackward,
     YankInsideWord,
     YankAroundWord,
+    YankWordForward,
+    YankWordBackward,
     DeleteInsidePipe,
     DeleteAroundPipe,
     YankInsidePipe,
@@ -413,6 +417,26 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::Delete, VimKey::Char('w')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteWordForward, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Delete, VimKey::Char('b')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteWordBackward, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::Delete, VimKey::Char('a')) => {
                 next.pending = Some(VimPending::DeleteAround);
                 handled = true;
@@ -454,6 +478,26 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             }
             (VimPending::Yank, VimKey::Char('i')) => {
                 next.pending = Some(VimPending::YankInner);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Yank, VimKey::Char('w')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankWordForward, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Yank, VimKey::Char('b')) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action(VimIntent::YankWordBackward, count));
                 handled = true;
                 return VimStep {
                     state: next,

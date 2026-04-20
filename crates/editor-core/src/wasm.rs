@@ -846,6 +846,10 @@ fn intent_to_id(intent: VimIntent) -> u32 {
         VimIntent::YankInsidePipe => 40,
         VimIntent::YankAroundPipe => 41,
         VimIntent::Swallow => 42,
+        VimIntent::DeleteWordForward => 43,
+        VimIntent::DeleteWordBackward => 44,
+        VimIntent::YankWordForward => 45,
+        VimIntent::YankWordBackward => 46,
     }
 }
 

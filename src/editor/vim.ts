@@ -1,8 +1,6 @@
 import {
   cursorCharLeft,
   cursorCharRight,
-  cursorGroupBackward,
-  cursorGroupForward,
   cursorLineDown,
   cursorLineEnd,
   cursorLineStart,
@@ -111,6 +109,68 @@ function copyToClipboard(text: string) {
   void navigator.clipboard.writeText(text).catch((err) => {
     console.error("Vim yank failed:", err);
   });
+}
+
+function getCharClass(char: string): number {
+  if (!char || /^\s$/.test(char)) return 0;
+  if (/[A-Za-z0-9_]/.test(char)) return 1;
+  return 2;
+}
+
+function vimMoveWordForward(view: EditorView): boolean {
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  const text = line.text;
+  const len = text.length;
+  let col = head - line.from;
+
+  if (col >= len) {
+    if (line.number < view.state.doc.lines) {
+      view.dispatch({ selection: { anchor: view.state.doc.line(line.number + 1).from }, scrollIntoView: true });
+    }
+    return true;
+  }
+
+  const startClass = getCharClass(text[col]);
+  while (col < len && getCharClass(text[col]) === startClass) {
+    col++;
+  }
+  if (startClass !== 0) {
+    while (col < len && getCharClass(text[col]) === 0) {
+      col++;
+    }
+  }
+
+  view.dispatch({ selection: { anchor: line.from + col }, scrollIntoView: true });
+  return true;
+}
+
+function vimMoveWordBackward(view: EditorView): boolean {
+  const head = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(head);
+  const text = line.text;
+  let col = head - line.from;
+
+  if (col === 0) {
+    if (line.number > 1) {
+      const prevLine = view.state.doc.line(line.number - 1);
+      view.dispatch({ selection: { anchor: prevLine.to }, scrollIntoView: true });
+    }
+    return true;
+  }
+
+  col -= 1;
+  while (col > 0 && getCharClass(text[col]) === 0) {
+    col -= 1;
+  }
+
+  const targetClass = getCharClass(text[col]);
+  while (col > 0 && getCharClass(text[col - 1]) === targetClass) {
+    col -= 1;
+  }
+
+  view.dispatch({ selection: { anchor: line.from + col }, scrollIntoView: true });
+  return true;
 }
 
 function firstCodePoint(value: string): number | null {
@@ -604,6 +664,75 @@ export function vimModeExtension(options: VimOptions = {}) {
     return false;
   };
 
+  const deleteWordForward = (view: EditorView, count: number) => {
+    let changed = false;
+    for (let i = 0; i < count; i++) {
+      const from = view.state.selection.main.head;
+      vimMoveWordForward(view);
+      const to = view.state.selection.main.head;
+      if (from === to) break;
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+      setRegister(view.state.sliceDoc(start, end));
+      deleteRange(view, start, end);
+      changed = true;
+    }
+    return changed;
+  };
+
+  const deleteWordBackward = (view: EditorView, count: number) => {
+    let changed = false;
+    for (let i = 0; i < count; i++) {
+      const from = view.state.selection.main.head;
+      vimMoveWordBackward(view);
+      const to = view.state.selection.main.head;
+      if (from === to) break;
+      const start = Math.min(from, to);
+      const end = Math.max(from, to);
+      setRegister(view.state.sliceDoc(start, end));
+      deleteRange(view, start, end);
+      changed = true;
+    }
+    return changed;
+  };
+
+  const yankWordForward = (view: EditorView, count: number) => {
+    const chunks: string[] = [];
+    const origHead = view.state.selection.main.head;
+    for (let i = 0; i < count; i++) {
+      const from = view.state.selection.main.head;
+      vimMoveWordForward(view);
+      const to = view.state.selection.main.head;
+      if (from === to) break;
+      chunks.push(view.state.sliceDoc(Math.min(from, to), Math.max(from, to)));
+    }
+    view.dispatch({ selection: { anchor: origHead }, scrollIntoView: true });
+    if (chunks.length > 0) {
+      setRegister(chunks.join(""));
+      return true;
+    }
+    return false;
+  };
+
+  const yankWordBackward = (view: EditorView, count: number) => {
+    const chunks: string[] = [];
+    const origHead = view.state.selection.main.head;
+    for (let i = 0; i < count; i++) {
+      const from = view.state.selection.main.head;
+      vimMoveWordBackward(view);
+      const to = view.state.selection.main.head;
+      if (from === to) break;
+      chunks.push(view.state.sliceDoc(Math.min(from, to), Math.max(from, to)));
+    }
+    view.dispatch({ selection: { anchor: origHead }, scrollIntoView: true });
+    if (chunks.length > 0) {
+      chunks.reverse();
+      setRegister(chunks.join(""));
+      return true;
+    }
+    return false;
+  };
+
   const yankVisualSelection = (view: EditorView) => {
     if (mode() === "visual-line") {
       const main = view.state.selection.main;
@@ -698,9 +827,9 @@ export function vimModeExtension(options: VimOptions = {}) {
       case 3: // move_down
         return runMove(view, cursorLineDown, count);
       case 4: // move_word_forward
-        return runMove(view, cursorGroupForward, count);
+        return runMove(view, vimMoveWordForward, count);
       case 5: // move_word_backward
-        return runMove(view, cursorGroupBackward, count);
+        return runMove(view, vimMoveWordBackward, count);
       case 6: // move_line_start
         return runMove(view, cursorLineStart, count);
       case 7: // move_line_end
@@ -811,6 +940,14 @@ export function vimModeExtension(options: VimOptions = {}) {
         return applyTextObject(view, "pipe", true, false, count) > 0;
       case 42: // swallow
         return true;
+      case 43: // delete_word_forward
+        return deleteWordForward(view, count);
+      case 44: // delete_word_backward
+        return deleteWordBackward(view, count);
+      case 45: // yank_word_forward
+        return yankWordForward(view, count);
+      case 46: // yank_word_backward
+        return yankWordBackward(view, count);
       default:
         return true;
     }
