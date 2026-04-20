@@ -14,15 +14,13 @@
       {
         "label": "main",
         "title": "Slate",
-        "width": 600,
-        "height": 500,
-        "minWidth": 300,
-        "minHeight": 200,
+        "width": 900,
+        "height": 700,
         "resizable": true,
         "decorations": true,
-        "center": true,
+        "transparent": false,
         "focus": true,
-        "visible": true
+        "visible": false
       }
     ]
   },
