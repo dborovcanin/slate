@@ -166,6 +166,7 @@ struct TerminalApp {
     // highest index whose entry is current; all higher indices are stale.
     fence_checkpoints: Vec<(bool, Option<String>)>,
     fence_checkpoints_valid_through: usize,
+    draw_buf: String,
 }
 
 impl TerminalApp {
@@ -330,6 +331,7 @@ impl TerminalApp {
             history,
             fence_checkpoints: vec![(false, None)],
             fence_checkpoints_valid_through: 0,
+            draw_buf: String::new(),
         };
 
         app.recompute_folding();
@@ -3999,7 +4001,8 @@ impl TerminalApp {
         let editor_height = rows.saturating_sub(2).max(1);
         let gutter_width = self.gutter_width();
         let line_number_width = gutter_width.saturating_sub(2);
-        let mut buf = String::with_capacity(rows.saturating_mul(cols.saturating_add(8)));
+        let mut buf = std::mem::take(&mut self.draw_buf);
+        buf.clear();
 
         // Hide cursor, move home. No \x1b[2J — we overwrite every row to full width.
         buf.push_str("\x1b[?25l\x1b[H");
@@ -4473,10 +4476,12 @@ impl TerminalApp {
         buf.push_str(cursor_style);
         buf.push_str("\x1b[?25h");
 
-        out.write_all(buf.as_bytes())
+        let result = out
+            .write_all(buf.as_bytes())
             .and_then(|_| out.flush())
-            .map_err(|e| format!("Failed to draw terminal UI: {e}"))?;
-        Ok(())
+            .map_err(|e| format!("Failed to draw terminal UI: {e}"));
+        self.draw_buf = buf;
+        result
     }
 
     fn cursor_position(&self, rows: usize, cols: usize) -> (usize, usize) {
