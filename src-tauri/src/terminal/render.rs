@@ -822,13 +822,6 @@ fn hidden_line_prefix_marker_ranges(
     ranges
 }
 
-fn is_inline_marker_token(kind: InlineTokenType) -> bool {
-    matches!(
-        kind,
-        InlineTokenType::CodeMarker | InlineTokenType::LinkMarker
-    )
-}
-
 fn normalize_hidden_ranges(mut ranges: Vec<(usize, usize)>, len: usize) -> Vec<(usize, usize)> {
     if ranges.is_empty() || len == 0 {
         return Vec::new();
@@ -857,57 +850,26 @@ fn normalize_hidden_ranges(mut ranges: Vec<(usize, usize)>, len: usize) -> Vec<(
     merged
 }
 
-fn marker_reveal_component_range(
-    tokens: &[markdown_tokens::InlineToken],
-    marker_index: usize,
-) -> Option<(usize, usize)> {
-    let marker = tokens.get(marker_index)?;
-    if !is_inline_marker_token(marker.kind) {
-        return None;
-    }
-
-    let mut start_index = marker_index;
-    while start_index > 0 {
-        let prev = &tokens[start_index - 1];
-        let current = &tokens[start_index];
-        if prev.to != current.from {
-            break;
-        }
-        start_index -= 1;
-    }
-
-    let mut end_index = marker_index;
-    while end_index + 1 < tokens.len() {
-        let current = &tokens[end_index];
-        let next = &tokens[end_index + 1];
-        if current.to != next.from {
-            break;
-        }
-        end_index += 1;
-    }
-
-    let has_non_marker = (start_index..=end_index).any(|idx| {
-        tokens
-            .get(idx)
-            .map(|token| !is_inline_marker_token(token.kind))
-            .unwrap_or(false)
-    });
-    if !has_non_marker {
-        return None;
-    }
-
-    Some((tokens[start_index].from, tokens[end_index].to))
-}
-
 fn should_reveal_inline_marker(
     tokens: &[markdown_tokens::InlineToken],
+    component_ranges: &[markdown_tokens::InlineMarkerComponentRange],
     marker_index: usize,
     active_cursor_col: Option<usize>,
 ) -> bool {
     let Some(cursor_col) = active_cursor_col else {
         return false;
     };
-    let Some((from, to)) = marker_reveal_component_range(tokens, marker_index) else {
+    let Some(marker) = tokens.get(marker_index) else {
+        return false;
+    };
+    if !markdown_tokens::is_inline_marker_token_kind(marker.kind) {
+        return false;
+    }
+    let Some((from, to)) = component_ranges
+        .iter()
+        .find(|range| marker.from >= range.from && marker.to <= range.to)
+        .map(|range| (range.from, range.to))
+    else {
         return false;
     };
     cursor_col >= from && cursor_col <= to
@@ -920,6 +882,7 @@ fn apply_inline_token_styles(
     active_cursor_col: Option<usize>,
 ) {
     let len = styles.len();
+    let component_ranges = markdown_tokens::inline_marker_component_ranges_from_tokens(tokens);
     for (index, token) in tokens.iter().enumerate() {
         let from = token.from.min(len);
         let to = token.to.min(len);
@@ -927,8 +890,8 @@ fn apply_inline_token_styles(
             continue;
         }
 
-        if is_inline_marker_token(token.kind)
-            && !should_reveal_inline_marker(tokens, index, active_cursor_col)
+        if markdown_tokens::is_inline_marker_token_kind(token.kind)
+            && !should_reveal_inline_marker(tokens, &component_ranges, index, active_cursor_col)
         {
             hidden_ranges.push((from, to));
             continue;

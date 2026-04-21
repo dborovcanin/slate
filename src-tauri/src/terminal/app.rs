@@ -1801,50 +1801,35 @@ impl TerminalApp {
     }
 
     fn remember_command_in_history(&mut self, command: &str) {
-        let trimmed = command.trim();
-        if trimmed.is_empty() {
-            return;
-        }
-
-        if let Some(existing_idx) = self
-            .command_history
-            .iter()
-            .position(|entry| entry == trimmed)
-        {
-            self.command_history.remove(existing_idx);
-        }
-        self.command_history.push(trimmed.to_string());
-        if self.command_history.len() > MAX_COMMAND_HISTORY_ENTRIES {
-            self.command_history.remove(0);
-        }
+        crate::editor_core::command_history::remember_command(
+            &mut self.command_history,
+            command,
+            MAX_COMMAND_HISTORY_ENTRIES,
+        );
         self.command_history_index = None;
     }
 
     fn cycle_command_history_prev(&mut self) {
-        let history_len = self.command_history.len();
-        if history_len == 0 {
+        let Some(step) = crate::editor_core::command_history::cycle_prev(
+            &self.command_history,
+            self.command_history_index,
+        ) else {
             return;
-        }
-        let next_idx = match self.command_history_index {
-            Some(current) => (current + history_len - 1) % history_len,
-            None => history_len - 1,
         };
-        self.command_history_index = Some(next_idx);
-        self.command_input = self.command_history[next_idx].clone();
+        self.command_history_index = Some(step.index);
+        self.command_input = step.command;
         self.update_command_status();
     }
 
     fn cycle_command_history_next(&mut self) {
-        let history_len = self.command_history.len();
-        if history_len == 0 {
+        let Some(step) = crate::editor_core::command_history::cycle_next(
+            &self.command_history,
+            self.command_history_index,
+        ) else {
             return;
-        }
-        let next_idx = match self.command_history_index {
-            Some(current) => (current + 1) % history_len,
-            None => 0,
         };
-        self.command_history_index = Some(next_idx);
-        self.command_input = self.command_history[next_idx].clone();
+        self.command_history_index = Some(step.index);
+        self.command_input = step.command;
         self.update_command_status();
     }
 

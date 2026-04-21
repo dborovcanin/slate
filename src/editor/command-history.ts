@@ -1,24 +1,19 @@
+import {
+  cycleCommandHistoryNext,
+  cycleCommandHistoryPrev,
+  rememberCommandHistory,
+} from "./wasm.ts";
+
 const MAX_COMMAND_HISTORY = 100;
 
 const commandHistory: string[] = [];
 
-function sanitizeCommand(rawCommand: string): string {
-  return rawCommand.trim().replace(/^:/, "");
+function replaceHistory(next: readonly string[]) {
+  commandHistory.splice(0, commandHistory.length, ...next);
 }
 
 export function rememberCommand(rawCommand: string) {
-  const command = sanitizeCommand(rawCommand);
-  if (!command) return;
-
-  const existing = commandHistory.lastIndexOf(command);
-  if (existing >= 0) {
-    commandHistory.splice(existing, 1);
-  }
-  commandHistory.push(command);
-
-  if (commandHistory.length > MAX_COMMAND_HISTORY) {
-    commandHistory.splice(0, commandHistory.length - MAX_COMMAND_HISTORY);
-  }
+  replaceHistory(rememberCommandHistory(commandHistory, rawCommand, MAX_COMMAND_HISTORY));
 }
 
 export class CommandHistoryNavigator {
@@ -33,23 +28,17 @@ export class CommandHistoryNavigator {
   }
 
   previous(): string | null {
-    if (commandHistory.length === 0) return null;
-    if (this.index === null) {
-      this.index = commandHistory.length - 1;
-    } else {
-      this.index = (this.index + commandHistory.length - 1) % commandHistory.length;
-    }
-    return commandHistory[this.index] ?? null;
+    const step = cycleCommandHistoryPrev(commandHistory, this.index);
+    if (!step) return null;
+    this.index = step.index;
+    return step.command;
   }
 
   next(): string | null {
-    if (commandHistory.length === 0) return null;
-    if (this.index === null) {
-      this.index = 0;
-    } else {
-      this.index = (this.index + 1) % commandHistory.length;
-    }
-    return commandHistory[this.index] ?? null;
+    const step = cycleCommandHistoryNext(commandHistory, this.index);
+    if (!step) return null;
+    this.index = step.index;
+    return step.command;
   }
 }
 

@@ -5,12 +5,16 @@ use wasm_bindgen::JsCast;
 use crate::calc_plan::{
     self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
 };
+use crate::command_history;
 use crate::command_catalog;
 use crate::context::ResolvedContext;
+use crate::folding;
 use crate::format::format_markdown;
 use crate::markdown_tokens::{
-    self, CodeToken, InlineToken, MarkdownAnalyzeResult, MarkdownAnalyzedLine, MarkdownLineInfo,
+    self, CodeToken, InlineMarkerComponentRange, InlineToken, MarkdownAnalyzeResult,
+    MarkdownAnalyzedLine, MarkdownLineInfo,
 };
+use crate::substitute;
 use crate::table;
 use crate::text_rules::{
     convert_line_to_list, rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules,
@@ -18,7 +22,9 @@ use crate::text_rules::{
     run_table_header_delete_column_rule, run_table_pipe_insert_column_rule, ListKind,
     TabRuleOptions, TableBoundaryEditOptions, TextRuleOptions,
 };
-use crate::types::{CommandMode, SelectionSnapshot, TextRange};
+use crate::types::{
+    CommandExecutionResult, CommandMode, EditorContextSnapshot, SelectionSnapshot, TextRange,
+};
 use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
 
 #[wasm_bindgen(start)]
@@ -283,6 +289,71 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
     let mode = parse_mode(mode)?;
     let command = command_catalog::resolve_command(mode, raw_input)?;
     Some(command.value.to_string())
+}
+
+#[wasm_bindgen]
+pub fn wasm_try_execute_vim_substitute(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    raw_input: &str,
+    mode: &str,
+) -> Option<JsValue> {
+    let mode = parse_mode(mode)?;
+    let snapshot = EditorContextSnapshot {
+        text: text.to_string(),
+        selection: SelectionSnapshot {
+            anchor: selection_anchor,
+            head: selection_head,
+        },
+        changed_range: None,
+    };
+    let result = substitute::try_execute_vim_substitute(&snapshot, raw_input, mode)?;
+    Some(command_execution_result_to_js(&result))
+}
+
+#[wasm_bindgen]
+pub fn wasm_command_history_sanitize(raw_command: &str) -> String {
+    command_history::sanitize_command(raw_command)
+}
+
+#[wasm_bindgen]
+pub fn wasm_command_history_remember(
+    history: JsValue,
+    raw_command: &str,
+    max_entries: usize,
+) -> Option<JsValue> {
+    let mut history = js_strings(history)?;
+    command_history::remember_command(&mut history, raw_command, max_entries);
+    let out = Array::new();
+    for command in &history {
+        out.push(&JsValue::from_str(command));
+    }
+    Some(out.into())
+}
+
+#[wasm_bindgen]
+pub fn wasm_command_history_prev(history: JsValue, current_index: i32) -> Option<JsValue> {
+    let history = js_strings(history)?;
+    let current_index = if current_index < 0 {
+        None
+    } else {
+        Some(current_index as usize)
+    };
+    let step = command_history::cycle_prev(&history, current_index)?;
+    Some(command_history_step_to_js(&step))
+}
+
+#[wasm_bindgen]
+pub fn wasm_command_history_next(history: JsValue, current_index: i32) -> Option<JsValue> {
+    let history = js_strings(history)?;
+    let current_index = if current_index < 0 {
+        None
+    } else {
+        Some(current_index as usize)
+    };
+    let step = command_history::cycle_next(&history, current_index)?;
+    Some(command_history_step_to_js(&step))
 }
 
 fn set_prop(obj: &Object, key: &str, value: JsValue) -> bool {
@@ -559,6 +630,65 @@ fn code_tokens_to_js(tokens: &[CodeToken]) -> JsValue {
     out.into()
 }
 
+fn inline_marker_component_range_to_js(range: &InlineMarkerComponentRange) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "from", JsValue::from_f64(range.from as f64));
+    let _ = set_prop(&out, "to", JsValue::from_f64(range.to as f64));
+    out.into()
+}
+
+fn inline_marker_component_ranges_to_js(ranges: &[InlineMarkerComponentRange]) -> JsValue {
+    let out = Array::new();
+    for range in ranges {
+        out.push(&inline_marker_component_range_to_js(range));
+    }
+    out.into()
+}
+
+fn fold_range_to_js_1_based(range: &folding::FoldRange) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(
+        &out,
+        "startLine",
+        JsValue::from_f64((range.start_line + 1) as f64),
+    );
+    let _ = set_prop(&out, "endLine", JsValue::from_f64((range.end_line + 1) as f64));
+    let _ = set_prop(&out, "kind", JsValue::from_str(range.kind.as_str()));
+    out.into()
+}
+
+fn command_history_step_to_js(step: &command_history::CommandHistoryStep) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "index", JsValue::from_f64(step.index as f64));
+    let _ = set_prop(&out, "command", JsValue::from_str(&step.command));
+    out.into()
+}
+
+fn command_execution_result_to_js(result: &CommandExecutionResult) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "message", JsValue::from_str(&result.message));
+    let operations = Array::new();
+    for operation in &result.operations {
+        operations.push(&edit_operation_to_js(operation));
+    }
+    let _ = set_prop(&out, "operations", operations.into());
+    let _ = set_prop(
+        &out,
+        "clipboardText",
+        result
+            .clipboard_text
+            .as_deref()
+            .map(JsValue::from_str)
+            .unwrap_or(JsValue::NULL),
+    );
+    let _ = set_prop(
+        &out,
+        "quitRequested",
+        JsValue::from_bool(result.quit_requested),
+    );
+    out.into()
+}
+
 fn markdown_analyzed_line_to_js(line: &MarkdownAnalyzedLine) -> JsValue {
     let out = Object::new();
     let _ = set_prop(&out, "info", markdown_line_info_to_js(&line.info));
@@ -615,6 +745,13 @@ pub fn wasm_markdown_find_inline_tokens(line_text: &str) -> JsValue {
 }
 
 #[wasm_bindgen]
+pub fn wasm_markdown_inline_marker_component_ranges(line_text: &str) -> JsValue {
+    inline_marker_component_ranges_to_js(&markdown_tokens::inline_marker_component_ranges(
+        line_text,
+    ))
+}
+
+#[wasm_bindgen]
 pub fn wasm_markdown_tokenize_code_line(line_text: &str, lang: Option<String>) -> JsValue {
     code_tokens_to_js(&markdown_tokens::tokenize_code_line(
         line_text,
@@ -645,6 +782,17 @@ pub fn wasm_markdown_analyze_lines(
         start_code_fence_lang.as_deref(),
     );
     Some(markdown_analyze_result_to_js(&result))
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_build_fold_ranges_ui(lines: JsValue) -> Option<JsValue> {
+    let lines = js_strings(lines)?;
+    let ranges = folding::build_fold_ranges_ui(&lines);
+    let out = Array::new();
+    for range in &ranges {
+        out.push(&fold_range_to_js_1_based(range));
+    }
+    Some(out.into())
 }
 
 #[wasm_bindgen]

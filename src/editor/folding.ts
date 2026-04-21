@@ -22,9 +22,9 @@ import {
   foldedRanges,
   unfoldEffect,
 } from "@codemirror/language";
-import { ensureWasmReady, markdownAnalyzeLines } from "./wasm.ts";
+import { ensureWasmReady, markdownBuildFoldRangesUi } from "./wasm.ts";
 
-type FoldKind = "heading" | "fence";
+type FoldKind = "heading" | "fence" | "list" | "table" | "paragraph";
 const MAX_FOLD_ANALYSIS_LINES = 20_000;
 const FOLD_VIEWPORT_MARGIN_LINES = 80;
 const FOLD_ANALYSIS_IDLE_TIMEOUT_MS = 120;
@@ -77,86 +77,21 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
   for (let lineNo = 1; lineNo <= lineCount; lineNo++) {
     lines.push(doc.line(lineNo).text);
   }
-  const analyzed = markdownAnalyzeLines(lines, {
-    inCodeBlock: false,
-    codeFenceLang: null,
-  }).lines;
-
-  const nextHeadingAtLevel: number[] = Array(7).fill(lineCount + 1);
-  for (let lineNo = lineCount; lineNo >= 1; lineNo--) {
-    const current = analyzed[lineNo - 1];
-    if (!current) continue;
-    const level = current.info.headingLevel;
-    if (level === null || current.inCodeBlock) continue;
-
-    const nextHeading = nextHeadingAtLevel[level];
-    let endLine = nextHeading <= lineCount ? nextHeading - 1 : lineCount;
-    // Keep visual breathing room between sections by excluding trailing blank
-    // separator lines from the folded region.
-    while (endLine > lineNo && doc.line(endLine).text.trim().length === 0) {
-      endLine -= 1;
-    }
-    if (endLine > lineNo) {
-      const headerFrom = doc.line(lineNo).from;
-      const from = doc.line(lineNo).to;
-      const to = doc.line(endLine).to;
-      if (from < to) {
-        ranges.set(lineNo, {
-          startLine: lineNo,
-          endLine,
-          headerFrom,
-          from,
-          to,
-          kind: "heading",
-        });
-      }
-    }
-    nextHeadingAtLevel[level] = lineNo;
-  }
-
-  let openFenceLine: number | null = null;
-  for (let lineNo = 1; lineNo <= lineCount; lineNo++) {
-    const current = analyzed[lineNo - 1];
-    if (!current || !current.info.isCodeFence) continue;
-    if (!current.inCodeBlock) {
-      openFenceLine = lineNo;
-      continue;
-    }
-
-    if (openFenceLine !== null) {
-      const startLine = openFenceLine;
-      const endLine = lineNo;
-      if (endLine > startLine) {
-        const headerFrom = doc.line(startLine).from;
-        const from = doc.line(startLine).to;
-        const to = doc.line(endLine).to;
-        if (from < to) {
-          ranges.set(startLine, {
-            startLine,
-            endLine,
-            headerFrom,
-            from,
-            to,
-            kind: "fence",
-          });
-        }
-      }
-      openFenceLine = null;
-    }
-  }
-
-  if (openFenceLine !== null && openFenceLine < lineCount) {
-    const headerFrom = doc.line(openFenceLine).from;
-    const from = doc.line(openFenceLine).to;
-    const to = doc.line(lineCount).to;
+  const sharedRanges = markdownBuildFoldRangesUi(lines);
+  for (const range of sharedRanges) {
+    const startLine = Math.max(1, Math.min(lineCount, range.startLine));
+    const endLine = Math.max(startLine, Math.min(lineCount, range.endLine));
+    const headerFrom = doc.line(startLine).from;
+    const from = doc.line(startLine).to;
+    const to = doc.line(endLine).to;
     if (from < to) {
-      ranges.set(openFenceLine, {
-        startLine: openFenceLine,
-        endLine: lineCount,
+      ranges.set(startLine, {
+        startLine,
+        endLine,
         headerFrom,
         from,
         to,
-        kind: "fence",
+        kind: range.kind,
       });
     }
   }
@@ -269,30 +204,10 @@ function scheduleIdle(fn: () => void): IdleHandle {
   return { cancel: () => clearTimeout(id) };
 }
 
-// Heading markers (#), code fence markers (`), and newlines are the only characters
-// that can create or destroy a fold boundary. Skip the full re-analysis when the edit
-// contains none of these.
-const FOLD_STRUCTURAL_RE = /[#`\n]/;
-
 function editMightAffectFolds(update: ViewUpdate): boolean {
-  let might = false;
-  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
-    if (might) return;
-    if (toA > fromA) {
-      const deleted = update.startState.doc.sliceString(fromA, toA);
-      if (FOLD_STRUCTURAL_RE.test(deleted)) {
-        might = true;
-        return;
-      }
-    }
-    if (toB > fromB) {
-      const inserted = update.state.doc.sliceString(fromB, toB);
-      if (FOLD_STRUCTURAL_RE.test(inserted)) {
-        might = true;
-      }
-    }
-  });
-  return might;
+  // Paragraph/list/table boundaries can change when a line turns empty/non-empty
+  // or when list/table markers are edited, so any document edit may affect folds.
+  return update.docChanged;
 }
 
 const foldAnalyzerPlugin = ViewPlugin.define((view) => {
@@ -540,7 +455,12 @@ function applyFoldStateAtRange(view: EditorView, range: FoldRange, nextCollapsed
 function formatFoldMessage(action: "folded" | "unfolded", range: FoldRange): string {
   const hiddenLineCount = range.endLine - range.startLine;
   const hiddenSuffix = hiddenLineCount === 1 ? "" : "s";
-  const kind = range.kind === "heading" ? "heading" : "code block";
+  const kind =
+    range.kind === "heading"
+      ? "heading"
+      : range.kind === "fence"
+      ? "code block"
+      : range.kind;
   return `fold: ${action} ${kind} (${hiddenLineCount} line${hiddenSuffix})`;
 }
 

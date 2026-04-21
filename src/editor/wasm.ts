@@ -17,18 +17,25 @@ import init, {
   wasm_calc_line_for_eval,
   wasm_calc_line_uses_assignment_prefix,
   wasm_calc_plan_incremental,
+  wasm_command_history_next,
+  wasm_command_history_prev,
+  wasm_command_history_remember,
+  wasm_command_history_sanitize,
   wasm_format_markdown,
   wasm_format_table_lines,
   wasm_list_command_suggestions,
   wasm_markdown_analyze_lines,
+  wasm_markdown_build_fold_ranges_ui,
   wasm_markdown_classify_line,
   wasm_markdown_find_inline_tokens,
+  wasm_markdown_inline_marker_component_ranges,
   wasm_markdown_is_code_fence,
   wasm_markdown_parse_fence_language,
   wasm_markdown_tokenize_code_line,
   wasm_normalize_command,
   wasm_rewrite_line_with_checklist_toggle_suffix,
   wasm_resolve_command,
+  wasm_try_execute_vim_substitute,
   wasm_run_doc_change_rules,
   wasm_run_enter_rules,
   wasm_run_table_boundary_edit_rules,
@@ -255,6 +262,27 @@ export interface MarkdownCodeToken {
   type: MarkdownCodeTokenType;
 }
 
+export interface MarkdownInlineMarkerComponentRange {
+  from: number;
+  to: number;
+}
+
+export interface MarkdownFoldRange {
+  startLine: number; // 1-based
+  endLine: number; // 1-based
+  kind: "heading" | "fence" | "list" | "table" | "paragraph";
+}
+
+export interface VimSubstituteExecutionResult {
+  message: string;
+  operations: EditOperation[];
+}
+
+interface CommandHistoryStepPayload {
+  index: number;
+  command: string;
+}
+
 export interface MarkdownLineInfo {
   headingLevel: number | null;
   headingMarkerEnd: number | null;
@@ -432,6 +460,27 @@ function decodeEditOperation(raw: unknown, sourceText: string): EditOperation | 
   return mapOperationFromUtf8ToUtf16(sourceText, { changes, selection });
 }
 
+function decodeVimSubstituteExecutionResult(
+  raw: unknown,
+  sourceText: string,
+): VimSubstituteExecutionResult | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+  if (typeof obj["message"] !== "string") return null;
+  const operations: EditOperation[] = [];
+  if (Array.isArray(obj["operations"])) {
+    for (const rawOp of obj["operations"]) {
+      const decoded = decodeEditOperation(rawOp, sourceText);
+      if (!decoded) continue;
+      operations.push(decoded);
+    }
+  }
+  return {
+    message: obj["message"],
+    operations,
+  };
+}
+
 export function runDocChangeRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
@@ -593,6 +642,101 @@ export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): str
   return wasm_resolve_command(mode, rawInput) ?? null;
 }
 
+export function tryExecuteVimSubstituteFromWasm(
+  snapshot: EditorContextSnapshot,
+  rawInput: string,
+  mode: CommandMode,
+): VimSubstituteExecutionResult | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const text = snapshot.text;
+  const [anchor, head] = batchUtf16ToUtf8(text, [
+    snapshot.selection.anchor,
+    snapshot.selection.head,
+  ]);
+  const raw = wasm_try_execute_vim_substitute(
+    text,
+    anchor!,
+    head!,
+    rawInput,
+    mode,
+  ) as unknown;
+  return decodeVimSubstituteExecutionResult(raw, text);
+}
+
+export function sanitizeCommandHistoryCommand(rawCommand: string): string {
+  if (!ensureWasmReadyNonBlocking()) {
+    const trimmed = rawCommand.trim();
+    return trimmed.replace(/^:/, "");
+  }
+  return wasm_command_history_sanitize(rawCommand);
+}
+
+function asCommandHistoryStep(value: unknown): CommandHistoryStepPayload | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Partial<CommandHistoryStepPayload>;
+  if (typeof raw.index !== "number" || typeof raw.command !== "string") return null;
+  return { index: raw.index, command: raw.command };
+}
+
+export function rememberCommandHistory(
+  history: readonly string[],
+  rawCommand: string,
+  maxEntries: number,
+): string[] {
+  if (!ensureWasmReadyNonBlocking()) {
+    const command = sanitizeCommandHistoryCommand(rawCommand);
+    if (!command) return [...history];
+    const next = [...history];
+    const existing = next.lastIndexOf(command);
+    if (existing >= 0) next.splice(existing, 1);
+    next.push(command);
+    if (next.length > maxEntries) {
+      next.splice(0, next.length - maxEntries);
+    }
+    return next;
+  }
+  const raw = wasm_command_history_remember(
+    [...history],
+    rawCommand,
+    maxEntries,
+  ) as unknown;
+  return Array.isArray(raw) ? raw.filter((entry): entry is string => typeof entry === "string") : [...history];
+}
+
+export function cycleCommandHistoryPrev(
+  history: readonly string[],
+  currentIndex: number | null,
+): CommandHistoryStepPayload | null {
+  if (!ensureWasmReadyNonBlocking()) {
+    if (history.length === 0) return null;
+    const nextIndex = currentIndex === null
+      ? history.length - 1
+      : (currentIndex + history.length - 1) % history.length;
+    return { index: nextIndex, command: history[nextIndex] ?? "" };
+  }
+  const raw = wasm_command_history_prev(
+    [...history],
+    currentIndex === null ? -1 : currentIndex,
+  ) as unknown;
+  return asCommandHistoryStep(raw);
+}
+
+export function cycleCommandHistoryNext(
+  history: readonly string[],
+  currentIndex: number | null,
+): CommandHistoryStepPayload | null {
+  if (!ensureWasmReadyNonBlocking()) {
+    if (history.length === 0) return null;
+    const nextIndex = currentIndex === null ? 0 : (currentIndex + 1) % history.length;
+    return { index: nextIndex, command: history[nextIndex] ?? "" };
+  }
+  const raw = wasm_command_history_next(
+    [...history],
+    currentIndex === null ? -1 : currentIndex,
+  ) as unknown;
+  return asCommandHistoryStep(raw);
+}
+
 const DEFAULT_MARKDOWN_LINE_INFO: MarkdownLineInfo = {
   headingLevel: null,
   headingMarkerEnd: null,
@@ -676,6 +820,42 @@ function asMarkdownCodeTokens(value: unknown): MarkdownCodeToken[] {
   return out;
 }
 
+function asMarkdownInlineMarkerComponentRanges(
+  value: unknown,
+): MarkdownInlineMarkerComponentRange[] {
+  if (!Array.isArray(value)) return [];
+  const out: MarkdownInlineMarkerComponentRange[] = [];
+  for (const range of value) {
+    if (typeof range !== "object" || range === null) continue;
+    const raw = range as Partial<MarkdownInlineMarkerComponentRange>;
+    if (typeof raw.from !== "number" || typeof raw.to !== "number") continue;
+    out.push({ from: raw.from, to: raw.to });
+  }
+  return out;
+}
+
+function asMarkdownFoldRanges(value: unknown): MarkdownFoldRange[] {
+  if (!Array.isArray(value)) return [];
+  const out: MarkdownFoldRange[] = [];
+  for (const range of value) {
+    if (typeof range !== "object" || range === null) continue;
+    const raw = range as Partial<MarkdownFoldRange>;
+    if (
+      typeof raw.startLine !== "number" ||
+      typeof raw.endLine !== "number" ||
+      typeof raw.kind !== "string"
+    ) {
+      continue;
+    }
+    out.push({
+      startLine: raw.startLine,
+      endLine: raw.endLine,
+      kind: raw.kind as MarkdownFoldRange["kind"],
+    });
+  }
+  return out;
+}
+
 export function markdownClassifyLine(lineText: string): MarkdownLineInfo {
   if (!ensureWasmReadyNonBlocking()) return DEFAULT_MARKDOWN_LINE_INFO;
   const value = wasm_markdown_classify_line(lineText) as unknown;
@@ -685,6 +865,15 @@ export function markdownClassifyLine(lineText: string): MarkdownLineInfo {
 export function markdownFindInlineTokens(lineText: string): MarkdownInlineToken[] {
   if (!ensureWasmReadyNonBlocking()) return [];
   return asMarkdownInlineTokens(wasm_markdown_find_inline_tokens(lineText));
+}
+
+export function markdownInlineMarkerComponentRanges(
+  lineText: string,
+): MarkdownInlineMarkerComponentRange[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  return asMarkdownInlineMarkerComponentRanges(
+    wasm_markdown_inline_marker_component_ranges(lineText),
+  );
 }
 
 export function markdownTokenizeCodeLine(
@@ -765,6 +954,13 @@ export function markdownAnalyzeLines(
     finalCodeFenceLang:
       typeof payload.finalCodeFenceLang === "string" ? payload.finalCodeFenceLang : null,
   };
+}
+
+export function markdownBuildFoldRangesUi(
+  lines: readonly string[],
+): MarkdownFoldRange[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  return asMarkdownFoldRanges(wasm_markdown_build_fold_ranges_ui([...lines]));
 }
 
 export function calcFindSingleTableCell(lineText: string): CalcSegment | null {

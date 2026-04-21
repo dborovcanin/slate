@@ -73,3 +73,25 @@ test("describeFoldRanges excludes trailing blank separator lines from heading fo
     { startLine: 5, endLine: 6, kind: "heading" },
   ]);
 });
+
+test("describeFoldRanges includes list, table, and paragraph folds", async () => {
+  await ensureWasmReady();
+  const text = [
+    "- one",
+    "- two",
+    "",
+    "| name | value |",
+    "| --- | --- |",
+    "| a | 1 |",
+    "",
+    "para",
+    "graph",
+    "",
+  ].join("\n");
+
+  assert.deepEqual(describeFoldRanges(text), [
+    { startLine: 1, endLine: 2, kind: "list" },
+    { startLine: 4, endLine: 6, kind: "table" },
+    { startLine: 8, endLine: 9, kind: "paragraph" },
+  ]);
+});

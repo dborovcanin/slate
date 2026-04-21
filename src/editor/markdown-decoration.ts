@@ -8,14 +8,17 @@ import {
   markdownAnalyzeLines,
   markdownClassifyLine,
   markdownFindInlineTokens,
+  markdownInlineMarkerComponentRanges,
   markdownTokenizeCodeLine,
   type MarkdownCodeToken as SharedCodeToken,
+  type MarkdownInlineMarkerComponentRange as SharedInlineMarkerComponentRange,
   type MarkdownInlineToken as SharedInlineToken,
   type MarkdownLineInfo as SharedMarkdownLineInfo,
 } from "./wasm.ts";
 
 type InlineToken = SharedInlineToken;
 type CodeToken = SharedCodeToken;
+type InlineMarkerComponentRange = SharedInlineMarkerComponentRange;
 export type MarkdownLineInfo = SharedMarkdownLineInfo;
 
 interface FenceState {
@@ -214,56 +217,29 @@ interface PendingDecoration {
   decoration: Decoration;
 }
 
-function isInlineMarkerToken(token: InlineToken): boolean {
-  return token.type === "code-marker" || token.type === "link-marker";
-}
-
-function markerRevealComponentRange(
+function markerRevealComponentRangeForToken(
   tokens: readonly InlineToken[],
   markerIndex: number,
+  componentRanges: readonly InlineMarkerComponentRange[],
 ): TextRange | null {
   const marker = tokens[markerIndex];
-  if (!marker || !isInlineMarkerToken(marker)) return null;
-
-  let startIndex = markerIndex;
-  while (startIndex > 0) {
-    const prev = tokens[startIndex - 1];
-    const current = tokens[startIndex];
-    if (!prev || !current || prev.to !== current.from) break;
-    startIndex -= 1;
+  if (!marker || (marker.type !== "code-marker" && marker.type !== "link-marker")) {
+    return null;
   }
-
-  let endIndex = markerIndex;
-  while (endIndex + 1 < tokens.length) {
-    const current = tokens[endIndex];
-    const next = tokens[endIndex + 1];
-    if (!current || !next || current.to !== next.from) break;
-    endIndex += 1;
-  }
-
-  let hasNonMarker = false;
-  for (let index = startIndex; index <= endIndex; index++) {
-    const token = tokens[index];
-    if (token && !isInlineMarkerToken(token)) {
-      hasNonMarker = true;
-      break;
-    }
-  }
-  if (!hasNonMarker) return null;
-
-  return {
-    from: tokens[startIndex]!.from,
-    to: tokens[endIndex]!.to,
-  };
+  const range = componentRanges.find((entry) =>
+    marker.from >= entry.from && marker.to <= entry.to
+  );
+  return range ? { from: range.from, to: range.to } : null;
 }
 
 function shouldRevealInlineMarker(
   tokens: readonly InlineToken[],
+  componentRanges: readonly InlineMarkerComponentRange[],
   markerIndex: number,
   lineFrom: number,
   activeSelection?: ActiveSelection,
 ): boolean {
-  const range = markerRevealComponentRange(tokens, markerIndex);
+  const range = markerRevealComponentRangeForToken(tokens, markerIndex, componentRanges);
   if (!range) return false;
   return selectionTouchesInlineRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
 }
@@ -271,6 +247,7 @@ function shouldRevealInlineMarker(
 function collectInlineDecorations(
   lineFrom: number,
   tokens: readonly InlineToken[],
+  componentRanges: readonly InlineMarkerComponentRange[],
   activeSelection?: ActiveSelection,
 ): PendingDecoration[] {
   const pending: PendingDecoration[] = [];
@@ -295,7 +272,13 @@ function collectInlineDecorations(
         pending.push({
           from,
           to,
-          decoration: shouldRevealInlineMarker(tokens, index, lineFrom, activeSelection)
+          decoration: shouldRevealInlineMarker(
+            tokens,
+            componentRanges,
+            index,
+            lineFrom,
+            activeSelection,
+          )
             ? decCodeMarker
             : decHiddenMarkdownToken,
         });
@@ -310,7 +293,13 @@ function collectInlineDecorations(
         pending.push({
           from,
           to,
-          decoration: shouldRevealInlineMarker(tokens, index, lineFrom, activeSelection)
+          decoration: shouldRevealInlineMarker(
+            tokens,
+            componentRanges,
+            index,
+            lineFrom,
+            activeSelection,
+          )
             ? decLinkMarker
             : decHiddenMarkdownToken,
         });
@@ -710,16 +699,9 @@ function inlineRevealComponentSignatureForCursor(
   lineText: string,
   cursorOffsetInLine: number,
 ): string {
-  const tokens = markdownFindInlineTokens(lineText);
-  const seen = new Set<string>();
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index];
-    if (!token || !isInlineMarkerToken(token)) continue;
-    const range = markerRevealComponentRange(tokens, index);
-    if (!range) continue;
+  const ranges = markdownInlineMarkerComponentRanges(lineText);
+  for (const range of ranges) {
     const signature = `${range.from}-${range.to}`;
-    if (seen.has(signature)) continue;
-    seen.add(signature);
     if (cursorOffsetInLine >= range.from && cursorOffsetInLine < range.to) {
       return signature;
     }
@@ -871,7 +853,13 @@ function decorateContentLine(
       decoration: decVariable,
     });
   }
-  for (const inline of collectInlineDecorations(line.from, inlineTokens, activeSelection)) {
+  const inlineMarkerComponentRanges = markdownInlineMarkerComponentRanges(line.text);
+  for (const inline of collectInlineDecorations(
+    line.from,
+    inlineTokens,
+    inlineMarkerComponentRanges,
+    activeSelection,
+  )) {
     pending.push(inline);
   }
   pending.sort((a, b) => a.from - b.from || a.to - b.to);

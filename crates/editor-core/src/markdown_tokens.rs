@@ -49,6 +49,12 @@ pub struct InlineToken {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InlineMarkerComponentRange {
+    pub from: usize,
+    pub to: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CodeTokenType {
     Keyword,
     String,
@@ -446,6 +452,10 @@ fn is_run(chars: &[char], pos: usize, marker: char, count: usize) -> bool {
     (0..count).all(|idx| pos + idx < chars.len() && chars[pos + idx] == marker)
 }
 
+pub fn is_inline_marker_token_kind(kind: InlineTokenType) -> bool {
+    matches!(kind, InlineTokenType::CodeMarker | InlineTokenType::LinkMarker)
+}
+
 fn is_marker_left_boundary(chars: &[char], marker_start: usize) -> bool {
     marker_start == 0 || chars[marker_start - 1].is_whitespace()
 }
@@ -713,6 +723,79 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
 
     tokens.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
     tokens
+}
+
+fn marker_component_range_for_token_index(
+    tokens: &[InlineToken],
+    marker_index: usize,
+) -> Option<InlineMarkerComponentRange> {
+    let marker = tokens.get(marker_index)?;
+    if !is_inline_marker_token_kind(marker.kind) {
+        return None;
+    }
+
+    let mut start_index = marker_index;
+    while start_index > 0 {
+        let prev = &tokens[start_index - 1];
+        let current = &tokens[start_index];
+        if prev.to != current.from {
+            break;
+        }
+        start_index -= 1;
+    }
+
+    let mut end_index = marker_index;
+    while end_index + 1 < tokens.len() {
+        let current = &tokens[end_index];
+        let next = &tokens[end_index + 1];
+        if current.to != next.from {
+            break;
+        }
+        end_index += 1;
+    }
+
+    let has_non_marker = (start_index..=end_index).any(|idx| {
+        tokens
+            .get(idx)
+            .map(|token| !is_inline_marker_token_kind(token.kind))
+            .unwrap_or(false)
+    });
+    if !has_non_marker {
+        return None;
+    }
+
+    Some(InlineMarkerComponentRange {
+        from: tokens[start_index].from,
+        to: tokens[end_index].to,
+    })
+}
+
+pub fn inline_marker_component_ranges_from_tokens(
+    tokens: &[InlineToken],
+) -> Vec<InlineMarkerComponentRange> {
+    let mut ranges: Vec<InlineMarkerComponentRange> = Vec::new();
+    for (idx, token) in tokens.iter().enumerate() {
+        if !is_inline_marker_token_kind(token.kind) {
+            continue;
+        }
+        let Some(range) = marker_component_range_for_token_index(tokens, idx) else {
+            continue;
+        };
+        if ranges
+            .iter()
+            .any(|existing| existing.from == range.from && existing.to == range.to)
+        {
+            continue;
+        }
+        ranges.push(range);
+    }
+    ranges.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
+    ranges
+}
+
+pub fn inline_marker_component_ranges(text: &str) -> Vec<InlineMarkerComponentRange> {
+    let tokens = tokenize_inline_markdown(text);
+    inline_marker_component_ranges_from_tokens(&tokens)
 }
 
 fn keyword_list(lang: Option<&str>) -> &'static [&'static str] {
@@ -1048,6 +1131,20 @@ mod tests {
         assert!(!kinds.contains(&"emphasis"));
         assert!(!kinds.contains(&"strong"));
         assert!(!kinds.contains(&"strikethrough"));
+    }
+
+    #[test]
+    fn inline_marker_component_ranges_identify_contiguous_marker_components() {
+        let ranges = inline_marker_component_ranges("**bold** and `code`");
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], InlineMarkerComponentRange { from: 0, to: 8 });
+        assert_eq!(ranges[1], InlineMarkerComponentRange { from: 13, to: 19 });
+    }
+
+    #[test]
+    fn inline_marker_component_ranges_skip_marker_only_runs() {
+        let ranges = inline_marker_component_ranges("****");
+        assert!(ranges.is_empty());
     }
 
     #[test]

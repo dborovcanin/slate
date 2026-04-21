@@ -7,6 +7,7 @@ import {
   listCommandSuggestionsFromWasm,
   normalizeCommand,
   resolveCommandFromWasm,
+  tryExecuteVimSubstituteFromWasm,
   type ListKind,
 } from "../wasm.ts";
 import type {
@@ -423,6 +424,18 @@ export async function executeCommand(
 ): Promise<CommandExecutionResult> {
   const normalizedInput = normalizeCommand(rawInput);
   if (!normalizedInput) return { message: "", operations: [] };
+
+  const substituteResult = tryExecuteVimSubstituteFromWasm(
+    snapshot,
+    rawInput,
+    runtime.mode,
+  );
+  if (substituteResult) {
+    return {
+      message: substituteResult.message,
+      operations: substituteResult.operations,
+    };
+  }
 
   const canonical = isWasmReady() ? resolveCommandFromWasm(runtime.mode, rawInput) : null;
   if (!canonical) {
