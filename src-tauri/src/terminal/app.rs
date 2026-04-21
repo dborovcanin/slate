@@ -4640,8 +4640,29 @@ impl TerminalApp {
                 } else {
                     self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
                 }
+
+                if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
+                    let (collapsed_line, mapped_col) =
+                        render::collapse_markdown_line_for_cursor(&rendered_line, self.cursor_col);
+                    if collapsed_line != rendered_line || mapped_col != self.cursor_col {
+                        cursor_line_override = Some((collapsed_line, mapped_col));
+                    }
+                }
+
                 let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost);
                 let effective_reminder_ghost = reminder_ghost_override.as_deref();
+                let render_cursor_col = if is_cursor_line {
+                    if !formula_segments.is_empty() {
+                        cursor_line_override
+                            .as_ref()
+                            .map(|(_, mapped_col)| *mapped_col)
+                            .or(Some(self.cursor_col))
+                    } else {
+                        Some(self.cursor_col)
+                    }
+                } else {
+                    None
+                };
                 let line_scroll_col = self.scroll_col;
                 let line_width = line_display_cols(&rendered_line);
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
@@ -4692,7 +4713,7 @@ impl TerminalApp {
                     && visual_highlight_ranges.is_empty()
                     && focused_pipe_ranges.is_empty()
                 {
-                    ctx.render_line_window_with_reminder(
+                    ctx.render_line_window_with_reminder_cursor(
                         &rendered_line,
                         viewport.text_width,
                         viewport.text_window_col,
@@ -4702,6 +4723,7 @@ impl TerminalApp {
                         &search_ranges,
                         &current_search_ranges,
                         &self.calc.variable_names,
+                        render_cursor_col,
                     )
                 } else {
                     ctx.render_line_full(
@@ -4717,6 +4739,7 @@ impl TerminalApp {
                         &ghost_dim_ranges,
                         &visual_highlight_ranges,
                         &focused_pipe_ranges,
+                        render_cursor_col,
                     )
                 };
                 buf.push_str(&goto(row, 1));

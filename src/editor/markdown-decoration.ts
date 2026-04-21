@@ -114,6 +114,21 @@ class HiddenChecklistPrefixWidget extends WidgetType {
   }
 }
 
+class HiddenMarkdownTokenWidget extends WidgetType {
+  eq(): boolean {
+    return true;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "md-hidden-token";
+    span.contentEditable = "false";
+    span.setAttribute("draggable", "false");
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  }
+}
+
 class UnorderedListGlyphWidget extends WidgetType {
   private readonly glyph: string;
 
@@ -142,7 +157,10 @@ const decChecklistHiddenPrefix = Decoration.replace({
   inclusive: false,
 });
 
-const decHiddenMarkdownToken = Decoration.mark({ class: "md-hidden-token" });
+const decHiddenMarkdownToken = Decoration.replace({
+  widget: new HiddenMarkdownTokenWidget(),
+  inclusive: false,
+});
 const decUnorderedListBullet = Decoration.replace({
   widget: new UnorderedListGlyphWidget("•"),
   inclusive: false,
@@ -247,7 +265,7 @@ function shouldRevealInlineMarker(
 ): boolean {
   const range = markerRevealComponentRange(tokens, markerIndex);
   if (!range) return false;
-  return selectionTouchesRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
+  return selectionTouchesInlineRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
 }
 
 function collectInlineDecorations(
@@ -637,6 +655,18 @@ function selectionTouchesRange(
   return selection.from < to && from < selection.to;
 }
 
+function selectionTouchesInlineRange(
+  selection: ActiveSelection | undefined,
+  from: number,
+  to: number,
+): boolean {
+  if (!selection) return false;
+  if (selection.empty) {
+    return selection.from >= from && selection.from < to;
+  }
+  return selection.from < to && from < selection.to;
+}
+
 interface UnorderedListMarkerSymbolRange extends TextRange {
   arrow: boolean;
 }
@@ -690,7 +720,7 @@ function inlineRevealComponentSignatureForCursor(
     const signature = `${range.from}-${range.to}`;
     if (seen.has(signature)) continue;
     seen.add(signature);
-    if (cursorOffsetInLine >= range.from && cursorOffsetInLine <= range.to) {
+    if (cursorOffsetInLine >= range.from && cursorOffsetInLine < range.to) {
       return signature;
     }
   }

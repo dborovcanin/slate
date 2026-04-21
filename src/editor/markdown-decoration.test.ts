@@ -102,12 +102,17 @@ test("findVariableNameRanges finds variable references with boundaries", () => {
 });
 
 function collectDecorations(decos: ReturnType<typeof buildMarkdownDecorationsForSpans>) {
-  const out: Array<{ from: number; to: number; cls: string }> = [];
+  const out: Array<{ from: number; to: number; cls: string; widget: string }> = [];
   const cursor = decos.iter();
   while (cursor.value) {
-    const spec = cursor.value.spec as { class?: string; attributes?: { class?: string } };
+    const spec = cursor.value.spec as {
+      class?: string;
+      attributes?: { class?: string };
+      widget?: { constructor?: { name?: string } };
+    };
     const cls = spec.class ?? spec.attributes?.class ?? "";
-    out.push({ from: cursor.from, to: cursor.to, cls });
+    const widget = spec.widget?.constructor?.name ?? "";
+    out.push({ from: cursor.from, to: cursor.to, cls, widget });
     cursor.next();
   }
   return out;
@@ -374,13 +379,16 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
 
   assert.ok(
     hiddenFlat.some(
-      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) => d.from === line.from && d.to === line.from + 2 && d.widget === "HiddenMarkdownTokenWidget",
     ),
     "opening strong marker should be hidden when caret is elsewhere",
   );
   assert.ok(
     hiddenFlat.some(
-      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     "closing strong marker should be hidden when caret is elsewhere",
   );
@@ -395,14 +403,17 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
 
   assert.equal(
     revealedFlat.some(
-      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) => d.from === line.from && d.to === line.from + 2 && d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "opening marker replacement should be removed when caret enters token content",
   );
   assert.equal(
     revealedFlat.some(
-      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "closing marker replacement should be removed when caret enters token content",
@@ -417,14 +428,17 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
   const revealFromOpeningFlat = collectDecorations(revealFromOpeningMarker);
   assert.equal(
     revealFromOpeningFlat.some(
-      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) => d.from === line.from && d.to === line.from + 2 && d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "opening marker replacement should be removed when caret is inside opening marker",
   );
   assert.equal(
     revealFromOpeningFlat.some(
-      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "closing marker replacement should also be removed when caret is inside opening marker",
@@ -439,17 +453,46 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
   const revealFromClosingFlat = collectDecorations(revealFromClosingMarker);
   assert.equal(
     revealFromClosingFlat.some(
-      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) => d.from === line.from && d.to === line.from + 2 && d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "opening marker replacement should be removed when caret is inside closing marker",
   );
   assert.equal(
     revealFromClosingFlat.some(
-      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "closing marker replacement should be removed when caret is inside closing marker",
+  );
+
+  const hideImmediatelyAfterClosingMarker = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 8, to: line.from + 8, empty: true },
+  );
+  const hideAfterClosingFlat = collectDecorations(hideImmediatelyAfterClosingMarker);
+  assert.ok(
+    hideAfterClosingFlat.some(
+      (d) =>
+        d.from === line.from &&
+        d.to === line.from + 2 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    "opening marker should hide immediately once caret leaves the inline component",
+  );
+  assert.ok(
+    hideAfterClosingFlat.some(
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    "closing marker should hide immediately once caret leaves the inline component",
   );
 });
 
@@ -466,13 +509,19 @@ test("buildMarkdownDecorationsForSpans hides heading and quote prefixes off-care
   const hiddenFlat = collectDecorations(hidden);
   assert.ok(
     hiddenFlat.some(
-      (d) => d.from === headingLine.from && d.to === headingLine.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === headingLine.from &&
+        d.to === headingLine.from + 2 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     "heading marker prefix should be hidden when line is not active",
   );
   assert.ok(
     hiddenFlat.some(
-      (d) => d.from === quoteLine.from && d.to === quoteLine.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === quoteLine.from &&
+        d.to === quoteLine.from + 2 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     "quote marker prefix should be hidden when line is not active",
   );
@@ -486,7 +535,10 @@ test("buildMarkdownDecorationsForSpans hides heading and quote prefixes off-care
   const revealQuoteFlat = collectDecorations(revealQuote);
   assert.equal(
     revealQuoteFlat.some(
-      (d) => d.from === quoteLine.from && d.to === quoteLine.from + 2 && d.cls.includes("md-hidden-token"),
+      (d) =>
+        d.from === quoteLine.from &&
+        d.to === quoteLine.from + 2 &&
+        d.widget === "HiddenMarkdownTokenWidget",
     ),
     false,
     "quote marker replacement should be removed for active quote line",

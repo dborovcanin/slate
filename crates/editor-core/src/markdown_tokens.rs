@@ -446,6 +446,14 @@ fn is_run(chars: &[char], pos: usize, marker: char, count: usize) -> bool {
     (0..count).all(|idx| pos + idx < chars.len() && chars[pos + idx] == marker)
 }
 
+fn is_marker_left_boundary(chars: &[char], marker_start: usize) -> bool {
+    marker_start == 0 || chars[marker_start - 1].is_whitespace()
+}
+
+fn is_marker_right_boundary(chars: &[char], marker_end: usize) -> bool {
+    marker_end >= chars.len() || chars[marker_end].is_whitespace()
+}
+
 fn find_backtick_close(chars: &[char], from: usize, count: usize) -> Option<usize> {
     let mut i = from;
     while i + count <= chars.len() {
@@ -479,6 +487,7 @@ fn find_paired_close(
             && !overlaps(protected, i, i + marker_len)
             && i > 0
             && !chars[i - 1].is_whitespace()
+            && is_marker_right_boundary(chars, i + marker_len)
         {
             return Some(i);
         }
@@ -500,7 +509,7 @@ fn find_single_close(
                 i += 2;
                 continue;
             }
-            if i > 0 && !chars[i - 1].is_whitespace() {
+            if i > 0 && !chars[i - 1].is_whitespace() && is_marker_right_boundary(chars, i + 1) {
                 return Some(i);
             }
         }
@@ -621,6 +630,10 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
                 pos += 1;
                 continue;
             }
+            if !is_marker_left_boundary(&chars, pos) {
+                pos += 1;
+                continue;
+            }
             let after = pos + 2;
             if after >= len || chars[after].is_whitespace() {
                 pos += 1;
@@ -646,6 +659,10 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
             i += 1;
             continue;
         }
+        if !is_marker_left_boundary(&chars, i) {
+            i += 1;
+            continue;
+        }
         let after = i + 2;
         if after >= len || chars[after].is_whitespace() {
             i += 1;
@@ -668,6 +685,10 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
         let mut pos = 0;
         while pos + 2 < len {
             if chars[pos] != marker || overlaps(&protected, pos, pos + 1) {
+                pos += 1;
+                continue;
+            }
+            if !is_marker_left_boundary(&chars, pos) {
                 pos += 1;
                 continue;
             }
@@ -1018,6 +1039,15 @@ mod tests {
         assert!(kinds.contains(&"code"));
         assert!(kinds.contains(&"link-text"));
         assert!(kinds.contains(&"link-url"));
+    }
+
+    #[test]
+    fn inline_tokenizer_does_not_treat_mid_word_markers_as_formatting() {
+        let tokens = tokenize_inline_markdown("this_Is_my_Word this*is*mid this~~is~~mid");
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(!kinds.contains(&"emphasis"));
+        assert!(!kinds.contains(&"strong"));
+        assert!(!kinds.contains(&"strikethrough"));
     }
 
     #[test]

@@ -330,6 +330,7 @@ impl RenderContext {
         )
     }
 
+    #[allow(dead_code)]
     pub fn render_line_window_with_reminder(
         &mut self,
         text: &str,
@@ -341,6 +342,34 @@ impl RenderContext {
         search_ranges: &[(usize, usize)],
         current_search_ranges: &[(usize, usize)],
         variable_names: &[String],
+    ) -> String {
+        self.render_line_window_with_reminder_cursor(
+            text,
+            width,
+            window_col,
+            calc_ghost,
+            reminder_ghost,
+            reminder_strikethrough,
+            search_ranges,
+            current_search_ranges,
+            variable_names,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn render_line_window_with_reminder_cursor(
+        &mut self,
+        text: &str,
+        width: usize,
+        window_col: usize,
+        calc_ghost: Option<&str>,
+        reminder_ghost: Option<&str>,
+        reminder_strikethrough: bool,
+        search_ranges: &[(usize, usize)],
+        current_search_ranges: &[(usize, usize)],
+        variable_names: &[String],
+        active_cursor_col: Option<usize>,
     ) -> String {
         self.render_line_with_dim_ranges_window_with_reminder(
             text,
@@ -354,6 +383,7 @@ impl RenderContext {
             variable_names,
             &[],
             &[],
+            active_cursor_col,
         )
     }
 
@@ -406,6 +436,7 @@ impl RenderContext {
             variable_names,
             dim_ranges,
             reverse_ranges,
+            None,
         )
     }
 
@@ -422,6 +453,7 @@ impl RenderContext {
         variable_names: &[String],
         dim_ranges: &[(usize, usize)],
         reverse_ranges: &[(usize, usize)],
+        active_cursor_col: Option<usize>,
     ) -> String {
         self.render_line_full(
             text,
@@ -436,6 +468,7 @@ impl RenderContext {
             dim_ranges,
             reverse_ranges,
             &[],
+            active_cursor_col,
         )
     }
 
@@ -454,10 +487,12 @@ impl RenderContext {
         dim_ranges: &[(usize, usize)],
         reverse_ranges: &[(usize, usize)],
         red_ranges: &[(usize, usize)],
+        active_cursor_col: Option<usize>,
     ) -> String {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
         let mut styles = vec![CharStyle::default(); len];
+        let mut hidden_ranges: Vec<(usize, usize)> = Vec::new();
 
         let info = markdown_tokens::classify_markdown_line(text);
 
@@ -482,6 +517,11 @@ impl RenderContext {
             apply_code_token_styles(&code_tokens, &mut styles, self.palette);
         } else {
             apply_line_styles_from_info(&info, &mut styles);
+            hidden_ranges.extend(hidden_line_prefix_marker_ranges(
+                &info,
+                len,
+                active_cursor_col.is_some(),
+            ));
             let inline_tokens = markdown_tokens::tokenize_inline_markdown(text);
             // Markdown emphasis (`*x*`, `***x***`) inside table rows is
             // ambiguous with our formula markers (`value*`, `value***`) and
@@ -506,7 +546,12 @@ impl RenderContext {
             } else {
                 &inline_tokens
             };
-            apply_inline_token_styles(inline_tokens_to_apply, &mut styles);
+            apply_inline_token_styles(
+                inline_tokens_to_apply,
+                &mut styles,
+                &mut hidden_ranges,
+                active_cursor_col,
+            );
             apply_variable_styles(&chars, &mut styles, variable_names, self.palette.variable);
         }
 
@@ -543,6 +588,8 @@ impl RenderContext {
             }
         }
 
+        hidden_ranges = normalize_hidden_ranges(hidden_ranges, len);
+
         let calc_prefix = if calc_ghost
             .map(|ghost| ghost.trim_start().starts_with('*'))
             .unwrap_or(false)
@@ -563,6 +610,7 @@ impl RenderContext {
             calc_prefix,
             reminder_ghost,
             reminder_strikethrough,
+            &hidden_ranges,
         )
     }
 }
@@ -750,12 +798,139 @@ fn apply_line_styles_from_info(info: &MarkdownLineInfo, styles: &mut [CharStyle]
     }
 }
 
-fn apply_inline_token_styles(tokens: &[markdown_tokens::InlineToken], styles: &mut [CharStyle]) {
+fn hidden_line_prefix_marker_ranges(
+    info: &MarkdownLineInfo,
+    len: usize,
+    reveal_prefix: bool,
+) -> Vec<(usize, usize)> {
+    let mut ranges = Vec::new();
+    if reveal_prefix {
+        return ranges;
+    }
+    if let Some(marker_end) = info.heading_marker_end {
+        let to = marker_end.min(len);
+        if to > 0 {
+            ranges.push((0, to));
+        }
+    }
+    if let Some(marker_end) = info.quote_marker_end {
+        let to = marker_end.min(len);
+        if to > 0 {
+            ranges.push((0, to));
+        }
+    }
+    ranges
+}
+
+fn is_inline_marker_token(kind: InlineTokenType) -> bool {
+    matches!(
+        kind,
+        InlineTokenType::CodeMarker | InlineTokenType::LinkMarker
+    )
+}
+
+fn normalize_hidden_ranges(mut ranges: Vec<(usize, usize)>, len: usize) -> Vec<(usize, usize)> {
+    if ranges.is_empty() || len == 0 {
+        return Vec::new();
+    }
+    for range in &mut ranges {
+        range.0 = range.0.min(len);
+        range.1 = range.1.min(len);
+    }
+    ranges.retain(|(from, to)| to > from);
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    ranges.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    let mut merged: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+    for (from, to) in ranges {
+        if let Some(last) = merged.last_mut() {
+            if from <= last.1 {
+                if to > last.1 {
+                    last.1 = to;
+                }
+                continue;
+            }
+        }
+        merged.push((from, to));
+    }
+    merged
+}
+
+fn marker_reveal_component_range(
+    tokens: &[markdown_tokens::InlineToken],
+    marker_index: usize,
+) -> Option<(usize, usize)> {
+    let marker = tokens.get(marker_index)?;
+    if !is_inline_marker_token(marker.kind) {
+        return None;
+    }
+
+    let mut start_index = marker_index;
+    while start_index > 0 {
+        let prev = &tokens[start_index - 1];
+        let current = &tokens[start_index];
+        if prev.to != current.from {
+            break;
+        }
+        start_index -= 1;
+    }
+
+    let mut end_index = marker_index;
+    while end_index + 1 < tokens.len() {
+        let current = &tokens[end_index];
+        let next = &tokens[end_index + 1];
+        if current.to != next.from {
+            break;
+        }
+        end_index += 1;
+    }
+
+    let has_non_marker = (start_index..=end_index).any(|idx| {
+        tokens
+            .get(idx)
+            .map(|token| !is_inline_marker_token(token.kind))
+            .unwrap_or(false)
+    });
+    if !has_non_marker {
+        return None;
+    }
+
+    Some((tokens[start_index].from, tokens[end_index].to))
+}
+
+fn should_reveal_inline_marker(
+    tokens: &[markdown_tokens::InlineToken],
+    marker_index: usize,
+    active_cursor_col: Option<usize>,
+) -> bool {
+    let Some(cursor_col) = active_cursor_col else {
+        return false;
+    };
+    let Some((from, to)) = marker_reveal_component_range(tokens, marker_index) else {
+        return false;
+    };
+    cursor_col >= from && cursor_col <= to
+}
+
+fn apply_inline_token_styles(
+    tokens: &[markdown_tokens::InlineToken],
+    styles: &mut [CharStyle],
+    hidden_ranges: &mut Vec<(usize, usize)>,
+    active_cursor_col: Option<usize>,
+) {
     let len = styles.len();
-    for token in tokens {
+    for (index, token) in tokens.iter().enumerate() {
         let from = token.from.min(len);
         let to = token.to.min(len);
         if to <= from {
+            continue;
+        }
+
+        if is_inline_marker_token(token.kind)
+            && !should_reveal_inline_marker(tokens, index, active_cursor_col)
+        {
+            hidden_ranges.push((from, to));
             continue;
         }
 
@@ -770,6 +945,93 @@ fn apply_inline_token_styles(tokens: &[markdown_tokens::InlineToken], styles: &m
             }
         }
     }
+}
+
+fn hidden_ranges_for_markdown_line(
+    text: &str,
+    active_cursor_col: Option<usize>,
+) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if len == 0 {
+        return Vec::new();
+    }
+    let info = markdown_tokens::classify_markdown_line(text);
+    let mut hidden_ranges =
+        hidden_line_prefix_marker_ranges(&info, len, active_cursor_col.is_some());
+    let inline_tokens = markdown_tokens::tokenize_inline_markdown(text);
+    let is_table_row = text.trim_start().starts_with('|');
+    let filtered_tokens: Vec<markdown_tokens::InlineToken>;
+    let inline_tokens_to_apply: &[markdown_tokens::InlineToken] = if is_table_row {
+        filtered_tokens = inline_tokens
+            .iter()
+            .filter(|t| {
+                !matches!(
+                    t.kind,
+                    markdown_tokens::InlineTokenType::Strong
+                        | markdown_tokens::InlineTokenType::Emphasis
+                )
+            })
+            .cloned()
+            .collect();
+        &filtered_tokens
+    } else {
+        &inline_tokens
+    };
+    let mut dummy_styles = vec![CharStyle::default(); len];
+    apply_inline_token_styles(
+        inline_tokens_to_apply,
+        &mut dummy_styles,
+        &mut hidden_ranges,
+        active_cursor_col,
+    );
+    normalize_hidden_ranges(hidden_ranges, len)
+}
+
+pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (String, usize) {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if len == 0 {
+        return (String::new(), 0);
+    }
+    let clamped_cursor = cursor_col.min(len);
+    let hidden_ranges = hidden_ranges_for_markdown_line(text, Some(clamped_cursor));
+    if hidden_ranges.is_empty() {
+        return (text.to_string(), clamped_cursor);
+    }
+
+    let mut mapped_cursor = clamped_cursor;
+    for (from, to) in &hidden_ranges {
+        if *from >= clamped_cursor {
+            break;
+        }
+        let removed = if *to <= clamped_cursor {
+            to - from
+        } else {
+            clamped_cursor.saturating_sub(*from)
+        };
+        mapped_cursor = mapped_cursor.saturating_sub(removed);
+    }
+
+    let mut out = String::with_capacity(chars.len());
+    let mut hidden_iter = hidden_ranges.iter().peekable();
+    for (idx, ch) in chars.iter().enumerate() {
+        while let Some((_, end)) = hidden_iter.peek() {
+            if idx >= *end {
+                hidden_iter.next();
+            } else {
+                break;
+            }
+        }
+        if let Some((start, end)) = hidden_iter.peek() {
+            if idx >= *start && idx < *end {
+                continue;
+            }
+        }
+        out.push(*ch);
+    }
+    let out_len = out.chars().count();
+    (out, mapped_cursor.min(out_len))
 }
 
 fn apply_code_token_styles(
@@ -835,6 +1097,7 @@ fn build_ansi_output(
         calc_prefix,
         None,
         false,
+        &[],
     )
 }
 
@@ -887,6 +1150,7 @@ fn build_ansi_output_window(
     calc_prefix: &str,
     reminder_ghost: Option<&str>,
     reminder_strikethrough: bool,
+    hidden_ranges: &[(usize, usize)],
 ) -> String {
     let mut buf = String::with_capacity(width * 4);
     let mut current = CharStyle::default();
@@ -894,7 +1158,20 @@ fn build_ansi_output_window(
     let mut emitted = 0usize;
     let window_end = window_col.saturating_add(width);
 
+    let mut hidden_iter = hidden_ranges.iter().peekable();
     for (i, &ch) in chars.iter().enumerate() {
+        while let Some((_, end)) = hidden_iter.peek() {
+            if i >= *end {
+                hidden_iter.next();
+            } else {
+                break;
+            }
+        }
+        if let Some((start, end)) = hidden_iter.peek() {
+            if i >= *start && i < *end {
+                continue;
+            }
+        }
         let s = styles[i];
         if ch == '\t' {
             let tab_spaces = TAB_WIDTH - (stream_col % TAB_WIDTH);
@@ -1208,6 +1485,139 @@ mod tests {
         let default_palette = RenderPalette::default();
         assert_eq!(palette.code_keyword, default_palette.code_keyword);
         assert_eq!(palette.search_match, default_palette.search_match);
+    }
+
+    #[test]
+    fn render_hides_inline_markers_off_cursor_and_reveals_on_marker_boundaries() {
+        let mut ctx = RenderContext::new();
+        let hidden = ctx.render_line_window_with_reminder_cursor(
+            "**bold**",
+            8,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            None,
+        );
+        let hidden_visible = strip_ansi(&hidden);
+        assert!(hidden_visible.starts_with("bold"));
+        assert!(!hidden_visible.contains('*'));
+
+        let reveal_open = ctx.render_line_window_with_reminder_cursor(
+            "**bold**",
+            8,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            Some(1),
+        );
+        assert_eq!(strip_ansi(&reveal_open), "**bold**");
+
+        let reveal_close = ctx.render_line_window_with_reminder_cursor(
+            "**bold**",
+            8,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            Some(6),
+        );
+        assert_eq!(strip_ansi(&reveal_close), "**bold**");
+    }
+
+    #[test]
+    fn render_hides_heading_marker_off_cursor_line_and_reveals_on_active_line() {
+        let mut ctx = RenderContext::new();
+        let hidden = ctx.render_line_window_with_reminder_cursor(
+            "# Heading",
+            9,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            None,
+        );
+        let hidden_visible = strip_ansi(&hidden);
+        assert!(hidden_visible.starts_with("Heading"));
+        assert!(!hidden_visible.contains('#'));
+
+        let revealed = ctx.render_line_window_with_reminder_cursor(
+            "# Heading",
+            9,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            Some(0),
+        );
+        assert_eq!(strip_ansi(&revealed), "# Heading");
+    }
+
+    #[test]
+    fn render_reveals_only_active_inline_component_on_cursor_line() {
+        let mut ctx = RenderContext::new();
+
+        let reveal_strong = ctx.render_line_window_with_reminder_cursor(
+            "**bold** and `code`",
+            32,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            Some(3),
+        );
+        let strong_visible = strip_ansi(&reveal_strong);
+        assert!(strong_visible.starts_with("**bold** and code"));
+        assert!(!strong_visible.contains("`code`"));
+
+        let reveal_code = ctx.render_line_window_with_reminder_cursor(
+            "**bold** and `code`",
+            32,
+            0,
+            None,
+            None,
+            false,
+            &[],
+            &[],
+            &[],
+            Some(14),
+        );
+        let code_visible = strip_ansi(&reveal_code);
+        assert!(code_visible.starts_with("bold and `code`"));
+        assert!(!code_visible.contains("**bold**"));
+    }
+
+    #[test]
+    fn collapse_markdown_line_for_cursor_removes_hidden_marker_gaps_and_maps_cursor() {
+        let (collapsed, mapped_col) = collapse_markdown_line_for_cursor("`code` tail **bold**", 10);
+        assert_eq!(collapsed, "code tail bold");
+        assert_eq!(mapped_col, 8);
+    }
+
+    #[test]
+    fn collapse_markdown_line_for_cursor_does_not_collapse_mid_word_underscores() {
+        let (collapsed, mapped_col) = collapse_markdown_line_for_cursor("this_Is_my_Word", 7);
+        assert_eq!(collapsed, "this_Is_my_Word");
+        assert_eq!(mapped_col, 7);
     }
 
     fn strip_ansi(s: &str) -> String {
