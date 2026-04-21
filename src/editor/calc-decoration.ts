@@ -41,6 +41,11 @@ import {
   calcFormatFormulaDisplayValue,
   calcLineUsesAssignmentPrefix,
 } from "./wasm.ts";
+import {
+  editorProfilerNowMs,
+  isEditorProfilerEnabled,
+  recordEditorProfilerSample,
+} from "../perf/editor-profiler.ts";
 
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
@@ -542,12 +547,60 @@ function buildCalcDecorations(view: EditorView): DecorationSet {
   return buildCalcDecorationsForSpans(view.state, expandedCalcVisibleSpans(view));
 }
 
+interface CalcDecorationBuildMetrics extends Record<string, number> {
+  spanCount: number;
+  lineCount: number;
+  totalChars: number;
+  maxLineLength: number;
+}
+
+function calcDecorationBuildMetrics(view: EditorView): CalcDecorationBuildMetrics {
+  const doc = view.state.doc;
+  const spans = expandedCalcVisibleSpans(view);
+  let lineCount = 0;
+  let totalChars = 0;
+  let maxLineLength = 0;
+
+  for (const span of spans) {
+    const fromLine = Math.max(1, span.fromLine);
+    const toLine = Math.min(doc.lines, span.toLine);
+    if (fromLine > toLine) continue;
+    for (let lineNo = fromLine; lineNo <= toLine; lineNo++) {
+      const text = doc.line(lineNo).text;
+      lineCount += 1;
+      totalChars += text.length;
+      if (text.length > maxLineLength) maxLineLength = text.length;
+    }
+  }
+
+  return {
+    spanCount: spans.length,
+    lineCount,
+    totalChars,
+    maxLineLength,
+  };
+}
+
+function calcDecorationRebuildReason(
+  update: ViewUpdate,
+  resultsChanged: boolean,
+  cellsChanged: boolean,
+): string {
+  const reasons: string[] = [];
+  if (resultsChanged) reasons.push("resultsChanged");
+  if (cellsChanged) reasons.push("cellsChanged");
+  if (update.docChanged) reasons.push("docChanged");
+  if (update.selectionSet) reasons.push("selectionSet");
+  if (update.viewportChanged) reasons.push("viewportChanged");
+  return reasons.length > 0 ? reasons.join("+") : "unspecified";
+}
+
 const calcDecorationsPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = this.safeBuild(view, Decoration.none);
+      this.decorations = this.safeBuild(view, Decoration.none, "init");
     }
 
     update(update: ViewUpdate) {
@@ -566,14 +619,43 @@ const calcDecorationsPlugin = ViewPlugin.fromClass(
         return;
       }
 
-      this.decorations = this.safeBuild(update.view, this.decorations);
+      this.decorations = this.safeBuild(
+        update.view,
+        this.decorations,
+        calcDecorationRebuildReason(update, resultsChanged, cellsChanged),
+      );
     }
 
-    private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {
+    private safeBuild(
+      view: EditorView,
+      fallback: DecorationSet,
+      reason: string,
+    ): DecorationSet {
+      const profilingEnabled = isEditorProfilerEnabled();
+      const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
+      const metrics = profilingEnabled ? calcDecorationBuildMetrics(view) : null;
       try {
-        return buildCalcDecorations(view);
+        const next = buildCalcDecorations(view);
+        if (profilingEnabled) {
+          recordEditorProfilerSample(
+            "calc.decorations.safeBuild",
+            editorProfilerNowMs() - startedAt,
+            {
+              reason,
+              metrics,
+            },
+          );
+        }
+        return next;
       } catch (error) {
         console.error("Calc decoration build failed:", error);
+        if (profilingEnabled) {
+          recordEditorProfilerSample(
+            "calc.decorations.safeBuild",
+            editorProfilerNowMs() - startedAt,
+            { reason: `${reason}_error` },
+          );
+        }
         return fallback;
       }
     }

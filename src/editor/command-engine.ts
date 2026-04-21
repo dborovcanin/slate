@@ -18,6 +18,10 @@ import { formatMarkdownTextAsync } from "./markdown-format.ts";
 import { state } from "../state.ts";
 import { applyReminderDelete, applyReminderUpsert } from "./notify-decoration.ts";
 import { executeFoldCommand } from "./folding.ts";
+import {
+  listEditorProfilerCommandSuggestions,
+  tryExecuteEditorProfilerCommand,
+} from "../perf/editor-profiler.ts";
 
 export type { CommandMode, CommandSuggestion };
 
@@ -141,7 +145,12 @@ async function copyText(text: string) {
 }
 
 export function listCommandSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
-  return listCoreCommandSuggestions(mode, rawInput);
+  const core = listCoreCommandSuggestions(mode, rawInput);
+  const profiler = listEditorProfilerCommandSuggestions(rawInput);
+  if (profiler.length === 0) return core;
+  const seen = new Set(core.map((entry) => entry.value));
+  const extra = profiler.filter((entry) => !seen.has(entry.value));
+  return [...extra, ...core];
 }
 
 export async function executeCommand(
@@ -149,6 +158,9 @@ export async function executeCommand(
   rawInput: string,
   options: CommandExecutionOptions,
 ): Promise<string> {
+  const profilerMessage = tryExecuteEditorProfilerCommand(rawInput);
+  if (profilerMessage !== null) return profilerMessage;
+
   const snapshot = snapshotFromView(view);
   if (options.selectionOverride) {
     snapshot.selection = {

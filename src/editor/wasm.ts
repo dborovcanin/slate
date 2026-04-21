@@ -52,6 +52,12 @@ import type {
   EditorContextSnapshot,
 } from "./core/types.ts";
 import { startupMark } from "../perf/startup.ts";
+import {
+  editorProfilerNowMs,
+  isEditorProfilerEnabled,
+  recordEditorProfilerSample,
+  type EditorProfilerMetrics,
+} from "../perf/editor-profiler.ts";
 
 // Initialize non-blocking in the browser to avoid delaying first paint.
 // In Node.js tests we can call ensureWasmReady() up front.
@@ -856,6 +862,30 @@ function asMarkdownFoldRanges(value: unknown): MarkdownFoldRange[] {
   return out;
 }
 
+function singleLinePayloadMetrics(lineText: string): EditorProfilerMetrics {
+  const len = lineText.length;
+  return {
+    lineCount: 1,
+    totalChars: len,
+    maxLineLength: len,
+  };
+}
+
+function lineArrayPayloadMetrics(lines: readonly string[]): EditorProfilerMetrics {
+  let totalChars = 0;
+  let maxLineLength = 0;
+  for (const line of lines) {
+    const len = line.length;
+    totalChars += len;
+    if (len > maxLineLength) maxLineLength = len;
+  }
+  return {
+    lineCount: lines.length,
+    totalChars,
+    maxLineLength,
+  };
+}
+
 export function markdownClassifyLine(lineText: string): MarkdownLineInfo {
   if (!ensureWasmReadyNonBlocking()) return DEFAULT_MARKDOWN_LINE_INFO;
   const value = wasm_markdown_classify_line(lineText) as unknown;
@@ -871,9 +901,22 @@ export function markdownInlineMarkerComponentRanges(
   lineText: string,
 ): MarkdownInlineMarkerComponentRange[] {
   if (!ensureWasmReadyNonBlocking()) return [];
-  return asMarkdownInlineMarkerComponentRanges(
+  const profiling = isEditorProfilerEnabled();
+  const startedAt = profiling ? editorProfilerNowMs() : 0;
+  const result = asMarkdownInlineMarkerComponentRanges(
     wasm_markdown_inline_marker_component_ranges(lineText),
   );
+  if (profiling) {
+    recordEditorProfilerSample(
+      "wasm.markdownInlineMarkerComponentRanges",
+      editorProfilerNowMs() - startedAt,
+      {
+        reason: "sync",
+        metrics: singleLinePayloadMetrics(lineText),
+      },
+    );
+  }
+  return result;
 }
 
 export function markdownTokenizeCodeLine(
@@ -898,8 +941,12 @@ export function markdownAnalyzeLines(
   lines: readonly string[],
   start: { inCodeBlock: boolean; codeFenceLang: string | null },
 ): MarkdownAnalyzeResult {
+  const profiling = isEditorProfilerEnabled();
+  const startedAt = profiling ? editorProfilerNowMs() : 0;
+  const metrics = profiling ? lineArrayPayloadMetrics(lines) : null;
+
   if (!ensureWasmReadyNonBlocking()) {
-    return {
+    const fallback: MarkdownAnalyzeResult = {
       lines: lines.map(() => ({
         info: DEFAULT_MARKDOWN_LINE_INFO,
         inCodeBlock: start.inCodeBlock,
@@ -910,6 +957,17 @@ export function markdownAnalyzeLines(
       finalInCodeBlock: start.inCodeBlock,
       finalCodeFenceLang: start.codeFenceLang,
     };
+    if (profiling) {
+      recordEditorProfilerSample(
+        "wasm.markdownAnalyzeLines",
+        editorProfilerNowMs() - startedAt,
+        {
+          reason: "sync_wasm_not_ready",
+          metrics,
+        },
+      );
+    }
+    return fallback;
   }
 
   const raw = wasm_markdown_analyze_lines(
@@ -919,11 +977,22 @@ export function markdownAnalyzeLines(
   ) as unknown;
 
   if (typeof raw !== "object" || raw === null) {
-    return {
+    const fallback: MarkdownAnalyzeResult = {
       lines: [],
       finalInCodeBlock: start.inCodeBlock,
       finalCodeFenceLang: start.codeFenceLang,
     };
+    if (profiling) {
+      recordEditorProfilerSample(
+        "wasm.markdownAnalyzeLines",
+        editorProfilerNowMs() - startedAt,
+        {
+          reason: "sync_invalid_payload",
+          metrics,
+        },
+      );
+    }
+    return fallback;
   }
 
   const payload = raw as Partial<MarkdownAnalyzeResult>;
@@ -945,7 +1014,7 @@ export function markdownAnalyzeLines(
     }
   }
 
-  return {
+  const out: MarkdownAnalyzeResult = {
     lines: outLines,
     finalInCodeBlock:
       typeof payload.finalInCodeBlock === "boolean"
@@ -954,6 +1023,17 @@ export function markdownAnalyzeLines(
     finalCodeFenceLang:
       typeof payload.finalCodeFenceLang === "string" ? payload.finalCodeFenceLang : null,
   };
+  if (profiling) {
+    recordEditorProfilerSample(
+      "wasm.markdownAnalyzeLines",
+      editorProfilerNowMs() - startedAt,
+      {
+        reason: "sync",
+        metrics,
+      },
+    );
+  }
+  return out;
 }
 
 export function markdownBuildFoldRangesUi(
@@ -987,9 +1067,22 @@ export function calcFindTableFormulaSegment(lineText: string): TableFormulaSegme
 
 export function calcFindTableFormulaSegments(lineText: string): TableFormulaSegment[] {
   if (!ensureWasmReadyNonBlocking()) return [];
-  return (
+  const profiling = isEditorProfilerEnabled();
+  const startedAt = profiling ? editorProfilerNowMs() : 0;
+  const result = (
     wasm_calc_find_table_formula_segments(lineText) as TableFormulaSegment[] | null | undefined
   ) ?? [];
+  if (profiling) {
+    recordEditorProfilerSample(
+      "wasm.calcFindTableFormulaSegments",
+      editorProfilerNowMs() - startedAt,
+      {
+        reason: "sync",
+        metrics: singleLinePayloadMetrics(lineText),
+      },
+    );
+  }
+  return result;
 }
 
 export function calcLineForEvaluation(lineText: string): string {

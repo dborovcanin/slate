@@ -15,6 +15,11 @@ import {
   type MarkdownInlineToken as SharedInlineToken,
   type MarkdownLineInfo as SharedMarkdownLineInfo,
 } from "./wasm.ts";
+import {
+  editorProfilerNowMs,
+  isEditorProfilerEnabled,
+  recordEditorProfilerSample,
+} from "../perf/editor-profiler.ts";
 
 type InlineToken = SharedInlineToken;
 type CodeToken = SharedCodeToken;
@@ -34,6 +39,7 @@ const DEFAULT_FENCE_STATE: FenceState = {
 const VIEWPORT_MARGIN_LINES = 24;
 const HOTPATH_REBUILD_MARGIN_LINES = 8;
 const FENCE_CHECKPOINT_INTERVAL = 256;
+const INLINE_MARKER_RANGE_CACHE_LIMIT = 1024;
 
 const decHeadingToken = Decoration.mark({ class: "md-token md-token-heading" });
 const decQuoteToken = Decoration.mark({ class: "md-token md-token-quote" });
@@ -188,6 +194,35 @@ export function classifyMarkdownLine(text: string): MarkdownLineInfo {
 
 export function findInlineMarkdownTokens(text: string): InlineToken[] {
   return markdownFindInlineTokens(text);
+}
+
+const inlineMarkerRangeCache = new Map<string, InlineMarkerComponentRange[]>();
+
+function cachedInlineMarkerComponentRanges(
+  lineText: string,
+  profiling?: MarkdownBuildProfiling,
+): InlineMarkerComponentRange[] {
+  const startedAt = profiling ? editorProfilerNowMs() : 0;
+  const cached = inlineMarkerRangeCache.get(lineText);
+  if (cached) {
+    if (profiling) {
+      profiling.inlineMarkerRangeMs += editorProfilerNowMs() - startedAt;
+    }
+    return cached;
+  }
+
+  const computed = markdownInlineMarkerComponentRanges(lineText);
+  inlineMarkerRangeCache.set(lineText, computed);
+  if (inlineMarkerRangeCache.size > INLINE_MARKER_RANGE_CACHE_LIMIT) {
+    const oldest = inlineMarkerRangeCache.keys().next().value;
+    if (typeof oldest === "string") {
+      inlineMarkerRangeCache.delete(oldest);
+    }
+  }
+  if (profiling) {
+    profiling.inlineMarkerRangeMs += editorProfilerNowMs() - startedAt;
+  }
+  return computed;
 }
 
 function addCodeSyntaxDecorations(
@@ -377,9 +412,30 @@ interface ActiveSelection {
   empty: boolean;
 }
 
+interface MarkdownBuildProfiling {
+  spanCount: number;
+  lineCount: number;
+  totalChars: number;
+  maxLineLength: number;
+  analyzeLinesMs: number;
+  inlineMarkerRangeMs: number;
+}
+
+function createMarkdownBuildProfiling(): MarkdownBuildProfiling {
+  return {
+    spanCount: 0,
+    lineCount: 0,
+    totalChars: 0,
+    maxLineLength: 0,
+    analyzeLinesMs: 0,
+    inlineMarkerRangeMs: 0,
+  };
+}
+
 export interface MarkdownDecorationBuildOptions {
   getFenceStateBeforeLine?: (lineNumber: number) => FenceState;
   variableMatcher?: VariableMatcher;
+  profiling?: MarkdownBuildProfiling;
 }
 
 class VariableMatcherCache {
@@ -487,6 +543,7 @@ export function buildMarkdownDecorationsForSpans(
 ): DecorationSet {
   if (spans.length === 0) return Decoration.none;
 
+  const profiling = options.profiling;
   const sortedSpans = [...spans].sort(
     (a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine,
   );
@@ -497,15 +554,28 @@ export function buildMarkdownDecorationsForSpans(
     const fromLine = Math.max(1, span.fromLine);
     const toLine = Math.min(doc.lines, span.toLine);
     if (fromLine > toLine) continue;
+    if (profiling) profiling.spanCount += 1;
 
     const chunkLines: string[] = [];
     for (let lineNo = fromLine; lineNo <= toLine; lineNo++) {
-      chunkLines.push(doc.line(lineNo).text);
+      const text = doc.line(lineNo).text;
+      chunkLines.push(text);
+      if (profiling) {
+        profiling.lineCount += 1;
+        profiling.totalChars += text.length;
+        if (text.length > profiling.maxLineLength) {
+          profiling.maxLineLength = text.length;
+        }
+      }
     }
     const fenceState = options.getFenceStateBeforeLine
       ? cloneFenceState(options.getFenceStateBeforeLine(fromLine))
       : fallbackFenceStateBeforeLine(doc, fromLine);
+    const analyzeStartedAt = profiling ? editorProfilerNowMs() : 0;
     const analysis = markdownAnalyzeLines(chunkLines, fenceState);
+    if (profiling) {
+      profiling.analyzeLinesMs += editorProfilerNowMs() - analyzeStartedAt;
+    }
 
     for (let idx = 0; idx < analysis.lines.length; idx++) {
       const lineNo = fromLine + idx;
@@ -534,6 +604,7 @@ export function buildMarkdownDecorationsForSpans(
         matcher,
         lineAnalysis.inlineTokens,
         activeSelection,
+        profiling,
       );
     }
   }
@@ -574,6 +645,7 @@ function buildMarkdownDecorations(
   fenceCache: FenceCheckpointCache,
   matcherCache: VariableMatcherCache,
   marginLines = VIEWPORT_MARGIN_LINES,
+  profiling?: MarkdownBuildProfiling,
 ): DecorationSet {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
@@ -588,6 +660,7 @@ function buildMarkdownDecorations(
     getFenceStateBeforeLine: (lineNumber) =>
       fenceCache.getStateBeforeLine(doc, lineNumber),
     variableMatcher: matcher,
+    profiling,
   });
 }
 
@@ -699,7 +772,16 @@ function inlineRevealComponentSignatureForCursor(
   lineText: string,
   cursorOffsetInLine: number,
 ): string {
-  const ranges = markdownInlineMarkerComponentRanges(lineText);
+  if (
+    !lineText.includes("*")
+    && !lineText.includes("_")
+    && !lineText.includes("`")
+    && !lineText.includes("[")
+    && !lineText.includes("~")
+  ) {
+    return "";
+  }
+  const ranges = cachedInlineMarkerComponentRanges(lineText);
   for (const range of ranges) {
     const signature = `${range.from}-${range.to}`;
     if (cursorOffsetInLine >= range.from && cursorOffsetInLine < range.to) {
@@ -733,6 +815,7 @@ function decorateContentLine(
   matcher: VariableMatcher,
   inlineTokens: readonly InlineToken[],
   activeSelection?: ActiveSelection,
+  profiling?: MarkdownBuildProfiling,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
 
@@ -853,7 +936,7 @@ function decorateContentLine(
       decoration: decVariable,
     });
   }
-  const inlineMarkerComponentRanges = markdownInlineMarkerComponentRanges(line.text);
+  const inlineMarkerComponentRanges = cachedInlineMarkerComponentRanges(line.text, profiling);
   for (const inline of collectInlineDecorations(
     line.from,
     inlineTokens,
@@ -907,6 +990,14 @@ function allChangesBelowViewport(update: ViewUpdate): boolean {
   return earliestChangedPos(update) > endPos;
 }
 
+function changedRangeCount(update: ViewUpdate): number {
+  let count = 0;
+  update.changes.iterChangedRanges(() => {
+    count += 1;
+  });
+  return count;
+}
+
 const markdownRichPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
@@ -916,7 +1007,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     private pendingRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(view: EditorView) {
-      this.decorations = this.safeBuild(view, Decoration.none, VIEWPORT_MARGIN_LINES);
+      this.decorations = this.safeBuild(view, Decoration.none, VIEWPORT_MARGIN_LINES, "init");
       void ensureWasmReady()
         .then(() => {
           if (this.destroyed) return;
@@ -948,6 +1039,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           update.view,
           this.decorations,
           VIEWPORT_MARGIN_LINES,
+          "init",
         );
         return;
       }
@@ -961,6 +1053,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           update.view,
           this.decorations,
           HOTPATH_REBUILD_MARGIN_LINES,
+          "docChanged_deferred",
         );
         return;
       }
@@ -974,10 +1067,12 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       const varsChanged = prevVars !== nextVars;
 
       if (varsChanged || update.viewportChanged) {
+        const reason = varsChanged ? "varsChanged" : "viewportChanged";
         this.decorations = this.safeBuild(
           update.view,
           this.decorations,
           VIEWPORT_MARGIN_LINES,
+          reason,
         );
         return;
       }
@@ -1011,6 +1106,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           update.view,
           this.decorations,
           HOTPATH_REBUILD_MARGIN_LINES,
+          "selectionSet",
         );
         return;
       }
@@ -1022,24 +1118,73 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       if (allChangesBelowViewport(update)) return;
       // Keep typing responsive by mapping existing decorations immediately
       // and coalescing an actual rebuild after input settles.
+      const profiling = isEditorProfilerEnabled();
+      const startedAt = profiling ? editorProfilerNowMs() : 0;
       this.decorations = this.decorations.map(update.changes);
       this.scheduleDeferredRefresh(update.view);
+      if (profiling) {
+        recordEditorProfilerSample(
+          "markdown.decorations.rebuildTrigger",
+          editorProfilerNowMs() - startedAt,
+          {
+            reason: "docChanged_immediate",
+            metrics: {
+              changedRanges: changedRangeCount(update),
+            },
+          },
+        );
+      }
     }
 
     private safeBuild(
       view: EditorView,
       fallback: DecorationSet,
       marginLines: number,
+      reason: string,
     ): DecorationSet {
+      const profilingEnabled = isEditorProfilerEnabled();
+      const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
+      const profiling = profilingEnabled ? createMarkdownBuildProfiling() : undefined;
       try {
-        return buildMarkdownDecorations(
+        const next = buildMarkdownDecorations(
           view,
           this.fenceCache,
           this.matcherCache,
           marginLines,
+          profiling,
         );
+        if (profilingEnabled) {
+          const durationMs = editorProfilerNowMs() - startedAt;
+          const analyzeMs = profiling?.analyzeLinesMs ?? 0;
+          const inlineMarkerRangeMs = profiling?.inlineMarkerRangeMs ?? 0;
+          const decorationAssemblyMs = Math.max(
+            0,
+            durationMs - analyzeMs - inlineMarkerRangeMs,
+          );
+          recordEditorProfilerSample("markdown.decorations.safeBuild", durationMs, {
+            reason,
+            metrics: {
+              marginLines,
+              spanCount: profiling?.spanCount ?? 0,
+              lineCount: profiling?.lineCount ?? 0,
+              totalChars: profiling?.totalChars ?? 0,
+              maxLineLength: profiling?.maxLineLength ?? 0,
+              analyzeLinesMs: analyzeMs,
+              inlineMarkerRangeMs,
+              decorationAssemblyMs,
+            },
+          });
+        }
+        return next;
       } catch (error) {
         console.error("Markdown decoration build failed:", error);
+        if (profilingEnabled) {
+          recordEditorProfilerSample(
+            "markdown.decorations.safeBuild",
+            editorProfilerNowMs() - startedAt,
+            { reason: `${reason}_error` },
+          );
+        }
         return fallback;
       }
     }

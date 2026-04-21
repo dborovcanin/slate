@@ -204,10 +204,38 @@ function scheduleIdle(fn: () => void): IdleHandle {
   return { cancel: () => clearTimeout(id) };
 }
 
+// Fold ranges only need full rebuild when a changed line crosses structural classes
+// (empty/heading/fence/list/table/rule/paragraph) or when line breaks are inserted/removed.
+function foldStructuralSignature(lineText: string): string {
+  const trimmed = lineText.trim();
+  if (trimmed.length === 0) return "empty";
+
+  const heading = /^(#{1,6})\s+/.exec(trimmed);
+  if (heading) return `heading-${heading[1]?.length ?? 1}`;
+  if (/^```/.test(trimmed)) return "fence";
+  if (/^(?:->|[-*+]|\d+\.)\s+/.test(trimmed)) return "list";
+  if (/^\|.*\|$/.test(trimmed)) return "table";
+  if (/^(?:[-*_]\s*){3,}$/.test(trimmed)) return "rule";
+  return "paragraph";
+}
+
 function editMightAffectFolds(update: ViewUpdate): boolean {
-  // Paragraph/list/table boundaries can change when a line turns empty/non-empty
-  // or when list/table markers are edited, so any document edit may affect folds.
-  return update.docChanged;
+  let might = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (might) return;
+
+    const deleted = toA > fromA ? update.startState.doc.sliceString(fromA, toA) : "";
+    const inserted = toB > fromB ? update.state.doc.sliceString(fromB, toB) : "";
+    if (deleted.includes("\n") || inserted.includes("\n")) {
+      might = true;
+      return;
+    }
+
+    const beforeLine = update.startState.doc.lineAt(fromA).text;
+    const afterLine = update.state.doc.lineAt(fromB).text;
+    might = foldStructuralSignature(beforeLine) !== foldStructuralSignature(afterLine);
+  });
+  return might;
 }
 
 const foldAnalyzerPlugin = ViewPlugin.define((view) => {

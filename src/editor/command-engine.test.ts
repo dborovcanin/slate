@@ -8,6 +8,12 @@ before(async () => { await ensureWasmReady(); });
 test("editor mode exposes only editing commands", async () => {
   const values = listCommandSuggestions("editor", "").map((entry) => entry.value);
   assert.deepEqual(values, [
+    "perf status",
+    "perf on",
+    "perf off",
+    "perf dump",
+    "perf where",
+    "perf clear",
     "sum",
     "sum list",
     "sum row",
