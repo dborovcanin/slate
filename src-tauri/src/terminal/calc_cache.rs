@@ -13,20 +13,3 @@ pub struct CalcCache {
     pub cached_has_builtin_formula: bool,
     pub cached_has_variable_assignment: bool,
 }
-
-impl CalcCache {
-    pub fn empty(engine: CalcEngine, line_count: usize) -> Self {
-        Self {
-            engine,
-            results: vec![None; line_count],
-            cell_results: vec![Vec::new(); line_count],
-            variable_names: Vec::new(),
-            prev_line_hashes: Vec::new(),
-            prev_line_has_assignment: Vec::new(),
-            prev_line_has_builtin_formula: Vec::new(),
-            stale: true,
-            cached_has_builtin_formula: false,
-            cached_has_variable_assignment: false,
-        }
-    }
-}

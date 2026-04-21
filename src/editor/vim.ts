@@ -1052,13 +1052,14 @@ export function vimModeExtension(options: VimOptions = {}) {
 
       const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
       if (activeMode === "normal" && plain) {
+        const plainKey = event.key.toLowerCase();
         if (pendingFoldPrefixUntilMs > 0) {
           pendingFoldPrefixUntilMs = 0;
-          if (event.key === "a") {
+          if (plainKey === "a") {
             event.preventDefault();
             return toggleFoldAtCursor(view);
           }
-        } else if (event.key === "z") {
+        } else if (plainKey === "z") {
           event.preventDefault();
           pendingFoldPrefixUntilMs = now + 900;
           return true;

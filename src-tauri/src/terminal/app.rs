@@ -2,7 +2,7 @@ use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, goto, pad_right, AnsiS
 use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::{self, DatePickerAction, DatePickerView};
-use super::folding::{self, FoldKind, FoldRange};
+use super::folding::{self, FoldKind};
 use super::folding_state::FoldingState;
 use super::history::LineHistory;
 use super::input::{self, Key, TerminalGuard};
