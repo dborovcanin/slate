@@ -1,9 +1,29 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoteModules {
+    pub math: bool,
+    pub table: bool,
+    pub variables: bool,
+    pub style: bool,
+}
+
+impl Default for NoteModules {
+    fn default() -> Self {
+        Self {
+            math: true,
+            table: true,
+            variables: true,
+            style: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,
     pub body: String,
+    pub modules: NoteModules,
     pub created_at: String,
     pub updated_at: String,
 }

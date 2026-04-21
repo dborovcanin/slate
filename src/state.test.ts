@@ -7,6 +7,12 @@ function note(id: string, body: string, updatedAt: string): Note {
   return {
     id,
     body,
+    modules: {
+      math: true,
+      table: true,
+      variables: true,
+      style: true,
+    },
     created_at: "2026-01-01T00:00:00Z",
     updated_at: updatedAt,
   };

@@ -69,6 +69,18 @@ html, body {
   letter-spacing: 0.02em;
 }
 
+.status-modules {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--fg-dim);
+  background: var(--bg-overlay);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .toast {
   position: fixed;
   bottom: 40px;

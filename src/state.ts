@@ -1,4 +1,4 @@
-import type { Note, NoteSummary } from "./api";
+import type { Note, NoteModules, NoteSummary } from "./api";
 
 export type EventType = "note-changed" | "notes-updated";
 type Listener = (event: EventType) => void;
@@ -47,6 +47,13 @@ export class AppState {
 
   setActiveNote(note: Note) {
     this._activeNote = note;
+    this.emit("note-changed");
+  }
+
+  updateActiveNoteModules(modules: NoteModules) {
+    const active = this._activeNote;
+    if (!active) return;
+    this._activeNote = { ...active, modules: { ...modules } };
     this.emit("note-changed");
   }
 

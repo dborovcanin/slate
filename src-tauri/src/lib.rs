@@ -60,6 +60,7 @@ fn run_gui() -> Result<(), String> {
             commands::notes::list_notes_meta,
             commands::notes::get_note_meta,
             commands::notes::delete_note,
+            commands::notes::set_note_modules,
             commands::reminders::list_note_reminders,
             commands::reminders::upsert_note_reminder,
             commands::reminders::delete_note_reminder,

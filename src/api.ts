@@ -1,8 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 
+export interface NoteModules {
+  math: boolean;
+  table: boolean;
+  variables: boolean;
+  style: boolean;
+}
+
 export interface Note {
   id: string;
   body: string;
+  modules: NoteModules;
   created_at: string;
   updated_at: string;
 }
@@ -40,6 +48,7 @@ export interface ThemeConfig {
   date_time_format: string;
   variables_enabled: boolean;
   variables_autocomplete_min_chars: number;
+  default_modules: NoteModules;
 }
 
 export interface RuntimeFlags {
@@ -68,6 +77,12 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   date_time_format: "%Y-%m-%d %H:%M",
   variables_enabled: true,
   variables_autocomplete_min_chars: 3,
+  default_modules: {
+    math: true,
+    table: true,
+    variables: true,
+    style: true,
+  },
 };
 
 export const DEFAULT_RUNTIME_FLAGS: RuntimeFlags = {
@@ -134,6 +149,10 @@ export function getNoteMeta(id: string): Promise<NoteSummary | null> {
 
 export function deleteNote(id: string): Promise<boolean> {
   return invoke<boolean>("delete_note", { id });
+}
+
+export function setNoteModules(id: string, modules: NoteModules): Promise<Note> {
+  return invoke<Note>("set_note_modules", { id, modules });
 }
 
 export function listNoteReminders(noteId: string): Promise<NoteReminder[]> {

@@ -14,7 +14,11 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Shared command panel in both Vim and non-Vim modes
   - Vim mode: open with `:`
   - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
-  - Built-in commands: `sum`, `sum list`, `sum row`, `sum column`, `sum doc`, `avg`, `avg list`, `avg row`, `avg column`, `avg doc`, `date`, `format`, `clip-watch`, `clip-watch-stop`, `clist`, `ulist`, `olist`
+  - Built-in commands: `sum`, `sum list`, `sum row`, `sum column`, `sum doc`, `avg`, `avg list`, `avg row`, `avg column`, `avg doc`, `date`, `format`, `clip-watch`, `clip-watch-stop`, `clist`, `ulist`, `olist`, `module status`, `module on <math|table|variables|style>`, `module off <math|table|variables|style>`, `module toggle <math|table|variables|style>`
+- Per-note modules (`math`, `table`, `variables`, `style`)
+  - New notes start with defaults from `[editor.modules]` in config
+  - Module state is saved with each note and restored when that note is opened
+  - Status bar shows loaded modules (chip similar to clip-watch indicator)
 - Modular editor core (`src/editor/core`): snapshot-based context + operation-based command/rule engine, designed for GUI/terminal parity
 - Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
 - Checklist markdown (`- [ ]`, `- [x]`) gets dedicated visual styling (`☐` / crossed `☒` + done-item strike style)
@@ -40,7 +44,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Folding: `za` toggles fold at cursor (GUI headings/code fences)
-- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:q`
+- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:q`
 - `:sum` and `:avg` compute from the selected scope, insert only `<value>` at cursor/selection, and copy the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 
@@ -290,6 +294,12 @@ date_format = "%Y-%m-%d"
 enabled = true
 autocomplete_min_chars = 3
 
+[editor.modules]
+math = true
+table = true
+variables = true
+style = true
+
 [special_notes]
 email_note_prefix = "inbox-email"
 email_rotation = "daily-local"
@@ -351,6 +361,18 @@ Editor options:
 Variable options:
 - `[editor.variables] enabled = true` turns note-local variable resolution/autocomplete on or off
 - `[editor.variables] autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
+
+Module defaults for new notes:
+- `[editor.modules] math = true` enables calc ghost/evaluation module
+- `[editor.modules] table = true` enables markdown table navigation/editing module
+- `[editor.modules] variables = true` enables variable features module
+- `[editor.modules] style = true` enables markdown styling/list helpers module
+
+Per-note module commands:
+- `:module status` shows current note module state
+- `:module on <math|table|variables|style>` enables one module for the active note
+- `:module off <math|table|variables|style>` disables one module for the active note
+- `:module toggle <math|table|variables|style>` toggles one module for the active note
 
 Special notes options:
 - `[special_notes] email_note_prefix` controls daily email note ids (default `inbox-email`)

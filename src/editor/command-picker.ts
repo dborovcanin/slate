@@ -3,6 +3,7 @@ import { executeCommand, listCommandSuggestions, type CommandMode, type CommandS
 import { CommandHistoryNavigator, rememberCommand } from "./command-history.ts";
 import { insertAtSelection } from "./editor-utils";
 import { createListOverlay, type ListOverlay, type ListOverlayState } from "../overlays/overlay.ts";
+import type { NoteModules } from "../api.ts";
 
 interface CommandPickerOptions {
   mode: CommandMode;
@@ -11,6 +12,8 @@ interface CommandPickerOptions {
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
+  getNoteModules?: () => NoteModules | null;
+  setNoteModules?: (modules: NoteModules) => Promise<void> | void;
   source?: "vim-colon" | "shortcut";
   selectionOverride?: {
     anchor: number;
@@ -25,6 +28,8 @@ interface CommandModeExtensionOptions {
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
+  getNoteModules?: () => NoteModules | null;
+  setNoteModules?: (modules: NoteModules) => Promise<void> | void;
 }
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
@@ -110,6 +115,8 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         onExitCommand: options.onExitCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
+        getNoteModules: options.getNoteModules,
+        setNoteModules: options.setNoteModules,
         selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
@@ -223,6 +230,8 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         onExitCommand: options.onExitCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
+        getNoteModules: options.getNoteModules,
+        setNoteModules: options.setNoteModules,
         source: "shortcut",
       });
       return true;

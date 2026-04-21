@@ -1,6 +1,16 @@
-use app_core::storage::{Note, NoteSummary};
+use app_core::storage::{Note, NoteModules, NoteSummary};
 use app_core::AppCore;
 use tauri::State;
+
+fn default_note_modules_from_config() -> NoteModules {
+    let cfg = app_core::config::load_theme_config();
+    NoteModules {
+        math: cfg.default_modules.math,
+        table: cfg.default_modules.table,
+        variables: cfg.default_modules.variables,
+        style: cfg.default_modules.style,
+    }
+}
 
 #[tauri::command]
 pub fn get_or_create_note(core: State<'_, AppCore>) -> Result<Note, String> {
@@ -16,7 +26,9 @@ pub fn get_or_create_note(core: State<'_, AppCore>) -> Result<Note, String> {
         return Ok(note);
     }
     let id = ulid::Ulid::new().to_string();
-    core.db().save_note(&id, "")
+    core.db().save_note(&id, "")?;
+    core.db()
+        .set_note_modules(&id, default_note_modules_from_config())
 }
 
 #[tauri::command]
@@ -32,7 +44,9 @@ pub fn get_note(core: State<'_, AppCore>, id: String) -> Result<Option<Note>, St
 #[tauri::command]
 pub fn create_note(core: State<'_, AppCore>) -> Result<Note, String> {
     let id = ulid::Ulid::new().to_string();
-    core.db().save_note(&id, "")
+    core.db().save_note(&id, "")?;
+    core.db()
+        .set_note_modules(&id, default_note_modules_from_config())
 }
 
 #[tauri::command]
@@ -53,4 +67,13 @@ pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<Note
 #[tauri::command]
 pub fn delete_note(core: State<'_, AppCore>, id: String) -> Result<bool, String> {
     core.db().delete_note(&id)
+}
+
+#[tauri::command]
+pub fn set_note_modules(
+    core: State<'_, AppCore>,
+    id: String,
+    modules: NoteModules,
+) -> Result<Note, String> {
+    core.db().set_note_modules(&id, modules)
 }

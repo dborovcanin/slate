@@ -8,11 +8,16 @@ import {
   exportToFile,
   getThemeConfigOrDefault,
   getRuntimeFlagsOrDefault,
+  setNoteModules,
+  type Note,
+  type NoteModules,
+  type RuntimeFlags,
   type ThemeConfig,
   type NoteSummary,
 } from "./api";
 import {
   mountEditor,
+  reconfigureEditor,
   setEditorContent,
   focusEditor,
   flushSave,
@@ -45,9 +50,51 @@ function ensureSummaryIncludesActive(noteId: string, body: string, summaries: No
   ];
 }
 
+const DEFAULT_NOTE_MODULES: NoteModules = {
+  math: true,
+  table: true,
+  variables: true,
+  style: true,
+};
+
+function normalizeModules(modules: Partial<NoteModules> | null | undefined): NoteModules {
+  if (!modules) return { ...DEFAULT_NOTE_MODULES };
+  return {
+    math: modules.math ?? true,
+    table: modules.table ?? true,
+    variables: modules.variables ?? true,
+    style: modules.style ?? true,
+  };
+}
+
+function modulesForNote(note: Note | null, config: ThemeConfig): NoteModules {
+  return normalizeModules(note?.modules ?? config.default_modules);
+}
+
+function effectiveModules(modules: NoteModules, flags: RuntimeFlags): NoteModules {
+  return {
+    math: modules.math && !flags.calc_disable,
+    table: modules.table,
+    variables: modules.variables && !flags.autocomplete_disable,
+    style: modules.style && !flags.markdown_disable,
+  };
+}
+
+function moduleIndicatorText(modules: NoteModules): string {
+  const labels: string[] = [];
+  if (modules.math) labels.push("math");
+  if (modules.table) labels.push("table");
+  if (modules.variables) labels.push("variables");
+  if (modules.style) labels.push("style");
+  if (labels.length === 0) return "modules OFF";
+  return `modules ${labels.join(" ")}`;
+}
+
 const ACTIVE_NOTE_SYNC_INTERVAL_MS = 2500;
 let activeNoteSyncTimer: number | null = null;
 let activeNoteSyncInFlight = false;
+let appConfig: ThemeConfig | null = null;
+let appRuntimeFlags: RuntimeFlags | null = null;
 
 function applyNoteSummaries(summaries: NoteSummary[]) {
   const active = state.activeNote;
@@ -56,6 +103,57 @@ function applyNoteSummaries(summaries: NoteSummary[]) {
     return;
   }
   state.setNoteSummaries(ensureSummaryIncludesActive(active.id, active.body, summaries));
+}
+
+function editorOptionsForNote(note: Note | null) {
+  if (!appConfig || !appRuntimeFlags) {
+    throw new Error("Editor options requested before app config initialization");
+  }
+  const noteModules = modulesForNote(note, appConfig);
+  const loaded = effectiveModules(noteModules, appRuntimeFlags);
+  return {
+    plainTextMode: appRuntimeFlags.plain_text_mode,
+    detachBackend: appRuntimeFlags.backend_detach,
+    disableCalc: appRuntimeFlags.calc_disable || !loaded.math,
+    disableMarkdownDecorations: appRuntimeFlags.markdown_disable || !loaded.style,
+    disableFolding: appRuntimeFlags.folding_disable,
+    disableNotify: appRuntimeFlags.notify_disable,
+    disableAutocomplete: appRuntimeFlags.autocomplete_disable || !loaded.variables,
+    tableEnabled: loaded.table,
+    markdownAutoformat: appConfig.markdown_autoformat && loaded.style,
+    checklistAutoReorder: appConfig.checklist_auto_reorder && loaded.style,
+    formatOnSave: appConfig.format_on_save,
+    vimMode: !!appConfig.vim_mode,
+    dateFormat: appConfig.date_format,
+    dateTimeFormat: appConfig.date_time_format,
+    variablesEnabled: appConfig.variables_enabled && loaded.variables,
+    variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
+    onExitCommand: handleExitWindow,
+    onClipWatchStateChange: (active: boolean) => {
+      clipWatchActive = active;
+      updateStatusBar();
+    },
+    onClipWatchPaste: (text: string) => {
+      const suffix = text.includes("\n") ? " (multiline)" : "";
+      showToast(`clip-watch pasted${suffix}`);
+    },
+    getNoteModules: () =>
+      appConfig ? modulesForNote(state.activeNote, appConfig) : null,
+    setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),
+  };
+}
+
+function reconfigureEditorForNote(note: Note | null) {
+  if (!appConfig || !appRuntimeFlags) return;
+  reconfigureEditor(editorOptionsForNote(note));
+}
+
+async function persistActiveNoteModules(modules: NoteModules) {
+  const active = state.activeNote;
+  if (!active) throw new Error("No active note");
+  const saved = await setNoteModules(active.id, normalizeModules(modules));
+  state.setActiveNote(saved);
+  reconfigureEditorForNote(saved);
 }
 
 async function syncActiveNoteIfBackendChanged() {
@@ -83,6 +181,7 @@ async function syncActiveNoteIfBackendChanged() {
     }
     const sameBody = latest.body === active.body;
     state.setActiveNote(latest);
+    reconfigureEditorForNote(latest);
     if (!sameBody) {
       setEditorContent(latest.body, { forceStateReset: true });
       focusEditor();
@@ -116,6 +215,7 @@ async function switchToNote(id: string) {
   const note = await getNote(id);
   if (!note) return;
   state.setActiveNote(note);
+  reconfigureEditorForNote(note);
   setEditorContent(note.body, { forceStateReset: true });
   focusEditor();
 
@@ -133,6 +233,7 @@ async function handleCreateNote() {
   const note = await createNote();
   state.addNote(note);
   state.setActiveNote(note);
+  reconfigureEditorForNote(note);
   setEditorContent("");
   focusEditor();
 }
@@ -172,6 +273,7 @@ async function handleDeleteNoteById(noteId: string) {
     const note = await createNote();
     state.addNote(note);
     state.setActiveNote(note);
+    reconfigureEditorForNote(note);
     setEditorContent("");
     focusEditor();
   }
@@ -556,6 +658,27 @@ function updateStatusBar() {
   }
 
   const hintEl = statusMetaEl.querySelector(".status-bar-hint");
+  let modulesEl = statusMetaEl.querySelector(".status-modules") as HTMLElement | null;
+  if (appConfig && appRuntimeFlags) {
+    const loaded = effectiveModules(
+      modulesForNote(state.activeNote, appConfig),
+      appRuntimeFlags,
+    );
+    const textModules = moduleIndicatorText(loaded);
+    if (!modulesEl) {
+      modulesEl = document.createElement("span");
+      modulesEl.className = "status-modules";
+    }
+    modulesEl.textContent = textModules;
+    if (hintEl) {
+      statusMetaEl.insertBefore(modulesEl, hintEl);
+    } else {
+      statusMetaEl.appendChild(modulesEl);
+    }
+  } else if (modulesEl) {
+    modulesEl.remove();
+  }
+
   let watchEl = statusMetaEl.querySelector(".status-clip-watch") as HTMLElement | null;
   if (clipWatchActive) {
     if (!watchEl) {
@@ -590,37 +713,14 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
     getRuntimeFlagsOrDefault(),
   ]);
+  appConfig = config;
+  appRuntimeFlags = runtimeFlags;
   startupMark("ui_data_loaded");
   state.setActiveNote(note);
   applyNoteSummaries(summaries);
 
   createStatusBar(container);
-  mountEditor(editorEl, {
-    plainTextMode: runtimeFlags.plain_text_mode,
-    detachBackend: runtimeFlags.backend_detach,
-    disableCalc: runtimeFlags.calc_disable,
-    disableMarkdownDecorations: runtimeFlags.markdown_disable,
-    disableFolding: runtimeFlags.folding_disable,
-    disableNotify: runtimeFlags.notify_disable,
-    disableAutocomplete: runtimeFlags.autocomplete_disable,
-    markdownAutoformat: config.markdown_autoformat,
-    checklistAutoReorder: config.checklist_auto_reorder,
-    formatOnSave: config.format_on_save,
-    vimMode: !!config.vim_mode,
-    dateFormat: config.date_format,
-    dateTimeFormat: config.date_time_format,
-    variablesEnabled: config.variables_enabled,
-    variableAutocompleteMinChars: config.variables_autocomplete_min_chars,
-    onExitCommand: handleExitWindow,
-    onClipWatchStateChange: (active) => {
-      clipWatchActive = active;
-      updateStatusBar();
-    },
-    onClipWatchPaste: (text) => {
-      const suffix = text.includes("\n") ? " (multiline)" : "";
-      showToast(`clip-watch pasted${suffix}`);
-    },
-  });
+  mountEditor(editorEl, editorOptionsForNote(note));
   startupMark("ui_editor_mounted");
   setupKeyboardShortcuts();
 

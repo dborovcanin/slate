@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
     body TEXT NOT NULL DEFAULT '',
+    modules_json TEXT NOT NULL DEFAULT '{"math":true,"table":true,"variables":true,"style":true}',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

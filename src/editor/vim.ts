@@ -11,6 +11,7 @@ import {
 } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
+import type { NoteModules } from "../api.ts";
 import { toggleFoldAtCursor } from "./folding.ts";
 import {
   editorSearchHasMatches,
@@ -36,6 +37,8 @@ interface VimOptions {
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
+  getNoteModules?: () => NoteModules | null;
+  setNoteModules?: (modules: NoteModules) => Promise<void> | void;
 }
 
 type VimRegisterMode = "charwise" | "linewise";
@@ -967,6 +970,8 @@ export function vimModeExtension(options: VimOptions = {}) {
           onExitCommand: options.onExitCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
+          getNoteModules: options.getNoteModules,
+          setNoteModules: options.setNoteModules,
           source: "vim-colon",
           selectionOverride: preservedSelection,
         });

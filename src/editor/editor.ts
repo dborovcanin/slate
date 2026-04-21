@@ -9,7 +9,7 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap, deleteGroupBackward, history, historyKeymap, cursorGroupLeft, cursorGroupRight } from "@codemirror/commands";
 import { state } from "../state";
-import { saveNote } from "../api";
+import { saveNote, type NoteModules } from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
 import { markdownRichTextExtensions } from "./markdown-decoration";
@@ -113,6 +113,7 @@ interface EditorMountOptions {
   disableFolding?: boolean;
   disableNotify?: boolean;
   disableAutocomplete?: boolean;
+  tableEnabled?: boolean;
   markdownAutoformat?: boolean;
   checklistAutoReorder?: boolean;
   formatOnSave?: boolean;
@@ -124,11 +125,14 @@ interface EditorMountOptions {
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
+  getNoteModules?: () => NoteModules | null;
+  setNoteModules?: (modules: NoteModules) => Promise<void> | void;
 }
 
 let currentFormatOnSave = false;
 let currentDateFormat = "%Y-%m-%d";
 let backendDetached = false;
+let tableModuleEnabled = true;
 
 function isLeftArrowKey(key: string): boolean {
   return key === "ArrowLeft" || key === "Left";
@@ -164,6 +168,7 @@ function tableCellNavigationDomHandler() {
 
         const isMod = event.ctrlKey || event.metaKey;
         if (!isMod || event.altKey || event.shiftKey) return false;
+        if (!tableModuleEnabled) return false;
 
         if (isLeftArrowKey(event.key)) {
           event.preventDefault();
@@ -247,6 +252,9 @@ function moveTableCellOrWord(
   tableOutdent: boolean,
   fallbackLeft: boolean,
 ): boolean {
+  if (!tableModuleEnabled) {
+    return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
+  }
   const main = view.state.selection.main;
   if (!main.empty) {
     return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
@@ -273,21 +281,34 @@ export async function performFormatAndSave() {
   await flushSave();
 }
 
-export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
-  const note = state.activeNote;
-  const doc = note?.body ?? "";
+function applyViewModeClasses(vimMode: boolean, plainTextMode: boolean) {
+  if (!view) return;
+  if (!vimMode || plainTextMode) {
+    view.dom.classList.remove("cm-vim-normal", "cm-vim-insert", "cm-vim-visual");
+    delete view.dom.dataset.vimMode;
+  }
+}
+
+function buildEditorExtensions(options: EditorMountOptions): {
+  extensions: Extension[];
+  plainTextMode: boolean;
+  vimMode: boolean;
+} {
   const plainTextMode = !!options.plainTextMode;
   const disableCalc = plainTextMode || !!options.disableCalc;
   const disableMarkdownDecorations = plainTextMode || !!options.disableMarkdownDecorations;
   const disableFolding = plainTextMode || !!options.disableFolding;
   const disableNotify = plainTextMode || !!options.disableNotify;
   const disableAutocomplete = plainTextMode || !!options.disableAutocomplete;
+  const tableEnabled = !plainTextMode && (options.tableEnabled ?? true);
   const markdownAutoformat = options.markdownAutoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
+  const vimMode = !!options.vimMode;
 
   backendDetached = plainTextMode || !!options.detachBackend;
   currentFormatOnSave = !!options.formatOnSave;
   currentDateFormat = options.dateFormat || "%Y-%m-%d";
+  tableModuleEnabled = tableEnabled;
 
   const extensions = [
     EditorState.allowMultipleSelections.of(true),
@@ -307,6 +328,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       markdownEditingExtensions({
         autoformat: markdownAutoformat,
         checklistAutoReorder,
+        tableEnabled,
       }),
       ...variableAutocompleteExtensions({
         enabled: !disableAutocomplete && (options.variablesEnabled ?? true),
@@ -331,6 +353,8 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
         onExitCommand: options.onExitCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
+        getNoteModules: options.getNoteModules,
+        setNoteModules: options.setNoteModules,
       }),
       ...editorContextMenuExtensions({
         dateFormat: options.dateFormat,
@@ -341,7 +365,8 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
       Prec.highest(keymap.of([
         {
           key: "Ctrl-w",
-          run: runTableHeaderDeleteColumnCommand,
+          run: (view) =>
+            tableModuleEnabled ? runTableHeaderDeleteColumnCommand(view) : false,
           preventDefault: true,
         },
         { key: "Ctrl-w", run: deleteGroupBackward, preventDefault: true },
@@ -362,7 +387,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     );
   }
 
-  if (options.vimMode && !plainTextMode) {
+  if (vimMode && !plainTextMode) {
     extensions.push(
       Prec.highest(
         vimModeExtension({
@@ -371,25 +396,32 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
           onExitCommand: options.onExitCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
+          getNoteModules: options.getNoteModules,
+          setNoteModules: options.setNoteModules,
         }),
       ),
     );
   }
 
-  const startState = EditorState.create({ doc, extensions });
-  mountedExtensions = extensions;
+  return { extensions, plainTextMode, vimMode };
+}
+
+export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {}) {
+  const note = state.activeNote;
+  const doc = note?.body ?? "";
+  const setup = buildEditorExtensions(options);
+
+  const startState = EditorState.create({ doc, extensions: setup.extensions });
+  mountedExtensions = setup.extensions;
   localDirty = false;
   saveInFlight = false;
 
   view = new EditorView({ state: startState, parent });
   startupMark("ui_codemirror_ready");
-  if (!options.vimMode || plainTextMode) {
-    view.dom.classList.remove("cm-vim-normal", "cm-vim-insert", "cm-vim-visual");
-    delete view.dom.dataset.vimMode;
-  }
+  applyViewModeClasses(setup.vimMode, setup.plainTextMode);
   view.focus();
 
-  if (!plainTextMode) {
+  if (!setup.plainTextMode) {
     // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is
     // always available when the editor has focus.
     window.addEventListener(
@@ -419,6 +451,25 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flushSave();
   });
+}
+
+export function reconfigureEditor(options: EditorMountOptions = {}) {
+  if (!view) return;
+  const setup = buildEditorExtensions(options);
+  const main = view.state.selection.main;
+  const nextState = EditorState.create({
+    doc: view.state.doc.toString(),
+    extensions: setup.extensions,
+    selection: { anchor: main.anchor, head: main.head },
+  });
+  mountedExtensions = setup.extensions;
+  suppressProgrammaticDocSync = true;
+  try {
+    view.setState(nextState);
+  } finally {
+    suppressProgrammaticDocSync = false;
+  }
+  applyViewModeClasses(setup.vimMode, setup.plainTextMode);
 }
 
 interface SetEditorContentOptions {

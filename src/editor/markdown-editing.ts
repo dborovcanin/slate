@@ -640,18 +640,25 @@ function checklistClickHandlers() {
 interface MarkdownEditingOptions {
   autoformat?: boolean;
   checklistAutoReorder?: boolean;
+  tableEnabled?: boolean;
 }
 
 export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) {
   const autoformat = options.autoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
+  const tableEnabled = options.tableEnabled ?? true;
+  const tableExtensions = tableEnabled
+    ? [
+      Prec.high(tablePipeInputHandler()),
+      Prec.high(keymap.of(tableCursorKeymap(autoformat))),
+      tableCursorGuards(),
+    ]
+    : [];
   return [
-    Prec.high(tablePipeInputHandler()),
-    Prec.high(keymap.of(tableCursorKeymap(autoformat))),
+    ...tableExtensions,
     Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
     Prec.low(keymap.of(markdownTabKeymap(autoformat))),
     checklistClickHandlers(),
-    tableCursorGuards(),
     textRulesPlugin(autoformat, checklistAutoReorder),
   ];
 }

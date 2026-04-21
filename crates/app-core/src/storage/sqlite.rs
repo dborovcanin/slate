@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use time::OffsetDateTime;
 
-use super::models::{Note, NoteSummary, Reminder};
+use super::models::{Note, NoteModules, NoteSummary, Reminder};
+
+const DEFAULT_NOTE_MODULES_JSON: &str =
+    r#"{"math":true,"table":true,"variables":true,"style":true}"#;
 
 pub struct Db {
     conn: Mutex<Connection>,
@@ -23,6 +26,7 @@ impl Db {
         let migration = include_str!("../../migrations/0001_init.sql");
         conn.execute_batch(migration)
             .map_err(|e| format!("Failed to run migration: {e}"))?;
+        ensure_notes_schema(&conn)?;
         ensure_reminders_schema(&conn)?;
         ensure_ingest_schema(&conn)?;
 
@@ -42,13 +46,34 @@ impl Db {
         let now = now_iso();
 
         conn.execute(
-            "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO notes (id, body, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
-            rusqlite::params![id, body, now, now],
+            rusqlite::params![id, body, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
         .map_err(|e| e.to_string())?;
 
         load_note(&conn, id)?.ok_or_else(|| "Note not found after save".to_string())
+    }
+
+    pub fn set_note_modules(&self, id: &str, modules: NoteModules) -> Result<Note, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+        let modules_json = serde_json::to_string(&modules)
+            .map_err(|e| format!("Failed to encode note modules: {e}"))?;
+
+        let changed = conn
+            .execute(
+                "UPDATE notes
+                 SET modules_json = ?2, updated_at = ?3
+                 WHERE id = ?1",
+                rusqlite::params![id, modules_json, now],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("Note not found".to_string());
+        }
+
+        load_note(&conn, id)?.ok_or_else(|| "Note not found after module update".to_string())
     }
 
     pub fn append_note_body(&self, id: &str, body_suffix: &str) -> Result<Note, String> {
@@ -56,7 +81,7 @@ impl Db {
         let now = now_iso();
 
         conn.execute(
-            "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO notes (id, body, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                  body = CASE
                      WHEN notes.body = '' THEN excluded.body
@@ -65,7 +90,7 @@ impl Db {
                      ELSE notes.body || char(10) || excluded.body
                  END,
                  updated_at = excluded.updated_at",
-            rusqlite::params![id, body_suffix, now, now],
+            rusqlite::params![id, body_suffix, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
         .map_err(|e| e.to_string())?;
 
@@ -135,7 +160,7 @@ impl Db {
         }
 
         tx.execute(
-            "INSERT INTO notes (id, body, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO notes (id, body, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(id) DO UPDATE SET
                  body = CASE
                      WHEN notes.body = '' THEN excluded.body
@@ -144,20 +169,23 @@ impl Db {
                      ELSE excluded.body || char(10) || notes.body
                  END,
                  updated_at = excluded.updated_at",
-            rusqlite::params![note_id, body, now, now],
+            rusqlite::params![note_id, body, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
         .map_err(|e| e.to_string())?;
 
         let mut stmt = tx
-            .prepare("SELECT id, body, created_at, updated_at FROM notes WHERE id = ?1")
+            .prepare(
+                "SELECT id, body, modules_json, created_at, updated_at FROM notes WHERE id = ?1",
+            )
             .map_err(|e| e.to_string())?;
         let note = stmt
             .query_row([note_id], |row| {
                 Ok(Note {
                     id: row.get(0)?,
                     body: row.get(1)?,
-                    created_at: row.get(2)?,
-                    updated_at: row.get(3)?,
+                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
                 })
             })
             .optional()
@@ -173,7 +201,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, body, created_at, updated_at FROM notes ORDER BY updated_at DESC LIMIT 1",
+                "SELECT id, body, modules_json, created_at, updated_at FROM notes ORDER BY updated_at DESC LIMIT 1",
             )
             .map_err(|e| e.to_string())?;
 
@@ -182,8 +210,9 @@ impl Db {
                 Ok(Note {
                     id: row.get(0)?,
                     body: row.get(1)?,
-                    created_at: row.get(2)?,
-                    updated_at: row.get(3)?,
+                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
                 })
             })
             .optional()
@@ -204,7 +233,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, body, created_at, updated_at
+                "SELECT id, body, modules_json, created_at, updated_at
                  FROM notes
                  WHERE id NOT LIKE ?1 ESCAPE '\\'
                  ORDER BY updated_at DESC
@@ -218,8 +247,9 @@ impl Db {
                 Ok(Note {
                     id: row.get(0)?,
                     body: row.get(1)?,
-                    created_at: row.get(2)?,
-                    updated_at: row.get(3)?,
+                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
                 })
             })
             .optional()
@@ -231,7 +261,7 @@ impl Db {
     pub fn list_notes(&self) -> Result<Vec<Note>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare("SELECT id, body, created_at, updated_at FROM notes ORDER BY updated_at DESC")
+            .prepare("SELECT id, body, modules_json, created_at, updated_at FROM notes ORDER BY updated_at DESC")
             .map_err(|e| e.to_string())?;
 
         let notes = stmt
@@ -239,8 +269,9 @@ impl Db {
                 Ok(Note {
                     id: row.get(0)?,
                     body: row.get(1)?,
-                    created_at: row.get(2)?,
-                    updated_at: row.get(3)?,
+                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -534,7 +565,7 @@ impl Db {
 
 fn load_note(conn: &Connection, id: &str) -> Result<Option<Note>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, body, created_at, updated_at FROM notes WHERE id = ?1")
+        .prepare("SELECT id, body, modules_json, created_at, updated_at FROM notes WHERE id = ?1")
         .map_err(|e| e.to_string())?;
 
     let note = stmt
@@ -542,14 +573,25 @@ fn load_note(conn: &Connection, id: &str) -> Result<Option<Note>, String> {
             Ok(Note {
                 id: row.get(0)?,
                 body: row.get(1)?,
-                created_at: row.get(2)?,
-                updated_at: row.get(3)?,
+                modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
             })
         })
         .optional()
         .map_err(|e| e.to_string())?;
 
     Ok(note)
+}
+
+fn parse_note_modules_json(value: Option<String>) -> NoteModules {
+    let Some(raw) = value else {
+        return NoteModules::default();
+    };
+    match serde_json::from_str::<NoteModules>(&raw) {
+        Ok(modules) => modules,
+        Err(_) => NoteModules::default(),
+    }
 }
 
 fn load_reminder(
@@ -612,6 +654,16 @@ fn ensure_column(
         "ALTER TABLE {table} ADD COLUMN {column} {sql_def}"
     ))
     .map_err(|e| format!("Failed to add column {table}.{column}: {e}"))?;
+    Ok(())
+}
+
+fn ensure_notes_schema(conn: &Connection) -> Result<(), String> {
+    ensure_column(
+        conn,
+        "notes",
+        "modules_json",
+        "TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}'",
+    )?;
     Ok(())
 }
 
@@ -725,6 +777,48 @@ mod tests {
         assert!(db.delete_note("n1").expect("delete succeeds"));
         assert!(!db.delete_note("n1").expect("second delete succeeds"));
         assert!(db.get_note("n1").expect("lookup succeeds").is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn notes_default_modules_and_persist_explicit_module_updates() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let note = db.save_note("n1", "hello").expect("note saved");
+        assert_eq!(note.id, "n1");
+        assert_eq!(note.body, "hello");
+        assert_eq!(note.modules, NoteModules::default());
+
+        let updated = db
+            .set_note_modules(
+                "n1",
+                NoteModules {
+                    math: false,
+                    table: true,
+                    variables: false,
+                    style: true,
+                },
+            )
+            .expect("module update succeeds");
+        assert!(!updated.modules.math);
+        assert!(updated.modules.table);
+        assert!(!updated.modules.variables);
+        assert!(updated.modules.style);
+
+        let fetched = db
+            .get_note("n1")
+            .expect("lookup succeeds")
+            .expect("note exists");
+        assert_eq!(fetched.modules, updated.modules);
+
+        // Body saves should keep previously selected modules unchanged.
+        let body_updated = db
+            .save_note("n1", "updated body")
+            .expect("body update succeeds");
+        assert_eq!(body_updated.modules, updated.modules);
 
         drop(db);
         let _ = fs::remove_file(path);

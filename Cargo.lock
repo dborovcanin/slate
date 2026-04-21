@@ -56,6 +56,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "serde",
+ "serde_json",
  "time",
  "toml 0.9.12+spec-1.1.0",
  "ulid",

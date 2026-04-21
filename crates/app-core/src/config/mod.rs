@@ -21,6 +21,10 @@ const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
 const DEFAULT_VARIABLES_ENABLED: bool = true;
 const DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 3;
+const DEFAULT_MODULE_MATH_ENABLED: bool = true;
+const DEFAULT_MODULE_TABLE_ENABLED: bool = true;
+const DEFAULT_MODULE_VARIABLES_ENABLED: bool = true;
+const DEFAULT_MODULE_STYLE_ENABLED: bool = true;
 const MIN_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 1;
 const MAX_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 8;
 const DEFAULT_EMAIL_NOTE_PREFIX: &str = "inbox-email";
@@ -99,6 +103,13 @@ enabled = true
 # Minimum typed characters to show variable completion suggestions
 autocomplete_min_chars = 3
 
+[editor.modules]
+# Default per-note modules for newly created notes
+math = true
+table = true
+variables = true
+style = true
+
 [special_notes]
 # Prefix for date-partitioned email inbox notes
 email_note_prefix = "inbox-email"
@@ -130,6 +141,25 @@ max_body_bytes = 524288
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EditorModulesConfig {
+    pub math: bool,
+    pub table: bool,
+    pub variables: bool,
+    pub style: bool,
+}
+
+impl Default for EditorModulesConfig {
+    fn default() -> Self {
+        Self {
+            math: DEFAULT_MODULE_MATH_ENABLED,
+            table: DEFAULT_MODULE_TABLE_ENABLED,
+            variables: DEFAULT_MODULE_VARIABLES_ENABLED,
+            style: DEFAULT_MODULE_STYLE_ENABLED,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThemeConfig {
     pub color_scheme: String,
     pub background: String,
@@ -146,6 +176,7 @@ pub struct ThemeConfig {
     pub date_time_format: String,
     pub variables_enabled: bool,
     pub variables_autocomplete_min_chars: u8,
+    pub default_modules: EditorModulesConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -263,6 +294,7 @@ impl Default for ThemeConfig {
             date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
             variables_enabled: DEFAULT_VARIABLES_ENABLED,
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
+            default_modules: EditorModulesConfig::default(),
         }
     }
 }
@@ -300,12 +332,22 @@ struct EditorSection {
     date_time_format: Option<String>,
     #[serde(default)]
     variables: VariablesSection,
+    #[serde(default)]
+    modules: ModulesSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct VariablesSection {
     enabled: Option<bool>,
     autocomplete_min_chars: Option<u16>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ModulesSection {
+    math: Option<bool>,
+    table: Option<bool>,
+    variables: Option<bool>,
+    style: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -454,6 +496,28 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         variables_autocomplete_min_chars: normalize_variable_autocomplete_min_chars(
             raw.editor.variables.autocomplete_min_chars,
         ),
+        default_modules: EditorModulesConfig {
+            math: raw
+                .editor
+                .modules
+                .math
+                .unwrap_or(DEFAULT_MODULE_MATH_ENABLED),
+            table: raw
+                .editor
+                .modules
+                .table
+                .unwrap_or(DEFAULT_MODULE_TABLE_ENABLED),
+            variables: raw
+                .editor
+                .modules
+                .variables
+                .unwrap_or(DEFAULT_MODULE_VARIABLES_ENABLED),
+            style: raw
+                .editor
+                .modules
+                .style
+                .unwrap_or(DEFAULT_MODULE_STYLE_ENABLED),
+        },
     })
 }
 
@@ -723,6 +787,12 @@ mod tests {
             [editor.variables]
             enabled = false
             autocomplete_min_chars = 5
+
+            [editor.modules]
+            math = false
+            table = true
+            variables = false
+            style = true
             "#,
         )
         .expect("config parsed");
@@ -742,6 +812,10 @@ mod tests {
         assert_eq!(cfg.date_time_format, "%d.%m.%Y. %H:%M");
         assert!(!cfg.variables_enabled);
         assert_eq!(cfg.variables_autocomplete_min_chars, 5);
+        assert!(!cfg.default_modules.math);
+        assert!(cfg.default_modules.table);
+        assert!(!cfg.default_modules.variables);
+        assert!(cfg.default_modules.style);
     }
 
     #[test]
@@ -836,6 +910,10 @@ mod tests {
         assert_eq!(cfg.date_time_format, "%Y-%m-%d %H:%M");
         assert!(cfg.variables_enabled);
         assert_eq!(cfg.variables_autocomplete_min_chars, 3);
+        assert!(cfg.default_modules.math);
+        assert!(cfg.default_modules.table);
+        assert!(cfg.default_modules.variables);
+        assert!(cfg.default_modules.style);
     }
 
     #[test]

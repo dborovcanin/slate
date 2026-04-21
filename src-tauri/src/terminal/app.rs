@@ -14,6 +14,7 @@ use super::text_utils::*;
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
+use app_core::storage::NoteModules;
 use app_core::calc::CalcEngine;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
@@ -498,8 +499,7 @@ impl TerminalApp {
             }
             Key::Ctrl('n') => {
                 self.save(db)?;
-                let id = Ulid::new().to_string();
-                let note = db.save_note(&id, "")?;
+                let note = new_note(db)?;
                 self.set_active_note(db, note)?;
                 self.refresh_switcher_items(db)?;
                 self.status = format!("new note {}", self.active_note.id);
@@ -1780,8 +1780,7 @@ impl TerminalApp {
             if let Some(note) = db.get_most_recent_note()? {
                 self.set_active_note(db, note)?;
             } else {
-                let id = Ulid::new().to_string();
-                let note = db.save_note(&id, "")?;
+                let note = new_note(db)?;
                 self.set_active_note(db, note)?;
             }
         } else {
@@ -5044,7 +5043,18 @@ fn select_note(db: &Db, opts: &TerminalOptions) -> Result<Note, String> {
 
 fn new_note(db: &Db) -> Result<Note, String> {
     let id = Ulid::new().to_string();
-    db.save_note(&id, "")
+    db.save_note(&id, "")?;
+    db.set_note_modules(&id, default_note_modules_from_config())
+}
+
+fn default_note_modules_from_config() -> NoteModules {
+    let cfg = crate::config::load_theme_config();
+    NoteModules {
+        math: cfg.default_modules.math,
+        table: cfg.default_modules.table,
+        variables: cfg.default_modules.variables,
+        style: cfg.default_modules.style,
+    }
 }
 
 fn load_note_reminder_ghosts(
