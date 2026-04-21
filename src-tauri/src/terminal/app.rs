@@ -245,14 +245,17 @@ impl TerminalApp {
             crate::editor_core::calc_plan::contains_builtin_formula(&lines);
         let initial_has_variable_assignment =
             crate::editor_core::calc_plan::contains_variable_assignment(&lines);
+        let note_math_enabled = active_note.modules.math;
         let note_variables_enabled = active_note.modules.variables;
+        let active_has_builtin_formula = note_math_enabled && initial_has_builtin_formula;
         let active_has_variable_assignment =
-            note_variables_enabled && initial_has_variable_assignment;
-        let calc_viewport_only = lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+            note_math_enabled && note_variables_enabled && initial_has_variable_assignment;
+        let calc_viewport_only = note_math_enabled
+            && lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
             && active_has_variable_assignment
-            && !initial_has_builtin_formula;
+            && !active_has_builtin_formula;
         let skip_initial_calc =
-            calc_viewport_only || (!initial_has_builtin_formula && !active_has_variable_assignment);
+            calc_viewport_only || (!active_has_builtin_formula && !active_has_variable_assignment);
         let calc_begin = Instant::now();
         let calc_data = if skip_initial_calc {
             CalcData {
@@ -569,7 +572,8 @@ impl TerminalApp {
             }
             Key::CtrlArrowLeft => {
                 if !self.try_table_navigation_rule(true)
-                    && !is_markdown_table_line(self.current_line())
+                    && (!self.note_table_module_enabled()
+                        || !is_markdown_table_line(self.current_line()))
                 {
                     self.move_cursor_left_word();
                 }
@@ -577,7 +581,8 @@ impl TerminalApp {
             }
             Key::CtrlArrowRight => {
                 if !self.try_table_navigation_rule(false)
-                    && !is_markdown_table_line(self.current_line())
+                    && (!self.note_table_module_enabled()
+                        || !is_markdown_table_line(self.current_line()))
                 {
                     self.move_cursor_right_word();
                 }
@@ -701,7 +706,10 @@ impl TerminalApp {
                     should_autoformat = true;
                 }
                 refresh_variable_popup = true;
-                if ch == ' ' && is_markdown_table_line(self.current_line()) {
+                if ch == ' '
+                    && self.note_table_module_enabled()
+                    && is_markdown_table_line(self.current_line())
+                {
                     // Let users type multi-word table cell content without
                     // instant trim/realign fighting the cursor.
                     should_autoformat = false;
@@ -1568,8 +1576,8 @@ impl TerminalApp {
         if Self::line_might_trigger_doc_change_rules(self.current_line()) {
             let ctx = self.build_context();
             let options = crate::editor_core::text_rules::TextRuleOptions {
-                markdown_autoformat: self.markdown_autoformat,
-                checklist_auto_reorder: self.checklist_auto_reorder,
+                markdown_autoformat: self.markdown_autoformat_enabled(),
+                checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
             };
             if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
                 self.apply_edit_operation(&op);
@@ -2076,20 +2084,44 @@ impl TerminalApp {
             _ => return false,
         }
 
-        let previous_variables_enabled = self.active_note.modules.variables;
+        let previous_modules = self.active_note.modules;
         match db.set_note_modules(&self.active_note.id, next_modules) {
             Ok(saved_note) => {
                 self.active_note.modules = saved_note.modules;
                 self.active_note.updated_at = saved_note.updated_at;
-                if previous_variables_enabled != self.active_note.modules.variables {
-                    self.calc.stale = true;
-                    self.calc_last_view_eval_range = None;
-                    self.recompute_calc_full();
-                    if self.mode == UiMode::Editor && self.note_variables_module_enabled() {
+                let calc_module_changed = previous_modules.math != self.active_note.modules.math
+                    || previous_modules.variables != self.active_note.modules.variables;
+                if calc_module_changed {
+                    self.calc_viewport_only = self.note_math_module_enabled()
+                        && self.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+                        && self.active_has_variable_assignments()
+                        && !self.calc.cached_has_builtin_formula;
+                    if self.note_math_module_enabled() {
+                        self.calc.stale = true;
+                        if self.calc_viewport_only {
+                            self.clear_calc_cache();
+                            let editor_height = self.editor_height();
+                            self.ensure_calc_for_viewport(editor_height, true);
+                        } else {
+                            self.recompute_calc_full();
+                        }
+                    } else {
+                        self.clear_calc_cache();
+                    }
+
+                    if self.mode == UiMode::Editor
+                        && self.note_math_module_enabled()
+                        && self.note_variables_module_enabled()
+                    {
                         self.refresh_variable_autocomplete_popup();
                     } else {
                         self.dismiss_variable_autocomplete_popup();
                     }
+                }
+
+                if previous_modules.table != self.active_note.modules.table {
+                    self.adjust_cursor();
+                    self.adjust_scroll();
                 }
                 self.status = self.format_active_note_modules_status();
             }
@@ -2769,12 +2801,34 @@ impl TerminalApp {
             || crate::editor_core::markdown_tokens::list_marker_end(text).is_some()
     }
 
+    fn note_math_module_enabled(&self) -> bool {
+        self.active_note.modules.math
+    }
+
+    fn note_table_module_enabled(&self) -> bool {
+        self.active_note.modules.table
+    }
+
     fn note_variables_module_enabled(&self) -> bool {
         self.active_note.modules.variables
     }
 
+    fn note_style_module_enabled(&self) -> bool {
+        self.active_note.modules.style
+    }
+
+    fn markdown_autoformat_enabled(&self) -> bool {
+        self.markdown_autoformat && self.note_style_module_enabled()
+    }
+
+    fn checklist_auto_reorder_enabled(&self) -> bool {
+        self.checklist_auto_reorder && self.note_style_module_enabled()
+    }
+
     fn active_has_variable_assignments(&self) -> bool {
-        self.note_variables_module_enabled() && self.calc.cached_has_variable_assignment
+        self.note_math_module_enabled()
+            && self.note_variables_module_enabled()
+            && self.calc.cached_has_variable_assignment
     }
 
     fn calc_variables_enabled(&self) -> bool {
@@ -2796,6 +2850,17 @@ impl TerminalApp {
         !self.calc.cached_has_builtin_formula
             && !self.active_has_variable_assignments()
             && !self.calc.stale
+    }
+
+    fn clear_calc_cache(&mut self) {
+        self.calc.results = vec![None; self.lines.len()];
+        self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+        self.calc.variable_names.clear();
+        self.calc.prev_line_hashes.clear();
+        self.calc.prev_line_has_assignment.clear();
+        self.calc.prev_line_has_builtin_formula.clear();
+        self.calc.stale = false;
+        self.calc_last_view_eval_range = None;
     }
 
     fn defer_calc_state_after_edit(&mut self) {
@@ -3276,6 +3341,10 @@ impl TerminalApp {
     }
 
     fn recompute_calc_full(&mut self) {
+        if !self.note_math_module_enabled() {
+            self.clear_calc_cache();
+            return;
+        }
         let calc_variables_enabled = self.calc_variables_enabled();
         if self.calc.stale {
             let calc_data =
@@ -3855,31 +3924,35 @@ impl TerminalApp {
             }
             return false;
         }
-        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
-            let edit_start = table_cell_edit_start(&cell);
-            let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-            if self.cursor_col <= edit_start {
-                return false;
+        if self.note_table_module_enabled() {
+            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+                let edit_start = table_cell_edit_start(&cell);
+                let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
+                if self.cursor_col <= edit_start {
+                    return false;
+                }
+                let mut col = self.cursor_col.min(edit_end);
+                let line = self.current_line();
+                let chars: Vec<char> = line.chars().collect();
+                while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric())
+                {
+                    col -= 1;
+                }
+                while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric())
+                {
+                    col -= 1;
+                }
+                if col == self.cursor_col {
+                    return false;
+                }
+                let start_byte = byte_index(self.current_line(), col);
+                let end_byte = byte_index(self.current_line(), self.cursor_col);
+                let text = self.current_line_mut();
+                text.replace_range(start_byte..end_byte, "");
+                self.cursor_col = col;
+                self.mark_edited();
+                return true;
             }
-            let mut col = self.cursor_col.min(edit_end);
-            let line = self.current_line();
-            let chars: Vec<char> = line.chars().collect();
-            while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
-                col -= 1;
-            }
-            while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
-                col -= 1;
-            }
-            if col == self.cursor_col {
-                return false;
-            }
-            let start_byte = byte_index(self.current_line(), col);
-            let end_byte = byte_index(self.current_line(), self.cursor_col);
-            let text = self.current_line_mut();
-            text.replace_range(start_byte..end_byte, "");
-            self.cursor_col = col;
-            self.mark_edited();
-            return true;
         }
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
@@ -3985,7 +4058,10 @@ impl TerminalApp {
         if self.mode != UiMode::Editor {
             return None;
         }
-        if !self.note_variables_module_enabled() || self.calc.variable_names.is_empty() {
+        if !self.note_math_module_enabled()
+            || !self.note_variables_module_enabled()
+            || self.calc.variable_names.is_empty()
+        {
             return None;
         }
         let line = self.current_line();
@@ -4187,6 +4263,9 @@ impl TerminalApp {
     }
 
     fn apply_calc_tab(&mut self) -> bool {
+        if !self.note_math_module_enabled() {
+            return false;
+        }
         let text = self.current_line().to_string();
         let Some(result) = self
             .calc
@@ -4226,14 +4305,17 @@ impl TerminalApp {
     }
 
     fn try_autoformat_rules(&mut self) {
+        if !self.note_style_module_enabled() {
+            return;
+        }
         if !Self::line_might_trigger_doc_change_rules(self.current_line()) {
             return;
         }
 
         let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: self.markdown_autoformat,
-            checklist_auto_reorder: self.checklist_auto_reorder,
+            markdown_autoformat: self.markdown_autoformat_enabled(),
+            checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
         };
         if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
             self.apply_edit_operation(&op);
@@ -4243,8 +4325,8 @@ impl TerminalApp {
     fn try_enter_rule(&mut self) -> bool {
         let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TextRuleOptions {
-            markdown_autoformat: self.markdown_autoformat,
-            checklist_auto_reorder: self.checklist_auto_reorder,
+            markdown_autoformat: self.markdown_autoformat_enabled(),
+            checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
         };
         if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&ctx, options) {
             self.apply_edit_operation(&op);
@@ -4256,7 +4338,7 @@ impl TerminalApp {
     fn try_tab_rule(&mut self, outdent: bool) -> bool {
         let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TabRuleOptions {
-            markdown_autoformat: self.markdown_autoformat,
+            markdown_autoformat: self.markdown_autoformat_enabled(),
             outdent,
         };
         if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&ctx, options) {
@@ -4267,9 +4349,12 @@ impl TerminalApp {
     }
 
     fn try_table_navigation_rule(&mut self, outdent: bool) -> bool {
+        if !self.note_table_module_enabled() {
+            return false;
+        }
         let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TabRuleOptions {
-            markdown_autoformat: self.markdown_autoformat,
+            markdown_autoformat: self.markdown_autoformat_enabled(),
             outdent,
         };
         if let Some(op) =
@@ -4282,6 +4367,9 @@ impl TerminalApp {
     }
 
     fn try_table_pipe_insert_column_rule(&mut self) -> bool {
+        if !self.note_table_module_enabled() {
+            return false;
+        }
         let ctx = self.build_context();
         if let Some(op) = crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx) {
             self.apply_edit_operation(&op);
@@ -4291,6 +4379,9 @@ impl TerminalApp {
     }
 
     fn try_table_header_delete_column_rule(&mut self) -> bool {
+        if !self.note_table_module_enabled() {
+            return false;
+        }
         let ctx = self.build_context();
         if let Some(op) = crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
         {
@@ -4305,9 +4396,12 @@ impl TerminalApp {
         backward: bool,
         structural_merge: bool,
     ) -> Option<bool> {
+        if !self.note_table_module_enabled() {
+            return None;
+        }
         let ctx = self.build_context();
         let options = crate::editor_core::text_rules::TableBoundaryEditOptions {
-            markdown_autoformat: self.markdown_autoformat,
+            markdown_autoformat: self.markdown_autoformat_enabled(),
             backward,
             structural_merge,
         };
@@ -4406,24 +4500,26 @@ impl TerminalApp {
     }
 
     fn backspace(&mut self) {
-        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
-            let edit_start = table_cell_edit_start(&cell);
-            let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-            if self.cursor_col <= edit_start {
+        if self.note_table_module_enabled() {
+            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+                let edit_start = table_cell_edit_start(&cell);
+                let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
+                if self.cursor_col <= edit_start {
+                    return;
+                }
+                if self.cursor_col > edit_end {
+                    self.cursor_col = edit_end;
+                    return;
+                }
+                let new_col = self.cursor_col - 1;
+                if new_col < edit_start {
+                    return;
+                }
+                remove_char_at(&mut self.lines[self.cursor_line], new_col);
+                self.cursor_col = new_col;
+                self.mark_edited();
                 return;
             }
-            if self.cursor_col > edit_end {
-                self.cursor_col = edit_end;
-                return;
-            }
-            let new_col = self.cursor_col - 1;
-            if new_col < edit_start {
-                return;
-            }
-            remove_char_at(&mut self.lines[self.cursor_line], new_col);
-            self.cursor_col = new_col;
-            self.mark_edited();
-            return;
         }
 
         if self.cursor_col > 0 {
@@ -4447,20 +4543,22 @@ impl TerminalApp {
     }
 
     fn delete_forward(&mut self) {
-        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
-            let edit_start = table_cell_edit_start(&cell);
-            let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-            if self.cursor_col < edit_start {
-                self.cursor_col = edit_start;
+        if self.note_table_module_enabled() {
+            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+                let edit_start = table_cell_edit_start(&cell);
+                let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
+                if self.cursor_col < edit_start {
+                    self.cursor_col = edit_start;
+                    return;
+                }
+                if self.cursor_col >= edit_end {
+                    return;
+                }
+                let col = self.cursor_col;
+                remove_char_at(&mut self.lines[self.cursor_line], col);
+                self.mark_edited();
                 return;
             }
-            if self.cursor_col >= edit_end {
-                return;
-            }
-            let col = self.cursor_col;
-            remove_char_at(&mut self.lines[self.cursor_line], col);
-            self.mark_edited();
-            return;
         }
 
         let line_len = line_char_len(self.current_line());
@@ -4481,7 +4579,7 @@ impl TerminalApp {
     }
 
     fn move_cursor_left(&mut self) {
-        let table_target_col = {
+        let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(current_cell) = table_cell_info_at_char(line_text, self.cursor_col) {
                 let anchor = table_cell_navigation_anchor(line_text, &current_cell);
@@ -4500,6 +4598,8 @@ impl TerminalApp {
             } else {
                 None
             }
+        } else {
+            None
         };
         if let Some(target_col) = table_target_col {
             self.cursor_col = target_col;
@@ -4520,7 +4620,7 @@ impl TerminalApp {
     }
 
     fn move_cursor_right(&mut self) {
-        let table_target_col = {
+        let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(current_cell) = table_cell_info_at_char(line_text, self.cursor_col) {
                 let anchor = table_cell_navigation_anchor(line_text, &current_cell);
@@ -4541,6 +4641,8 @@ impl TerminalApp {
             } else {
                 None
             }
+        } else {
+            None
         };
         if let Some(target_col) = table_target_col {
             self.cursor_col = target_col;
@@ -4568,8 +4670,10 @@ impl TerminalApp {
         let current_virtual = self.current_virtual_line();
         let target_virtual = current_virtual.saturating_sub(count);
         self.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
-        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
-            self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+        if self.note_table_module_enabled() {
+            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+                self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+            }
         }
     }
 
@@ -4585,8 +4689,10 @@ impl TerminalApp {
         self.cursor_line = self
             .real_line_for_virtual(target_virtual)
             .unwrap_or_else(|| self.lines.len().saturating_sub(1));
-        if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
-            self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+        if self.note_table_module_enabled() {
+            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+                self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+            }
         }
     }
 
@@ -4604,7 +4710,7 @@ impl TerminalApp {
         if self.cursor_col > len {
             self.cursor_col = len;
         }
-        let table_anchor = {
+        let table_anchor = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(cell) = table_cell_info_at_char(line_text, self.cursor_col) {
                 let anchor = table_cell_navigation_anchor(line_text, &cell);
@@ -4623,6 +4729,8 @@ impl TerminalApp {
             } else {
                 None
             }
+        } else {
+            None
         };
         if let Some(anchor) = table_anchor {
             self.cursor_col = anchor;
@@ -4727,6 +4835,10 @@ impl TerminalApp {
     }
 
     fn recompute_calc_range(&mut self, eval_from: usize, eval_to: usize) {
+        if !self.note_math_module_enabled() {
+            self.clear_calc_cache();
+            return;
+        }
         if eval_from >= eval_to || eval_to > self.lines.len() {
             return;
         }
@@ -5140,7 +5252,7 @@ impl TerminalApp {
                 // the source `line_text` and translated to rendered char
                 // positions using the formula-mask delta accumulated above.
                 let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
-                if is_cursor_line && !is_fold_placeholder {
+                if self.note_table_module_enabled() && is_cursor_line && !is_fold_placeholder {
                     if let Some(info) = table_cell_info_at_char(line_text, self.cursor_col) {
                         let left_pipe_char = line_text[..info.left_pipe].chars().count();
                         let right_pipe_char = line_text[..info.right_pipe].chars().count();
@@ -6083,13 +6195,22 @@ mod tests {
         }
     }
 
-    fn note_modules_with_variables(enabled: bool) -> app_core::storage::NoteModules {
+    fn note_modules(
+        math: bool,
+        table: bool,
+        variables: bool,
+        style: bool,
+    ) -> app_core::storage::NoteModules {
         app_core::storage::NoteModules {
-            math: true,
-            table: true,
-            variables: enabled,
-            style: true,
+            math,
+            table,
+            variables,
+            style,
         }
+    }
+
+    fn note_modules_with_variables(enabled: bool) -> app_core::storage::NoteModules {
+        note_modules(true, true, enabled, true)
     }
 
     #[test]
@@ -7692,6 +7813,59 @@ mod tests {
         app.execute_terminal_command(&db, "module toggle variables");
         assert_eq!(app.status, "modules math=on table=on variables=on style=on");
         assert!(app.active_note.modules.variables);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn module_math_toggle_disables_calc_tab_path() {
+        let (db, mut app, path) = app_with_note("1 + 1");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+
+        app.execute_terminal_command(&db, "module off math");
+        app.handle_editor_key(&db, Key::Tab)
+            .expect("tab falls back when math module is off");
+        assert_eq!(app.lines[0], "1 + 1  ");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn module_table_toggle_disables_table_cursor_clamping() {
+        let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
+        app.mode = UiMode::Editor;
+        app.cursor_col = 9;
+
+        app.execute_terminal_command(&db, "module off table");
+        app.adjust_cursor();
+        assert_eq!(app.cursor_col, 9);
+
+        app.execute_terminal_command(&db, "module on table");
+        app.cursor_col = 9;
+        app.adjust_cursor();
+        assert_eq!(app.cursor_col, 8);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn module_style_toggle_disables_enter_autoformat_rules() {
+        let (db, mut app, path) = app_with_note("- [ ] task");
+        app.mode = UiMode::Editor;
+        app.cursor_col = line_char_len(app.current_line());
+
+        app.execute_terminal_command(&db, "module off style");
+        app.handle_editor_key(&db, Key::Enter)
+            .expect("enter uses plain newline when style module is off");
+        assert_eq!(app.lines, vec!["- [ ] task".to_string(), String::new()]);
 
         drop(app);
         drop(db);
