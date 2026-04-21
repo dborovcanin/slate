@@ -6930,6 +6930,90 @@ mod tests {
     }
 
     #[test]
+    fn vim_colon_substitute_replaces_current_line_only() {
+        let (db, mut app, path) = app_with_note("alpha alpha\nalpha alpha");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 1;
+        app.cursor_col = 0;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char(':'),
+                Key::Char('s'),
+                Key::Char('/'),
+                Key::Char('a'),
+                Key::Char('l'),
+                Key::Char('p'),
+                Key::Char('h'),
+                Key::Char('a'),
+                Key::Char('/'),
+                Key::Char('o'),
+                Key::Char('m'),
+                Key::Char('e'),
+                Key::Char('g'),
+                Key::Char('a'),
+                Key::Char('/'),
+                Key::Enter,
+            ],
+        );
+
+        assert_eq!(
+            app.lines,
+            vec!["alpha alpha".to_string(), "omega alpha".to_string()]
+        );
+        assert_eq!(app.mode, UiMode::Normal);
+        assert_eq!(app.status, "1 substitution on 1 line");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_colon_percent_substitute_global_replaces_whole_document() {
+        let (db, mut app, path) = app_with_note("alpha alpha\nalpha alpha");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char(':'),
+                Key::Char('%'),
+                Key::Char('s'),
+                Key::Char('/'),
+                Key::Char('a'),
+                Key::Char('l'),
+                Key::Char('p'),
+                Key::Char('h'),
+                Key::Char('a'),
+                Key::Char('/'),
+                Key::Char('o'),
+                Key::Char('m'),
+                Key::Char('e'),
+                Key::Char('g'),
+                Key::Char('a'),
+                Key::Char('/'),
+                Key::Char('g'),
+                Key::Enter,
+            ],
+        );
+
+        assert_eq!(
+            app.lines,
+            vec!["omega omega".to_string(), "omega omega".to_string()]
+        );
+        assert_eq!(app.mode, UiMode::Normal);
+        assert_eq!(app.status, "4 substitutions on 2 lines");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
     fn vim_golden_counted_delete_2dd_deletes_two_lines() {
         let (db, mut app, path) = app_with_note("alpha\nbeta\ngamma\ndelta");
         app.mode = UiMode::Normal;

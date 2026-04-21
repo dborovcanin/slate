@@ -323,6 +323,217 @@ fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimSubstituteScope {
+    CurrentLine,
+    WholeDocument,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct VimSubstituteFlags {
+    global: bool,
+    ignore_case: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VimSubstituteCommand {
+    scope: VimSubstituteScope,
+    pattern: String,
+    replacement: String,
+    flags: VimSubstituteFlags,
+}
+
+fn parse_delimited_segment(input: &str, delimiter: char) -> Result<(String, usize), String> {
+    let mut escaped = false;
+    for (idx, ch) in input.char_indices() {
+        if ch == delimiter && !escaped {
+            return Ok((input[..idx].to_string(), idx + ch.len_utf8()));
+        }
+        if ch == '\\' {
+            escaped = !escaped;
+        } else {
+            escaped = false;
+        }
+    }
+    Err("unterminated substitute command".to_string())
+}
+
+fn unescape_substitute_segment(segment: &str, delimiter: char) -> String {
+    let mut out = String::with_capacity(segment.len());
+    let mut chars = segment.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            if let Some(next) = chars.peek().copied() {
+                if next == delimiter || next == '\\' {
+                    out.push(next);
+                    let _ = chars.next();
+                    continue;
+                }
+            }
+            out.push(ch);
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn parse_vim_substitute_command(raw_input: &str) -> Result<Option<VimSubstituteCommand>, String> {
+    let trimmed = raw_input.trim();
+    let command = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    if command.is_empty() {
+        return Ok(None);
+    }
+
+    let (scope, remainder) = if let Some(rest) = command.strip_prefix("%s") {
+        (VimSubstituteScope::WholeDocument, rest)
+    } else if let Some(rest) = command.strip_prefix('s') {
+        (VimSubstituteScope::CurrentLine, rest)
+    } else {
+        return Ok(None);
+    };
+
+    let mut remainder_chars = remainder.chars();
+    let Some(delimiter) = remainder_chars.next() else {
+        return Err("missing delimiter".to_string());
+    };
+    if delimiter.is_ascii_alphanumeric() || delimiter.is_ascii_whitespace() {
+        // `sum`, `sum doc`, ... should fall through to regular command resolution.
+        return Ok(None);
+    }
+
+    let payload = &remainder[delimiter.len_utf8()..];
+    let (raw_pattern, consumed_pattern) = parse_delimited_segment(payload, delimiter)?;
+    let after_pattern = &payload[consumed_pattern..];
+    let (raw_replacement, consumed_replacement) =
+        parse_delimited_segment(after_pattern, delimiter)?;
+    let trailing_flags = after_pattern[consumed_replacement..].trim();
+
+    let mut flags = VimSubstituteFlags {
+        global: false,
+        ignore_case: false,
+    };
+    for flag in trailing_flags.chars() {
+        match flag {
+            'g' => flags.global = true,
+            'i' => flags.ignore_case = true,
+            _ => return Err(format!("unsupported substitute flag: {flag}")),
+        }
+    }
+
+    let pattern = unescape_substitute_segment(&raw_pattern, delimiter);
+    if pattern.is_empty() {
+        return Err("empty pattern is not supported".to_string());
+    }
+    let replacement = unescape_substitute_segment(&raw_replacement, delimiter);
+
+    Ok(Some(VimSubstituteCommand {
+        scope,
+        pattern,
+        replacement,
+        flags,
+    }))
+}
+
+fn apply_vim_substitute(
+    snapshot: &EditorContextSnapshot,
+    mode: CommandMode,
+    command: &VimSubstituteCommand,
+) -> CommandExecutionResult {
+    let pattern = if command.flags.ignore_case {
+        format!("(?i:{})", command.pattern)
+    } else {
+        command.pattern.clone()
+    };
+    let matcher = match Regex::new(&pattern) {
+        Ok(regex) => regex,
+        Err(error) => {
+            return result_with_message(format!("substitute: invalid pattern ({error})"));
+        }
+    };
+
+    let ctx = ResolvedContext::new(snapshot.clone());
+    let selection = ctx.selection();
+    let (start_line, end_line) = match command.scope {
+        VimSubstituteScope::WholeDocument => (1, ctx.line_count()),
+        VimSubstituteScope::CurrentLine if mode == CommandMode::Vim && !selection.empty => {
+            let anchor_line = ctx.line_at(selection.anchor).number;
+            let head_line = ctx.line_at(selection.head).number;
+            (anchor_line.min(head_line), anchor_line.max(head_line))
+        }
+        VimSubstituteScope::CurrentLine => {
+            let current_line = ctx.line_at(selection.head).number;
+            (current_line, current_line)
+        }
+    };
+
+    let from = ctx.line(start_line).from;
+    let to = ctx.line(end_line).to;
+    let mut replacements = 0usize;
+    let mut changed_lines = 0usize;
+    let mut replaced_lines = Vec::with_capacity(end_line.saturating_sub(start_line) + 1);
+    for line_no in start_line..=end_line {
+        let line_text = ctx.line_text(line_no);
+        let count_for_line = if command.flags.global {
+            matcher.find_iter(line_text).count()
+        } else if matcher.find(line_text).is_some() {
+            1
+        } else {
+            0
+        };
+        if count_for_line == 0 {
+            replaced_lines.push(line_text.to_string());
+            continue;
+        }
+
+        let replaced = if command.flags.global {
+            matcher
+                .replace_all(line_text, command.replacement.as_str())
+                .to_string()
+        } else {
+            matcher
+                .replacen(line_text, 1, command.replacement.as_str())
+                .to_string()
+        };
+        if replaced != line_text {
+            changed_lines += 1;
+        }
+        replacements += count_for_line;
+        replaced_lines.push(replaced);
+    }
+
+    if replacements == 0 {
+        return result_with_message(format!(
+            "substitute: pattern not found: {}",
+            command.pattern
+        ));
+    }
+
+    let op = replace_range(from, to, replaced_lines.join("\n"), None);
+    let mut result = result_with_message(format!(
+        "{replacements} substitution{} on {changed_lines} line{}",
+        if replacements == 1 { "" } else { "s" },
+        if changed_lines == 1 { "" } else { "s" }
+    ));
+    result.operations.push(op);
+    result
+}
+
+fn try_execute_vim_substitute(
+    snapshot: &EditorContextSnapshot,
+    raw_input: &str,
+    mode: CommandMode,
+) -> Option<CommandExecutionResult> {
+    if mode != CommandMode::Vim {
+        return None;
+    }
+    match parse_vim_substitute_command(raw_input) {
+        Ok(Some(command)) => Some(apply_vim_substitute(snapshot, mode, &command)),
+        Ok(None) => None,
+        Err(error) => Some(result_with_message(format!("substitute: {error}"))),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListConversionKind {
     Checklist,
     Unordered,
@@ -472,6 +683,10 @@ pub fn execute_command(
     raw_input: &str,
     mode: CommandMode,
 ) -> CommandExecutionResult {
+    if let Some(result) = try_execute_vim_substitute(snapshot, raw_input, mode) {
+        return result;
+    }
+
     let normalized = command_catalog::normalize_command(raw_input);
     if normalized.is_empty() {
         return result_with_message("");
@@ -691,6 +906,87 @@ mod tests {
         let vim_q = execute_command(&doc, "q", CommandMode::Vim);
         assert_eq!(vim_q.message, "quit");
         assert!(vim_q.quit_requested);
+    }
+
+    #[test]
+    fn vim_substitute_replaces_first_match_on_current_line() {
+        let doc = snapshot("alpha beta alpha\nalpha beta", 0, 0);
+        let result = execute_command(&doc, "s/alpha/omega/", CommandMode::Vim);
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].changes[0].from, 0);
+        assert_eq!(result.operations[0].changes[0].to, "alpha beta alpha".len());
+        assert_eq!(result.operations[0].changes[0].insert, "omega beta alpha");
+        assert_eq!(result.message, "1 substitution on 1 line");
+    }
+
+    #[test]
+    fn vim_substitute_percent_scope_replaces_first_match_per_line() {
+        let doc = snapshot("alpha alpha\nalpha alpha", 0, 0);
+        let result = execute_command(&doc, "%s/alpha/omega/", CommandMode::Vim);
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].changes[0].from, 0);
+        assert_eq!(result.operations[0].changes[0].to, doc.text.len());
+        assert_eq!(
+            result.operations[0].changes[0].insert,
+            "omega alpha\nomega alpha"
+        );
+        assert_eq!(result.message, "2 substitutions on 2 lines");
+    }
+
+    #[test]
+    fn vim_substitute_global_flag_replaces_all_matches() {
+        let doc = snapshot("alpha alpha\nalpha", 0, 0);
+        let result = execute_command(&doc, "%s/alpha/omega/g", CommandMode::Vim);
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].changes[0].insert, "omega omega\nomega");
+        assert_eq!(result.message, "3 substitutions on 2 lines");
+    }
+
+    #[test]
+    fn vim_substitute_ignore_case_flag_replaces_case_insensitive_matches() {
+        let doc = snapshot("Alpha alpha", 0, 0);
+        let result = execute_command(&doc, "s/alpha/omega/gi", CommandMode::Vim);
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].changes[0].insert, "omega omega");
+        assert_eq!(result.message, "2 substitutions on 1 line");
+    }
+
+    #[test]
+    fn vim_substitute_with_visual_selection_targets_selected_lines() {
+        let text = "zero\nalpha alpha\nalpha\ntail";
+        let start = text.find("alpha alpha").expect("line 2");
+        let end = text.find("\ntail").expect("tail marker");
+        let doc = snapshot(text, end, start);
+        let result = execute_command(&doc, "s/alpha/omega/g", CommandMode::Vim);
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        assert_eq!(change.from, start);
+        assert_eq!(change.to, end);
+        assert_eq!(change.insert, "omega omega\nomega");
+        assert_eq!(result.message, "3 substitutions on 2 lines");
+    }
+
+    #[test]
+    fn vim_substitute_reports_unsupported_flags_and_invalid_regex() {
+        let doc = snapshot("alpha", 0, 0);
+        let unsupported = execute_command(&doc, "s/alpha/beta/c", CommandMode::Vim);
+        assert_eq!(
+            unsupported.message,
+            "substitute: unsupported substitute flag: c"
+        );
+        assert!(unsupported.operations.is_empty());
+
+        let invalid = execute_command(&doc, "s/[alpha/beta/", CommandMode::Vim);
+        assert!(invalid.message.starts_with("substitute: invalid pattern"));
+        assert!(invalid.operations.is_empty());
+    }
+
+    #[test]
+    fn vim_substitute_parser_does_not_intercept_sum_command() {
+        let doc = snapshot("1\n2\n3", 0, 0);
+        let result = execute_command(&doc, "sum", CommandMode::Vim);
+        assert!(result.message.contains("sum(paragraph) = 6.00"));
+        assert_eq!(result.operations.len(), 1);
     }
 
     #[test]
