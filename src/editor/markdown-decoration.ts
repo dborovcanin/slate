@@ -28,7 +28,8 @@ const DEFAULT_FENCE_STATE: FenceState = {
   codeFenceLang: null,
 };
 
-const VIEWPORT_MARGIN_LINES = 48;
+const VIEWPORT_MARGIN_LINES = 24;
+const HOTPATH_REBUILD_MARGIN_LINES = 8;
 const FENCE_CHECKPOINT_INTERVAL = 256;
 
 const decHeadingToken = Decoration.mark({ class: "md-token md-token-heading" });
@@ -113,8 +114,41 @@ class HiddenChecklistPrefixWidget extends WidgetType {
   }
 }
 
+class UnorderedListGlyphWidget extends WidgetType {
+  private readonly glyph: string;
+
+  constructor(glyph: string) {
+    super();
+    this.glyph = glyph;
+  }
+
+  eq(other: UnorderedListGlyphWidget): boolean {
+    return other.glyph === this.glyph;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "md-unordered-list-glyph";
+    span.textContent = this.glyph;
+    span.contentEditable = "false";
+    span.setAttribute("draggable", "false");
+    span.setAttribute("aria-hidden", "true");
+    return span;
+  }
+}
+
 const decChecklistHiddenPrefix = Decoration.replace({
   widget: new HiddenChecklistPrefixWidget(),
+  inclusive: false,
+});
+
+const decHiddenMarkdownToken = Decoration.mark({ class: "md-hidden-token" });
+const decUnorderedListBullet = Decoration.replace({
+  widget: new UnorderedListGlyphWidget("•"),
+  inclusive: false,
+});
+const decUnorderedListArrow = Decoration.replace({
+  widget: new UnorderedListGlyphWidget("▸"),
   inclusive: false,
 });
 
@@ -162,12 +196,68 @@ interface PendingDecoration {
   decoration: Decoration;
 }
 
+function isInlineMarkerToken(token: InlineToken): boolean {
+  return token.type === "code-marker" || token.type === "link-marker";
+}
+
+function markerRevealComponentRange(
+  tokens: readonly InlineToken[],
+  markerIndex: number,
+): TextRange | null {
+  const marker = tokens[markerIndex];
+  if (!marker || !isInlineMarkerToken(marker)) return null;
+
+  let startIndex = markerIndex;
+  while (startIndex > 0) {
+    const prev = tokens[startIndex - 1];
+    const current = tokens[startIndex];
+    if (!prev || !current || prev.to !== current.from) break;
+    startIndex -= 1;
+  }
+
+  let endIndex = markerIndex;
+  while (endIndex + 1 < tokens.length) {
+    const current = tokens[endIndex];
+    const next = tokens[endIndex + 1];
+    if (!current || !next || current.to !== next.from) break;
+    endIndex += 1;
+  }
+
+  let hasNonMarker = false;
+  for (let index = startIndex; index <= endIndex; index++) {
+    const token = tokens[index];
+    if (token && !isInlineMarkerToken(token)) {
+      hasNonMarker = true;
+      break;
+    }
+  }
+  if (!hasNonMarker) return null;
+
+  return {
+    from: tokens[startIndex]!.from,
+    to: tokens[endIndex]!.to,
+  };
+}
+
+function shouldRevealInlineMarker(
+  tokens: readonly InlineToken[],
+  markerIndex: number,
+  lineFrom: number,
+  activeSelection?: ActiveSelection,
+): boolean {
+  const range = markerRevealComponentRange(tokens, markerIndex);
+  if (!range) return false;
+  return selectionTouchesRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
+}
+
 function collectInlineDecorations(
   lineFrom: number,
   tokens: readonly InlineToken[],
+  activeSelection?: ActiveSelection,
 ): PendingDecoration[] {
   const pending: PendingDecoration[] = [];
-  for (const token of tokens) {
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index]!;
     const from = lineFrom + token.from;
     const to = lineFrom + token.to;
     switch (token.type) {
@@ -184,7 +274,13 @@ function collectInlineDecorations(
         pending.push({ from, to, decoration: decCode });
         break;
       case "code-marker":
-        pending.push({ from, to, decoration: decCodeMarker });
+        pending.push({
+          from,
+          to,
+          decoration: shouldRevealInlineMarker(tokens, index, lineFrom, activeSelection)
+            ? decCodeMarker
+            : decHiddenMarkdownToken,
+        });
         break;
       case "link-text":
         pending.push({ from, to, decoration: decLinkText });
@@ -193,7 +289,13 @@ function collectInlineDecorations(
         pending.push({ from, to, decoration: decLinkUrl });
         break;
       case "link-marker":
-        pending.push({ from, to, decoration: decLinkMarker });
+        pending.push({
+          from,
+          to,
+          decoration: shouldRevealInlineMarker(tokens, index, lineFrom, activeSelection)
+            ? decLinkMarker
+            : decHiddenMarkdownToken,
+        });
         break;
     }
   }
@@ -447,12 +549,15 @@ function mergeLineSpans(spans: readonly VisibleLineSpan[]): VisibleLineSpan[] {
   return merged;
 }
 
-function expandedVisibleSpans(view: EditorView): VisibleLineSpan[] {
+function expandedVisibleSpans(
+  view: EditorView,
+  marginLines = VIEWPORT_MARGIN_LINES,
+): VisibleLineSpan[] {
   const doc = view.state.doc;
   if (view.visibleRanges.length === 0) return [];
   const expanded = view.visibleRanges.map(({ from, to }) => ({
-    fromLine: Math.max(1, doc.lineAt(from).number - VIEWPORT_MARGIN_LINES),
-    toLine: Math.min(doc.lines, doc.lineAt(to).number + VIEWPORT_MARGIN_LINES),
+    fromLine: Math.max(1, doc.lineAt(from).number - marginLines),
+    toLine: Math.min(doc.lines, doc.lineAt(to).number + marginLines),
   }));
   return mergeLineSpans(expanded);
 }
@@ -461,11 +566,12 @@ function buildMarkdownDecorations(
   view: EditorView,
   fenceCache: FenceCheckpointCache,
   matcherCache: VariableMatcherCache,
+  marginLines = VIEWPORT_MARGIN_LINES,
 ): DecorationSet {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
   const selection = view.state.selection.main;
-  const spans = expandedVisibleSpans(view);
+  const spans = expandedVisibleSpans(view, marginLines);
   const matcher = matcherCache.get(variableIndex);
   return buildMarkdownDecorationsForSpans(doc, spans, variableIndex, {
     from: selection.from,
@@ -531,6 +637,83 @@ function selectionTouchesRange(
   return selection.from < to && from < selection.to;
 }
 
+interface UnorderedListMarkerSymbolRange extends TextRange {
+  arrow: boolean;
+}
+
+function unorderedListMarkerSymbolRange(
+  text: string,
+): UnorderedListMarkerSymbolRange | null {
+  const match = text.match(/^(\s*)(->|[-*+])(\s+)/);
+  if (!match) return null;
+  const indentLen = (match[1] ?? "").length;
+  const marker = match[2] ?? "";
+  if (marker.length === 0) return null;
+  return {
+    from: indentLen,
+    to: indentLen + marker.length,
+    arrow: marker === "->",
+  };
+}
+
+function lineHasTransparentMarkdownSyntax(text: string): boolean {
+  if (/^\s*#{1,6}\s/.test(text)) return true;
+  if (/^\s*>/.test(text)) return true;
+  if (text.includes("`")) return true;
+  if (text.includes("~~")) return true;
+  if (text.includes("**") || text.includes("__")) return true;
+  if (text.includes("[") && text.includes("](") && text.includes(")")) return true;
+  if (/\*[^*\s][^*]*\*/.test(text)) return true;
+  return /_[^_\s][^_]*_/.test(text);
+}
+
+function selectionIntersectsTransparentMarkdownReveal(
+  doc: Text,
+  selection: ActiveSelection,
+): boolean {
+  if (!selection.empty) return true;
+  const line = doc.lineAt(selection.from);
+  return lineHasTransparentMarkdownSyntax(line.text);
+}
+
+function inlineRevealComponentSignatureForCursor(
+  lineText: string,
+  cursorOffsetInLine: number,
+): string {
+  const tokens = markdownFindInlineTokens(lineText);
+  const seen = new Set<string>();
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (!token || !isInlineMarkerToken(token)) continue;
+    const range = markerRevealComponentRange(tokens, index);
+    if (!range) continue;
+    const signature = `${range.from}-${range.to}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    if (cursorOffsetInLine >= range.from && cursorOffsetInLine <= range.to) {
+      return signature;
+    }
+  }
+  return "";
+}
+
+function emptySelectionRevealSignature(
+  doc: Text,
+  selection: ActiveSelection,
+): string | null {
+  if (!selection.empty) return null;
+  const line = doc.lineAt(selection.from);
+  const checklistReveal = lineChecklistRevealRanges(line).some((range) =>
+    selection.from >= range.from && selection.from <= range.to
+  );
+  const cursorOffsetInLine = selection.from - line.from;
+  const inlineSignature = inlineRevealComponentSignatureForCursor(
+    line.text,
+    cursorOffsetInLine,
+  );
+  return `${line.number}:${checklistReveal ? "1" : "0"}:${inlineSignature}`;
+}
+
 function decorateContentLine(
   builder: RangeSetBuilder<Decoration>,
   line: { from: number; to: number; text: string },
@@ -539,22 +722,61 @@ function decorateContentLine(
   inlineTokens: readonly InlineToken[],
   activeSelection?: ActiveSelection,
 ): void {
+  const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
+
   if (info.headingLevel) {
     builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
     if (info.headingMarkerEnd) {
-      builder.add(line.from, line.from + info.headingMarkerEnd, decHeadingToken);
+      const markerTo = line.from + info.headingMarkerEnd;
+      builder.add(
+        line.from,
+        markerTo,
+        revealLinePrefixSyntax ? decHeadingToken : decHiddenMarkdownToken,
+      );
       builder.add(line.from + info.headingMarkerEnd, line.to, decHeadingContent);
     }
   }
 
   if (info.quoteMarkerEnd) {
     builder.add(line.from, line.from, decQuoteLine);
-    builder.add(line.from, line.from + info.quoteMarkerEnd, decQuoteToken);
+    const markerTo = line.from + info.quoteMarkerEnd;
+    builder.add(
+      line.from,
+      markerTo,
+      revealLinePrefixSyntax ? decQuoteToken : decHiddenMarkdownToken,
+    );
   }
 
   if (info.listMarkerEnd && info.checklistMarkerStart === null) {
     builder.add(line.from, line.from, decListLine);
-    builder.add(line.from, line.from + info.listMarkerEnd, decListToken);
+    const markerPrefixTo = line.from + info.listMarkerEnd;
+    const unorderedMarker = unorderedListMarkerSymbolRange(line.text);
+    if (unorderedMarker) {
+      const markerFrom = line.from + unorderedMarker.from;
+      const markerTo = line.from + unorderedMarker.to;
+      const revealUnorderedSource = selectionTouchesRange(
+        activeSelection,
+        markerFrom,
+        markerTo,
+      );
+      if (line.from < markerFrom) {
+        builder.add(line.from, markerFrom, decListToken);
+      }
+      if (revealUnorderedSource) {
+        builder.add(markerFrom, markerTo, decListToken);
+      } else {
+        builder.add(
+          markerFrom,
+          markerTo,
+          unorderedMarker.arrow ? decUnorderedListArrow : decUnorderedListBullet,
+        );
+      }
+      if (markerTo < markerPrefixTo) {
+        builder.add(markerTo, markerPrefixTo, decListToken);
+      }
+    } else {
+      builder.add(line.from, markerPrefixTo, decListToken);
+    }
   }
 
   if (info.checklistMarkerStart !== null && info.checklistMarkerEnd !== null) {
@@ -619,7 +841,7 @@ function decorateContentLine(
       decoration: decVariable,
     });
   }
-  for (const inline of collectInlineDecorations(line.from, inlineTokens)) {
+  for (const inline of collectInlineDecorations(line.from, inlineTokens, activeSelection)) {
     pending.push(inline);
   }
   pending.sort((a, b) => a.from - b.from || a.to - b.to);
@@ -629,6 +851,7 @@ function decorateContentLine(
 }
 
 const markdownWasmReadyAnnotation = Annotation.define<boolean>();
+const markdownDeferredRefreshAnnotation = Annotation.define<boolean>();
 
 function earliestChangedLine(update: ViewUpdate): number {
   let earliest = Number.POSITIVE_INFINITY;
@@ -672,9 +895,10 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     private destroyed = false;
     private readonly fenceCache = new FenceCheckpointCache();
     private readonly matcherCache = new VariableMatcherCache();
+    private pendingRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(view: EditorView) {
-      this.decorations = this.safeBuild(view, Decoration.none);
+      this.decorations = this.safeBuild(view, Decoration.none, VIEWPORT_MARGIN_LINES);
       void ensureWasmReady()
         .then(() => {
           if (this.destroyed) return;
@@ -685,13 +909,41 @@ const markdownRichPlugin = ViewPlugin.fromClass(
         });
     }
 
+    private scheduleDeferredRefresh(view: EditorView) {
+      if (this.pendingRefreshTimer !== null) {
+        clearTimeout(this.pendingRefreshTimer);
+      }
+      this.pendingRefreshTimer = setTimeout(() => {
+        this.pendingRefreshTimer = null;
+        if (this.destroyed) return;
+        view.dispatch({ annotations: markdownDeferredRefreshAnnotation.of(true) });
+      }, 90);
+    }
+
     update(update: ViewUpdate) {
       if (
         update.transactions.some((transaction) =>
           transaction.annotation(markdownWasmReadyAnnotation),
         )
       ) {
-        this.decorations = this.safeBuild(update.view, this.decorations);
+        this.decorations = this.safeBuild(
+          update.view,
+          this.decorations,
+          VIEWPORT_MARGIN_LINES,
+        );
+        return;
+      }
+
+      if (
+        update.transactions.some((transaction) =>
+          transaction.annotation(markdownDeferredRefreshAnnotation),
+        )
+      ) {
+        this.decorations = this.safeBuild(
+          update.view,
+          this.decorations,
+          HOTPATH_REBUILD_MARGIN_LINES,
+        );
         return;
       }
 
@@ -704,11 +956,15 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       const varsChanged = prevVars !== nextVars;
 
       if (varsChanged || update.viewportChanged) {
-        this.decorations = this.safeBuild(update.view, this.decorations);
+        this.decorations = this.safeBuild(
+          update.view,
+          this.decorations,
+          VIEWPORT_MARGIN_LINES,
+        );
         return;
       }
 
-      if (update.selectionSet) {
+      if (update.selectionSet && !update.docChanged) {
         const prevSelection: ActiveSelection = {
           from: update.startState.selection.main.from,
           to: update.startState.selection.main.to,
@@ -719,11 +975,25 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           to: update.state.selection.main.to,
           empty: update.state.selection.main.empty,
         };
+        const prevLineNo = update.startState.doc.lineAt(prevSelection.from).number;
+        const nextLineNo = update.state.doc.lineAt(nextSelection.from).number;
+        if (prevLineNo === nextLineNo) {
+          const prevSig = emptySelectionRevealSignature(update.startState.doc, prevSelection);
+          const nextSig = emptySelectionRevealSignature(update.state.doc, nextSelection);
+          if (prevSig !== null && prevSig === nextSig) return;
+        }
         const affectsChecklist =
           selectionIntersectsChecklistReveal(update.startState.doc, prevSelection)
           || selectionIntersectsChecklistReveal(update.state.doc, nextSelection);
-        if (!affectsChecklist) return;
-        this.decorations = this.safeBuild(update.view, this.decorations);
+        const affectsTransparentMarkdown =
+          selectionIntersectsTransparentMarkdownReveal(update.startState.doc, prevSelection)
+          || selectionIntersectsTransparentMarkdownReveal(update.state.doc, nextSelection);
+        if (!affectsChecklist && !affectsTransparentMarkdown) return;
+        this.decorations = this.safeBuild(
+          update.view,
+          this.decorations,
+          HOTPATH_REBUILD_MARGIN_LINES,
+        );
         return;
       }
 
@@ -732,12 +1002,24 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       // viewport's text and fence state are both unchanged and CodeMirror
       // auto-maps the existing decorations through the transaction.
       if (allChangesBelowViewport(update)) return;
-      this.decorations = this.safeBuild(update.view, this.decorations);
+      // Keep typing responsive by mapping existing decorations immediately
+      // and coalescing an actual rebuild after input settles.
+      this.decorations = this.decorations.map(update.changes);
+      this.scheduleDeferredRefresh(update.view);
     }
 
-    private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {
+    private safeBuild(
+      view: EditorView,
+      fallback: DecorationSet,
+      marginLines: number,
+    ): DecorationSet {
       try {
-        return buildMarkdownDecorations(view, this.fenceCache, this.matcherCache);
+        return buildMarkdownDecorations(
+          view,
+          this.fenceCache,
+          this.matcherCache,
+          marginLines,
+        );
       } catch (error) {
         console.error("Markdown decoration build failed:", error);
         return fallback;
@@ -746,6 +1028,10 @@ const markdownRichPlugin = ViewPlugin.fromClass(
 
     destroy() {
       this.destroyed = true;
+      if (this.pendingRefreshTimer !== null) {
+        clearTimeout(this.pendingRefreshTimer);
+        this.pendingRefreshTimer = null;
+      }
     }
   },
   {

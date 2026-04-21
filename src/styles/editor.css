@@ -258,6 +258,10 @@
   opacity: 0.5;
 }
 
+.md-token-list {
+  opacity: 0.82;
+}
+
 .md-heading-content {
   color: var(--fg);
 }
@@ -310,6 +314,25 @@
   color: transparent;
   opacity: 0;
   font-size: 0;
+  user-select: none;
+  pointer-events: none;
+}
+
+.md-hidden-token {
+  color: transparent;
+  opacity: 0;
+  font-size: 0;
+  letter-spacing: 0;
+  user-select: none;
+  pointer-events: none;
+}
+
+.md-unordered-list-glyph {
+  display: inline-block;
+  min-width: 1ch;
+  text-align: center;
+  color: var(--fg-dim);
+  font-weight: 700;
   user-select: none;
   pointer-events: none;
 }

@@ -361,6 +361,187 @@ test("buildMarkdownDecorationsForSpans handles unsorted visible spans", () => {
   );
 });
 
+test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret enters token", () => {
+  const doc = Text.of(["**bold** tail"]);
+  const line = doc.line(1);
+
+  const hidden = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+  );
+  const hiddenFlat = collectDecorations(hidden);
+
+  assert.ok(
+    hiddenFlat.some(
+      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    "opening strong marker should be hidden when caret is elsewhere",
+  );
+  assert.ok(
+    hiddenFlat.some(
+      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+    ),
+    "closing strong marker should be hidden when caret is elsewhere",
+  );
+
+  const revealed = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 3, to: line.from + 3, empty: true },
+  );
+  const revealedFlat = collectDecorations(revealed);
+
+  assert.equal(
+    revealedFlat.some(
+      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "opening marker replacement should be removed when caret enters token content",
+  );
+  assert.equal(
+    revealedFlat.some(
+      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "closing marker replacement should be removed when caret enters token content",
+  );
+
+  const revealFromOpeningMarker = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 1, to: line.from + 1, empty: true },
+  );
+  const revealFromOpeningFlat = collectDecorations(revealFromOpeningMarker);
+  assert.equal(
+    revealFromOpeningFlat.some(
+      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "opening marker replacement should be removed when caret is inside opening marker",
+  );
+  assert.equal(
+    revealFromOpeningFlat.some(
+      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "closing marker replacement should also be removed when caret is inside opening marker",
+  );
+
+  const revealFromClosingMarker = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 6, to: line.from + 6, empty: true },
+  );
+  const revealFromClosingFlat = collectDecorations(revealFromClosingMarker);
+  assert.equal(
+    revealFromClosingFlat.some(
+      (d) => d.from === line.from && d.to === line.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "opening marker replacement should be removed when caret is inside closing marker",
+  );
+  assert.equal(
+    revealFromClosingFlat.some(
+      (d) => d.from === line.from + 6 && d.to === line.from + 8 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "closing marker replacement should be removed when caret is inside closing marker",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans hides heading and quote prefixes off-caret", () => {
+  const doc = Text.of(["# heading", "> quote"]);
+  const headingLine = doc.line(1);
+  const quoteLine = doc.line(2);
+
+  const hidden = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 2 }],
+    [],
+  );
+  const hiddenFlat = collectDecorations(hidden);
+  assert.ok(
+    hiddenFlat.some(
+      (d) => d.from === headingLine.from && d.to === headingLine.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    "heading marker prefix should be hidden when line is not active",
+  );
+  assert.ok(
+    hiddenFlat.some(
+      (d) => d.from === quoteLine.from && d.to === quoteLine.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    "quote marker prefix should be hidden when line is not active",
+  );
+
+  const revealQuote = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 2 }],
+    [],
+    { from: quoteLine.from + 3, to: quoteLine.from + 3, empty: true },
+  );
+  const revealQuoteFlat = collectDecorations(revealQuote);
+  assert.equal(
+    revealQuoteFlat.some(
+      (d) => d.from === quoteLine.from && d.to === quoteLine.from + 2 && d.cls.includes("md-hidden-token"),
+    ),
+    false,
+    "quote marker replacement should be removed for active quote line",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans keeps ordered list markers visible and stylizes unordered markers", () => {
+  const doc = Text.of(["  - bullet", "  1.2 item"]);
+  const bulletLine = doc.line(1);
+  const orderedLine = doc.line(2);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 2 }],
+    [],
+  );
+  const flat = collectDecorations(decos);
+  assert.ok(
+    flat.some(
+      (d) =>
+        d.from === orderedLine.from &&
+        d.to === orderedLine.from + 6 &&
+        d.cls.includes("md-token-list"),
+    ),
+    "ordered list prefix should remain visible via list token styling",
+  );
+  assert.ok(
+    flat.some(
+      (d) =>
+        d.from === bulletLine.from + 2 &&
+        d.to === bulletLine.from + 3 &&
+        d.cls === "",
+    ),
+    "unordered marker symbol should be replaced with styled glyph",
+  );
+
+  const revealBulletMarker = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 2 }],
+    [],
+    { from: bulletLine.from + 2, to: bulletLine.from + 2, empty: true },
+  );
+  const revealBulletFlat = collectDecorations(revealBulletMarker);
+  assert.equal(
+    revealBulletFlat.some(
+      (d) =>
+        d.from === bulletLine.from + 2 &&
+        d.to === bulletLine.from + 3 &&
+        d.cls === "",
+    ),
+    false,
+    "unordered source marker should be revealed while caret is on the marker",
+  );
+});
+
 test("buildMarkdownDecorationsForSpans hides unordered checklist list marker prefix", () => {
   const doc = Text.of(["- [ ] checklist"]);
   const line = doc.line(1);
