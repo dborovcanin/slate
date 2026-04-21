@@ -98,13 +98,14 @@ date_format = "%Y-%m-%d"
 date_time_format = "%Y-%m-%d %H:%M"
 
 [editor.variables]
-# Enable note-local reactive variables
+# Legacy compatibility flag (runtime gating is per-note via editor.modules)
 enabled = true
 # Minimum typed characters to show variable completion suggestions
 autocomplete_min_chars = 3
 
 [editor.modules]
 # Default per-note modules for newly created notes
+# Runtime behavior uses the active note's modules in both GUI and TUI.
 math = true
 table = true
 variables = true
@@ -174,6 +175,8 @@ pub struct ThemeConfig {
     pub vim_mode: bool,
     pub date_format: String,
     pub date_time_format: String,
+    // Compatibility-only parse field. Runtime variable gating is per-note via
+    // Note.modules.variables.
     pub variables_enabled: bool,
     pub variables_autocomplete_min_chars: u8,
     pub default_modules: EditorModulesConfig,

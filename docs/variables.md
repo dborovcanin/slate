@@ -24,6 +24,8 @@ total := subtotal + subtotal * tax rate
 - Scope is note-local (single note/document).
 - Definitions are global inside the note (not limited to paragraph/list/table block).
 - If a variable is assigned multiple times, the last assignment in the note wins.
+- Runtime enablement is per-note: `modules.variables` on the active note controls variable eval/autocomplete in GUI and TUI.
+- `[editor.modules]` config values are defaults for newly created notes.
 
 ## Evaluation
 
@@ -55,6 +57,10 @@ len + 2
 - Source: variable index from backend evaluation response.
 - Trigger: prefix match on normalized variable name.
 - Default threshold: 3 typed characters (configurable).
-- `Tab` behavior:
-  - if variable autocomplete popup is open, `Tab` accepts selected variable
-  - otherwise, `Tab` applies calc ghost result
+- TUI popup interactions:
+  - `Up/Down` moves the popup selection
+  - `Tab` or `Enter` accepts the selected variable
+  - `Esc` closes the popup
+- `Tab` fallback when popup is closed:
+  - variable autocomplete accept path (if available)
+  - otherwise calc ghost apply path

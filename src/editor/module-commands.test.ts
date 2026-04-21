@@ -4,7 +4,13 @@ import {
   listNoteModuleCommandSuggestions,
   tryExecuteNoteModuleCommand,
 } from "./module-commands.ts";
-import type { NoteModules } from "../api.ts";
+import {
+  DEFAULT_RUNTIME_FLAGS,
+  DEFAULT_THEME_CONFIG,
+  type Note,
+  type NoteModules,
+} from "../api.ts";
+import { effectiveModules, modulesForNote } from "./module-gating.ts";
 
 function modules(): NoteModules {
   return { math: true, table: true, variables: true, style: true };
@@ -46,4 +52,36 @@ test("module suggestions are shown for empty input and module prefix", () => {
   const filtered = listNoteModuleCommandSuggestions("module off");
   assert.ok(filtered.length > 0);
   assert.ok(filtered.every((entry) => entry.value.startsWith("module off")));
+});
+
+function noteWithModules(modules: NoteModules): Note {
+  return {
+    id: "n1",
+    body: "",
+    modules,
+    created_at: "",
+    updated_at: "",
+  };
+}
+
+test("effectiveModules gates variables by per-note module even when global legacy flag is true", () => {
+  const config = {
+    ...DEFAULT_THEME_CONFIG,
+    variables_enabled: true,
+  };
+  const note = noteWithModules({ math: true, table: true, variables: false, style: true });
+  const resolved = modulesForNote(note, config);
+  const loaded = effectiveModules(resolved, DEFAULT_RUNTIME_FLAGS);
+  assert.equal(loaded.variables, false);
+});
+
+test("effectiveModules keeps variables enabled when note module is on even if legacy flag is false", () => {
+  const config = {
+    ...DEFAULT_THEME_CONFIG,
+    variables_enabled: false,
+  };
+  const note = noteWithModules({ math: true, table: true, variables: true, style: true });
+  const resolved = modulesForNote(note, config);
+  const loaded = effectiveModules(resolved, DEFAULT_RUNTIME_FLAGS);
+  assert.equal(loaded.variables, true);
 });

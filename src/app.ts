@@ -37,6 +37,11 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 import { openDatePicker } from "./editor/date-picker";
 import { startupMark } from "./perf/startup.ts";
+import {
+  effectiveModules,
+  modulesForNote,
+  normalizeModules,
+} from "./editor/module-gating.ts";
 
 function ensureSummaryIncludesActive(noteId: string, body: string, summaries: NoteSummary[]): NoteSummary[] {
   if (summaries.some((summary) => summary.id === noteId)) return summaries;
@@ -48,36 +53,6 @@ function ensureSummaryIncludesActive(noteId: string, body: string, summaries: No
     },
     ...summaries,
   ];
-}
-
-const DEFAULT_NOTE_MODULES: NoteModules = {
-  math: true,
-  table: true,
-  variables: true,
-  style: true,
-};
-
-function normalizeModules(modules: Partial<NoteModules> | null | undefined): NoteModules {
-  if (!modules) return { ...DEFAULT_NOTE_MODULES };
-  return {
-    math: modules.math ?? true,
-    table: modules.table ?? true,
-    variables: modules.variables ?? true,
-    style: modules.style ?? true,
-  };
-}
-
-function modulesForNote(note: Note | null, config: ThemeConfig): NoteModules {
-  return normalizeModules(note?.modules ?? config.default_modules);
-}
-
-function effectiveModules(modules: NoteModules, flags: RuntimeFlags): NoteModules {
-  return {
-    math: modules.math && !flags.calc_disable,
-    table: modules.table,
-    variables: modules.variables && !flags.autocomplete_disable,
-    style: modules.style && !flags.markdown_disable,
-  };
 }
 
 function moduleIndicatorText(modules: NoteModules): string {
@@ -118,7 +93,7 @@ function editorOptionsForNote(note: Note | null) {
     disableMarkdownDecorations: appRuntimeFlags.markdown_disable || !loaded.style,
     disableFolding: appRuntimeFlags.folding_disable,
     disableNotify: appRuntimeFlags.notify_disable,
-    disableAutocomplete: appRuntimeFlags.autocomplete_disable || !loaded.variables,
+    disableAutocomplete: !loaded.variables,
     tableEnabled: loaded.table,
     markdownAutoformat: appConfig.markdown_autoformat && loaded.style,
     checklistAutoReorder: appConfig.checklist_auto_reorder && loaded.style,
@@ -126,7 +101,7 @@ function editorOptionsForNote(note: Note | null) {
     vimMode: !!appConfig.vim_mode,
     dateFormat: appConfig.date_format,
     dateTimeFormat: appConfig.date_time_format,
-    variablesEnabled: appConfig.variables_enabled && loaded.variables,
+    variablesEnabled: loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
     onClipWatchStateChange: (active: boolean) => {

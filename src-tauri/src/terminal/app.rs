@@ -14,8 +14,8 @@ use super::text_utils::*;
 use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
-use app_core::storage::NoteModules;
 use app_core::calc::CalcEngine;
+use app_core::storage::NoteModules;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
@@ -35,6 +35,7 @@ const OVERFLOW_RIGHT_MARKER: char = '>';
 const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
 const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
 const CALC_VIEWPORT_PREFETCH_MULTIPLIER: usize = 2;
+const VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS: usize = 3;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
@@ -98,6 +99,35 @@ struct SwitcherDeleteConfirm {
     note_title: String,
 }
 
+#[derive(Debug, Clone)]
+struct VariableCompletionPrefix {
+    from_col: usize,
+    to_col: usize,
+    query: String,
+}
+
+#[derive(Debug, Clone)]
+struct VariableAutocompleteState {
+    from_col: usize,
+    to_col: usize,
+    query: String,
+    suggestions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+struct VariableAutocompletePopupState {
+    visible: bool,
+    anchor_row: usize,
+    anchor_col: usize,
+    from_col: usize,
+    to_col: usize,
+    query: String,
+    suggestions: Vec<String>,
+    selected_index: usize,
+    cursor_line: usize,
+    cursor_col: usize,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -157,7 +187,8 @@ struct TerminalApp {
     markdown_autoformat: bool,
     checklist_auto_reorder: bool,
     // Calc/variables behavior
-    variables_enabled: bool,
+    variable_autocomplete_min_chars: usize,
+    variable_autocomplete_popup: VariableAutocompletePopupState,
     render_palette: render::RenderPalette,
     // Folding (real-line indexed, 0-based)
     folds: FoldingState,
@@ -185,7 +216,8 @@ impl TerminalApp {
         format_on_save: bool,
         markdown_autoformat: bool,
         checklist_auto_reorder: bool,
-        variables_enabled: bool,
+        _variables_enabled: bool,
+        variable_autocomplete_min_chars: u8,
         render_palette: render::RenderPalette,
         date_format: String,
         date_time_format: String,
@@ -211,11 +243,14 @@ impl TerminalApp {
             crate::editor_core::calc_plan::contains_builtin_formula(&lines);
         let initial_has_variable_assignment =
             crate::editor_core::calc_plan::contains_variable_assignment(&lines);
+        let note_variables_enabled = active_note.modules.variables;
+        let active_has_variable_assignment =
+            note_variables_enabled && initial_has_variable_assignment;
         let calc_viewport_only = lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
-            && initial_has_variable_assignment
+            && active_has_variable_assignment
             && !initial_has_builtin_formula;
-        let skip_initial_calc = calc_viewport_only
-            || (!initial_has_builtin_formula && !initial_has_variable_assignment);
+        let skip_initial_calc =
+            calc_viewport_only || (!initial_has_builtin_formula && !active_has_variable_assignment);
         let calc_begin = Instant::now();
         let calc_data = if skip_initial_calc {
             CalcData {
@@ -224,12 +259,7 @@ impl TerminalApp {
                 variable_names: Vec::new(),
             }
         } else {
-            compute_calc_data(
-                &calc_engine,
-                &lines,
-                variables_enabled && initial_has_variable_assignment,
-                None,
-            )
+            compute_calc_data(&calc_engine, &lines, active_has_variable_assignment, None)
         };
         let loading_calc_engine = calc_begin.elapsed();
 
@@ -335,7 +365,10 @@ impl TerminalApp {
             format_on_save,
             markdown_autoformat,
             checklist_auto_reorder,
-            variables_enabled,
+            variable_autocomplete_min_chars: usize::from(
+                variable_autocomplete_min_chars.clamp(1, 64),
+            ),
+            variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             render_palette,
             folds: FoldingState::empty(line_has_fold_structure),
             command_bar_from_normal: false,
@@ -477,6 +510,8 @@ impl TerminalApp {
     fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         let mut should_autoformat = false;
         let mut clamp_table_padding = true;
+        let mut moved_cursor = false;
+        let mut refresh_variable_popup = false;
         match key {
             Key::Ctrl('q') => {
                 self.quit = true;
@@ -506,19 +541,37 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::Ctrl('p') => {
+                self.dismiss_variable_autocomplete_popup();
                 self.open_switcher(db)?;
                 return Ok(());
             }
-            Key::ArrowUp => self.move_cursor_up(1),
-            Key::ArrowDown => self.move_cursor_down(1),
-            Key::ArrowLeft => self.move_cursor_left(),
-            Key::ArrowRight => self.move_cursor_right(),
+            Key::ArrowUp => {
+                if !self.move_variable_autocomplete_selection(-1) {
+                    self.move_cursor_up(1);
+                    moved_cursor = true;
+                }
+            }
+            Key::ArrowDown => {
+                if !self.move_variable_autocomplete_selection(1) {
+                    self.move_cursor_down(1);
+                    moved_cursor = true;
+                }
+            }
+            Key::ArrowLeft => {
+                self.move_cursor_left();
+                moved_cursor = true;
+            }
+            Key::ArrowRight => {
+                self.move_cursor_right();
+                moved_cursor = true;
+            }
             Key::CtrlArrowLeft => {
                 if !self.try_table_navigation_rule(true)
                     && !is_markdown_table_line(self.current_line())
                 {
                     self.move_cursor_left_word();
                 }
+                moved_cursor = true;
             }
             Key::CtrlArrowRight => {
                 if !self.try_table_navigation_rule(false)
@@ -526,6 +579,7 @@ impl TerminalApp {
                 {
                     self.move_cursor_right_word();
                 }
+                moved_cursor = true;
             }
             Key::CtrlBackspace => {
                 if self.try_table_header_delete_column_rule() {
@@ -536,6 +590,7 @@ impl TerminalApp {
                 } else {
                     should_autoformat = self.delete_word_backward();
                 }
+                refresh_variable_popup = true;
             }
             Key::CtrlDelete => {
                 if self.try_table_header_delete_column_rule() {
@@ -547,11 +602,24 @@ impl TerminalApp {
                     self.delete_forward();
                     should_autoformat = true;
                 }
+                refresh_variable_popup = true;
             }
-            Key::PageUp => self.move_cursor_up(self.editor_height().saturating_sub(1)),
-            Key::PageDown => self.move_cursor_down(self.editor_height().saturating_sub(1)),
-            Key::Home => self.cursor_col = 0,
-            Key::End => self.cursor_col = line_char_len(self.current_line()),
+            Key::PageUp => {
+                self.move_cursor_up(self.editor_height().saturating_sub(1));
+                moved_cursor = true;
+            }
+            Key::PageDown => {
+                self.move_cursor_down(self.editor_height().saturating_sub(1));
+                moved_cursor = true;
+            }
+            Key::Home => {
+                self.cursor_col = 0;
+                moved_cursor = true;
+            }
+            Key::End => {
+                self.cursor_col = line_char_len(self.current_line());
+                moved_cursor = true;
+            }
             Key::Backspace => {
                 if let Some(changed) = self.try_table_boundary_edit_rule(true, false) {
                     should_autoformat = changed;
@@ -559,6 +627,7 @@ impl TerminalApp {
                     self.backspace();
                     should_autoformat = true;
                 }
+                refresh_variable_popup = true;
             }
             Key::Delete => {
                 if let Some(changed) = self.try_table_boundary_edit_rule(false, false) {
@@ -567,21 +636,31 @@ impl TerminalApp {
                     self.delete_forward();
                     should_autoformat = true;
                 }
+                refresh_variable_popup = true;
             }
             Key::Enter => {
-                if !self.try_enter_rule() {
-                    self.insert_newline();
+                if self.apply_variable_autocomplete_popup_selection() {
+                    should_autoformat = true;
+                } else {
+                    if !self.try_enter_rule() {
+                        self.insert_newline();
+                    }
+                    refresh_variable_popup = true;
+                    should_autoformat = true;
                 }
-                should_autoformat = true;
             }
             Key::Tab => {
-                if self.apply_calc_tab() {
+                if self.apply_variable_autocomplete_tab() {
+                    should_autoformat = true;
+                    // handled
+                } else if self.apply_calc_tab() {
                     should_autoformat = true;
                     // handled
                 } else if !self.try_table_navigation_rule(false) && !self.try_tab_rule(false) {
                     self.insert_text("  ");
                     should_autoformat = true;
                 }
+                refresh_variable_popup = true;
             }
             Key::BackTab => {
                 if !self.try_table_navigation_rule(true) && self.try_tab_rule(true) {
@@ -596,9 +675,11 @@ impl TerminalApp {
                 self.command_selection_linewise = false;
                 self.mode = UiMode::CommandBar;
                 self.status = ":".to_string();
+                self.dismiss_variable_autocomplete_popup();
                 return Ok(());
             }
             Key::Ctrl('f') => {
+                self.dismiss_variable_autocomplete_popup();
                 self.open_search();
                 return Ok(());
             }
@@ -607,6 +688,7 @@ impl TerminalApp {
                 // Pasted content should stay as-is; skip per-keystroke
                 // autoformat pass that would otherwise scan the full document.
                 should_autoformat = false;
+                refresh_variable_popup = true;
             }
             Key::Char(ch) => {
                 if ch == '|' && self.try_table_pipe_insert_column_rule() {
@@ -616,6 +698,7 @@ impl TerminalApp {
                     self.insert_char(ch);
                     should_autoformat = true;
                 }
+                refresh_variable_popup = true;
                 if ch == ' ' && is_markdown_table_line(self.current_line()) {
                     // Let users type multi-word table cell content without
                     // instant trim/realign fighting the cursor.
@@ -626,9 +709,14 @@ impl TerminalApp {
                 }
             }
             Key::Esc => {
-                self.mode = UiMode::Normal;
-                self.vim_state = crate::editor_core::vim::VimState::default();
-                self.status = "-- NORMAL --".to_string();
+                if self.variable_autocomplete_popup.visible {
+                    self.dismiss_variable_autocomplete_popup();
+                } else {
+                    self.mode = UiMode::Normal;
+                    self.vim_state = crate::editor_core::vim::VimState::default();
+                    self.status = "-- NORMAL --".to_string();
+                    self.dismiss_variable_autocomplete_popup();
+                }
             }
             Key::Ctrl(_) => {}
         }
@@ -638,6 +726,16 @@ impl TerminalApp {
 
         if should_autoformat {
             self.try_autoformat_rules();
+        }
+
+        if self.mode == UiMode::Editor {
+            if moved_cursor {
+                self.dismiss_variable_autocomplete_popup();
+            } else if refresh_variable_popup {
+                self.refresh_variable_autocomplete_popup();
+            }
+        } else {
+            self.dismiss_variable_autocomplete_popup();
         }
 
         Ok(())
@@ -2103,6 +2201,7 @@ impl TerminalApp {
     }
 
     fn open_date_picker(&mut self, action: DatePickerAction, require_time: bool) {
+        self.dismiss_variable_autocomplete_popup();
         if let Some((year, month, day, hour, minute)) = date_picker::current_local_datetime_parts()
         {
             self.date_year = year;
@@ -2309,6 +2408,7 @@ impl TerminalApp {
     }
 
     fn open_switcher(&mut self, db: &Db) -> Result<(), String> {
+        self.dismiss_variable_autocomplete_popup();
         self.refresh_switcher_items(db)?;
         self.mode = UiMode::Switcher;
         self.switcher_query.clear();
@@ -2321,6 +2421,7 @@ impl TerminalApp {
     }
 
     fn close_switcher(&mut self) {
+        self.dismiss_variable_autocomplete_popup();
         self.mode = UiMode::Editor;
         self.switcher_query.clear();
         self.switcher_matches.clear();
@@ -2461,6 +2562,7 @@ impl TerminalApp {
         self.active_note = note;
         self.lines = split_lines(&self.active_note.body);
         self.active_note.body = String::new();
+        self.dismiss_variable_autocomplete_popup();
         self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
         self.reminders_dirty = false;
         self.last_reminder_check = Instant::now();
@@ -2478,11 +2580,11 @@ impl TerminalApp {
         self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();
         self.calc_viewport_only = self.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
-            && self.calc.cached_has_variable_assignment
+            && self.active_has_variable_assignments()
             && !self.calc.cached_has_builtin_formula;
         self.calc_last_view_eval_range = None;
         if self.calc_viewport_only
-            || (!self.calc.cached_has_builtin_formula && !self.calc.cached_has_variable_assignment)
+            || (!self.calc.cached_has_builtin_formula && !self.active_has_variable_assignments())
         {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
@@ -2599,14 +2701,22 @@ impl TerminalApp {
             || crate::editor_core::markdown_tokens::list_marker_end(text).is_some()
     }
 
+    fn note_variables_module_enabled(&self) -> bool {
+        self.active_note.modules.variables
+    }
+
+    fn active_has_variable_assignments(&self) -> bool {
+        self.note_variables_module_enabled() && self.calc.cached_has_variable_assignment
+    }
+
     fn calc_variables_enabled(&self) -> bool {
-        self.variables_enabled && self.calc.cached_has_variable_assignment
+        self.active_has_variable_assignments()
     }
 
     fn should_defer_calc_recompute(&self) -> bool {
         self.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
             && !self.calc.cached_has_builtin_formula
-            && !self.calc.cached_has_variable_assignment
+            && !self.active_has_variable_assignments()
     }
 
     fn can_skip_calc_recompute(&self) -> bool {
@@ -2616,7 +2726,7 @@ impl TerminalApp {
         // doc size, which is the biggest input-latency win for notes that
         // don't use calc at all.
         !self.calc.cached_has_builtin_formula
-            && !self.calc.cached_has_variable_assignment
+            && !self.active_has_variable_assignments()
             && !self.calc.stale
     }
 
@@ -3313,6 +3423,7 @@ impl TerminalApp {
     // --- Search ---
 
     fn open_search(&mut self) {
+        self.dismiss_variable_autocomplete_popup();
         self.search_query.clear();
         self.search_matches.clear();
         self.search_current = 0;
@@ -3800,6 +3911,211 @@ impl TerminalApp {
         self.cursor_line += 1;
         self.cursor_col = 0;
         self.mark_edited_from_line(changed_from_line);
+    }
+
+    fn variable_autocomplete_state(&self) -> Option<VariableAutocompleteState> {
+        if self.mode != UiMode::Editor {
+            return None;
+        }
+        if !self.note_variables_module_enabled() || self.calc.variable_names.is_empty() {
+            return None;
+        }
+        let line = self.current_line();
+        let prefix = extract_variable_completion_prefix(line, self.cursor_col)?;
+        let suggestions = build_variable_suggestions(
+            &self.calc.variable_names,
+            &prefix.query,
+            self.variable_autocomplete_min_chars,
+            VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+        );
+        if suggestions.is_empty() {
+            return None;
+        }
+        Some(VariableAutocompleteState {
+            from_col: prefix.from_col,
+            to_col: prefix.to_col,
+            query: prefix.query,
+            suggestions,
+        })
+    }
+
+    fn variable_popup_anchor(&self, anchor_col: usize) -> Option<(usize, usize)> {
+        let (rows, cols) = input::terminal_size();
+        if rows <= EDITOR_TOP_ROW || cols == 0 {
+            return None;
+        }
+        let cursor_virtual = self.current_virtual_line();
+        let row = EDITOR_TOP_ROW
+            + cursor_virtual
+                .saturating_sub(self.scroll_line)
+                .min(rows.saturating_sub(2));
+        let gutter_width = self.gutter_width();
+        let available = cols.saturating_sub(gutter_width);
+        if available == 0 {
+            return None;
+        }
+        let line_text = self.current_line();
+        let line_col = anchor_col.min(line_char_len(line_text));
+        let display_col = display_cols_for_prefix(line_text, line_col);
+        let line_width = line_display_cols(line_text);
+        let visible_col =
+            viewport_col_for_display_col(display_col, line_width, self.scroll_col, available);
+        let col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
+        Some((row.max(EDITOR_TOP_ROW), col))
+    }
+
+    fn dismiss_variable_autocomplete_popup(&mut self) {
+        self.variable_autocomplete_popup = VariableAutocompletePopupState::default();
+    }
+
+    fn refresh_variable_autocomplete_popup(&mut self) {
+        let Some(state) = self.variable_autocomplete_state() else {
+            self.dismiss_variable_autocomplete_popup();
+            return;
+        };
+        let Some((anchor_row, anchor_col)) = self.variable_popup_anchor(state.from_col) else {
+            self.dismiss_variable_autocomplete_popup();
+            return;
+        };
+        let previous_selection = if self.variable_autocomplete_popup.visible
+            && self.variable_autocomplete_popup.cursor_line == self.cursor_line
+            && self.variable_autocomplete_popup.cursor_col <= self.cursor_col
+            && self.variable_autocomplete_popup.query == state.query
+        {
+            self.variable_autocomplete_popup
+                .suggestions
+                .get(self.variable_autocomplete_popup.selected_index)
+                .cloned()
+        } else {
+            None
+        };
+        let selected_index = previous_selection
+            .as_ref()
+            .and_then(|picked| state.suggestions.iter().position(|name| name == picked))
+            .unwrap_or(0)
+            .min(state.suggestions.len().saturating_sub(1));
+        self.variable_autocomplete_popup = VariableAutocompletePopupState {
+            visible: true,
+            anchor_row,
+            anchor_col,
+            from_col: state.from_col,
+            to_col: state.to_col,
+            query: state.query,
+            suggestions: state.suggestions,
+            selected_index,
+            cursor_line: self.cursor_line,
+            cursor_col: self.cursor_col,
+        };
+    }
+
+    fn move_variable_autocomplete_selection(&mut self, delta: isize) -> bool {
+        if !self.variable_autocomplete_popup.visible
+            || self.variable_autocomplete_popup.suggestions.is_empty()
+        {
+            return false;
+        }
+        let len = self.variable_autocomplete_popup.suggestions.len();
+        let current = self
+            .variable_autocomplete_popup
+            .selected_index
+            .min(len.saturating_sub(1));
+        let next = if delta >= 0 {
+            (current + delta as usize) % len
+        } else {
+            (current + len - ((-delta) as usize % len)) % len
+        };
+        self.variable_autocomplete_popup.selected_index = next;
+        true
+    }
+
+    fn apply_variable_autocomplete_pick(
+        &mut self,
+        from_col: usize,
+        to_col: usize,
+        pick: String,
+    ) -> bool {
+        let from_col = from_col.min(self.cursor_col);
+        let to_col = to_col.min(line_char_len(self.current_line()));
+        if from_col >= to_col {
+            return false;
+        }
+
+        let from_byte = byte_index(self.current_line(), from_col);
+        let to_byte = byte_index(self.current_line(), to_col);
+        self.lines[self.cursor_line].replace_range(from_byte..to_byte, &pick);
+        self.cursor_col = from_col + pick.chars().count();
+        self.mark_edited();
+        self.status = format!("autocomplete: {pick}");
+        self.dismiss_variable_autocomplete_popup();
+        true
+    }
+
+    fn apply_variable_autocomplete_popup_selection(&mut self) -> bool {
+        if !self.variable_autocomplete_popup.visible
+            || self.variable_autocomplete_popup.cursor_line != self.cursor_line
+            || self.variable_autocomplete_popup.cursor_col > self.cursor_col
+        {
+            self.dismiss_variable_autocomplete_popup();
+            return false;
+        }
+        let pick = self
+            .variable_autocomplete_popup
+            .suggestions
+            .get(self.variable_autocomplete_popup.selected_index)
+            .cloned();
+        let Some(pick) = pick else {
+            self.dismiss_variable_autocomplete_popup();
+            return false;
+        };
+        self.apply_variable_autocomplete_pick(
+            self.variable_autocomplete_popup.from_col,
+            self.variable_autocomplete_popup.to_col,
+            pick,
+        )
+    }
+
+    fn variable_autocomplete_status_hint(&self) -> Option<String> {
+        let (query, suggestions, selected) = if self.variable_autocomplete_popup.visible {
+            (
+                self.variable_autocomplete_popup.query.clone(),
+                self.variable_autocomplete_popup.suggestions.clone(),
+                Some(self.variable_autocomplete_popup.selected_index),
+            )
+        } else {
+            let state = self.variable_autocomplete_state()?;
+            (state.query, state.suggestions, None)
+        };
+        let picks = suggestions
+            .iter()
+            .take(VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS)
+            .enumerate()
+            .map(|(idx, suggestion)| {
+                if selected == Some(idx) {
+                    format!(">{suggestion}<")
+                } else {
+                    suggestion.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("  ");
+        if picks.is_empty() {
+            None
+        } else {
+            Some(format!("var {query} -> {picks} (Tab/Enter)"))
+        }
+    }
+
+    fn apply_variable_autocomplete_tab(&mut self) -> bool {
+        if self.variable_autocomplete_popup.visible {
+            return self.apply_variable_autocomplete_popup_selection();
+        }
+        let Some(state) = self.variable_autocomplete_state() else {
+            return false;
+        };
+        let Some(pick) = state.suggestions.first().cloned() else {
+            return false;
+        };
+        self.apply_variable_autocomplete_pick(state.from_col, state.to_col, pick)
     }
 
     fn apply_calc_tab(&mut self) -> bool {
@@ -4391,6 +4707,124 @@ impl TerminalApp {
         self.calc_last_view_eval_range = Some(eval_range);
     }
 
+    fn draw_variable_autocomplete_popup(&self, buf: &mut String, rows: usize, cols: usize) {
+        if self.mode != UiMode::Editor
+            || !self.variable_autocomplete_popup.visible
+            || self.variable_autocomplete_popup.suggestions.is_empty()
+            || cols == 0
+            || rows <= EDITOR_TOP_ROW
+        {
+            return;
+        }
+
+        let max_editor_row = rows.saturating_sub(1);
+        let available_editor_rows = max_editor_row.saturating_sub(EDITOR_TOP_ROW) + 1;
+        if available_editor_rows < 3 {
+            return;
+        }
+
+        let max_suggestions = available_editor_rows.saturating_sub(2).max(1);
+        let visible_count = self
+            .variable_autocomplete_popup
+            .suggestions
+            .len()
+            .min(max_suggestions);
+        let suggestions = &self.variable_autocomplete_popup.suggestions[..visible_count];
+        let selected_index = self
+            .variable_autocomplete_popup
+            .selected_index
+            .min(visible_count.saturating_sub(1));
+
+        let inner_width = suggestions
+            .iter()
+            .map(|item| item.chars().count() + 2)
+            .max()
+            .unwrap_or(1)
+            .min(cols.saturating_sub(2).max(1));
+        let box_width = (inner_width + 2).min(cols.max(1));
+        let box_height = visible_count + 2;
+
+        let mut x = self.variable_autocomplete_popup.anchor_col.min(cols.max(1));
+        if x + box_width > cols + 1 {
+            x = cols.saturating_sub(box_width).saturating_add(1).max(1);
+        }
+
+        let preferred_top = self
+            .variable_autocomplete_popup
+            .anchor_row
+            .saturating_add(1);
+        let mut y = preferred_top;
+        if y + box_height > max_editor_row + 1 {
+            y = self
+                .variable_autocomplete_popup
+                .anchor_row
+                .saturating_sub(box_height.saturating_sub(1));
+        }
+        y = y
+            .max(EDITOR_TOP_ROW)
+            .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
+
+        let border_style = AnsiStyle {
+            fg: Some(self.render_palette.code_type),
+            ..Default::default()
+        };
+        let row_style = AnsiStyle {
+            fg: Some(self.render_palette.variable),
+            ..Default::default()
+        };
+        let selected_bg = self.render_palette.search_current;
+        let selected_style = AnsiStyle {
+            fg: Some(contrast_fg_for_bg(selected_bg)),
+            bg: Some(selected_bg),
+            bold: true,
+            ..Default::default()
+        };
+
+        border_style.write_to(buf);
+        for dx in 0..box_width {
+            let ch = if dx == 0 || dx + 1 == box_width {
+                '+'
+            } else {
+                '-'
+            };
+            buf.push_str(&goto(y, x + dx));
+            buf.push(ch);
+            buf.push_str(&goto(y + box_height - 1, x + dx));
+            buf.push(ch);
+        }
+        for dy in 1..box_height.saturating_sub(1) {
+            buf.push_str(&goto(y + dy, x));
+            buf.push('|');
+            buf.push_str(&goto(y + dy, x + box_width - 1));
+            buf.push('|');
+        }
+        buf.push_str(render::RESET);
+
+        for (idx, suggestion) in suggestions.iter().enumerate() {
+            let row = y + 1 + idx;
+            let text = format!(" {suggestion}");
+            if idx == selected_index {
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    x + 1,
+                    box_width.saturating_sub(2),
+                    &text,
+                    selected_style,
+                );
+            } else {
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    x + 1,
+                    box_width.saturating_sub(2),
+                    &text,
+                    row_style,
+                );
+            }
+        }
+    }
+
     fn draw(&mut self, out: &mut impl Write) -> Result<(), String> {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
@@ -4777,9 +5211,15 @@ impl TerminalApp {
             }
         }
 
+        let status_owned = if self.mode == UiMode::Editor {
+            self.variable_autocomplete_status_hint()
+                .map(|hint| format!("{}  [{}]", self.status, hint))
+        } else {
+            None
+        };
         let status = match self.mode {
-            UiMode::Editor
-            | UiMode::Normal
+            UiMode::Editor => status_owned.as_deref().unwrap_or(&self.status),
+            UiMode::Normal
             | UiMode::CommandBar
             | UiMode::Search
             | UiMode::Visual
@@ -4853,6 +5293,7 @@ impl TerminalApp {
                 self.render_palette,
             );
         }
+        self.draw_variable_autocomplete_popup(&mut buf, rows, cols);
 
         let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
         if let Some((line_text, mapped_col)) = cursor_line_override {
@@ -4986,6 +5427,7 @@ pub fn run_terminal_session(
         config.markdown_autoformat,
         config.checklist_auto_reorder,
         config.variables_enabled,
+        config.variables_autocomplete_min_chars,
         render::RenderPalette::for_color_scheme(&config.color_scheme),
         config.date_format.clone(),
         config.date_time_format.clone(),
@@ -5411,6 +5853,63 @@ fn table_cell_navigation_anchor(line: &str, cell: &TableCellInfo) -> usize {
     line[..anchor_byte].chars().count()
 }
 
+fn variable_query_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric() || ch == '_' || ch == ' '
+}
+
+fn extract_variable_completion_prefix(
+    line_text: &str,
+    cursor_col: usize,
+) -> Option<VariableCompletionPrefix> {
+    let chars = line_text.chars().collect::<Vec<_>>();
+    let col = cursor_col.min(chars.len());
+    let mut from = col;
+
+    while from > 0 && variable_query_char(chars[from - 1]) {
+        from -= 1;
+    }
+
+    while from < col && chars[from] == ' ' {
+        from += 1;
+    }
+
+    if from >= col {
+        return None;
+    }
+
+    let query = chars[from..col].iter().collect::<String>();
+    if query.is_empty() || query.ends_with(' ') {
+        return None;
+    }
+
+    Some(VariableCompletionPrefix {
+        from_col: from,
+        to_col: col,
+        query,
+    })
+}
+
+fn build_variable_suggestions(
+    variable_names: &[String],
+    query: &str,
+    min_chars: usize,
+    max_suggestions: usize,
+) -> Vec<String> {
+    let normalized_query = query.trim().to_lowercase();
+    if normalized_query.chars().count() < min_chars {
+        return Vec::new();
+    }
+
+    let mut matches = variable_names
+        .iter()
+        .filter(|name| name.starts_with(&normalized_query) && **name != normalized_query)
+        .cloned()
+        .collect::<Vec<_>>();
+    matches.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+    matches.truncate(max_suggestions.max(1));
+    matches
+}
+
 struct TableFormulaSegment {
     from_byte: usize,
     to_byte: usize,
@@ -5476,10 +5975,11 @@ mod tests {
     use super::folding::describe_fold_ranges;
     use super::input::Key;
     use super::{
-        builtin_formula_label, compute_calc_results, compute_calc_trailer_refresh,
-        find_calc_segment_range, find_table_formula_segment, format_formula_display_value,
-        rendered_line_display_cols, should_mask_formula_cell, table_cell_info_at_char,
-        table_cell_is_empty, table_cell_navigation_anchor,
+        build_variable_suggestions, builtin_formula_label, compute_calc_results,
+        compute_calc_trailer_refresh, extract_variable_completion_prefix, find_calc_segment_range,
+        find_table_formula_segment, format_formula_display_value, rendered_line_display_cols,
+        should_mask_formula_cell, table_cell_info_at_char, table_cell_is_empty,
+        table_cell_navigation_anchor,
     };
     use super::{display_cols_for_prefix, line_char_len};
     use super::{TerminalApp, TerminalOptions, UiMode};
@@ -5516,6 +6016,7 @@ mod tests {
             true,
             true,
             true,
+            3,
             super::render::RenderPalette::default(),
             "%Y-%m-%d".to_string(),
             "%Y-%m-%d %H:%M".to_string(),
@@ -5529,6 +6030,15 @@ mod tests {
         for key in keys {
             app.handle_key(db, key.clone())
                 .expect("key sequence should apply");
+        }
+    }
+
+    fn note_modules_with_variables(enabled: bool) -> app_core::storage::NoteModules {
+        app_core::storage::NoteModules {
+            math: true,
+            table: true,
+            variables: enabled,
+            style: true,
         }
     }
 
@@ -6303,6 +6813,44 @@ mod tests {
     }
 
     #[test]
+    fn variable_completion_prefix_resolves_current_query_span() {
+        let prefix =
+            extract_variable_completion_prefix("total cost + tax", 10).expect("prefix exists");
+        assert_eq!(prefix.from_col, 0);
+        assert_eq!(prefix.to_col, 10);
+        assert_eq!(prefix.query, "total cost");
+    }
+
+    #[test]
+    fn variable_completion_prefix_skips_leading_spaces_and_rejects_trailing_space() {
+        let prefix = extract_variable_completion_prefix("   total", 8).expect("prefix exists");
+        assert_eq!(prefix.from_col, 3);
+        assert_eq!(prefix.to_col, 8);
+        assert_eq!(prefix.query, "total");
+
+        assert!(extract_variable_completion_prefix("total ", 6).is_none());
+    }
+
+    #[test]
+    fn variable_suggestions_require_min_chars_and_exclude_exact_match() {
+        let variables = vec![
+            "total cost".to_string(),
+            "tax".to_string(),
+            "total revenue".to_string(),
+        ];
+
+        assert!(build_variable_suggestions(&variables, "to", 3, 8).is_empty());
+
+        let picks = build_variable_suggestions(&variables, "tot", 3, 8);
+        assert_eq!(
+            picks,
+            vec!["total cost".to_string(), "total revenue".to_string()]
+        );
+
+        assert!(build_variable_suggestions(&variables, "total cost", 3, 8).is_empty());
+    }
+
+    #[test]
     fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
         let (db, app, path) = app_with_note("plain line\nanother plain line");
 
@@ -6817,6 +7365,171 @@ mod tests {
 
         assert_eq!(app.lines[1], "- [ ] 15");
         assert_eq!(app.cursor_col, app.lines[1].chars().count());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn variable_autocomplete_popup_appears_after_min_chars_and_supports_selection_keys() {
+        let (db, mut app, path) = app_with_note("total cost := 10\ntotal revenue := 20\nto");
+        app.cursor_line = 2;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(!app.variable_autocomplete_popup.visible);
+
+        app.handle_editor_key(&db, Key::Char('t'))
+            .expect("typing triggers popup refresh");
+        assert!(app.variable_autocomplete_popup.visible);
+        assert_eq!(app.variable_autocomplete_popup.selected_index, 0);
+        assert_eq!(app.variable_autocomplete_popup.suggestions.len(), 2);
+
+        app.handle_editor_key(&db, Key::ArrowDown)
+            .expect("down picks next");
+        assert_eq!(app.variable_autocomplete_popup.selected_index, 1);
+        assert_eq!(app.cursor_line, 2);
+        assert_eq!(app.cursor_col, 3);
+
+        app.handle_editor_key(&db, Key::ArrowUp)
+            .expect("up picks previous");
+        assert_eq!(app.variable_autocomplete_popup.selected_index, 0);
+
+        app.handle_editor_key(&db, Key::Enter)
+            .expect("enter accepts selected suggestion");
+        assert_eq!(app.lines[2], "total cost");
+        assert_eq!(app.cursor_col, "total cost".chars().count());
+        assert!(!app.variable_autocomplete_popup.visible);
+
+        app.lines[2] = "tot".to_string();
+        app.cursor_col = 3;
+        app.refresh_variable_autocomplete_popup();
+        app.handle_editor_key(&db, Key::ArrowDown)
+            .expect("down selects second suggestion");
+        app.handle_editor_key(&db, Key::Tab)
+            .expect("tab accepts selected suggestion");
+        assert_eq!(app.lines[2], "total revenue");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn autocomplete_popup_esc_dismisses_and_tab_fallback_still_accepts_variable() {
+        let (db, mut app, path) = app_with_note("total cost := 10\ntotal revenue := 20\ntot");
+        app.cursor_line = 2;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(app.variable_autocomplete_popup.visible);
+
+        app.handle_editor_key(&db, Key::Esc)
+            .expect("esc closes autocomplete popup");
+        assert_eq!(app.mode, UiMode::Editor);
+        assert!(!app.variable_autocomplete_popup.visible);
+
+        app.handle_editor_key(&db, Key::Tab)
+            .expect("tab fallback still applies variable autocomplete");
+        assert_eq!(app.lines[2], "total cost");
+        assert_eq!(app.status, "autocomplete: total cost");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn autocomplete_popup_closes_on_cursor_movement() {
+        let (db, mut app, path) = app_with_note("total cost := 10\ntot");
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(app.variable_autocomplete_popup.visible);
+
+        app.handle_editor_key(&db, Key::ArrowLeft)
+            .expect("left moves cursor");
+        assert!(!app.variable_autocomplete_popup.visible);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn variable_autocomplete_is_disabled_when_active_note_module_is_off() {
+        let (db, mut app, path) = app_with_note("total cost := 10\ntot");
+        db.set_note_modules("n1", note_modules_with_variables(false))
+            .expect("disable variable module");
+        let note = db
+            .get_note("n1")
+            .expect("note lookup")
+            .expect("note exists");
+        app.set_active_note(&db, note).expect("activate note");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(!app.variable_autocomplete_popup.visible);
+        assert!(!app.calc_variables_enabled());
+
+        app.handle_editor_key(&db, Key::Tab)
+            .expect("tab falls back when variable module is off");
+        assert_eq!(app.lines[1], "tot  ");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn switching_notes_refreshes_variable_module_gating_immediately() {
+        let (db, mut app, path) = app_with_note("total cost := 10\ntot");
+        db.set_note_modules("n1", note_modules_with_variables(false))
+            .expect("disable n1 variable module");
+        let note1 = db.get_note("n1").expect("n1 lookup").expect("n1 exists");
+        app.set_active_note(&db, note1).expect("activate n1");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(!app.variable_autocomplete_popup.visible);
+
+        db.save_note("n2", "total cost := 10\ntot")
+            .expect("save n2");
+        db.set_note_modules("n2", note_modules_with_variables(true))
+            .expect("enable n2 variable module");
+        let note2 = db.get_note("n2").expect("n2 lookup").expect("n2 exists");
+        app.set_active_note(&db, note2).expect("activate n2");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(app.variable_autocomplete_popup.visible);
+        assert!(app.calc_variables_enabled());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn tab_accepts_variable_autocomplete_for_active_prefix() {
+        let (db, mut app, path) = app_with_note("total cost := 10\ntot");
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+        assert!(!app.variable_autocomplete_popup.visible);
+
+        let hint = app
+            .variable_autocomplete_status_hint()
+            .expect("autocomplete hint");
+        assert!(hint.contains("total cost"));
+
+        app.handle_editor_key(&db, Key::Tab)
+            .expect("tab accepts autocomplete");
+
+        assert_eq!(app.lines[1], "total cost");
+        assert_eq!(app.cursor_col, "total cost".chars().count());
+        assert_eq!(app.status, "autocomplete: total cost");
 
         drop(app);
         drop(db);

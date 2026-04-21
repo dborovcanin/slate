@@ -472,11 +472,9 @@ pub fn execute_command(
     raw_input: &str,
     mode: CommandMode,
 ) -> CommandExecutionResult {
-    if let Some(result) = crate::editor_core::substitute::try_execute_vim_substitute(
-        snapshot,
-        raw_input,
-        mode,
-    ) {
+    if let Some(result) =
+        crate::editor_core::substitute::try_execute_vim_substitute(snapshot, raw_input, mode)
+    {
         return result;
     }
 

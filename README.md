@@ -291,6 +291,7 @@ vim_mode = false
 date_format = "%Y-%m-%d"
 
 [editor.variables]
+# compatibility-only (runtime uses per-note modules.variables)
 enabled = true
 autocomplete_min_chars = 3
 
@@ -359,7 +360,7 @@ Editor options:
 - `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
 
 Variable options:
-- `[editor.variables] enabled = true` turns note-local variable resolution/autocomplete on or off
+- `[editor.variables] enabled = true` is kept for compatibility only (runtime variable gating is controlled by each note's `modules.variables`)
 - `[editor.variables] autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
 
 Module defaults for new notes:
@@ -367,6 +368,7 @@ Module defaults for new notes:
 - `[editor.modules] table = true` enables markdown table navigation/editing module
 - `[editor.modules] variables = true` enables variable features module
 - `[editor.modules] style = true` enables markdown styling/list helpers module
+- Active-note module state controls runtime behavior in both GUI and TUI
 
 Per-note module commands:
 - `:module status` shows current note module state

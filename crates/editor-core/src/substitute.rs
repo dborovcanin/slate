@@ -67,7 +67,9 @@ fn unescape_substitute_segment(segment: &str, delimiter: char) -> String {
     out
 }
 
-pub fn parse_vim_substitute_command(raw_input: &str) -> Result<Option<VimSubstituteCommand>, String> {
+pub fn parse_vim_substitute_command(
+    raw_input: &str,
+) -> Result<Option<VimSubstituteCommand>, String> {
     let trimmed = raw_input.trim();
     let command = trimmed.strip_prefix(':').unwrap_or(trimmed);
     if command.is_empty() {
@@ -231,7 +233,10 @@ mod tests {
         EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },
-            changed_range: Some(TextRange { from: anchor, to: head }),
+            changed_range: Some(TextRange {
+                from: anchor,
+                to: head,
+            }),
         }
     }
 
@@ -263,4 +268,3 @@ mod tests {
         assert_eq!(op.changes[0].insert, "omega beta");
     }
 }
-

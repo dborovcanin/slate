@@ -5,8 +5,8 @@ use wasm_bindgen::JsCast;
 use crate::calc_plan::{
     self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
 };
-use crate::command_history;
 use crate::command_catalog;
+use crate::command_history;
 use crate::context::ResolvedContext;
 use crate::folding;
 use crate::format::format_markdown;
@@ -652,7 +652,11 @@ fn fold_range_to_js_1_based(range: &folding::FoldRange) -> JsValue {
         "startLine",
         JsValue::from_f64((range.start_line + 1) as f64),
     );
-    let _ = set_prop(&out, "endLine", JsValue::from_f64((range.end_line + 1) as f64));
+    let _ = set_prop(
+        &out,
+        "endLine",
+        JsValue::from_f64((range.end_line + 1) as f64),
+    );
     let _ = set_prop(&out, "kind", JsValue::from_str(range.kind.as_str()));
     out.into()
 }

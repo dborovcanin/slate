@@ -1,6 +1,6 @@
 pub mod calc_plan;
-pub mod command_history;
 pub mod command_catalog;
+pub mod command_history;
 pub mod context;
 pub mod folding;
 pub mod format;

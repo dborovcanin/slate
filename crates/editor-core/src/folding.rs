@@ -66,10 +66,7 @@ fn is_list_fold_line(line: &str) -> bool {
     markdown_tokens::list_marker_end(line).is_some()
 }
 
-fn build_fold_ranges_with_options(
-    lines: &[String],
-    options: FoldBuildOptions,
-) -> Vec<FoldRange> {
+fn build_fold_ranges_with_options(lines: &[String], options: FoldBuildOptions) -> Vec<FoldRange> {
     if lines.len() <= 1 {
         return Vec::new();
     }

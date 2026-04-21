@@ -453,7 +453,10 @@ fn is_run(chars: &[char], pos: usize, marker: char, count: usize) -> bool {
 }
 
 pub fn is_inline_marker_token_kind(kind: InlineTokenType) -> bool {
-    matches!(kind, InlineTokenType::CodeMarker | InlineTokenType::LinkMarker)
+    matches!(
+        kind,
+        InlineTokenType::CodeMarker | InlineTokenType::LinkMarker
+    )
 }
 
 fn is_marker_left_boundary(chars: &[char], marker_start: usize) -> bool {
