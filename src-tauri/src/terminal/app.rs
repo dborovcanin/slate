@@ -32,6 +32,8 @@ const HORIZONTAL_SCROLL_LEFT_CONTEXT: usize = 2;
 const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
 const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
+const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
+const CALC_VIEWPORT_PREFETCH_MULTIPLIER: usize = 2;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
@@ -134,6 +136,8 @@ struct TerminalApp {
     command_selection_linewise: bool,
     // Calc ghost cache
     calc: CalcCache,
+    calc_viewport_only: bool,
+    calc_last_view_eval_range: Option<(usize, usize)>,
     reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
     reminders_dirty: bool,
     last_reminder_check: Instant,
@@ -203,11 +207,13 @@ impl TerminalApp {
             crate::editor_core::calc_plan::contains_builtin_formula(&lines);
         let initial_has_variable_assignment =
             crate::editor_core::calc_plan::contains_variable_assignment(&lines);
-        let defer_initial_calc = lines.len() >= LARGE_DOC_CALC_DEFER_LINES
-            && !initial_has_builtin_formula
-            && !initial_has_variable_assignment;
+        let calc_viewport_only = lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+            && initial_has_variable_assignment
+            && !initial_has_builtin_formula;
+        let skip_initial_calc = calc_viewport_only
+            || (!initial_has_builtin_formula && !initial_has_variable_assignment);
         let calc_begin = Instant::now();
-        let calc_data = if defer_initial_calc {
+        let calc_data = if skip_initial_calc {
             CalcData {
                 line_results: vec![None; lines.len()],
                 cell_results: vec![Vec::new(); lines.len()],
@@ -224,7 +230,7 @@ impl TerminalApp {
         let loading_calc_engine = calc_begin.elapsed();
 
         let (prev_line_hashes, prev_line_has_assignment, prev_line_has_builtin_formula) =
-            if defer_initial_calc {
+            if skip_initial_calc {
                 (Vec::new(), Vec::new(), Vec::new())
             } else {
                 (
@@ -305,10 +311,12 @@ impl TerminalApp {
                 prev_line_hashes,
                 prev_line_has_assignment,
                 prev_line_has_builtin_formula,
-                stale: defer_initial_calc,
+                stale: false,
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,
             },
+            calc_viewport_only,
+            calc_last_view_eval_range: None,
             reminder_ghosts,
             reminders_dirty: false,
             last_reminder_check: Instant::now(),
@@ -334,9 +342,13 @@ impl TerminalApp {
             draw_buf: String::new(),
         };
 
-        app.recompute_folding();
+        app.recompute_folding_from_cached_structure();
         app.adjust_cursor();
         app.adjust_scroll();
+        if app.calc_viewport_only {
+            let editor_height = app.editor_height();
+            app.ensure_calc_for_viewport(editor_height, true);
+        }
 
         let metrics = TerminalStartupMetrics {
             loading_note,
@@ -2412,7 +2424,21 @@ impl TerminalApp {
         self.fence_checkpoints.truncate(1);
         self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();
-        if self.should_defer_calc_recompute() {
+        self.calc_viewport_only = self.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+            && self.calc.cached_has_variable_assignment
+            && !self.calc.cached_has_builtin_formula;
+        self.calc_last_view_eval_range = None;
+        if self.calc_viewport_only
+            || (!self.calc.cached_has_builtin_formula && !self.calc.cached_has_variable_assignment)
+        {
+            self.calc.results = vec![None; self.lines.len()];
+            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+            self.calc.variable_names.clear();
+            self.calc.prev_line_hashes.clear();
+            self.calc.prev_line_has_assignment.clear();
+            self.calc.prev_line_has_builtin_formula.clear();
+            self.calc.stale = false;
+        } else if self.should_defer_calc_recompute() {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
@@ -2426,6 +2452,10 @@ impl TerminalApp {
         self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
+        if self.calc_viewport_only {
+            let editor_height = self.editor_height();
+            self.ensure_calc_for_viewport(editor_height, true);
+        }
         self.history
             .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
         Ok(())
@@ -2653,12 +2683,16 @@ impl TerminalApp {
     }
 
     fn recompute_folding(&mut self) {
-        self.folds.rescan_pending = false;
         self.folds.line_has_structure = self
             .lines
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect();
+        self.recompute_folding_from_cached_structure();
+    }
+
+    fn recompute_folding_from_cached_structure(&mut self) {
+        self.folds.rescan_pending = false;
         self.folds.ranges = folding::build_fold_ranges(&self.lines);
         self.folds.range_by_start = vec![None; self.lines.len()];
         for range in &self.folds.ranges {
@@ -4228,9 +4262,86 @@ impl TerminalApp {
         self.scroll_col = self.scroll_col.min(max_scroll);
     }
 
+    fn calc_eval_range_for_viewport(&self, editor_height: usize) -> Option<(usize, usize)> {
+        if self.lines.is_empty() || editor_height == 0 {
+            return None;
+        }
+        let visible_count = self.visible_line_count();
+        if visible_count == 0 {
+            return None;
+        }
+        let prefetch = editor_height.saturating_mul(CALC_VIEWPORT_PREFETCH_MULTIPLIER);
+        let start_virtual = self.scroll_line.saturating_sub(prefetch);
+        let end_virtual = self
+            .scroll_line
+            .saturating_add(editor_height)
+            .saturating_add(prefetch)
+            .min(visible_count.saturating_sub(1));
+        let start_line = self.real_line_for_virtual(start_virtual).unwrap_or(0);
+        let end_line_inclusive = self
+            .real_line_for_virtual(end_virtual)
+            .unwrap_or_else(|| self.lines.len().saturating_sub(1));
+        let end_line_exclusive = end_line_inclusive.saturating_add(1).min(self.lines.len());
+        if start_line >= end_line_exclusive {
+            None
+        } else {
+            Some((start_line, end_line_exclusive))
+        }
+    }
+
+    fn recompute_calc_range(&mut self, eval_from: usize, eval_to: usize) {
+        if eval_from >= eval_to || eval_to > self.lines.len() {
+            return;
+        }
+        let calc_data = compute_calc_data(
+            &self.calc.engine,
+            &self.lines,
+            self.calc_variables_enabled(),
+            Some((eval_from, eval_to)),
+        );
+        if self.calc.results.len() != self.lines.len() {
+            self.calc.results = vec![None; self.lines.len()];
+        }
+        if self.calc.cell_results.len() != self.lines.len() {
+            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+        }
+        for line_idx in eval_from..eval_to {
+            if let Some(slot) = self.calc.results.get_mut(line_idx) {
+                *slot = calc_data
+                    .line_results
+                    .get(line_idx)
+                    .cloned()
+                    .unwrap_or(None);
+            }
+            if let Some(slot) = self.calc.cell_results.get_mut(line_idx) {
+                *slot = calc_data
+                    .cell_results
+                    .get(line_idx)
+                    .cloned()
+                    .unwrap_or_default();
+            }
+        }
+        self.calc.variable_names = calc_data.variable_names;
+    }
+
+    fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {
+        if !self.calc_viewport_only {
+            return;
+        }
+        let Some(eval_range) = self.calc_eval_range_for_viewport(editor_height) else {
+            return;
+        };
+        if !force && self.calc_last_view_eval_range == Some(eval_range) {
+            return;
+        }
+        self.recompute_calc_range(eval_range.0, eval_range.1);
+        self.calc_last_view_eval_range = Some(eval_range);
+    }
+
     fn draw(&mut self, out: &mut impl Write) -> Result<(), String> {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
+        self.ensure_calc_for_viewport(editor_height, false);
         let gutter_width = self.gutter_width();
         let line_number_width = gutter_width.saturating_sub(2);
         let mut buf = std::mem::take(&mut self.draw_buf);
@@ -6102,6 +6213,112 @@ mod tests {
             results,
             vec![None, Some("15".to_string()), Some("16".to_string())]
         );
+    }
+
+    #[test]
+    fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
+        let (db, app, path) = app_with_note("plain line\nanother plain line");
+
+        assert!(!app.calc.cached_has_builtin_formula);
+        assert!(!app.calc.cached_has_variable_assignment);
+        assert!(!app.calc.stale);
+        assert_eq!(app.calc.results.len(), app.lines.len());
+        assert!(app.calc.results.iter().all(|entry| entry.is_none()));
+        assert!(app.calc.cell_results.iter().all(|row| row.is_empty()));
+        assert!(app.calc.prev_line_hashes.is_empty());
+        assert!(app.calc.prev_line_has_assignment.is_empty());
+        assert!(app.calc.prev_line_has_builtin_formula.is_empty());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn large_note_with_assignments_uses_viewport_calc_on_open() {
+        let mut lines = Vec::new();
+        lines.push("base := 1".to_string());
+        lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+        let body = lines.join("\n");
+        let (db, app, path) = app_with_note(&body);
+
+        assert!(app.calc_viewport_only);
+        assert!(app.calc_last_view_eval_range.is_some());
+        assert_eq!(
+            app.calc.results.get(1).and_then(|entry| entry.as_deref()),
+            Some("3")
+        );
+        assert_eq!(
+            app.calc.results.last().and_then(|entry| entry.as_deref()),
+            None
+        );
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn viewport_calc_evaluates_new_window_after_scroll() {
+        let mut lines = Vec::new();
+        lines.push("base := 1".to_string());
+        lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+        let body = lines.join("\n");
+        let (db, mut app, path) = app_with_note(&body);
+
+        let last_idx = app.lines.len().saturating_sub(1);
+        assert_eq!(
+            app.calc
+                .results
+                .get(last_idx)
+                .and_then(|entry| entry.as_deref()),
+            None
+        );
+
+        app.cursor_line = last_idx;
+        app.adjust_cursor();
+        app.adjust_scroll();
+        let mut out = Vec::new();
+        app.draw(&mut out).expect("draw after scroll");
+
+        assert_eq!(
+            app.calc
+                .results
+                .get(last_idx)
+                .and_then(|entry| entry.as_deref()),
+            Some("3")
+        );
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
+        let (db, mut app, path) = app_with_note("x := 4\nx + 2");
+        assert!(app.calc.cached_has_variable_assignment);
+        assert!(!app.calc.prev_line_hashes.is_empty());
+
+        let plain_note = db
+            .save_note("n2", "plain line\nstill plain")
+            .expect("save plain note");
+        app.set_active_note(&db, plain_note)
+            .expect("switch to plain note");
+
+        assert!(!app.calc.cached_has_builtin_formula);
+        assert!(!app.calc.cached_has_variable_assignment);
+        assert!(!app.calc.stale);
+        assert_eq!(app.calc.results.len(), app.lines.len());
+        assert!(app.calc.results.iter().all(|entry| entry.is_none()));
+        assert!(app.calc.cell_results.iter().all(|row| row.is_empty()));
+        assert!(app.calc.prev_line_hashes.is_empty());
+        assert!(app.calc.prev_line_has_assignment.is_empty());
+        assert!(app.calc.prev_line_has_builtin_formula.is_empty());
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
     }
 
     #[test]
