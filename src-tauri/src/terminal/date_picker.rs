@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, goto, AnsiStyle};
+use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, goto, AnsiStyle};
 use super::render::{self, RenderPalette};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,8 +195,8 @@ pub fn draw_date_picker(
     cols: usize,
     palette: RenderPalette,
 ) {
-    let box_w: usize = 38;
-    let box_h: usize = 15;
+    let box_w: usize = 46;
+    let box_h: usize = 18;
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
 
@@ -218,7 +218,7 @@ pub fn draw_date_picker(
         fg: Some(palette.variable),
         ..Default::default()
     };
-    let selected_bg = palette.search_current;
+    let selected_bg = palette.primary();
     let selected_day_style = AnsiStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
@@ -245,36 +245,44 @@ pub fn draw_date_picker(
         draw_row_at_styled(buf, y + dy, x, box_w, "", AnsiStyle::default());
     }
 
-    // Border
-    border_style.write_to(buf);
-    for dx in 0..box_w {
-        let ch = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
-        buf.push_str(&goto(y, x + dx));
-        buf.push(ch);
-        buf.push_str(&goto(y + box_h - 1, x + dx));
-        buf.push(ch);
-    }
-    for dy in 1..box_h.saturating_sub(1) {
-        buf.push_str(&goto(y + dy, x));
-        buf.push('|');
-        buf.push_str(&goto(y + dy, x + box_w - 1));
-        buf.push('|');
-    }
-    buf.push_str(render::RESET);
+    draw_box_border(buf, y, x, box_w, box_h, border_style);
+
+    let inner_w = box_w.saturating_sub(2);
+    let inner_h = box_h.saturating_sub(2);
+    let content_h = 14usize;
+    let content_top = y + 1 + inner_h.saturating_sub(content_h) / 2;
+    let title_row = content_top;
+    let header_row = title_row + 2;
+    let grid_start_row = header_row + 1;
+    let time_row = grid_start_row + 7;
+    let hint_row = time_row + 1;
+    let footer_row = hint_row + 2;
 
     // Title: month + year
     let month_name = MONTH_NAMES[view.month.saturating_sub(1).min(11) as usize];
     let title = format!("< {} {} >", month_name, view.year);
-    let title_x = x + 1 + (box_w.saturating_sub(2).saturating_sub(title.len())) / 2;
-    draw_row_at_styled(buf, y + 1, title_x, title.len(), &title, title_style);
+    let title_x = x + 1 + inner_w.saturating_sub(title.chars().count()) / 2;
+    draw_row_at_styled(
+        buf,
+        title_row,
+        title_x,
+        title.chars().count(),
+        &title,
+        title_style,
+    );
 
-    // Day headers
-    let header = " Mo Tu We Th Fr Sa Su ";
-    let inner_w = box_w.saturating_sub(2);
-    let hdr_text: String = header.chars().take(inner_w).collect();
-    buf.push_str(&goto(y + 2, x + 1));
+    // Calendar block
+    const CAL_COLS: usize = 7;
+    const CAL_CELL_W: usize = 4;
+    let calendar_block_w = CAL_COLS * CAL_CELL_W;
+    let calendar_x = x + 1 + inner_w.saturating_sub(calendar_block_w) / 2;
+    let weekday_labels = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
     header_style.write_to(buf);
-    buf.push_str(&hdr_text);
+    for (idx, label) in weekday_labels.iter().enumerate() {
+        let col = calendar_x + idx * CAL_CELL_W + (CAL_CELL_W.saturating_sub(label.len())) / 2;
+        buf.push_str(&goto(header_row, col));
+        buf.push_str(label);
+    }
     buf.push_str(render::RESET);
 
     // Calendar grid
@@ -285,8 +293,8 @@ pub fn draw_date_picker(
     let mut col_idx = first_dow as usize;
 
     for day in 1..=max_days {
-        let grid_row = y + 3 + row_idx;
-        let grid_col = x + 1 + col_idx * 3;
+        let grid_row = grid_start_row + row_idx;
+        let grid_col = calendar_x + col_idx * CAL_CELL_W + (CAL_CELL_W.saturating_sub(2) / 2);
 
         if grid_row < y + box_h - 1 {
             buf.push_str(&goto(grid_row, grid_col));
@@ -337,23 +345,23 @@ pub fn draw_date_picker(
     };
     draw_row_at_styled(
         buf,
-        y + box_h - 5,
-        x + 2,
-        inner_w.saturating_sub(2),
+        time_row,
+        x + 1 + inner_w.saturating_sub(time_label.chars().count()) / 2,
+        time_label.chars().count(),
         &time_label,
         time_style,
     );
     let hint = format!("{action}: h/l hour  j/k minute  Enter confirm");
     draw_row_at_styled(
         buf,
-        y + box_h - 4,
-        x + 2,
-        inner_w.saturating_sub(2),
+        hint_row,
+        x + 1 + inner_w.saturating_sub(hint.chars().count()) / 2,
+        hint.chars().count(),
         &hint,
         hint_style,
     );
-    let footer_x = x + 1 + (inner_w.saturating_sub(selected.chars().count())) / 2;
-    buf.push_str(&goto(y + box_h - 2, footer_x));
+    let footer_x = x + 1 + inner_w.saturating_sub(selected.chars().count()) / 2;
+    buf.push_str(&goto(footer_row, footer_x));
     footer_style.write_to(buf);
     buf.push_str(&selected);
     buf.push_str(render::RESET);

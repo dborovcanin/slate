@@ -105,3 +105,54 @@ pub fn draw_row_at_styled(
     buf.push_str(&pad_right(text, width));
     buf.push_str(render::RESET);
 }
+
+pub fn draw_box_border(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+    style: AnsiStyle,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let row = row.max(1);
+    let col = col.max(1);
+    style.write_to(buf);
+    if width == 1 || height == 1 {
+        for dx in 0..width {
+            buf.push_str(&goto(row, col + dx));
+            buf.push('─');
+        }
+        buf.push_str(render::RESET);
+        return;
+    }
+
+    buf.push_str(&goto(row, col));
+    buf.push('┌');
+    for dx in 1..width.saturating_sub(1) {
+        buf.push_str(&goto(row, col + dx));
+        buf.push('─');
+    }
+    buf.push_str(&goto(row, col + width - 1));
+    buf.push('┐');
+
+    let bottom = row + height - 1;
+    buf.push_str(&goto(bottom, col));
+    buf.push('└');
+    for dx in 1..width.saturating_sub(1) {
+        buf.push_str(&goto(bottom, col + dx));
+        buf.push('─');
+    }
+    buf.push_str(&goto(bottom, col + width - 1));
+    buf.push('┘');
+
+    for dy in 1..height.saturating_sub(1) {
+        buf.push_str(&goto(row + dy, col));
+        buf.push('│');
+        buf.push_str(&goto(row + dy, col + width - 1));
+        buf.push('│');
+    }
+    buf.push_str(render::RESET);
+}

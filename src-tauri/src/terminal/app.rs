@@ -1,4 +1,6 @@
-use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, goto, pad_right, AnsiStyle};
+use super::ansi::{
+    contrast_fg_for_bg, draw_box_border, draw_row_at_styled, goto, pad_right, AnsiStyle,
+};
 use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::{self, DatePickerAction, DatePickerView};
@@ -4772,7 +4774,7 @@ impl TerminalApp {
             fg: Some(self.render_palette.variable),
             ..Default::default()
         };
-        let selected_bg = self.render_palette.search_current;
+        let selected_bg = self.render_palette.primary();
         let selected_style = AnsiStyle {
             fg: Some(contrast_fg_for_bg(selected_bg)),
             bg: Some(selected_bg),
@@ -4780,25 +4782,7 @@ impl TerminalApp {
             ..Default::default()
         };
 
-        border_style.write_to(buf);
-        for dx in 0..box_width {
-            let ch = if dx == 0 || dx + 1 == box_width {
-                '+'
-            } else {
-                '-'
-            };
-            buf.push_str(&goto(y, x + dx));
-            buf.push(ch);
-            buf.push_str(&goto(y + box_height - 1, x + dx));
-            buf.push(ch);
-        }
-        for dy in 1..box_height.saturating_sub(1) {
-            buf.push_str(&goto(y + dy, x));
-            buf.push('|');
-            buf.push_str(&goto(y + dy, x + box_width - 1));
-            buf.push('|');
-        }
-        buf.push_str(render::RESET);
+        draw_box_border(buf, y, x, box_width, box_height, border_style);
 
         for (idx, suggestion) in suggestions.iter().enumerate() {
             let row = y + 1 + idx;
@@ -4853,7 +4837,7 @@ impl TerminalApp {
             " note  {}  {}{}{}",
             self.active_note.id, title, dirty_mark, mode_label
         );
-        let title_bg = self.render_palette.search_current;
+        let title_bg = self.render_palette.search_match;
         draw_row_at_styled(
             &mut buf,
             TITLE_ROW,

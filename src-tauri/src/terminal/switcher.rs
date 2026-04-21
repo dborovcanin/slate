@@ -1,7 +1,7 @@
 use std::cmp::min;
 
-use super::ansi::{contrast_fg_for_bg, draw_row_at_styled, AnsiStyle};
-use super::render::{self, RenderPalette};
+use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, AnsiStyle};
+use super::render::RenderPalette;
 #[derive(Debug, Clone)]
 pub struct NoteMeta {
     pub id: String,
@@ -127,7 +127,7 @@ pub fn draw_switcher(
         fg: Some(palette.variable),
         ..Default::default()
     };
-    let selected_bg = palette.search_current;
+    let selected_bg = palette.primary();
     let selected_style = AnsiStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
@@ -135,22 +135,7 @@ pub fn draw_switcher(
         ..Default::default()
     };
 
-    // Border
-    border_style.write_to(buf);
-    for dx in 0..box_w {
-        let ch_top = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
-        buf.push_str(&super::ansi::goto(y, x + dx));
-        buf.push(ch_top);
-        buf.push_str(&super::ansi::goto(y + box_h - 1, x + dx));
-        buf.push(ch_top);
-    }
-    for dy in 1..box_h.saturating_sub(1) {
-        buf.push_str(&super::ansi::goto(y + dy, x));
-        buf.push('|');
-        buf.push_str(&super::ansi::goto(y + dy, x + box_w - 1));
-        buf.push('|');
-    }
-    buf.push_str(render::RESET);
+    draw_box_border(buf, y, x, box_w, box_h, border_style);
 
     let prompt = format!(" search: {}", view.query);
     draw_row_at_styled(
@@ -217,12 +202,12 @@ pub fn draw_delete_confirm(
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
 
     let border_style = AnsiStyle {
-        fg: Some(palette.search_current),
+        fg: Some(palette.primary()),
         bold: true,
         ..Default::default()
     };
     let message_style = AnsiStyle {
-        fg: Some(palette.search_current),
+        fg: Some(palette.primary()),
         bold: true,
         ..Default::default()
     };
@@ -232,21 +217,7 @@ pub fn draw_delete_confirm(
         ..Default::default()
     };
 
-    border_style.write_to(buf);
-    for dx in 0..box_w {
-        let ch = if dx == 0 || dx + 1 == box_w { '+' } else { '-' };
-        buf.push_str(&super::ansi::goto(y, x + dx));
-        buf.push(ch);
-        buf.push_str(&super::ansi::goto(y + box_h - 1, x + dx));
-        buf.push(ch);
-    }
-    for dy in 1..box_h.saturating_sub(1) {
-        buf.push_str(&super::ansi::goto(y + dy, x));
-        buf.push('|');
-        buf.push_str(&super::ansi::goto(y + dy, x + box_w - 1));
-        buf.push('|');
-    }
-    buf.push_str(render::RESET);
+    draw_box_border(buf, y, x, box_w, box_h, border_style);
 
     draw_row_at_styled(
         buf,

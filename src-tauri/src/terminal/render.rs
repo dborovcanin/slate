@@ -176,6 +176,10 @@ impl RenderPalette {
             _ => Self::default(),
         }
     }
+
+    pub fn primary(&self) -> u8 {
+        self.code_keyword
+    }
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
