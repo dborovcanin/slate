@@ -1,7 +1,6 @@
 import {
   Annotation,
   type ChangeSet,
-  type EditorState,
   type Range,
   StateEffect,
   StateField,
@@ -13,12 +12,11 @@ import {
   EditorView,
   ViewPlugin,
   type ViewUpdate,
-  WidgetType,
   keymap,
 } from "@codemirror/view";
 import {
-  codeFolding,
   foldEffect,
+  foldGutter,
   foldService,
   foldState as cmFoldState,
   foldedRanges,
@@ -42,7 +40,6 @@ interface FoldRange {
 
 interface FoldRangesValue {
   ranges: Map<number, FoldRange>;
-  rangesByFrom: Map<number, FoldRange>;
 }
 
 export type FoldCommandAction = "fold" | "unfold" | "fold-toggle";
@@ -63,47 +60,8 @@ interface FoldRangesReplacement {
   docLength: number;
 }
 
-interface FoldPlaceholderInfo {
-  hiddenLineCount: number;
-  kind: FoldKind | null;
-}
-
 const setFoldRangesEffect = StateEffect.define<FoldRangesReplacement>();
 const foldWasmReadyAnnotation = Annotation.define<boolean>();
-
-class FoldToggleWidget extends WidgetType {
-  readonly foldLine: number;
-  readonly collapsed: boolean;
-
-  constructor(foldLine: number, collapsed: boolean) {
-    super();
-    this.foldLine = foldLine;
-    this.collapsed = collapsed;
-  }
-
-  eq(other: FoldToggleWidget): boolean {
-    return other.foldLine === this.foldLine && other.collapsed === this.collapsed;
-  }
-
-  toDOM(): HTMLElement {
-    const span = document.createElement("span");
-    span.className = `cm-fold-toggle${this.collapsed ? " cm-fold-toggle-collapsed" : ""}`;
-    span.dataset.foldLine = `${this.foldLine}`;
-    span.textContent = this.collapsed ? "" : "";
-    span.title = this.collapsed ? "Click to unfold" : "Click to fold";
-    span.setAttribute(
-      "aria-label",
-      this.collapsed
-        ? "Folded section toggle. Click to unfold."
-        : "Foldable section toggle. Click to fold.",
-    );
-    return span;
-  }
-
-  ignoreEvent(): boolean {
-    return false;
-  }
-}
 
 function foldRangeToSpan(range: FoldRange): number {
   return range.endLine - range.startLine;
@@ -132,11 +90,16 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
     if (level === null || current.inCodeBlock) continue;
 
     const nextHeading = nextHeadingAtLevel[level];
-    const endLine = nextHeading <= lineCount ? nextHeading - 1 : lineCount;
+    let endLine = nextHeading <= lineCount ? nextHeading - 1 : lineCount;
+    // Keep visual breathing room between sections by excluding trailing blank
+    // separator lines from the folded region.
+    while (endLine > lineNo && doc.line(endLine).text.trim().length === 0) {
+      endLine -= 1;
+    }
     if (endLine > lineNo) {
       const headerFrom = doc.line(lineNo).from;
-      const from = doc.line(lineNo + 1).from;
-      const to = endLine < lineCount ? doc.line(endLine + 1).from : doc.line(endLine).to;
+      const from = doc.line(lineNo).to;
+      const to = doc.line(endLine).to;
       if (from < to) {
         ranges.set(lineNo, {
           startLine: lineNo,
@@ -165,8 +128,8 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
       const endLine = lineNo;
       if (endLine > startLine) {
         const headerFrom = doc.line(startLine).from;
-        const from = doc.line(startLine + 1).from;
-        const to = endLine < lineCount ? doc.line(endLine + 1).from : doc.line(endLine).to;
+        const from = doc.line(startLine).to;
+        const to = doc.line(endLine).to;
         if (from < to) {
           ranges.set(startLine, {
             startLine,
@@ -184,7 +147,7 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
 
   if (openFenceLine !== null && openFenceLine < lineCount) {
     const headerFrom = doc.line(openFenceLine).from;
-    const from = doc.line(openFenceLine + 1).from;
+    const from = doc.line(openFenceLine).to;
     const to = doc.line(lineCount).to;
     if (from < to) {
       ranges.set(openFenceLine, {
@@ -216,13 +179,15 @@ function mapFoldRangesThroughChanges(
     if (headerFrom < 0 || headerFrom >= newDoc.length) continue;
     const headerLine = newDoc.lineAt(headerFrom);
     if (headerLine.from !== headerFrom) continue;
-    const contentStartLine = from < newDoc.length
-      ? newDoc.lineAt(from).number
-      : newDoc.lines + 1;
-    if (contentStartLine !== headerLine.number + 1) continue;
+    const startsAtHeaderLineEnd = from === headerLine.to;
+    const startsAtNextLine = from < newDoc.length
+      ? newDoc.lineAt(from).number === headerLine.number + 1
+      : false;
+    if (!startsAtHeaderLineEnd && !startsAtNextLine) continue;
+    const endProbe = Math.max(0, Math.min(newDoc.length - 1, to - 1));
     const endLineNo = to >= newDoc.length
       ? newDoc.lines
-      : Math.max(headerLine.number, newDoc.lineAt(to).number - 1);
+      : Math.max(headerLine.number, newDoc.lineAt(endProbe).number);
     if (endLineNo <= headerLine.number) continue;
     const nextRange: FoldRange = {
       startLine: headerLine.number,
@@ -257,21 +222,9 @@ function foldRangesEqual(a: Map<number, FoldRange>, b: Map<number, FoldRange>): 
   return true;
 }
 
-function indexFoldRanges(ranges: Map<number, FoldRange>): Map<number, FoldRange> {
-  const byFrom = new Map<number, FoldRange>();
-  for (const range of ranges.values()) {
-    byFrom.set(range.from, range);
-  }
-  return byFrom;
-}
-
 const foldRangesField = StateField.define<FoldRangesValue>({
   create(state) {
-    const ranges = buildFoldRanges(state.doc);
-    return {
-      ranges,
-      rangesByFrom: indexFoldRanges(ranges),
-    };
+    return { ranges: buildFoldRanges(state.doc) };
   },
   update(value, tr) {
     let ranges = value.ranges;
@@ -295,10 +248,7 @@ const foldRangesField = StateField.define<FoldRangesValue>({
     }
 
     if (!changed) return value;
-    return {
-      ranges,
-      rangesByFrom: indexFoldRanges(ranges),
-    };
+    return { ranges };
   },
 });
 
@@ -448,40 +398,58 @@ function foldLineInSpans(lineNumber: number, spans: readonly FoldVisibleLineSpan
   return false;
 }
 
-function isRangeCollapsed(set: DecorationSet, range: FoldRange): boolean {
-  let collapsed = false;
-  set.between(range.from, range.to, (from, to) => {
-    if (from <= range.from && to >= range.to) {
-      collapsed = true;
+function collapsedRangeAtStart(
+  state: EditorView["state"],
+  range: FoldRange,
+): { from: number; to: number } | null {
+  const folded = foldedRanges(state);
+  const probeTo = Math.min(state.doc.length, range.from + 1);
+  let found: { from: number; to: number } | null = null;
+  folded.between(range.from, probeTo, (a, b) => {
+    if (a === range.from && (!found || b > found.to)) {
+      found = { from: a, to: b };
     }
   });
-  return collapsed;
+  return found;
 }
 
-function buildVisibleFoldToggleDecorations(view: EditorView): DecorationSet {
+function isRangeCollapsed(state: EditorView["state"], range: FoldRange): boolean {
+  const folded = collapsedRangeAtStart(state, range);
+  return !!folded && folded.to >= range.to;
+}
+
+function findFoldAtPos(
+  state: EditorView["state"],
+  pos: number,
+): { from: number; to: number } | null {
+  const folded = foldedRanges(state);
+  const from = Math.max(0, pos - 1);
+  const to = Math.min(state.doc.length, pos + 1);
+  let found: { from: number; to: number } | null = null;
+  folded.between(from, to, (a, b) => {
+    if (a <= pos && b >= pos && (!found || a > found.from)) {
+      found = { from: a, to: b };
+    }
+  });
+  return found;
+}
+
+function buildVisibleFoldStartLineDecorations(view: EditorView): DecorationSet {
   const foldRanges = view.state.field(foldRangesField, false);
   if (!foldRanges) return Decoration.none;
 
   const spans = expandedFoldVisibleSpans(view);
   if (spans.length === 0) return Decoration.none;
 
-  const collapsed = foldedRanges(view.state);
-  const doc = view.state.doc;
   const decorationRanges: Range<Decoration>[] = [];
   const visibleRanges = [...foldRanges.ranges.values()]
     .filter((range) => foldLineInSpans(range.startLine, spans))
     .sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
 
   for (const range of visibleRanges) {
-    const collapsedHere = isRangeCollapsed(collapsed, range);
-    const line = doc.line(range.startLine);
-    decorationRanges.push(
-      Decoration.widget({
-        side: -1,
-        widget: new FoldToggleWidget(range.startLine, collapsedHere),
-      }).range(line.from),
-    );
+    const collapsedHere = isRangeCollapsed(view.state, range);
     if (collapsedHere) {
+      const line = view.state.doc.line(range.startLine);
       decorationRanges.push(Decoration.line({ class: "cm-folded-start-line" }).range(line.from));
     }
   }
@@ -489,7 +457,7 @@ function buildVisibleFoldToggleDecorations(view: EditorView): DecorationSet {
   return decorationRanges.length > 0 ? Decoration.set(decorationRanges, true) : Decoration.none;
 }
 
-const foldToggleDecorationsPlugin = ViewPlugin.fromClass(
+const foldStartLineDecorationsPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
 
@@ -513,7 +481,7 @@ const foldToggleDecorationsPlugin = ViewPlugin.fromClass(
 
     private safeBuild(view: EditorView, fallback: DecorationSet): DecorationSet {
       try {
-        return buildVisibleFoldToggleDecorations(view);
+        return buildVisibleFoldStartLineDecorations(view);
       } catch (error) {
         console.error("Fold decoration build failed:", error);
         return fallback;
@@ -543,12 +511,13 @@ function findFoldStartForLine(ranges: Map<number, FoldRange>, line: number): num
 }
 
 function applyFoldStateAtRange(view: EditorView, range: FoldRange, nextCollapsed: boolean): boolean {
-  const currentCollapsed = isRangeCollapsed(foldedRanges(view.state), range);
+  const collapsed = collapsedRangeAtStart(view.state, range);
+  const currentCollapsed = !!collapsed && collapsed.to >= range.to;
   if (currentCollapsed === nextCollapsed) return false;
 
   const effect = nextCollapsed
     ? foldEffect.of({ from: range.from, to: range.to })
-    : unfoldEffect.of({ from: range.from, to: range.to });
+    : unfoldEffect.of(collapsed ?? { from: range.from, to: range.to });
 
   const main = view.state.selection.main;
   const intersectsHidden = main.from < range.to && range.from < main.to;
@@ -568,15 +537,6 @@ function applyFoldStateAtRange(view: EditorView, range: FoldRange, nextCollapsed
   return true;
 }
 
-function toggleFoldAtLine(view: EditorView, line: number): boolean {
-  const foldRanges = view.state.field(foldRangesField, false);
-  if (!foldRanges) return false;
-  const range = foldRanges.ranges.get(line);
-  if (!range) return false;
-  const currentCollapsed = isRangeCollapsed(foldedRanges(view.state), range);
-  return applyFoldStateAtRange(view, range, !currentCollapsed);
-}
-
 function formatFoldMessage(action: "folded" | "unfolded", range: FoldRange): string {
   const hiddenLineCount = range.endLine - range.startLine;
   const hiddenSuffix = hiddenLineCount === 1 ? "" : "s";
@@ -594,7 +554,7 @@ export function toggleFoldAtCursor(view: EditorView): boolean {
   const range = foldRanges.ranges.get(foldStart);
   if (!range) return false;
 
-  const currentCollapsed = isRangeCollapsed(foldedRanges(view.state), range);
+  const currentCollapsed = isRangeCollapsed(view.state, range);
   return applyFoldStateAtRange(view, range, !currentCollapsed);
 }
 
@@ -615,7 +575,7 @@ export function executeFoldCommand(view: EditorView, action: FoldCommandAction):
     return { changed: false, message: "fold: no foldable block at cursor" };
   }
 
-  const isCollapsed = isRangeCollapsed(foldedRanges(view.state), range);
+  const isCollapsed = isRangeCollapsed(view.state, range);
 
   if (action === "fold" && isCollapsed) {
     return { changed: false, message: "fold: already folded" };
@@ -636,35 +596,18 @@ export function executeFoldCommand(view: EditorView, action: FoldCommandAction):
   };
 }
 
-function prepareFoldPlaceholder(
-  state: EditorState,
-  range: { from: number; to: number },
-): FoldPlaceholderInfo {
+const markdownFoldService = foldService.of((state, lineStart, _lineEnd) => {
   const foldRanges = state.field(foldRangesField, false);
-  const known = foldRanges?.rangesByFrom.get(range.from);
-  if (known) {
-    return {
-      hiddenLineCount: known.endLine - known.startLine,
-      kind: known.kind,
-    };
-  }
+  if (!foldRanges) return null;
 
-  const firstHiddenLine = state.doc.lineAt(range.from).number;
-  let lastHiddenLine: number;
-  if (range.to >= state.doc.length) {
-    lastHiddenLine = state.doc.lines;
-  } else {
-    const toLine = state.doc.lineAt(range.to);
-    lastHiddenLine = range.to === toLine.from ? toLine.number - 1 : toLine.number;
-  }
+  const line = state.doc.lineAt(lineStart).number;
+  const range = foldRanges.ranges.get(line);
+  if (!range) return null;
 
-  return {
-    hiddenLineCount: Math.max(1, lastHiddenLine - firstHiddenLine + 1),
-    kind: null,
-  };
-}
+  return { from: range.from, to: range.to };
+});
 
-const foldMouseHandlers = EditorView.domEventHandlers({
+const foldPlaceholderMouseHandlers = EditorView.domEventHandlers({
   mousedown: (event, view) => {
     if (event.button !== 0) return false;
     const rawTarget = event.target;
@@ -674,61 +617,46 @@ const foldMouseHandlers = EditorView.domEventHandlers({
       ? rawTarget.parentElement
       : null;
     if (!target) return false;
+    const placeholder = target.closest(".cm-foldPlaceholder, .cm-fold-placeholder");
+    if (!placeholder) return false;
 
-    const foldTarget = target.closest(".cm-fold-toggle") as HTMLElement | null;
-    if (!foldTarget) return false;
-
-    const lineRaw = foldTarget.dataset.foldLine;
-    const line = Number(lineRaw);
-    if (!Number.isFinite(line) || line <= 0) return false;
-
+    const pos = view.posAtDOM(placeholder);
+    const folded = findFoldAtPos(view.state, pos);
     event.preventDefault();
     event.stopPropagation();
-    return toggleFoldAtLine(view, line);
+    if (!folded) return true;
+    view.dispatch({ effects: [unfoldEffect.of(folded)] });
+    return true;
   },
 });
 
-const markdownFoldService = foldService.of((state, lineStart, _lineEnd) => {
-  const foldRanges = state.field(foldRangesField, false);
-  if (!foldRanges) return null;
-
-  const line = state.doc.lineAt(lineStart).number;
-  const foldStart = findFoldStartForLine(foldRanges.ranges, line);
-  if (foldStart === null) return null;
-  const range = foldRanges.ranges.get(foldStart);
-  if (!range) return null;
-
-  return { from: range.from, to: range.to };
-});
+function foldMarkerDOM(open: boolean): HTMLElement {
+  const span = document.createElement("span");
+  span.className = `cm-fold-toggle${open ? "" : " cm-fold-toggle-collapsed"}`;
+  span.textContent = open ? "" : "";
+  span.title = open ? "Click to fold" : "Click to unfold";
+  span.setAttribute(
+    "aria-label",
+    open
+      ? "Foldable section toggle. Click to fold."
+      : "Folded section toggle. Click to unfold.",
+  );
+  return span;
+}
 
 export function foldingExtensions() {
   return [
     foldRangesField,
     foldAnalyzerPlugin,
     markdownFoldService,
-    codeFolding({
-      preparePlaceholder: prepareFoldPlaceholder,
-      placeholderDOM: (_view, onclick, prepared) => {
-        const info = prepared as FoldPlaceholderInfo | null;
-        const hiddenLineCount = info?.hiddenLineCount ?? 1;
-        const span = document.createElement("span");
-        span.className = "cm-fold-placeholder";
-        if (info?.kind) {
-          span.dataset.foldKind = info.kind;
-        }
-        span.textContent = ` ${hiddenLineCount} line${hiddenLineCount === 1 ? "" : "s"} folded`;
-        span.title = "Click to unfold";
-        span.setAttribute("aria-label", "Folded section. Click to unfold.");
-        span.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          onclick(event);
-        });
-        return span;
-      },
+    foldGutter({
+      markerDOM: foldMarkerDOM,
+      foldingChanged: (update) =>
+        update.startState.field(foldRangesField, false) !==
+        update.state.field(foldRangesField, false),
     }),
-    foldToggleDecorationsPlugin,
-    foldMouseHandlers,
+    foldStartLineDecorationsPlugin,
+    foldPlaceholderMouseHandlers,
     keymap.of([
       {
         key: "Ctrl-Alt-z",

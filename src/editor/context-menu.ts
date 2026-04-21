@@ -56,9 +56,9 @@ class EditorContextMenuController implements PluginValue {
   shouldHandleContextMenu(target: EventTarget | null): boolean {
     if (!(target instanceof Element)) return false;
     if (target.closest(".editor-context-menu")) return false;
-    if (target.closest(".editor-search-bar")) return false;
+    if (target.closest(".editor-search-bar, .cm-search")) return false;
     if (target.closest(".command-picker-bar")) return false;
-    if (target.closest(".variable-autocomplete")) return false;
+    if (target.closest(".variable-autocomplete, .cm-tooltip-autocomplete")) return false;
     return target.closest(".cm-scroller, .cm-content, .cm-line") !== null;
   }
 

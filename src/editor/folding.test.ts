@@ -55,3 +55,21 @@ test("describeFoldRanges finds fenced code fold and ignores heading inside code 
     { startLine: 2, endLine: 5, kind: "fence" },
   ]);
 });
+
+test("describeFoldRanges excludes trailing blank separator lines from heading folds", async () => {
+  await ensureWasmReady();
+  const text = [
+    "# One",
+    "alpha",
+    "",
+    "",
+    "# Two",
+    "beta",
+    "",
+  ].join("\n");
+
+  assert.deepEqual(describeFoldRanges(text), [
+    { startLine: 1, endLine: 2, kind: "heading" },
+    { startLine: 5, endLine: 6, kind: "heading" },
+  ]);
+});
