@@ -109,6 +109,19 @@ test("core command suggestions are mode-aware", async () => {
     "date",
     "notify",
     "notify-delete",
+    "module status",
+    "module on math",
+    "module off math",
+    "module toggle math",
+    "module on table",
+    "module off table",
+    "module toggle table",
+    "module on variables",
+    "module off variables",
+    "module toggle variables",
+    "module on style",
+    "module off style",
+    "module toggle style",
     "format",
     "clip-watch",
     "clip-watch-stop",
@@ -122,6 +135,38 @@ test("core command suggestions are mode-aware", async () => {
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);
   assert.equal(vimValues.includes("q"), true);
+});
+
+test("core executeCommand handles module status/on/off/toggle", async () => {
+  let current = { math: true, table: true, variables: true, style: true };
+  const getNoteModules = () => current;
+  const setNoteModules = async (next: typeof current) => {
+    current = next;
+  };
+
+  const status = await executeCommand(snapshot("", 0), "modules", {
+    mode: "editor",
+    getNoteModules,
+    setNoteModules,
+  });
+  assert.equal(status.message, "modules math=on table=on variables=on style=on");
+  assert.deepEqual(status.operations, []);
+
+  const off = await executeCommand(snapshot("", 0), "module off math", {
+    mode: "editor",
+    getNoteModules,
+    setNoteModules,
+  });
+  assert.equal(off.message, "modules math=off table=on variables=on style=on");
+  assert.equal(current.math, false);
+
+  const toggle = await executeCommand(snapshot("", 0), "modules toggle style", {
+    mode: "editor",
+    getNoteModules,
+    setNoteModules,
+  });
+  assert.equal(toggle.message, "modules math=off table=on variables=on style=off");
+  assert.equal(current.style, false);
 });
 
 test("core executeCommand computes sum and returns insertion operation", async () => {

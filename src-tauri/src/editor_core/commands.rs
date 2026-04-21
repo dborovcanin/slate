@@ -595,6 +595,19 @@ pub fn execute_command(
         }
         CommandId::Notify => result_with_message("notify handled by host"),
         CommandId::NotifyDelete => result_with_message("notify-delete handled by host"),
+        CommandId::ModuleStatus
+        | CommandId::ModuleOnMath
+        | CommandId::ModuleOffMath
+        | CommandId::ModuleToggleMath
+        | CommandId::ModuleOnTable
+        | CommandId::ModuleOffTable
+        | CommandId::ModuleToggleTable
+        | CommandId::ModuleOnVariables
+        | CommandId::ModuleOffVariables
+        | CommandId::ModuleToggleVariables
+        | CommandId::ModuleOnStyle
+        | CommandId::ModuleOffStyle
+        | CommandId::ModuleToggleStyle => result_with_message("module command handled by host"),
         CommandId::ClipWatch => result_with_message("clip-watch handled by host"),
         CommandId::ClipWatchStop => result_with_message("clip-watch-stop handled by host"),
         CommandId::Fold => result_with_message("fold handled by host"),
@@ -665,6 +678,19 @@ mod tests {
                 "date",
                 "notify",
                 "notify-delete",
+                "module status",
+                "module on math",
+                "module off math",
+                "module toggle math",
+                "module on table",
+                "module off table",
+                "module toggle table",
+                "module on variables",
+                "module off variables",
+                "module toggle variables",
+                "module on style",
+                "module off style",
+                "module toggle style",
                 "format",
                 "clip-watch",
                 "clip-watch-stop",

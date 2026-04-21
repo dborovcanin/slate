@@ -16,6 +16,7 @@ import type {
   EditOperation,
   EditorContextSnapshot,
 } from "./types.ts";
+import type { NoteModules } from "../../api.ts";
 
 export type { CommandMode, CommandSuggestion } from "./types.ts";
 
@@ -59,6 +60,8 @@ export interface CommandRuntime {
     changed: boolean;
     message: string;
   };
+  getNoteModules?: () => NoteModules | null;
+  setNoteModules?: (modules: NoteModules) => Promise<void> | void;
 }
 
 export interface CommandExecutionResult {
@@ -307,6 +310,51 @@ async function runFoldCommand(
   };
 }
 
+const MODULE_NAMES: Array<keyof NoteModules> = ["math", "table", "variables", "style"];
+
+function formatModules(modules: NoteModules): string {
+  const parts = MODULE_NAMES.map((name) => `${name}=${modules[name] ? "on" : "off"}`);
+  return `modules ${parts.join(" ")}`;
+}
+
+async function runModuleCommand(
+  normalizedInput: string,
+  _ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  const current = runtime.getNoteModules?.() ?? null;
+  if (!current) {
+    return { message: "module unavailable", operations: [] };
+  }
+
+  if (normalizedInput === "module status") {
+    return { message: formatModules(current), operations: [] };
+  }
+
+  const next: NoteModules = { ...current };
+  if (normalizedInput === "module on math") next.math = true;
+  else if (normalizedInput === "module off math") next.math = false;
+  else if (normalizedInput === "module toggle math") next.math = !next.math;
+  else if (normalizedInput === "module on table") next.table = true;
+  else if (normalizedInput === "module off table") next.table = false;
+  else if (normalizedInput === "module toggle table") next.table = !next.table;
+  else if (normalizedInput === "module on variables") next.variables = true;
+  else if (normalizedInput === "module off variables") next.variables = false;
+  else if (normalizedInput === "module toggle variables") next.variables = !next.variables;
+  else if (normalizedInput === "module on style") next.style = true;
+  else if (normalizedInput === "module off style") next.style = false;
+  else if (normalizedInput === "module toggle style") next.style = !next.style;
+  else {
+    return {
+      message: "module usage: module [status|on|off|toggle] <math|table|variables|style>",
+      operations: [],
+    };
+  }
+
+  await runtime.setNoteModules?.(next);
+  return { message: formatModules(next), operations: [] };
+}
+
 function listConversionLabel(kind: ListKind): string {
   if (kind === "checklist") return "checklist";
   if (kind === "unordered") return "unordered list";
@@ -400,6 +448,19 @@ const EXECUTOR_MAP: Record<string, ExecuteFn> = {
   "date": runDateCommand,
   "notify": runNotifyCommand,
   "notify-delete": runNotifyDeleteCommand,
+  "module status": runModuleCommand,
+  "module on math": runModuleCommand,
+  "module off math": runModuleCommand,
+  "module toggle math": runModuleCommand,
+  "module on table": runModuleCommand,
+  "module off table": runModuleCommand,
+  "module toggle table": runModuleCommand,
+  "module on variables": runModuleCommand,
+  "module off variables": runModuleCommand,
+  "module toggle variables": runModuleCommand,
+  "module on style": runModuleCommand,
+  "module off style": runModuleCommand,
+  "module toggle style": runModuleCommand,
   "format": runFormatCommand,
   "fold": runFoldCommand,
   "unfold": runFoldCommand,

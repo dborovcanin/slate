@@ -15,6 +15,19 @@ pub enum CommandId {
     Date,
     Notify,
     NotifyDelete,
+    ModuleStatus,
+    ModuleOnMath,
+    ModuleOffMath,
+    ModuleToggleMath,
+    ModuleOnTable,
+    ModuleOffTable,
+    ModuleToggleTable,
+    ModuleOnVariables,
+    ModuleOffVariables,
+    ModuleToggleVariables,
+    ModuleOnStyle,
+    ModuleOffStyle,
+    ModuleToggleStyle,
     Format,
     Checklist,
     UnorderedList,
@@ -39,7 +52,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 23] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 36] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -129,6 +142,97 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 23] = [
         value: "notify-delete",
         aliases: &["notify_delete", "notify-delte"],
         description: "delete reminder for current line",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleStatus,
+        value: "module status",
+        aliases: &["module", "modules", "modules status"],
+        description: "show modules for current note",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOnMath,
+        value: "module on math",
+        aliases: &["modules on math"],
+        description: "enable math module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOffMath,
+        value: "module off math",
+        aliases: &["modules off math"],
+        description: "disable math module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleToggleMath,
+        value: "module toggle math",
+        aliases: &["modules toggle math"],
+        description: "toggle math module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOnTable,
+        value: "module on table",
+        aliases: &["modules on table"],
+        description: "enable table module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOffTable,
+        value: "module off table",
+        aliases: &["modules off table"],
+        description: "disable table module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleToggleTable,
+        value: "module toggle table",
+        aliases: &["modules toggle table"],
+        description: "toggle table module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOnVariables,
+        value: "module on variables",
+        aliases: &["modules on variables"],
+        description: "enable variables module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOffVariables,
+        value: "module off variables",
+        aliases: &["modules off variables"],
+        description: "disable variables module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleToggleVariables,
+        value: "module toggle variables",
+        aliases: &["modules toggle variables"],
+        description: "toggle variables module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOnStyle,
+        value: "module on style",
+        aliases: &["modules on style"],
+        description: "enable style module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOffStyle,
+        value: "module off style",
+        aliases: &["modules off style"],
+        description: "disable style module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleToggleStyle,
+        value: "module toggle style",
+        aliases: &["modules toggle style"],
+        description: "toggle style module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -335,6 +439,18 @@ mod tests {
         assert_eq!(
             resolve_command(CommandMode::Editor, "za").map(|cmd| cmd.id),
             Some(CommandId::FoldToggle)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "module").map(|cmd| cmd.id),
+            Some(CommandId::ModuleStatus)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "modules off variables").map(|cmd| cmd.id),
+            Some(CommandId::ModuleOffVariables)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "module toggle style").map(|cmd| cmd.id),
+            Some(CommandId::ModuleToggleStyle)
         );
     }
 

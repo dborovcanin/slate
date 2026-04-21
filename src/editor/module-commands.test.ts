@@ -1,9 +1,6 @@
-import test from "node:test";
+import test, { before } from "node:test";
 import assert from "node:assert/strict";
-import {
-  listNoteModuleCommandSuggestions,
-  tryExecuteNoteModuleCommand,
-} from "./module-commands.ts";
+import { executeCommand, listCommandSuggestions } from "./core/commands.ts";
 import {
   DEFAULT_RUNTIME_FLAGS,
   DEFAULT_THEME_CONFIG,
@@ -11,6 +8,15 @@ import {
   type NoteModules,
 } from "../api.ts";
 import { effectiveModules, modulesForNote } from "./module-gating.ts";
+import { ensureWasmReady } from "./wasm.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
+
+function snapshot(text: string, head = 0, anchor = head) {
+  return { text, selection: { anchor, head } };
+}
 
 function modules(): NoteModules {
   return { math: true, table: true, variables: true, style: true };
@@ -23,33 +29,36 @@ test("module command reports status and updates selected module", async () => {
     current = next;
   };
 
-  const status = await tryExecuteNoteModuleCommand(":module status", {
+  const status = await executeCommand(snapshot(""), ":module status", {
+    mode: "editor",
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(status, "modules math=on table=on variables=on style=on");
+  assert.equal(status.message, "modules math=on table=on variables=on style=on");
 
-  const off = await tryExecuteNoteModuleCommand(":module off math", {
+  const off = await executeCommand(snapshot(""), ":module off math", {
+    mode: "editor",
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(off, "modules math=off table=on variables=on style=on");
+  assert.equal(off.message, "modules math=off table=on variables=on style=on");
   assert.equal(current.math, false);
 
-  const toggle = await tryExecuteNoteModuleCommand(":module toggle style", {
+  const toggle = await executeCommand(snapshot(""), ":module toggle style", {
+    mode: "editor",
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(toggle, "modules math=off table=on variables=on style=off");
+  assert.equal(toggle.message, "modules math=off table=on variables=on style=off");
   assert.equal(current.style, false);
 });
 
 test("module suggestions are shown for empty input and module prefix", () => {
-  const empty = listNoteModuleCommandSuggestions("");
+  const empty = listCommandSuggestions("editor", "");
   assert.ok(empty.length >= 5);
   assert.ok(empty.some((entry) => entry.value === "module status"));
 
-  const filtered = listNoteModuleCommandSuggestions("module off");
+  const filtered = listCommandSuggestions("editor", "module off");
   assert.ok(filtered.length > 0);
   assert.ok(filtered.every((entry) => entry.value.startsWith("module off")));
 });

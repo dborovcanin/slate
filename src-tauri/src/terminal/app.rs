@@ -2037,6 +2037,69 @@ impl TerminalApp {
         }
     }
 
+    fn format_active_note_modules_status(&self) -> String {
+        let modules = self.active_note.modules;
+        format!(
+            "modules math={} table={} variables={} style={}",
+            if modules.math { "on" } else { "off" },
+            if modules.table { "on" } else { "off" },
+            if modules.variables { "on" } else { "off" },
+            if modules.style { "on" } else { "off" },
+        )
+    }
+
+    fn handle_terminal_module_command(
+        &mut self,
+        db: &Db,
+        command_id: crate::editor_core::command_catalog::CommandId,
+    ) -> bool {
+        use crate::editor_core::command_catalog::CommandId;
+
+        let mut next_modules = self.active_note.modules;
+        match command_id {
+            CommandId::ModuleStatus => {
+                self.status = self.format_active_note_modules_status();
+                return true;
+            }
+            CommandId::ModuleOnMath => next_modules.math = true,
+            CommandId::ModuleOffMath => next_modules.math = false,
+            CommandId::ModuleToggleMath => next_modules.math = !next_modules.math,
+            CommandId::ModuleOnTable => next_modules.table = true,
+            CommandId::ModuleOffTable => next_modules.table = false,
+            CommandId::ModuleToggleTable => next_modules.table = !next_modules.table,
+            CommandId::ModuleOnVariables => next_modules.variables = true,
+            CommandId::ModuleOffVariables => next_modules.variables = false,
+            CommandId::ModuleToggleVariables => next_modules.variables = !next_modules.variables,
+            CommandId::ModuleOnStyle => next_modules.style = true,
+            CommandId::ModuleOffStyle => next_modules.style = false,
+            CommandId::ModuleToggleStyle => next_modules.style = !next_modules.style,
+            _ => return false,
+        }
+
+        let previous_variables_enabled = self.active_note.modules.variables;
+        match db.set_note_modules(&self.active_note.id, next_modules) {
+            Ok(saved_note) => {
+                self.active_note.modules = saved_note.modules;
+                self.active_note.updated_at = saved_note.updated_at;
+                if previous_variables_enabled != self.active_note.modules.variables {
+                    self.calc.stale = true;
+                    self.calc_last_view_eval_range = None;
+                    self.recompute_calc_full();
+                    if self.mode == UiMode::Editor && self.note_variables_module_enabled() {
+                        self.refresh_variable_autocomplete_popup();
+                    } else {
+                        self.dismiss_variable_autocomplete_popup();
+                    }
+                }
+                self.status = self.format_active_note_modules_status();
+            }
+            Err(error) => {
+                self.status = format!("module update failed: {error}");
+            }
+        }
+        true
+    }
+
     fn execute_terminal_command(&mut self, db: &Db, cmd: &str) {
         if cmd == "q!" || cmd == "q" {
             self.force_quit = cmd == "q!";
@@ -2047,6 +2110,9 @@ impl TerminalApp {
         if let Some(command) =
             crate::editor_core::command_catalog::resolve_command(self.command_mode(), cmd)
         {
+            if self.handle_terminal_module_command(db, command.id) {
+                return;
+            }
             match command.id {
                 crate::editor_core::command_catalog::CommandId::Date => {
                     self.open_date_picker(DatePickerAction::InsertDate, false);
@@ -7593,6 +7659,39 @@ mod tests {
         app.execute_terminal_command(&db, "clip-watch-stop");
         assert!(!app.clipboard_watch_enabled);
         assert_eq!(app.status, "clip-watch not active");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn module_commands_update_and_persist_note_modules() {
+        let (db, mut app, path) = app_with_note("alpha := 10\nalp");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 1;
+        app.cursor_col = line_char_len(app.current_line());
+        app.refresh_variable_autocomplete_popup();
+        assert!(app.variable_autocomplete_popup.visible);
+
+        app.execute_terminal_command(&db, "module status");
+        assert_eq!(app.status, "modules math=on table=on variables=on style=on");
+
+        app.execute_terminal_command(&db, "modules off variables");
+        assert_eq!(app.status, "modules math=on table=on variables=off style=on");
+        assert!(!app.active_note.modules.variables);
+        assert!(!app.variable_autocomplete_popup.visible);
+        assert!(app.calc.variable_names.is_empty());
+
+        let persisted = db
+            .get_note("n1")
+            .expect("note lookup")
+            .expect("note exists");
+        assert!(!persisted.modules.variables);
+
+        app.execute_terminal_command(&db, "module toggle variables");
+        assert_eq!(app.status, "modules math=on table=on variables=on style=on");
+        assert!(app.active_note.modules.variables);
 
         drop(app);
         drop(db);

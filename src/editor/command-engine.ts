@@ -22,10 +22,6 @@ import {
   listEditorProfilerCommandSuggestions,
   tryExecuteEditorProfilerCommand,
 } from "../perf/editor-profiler.ts";
-import {
-  listNoteModuleCommandSuggestions,
-  tryExecuteNoteModuleCommand,
-} from "./module-commands.ts";
 import type { NoteModules } from "../api.ts";
 
 export type { CommandMode, CommandSuggestion };
@@ -154,10 +150,9 @@ async function copyText(text: string) {
 export function listCommandSuggestions(mode: CommandMode, rawInput: string): CommandSuggestion[] {
   const core = listCoreCommandSuggestions(mode, rawInput);
   const profiler = listEditorProfilerCommandSuggestions(rawInput);
-  const modules = listNoteModuleCommandSuggestions(rawInput);
-  if (profiler.length === 0 && modules.length === 0) return core;
+  if (profiler.length === 0) return core;
   const seen = new Set(core.map((entry) => entry.value));
-  const extra = [...profiler, ...modules].filter((entry) => !seen.has(entry.value));
+  const extra = profiler.filter((entry) => !seen.has(entry.value));
   return [...extra, ...core];
 }
 
@@ -166,12 +161,6 @@ export async function executeCommand(
   rawInput: string,
   options: CommandExecutionOptions,
 ): Promise<string> {
-  const moduleMessage = await tryExecuteNoteModuleCommand(rawInput, {
-    getNoteModules: options.getNoteModules,
-    setNoteModules: options.setNoteModules,
-  });
-  if (moduleMessage !== null) return moduleMessage;
-
   const profilerMessage = tryExecuteEditorProfilerCommand(rawInput);
   if (profilerMessage !== null) return profilerMessage;
 
@@ -224,6 +213,8 @@ export async function executeCommand(
     runFoldCommand: (action: FoldCommandAction) => executeFoldCommand(view, action),
     onQuit: options.onExitCommand,
     formatMarkdown: formatMarkdownTextAsync,
+    getNoteModules: options.getNoteModules,
+    setNoteModules: options.setNoteModules,
   });
 
   if (result.operations.length > 0) {
