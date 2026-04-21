@@ -1,5 +1,6 @@
 import { EditorView } from "@codemirror/view";
 import { executeCommand, listCommandSuggestions, type CommandMode, type CommandSuggestion } from "./command-engine";
+import { CommandHistoryNavigator, rememberCommand } from "./command-history.ts";
 import { insertAtSelection } from "./editor-utils";
 import { createListOverlay, type ListOverlay, type ListOverlayState } from "../overlays/overlay.ts";
 
@@ -28,8 +29,8 @@ interface CommandModeExtensionOptions {
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
 
-function normalizeCommand(rawInput: string): string {
-  return rawInput.trim().replace(/^:/, "").toLowerCase();
+function sanitizeCommand(rawInput: string): string {
+  return rawInput.trim().replace(/^:/, "");
 }
 
 function isInsideCommandPicker(target: EventTarget | null): boolean {
@@ -94,11 +95,13 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   prefixEl.textContent = ":";
 
   let pickerOverlay: ListOverlay | null = null;
+  const historyNavigator = new CommandHistoryNavigator();
 
   const submit = async (command: string) => {
     pickerOverlay?.close();
     view.focus();
     if (!command) return;
+    rememberCommand(command);
     try {
       const message = await executeCommand(view, command, {
         mode: options.mode,
@@ -119,13 +122,18 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   };
 
   const pickCommand = (state: ListOverlayState<CommandSuggestion>): string => {
-    const normalized = normalizeCommand(state.query);
-    if (!normalized && state.items.length > 0) {
+    const command = sanitizeCommand(state.query);
+    const normalized = command.toLowerCase();
+    if (!command && state.items.length > 0) {
       return state.items[Math.max(state.selectedIndex, 0)]?.value ?? "";
     }
-    if (!normalized) return "";
+    if (!command) return "";
     if (state.items.some((s) => s.value === normalized)) return normalized;
-    return state.items[Math.max(state.selectedIndex, 0)]?.value ?? normalized;
+    const selected = state.items[Math.max(state.selectedIndex, 0)]?.value;
+    if (selected && selected.toLowerCase().startsWith(normalized)) {
+      return selected;
+    }
+    return command;
   };
 
   pickerOverlay = createListOverlay<CommandSuggestion>({
@@ -144,6 +152,38 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
     },
     emptyMessage: "No commands",
     onKeydown: (event, state) => {
+      if (event.key !== "ArrowUp" && event.key !== "ArrowDown") {
+        historyNavigator.reset();
+      }
+
+      if (event.key === "ArrowUp") {
+        if (!historyNavigator.isActive() && state.query.trim().length > 0) {
+          return false;
+        }
+        const previous = historyNavigator.previous();
+        if (!previous) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        state.inputEl.value = previous;
+        state.selectedIndex = 0;
+        state.refresh();
+        return true;
+      }
+
+      if (event.key === "ArrowDown") {
+        if (!historyNavigator.isActive() && state.query.trim().length > 0) {
+          return false;
+        }
+        const next = historyNavigator.next();
+        if (!next) return false;
+        event.preventDefault();
+        event.stopPropagation();
+        state.inputEl.value = next;
+        state.selectedIndex = 0;
+        state.refresh();
+        return true;
+      }
+
       if (event.key === "Tab") {
         if (state.items.length === 0) return false;
         event.preventDefault();

@@ -81,6 +81,7 @@ struct TerminalStartupMetrics {
 }
 
 const MAX_UNDO_ENTRIES: usize = 500;
+const MAX_COMMAND_HISTORY_ENTRIES: usize = 100;
 
 #[derive(Debug, Clone)]
 struct LineReminderGhost {
@@ -113,6 +114,8 @@ struct TerminalApp {
     last_edit: Instant,
     status: String,
     command_input: String,
+    command_history: Vec<String>,
+    command_history_index: Option<usize>,
     quit: bool,
     force_quit: bool,
     // Date picker state
@@ -284,6 +287,8 @@ impl TerminalApp {
             last_edit: Instant::now(),
             status: initial_status,
             command_input: String::new(),
+            command_history: Vec::new(),
+            command_history_index: None,
             quit: false,
             force_quit: false,
             date_year: 0,
@@ -585,6 +590,7 @@ impl TerminalApp {
             }
             Key::Ctrl('e') => {
                 self.command_input.clear();
+                self.command_history_index = None;
                 self.command_bar_from_normal = false;
                 self.command_selection = None;
                 self.command_selection_linewise = false;
@@ -1386,6 +1392,7 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::OpenCommandBar => {
                     self.command_input.clear();
+                    self.command_history_index = None;
                     self.command_bar_from_normal = true;
                     self.command_selection = None;
                     self.command_selection_linewise = false;
@@ -1491,6 +1498,7 @@ impl TerminalApp {
                 self.command_selection = self.capture_visual_command_selection();
                 self.vim_state = crate::editor_core::vim::VimState::default();
                 self.command_input.clear();
+                self.command_history_index = None;
                 self.command_bar_from_normal = true;
                 self.mode = UiMode::CommandBar;
                 self.status = ":".to_string();
@@ -1792,6 +1800,54 @@ impl TerminalApp {
         }
     }
 
+    fn remember_command_in_history(&mut self, command: &str) {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            return;
+        }
+
+        if let Some(existing_idx) = self
+            .command_history
+            .iter()
+            .position(|entry| entry == trimmed)
+        {
+            self.command_history.remove(existing_idx);
+        }
+        self.command_history.push(trimmed.to_string());
+        if self.command_history.len() > MAX_COMMAND_HISTORY_ENTRIES {
+            self.command_history.remove(0);
+        }
+        self.command_history_index = None;
+    }
+
+    fn cycle_command_history_prev(&mut self) {
+        let history_len = self.command_history.len();
+        if history_len == 0 {
+            return;
+        }
+        let next_idx = match self.command_history_index {
+            Some(current) => (current + history_len - 1) % history_len,
+            None => history_len - 1,
+        };
+        self.command_history_index = Some(next_idx);
+        self.command_input = self.command_history[next_idx].clone();
+        self.update_command_status();
+    }
+
+    fn cycle_command_history_next(&mut self) {
+        let history_len = self.command_history.len();
+        if history_len == 0 {
+            return;
+        }
+        let next_idx = match self.command_history_index {
+            Some(current) => (current + 1) % history_len,
+            None => 0,
+        };
+        self.command_history_index = Some(next_idx);
+        self.command_input = self.command_history[next_idx].clone();
+        self.update_command_status();
+    }
+
     fn handle_command_bar_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
@@ -1801,6 +1857,7 @@ impl TerminalApp {
                     UiMode::Editor
                 };
                 self.command_input.clear();
+                self.command_history_index = None;
                 self.command_selection = None;
                 self.command_selection_linewise = false;
                 self.status = if self.command_bar_from_normal {
@@ -1816,13 +1873,16 @@ impl TerminalApp {
                 } else {
                     UiMode::Editor
                 };
+                self.remember_command_in_history(&cmd);
                 self.mode = return_to;
                 self.command_input.clear();
+                self.command_history_index = None;
                 self.execute_terminal_command(db, &cmd);
                 self.command_selection = None;
                 self.command_selection_linewise = false;
             }
             Key::Tab => {
+                self.command_history_index = None;
                 let suggestions = crate::editor_core::commands::list_command_suggestions(
                     self.command_mode(),
                     &self.command_input,
@@ -1833,6 +1893,7 @@ impl TerminalApp {
                 }
             }
             Key::Backspace => {
+                self.command_history_index = None;
                 self.command_input.pop();
                 if self.command_input.is_empty() {
                     self.mode = if self.command_bar_from_normal {
@@ -1851,11 +1912,19 @@ impl TerminalApp {
                     self.update_command_status();
                 }
             }
+            Key::ArrowUp => {
+                self.cycle_command_history_prev();
+            }
+            Key::ArrowDown => {
+                self.cycle_command_history_next();
+            }
             Key::Char(ch) => {
+                self.command_history_index = None;
                 self.command_input.push(ch);
                 self.update_command_status();
             }
             Key::Paste(text) => {
+                self.command_history_index = None;
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                     self.command_input.push(ch);
                 }
@@ -6923,6 +6992,55 @@ mod tests {
 
         app.execute_terminal_command(&db, "zo");
         assert!(!app.folds.collapsed_starts.contains(&0));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn command_bar_arrow_history_cycles_latest_commands() {
+        let (db, mut app, path) = app_with_note("alpha");
+        app.mode = UiMode::Normal;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char(':'),
+                Key::Char('f'),
+                Key::Char('o'),
+                Key::Char('o'),
+                Key::Enter,
+            ],
+        );
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Char(':'),
+                Key::Char('b'),
+                Key::Char('a'),
+                Key::Char('r'),
+                Key::Enter,
+            ],
+        );
+
+        run_keys(&mut app, &db, &[Key::Char(':')]);
+        assert_eq!(app.mode, UiMode::CommandBar);
+        assert_eq!(app.command_input, "");
+
+        run_keys(&mut app, &db, &[Key::ArrowUp]);
+        assert_eq!(app.command_input, "bar");
+        run_keys(&mut app, &db, &[Key::ArrowUp]);
+        assert_eq!(app.command_input, "foo");
+        run_keys(&mut app, &db, &[Key::ArrowUp]);
+        assert_eq!(app.command_input, "bar");
+
+        run_keys(&mut app, &db, &[Key::ArrowDown]);
+        assert_eq!(app.command_input, "foo");
+        run_keys(&mut app, &db, &[Key::ArrowDown]);
+        assert_eq!(app.command_input, "bar");
 
         drop(app);
         drop(db);
