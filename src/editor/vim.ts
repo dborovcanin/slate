@@ -6,7 +6,6 @@ import {
   cursorLineStart,
   cursorLineUp,
   deleteCharForward,
-  deleteLine,
   redo,
   undo,
 } from "@codemirror/commands";
@@ -37,6 +36,13 @@ interface VimOptions {
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
+}
+
+type VimRegisterMode = "charwise" | "linewise";
+
+interface VimRegister {
+  text: string;
+  mode: VimRegisterMode;
 }
 
 function isPrintableTextKey(event: KeyboardEvent): boolean {
@@ -332,7 +338,7 @@ function findPipeObjectRange(
 export function vimModeExtension(options: VimOptions = {}) {
   const session = new VimSession("insert");
   let currentMode: VimUiMode = "insert";
-  let unnamedRegister = "";
+  let unnamedRegister: VimRegister | null = null;
   let swallowVisualDdUntilMs = 0;
   let pendingFoldPrefixUntilMs = 0;
 
@@ -342,9 +348,9 @@ export function vimModeExtension(options: VimOptions = {}) {
 
   const mode = (): VimUiMode => currentMode;
 
-  const setRegister = (text: string) => {
-    if (!text) return;
-    unnamedRegister = text;
+  const setRegister = (text: string, registerMode: VimRegisterMode = "charwise") => {
+    if (registerMode === "charwise" && !text) return;
+    unnamedRegister = { text, mode: registerMode };
     copyToClipboard(text);
   };
 
@@ -360,17 +366,40 @@ export function vimModeExtension(options: VimOptions = {}) {
     });
   };
 
+  const pasteLinewiseBelow = (view: EditorView, text: string, repeats: number) => {
+    const normalized = text.endsWith("\n") ? text.slice(0, -1) : text;
+    const lines = normalized.length > 0 ? normalized.split("\n") : [""];
+    if (lines.length === 0) return;
+    const repeated: string[] = [];
+    for (let i = 0; i < repeats; i++) {
+      repeated.push(...lines);
+    }
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    const insertAt = line.to;
+    const insert = `\n${repeated.join("\n")}`;
+    view.dispatch({
+      changes: { from: insertAt, to: insertAt, insert },
+      selection: { anchor: insertAt + 1 },
+      scrollIntoView: true,
+    });
+  };
+
   const pasteAfter = (view: EditorView, count: number) => {
     const repeats = Math.max(1, count);
-    const pasteText = (text: string) => {
-      if (!text) return;
+    const pasteRegister = (register: VimRegister) => {
+      if (register.mode === "charwise" && !register.text) return;
+      if (register.mode === "linewise") {
+        pasteLinewiseBelow(view, register.text, repeats);
+        return;
+      }
       for (let i = 0; i < repeats; i++) {
-        insertAfterCursorOnce(view, text);
+        insertAfterCursorOnce(view, register.text);
       }
     };
 
     if (unnamedRegister) {
-      pasteText(unnamedRegister);
+      pasteRegister(unnamedRegister);
       return true;
     }
 
@@ -379,8 +408,8 @@ export function vimModeExtension(options: VimOptions = {}) {
         .readText()
         .then((text) => {
           if (!text) return;
-          unnamedRegister = text;
-          pasteText(text);
+          unnamedRegister = { text, mode: "charwise" };
+          pasteRegister(unnamedRegister);
         })
         .catch((err) => {
           console.error("Vim paste failed:", err);
@@ -742,7 +771,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       for (let lineNo = start; lineNo <= end; lineNo++) {
         parts.push(view.state.doc.line(lineNo).text);
       }
-      setRegister(parts.join("\n"));
+      setRegister(parts.join("\n"), "linewise");
       return true;
     }
 
@@ -764,7 +793,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
         parts.push(view.state.doc.line(lineNo).text);
       }
-      setRegister(parts.join("\n"));
+      setRegister(parts.join("\n"), "linewise");
 
       let from = view.state.doc.line(startLine).from;
       let to = view.state.doc.line(endLine).to;
@@ -810,7 +839,33 @@ export function vimModeExtension(options: VimOptions = {}) {
     for (let lineNo = current; lineNo <= end; lineNo++) {
       parts.push(view.state.doc.line(lineNo).text);
     }
-    setRegister(parts.join("\n"));
+    setRegister(parts.join("\n"), "linewise");
+    return true;
+  };
+
+  const deleteCurrentLines = (view: EditorView, count: number) => {
+    const current = view.state.doc.lineAt(view.state.selection.main.head).number;
+    const end = Math.min(view.state.doc.lines, current + count - 1);
+    const parts: string[] = [];
+    for (let lineNo = current; lineNo <= end; lineNo++) {
+      parts.push(view.state.doc.line(lineNo).text);
+    }
+    if (parts.length === 0) return false;
+    setRegister(parts.join("\n"), "linewise");
+
+    let from = view.state.doc.line(current).from;
+    let to = view.state.doc.line(end).to;
+    if (end < view.state.doc.lines) {
+      to += 1;
+    } else if (current > 1) {
+      from = view.state.doc.line(current - 1).to;
+    }
+
+    view.dispatch({
+      changes: { from, to, insert: "" },
+      selection: { anchor: from },
+      scrollIntoView: true,
+    });
     return true;
   };
 
@@ -878,7 +933,7 @@ export function vimModeExtension(options: VimOptions = {}) {
         collapseSelection(view);
         return true;
       case 20: // delete_line
-        return runCounted(view, deleteLine, count);
+        return deleteCurrentLines(view, count);
       case 21: // yank_line
         return yankCurrentLines(view, count);
       case 22: // delete_to_line_start
