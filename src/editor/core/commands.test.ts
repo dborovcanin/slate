@@ -174,6 +174,46 @@ test("core executeCommand handles module status/on/off/toggle", async () => {
   assert.equal(current.style, false);
 });
 
+test("core executeCommand module on/off is idempotent and requires persistence runtime", async () => {
+  let current = { math: true, table: true, variables: true, style: true };
+  const getNoteModules = () => current;
+  let writes = 0;
+  const setNoteModules = async (next: typeof current) => {
+    writes += 1;
+    current = next;
+  };
+
+  const alreadyOn = await executeCommand(snapshot("", 0), "module math on", {
+    mode: "editor",
+    getNoteModules,
+    setNoteModules,
+  });
+  assert.equal(alreadyOn.message, "module math already on");
+  assert.equal(writes, 0);
+
+  const off = await executeCommand(snapshot("", 0), "module math off", {
+    mode: "editor",
+    getNoteModules,
+    setNoteModules,
+  });
+  assert.equal(off.message, "modules math=off table=on variables=on style=on");
+  assert.equal(writes, 1);
+
+  const alreadyOff = await executeCommand(snapshot("", 0), "module math off", {
+    mode: "editor",
+    getNoteModules,
+    setNoteModules,
+  });
+  assert.equal(alreadyOff.message, "module math already off");
+  assert.equal(writes, 1);
+
+  const unavailable = await executeCommand(snapshot("", 0), "module style off", {
+    mode: "editor",
+    getNoteModules,
+  });
+  assert.equal(unavailable.message, "module unavailable");
+});
+
 test("core executeCommand computes sum and returns insertion operation", async () => {
   const result = await executeCommand(snapshot("10\n20", 0), "sum", {
     mode: "editor",

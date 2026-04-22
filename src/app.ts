@@ -142,7 +142,21 @@ function reconfigureEditorForNote(note: Note | null) {
 async function persistActiveNoteModules(modules: NoteModules) {
   const active = state.activeNote;
   if (!active) throw new Error("No active note");
-  const saved = await setNoteModules(active.id, normalizeModules(modules));
+  const activeId = active.id;
+  const nextModules = normalizeModules(modules);
+  if (
+    active.modules.math === nextModules.math &&
+    active.modules.table === nextModules.table &&
+    active.modules.variables === nextModules.variables &&
+    active.modules.style === nextModules.style
+  ) {
+    return;
+  }
+
+  const saved = await setNoteModules(activeId, nextModules);
+  if (state.activeNote?.id !== activeId) {
+    return;
+  }
   state.setActiveNote(saved);
   reconfigureEditorForNote(saved);
 }
@@ -226,6 +240,48 @@ async function startBackendNoteChangeListener() {
   );
 }
 
+function openNoteSwitcher() {
+  openSwitcher(switchToNote, (noteId) => {
+    void handleDeleteNoteById(noteId).catch((error) => {
+      console.error("Action failed:", error);
+      showToast("Action failed");
+    });
+  });
+}
+
+function errorMessageOf(error: unknown): string {
+  return error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+}
+
+async function unlockProtectedNoteWithRetry(noteId: string, title: string): Promise<Note | null> {
+  while (true) {
+    const password = await promptPasswordInApp(
+      `Enter password to open "${title}".`,
+      "Open",
+    );
+    if (password === null) {
+      return null;
+    }
+
+    try {
+      return await unlockNoteAccess(noteId, password);
+    } catch (error) {
+      const message = errorMessageOf(error);
+      if (message.includes("invalid password")) {
+        showToast("Invalid password");
+        continue;
+      }
+      if (message.includes("password")) {
+        showToast("Password required");
+        continue;
+      }
+      console.error("Open note failed:", error);
+      showToast("Open failed");
+      return null;
+    }
+  }
+}
+
 async function switchToNote(id: string) {
   await flushSave();
   const summary = await getNoteMeta(id);
@@ -236,24 +292,9 @@ async function switchToNote(id: string) {
 
   let note: Note | null = null;
   if (summary.access_mode !== "none" && !summary.is_unlocked) {
-    const password = await promptPasswordInApp(
-      `Enter password to open "${summary.title}".`,
-      "Open",
-    );
-    if (password === null) return;
-    try {
-      note = await unlockNoteAccess(id, password);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
-      if (message.includes("invalid password")) {
-        showToast("Invalid password");
-      } else if (message.includes("password")) {
-        showToast("Password required");
-      } else {
-        console.error("Open note failed:", error);
-        showToast("Open failed");
-      }
+    note = await unlockProtectedNoteWithRetry(id, summary.title);
+    if (!note) {
+      openNoteSwitcher();
       return;
     }
   } else {
@@ -283,28 +324,12 @@ async function unlockStartupNoteIfNeeded(note: Note, summaries: NoteSummary[]): 
     return note;
   }
   const title = summaries.find((entry) => entry.id === note.id)?.title ?? note.id;
-  const password = await promptPasswordInApp(
-    `Enter password to open "${title}".`,
-    "Open",
-  );
-  if (password === null) {
+  const unlocked = await unlockProtectedNoteWithRetry(note.id, title);
+  if (!unlocked) {
+    openNoteSwitcher();
     return note;
   }
-  try {
-    return await unlockNoteAccess(note.id, password);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
-    if (message.includes("invalid password")) {
-      showToast("Invalid password");
-    } else if (message.includes("password")) {
-      showToast("Password required");
-    } else {
-      console.error("Startup note unlock failed:", error);
-      showToast("Open failed");
-    }
-    return note;
-  }
+  return unlocked;
 }
 
 async function unlockStartupActiveNoteAfterMount(note: Note, summaries: NoteSummary[]) {
@@ -745,12 +770,7 @@ function setupKeyboardShortcuts() {
         closeSwitcher();
         focusEditor();
       } else {
-        openSwitcher(switchToNote, (noteId) => {
-          void handleDeleteNoteById(noteId).catch((e) => {
-            console.error("Action failed:", e);
-            showToast("Action failed");
-          });
-        });
+        openNoteSwitcher();
       }
       return;
     }
@@ -956,13 +976,13 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   setupKeyboardShortcuts();
 
   const activeFlags: string[] = [];
-  if (runtimeFlags.plain_text_mode) activeFlags.push("PLAIN_TEXT_MODE");
-  if (runtimeFlags.backend_detach) activeFlags.push("BACKEND_DETACH");
-  if (runtimeFlags.calc_disable) activeFlags.push("CALC_DISABLE");
-  if (runtimeFlags.markdown_disable) activeFlags.push("MARKDOWN_DISABLE");
-  if (runtimeFlags.folding_disable) activeFlags.push("FOLDING_DISABLE");
-  if (runtimeFlags.notify_disable) activeFlags.push("NOTIFY_DISABLE");
-  if (runtimeFlags.autocomplete_disable) activeFlags.push("AUTOCOMPLETE_DISABLE");
+  if (runtimeFlags.plain_text_mode) activeFlags.push("SLATE_PLAIN_TEXT_MODE");
+  if (runtimeFlags.backend_detach) activeFlags.push("SLATE_BACKEND_DETACH");
+  if (runtimeFlags.calc_disable) activeFlags.push("SLATE_CALC_DISABLE");
+  if (runtimeFlags.markdown_disable) activeFlags.push("SLATE_MARKDOWN_DISABLE");
+  if (runtimeFlags.folding_disable) activeFlags.push("SLATE_FOLDING_DISABLE");
+  if (runtimeFlags.notify_disable) activeFlags.push("SLATE_NOTIFY_DISABLE");
+  if (runtimeFlags.autocomplete_disable) activeFlags.push("SLATE_AUTOCOMPLETE_DISABLE");
   if (activeFlags.length > 0) {
     showToast(`Runtime flags: ${activeFlags.join(", ")}`);
   } else if (config.vim_mode) {

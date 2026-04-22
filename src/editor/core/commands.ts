@@ -343,11 +343,31 @@ async function runModuleCommand(
   }
   const [, moduleName, action] = moduleMatch;
   const key = moduleName as keyof NoteModules;
-  if (action === "on") next[key] = true;
-  else if (action === "off") next[key] = false;
-  else next[key] = !next[key];
+  if (action === "on") {
+    if (current[key]) {
+      return { message: `module ${key} already on`, operations: [] };
+    }
+    next[key] = true;
+  } else if (action === "off") {
+    if (!current[key]) {
+      return { message: `module ${key} already off`, operations: [] };
+    }
+    next[key] = false;
+  } else {
+    next[key] = !next[key];
+  }
 
-  await runtime.setNoteModules?.(next);
+  if (!runtime.setNoteModules) {
+    return { message: "module unavailable", operations: [] };
+  }
+  try {
+    await runtime.setNoteModules(next);
+  } catch (error) {
+    return {
+      message: `module update failed: ${errorToMessage(error, "unknown module error")}`,
+      operations: [],
+    };
+  }
   return { message: formatModules(next), operations: [] };
 }
 

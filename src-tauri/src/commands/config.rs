@@ -29,12 +29,14 @@ fn env_flag(name: &str) -> bool {
 #[tauri::command]
 pub fn get_runtime_flags() -> RuntimeFlags {
     RuntimeFlags {
-        plain_text_mode: env_flag("PLAIN_TEXT_MODE"),
-        backend_detach: env_flag("BACKEND_DETACH"),
-        calc_disable: env_flag("CALC_DISABLE"),
-        markdown_disable: env_flag("MARKDOWN_DISABLE"),
-        folding_disable: env_flag("FOLDING_DISABLE"),
-        notify_disable: env_flag("NOTIFY_DISABLE"),
-        autocomplete_disable: env_flag("AUTOCOMPLETE_DISABLE"),
+        // Use namespaced env vars to avoid accidental collisions with
+        // unrelated shell/application variables.
+        plain_text_mode: env_flag("SLATE_PLAIN_TEXT_MODE"),
+        backend_detach: env_flag("SLATE_BACKEND_DETACH"),
+        calc_disable: env_flag("SLATE_CALC_DISABLE"),
+        markdown_disable: env_flag("SLATE_MARKDOWN_DISABLE"),
+        folding_disable: env_flag("SLATE_FOLDING_DISABLE"),
+        notify_disable: env_flag("SLATE_NOTIFY_DISABLE"),
+        autocomplete_disable: env_flag("SLATE_AUTOCOMPLETE_DISABLE"),
     }
 }
