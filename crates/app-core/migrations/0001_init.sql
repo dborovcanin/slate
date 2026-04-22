@@ -1,7 +1,14 @@
 CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
     body TEXT NOT NULL DEFAULT '',
+    note_title TEXT NOT NULL DEFAULT '',
     modules_json TEXT NOT NULL DEFAULT '{"math":true,"table":true,"variables":true,"style":true}',
+    access_mode TEXT NOT NULL DEFAULT 'none',
+    password_salt BLOB,
+    password_hash BLOB,
+    encryption_salt BLOB,
+    encryption_nonce BLOB,
+    encrypted_body BLOB,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

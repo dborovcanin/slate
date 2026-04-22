@@ -613,6 +613,11 @@ pub fn execute_command(
         CommandId::Fold => result_with_message("fold handled by host"),
         CommandId::Unfold => result_with_message("unfold handled by host"),
         CommandId::FoldToggle => result_with_message("fold-toggle handled by host"),
+        CommandId::NoteLock
+        | CommandId::NoteUnlock
+        | CommandId::NoteEncrypt
+        | CommandId::NoteDecrypt
+        | CommandId::NoteUnprotect => result_with_message("note security command handled by host"),
         CommandId::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
@@ -700,6 +705,11 @@ mod tests {
                 "clist",
                 "ulist",
                 "olist",
+                "note lock",
+                "note unlock",
+                "note encrypt",
+                "note decrypt",
+                "note unprotect",
             ]
         );
 

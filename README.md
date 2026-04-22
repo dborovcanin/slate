@@ -100,6 +100,11 @@ sqrt(144) + 3^2         → 21
 - Fuzzy search switcher (Ctrl+P) with match highlighting
 - Titles derived from the first non-empty line — no extra fields to fill
 
+**Note protection**
+- `note lock` requires a password to open a note in the app, but the note body remains plaintext in SQLite
+- `note encrypt` requires a password and stores the note body encrypted at rest
+- Password arguments for note-security commands are redacted from command history entries
+
 **Export**
 - Ctrl+E copies the current note to clipboard
 - Ctrl+Shift+E opens a native file dialog to save as `.md` or `.txt`

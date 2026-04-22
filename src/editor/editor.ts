@@ -89,6 +89,10 @@ function editTouchesTitleRegion(update: ViewUpdate): boolean {
 const onUpdate = EditorView.updateListener.of((update) => {
   if (update.docChanged) {
     if (backendDetached) return;
+    const active = state.activeNote;
+    if (active && active.access_mode !== "none" && !active.is_unlocked) {
+      return;
+    }
     if (suppressProgrammaticDocSync) return;
     if (
       update.transactions.some((transaction) =>

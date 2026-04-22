@@ -17,6 +17,8 @@ function buildItems(query: string): SwitcherItem[] {
         {
           id: state.activeNote.id,
           title: state.notes.find((n) => n.id === state.activeNote!.id)?.title ?? "Untitled",
+          accessMode: state.activeNote.access_mode,
+          isUnlocked: state.activeNote.is_unlocked,
           updatedAt: state.activeNote.updated_at,
         },
         ...notes,
@@ -39,9 +41,21 @@ function renderSwitcherItem(
   title.appendChild(highlightPositions(item.title, positions));
   row.appendChild(title);
 
+  if (item.accessMode === "locked") {
+    const badge = document.createElement("span");
+    badge.className = "switcher-item-badge switcher-item-badge--locked";
+    badge.textContent = "locked (app)";
+    row.appendChild(badge);
+  } else if (item.accessMode === "encrypted") {
+    const badge = document.createElement("span");
+    badge.className = "switcher-item-badge switcher-item-badge--encrypted";
+    badge.textContent = "encrypted";
+    row.appendChild(badge);
+  }
+
   if (item.id === state.activeNote?.id) {
     const badge = document.createElement("span");
-    badge.className = "switcher-item-badge";
+    badge.className = "switcher-item-badge switcher-item-badge--current";
     badge.textContent = "current";
     row.appendChild(badge);
   }

@@ -13,6 +13,8 @@ function note(id: string, body: string, updatedAt: string): Note {
       variables: true,
       style: true,
     },
+    access_mode: "none",
+    is_unlocked: true,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: updatedAt,
   };

@@ -37,6 +37,11 @@ pub enum CommandId {
     Fold,
     Unfold,
     FoldToggle,
+    NoteLock,
+    NoteUnlock,
+    NoteEncrypt,
+    NoteDecrypt,
+    NoteUnprotect,
     Quit,
 }
 
@@ -52,7 +57,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 36] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 41] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -323,6 +328,47 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 36] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::NoteLock,
+        value: "note lock",
+        aliases: &["note-lock", "lock-note"],
+        description: "lock current note in app only (plaintext at rest; requires password)",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::NoteUnlock,
+        value: "note unlock",
+        aliases: &["note-unlock", "unlock-note"],
+        description: "unlock app-level note lock (requires password)",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::NoteEncrypt,
+        value: "note encrypt",
+        aliases: &["note-encrypt", "encrypt-note"],
+        description: "encrypt current note at rest (requires password)",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::NoteDecrypt,
+        value: "note decrypt",
+        aliases: &["note-decrypt", "decrypt-note"],
+        description: "decrypt current note to plain text (requires password)",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::NoteUnprotect,
+        value: "note unprotect",
+        aliases: &[
+            "note-unprotect",
+            "unprotect-note",
+            "note unencrypt",
+            "note-unencrypt",
+            "unencrypt-note",
+        ],
+        description: "remove note protection (locked or encrypted) and password (requires password)",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::Quit,
         value: "q",
         aliases: &["q!"],
@@ -338,7 +384,25 @@ pub fn normalize_command(input: &str) -> String {
 }
 
 fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
-    def.value == normalized_input || def.aliases.iter().any(|alias| *alias == normalized_input)
+    let matches_exact =
+        def.value == normalized_input || def.aliases.iter().any(|alias| *alias == normalized_input);
+    if matches_exact {
+        return true;
+    }
+    match def.id {
+        CommandId::NoteLock
+        | CommandId::NoteUnlock
+        | CommandId::NoteEncrypt
+        | CommandId::NoteDecrypt
+        | CommandId::NoteUnprotect => std::iter::once(def.value)
+            .chain(def.aliases.iter().copied())
+            .any(|candidate| {
+                normalized_input
+                    .strip_prefix(candidate)
+                    .is_some_and(|rest| rest.starts_with(' '))
+            }),
+        _ => false,
+    }
 }
 
 fn available_commands(mode: CommandMode) -> Vec<&'static CommandDefinition> {
@@ -479,6 +543,26 @@ mod tests {
         assert_eq!(
             resolve_command(CommandMode::Editor, "modules off variables").map(|cmd| cmd.id),
             Some(CommandId::ModuleOffVariables)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "note lock").map(|cmd| cmd.id),
+            Some(CommandId::NoteLock)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "note lock hunter2").map(|cmd| cmd.id),
+            Some(CommandId::NoteLock)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "note decrypt hunter2").map(|cmd| cmd.id),
+            Some(CommandId::NoteDecrypt)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "note unencrypt hunter2").map(|cmd| cmd.id),
+            Some(CommandId::NoteUnprotect)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "note unprotect hunter2").map(|cmd| cmd.id),
+            Some(CommandId::NoteUnprotect)
         );
     }
 

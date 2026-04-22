@@ -1,8 +1,12 @@
 import type { EditorView } from "@codemirror/view";
 import {
+  decryptNote,
+  encryptNote,
   deleteNoteReminder,
   evaluateLines,
+  lockNoteAccess,
   readSystemClipboardText,
+  unlockNoteAccess,
   upsertNoteReminder,
 } from "../api.ts";
 import {
@@ -39,6 +43,89 @@ export interface CommandExecutionOptions {
     anchor: number;
     head: number;
   };
+}
+
+function parseNoteSecurityCommand(rawInput: string): {
+  action: "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect";
+  password: string | null;
+} | null {
+  const normalized = rawInput.replace(/^:/, "").trimStart();
+  if (!normalized) return null;
+  const [head, ...tailParts] = normalized.split(/\s+/);
+  const tail = normalized.slice((head ?? "").length).trimStart();
+  const normalizeAction = (
+    token: string,
+  ): "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect" | null => {
+    const lowered = token.toLowerCase();
+    if (lowered === "lock" || lowered === "note-lock" || lowered === "lock-note") return "lock";
+    if (lowered === "unlock" || lowered === "note-unlock" || lowered === "unlock-note")
+      return "unlock";
+    if (lowered === "encrypt" || lowered === "note-encrypt" || lowered === "encrypt-note")
+      return "encrypt";
+    if (lowered === "decrypt" || lowered === "note-decrypt" || lowered === "decrypt-note")
+      return "decrypt";
+    if (
+      lowered === "unprotect" ||
+      lowered === "unencrypt" ||
+      lowered === "note-unprotect" ||
+      lowered === "unprotect-note" ||
+      lowered === "note-unencrypt" ||
+      lowered === "unencrypt-note"
+    ) {
+      return "unprotect";
+    }
+    return null;
+  };
+
+  if ((head ?? "").toLowerCase() === "note") {
+    const actionToken = tailParts[0] ?? "";
+    const action = normalizeAction(actionToken);
+    if (!action) return null;
+    const passwordRaw = tail
+      .slice(actionToken.length)
+      .trimStart();
+    return { action, password: passwordRaw.trim().length > 0 ? passwordRaw : null };
+  }
+
+  const action = normalizeAction(head ?? "");
+  if (!action) return null;
+  return { action, password: tail.trim().length > 0 ? tail : null };
+}
+
+async function tryExecuteNoteSecurityCommand(
+  view: EditorView,
+  rawInput: string,
+): Promise<string | null> {
+  const parsed = parseNoteSecurityCommand(rawInput);
+  if (!parsed) return null;
+  const active = state.activeNote;
+  if (!active) return "no active note";
+  if (!parsed.password) {
+    return `usage: note ${parsed.action} <password>`;
+  }
+
+  const next = await (async () => {
+    if (parsed.action === "lock") return lockNoteAccess(active.id, parsed.password!);
+    if (parsed.action === "unlock") return unlockNoteAccess(active.id, parsed.password!);
+    if (parsed.action === "encrypt") return encryptNote(active.id, parsed.password!);
+    if (parsed.action === "unprotect") return decryptNote(active.id, parsed.password!);
+    return decryptNote(active.id, parsed.password!);
+  })();
+
+  state.setActiveNote(next);
+  const { setEditorContent } = await import("./editor.ts");
+  const prevHead = view.state.selection.main.head;
+  setEditorContent(next.body);
+  view.dispatch({
+    selection: { anchor: Math.min(next.body.length, prevHead) },
+    scrollIntoView: true,
+  });
+
+  if (parsed.action === "lock") return "note locked";
+  if (parsed.action === "unlock") return "note unlocked";
+  if (parsed.action === "encrypt") return "note encrypted at rest";
+  if (parsed.action === "unprotect") return "note unprotected";
+  return "note decrypted";
 }
 
 const CLIPBOARD_WATCH_POLL_MS = 400;
@@ -163,6 +250,9 @@ export async function executeCommand(
 ): Promise<string> {
   const profilerMessage = tryExecuteEditorProfilerCommand(rawInput);
   if (profilerMessage !== null) return profilerMessage;
+
+  const noteSecurityMessage = await tryExecuteNoteSecurityCommand(view, rawInput);
+  if (noteSecurityMessage !== null) return noteSecurityMessage;
 
   const snapshot = snapshotFromView(view);
   if (options.selectionOverride) {

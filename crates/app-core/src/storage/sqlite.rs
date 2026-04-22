@@ -1,15 +1,38 @@
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Nonce};
+use pbkdf2::pbkdf2_hmac;
 use rusqlite::{Connection, OptionalExtension};
+use sha2::Sha256;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
-use super::models::{Note, NoteModules, NoteSummary, Reminder};
+use super::models::{Note, NoteAccessMode, NoteModules, NoteSummary, Reminder};
 
 const DEFAULT_NOTE_MODULES_JSON: &str =
     r#"{"math":true,"table":true,"variables":true,"style":true}"#;
+const PASSWORD_SALT_LEN: usize = 16;
+const ENCRYPTION_SALT_LEN: usize = 16;
+const ENCRYPTION_NONCE_LEN: usize = 12;
+const PASSWORD_HASH_LEN: usize = 32;
+const PBKDF2_ITERATIONS: u32 = 200_000;
+const NOTE_TITLE_MAX_CHARS: usize = 60;
+
+#[derive(Debug, Clone)]
+struct NoteSecurityRow {
+    access_mode: NoteAccessMode,
+    password_salt: Option<Vec<u8>>,
+    password_hash: Option<Vec<u8>>,
+    encryption_salt: Option<Vec<u8>>,
+    encryption_nonce: Option<Vec<u8>>,
+    encrypted_body: Option<Vec<u8>>,
+}
 
 pub struct Db {
     conn: Mutex<Connection>,
+    unlocked_passwords: Mutex<HashMap<String, String>>,
 }
 
 impl Db {
@@ -32,27 +55,137 @@ impl Db {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            unlocked_passwords: Mutex::new(HashMap::new()),
         })
     }
 
     #[allow(dead_code)]
     pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
         let conn = self.conn.lock().unwrap();
-        load_note(&conn, id)
+        self.load_note_with_access(&conn, id)
     }
 
     pub fn save_note(&self, id: &str, body: &str) -> Result<Note, String> {
         let conn = self.conn.lock().unwrap();
         let now = now_iso();
+        let note_title = derive_note_title_from_body(body);
+
+        if let Some(security) = self.load_note_security(&conn, id)? {
+            match security.access_mode {
+                NoteAccessMode::None => {}
+                NoteAccessMode::Locked => {
+                    if !self.is_note_unlocked(id) {
+                        return Err("note is locked; unlock first".to_string());
+                    }
+                }
+                NoteAccessMode::Encrypted => {
+                    let password = self
+                        .unlocked_password_for(id)
+                        .ok_or_else(|| "note is locked; unlock first".to_string())?;
+                    let encrypted = encrypt_note_body(body, &password)?;
+                    conn.execute(
+                        "UPDATE notes
+                         SET body = '',
+                             note_title = ?2,
+                             encrypted_body = ?3,
+                             encryption_salt = ?4,
+                             encryption_nonce = ?5,
+                             updated_at = ?6
+                         WHERE id = ?1",
+                        rusqlite::params![
+                            id,
+                            note_title,
+                            encrypted.ciphertext,
+                            encrypted.salt,
+                            encrypted.nonce,
+                            now,
+                        ],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    return self
+                        .load_note_with_access(&conn, id)?
+                        .ok_or_else(|| "Note not found after save".to_string());
+                }
+            }
+        }
 
         conn.execute(
-            "INSERT INTO notes (id, body, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at",
-            rusqlite::params![id, body, DEFAULT_NOTE_MODULES_JSON, now, now],
+            "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 body = excluded.body,
+                 note_title = excluded.note_title,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
         .map_err(|e| e.to_string())?;
 
-        load_note(&conn, id)?.ok_or_else(|| "Note not found after save".to_string())
+        self.load_note_with_access(&conn, id)?
+            .ok_or_else(|| "Note not found after save".to_string())
+    }
+
+    pub fn create_note_with_defaults(
+        &self,
+        id: &str,
+        modules: NoteModules,
+        default_encryption_password: Option<&str>,
+    ) -> Result<Note, String> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let now = now_iso();
+        let note_title = derive_note_title_from_body("");
+        let modules_json = serde_json::to_string(&modules)
+            .map_err(|e| format!("Failed to encode note modules: {e}"))?;
+
+        let mut unlocked_password: Option<String> = None;
+        if let Some(raw_password) = default_encryption_password {
+            let password = normalize_password(raw_password)?;
+            let encrypted = encrypt_note_body("", &password)?;
+            let (password_salt, password_hash) = password_hash_pair(&password)?;
+            tx.execute(
+                "INSERT INTO notes (
+                    id,
+                    body,
+                    note_title,
+                    modules_json,
+                    access_mode,
+                    password_salt,
+                    password_hash,
+                    encryption_salt,
+                    encryption_nonce,
+                    encrypted_body,
+                    created_at,
+                    updated_at
+                ) VALUES (?1, '', ?2, ?3, 'encrypted', ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    id,
+                    note_title,
+                    modules_json,
+                    password_salt,
+                    password_hash,
+                    encrypted.salt,
+                    encrypted.nonce,
+                    encrypted.ciphertext,
+                    now,
+                    now,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            unlocked_password = Some(password);
+        } else {
+            tx.execute(
+                "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at)
+                 VALUES (?1, '', ?2, ?3, ?4, ?5)",
+                rusqlite::params![id, note_title, modules_json, now, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        tx.commit().map_err(|e| e.to_string())?;
+        if let Some(password) = unlocked_password.as_deref() {
+            self.set_unlocked_password(id, password);
+        }
+        self.load_note_with_access(&conn, id)?
+            .ok_or_else(|| "Note not found after create".to_string())
     }
 
     pub fn set_note_modules(&self, id: &str, modules: NoteModules) -> Result<Note, String> {
@@ -73,28 +206,256 @@ impl Db {
             return Err("Note not found".to_string());
         }
 
-        load_note(&conn, id)?.ok_or_else(|| "Note not found after module update".to_string())
+        self.load_note_with_access(&conn, id)?
+            .ok_or_else(|| "Note not found after module update".to_string())
+    }
+
+    pub fn lock_note(&self, id: &str, password: &str) -> Result<Note, String> {
+        let password = normalize_password(password)?;
+        let conn = self.conn.lock().unwrap();
+        let security = self
+            .load_note_security(&conn, id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        if is_note_protected(security.access_mode) && !self.is_note_unlocked(id) {
+            return Err("note is locked; unlock first".to_string());
+        }
+        let body = self
+            .load_note_plain_body_for_access(&conn, id, &security)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        let note_title = derive_note_title_from_body(&body);
+        let now = now_iso();
+        let (password_salt, password_hash) = password_hash_pair(&password)?;
+
+        conn.execute(
+            "UPDATE notes
+             SET body = ?2,
+                 note_title = ?3,
+                 access_mode = 'locked',
+                 password_salt = ?4,
+                 password_hash = ?5,
+                 encryption_salt = NULL,
+                 encryption_nonce = NULL,
+                 encrypted_body = NULL,
+                 updated_at = ?6
+             WHERE id = ?1",
+            rusqlite::params![id, body, note_title, password_salt, password_hash, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        self.clear_unlocked_password(id);
+        self.load_note_with_access(&conn, id)?
+            .ok_or_else(|| "Note not found after lock".to_string())
+    }
+
+    pub fn unlock_note(&self, id: &str, password: &str) -> Result<Note, String> {
+        let password = normalize_password(password)?;
+        let conn = self.conn.lock().unwrap();
+        let security = self
+            .load_note_security(&conn, id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        if security.access_mode == NoteAccessMode::None {
+            return self
+                .load_note_with_access(&conn, id)?
+                .ok_or_else(|| "Note not found".to_string());
+        }
+        verify_password(&security, &password)?;
+        self.set_unlocked_password(id, &password);
+        match self.load_note_with_access(&conn, id) {
+            Ok(Some(note)) => Ok(note),
+            Ok(None) => Err("Note not found after unlock".to_string()),
+            Err(error) => {
+                self.clear_unlocked_password(id);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn encrypt_note(&self, id: &str, password: &str) -> Result<Note, String> {
+        let password = normalize_password(password)?;
+        let conn = self.conn.lock().unwrap();
+        let security = self
+            .load_note_security(&conn, id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        if is_note_protected(security.access_mode) && !self.is_note_unlocked(id) {
+            return Err("note is locked; unlock first".to_string());
+        }
+        let body = self
+            .load_note_plain_body_for_access(&conn, id, &security)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        let note_title = derive_note_title_from_body(&body);
+        let encrypted = encrypt_note_body(&body, &password)?;
+        let (password_salt, password_hash) = password_hash_pair(&password)?;
+        let now = now_iso();
+
+        conn.execute(
+            "UPDATE notes
+             SET body = '',
+                 note_title = ?2,
+                 access_mode = 'encrypted',
+                 password_salt = ?3,
+                 password_hash = ?4,
+                 encryption_salt = ?5,
+                 encryption_nonce = ?6,
+                 encrypted_body = ?7,
+                 updated_at = ?8
+             WHERE id = ?1",
+            rusqlite::params![
+                id,
+                note_title,
+                password_salt,
+                password_hash,
+                encrypted.salt,
+                encrypted.nonce,
+                encrypted.ciphertext,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        // Keep the just-encrypted note open in this session so autosave continues
+        // to write encrypted-at-rest payloads with the same password.
+        self.set_unlocked_password(id, &password);
+        match self.load_note_with_access(&conn, id) {
+            Ok(Some(note)) => Ok(note),
+            Ok(None) => {
+                self.clear_unlocked_password(id);
+                Err("Note not found after encrypt".to_string())
+            }
+            Err(error) => {
+                self.clear_unlocked_password(id);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn decrypt_note(&self, id: &str, password: &str) -> Result<Note, String> {
+        let password = normalize_password(password)?;
+        let conn = self.conn.lock().unwrap();
+        let security = self
+            .load_note_security(&conn, id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        if security.access_mode == NoteAccessMode::None {
+            return self
+                .load_note_with_access(&conn, id)?
+                .ok_or_else(|| "Note not found".to_string());
+        }
+        verify_password(&security, &password)?;
+        let body = self
+            .load_note_plain_body_for_access_with_password(&conn, id, &security, &password)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        let note_title = derive_note_title_from_body(&body);
+        let now = now_iso();
+        conn.execute(
+            "UPDATE notes
+             SET body = ?2,
+                 note_title = ?3,
+                 access_mode = 'none',
+                 password_salt = NULL,
+                 password_hash = NULL,
+                 encryption_salt = NULL,
+                 encryption_nonce = NULL,
+                 encrypted_body = NULL,
+                 updated_at = ?4
+             WHERE id = ?1",
+            rusqlite::params![id, body, note_title, now],
+        )
+        .map_err(|e| e.to_string())?;
+        self.clear_unlocked_password(id);
+        self.load_note_with_access(&conn, id)?
+            .ok_or_else(|| "Note not found after decrypt".to_string())
     }
 
     pub fn append_note_body(&self, id: &str, body_suffix: &str) -> Result<Note, String> {
         let conn = self.conn.lock().unwrap();
         let now = now_iso();
 
+        let security = self.load_note_security(&conn, id)?;
+        if let Some(security) = security {
+            match security.access_mode {
+                NoteAccessMode::None => {}
+                NoteAccessMode::Locked => {
+                    if !self.is_note_unlocked(id) {
+                        return Err("note is locked; unlock first".to_string());
+                    }
+                }
+                NoteAccessMode::Encrypted => {
+                    let password = self
+                        .unlocked_password_for(id)
+                        .ok_or_else(|| "note is locked; unlock first".to_string())?;
+                    let current = self
+                        .load_note_plain_body_for_access(&conn, id, &security)?
+                        .unwrap_or_default();
+                    let next_body = if current.is_empty() {
+                        body_suffix.to_string()
+                    } else if body_suffix.is_empty() {
+                        current
+                    } else if current.ends_with('\n') {
+                        format!("{current}{body_suffix}")
+                    } else {
+                        format!("{current}\n{body_suffix}")
+                    };
+                    let note_title = derive_note_title_from_body(&next_body);
+                    let encrypted = encrypt_note_body(&next_body, &password)?;
+                    conn.execute(
+                        "UPDATE notes
+                         SET body = '',
+                             note_title = ?2,
+                             encrypted_body = ?3,
+                             encryption_salt = ?4,
+                             encryption_nonce = ?5,
+                             updated_at = ?6
+                         WHERE id = ?1",
+                        rusqlite::params![
+                            id,
+                            note_title,
+                            encrypted.ciphertext,
+                            encrypted.salt,
+                            encrypted.nonce,
+                            now,
+                        ],
+                    )
+                    .map_err(|e| e.to_string())?;
+                    return self
+                        .load_note_with_access(&conn, id)?
+                        .ok_or_else(|| "Note not found after append".to_string());
+                }
+            }
+        }
+
+        let current = self
+            .load_note_row(&conn, id)?
+            .map(|row| row.body)
+            .unwrap_or_default();
+        let next_body = if current.is_empty() {
+            body_suffix.to_string()
+        } else if body_suffix.is_empty() {
+            current
+        } else if current.ends_with('\n') {
+            format!("{current}{body_suffix}")
+        } else {
+            format!("{current}\n{body_suffix}")
+        };
+        let note_title = derive_note_title_from_body(&next_body);
+
         conn.execute(
-            "INSERT INTO notes (id, body, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+            "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
-                 body = CASE
-                     WHEN notes.body = '' THEN excluded.body
-                     WHEN excluded.body = '' THEN notes.body
-                     WHEN substr(notes.body, -1, 1) = char(10) THEN notes.body || excluded.body
-                     ELSE notes.body || char(10) || excluded.body
-                 END,
+                 body = excluded.body,
+                 note_title = excluded.note_title,
                  updated_at = excluded.updated_at",
-            rusqlite::params![id, body_suffix, DEFAULT_NOTE_MODULES_JSON, now, now],
+            rusqlite::params![
+                id,
+                next_body,
+                note_title,
+                DEFAULT_NOTE_MODULES_JSON,
+                now,
+                now
+            ],
         )
         .map_err(|e| e.to_string())?;
 
-        load_note(&conn, id)?.ok_or_else(|| "Note not found after append".to_string())
+        self.load_note_with_access(&conn, id)?
+            .ok_or_else(|| "Note not found after append".to_string())
     }
 
     pub fn prepend_note_with_ingest_event(
@@ -129,6 +490,11 @@ impl Db {
         message_truncated: bool,
     ) -> Result<Option<Note>, String> {
         let mut conn = self.conn.lock().unwrap();
+        if let Some(security) = self.load_note_security(&conn, note_id)? {
+            if security.access_mode != NoteAccessMode::None {
+                return Err("cannot ingest into protected note".to_string());
+            }
+        }
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
 
@@ -159,66 +525,62 @@ impl Db {
             return Ok(None);
         }
 
-        tx.execute(
-            "INSERT INTO notes (id, body, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET
-                 body = CASE
-                     WHEN notes.body = '' THEN excluded.body
-                     WHEN excluded.body = '' THEN notes.body
-                     WHEN substr(excluded.body, -1, 1) = char(10) THEN excluded.body || notes.body
-                     ELSE excluded.body || char(10) || notes.body
-                 END,
-                 updated_at = excluded.updated_at",
-            rusqlite::params![note_id, body, DEFAULT_NOTE_MODULES_JSON, now, now],
-        )
-        .map_err(|e| e.to_string())?;
-
-        let mut stmt = tx
-            .prepare(
-                "SELECT id, body, modules_json, created_at, updated_at FROM notes WHERE id = ?1",
-            )
-            .map_err(|e| e.to_string())?;
-        let note = stmt
-            .query_row([note_id], |row| {
-                Ok(Note {
-                    id: row.get(0)?,
-                    body: row.get(1)?,
-                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                })
+        let existing_body = tx
+            .query_row("SELECT body FROM notes WHERE id = ?1", [note_id], |row| {
+                row.get::<_, String>(0)
             })
             .optional()
             .map_err(|e| e.to_string())?
-            .ok_or_else(|| "Note not found after write".to_string())?;
-        drop(stmt);
+            .unwrap_or_default();
+        let next_body = if existing_body.is_empty() {
+            body.to_string()
+        } else if body.is_empty() {
+            existing_body
+        } else if body.ends_with('\n') {
+            format!("{body}{existing_body}")
+        } else {
+            format!("{body}\n{existing_body}")
+        };
+        let note_title = derive_note_title_from_body(&next_body);
+
+        tx.execute(
+            "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 body = excluded.body,
+                 note_title = excluded.note_title,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![
+                note_id,
+                next_body,
+                note_title,
+                DEFAULT_NOTE_MODULES_JSON,
+                now,
+                now
+            ],
+        )
+        .map_err(|e| e.to_string())?;
 
         tx.commit().map_err(|e| e.to_string())?;
+        let note = self
+            .load_note_with_access(&conn, note_id)?
+            .ok_or_else(|| "Note not found after write".to_string())?;
         Ok(Some(note))
     }
 
     pub fn get_most_recent_note(&self) -> Result<Option<Note>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
-            .prepare(
-                "SELECT id, body, modules_json, created_at, updated_at FROM notes ORDER BY updated_at DESC LIMIT 1",
-            )
+            .prepare("SELECT id FROM notes ORDER BY updated_at DESC LIMIT 1")
             .map_err(|e| e.to_string())?;
 
-        let note = stmt
-            .query_row([], |row| {
-                Ok(Note {
-                    id: row.get(0)?,
-                    body: row.get(1)?,
-                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                })
-            })
+        let id = stmt
+            .query_row([], |row| row.get::<_, String>(0))
             .optional()
             .map_err(|e| e.to_string())?;
-
-        Ok(note)
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        self.load_note_with_access(&conn, &id)
     }
 
     pub fn get_most_recent_note_excluding_prefix(
@@ -233,7 +595,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT id, body, modules_json, created_at, updated_at
+                "SELECT id
                  FROM notes
                  WHERE id NOT LIKE ?1 ESCAPE '\\'
                  ORDER BY updated_at DESC
@@ -242,93 +604,84 @@ impl Db {
             .map_err(|e| e.to_string())?;
 
         let pattern = format!("{}-%", escape_like_pattern(trimmed));
-        let note = stmt
-            .query_row([pattern], |row| {
-                Ok(Note {
-                    id: row.get(0)?,
-                    body: row.get(1)?,
-                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                })
-            })
+        let id = stmt
+            .query_row([pattern], |row| row.get::<_, String>(0))
             .optional()
             .map_err(|e| e.to_string())?;
-
-        Ok(note)
+        let Some(id) = id else {
+            return Ok(None);
+        };
+        self.load_note_with_access(&conn, &id)
     }
 
     pub fn list_notes(&self) -> Result<Vec<Note>, String> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT id, body, modules_json, created_at, updated_at FROM notes ORDER BY updated_at DESC")
-            .map_err(|e| e.to_string())?;
-
-        let notes = stmt
-            .query_map([], |row| {
-                Ok(Note {
-                    id: row.get(0)?,
-                    body: row.get(1)?,
-                    modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
-                    created_at: row.get(3)?,
-                    updated_at: row.get(4)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
-
+        let rows = self.load_note_access_rows(&conn)?;
+        let mut notes = Vec::with_capacity(rows.len());
+        for row in &rows {
+            notes.push(self.note_from_access_row(row)?);
+        }
         Ok(notes)
     }
 
     pub fn list_notes_meta(&self) -> Result<Vec<NoteSummary>, String> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, substr(body, 1, 200), updated_at FROM notes ORDER BY updated_at DESC",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let notes = stmt
-            .query_map([], |row| {
-                Ok(NoteSummary {
-                    id: row.get(0)?,
-                    body_prefix: row.get(1)?,
-                    updated_at: row.get(2)?,
-                })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+        let rows = self.load_note_access_rows(&conn)?;
+        let mut notes = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let note = self.note_from_access_row(row)?;
+            let stored_title = normalize_stored_title(row.note_title.clone());
+            let body_prefix = note_summary_body_prefix(&note);
+            let title = note_summary_title(&note, stored_title.as_deref());
+            notes.push(NoteSummary {
+                id: note.id,
+                title,
+                body_prefix,
+                access_mode: note.access_mode,
+                is_unlocked: note.is_unlocked,
+                updated_at: note.updated_at,
+            });
+        }
 
         Ok(notes)
     }
 
     pub fn get_note_meta(&self, id: &str) -> Result<Option<NoteSummary>, String> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare("SELECT id, substr(body, 1, 200), updated_at FROM notes WHERE id = ?1")
-            .map_err(|e| e.to_string())?;
-
-        let meta = stmt
-            .query_row([id], |row| {
-                Ok(NoteSummary {
-                    id: row.get(0)?,
-                    body_prefix: row.get(1)?,
-                    updated_at: row.get(2)?,
-                })
-            })
-            .optional()
-            .map_err(|e| e.to_string())?;
-
-        Ok(meta)
+        let Some(row) = self.load_note_access_row(&conn, id)? else {
+            return Ok(None);
+        };
+        let note = self.note_from_access_row(&row)?;
+        let stored_title = normalize_stored_title(row.note_title);
+        let body_prefix = note_summary_body_prefix(&note);
+        let title = note_summary_title(&note, stored_title.as_deref());
+        Ok(Some(NoteSummary {
+            id: note.id,
+            title,
+            body_prefix,
+            access_mode: note.access_mode,
+            is_unlocked: note.is_unlocked,
+            updated_at: note.updated_at,
+        }))
     }
 
-    pub fn delete_note(&self, id: &str) -> Result<bool, String> {
+    pub fn delete_note(&self, id: &str, password: Option<&str>) -> Result<bool, String> {
         let conn = self.conn.lock().unwrap();
+        if let Some(security) = self.load_note_security(&conn, id)? {
+            if is_note_protected(security.access_mode) {
+                let provided = password.ok_or_else(|| {
+                    "password required to delete locked/encrypted note".to_string()
+                })?;
+                let normalized = normalize_password(provided)?;
+                verify_password(&security, &normalized)?;
+            }
+        }
         let changed = conn
             .execute("DELETE FROM notes WHERE id = ?1", [id])
             .map_err(|e| e.to_string())?;
+        if changed > 0 {
+            self.clear_unlocked_password(id);
+        }
         Ok(changed > 0)
     }
 
@@ -561,27 +914,247 @@ impl Db {
         .map_err(|e| e.to_string())?;
         Ok(())
     }
+
+    fn is_note_unlocked(&self, id: &str) -> bool {
+        self.unlocked_passwords.lock().unwrap().contains_key(id)
+    }
+
+    fn unlocked_password_for(&self, id: &str) -> Option<String> {
+        self.unlocked_passwords.lock().unwrap().get(id).cloned()
+    }
+
+    fn set_unlocked_password(&self, id: &str, password: &str) {
+        self.unlocked_passwords
+            .lock()
+            .unwrap()
+            .insert(id.to_string(), password.to_string());
+    }
+
+    fn clear_unlocked_password(&self, id: &str) {
+        self.unlocked_passwords.lock().unwrap().remove(id);
+    }
+
+    fn load_note_security(
+        &self,
+        conn: &Connection,
+        id: &str,
+    ) -> Result<Option<NoteSecurityRow>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT access_mode, password_salt, password_hash, encryption_salt, encryption_nonce, encrypted_body
+                 FROM notes WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let row = stmt
+            .query_row([id], |row| {
+                Ok(NoteSecurityRow {
+                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(0)?),
+                    password_salt: row.get(1)?,
+                    password_hash: row.get(2)?,
+                    encryption_salt: row.get(3)?,
+                    encryption_nonce: row.get(4)?,
+                    encrypted_body: row.get(5)?,
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(row)
+    }
+
+    fn load_note_row(&self, conn: &Connection, id: &str) -> Result<Option<NoteRow>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT body
+                 FROM notes
+                 WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let note = stmt
+            .query_row([id], |row| Ok(NoteRow { body: row.get(0)? }))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(note)
+    }
+
+    fn load_note_access_row(
+        &self,
+        conn: &Connection,
+        id: &str,
+    ) -> Result<Option<NoteAccessRow>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, body, note_title, modules_json, access_mode,
+                        encryption_salt, encryption_nonce, encrypted_body, created_at, updated_at
+                 FROM notes
+                 WHERE id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let note = stmt
+            .query_row([id], |row| {
+                Ok(NoteAccessRow {
+                    id: row.get(0)?,
+                    body: row.get(1)?,
+                    note_title: row.get(2)?,
+                    modules_json: row.get(3)?,
+                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(4)?),
+                    encryption_salt: row.get(5)?,
+                    encryption_nonce: row.get(6)?,
+                    encrypted_body: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        Ok(note)
+    }
+
+    fn load_note_access_rows(&self, conn: &Connection) -> Result<Vec<NoteAccessRow>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, body, note_title, modules_json, access_mode,
+                        encryption_salt, encryption_nonce, encrypted_body, created_at, updated_at
+                 FROM notes
+                 ORDER BY updated_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let notes = stmt
+            .query_map([], |row| {
+                Ok(NoteAccessRow {
+                    id: row.get(0)?,
+                    body: row.get(1)?,
+                    note_title: row.get(2)?,
+                    modules_json: row.get(3)?,
+                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(4)?),
+                    encryption_salt: row.get(5)?,
+                    encryption_nonce: row.get(6)?,
+                    encrypted_body: row.get(7)?,
+                    created_at: row.get(8)?,
+                    updated_at: row.get(9)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(notes)
+    }
+
+    fn note_from_access_row(&self, row: &NoteAccessRow) -> Result<Note, String> {
+        let is_unlocked =
+            !is_note_protected(row.access_mode) || self.is_note_unlocked(row.id.as_str());
+        let body = if is_unlocked {
+            self.load_plain_body_from_access_row(row)?
+        } else {
+            String::new()
+        };
+        Ok(Note {
+            id: row.id.clone(),
+            body,
+            modules: parse_note_modules_json(row.modules_json.clone()),
+            access_mode: row.access_mode,
+            is_unlocked,
+            created_at: row.created_at.clone(),
+            updated_at: row.updated_at.clone(),
+        })
+    }
+
+    fn load_plain_body_from_access_row(&self, row: &NoteAccessRow) -> Result<String, String> {
+        match row.access_mode {
+            NoteAccessMode::None | NoteAccessMode::Locked => Ok(row.body.clone()),
+            NoteAccessMode::Encrypted => {
+                let password = self
+                    .unlocked_password_for(row.id.as_str())
+                    .ok_or_else(|| "note is locked; unlock first".to_string())?;
+                decrypt_note_body(
+                    row.encrypted_body
+                        .as_ref()
+                        .ok_or_else(|| "encrypted note payload missing".to_string())?,
+                    row.encryption_salt
+                        .as_ref()
+                        .ok_or_else(|| "encrypted note salt missing".to_string())?,
+                    row.encryption_nonce
+                        .as_ref()
+                        .ok_or_else(|| "encrypted note nonce missing".to_string())?,
+                    &password,
+                )
+            }
+        }
+    }
+
+    fn load_note_plain_body_for_access(
+        &self,
+        conn: &Connection,
+        id: &str,
+        security: &NoteSecurityRow,
+    ) -> Result<Option<String>, String> {
+        if !is_note_protected(security.access_mode) {
+            let body = self.load_note_row(conn, id)?.map(|row| row.body);
+            return Ok(body);
+        }
+
+        let Some(password) = self.unlocked_password_for(id) else {
+            return Ok(None);
+        };
+        self.load_note_plain_body_for_access_with_password(conn, id, security, &password)
+    }
+
+    fn load_note_plain_body_for_access_with_password(
+        &self,
+        conn: &Connection,
+        id: &str,
+        security: &NoteSecurityRow,
+        password: &str,
+    ) -> Result<Option<String>, String> {
+        let Some(row) = self.load_note_row(conn, id)? else {
+            return Ok(None);
+        };
+        let body = match security.access_mode {
+            NoteAccessMode::None => row.body,
+            NoteAccessMode::Locked => row.body,
+            NoteAccessMode::Encrypted => decrypt_note_body(
+                security
+                    .encrypted_body
+                    .as_ref()
+                    .ok_or_else(|| "encrypted note payload missing".to_string())?,
+                security
+                    .encryption_salt
+                    .as_ref()
+                    .ok_or_else(|| "encrypted note salt missing".to_string())?,
+                security
+                    .encryption_nonce
+                    .as_ref()
+                    .ok_or_else(|| "encrypted note nonce missing".to_string())?,
+                password,
+            )?,
+        };
+        Ok(Some(body))
+    }
+
+    fn load_note_with_access(&self, conn: &Connection, id: &str) -> Result<Option<Note>, String> {
+        let Some(row) = self.load_note_access_row(conn, id)? else {
+            return Ok(None);
+        };
+        self.note_from_access_row(&row).map(Some)
+    }
 }
 
-fn load_note(conn: &Connection, id: &str) -> Result<Option<Note>, String> {
-    let mut stmt = conn
-        .prepare("SELECT id, body, modules_json, created_at, updated_at FROM notes WHERE id = ?1")
-        .map_err(|e| e.to_string())?;
+#[derive(Debug, Clone)]
+struct NoteRow {
+    body: String,
+}
 
-    let note = stmt
-        .query_row([id], |row| {
-            Ok(Note {
-                id: row.get(0)?,
-                body: row.get(1)?,
-                modules: parse_note_modules_json(row.get::<_, Option<String>>(2)?),
-                created_at: row.get(3)?,
-                updated_at: row.get(4)?,
-            })
-        })
-        .optional()
-        .map_err(|e| e.to_string())?;
-
-    Ok(note)
+#[derive(Debug, Clone)]
+struct NoteAccessRow {
+    id: String,
+    body: String,
+    note_title: Option<String>,
+    modules_json: Option<String>,
+    access_mode: NoteAccessMode,
+    encryption_salt: Option<Vec<u8>>,
+    encryption_nonce: Option<Vec<u8>>,
+    encrypted_body: Option<Vec<u8>>,
+    created_at: String,
+    updated_at: String,
 }
 
 fn parse_note_modules_json(value: Option<String>) -> NoteModules {
@@ -592,6 +1165,170 @@ fn parse_note_modules_json(value: Option<String>) -> NoteModules {
         Ok(modules) => modules,
         Err(_) => NoteModules::default(),
     }
+}
+
+fn parse_note_access_mode(value: Option<String>) -> NoteAccessMode {
+    match value
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("none")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "locked" => NoteAccessMode::Locked,
+        "encrypted" => NoteAccessMode::Encrypted,
+        _ => NoteAccessMode::None,
+    }
+}
+
+fn normalize_stored_title(value: Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(ToString::to_string)
+}
+
+fn note_summary_title(note: &Note, stored_title: Option<&str>) -> String {
+    if let Some(title) = stored_title
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return title.to_string();
+    }
+    if note.is_unlocked {
+        derive_note_title_from_body(&note.body)
+    } else {
+        "Untitled".to_string()
+    }
+}
+
+fn note_summary_body_prefix(note: &Note) -> String {
+    if note.is_unlocked {
+        note.body.chars().take(200).collect()
+    } else {
+        "[locked]".to_string()
+    }
+}
+
+fn derive_note_title_from_body(body: &str) -> String {
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut out = String::new();
+        for (idx, ch) in trimmed.chars().enumerate() {
+            if idx >= NOTE_TITLE_MAX_CHARS {
+                out.push_str("...");
+                return out;
+            }
+            out.push(ch);
+        }
+        return out;
+    }
+    "Untitled".to_string()
+}
+
+fn is_note_protected(mode: NoteAccessMode) -> bool {
+    !matches!(mode, NoteAccessMode::None)
+}
+
+fn normalize_password(password: &str) -> Result<String, String> {
+    if password.trim().is_empty() {
+        return Err("password must not be empty".to_string());
+    }
+    if password != password.trim() {
+        return Err("password must not start or end with whitespace".to_string());
+    }
+    Ok(password.to_string())
+}
+
+fn fill_random_bytes(target: &mut [u8]) -> Result<(), String> {
+    getrandom::fill(target).map_err(|e| format!("Failed to gather secure random bytes: {e}"))
+}
+
+fn derive_password_hash(password: &str, salt: &[u8]) -> [u8; PASSWORD_HASH_LEN] {
+    let mut out = [0u8; PASSWORD_HASH_LEN];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut out);
+    out
+}
+
+fn password_hash_pair(password: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let mut salt = [0u8; PASSWORD_SALT_LEN];
+    fill_random_bytes(&mut salt)?;
+    let hash = derive_password_hash(password, &salt);
+    Ok((salt.to_vec(), hash.to_vec()))
+}
+
+fn verify_password(security: &NoteSecurityRow, password: &str) -> Result<(), String> {
+    let Some(salt) = security.password_salt.as_ref() else {
+        return Err("note password metadata missing".to_string());
+    };
+    let Some(expected_hash) = security.password_hash.as_ref() else {
+        return Err("note password metadata missing".to_string());
+    };
+    if expected_hash.len() != PASSWORD_HASH_LEN {
+        return Err("note password metadata invalid".to_string());
+    }
+    let actual = derive_password_hash(password, salt);
+    if actual.ct_eq(expected_hash.as_slice()).into() {
+        Ok(())
+    } else {
+        Err("invalid password".to_string())
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EncryptedBody {
+    salt: Vec<u8>,
+    nonce: Vec<u8>,
+    ciphertext: Vec<u8>,
+}
+
+fn derive_encryption_key(password: &str, salt: &[u8]) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key);
+    key
+}
+
+fn encrypt_note_body(body: &str, password: &str) -> Result<EncryptedBody, String> {
+    let mut salt = [0u8; ENCRYPTION_SALT_LEN];
+    fill_random_bytes(&mut salt)?;
+    let key = derive_encryption_key(password, &salt);
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to init cipher: {e}"))?;
+
+    let mut nonce_bytes = [0u8; ENCRYPTION_NONCE_LEN];
+    fill_random_bytes(&mut nonce_bytes)?;
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, body.as_bytes())
+        .map_err(|_| "Failed to encrypt note body".to_string())?;
+
+    Ok(EncryptedBody {
+        salt: salt.to_vec(),
+        nonce: nonce_bytes.to_vec(),
+        ciphertext,
+    })
+}
+
+fn decrypt_note_body(
+    ciphertext: &[u8],
+    salt: &[u8],
+    nonce: &[u8],
+    password: &str,
+) -> Result<String, String> {
+    if nonce.len() != ENCRYPTION_NONCE_LEN {
+        return Err("encrypted note nonce invalid".to_string());
+    }
+    let key = derive_encryption_key(password, salt);
+    let cipher =
+        Aes256Gcm::new_from_slice(&key).map_err(|e| format!("Failed to init cipher: {e}"))?;
+    let plain = cipher
+        .decrypt(Nonce::from_slice(nonce), ciphertext)
+        .map_err(|_| "invalid password".to_string())?;
+    String::from_utf8(plain).map_err(|_| "encrypted note content invalid UTF-8".to_string())
 }
 
 fn load_reminder(
@@ -658,12 +1395,19 @@ fn ensure_column(
 }
 
 fn ensure_notes_schema(conn: &Connection) -> Result<(), String> {
+    ensure_column(conn, "notes", "note_title", "TEXT NOT NULL DEFAULT ''")?;
     ensure_column(
         conn,
         "notes",
         "modules_json",
         "TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}'",
     )?;
+    ensure_column(conn, "notes", "access_mode", "TEXT NOT NULL DEFAULT 'none'")?;
+    ensure_column(conn, "notes", "password_salt", "BLOB")?;
+    ensure_column(conn, "notes", "password_hash", "BLOB")?;
+    ensure_column(conn, "notes", "encryption_salt", "BLOB")?;
+    ensure_column(conn, "notes", "encryption_nonce", "BLOB")?;
+    ensure_column(conn, "notes", "encrypted_body", "BLOB")?;
     Ok(())
 }
 
@@ -756,6 +1500,13 @@ mod tests {
     }
 
     #[test]
+    fn tauri_init_migration_is_in_sync_with_app_core() {
+        let app_core = include_str!("../../migrations/0001_init.sql");
+        let tauri = include_str!("../../../../src-tauri/migrations/0001_init.sql");
+        assert_eq!(app_core, tauri);
+    }
+
+    #[test]
     fn save_update_and_delete_note() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
@@ -774,9 +1525,266 @@ mod tests {
             Some("updated".to_string())
         );
 
-        assert!(db.delete_note("n1").expect("delete succeeds"));
-        assert!(!db.delete_note("n1").expect("second delete succeeds"));
+        assert!(db.delete_note("n1", None).expect("delete succeeds"));
+        assert!(!db.delete_note("n1", None).expect("second delete succeeds"));
         assert!(db.get_note("n1").expect("lookup succeeds").is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn password_normalization_rejects_surrounding_whitespace() {
+        let err = normalize_password(" pass123").expect_err("leading whitespace should fail");
+        assert!(err.contains("start or end with whitespace"));
+
+        let err = normalize_password("pass123 ").expect_err("trailing whitespace should fail");
+        assert!(err.contains("start or end with whitespace"));
+
+        let err = normalize_password("   ").expect_err("all-whitespace should fail");
+        assert!(err.contains("must not be empty"));
+
+        assert_eq!(
+            normalize_password("pass 123").expect("interior whitespace is allowed"),
+            "pass 123".to_string()
+        );
+    }
+
+    #[test]
+    fn lock_unlock_requires_password_and_redacts_locked_reads() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "top secret").expect("seed note");
+        let locked = db.lock_note("n1", "pass123").expect("lock note");
+        assert_eq!(locked.access_mode, NoteAccessMode::Locked);
+        assert!(!locked.is_unlocked);
+        assert_eq!(locked.body, "");
+
+        let listed_locked = db.list_notes_meta().expect("list meta");
+        assert_eq!(listed_locked.len(), 1);
+        assert_eq!(listed_locked[0].title, "top secret");
+        assert_eq!(listed_locked[0].body_prefix, "[locked]");
+        assert_eq!(listed_locked[0].access_mode, NoteAccessMode::Locked);
+        assert!(!listed_locked[0].is_unlocked);
+
+        let save_err = db
+            .save_note("n1", "should fail")
+            .expect_err("save should fail while locked");
+        assert!(save_err.contains("unlock first"));
+
+        let wrong = db
+            .unlock_note("n1", "wrong")
+            .expect_err("wrong password should fail");
+        assert!(wrong.contains("invalid password"));
+
+        let unlocked = db.unlock_note("n1", "pass123").expect("unlock note");
+        assert_eq!(unlocked.access_mode, NoteAccessMode::Locked);
+        assert!(unlocked.is_unlocked);
+        assert_eq!(unlocked.body, "top secret");
+
+        let listed_unlocked = db.list_notes_meta().expect("list meta unlocked");
+        assert_eq!(listed_unlocked.len(), 1);
+        assert_eq!(listed_unlocked[0].body_prefix, "top secret");
+        assert_eq!(listed_unlocked[0].access_mode, NoteAccessMode::Locked);
+        assert!(listed_unlocked[0].is_unlocked);
+
+        let saved = db
+            .save_note("n1", "top secret updated")
+            .expect("save after unlock");
+        assert_eq!(saved.body, "top secret updated");
+        assert!(saved.is_unlocked);
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn encrypt_decrypt_keeps_ciphertext_at_rest_until_decrypted() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "classified line").expect("seed note");
+        let encrypted = db.encrypt_note("n1", "enc-pass").expect("encrypt note");
+        assert_eq!(encrypted.access_mode, NoteAccessMode::Encrypted);
+        assert!(encrypted.is_unlocked);
+        assert_eq!(encrypted.body, "classified line");
+
+        let listed_encrypted = db.list_notes_meta().expect("list meta encrypted");
+        assert_eq!(listed_encrypted.len(), 1);
+        assert_eq!(listed_encrypted[0].title, "classified line");
+        assert_eq!(listed_encrypted[0].body_prefix, "classified line");
+        assert_eq!(listed_encrypted[0].access_mode, NoteAccessMode::Encrypted);
+        assert!(listed_encrypted[0].is_unlocked);
+
+        let conn = Connection::open(path.clone()).expect("inspect db");
+        let stored_before_unlock: String = conn
+            .query_row("SELECT body FROM notes WHERE id = 'n1'", [], |row| {
+                row.get(0)
+            })
+            .expect("body query");
+        let encrypted_payload_before_unlock: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT encrypted_body FROM notes WHERE id = 'n1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cipher query");
+        assert_eq!(stored_before_unlock, "");
+        assert!(encrypted_payload_before_unlock.is_some());
+        drop(conn);
+
+        let unlocked = db.unlock_note("n1", "enc-pass").expect("unlock encrypted");
+        assert_eq!(unlocked.access_mode, NoteAccessMode::Encrypted);
+        assert!(unlocked.is_unlocked);
+        assert_eq!(unlocked.body, "classified line");
+
+        let listed_unlocked = db.list_notes_meta().expect("list meta unlocked");
+        assert_eq!(listed_unlocked.len(), 1);
+        assert_eq!(listed_unlocked[0].body_prefix, "classified line");
+        assert_eq!(listed_unlocked[0].access_mode, NoteAccessMode::Encrypted);
+        assert!(listed_unlocked[0].is_unlocked);
+
+        db.save_note("n1", "classified line updated")
+            .expect("save encrypted unlocked note");
+        let conn = Connection::open(path.clone()).expect("inspect db after save");
+        let stored_after_save: String = conn
+            .query_row("SELECT body FROM notes WHERE id = 'n1'", [], |row| {
+                row.get(0)
+            })
+            .expect("body query");
+        let encrypted_payload_after_save: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT encrypted_body FROM notes WHERE id = 'n1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cipher query");
+        assert_eq!(stored_after_save, "");
+        assert!(encrypted_payload_after_save.is_some());
+        drop(conn);
+
+        let decrypted = db.decrypt_note("n1", "enc-pass").expect("decrypt note");
+        assert_eq!(decrypted.access_mode, NoteAccessMode::None);
+        assert!(decrypted.is_unlocked);
+        assert_eq!(decrypted.body, "classified line updated");
+
+        let conn = Connection::open(path.clone()).expect("inspect db after decrypt");
+        let stored_after_decrypt: String = conn
+            .query_row("SELECT body FROM notes WHERE id = 'n1'", [], |row| {
+                row.get(0)
+            })
+            .expect("body query");
+        let encrypted_payload_after_decrypt: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT encrypted_body FROM notes WHERE id = 'n1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cipher query");
+        assert_eq!(stored_after_decrypt, "classified line updated");
+        assert!(encrypted_payload_after_decrypt.is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn create_note_with_defaults_rolls_back_when_password_is_invalid() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let err = db
+            .create_note_with_defaults("n1", NoteModules::default(), Some(" pass123"))
+            .expect_err("invalid password should fail");
+        assert!(err.contains("start or end with whitespace"));
+        assert!(db.get_note("n1").expect("lookup succeeds").is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn create_note_with_defaults_can_create_encrypted_note_atomically() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let created = db
+            .create_note_with_defaults(
+                "n1",
+                NoteModules {
+                    math: false,
+                    table: true,
+                    variables: false,
+                    style: true,
+                },
+                Some("enc-pass"),
+            )
+            .expect("create note with defaults");
+        assert_eq!(created.id, "n1");
+        assert_eq!(created.access_mode, NoteAccessMode::Encrypted);
+        assert!(created.is_unlocked);
+        assert_eq!(created.body, "");
+        assert!(!created.modules.math);
+        assert!(created.modules.table);
+        assert!(!created.modules.variables);
+        assert!(created.modules.style);
+
+        let conn = Connection::open(path.clone()).expect("inspect db");
+        let encrypted_payload: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT encrypted_body FROM notes WHERE id = 'n1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("cipher query");
+        assert!(encrypted_payload.is_some());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn deleting_protected_note_requires_password() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("locked", "top secret")
+            .expect("seed locked note");
+        db.lock_note("locked", "lock-pass").expect("lock note");
+
+        let missing_password = db
+            .delete_note("locked", None)
+            .expect_err("delete should require password");
+        assert!(missing_password.contains("password required"));
+
+        let wrong_password = db
+            .delete_note("locked", Some("wrong"))
+            .expect_err("wrong password should fail");
+        assert!(wrong_password.contains("invalid password"));
+
+        assert!(db
+            .delete_note("locked", Some("lock-pass"))
+            .expect("delete locked note succeeds"));
+
+        db.save_note("encrypted", "classified")
+            .expect("seed encrypted note");
+        db.encrypt_note("encrypted", "enc-pass")
+            .expect("encrypt note");
+
+        let missing_password = db
+            .delete_note("encrypted", None)
+            .expect_err("delete should require password");
+        assert!(missing_password.contains("password required"));
+
+        let wrong_password = db
+            .delete_note("encrypted", Some("wrong"))
+            .expect_err("wrong password should fail");
+        assert!(wrong_password.contains("invalid password"));
+
+        assert!(db
+            .delete_note("encrypted", Some("enc-pass"))
+            .expect("delete encrypted note succeeds"));
 
         drop(db);
         let _ = fs::remove_file(path);
@@ -937,7 +1945,7 @@ mod tests {
             .expect("list reminders after line delete");
         assert!(after_line_delete.is_empty());
 
-        db.delete_note("n1").expect("delete note");
+        db.delete_note("n1", None).expect("delete note");
         let after_delete = db
             .list_reminders("n1")
             .expect("list reminders after delete");

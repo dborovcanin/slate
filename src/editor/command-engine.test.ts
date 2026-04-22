@@ -49,6 +49,11 @@ test("editor mode exposes only editing commands", async () => {
     "clist",
     "ulist",
     "olist",
+    "note lock",
+    "note unlock",
+    "note encrypt",
+    "note decrypt",
+    "note unprotect",
   ]);
   assert.equal(values.includes("q"), false);
 });

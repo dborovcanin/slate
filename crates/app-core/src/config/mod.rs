@@ -25,6 +25,8 @@ const DEFAULT_MODULE_MATH_ENABLED: bool = true;
 const DEFAULT_MODULE_TABLE_ENABLED: bool = true;
 const DEFAULT_MODULE_VARIABLES_ENABLED: bool = true;
 const DEFAULT_MODULE_STYLE_ENABLED: bool = true;
+const DEFAULT_ENCRYPT_NOTES: bool = false;
+const DEFAULT_NOTES_PASSWORD_ENV: &str = "SLATE_NOTES_PASSWORD";
 const MIN_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 1;
 const MAX_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 8;
 const DEFAULT_EMAIL_NOTE_PREFIX: &str = "inbox-email";
@@ -111,6 +113,12 @@ table = true
 variables = true
 style = true
 
+[editor.security]
+# When enabled, newly created notes are encrypted at rest by default.
+encrypt_notes = false
+# Environment variable used as the default encryption password.
+password_env = "SLATE_NOTES_PASSWORD"
+
 [special_notes]
 # Prefix for date-partitioned email inbox notes
 email_note_prefix = "inbox-email"
@@ -180,6 +188,25 @@ pub struct ThemeConfig {
     pub variables_enabled: bool,
     pub variables_autocomplete_min_chars: u8,
     pub default_modules: EditorModulesConfig,
+    // Compatibility-only fields. Runtime note security should be accessed
+    // via NoteSecurityConfig helpers to avoid mixing with visual/editor prefs.
+    pub encrypt_notes: bool,
+    pub notes_password_env: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NoteSecurityConfig {
+    pub encrypt_notes: bool,
+    pub password_env: String,
+}
+
+impl Default for NoteSecurityConfig {
+    fn default() -> Self {
+        Self {
+            encrypt_notes: DEFAULT_ENCRYPT_NOTES,
+            password_env: DEFAULT_NOTES_PASSWORD_ENV.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -298,6 +325,8 @@ impl Default for ThemeConfig {
             variables_enabled: DEFAULT_VARIABLES_ENABLED,
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
             default_modules: EditorModulesConfig::default(),
+            encrypt_notes: DEFAULT_ENCRYPT_NOTES,
+            notes_password_env: DEFAULT_NOTES_PASSWORD_ENV.to_string(),
         }
     }
 }
@@ -337,6 +366,8 @@ struct EditorSection {
     variables: VariablesSection,
     #[serde(default)]
     modules: ModulesSection,
+    #[serde(default)]
+    security: SecuritySection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -351,6 +382,12 @@ struct ModulesSection {
     table: Option<bool>,
     variables: Option<bool>,
     style: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct SecuritySection {
+    encrypt_notes: Option<bool>,
+    password_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -412,6 +449,38 @@ pub fn load_theme_config() -> ThemeConfig {
             ThemeConfig::default()
         }
     }
+}
+
+pub fn note_security_config_from_theme(theme: &ThemeConfig) -> NoteSecurityConfig {
+    NoteSecurityConfig {
+        encrypt_notes: theme.encrypt_notes,
+        password_env: theme.notes_password_env.clone(),
+    }
+}
+
+pub fn load_note_security_config() -> NoteSecurityConfig {
+    note_security_config_from_theme(&load_theme_config())
+}
+
+pub fn resolve_default_note_encryption_password(
+    security: &NoteSecurityConfig,
+) -> Result<Option<String>, String> {
+    if !security.encrypt_notes {
+        return Ok(None);
+    }
+    let env_name = security.password_env.trim();
+    if env_name.is_empty() {
+        return Err("config editor.security.password_env must not be empty".to_string());
+    }
+    let password = std::env::var(env_name).map_err(|_| {
+        format!("global note encryption enabled but env var '{env_name}' is missing")
+    })?;
+    if password.trim().is_empty() {
+        return Err(format!(
+            "global note encryption enabled but env var '{env_name}' is empty"
+        ));
+    }
+    Ok(Some(password))
 }
 
 pub fn load_special_notes_config() -> SpecialNotesConfig {
@@ -521,6 +590,15 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
                 .style
                 .unwrap_or(DEFAULT_MODULE_STYLE_ENABLED),
         },
+        encrypt_notes: raw
+            .editor
+            .security
+            .encrypt_notes
+            .unwrap_or(DEFAULT_ENCRYPT_NOTES),
+        notes_password_env: normalize_nonempty(
+            raw.editor.security.password_env,
+            DEFAULT_NOTES_PASSWORD_ENV,
+        ),
     })
 }
 
@@ -819,6 +897,8 @@ mod tests {
         assert!(cfg.default_modules.table);
         assert!(!cfg.default_modules.variables);
         assert!(cfg.default_modules.style);
+        assert!(!cfg.encrypt_notes);
+        assert_eq!(cfg.notes_password_env, "SLATE_NOTES_PASSWORD");
     }
 
     #[test]
@@ -917,6 +997,8 @@ mod tests {
         assert!(cfg.default_modules.table);
         assert!(cfg.default_modules.variables);
         assert!(cfg.default_modules.style);
+        assert!(!cfg.encrypt_notes);
+        assert_eq!(cfg.notes_password_env, "SLATE_NOTES_PASSWORD");
     }
 
     #[test]
@@ -935,6 +1017,52 @@ mod tests {
     fn parses_terminal_mode_override() {
         let cfg = parse_theme_config("[editor]\nterminal_mode = true").expect("config");
         assert!(cfg.terminal_mode);
+    }
+
+    #[test]
+    fn parses_editor_security_section() {
+        let cfg = parse_theme_config(
+            r#"
+            [editor.security]
+            encrypt_notes = true
+            password_env = "APP_NOTES_PASSWORD"
+            "#,
+        )
+        .expect("config");
+        assert!(cfg.encrypt_notes);
+        assert_eq!(cfg.notes_password_env, "APP_NOTES_PASSWORD");
+    }
+
+    #[test]
+    fn note_security_config_helpers_extract_and_validate() {
+        let cfg = parse_theme_config(
+            r#"
+            [editor.security]
+            encrypt_notes = true
+            password_env = "APP_NOTES_PASSWORD"
+            "#,
+        )
+        .expect("config");
+        let security = note_security_config_from_theme(&cfg);
+        assert!(security.encrypt_notes);
+        assert_eq!(security.password_env, "APP_NOTES_PASSWORD");
+
+        let disabled = NoteSecurityConfig {
+            encrypt_notes: false,
+            password_env: "IGNORED".to_string(),
+        };
+        assert_eq!(
+            resolve_default_note_encryption_password(&disabled).expect("disabled mode"),
+            None
+        );
+
+        let invalid_env = NoteSecurityConfig {
+            encrypt_notes: true,
+            password_env: "   ".to_string(),
+        };
+        let err = resolve_default_note_encryption_password(&invalid_env)
+            .expect_err("blank env name should fail");
+        assert!(err.contains("must not be empty"));
     }
 
     #[test]

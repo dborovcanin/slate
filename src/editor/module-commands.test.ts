@@ -68,6 +68,8 @@ function noteWithModules(modules: NoteModules): Note {
     id: "n1",
     body: "",
     modules,
+    access_mode: "none",
+    is_unlocked: true,
     created_at: "",
     updated_at: "",
   };

@@ -1,6 +1,20 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NoteAccessMode {
+    None,
+    Locked,
+    Encrypted,
+}
+
+impl Default for NoteAccessMode {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteModules {
     pub math: bool,
     pub table: bool,
@@ -24,6 +38,8 @@ pub struct Note {
     pub id: String,
     pub body: String,
     pub modules: NoteModules,
+    pub access_mode: NoteAccessMode,
+    pub is_unlocked: bool,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -31,7 +47,10 @@ pub struct Note {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NoteSummary {
     pub id: String,
+    pub title: String,
     pub body_prefix: String,
+    pub access_mode: NoteAccessMode,
+    pub is_unlocked: bool,
     pub updated_at: String,
 }
 

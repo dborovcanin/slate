@@ -17,6 +17,24 @@ test("command history keeps latest unique commands and trims colon", () => {
   assert.deepEqual(getCommandHistoryForTests(), ["format", "sum"]);
 });
 
+test("command history redacts note security passwords", () => {
+  resetCommandHistoryForTests();
+
+  rememberCommand(":note lock hunter2");
+  rememberCommand(":note encrypt top secret passphrase");
+  rememberCommand(":note unprotect pass123");
+  rememberCommand(":lock-note easy-pass");
+  rememberCommand(":encrypt-note hard pass");
+
+  assert.deepEqual(getCommandHistoryForTests(), [
+    "note lock",
+    "note encrypt",
+    "note unprotect",
+    "lock-note",
+    "encrypt-note",
+  ]);
+});
+
 test("history navigator cycles with up/down semantics", () => {
   resetCommandHistoryForTests();
   rememberCommand("one");

@@ -2,10 +2,13 @@ use std::cmp::min;
 
 use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, AnsiStyle};
 use super::render::RenderPalette;
+use app_core::storage::NoteAccessMode;
 #[derive(Debug, Clone)]
 pub struct NoteMeta {
     pub id: String,
     pub title: String,
+    pub access_mode: NoteAccessMode,
+    pub is_unlocked: bool,
 }
 
 pub fn load_note_meta(db: &crate::storage::Db) -> Result<Vec<NoteMeta>, String> {
@@ -13,23 +16,19 @@ pub fn load_note_meta(db: &crate::storage::Db) -> Result<Vec<NoteMeta>, String> 
         .list_notes_meta()?
         .into_iter()
         .map(|n| NoteMeta {
-            title: title_from_body(&n.body_prefix),
+            title: n.title,
             id: n.id,
+            access_mode: n.access_mode,
+            is_unlocked: n.is_unlocked,
         })
         .collect())
 }
 
-pub fn title_from_body(body: &str) -> String {
-    let first = body
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("Untitled")
-        .trim();
-    if first.chars().count() > 60 {
-        let truncated: String = first.chars().take(60).collect();
-        format!("{truncated}...")
-    } else {
-        first.to_string()
+fn access_badge(note: &NoteMeta) -> Option<&'static str> {
+    match note.access_mode {
+        NoteAccessMode::None => None,
+        NoteAccessMode::Locked => Some("[lock 󰌾]"),
+        NoteAccessMode::Encrypted => Some("[enc 󰕥]"),
     }
 }
 
@@ -39,13 +38,13 @@ pub fn print_note_list(db: &crate::storage::Db) -> Result<(), String> {
         println!("No notes");
         return Ok(());
     }
-    for (idx, note) in notes.iter().enumerate() {
-        println!(
-            "{:>3}. {}  {}",
-            idx + 1,
-            note.id,
-            title_from_body(&note.body_prefix)
-        );
+    for (idx, note) in notes.into_iter().enumerate() {
+        let badge = match note.access_mode {
+            NoteAccessMode::None => "",
+            NoteAccessMode::Locked => "[lock 󰌾] ",
+            NoteAccessMode::Encrypted => "[enc 󰕥] ",
+        };
+        println!("{:>3}. {}  {}{}", idx + 1, note.id, badge, note.title);
     }
     Ok(())
 }
@@ -166,7 +165,11 @@ pub fn draw_switcher(
         if let Some(match_idx) = view.matches.get(start + i).copied() {
             let item = &view.items[match_idx];
             let marker = if start + i == view.selected { ">" } else { " " };
-            let text = format!("{marker} {}  {}", item.id, item.title);
+            let text = if let Some(badge) = access_badge(item) {
+                format!("{marker} {}  {} {}", item.id, badge, item.title)
+            } else {
+                format!("{marker} {}  {}", item.id, item.title)
+            };
             if start + i == view.selected {
                 draw_row_at_styled(
                     buf,
@@ -187,6 +190,8 @@ pub fn draw_switcher(
 
 pub fn draw_delete_confirm(
     note_title: &str,
+    requires_password: bool,
+    password_len: usize,
     buf: &mut String,
     rows: usize,
     cols: usize,
@@ -194,10 +199,28 @@ pub fn draw_delete_confirm(
 ) {
     let title = truncate_title_for_confirm(note_title);
     let message = format!(" Delete \"{title}\"? ");
-    let hint = " Enter/Y confirm, Esc/N cancel ";
-    let inner_w = message.chars().count().max(hint.chars().count()).max(30);
+    let password_prompt = if requires_password {
+        let masked = if password_len == 0 {
+            "<required>".to_string()
+        } else {
+            "*".repeat(password_len.min(32))
+        };
+        format!(" Password: {masked} ")
+    } else {
+        String::new()
+    };
+    let hint = if requires_password {
+        " Enter confirm, Esc cancel "
+    } else {
+        " Enter/Y confirm, Esc/N cancel "
+    };
+    let mut inner_w = message.chars().count().max(hint.chars().count()).max(30);
+    if requires_password {
+        inner_w = inner_w.max(password_prompt.chars().count());
+    }
     let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
-    let box_h = 5usize.min(rows.saturating_sub(2).max(5));
+    let target_h = if requires_password { 6 } else { 5 };
+    let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
 
@@ -227,12 +250,114 @@ pub fn draw_delete_confirm(
         &message,
         message_style,
     );
+    if requires_password {
+        draw_row_at_styled(
+            buf,
+            y + 2,
+            x + 1,
+            box_w.saturating_sub(2),
+            &password_prompt,
+            message_style,
+        );
+    }
     draw_row_at_styled(
         buf,
-        y + 2,
+        y + if requires_password { 3 } else { 2 },
         x + 1,
         box_w.saturating_sub(2),
         &hint,
+        hint_style,
+    );
+}
+
+pub fn draw_open_confirm(
+    note_title: &str,
+    password_len: usize,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    draw_confirm(
+        &format!(" Open \"{}\" ", truncate_title_for_confirm(note_title)),
+        Some(password_len),
+        " Enter confirm, Esc cancel ",
+        buf,
+        rows,
+        cols,
+        palette,
+    );
+}
+
+fn draw_confirm(
+    message: &str,
+    password_len: Option<usize>,
+    hint: &str,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    let password_prompt = password_len.map(|len| {
+        let masked = if len == 0 {
+            "<required>".to_string()
+        } else {
+            "*".repeat(len.min(32))
+        };
+        format!(" Password: {masked} ")
+    });
+    let mut inner_w = message.chars().count().max(hint.chars().count()).max(30);
+    if let Some(prompt) = password_prompt.as_ref() {
+        inner_w = inner_w.max(prompt.chars().count());
+    }
+    let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
+    let target_h = if password_prompt.is_some() { 6 } else { 5 };
+    let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+
+    let border_style = AnsiStyle {
+        fg: Some(palette.primary()),
+        bold: true,
+        ..Default::default()
+    };
+    let message_style = AnsiStyle {
+        fg: Some(palette.primary()),
+        bold: true,
+        ..Default::default()
+    };
+    let hint_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        dim: true,
+        ..Default::default()
+    };
+
+    draw_box_border(buf, y, x, box_w, box_h, border_style);
+
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        message,
+        message_style,
+    );
+    if let Some(prompt) = password_prompt.as_ref() {
+        draw_row_at_styled(
+            buf,
+            y + 2,
+            x + 1,
+            box_w.saturating_sub(2),
+            prompt,
+            message_style,
+        );
+    }
+    draw_row_at_styled(
+        buf,
+        y + if password_prompt.is_some() { 3 } else { 2 },
+        x + 1,
+        box_w.saturating_sub(2),
+        hint,
         hint_style,
     );
 }

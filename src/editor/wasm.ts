@@ -672,7 +672,37 @@ export function tryExecuteVimSubstituteFromWasm(
 export function sanitizeCommandHistoryCommand(rawCommand: string): string {
   if (!ensureWasmReadyNonBlocking()) {
     const trimmed = rawCommand.trim();
-    return trimmed.replace(/^:/, "");
+    const base = trimmed.replace(/^:/, "");
+    const tokens = base.split(/\s+/).filter((token) => token.length > 0);
+    const normalizedHead = (tokens[0] ?? "").toLowerCase();
+    const noteActionAliases = new Set([
+      "lock",
+      "unlock",
+      "encrypt",
+      "decrypt",
+      "unencrypt",
+      "unprotect",
+      "note-lock",
+      "lock-note",
+      "note-unlock",
+      "unlock-note",
+      "note-encrypt",
+      "encrypt-note",
+      "note-decrypt",
+      "decrypt-note",
+      "note-unprotect",
+      "unprotect-note",
+      "note-unencrypt",
+      "unencrypt-note",
+    ]);
+    if (normalizedHead === "note" && tokens.length >= 3) {
+      if (noteActionAliases.has((tokens[1] ?? "").toLowerCase())) {
+        return `${tokens[0]} ${tokens[1]}`;
+      }
+    } else if (noteActionAliases.has(normalizedHead) && tokens.length >= 2) {
+      return tokens[0] ?? base;
+    }
+    return base;
   }
   return wasm_command_history_sanitize(rawCommand);
 }

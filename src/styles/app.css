@@ -113,7 +113,7 @@ html, body {
 }
 
 .app-confirm-panel {
-  width: min(360px, calc(100vw - 32px));
+  width: min(460px, calc(100vw - 32px));
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--bg-surface);
@@ -130,6 +130,29 @@ html, body {
   color: var(--fg);
 }
 
+.app-confirm-input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-overlay);
+  color: var(--fg);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  padding: 8px 10px;
+}
+
+.app-confirm-input::placeholder {
+  color: var(--fg-muted);
+}
+
+.app-confirm-input:focus,
+.app-confirm-input:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
 .app-confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -137,6 +160,7 @@ html, body {
 }
 
 .app-confirm-btn {
+  appearance: none;
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 12px;
@@ -150,6 +174,13 @@ html, body {
 .app-confirm-btn:hover {
   background: var(--bg-surface);
   border-color: var(--fg-dim);
+}
+
+.app-confirm-btn:focus,
+.app-confirm-btn:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
 .app-confirm-btn-danger {

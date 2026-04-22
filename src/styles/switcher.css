@@ -108,6 +108,23 @@
   flex-shrink: 0;
 }
 
+.switcher-item-badge--current {
+  color: var(--fg-dim);
+  border-color: var(--border);
+}
+
+.switcher-item-badge--locked {
+  color: color-mix(in srgb, var(--accent-warm) 65%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent-warm) 56%, var(--border));
+  background: color-mix(in srgb, var(--accent-warm) 18%, transparent);
+}
+
+.switcher-item-badge--encrypted {
+  color: color-mix(in srgb, var(--accent-cool) 70%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent-cool) 52%, var(--border));
+  background: color-mix(in srgb, var(--accent-cool) 20%, transparent);
+}
+
 .switcher-empty {
   padding: 18px;
   text-align: center;

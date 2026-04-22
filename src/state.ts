@@ -1,4 +1,4 @@
-import type { Note, NoteModules, NoteSummary } from "./api";
+import type { Note, NoteAccessMode, NoteModules, NoteSummary } from "./api";
 
 export type EventType = "note-changed" | "notes-updated";
 type Listener = (event: EventType) => void;
@@ -29,6 +29,8 @@ export function deriveTitle(body: string): string {
 export interface NoteEntry {
   id: string;
   title: string;
+  accessMode: NoteAccessMode;
+  isUnlocked: boolean;
   updatedAt: string;
 }
 
@@ -47,6 +49,18 @@ export class AppState {
 
   setActiveNote(note: Note) {
     this._activeNote = note;
+    const idx = this._notes.findIndex((entry) => entry.id === note.id);
+    if (idx >= 0) {
+      const fallbackTitle = this._notes[idx]?.title ?? "Untitled";
+      const nextTitle = note.is_unlocked ? deriveTitle(note.body) : fallbackTitle;
+      this._notes[idx] = {
+        ...this._notes[idx],
+        title: nextTitle,
+        accessMode: note.access_mode,
+        isUnlocked: note.is_unlocked,
+        updatedAt: note.updated_at,
+      };
+    }
     this.emit("note-changed");
   }
 
@@ -88,6 +102,8 @@ export class AppState {
       const entry: NoteEntry = {
         ...this._notes[idx],
         title: deriveTitle(body),
+        accessMode: updated.access_mode,
+        isUnlocked: updated.is_unlocked,
         updatedAt,
       };
       this._notes.splice(idx, 1);
@@ -101,6 +117,8 @@ export class AppState {
     this._notes = notes.map((n) => ({
       id: n.id,
       title: deriveTitle(n.body),
+      accessMode: n.access_mode,
+      isUnlocked: n.is_unlocked,
       updatedAt: n.updated_at,
     }));
     this.emit("notes-updated");
@@ -109,7 +127,9 @@ export class AppState {
   setNoteSummaries(summaries: NoteSummary[]) {
     this._notes = summaries.map((summary) => ({
       id: summary.id,
-      title: deriveTitle(summary.body_prefix),
+      title: summary.title,
+      accessMode: summary.access_mode,
+      isUnlocked: summary.is_unlocked,
       updatedAt: summary.updated_at,
     }));
     this.emit("notes-updated");
@@ -119,6 +139,8 @@ export class AppState {
     this._notes.unshift({
       id: note.id,
       title: deriveTitle(note.body),
+      accessMode: note.access_mode,
+      isUnlocked: note.is_unlocked,
       updatedAt: note.updated_at,
     });
     this.emit("notes-updated");

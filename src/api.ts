@@ -7,17 +7,24 @@ export interface NoteModules {
   style: boolean;
 }
 
+export type NoteAccessMode = "none" | "locked" | "encrypted";
+
 export interface Note {
   id: string;
   body: string;
   modules: NoteModules;
+  access_mode: NoteAccessMode;
+  is_unlocked: boolean;
   created_at: string;
   updated_at: string;
 }
 
 export interface NoteSummary {
   id: string;
+  title: string;
   body_prefix: string;
+  access_mode: NoteAccessMode;
+  is_unlocked: boolean;
   updated_at: string;
 }
 
@@ -49,6 +56,8 @@ export interface ThemeConfig {
   variables_enabled: boolean;
   variables_autocomplete_min_chars: number;
   default_modules: NoteModules;
+  encrypt_notes: boolean;
+  notes_password_env: string;
 }
 
 export interface RuntimeFlags {
@@ -83,6 +92,8 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
     variables: true,
     style: true,
   },
+  encrypt_notes: false,
+  notes_password_env: "SLATE_NOTES_PASSWORD",
 };
 
 export const DEFAULT_RUNTIME_FLAGS: RuntimeFlags = {
@@ -147,12 +158,28 @@ export function getNoteMeta(id: string): Promise<NoteSummary | null> {
   return invoke<NoteSummary | null>("get_note_meta", { id });
 }
 
-export function deleteNote(id: string): Promise<boolean> {
-  return invoke<boolean>("delete_note", { id });
+export function deleteNote(id: string, password?: string | null): Promise<boolean> {
+  return invoke<boolean>("delete_note", { id, password: password ?? null });
 }
 
 export function setNoteModules(id: string, modules: NoteModules): Promise<Note> {
   return invoke<Note>("set_note_modules", { id, modules });
+}
+
+export function lockNoteAccess(id: string, password: string): Promise<Note> {
+  return invoke<Note>("lock_note_access", { id, password });
+}
+
+export function unlockNoteAccess(id: string, password: string): Promise<Note> {
+  return invoke<Note>("unlock_note_access", { id, password });
+}
+
+export function encryptNote(id: string, password: string): Promise<Note> {
+  return invoke<Note>("encrypt_note", { id, password });
+}
+
+export function decryptNote(id: string, password: string): Promise<Note> {
+  return invoke<Note>("decrypt_note", { id, password });
 }
 
 export function listNoteReminders(noteId: string): Promise<NoteReminder[]> {

@@ -17,7 +17,7 @@ use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
-use app_core::storage::NoteModules;
+use app_core::storage::{NoteAccessMode, NoteModules};
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
@@ -67,6 +67,51 @@ fn trim_trailing_word(text: &mut String) {
     }
 }
 
+fn normalize_note_security_action(token: &str) -> Option<&'static str> {
+    let normalized = token.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "lock" | "note-lock" | "lock-note" => Some("lock"),
+        "unlock" | "note-unlock" | "unlock-note" => Some("unlock"),
+        "encrypt" | "note-encrypt" | "encrypt-note" => Some("encrypt"),
+        "decrypt" | "note-decrypt" | "decrypt-note" => Some("decrypt"),
+        "unprotect"
+        | "unencrypt"
+        | "note-unprotect"
+        | "unprotect-note"
+        | "note-unencrypt"
+        | "unencrypt-note" => Some("unprotect"),
+        _ => None,
+    }
+}
+
+fn parse_note_security_command(input: &str) -> Option<(&'static str, String)> {
+    let normalized = input.trim_start().trim_start_matches(':').trim_start();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let split_at = normalized.find(char::is_whitespace).unwrap_or(normalized.len());
+    let head = &normalized[..split_at];
+    let mut rest = normalized[split_at..].trim_start();
+
+    if head.eq_ignore_ascii_case("note") {
+        if rest.is_empty() {
+            return None;
+        }
+        let action_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let action = normalize_note_security_action(&rest[..action_end])?;
+        rest = if action_end >= rest.len() {
+            ""
+        } else {
+            rest[action_end..].trim_start()
+        };
+        return Some((action, rest.to_string()));
+    }
+
+    let action = normalize_note_security_action(head)?;
+    Some((action, rest.to_string()))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalOptions {
     pub create_new: bool,
@@ -109,6 +154,15 @@ struct LineReminderGhost {
 struct SwitcherDeleteConfirm {
     note_id: String,
     note_title: String,
+    requires_password: bool,
+    password: String,
+}
+
+#[derive(Debug, Clone)]
+struct SwitcherOpenConfirm {
+    note_id: String,
+    note_title: String,
+    password: String,
 }
 
 #[derive(Debug, Clone)]
@@ -166,6 +220,7 @@ struct TerminalApp {
     switcher_items: Vec<NoteMeta>,
     switcher_matches: Vec<usize>,
     switcher_selected: usize,
+    switcher_open_confirm: Option<SwitcherOpenConfirm>,
     switcher_delete_confirm: Option<SwitcherDeleteConfirm>,
     dirty: bool,
     last_edit: Instant,
@@ -236,6 +291,95 @@ struct TerminalApp {
 }
 
 impl TerminalApp {
+    fn active_note_is_editable(&self) -> bool {
+        self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked
+    }
+
+    fn locked_note_status_message(&self) -> String {
+        "note is locked; unlock first (:note unlock <password> or unlock-note <password>)"
+            .to_string()
+    }
+
+    fn set_locked_note_status(&mut self) {
+        self.status = self.locked_note_status_message();
+    }
+
+    fn is_locked_note_error(error: &str) -> bool {
+        error.contains("unlock first") || error.contains("note is locked")
+    }
+
+    fn editor_key_may_edit_note(key: &Key) -> bool {
+        matches!(
+            key,
+            Key::Ctrl('w')
+                | Key::CtrlBackspace
+                | Key::CtrlDelete
+                | Key::Backspace
+                | Key::Delete
+                | Key::Enter
+                | Key::Tab
+                | Key::BackTab
+                | Key::Paste(_)
+                | Key::Char(_)
+        )
+    }
+
+    fn vim_intent_mutates_document(intent: crate::editor_core::vim::VimIntent) -> bool {
+        matches!(
+            intent,
+            crate::editor_core::vim::VimIntent::EnterInsert
+                | crate::editor_core::vim::VimIntent::AppendInsert
+                | crate::editor_core::vim::VimIntent::InsertLineStart
+                | crate::editor_core::vim::VimIntent::AppendLineEnd
+                | crate::editor_core::vim::VimIntent::OpenLineBelow
+                | crate::editor_core::vim::VimIntent::OpenLineAbove
+                | crate::editor_core::vim::VimIntent::DeleteLine
+                | crate::editor_core::vim::VimIntent::DeleteToLineStart
+                | crate::editor_core::vim::VimIntent::DeleteToLineEnd
+                | crate::editor_core::vim::VimIntent::DeleteChar
+                | crate::editor_core::vim::VimIntent::PasteAfter
+                | crate::editor_core::vim::VimIntent::DeleteInsideWord
+                | crate::editor_core::vim::VimIntent::DeleteAroundWord
+                | crate::editor_core::vim::VimIntent::DeleteInsidePipe
+                | crate::editor_core::vim::VimIntent::DeleteAroundPipe
+                | crate::editor_core::vim::VimIntent::DeleteWordForward
+                | crate::editor_core::vim::VimIntent::DeleteWordBackward
+                | crate::editor_core::vim::VimIntent::Undo
+                | crate::editor_core::vim::VimIntent::Redo
+        )
+    }
+
+    fn require_startup_password_if_needed(&mut self) {
+        if self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked {
+            return;
+        }
+
+        self.mode = UiMode::Switcher;
+        self.switcher_query.clear();
+        self.recompute_switcher_matches();
+
+        let mut note_title = self.active_note.id.clone();
+        if let Some((match_idx, switcher_idx)) =
+            self.switcher_matches
+                .iter()
+                .enumerate()
+                .find(|(_, idx)| self.switcher_items[**idx].id == self.active_note.id)
+        {
+            self.switcher_selected = match_idx;
+            note_title = self.switcher_items[*switcher_idx].title.clone();
+        } else {
+            self.switcher_selected = 0;
+        }
+
+        self.switcher_open_confirm = Some(SwitcherOpenConfirm {
+            note_id: self.active_note.id.clone(),
+            note_title,
+            password: String::new(),
+        });
+        self.switcher_delete_confirm = None;
+        self.status = "password required to open protected note".to_string();
+    }
+
     fn new_with_startup_metrics(
         db: &Db,
         opts: &TerminalOptions,
@@ -252,7 +396,7 @@ impl TerminalApp {
         let startup_begin = Instant::now();
 
         let note_begin = Instant::now();
-        let mut active_note = select_note(db, opts)?;
+        let mut active_note = select_note(db, opts, &crate::config::load_theme_config())?;
         let loading_note = note_begin.elapsed();
 
         let lines = split_lines(&active_note.body);
@@ -343,6 +487,7 @@ impl TerminalApp {
             switcher_items,
             switcher_matches: Vec::new(),
             switcher_selected: 0,
+            switcher_open_confirm: None,
             switcher_delete_confirm: None,
             dirty: false,
             last_edit: Instant::now(),
@@ -415,6 +560,7 @@ impl TerminalApp {
         app.recompute_folding_from_cached_structure();
         app.adjust_cursor();
         app.adjust_scroll();
+        app.require_startup_password_if_needed();
         if app.calc_viewport_only {
             let editor_height = app.editor_height();
             app.ensure_calc_for_viewport(editor_height, true);
@@ -451,7 +597,11 @@ impl TerminalApp {
         }
 
         if !self.force_quit {
-            self.save(db)?;
+            if let Err(error) = self.save(db) {
+                if !Self::is_locked_note_error(&error) {
+                    return Err(error);
+                }
+            }
         }
         Ok(())
     }
@@ -463,8 +613,18 @@ impl TerminalApp {
             self.recompute_folding();
         }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
-            self.save(db)?;
-            self.status = format!("autosaved {}", self.active_note.id);
+            match self.save(db) {
+                Ok(()) => {
+                    self.status = format!("autosaved {}", self.active_note.id);
+                }
+                Err(error) => {
+                    if Self::is_locked_note_error(&error) {
+                        self.set_locked_note_status();
+                    } else {
+                        return Err(error);
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -490,6 +650,9 @@ impl TerminalApp {
 
     fn maybe_clipboard_watch(&mut self) {
         if !self.clipboard_watch_enabled {
+            return;
+        }
+        if !self.active_note_is_editable() {
             return;
         }
         if !matches!(self.mode, UiMode::Editor | UiMode::Normal) {
@@ -543,6 +706,11 @@ impl TerminalApp {
         let mut clamp_table_padding = true;
         let mut moved_cursor = false;
         let mut refresh_variable_popup = false;
+        if !self.active_note_is_editable() && Self::editor_key_may_edit_note(&key) {
+            self.set_locked_note_status();
+            self.dismiss_variable_autocomplete_popup();
+            return Ok(());
+        }
         match key {
             Key::Ctrl('q') => {
                 self.quit = true;
@@ -565,7 +733,7 @@ impl TerminalApp {
             }
             Key::Ctrl('n') => {
                 self.save(db)?;
-                let note = new_note(db)?;
+                let note = new_note(db, &crate::config::load_theme_config())?;
                 self.set_active_note(db, note)?;
                 self.refresh_switcher_items(db)?;
                 self.status = format!("new note {}", self.active_note.id);
@@ -1088,6 +1256,10 @@ impl TerminalApp {
     fn apply_vim_actions(&mut self, actions: &[crate::editor_core::vim::VimAction]) {
         for action in actions {
             let count = action.count.max(1);
+            if !self.active_note_is_editable() && Self::vim_intent_mutates_document(action.intent) {
+                self.set_locked_note_status();
+                continue;
+            }
             match action.intent {
                 crate::editor_core::vim::VimIntent::MoveLeft => {
                     for _ in 0..count {
@@ -1642,6 +1814,10 @@ impl TerminalApp {
             }
             Key::Char('y') | Key::Char('d') | Key::Char('x') => {
                 let is_delete = matches!(key, Key::Char('d') | Key::Char('x'));
+                if is_delete && !self.active_note_is_editable() {
+                    self.set_locked_note_status();
+                    return Ok(());
+                }
                 let anchor = self
                     .selection_anchor
                     .unwrap_or((self.cursor_line, self.cursor_col));
@@ -1770,6 +1946,9 @@ impl TerminalApp {
     }
 
     fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.switcher_open_confirm.is_some() {
+            return self.handle_switcher_open_confirm_key(db, key);
+        }
         if self.switcher_delete_confirm.is_some() {
             return self.handle_switcher_delete_confirm_key(db, key);
         }
@@ -1804,27 +1983,19 @@ impl TerminalApp {
                 self.recompute_switcher_matches();
             }
             Key::Delete | Key::CtrlBackspace => {
-                self.request_switcher_delete_confirmation();
+                self.request_switcher_delete_confirmation(db);
             }
             Key::Enter => {
                 if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
-                    let id = self.switcher_items[idx].id.clone();
-                    let mut opened = false;
-                    self.save(db)?;
-                    if let Some(note) = db.get_note(&id)? {
-                        self.set_active_note(db, note)?;
-                        self.status = format!("opened {}", id);
-                        opened = true;
+                    let item = self.switcher_items[idx].clone();
+                    if item.access_mode != NoteAccessMode::None && !item.is_unlocked {
+                        self.switcher_open_confirm = Some(SwitcherOpenConfirm {
+                            note_id: item.id,
+                            note_title: item.title,
+                            password: String::new(),
+                        });
                     } else {
-                        self.status = format!("note missing {}", id);
-                    }
-                    self.close_switcher();
-                    if opened {
-                        self.mode = UiMode::Normal;
-                        self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
-                        self.selection_anchor = None;
-                        self.command_selection = None;
-                        self.status = "-- NORMAL --".to_string();
+                        self.open_note_from_switcher(db, item.id.as_str(), None)?;
                     }
                 }
             }
@@ -1862,12 +2033,135 @@ impl TerminalApp {
             Key::Ctrl('p') => {
                 self.close_switcher();
             }
-            Key::Esc | Key::Char('n') | Key::Char('N') => {
+            Key::Esc => {
                 self.switcher_delete_confirm = None;
             }
-            Key::Enter | Key::Char('y') | Key::Char('Y') => {
-                if let Some(confirm) = self.switcher_delete_confirm.take() {
-                    self.delete_note_from_switcher(db, &confirm.note_id, &confirm.note_title)?;
+            Key::Enter => {
+                if let Some(confirm) = self.switcher_delete_confirm.clone() {
+                    if confirm.requires_password && confirm.password.trim().is_empty() {
+                        self.status = "password required to delete protected note".to_string();
+                        return Ok(());
+                    }
+                    let password = if confirm.requires_password {
+                        Some(confirm.password.as_str())
+                    } else {
+                        None
+                    };
+                    match self.delete_note_from_switcher(
+                        db,
+                        &confirm.note_id,
+                        &confirm.note_title,
+                        password,
+                    ) {
+                        Ok(()) => {
+                            self.switcher_delete_confirm = None;
+                        }
+                        Err(error) => {
+                            self.status = format!("delete failed: {error}");
+                            if let Some(current) = self.switcher_delete_confirm.as_mut() {
+                                current.password.clear();
+                            }
+                        }
+                    }
+                }
+            }
+            Key::Char('y') => {
+                let requires_password = self
+                    .switcher_delete_confirm
+                    .as_ref()
+                    .map(|confirm| confirm.requires_password)
+                    .unwrap_or(false);
+                if !requires_password {
+                    if let Some(confirm) = self.switcher_delete_confirm.clone() {
+                        match self.delete_note_from_switcher(
+                            db,
+                            &confirm.note_id,
+                            &confirm.note_title,
+                            None,
+                        ) {
+                            Ok(()) => {
+                                self.switcher_delete_confirm = None;
+                            }
+                            Err(error) => {
+                                self.status = format!("delete failed: {error}");
+                            }
+                        }
+                    }
+                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    confirm.password.push('y');
+                }
+            }
+            Key::Char('Y') => {
+                let requires_password = self
+                    .switcher_delete_confirm
+                    .as_ref()
+                    .map(|confirm| confirm.requires_password)
+                    .unwrap_or(false);
+                if !requires_password {
+                    if let Some(confirm) = self.switcher_delete_confirm.clone() {
+                        match self.delete_note_from_switcher(
+                            db,
+                            &confirm.note_id,
+                            &confirm.note_title,
+                            None,
+                        ) {
+                            Ok(()) => {
+                                self.switcher_delete_confirm = None;
+                            }
+                            Err(error) => {
+                                self.status = format!("delete failed: {error}");
+                            }
+                        }
+                    }
+                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    confirm.password.push('Y');
+                }
+            }
+            Key::Char('n') => {
+                let requires_password = self
+                    .switcher_delete_confirm
+                    .as_ref()
+                    .map(|confirm| confirm.requires_password)
+                    .unwrap_or(false);
+                if !requires_password {
+                    self.switcher_delete_confirm = None;
+                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    confirm.password.push('n');
+                }
+            }
+            Key::Char('N') => {
+                let requires_password = self
+                    .switcher_delete_confirm
+                    .as_ref()
+                    .map(|confirm| confirm.requires_password)
+                    .unwrap_or(false);
+                if !requires_password {
+                    self.switcher_delete_confirm = None;
+                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    confirm.password.push('N');
+                }
+            }
+            Key::Backspace | Key::CtrlBackspace => {
+                if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    if confirm.requires_password {
+                        confirm.password.pop();
+                    }
+                }
+            }
+            Key::Paste(text) => {
+                if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    if confirm.requires_password {
+                        for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                            confirm.password.push(ch);
+                        }
+                    }
+                }
+            }
+            Key::Char(ch) => {
+                if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    if confirm.requires_password {
+                        confirm.password.push(ch);
+                    }
                 }
             }
             _ => {}
@@ -1875,12 +2169,107 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn request_switcher_delete_confirmation(&mut self) {
+    fn handle_switcher_open_confirm_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        match key {
+            Key::Ctrl('q') => {
+                self.quit = true;
+            }
+            Key::Ctrl('p') => {
+                self.close_switcher();
+            }
+            Key::Esc => {
+                self.switcher_open_confirm = None;
+            }
+            Key::Enter => {
+                if let Some(confirm) = self.switcher_open_confirm.clone() {
+                    if confirm.password.trim().is_empty() {
+                        self.status = "password required to open protected note".to_string();
+                        return Ok(());
+                    }
+                    match self.open_note_from_switcher(
+                        db,
+                        &confirm.note_id,
+                        Some(confirm.password.as_str()),
+                    ) {
+                        Ok(()) => {
+                            self.switcher_open_confirm = None;
+                        }
+                        Err(error) => {
+                            self.status = format!("open failed: {error}");
+                            if let Some(current) = self.switcher_open_confirm.as_mut() {
+                                current.password.clear();
+                            }
+                        }
+                    }
+                }
+            }
+            Key::Backspace | Key::CtrlBackspace => {
+                if let Some(confirm) = self.switcher_open_confirm.as_mut() {
+                    confirm.password.pop();
+                }
+            }
+            Key::Paste(text) => {
+                if let Some(confirm) = self.switcher_open_confirm.as_mut() {
+                    for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                        confirm.password.push(ch);
+                    }
+                }
+            }
+            Key::Char(ch) => {
+                if let Some(confirm) = self.switcher_open_confirm.as_mut() {
+                    confirm.password.push(ch);
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn open_note_from_switcher(
+        &mut self,
+        db: &Db,
+        note_id: &str,
+        password: Option<&str>,
+    ) -> Result<(), String> {
+        self.save(db)?;
+        let note = if let Some(password) = password {
+            db.unlock_note(note_id, password)?
+        } else {
+            let Some(note) = db.get_note(note_id)? else {
+                self.status = format!("note missing {}", note_id);
+                return Ok(());
+            };
+            note
+        };
+        self.set_active_note(db, note)?;
+        self.close_switcher();
+        self.mode = UiMode::Normal;
+        self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
+        self.selection_anchor = None;
+        self.command_selection = None;
+        self.status = "-- NORMAL --".to_string();
+        Ok(())
+    }
+
+    fn request_switcher_delete_confirmation(&mut self, db: &Db) {
         if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
             let item = &self.switcher_items[idx];
+            let requires_password = match db.get_note_meta(&item.id) {
+                Ok(Some(note)) => matches!(
+                    note.access_mode,
+                    NoteAccessMode::Locked | NoteAccessMode::Encrypted
+                ),
+                Ok(None) => false,
+                Err(error) => {
+                    self.status = format!("delete check failed: {error}");
+                    false
+                }
+            };
             self.switcher_delete_confirm = Some(SwitcherDeleteConfirm {
                 note_id: item.id.clone(),
                 note_title: item.title.clone(),
+                requires_password,
+                password: String::new(),
             });
         }
     }
@@ -1890,9 +2279,10 @@ impl TerminalApp {
         db: &Db,
         note_id: &str,
         note_title: &str,
+        password: Option<&str>,
     ) -> Result<(), String> {
         let deleting_active = self.active_note.id == note_id;
-        let deleted = db.delete_note(note_id)?;
+        let deleted = db.delete_note(note_id, password)?;
         if !deleted {
             self.status = format!("note missing {}", note_id);
             self.refresh_switcher_items(db)?;
@@ -1903,7 +2293,7 @@ impl TerminalApp {
             if let Some(note) = db.get_most_recent_note()? {
                 self.set_active_note(db, note)?;
             } else {
-                let note = new_note(db)?;
+                let note = new_note(db, &crate::config::load_theme_config())?;
                 self.set_active_note(db, note)?;
             }
         } else {
@@ -2117,18 +2507,20 @@ impl TerminalApp {
                 if self.apply_command_completion_selection() {
                     return Ok(());
                 }
-                let cmd = self.command_input.trim().to_string();
+                let cmd = self.command_input.clone();
                 let return_to = if self.command_bar_from_normal {
                     UiMode::Normal
                 } else {
                     UiMode::Editor
                 };
-                self.remember_command_in_history(&cmd);
                 self.mode = return_to;
                 self.command_input.clear();
                 self.dismiss_command_completion_menu();
                 self.command_history_index = None;
-                self.execute_terminal_command(db, &cmd);
+                if !cmd.trim().is_empty() {
+                    self.remember_command_in_history(&cmd);
+                    self.execute_terminal_command(db, &cmd);
+                }
                 self.command_selection = None;
                 self.command_selection_linewise = false;
             }
@@ -2402,6 +2794,47 @@ impl TerminalApp {
             return;
         }
 
+        if let Some((action, password)) = parse_note_security_command(cmd) {
+            if password.is_empty() {
+                self.status = format!("usage: note {action} <password>");
+                return;
+            }
+            if self.dirty {
+                if let Err(error) = self.save(db) {
+                    self.status = format!("save failed: {error}");
+                    return;
+                }
+            }
+            let result = match action {
+                "lock" => db.lock_note(&self.active_note.id, &password),
+                "unlock" => db.unlock_note(&self.active_note.id, &password),
+                "encrypt" => db.encrypt_note(&self.active_note.id, &password),
+                "decrypt" => db.decrypt_note(&self.active_note.id, &password),
+                "unprotect" => db.decrypt_note(&self.active_note.id, &password),
+                _ => Err("unknown note security action".to_string()),
+            };
+            match result {
+                Ok(note) => {
+                    if let Err(error) = self.set_active_note(db, note) {
+                        self.status = format!("note {action} failed: {error}");
+                        return;
+                    }
+                    self.status = match action {
+                        "lock" => "note locked".to_string(),
+                        "unlock" => "note unlocked".to_string(),
+                        "encrypt" => "note encrypted at rest".to_string(),
+                        "decrypt" => "note decrypted".to_string(),
+                        "unprotect" => "note unprotected".to_string(),
+                        _ => format!("note {action}"),
+                    };
+                }
+                Err(error) => {
+                    self.status = format!("note {action} failed: {error}");
+                }
+            }
+            return;
+        }
+
         if let Some(command) =
             crate::editor_core::command_catalog::resolve_command(self.command_mode(), cmd)
         {
@@ -2475,6 +2908,10 @@ impl TerminalApp {
 
         if result.quit_requested {
             self.quit = true;
+            return;
+        }
+        if !self.active_note_is_editable() && !result.operations.is_empty() {
+            self.set_locked_note_status();
             return;
         }
 
@@ -2776,6 +3213,7 @@ impl TerminalApp {
         self.mode = UiMode::Switcher;
         self.switcher_query.clear();
         self.recompute_switcher_matches();
+        self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
         self.status =
             "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
@@ -2789,6 +3227,7 @@ impl TerminalApp {
         self.switcher_query.clear();
         self.switcher_matches.clear();
         self.switcher_selected = 0;
+        self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
         self.status = format!("editing {}", self.active_note.id);
     }
@@ -4658,6 +5097,10 @@ impl TerminalApp {
     }
 
     fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
+        if !self.active_note_is_editable() && !op.changes.is_empty() {
+            self.set_locked_note_status();
+            return;
+        }
         if op.changes.is_empty() {
             if let Some(sel) = &op.selection {
                 let mut offset = 0usize;
@@ -5633,8 +6076,14 @@ impl TerminalApp {
             | UiMode::Visual
             | UiMode::VisualLine => &self.status,
             UiMode::Switcher => {
-                if self.switcher_delete_confirm.is_some() {
-                    "Confirm delete: Enter/Y confirm, Esc/N cancel"
+                if self.switcher_open_confirm.is_some() {
+                    "Open note: type password, Enter confirm, Esc cancel"
+                } else if let Some(confirm) = self.switcher_delete_confirm.as_ref() {
+                    if confirm.requires_password {
+                        "Confirm delete: type password, Enter confirm, Esc cancel"
+                    } else {
+                        "Confirm delete: Enter/Y confirm, Esc/N cancel"
+                    }
                 } else {
                     "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
                 }
@@ -5675,6 +6124,18 @@ impl TerminalApp {
             if let Some(confirm) = self.switcher_delete_confirm.as_ref() {
                 switcher::draw_delete_confirm(
                     &confirm.note_title,
+                    confirm.requires_password,
+                    confirm.password.chars().count(),
+                    &mut buf,
+                    rows,
+                    cols,
+                    self.render_palette,
+                );
+            }
+            if let Some(confirm) = self.switcher_open_confirm.as_ref() {
+                switcher::draw_open_confirm(
+                    &confirm.note_title,
+                    confirm.password.chars().count(),
                     &mut buf,
                     rows,
                     cols,
@@ -5870,9 +6331,9 @@ fn format_startup_duration(duration: Duration) -> String {
     }
 }
 
-fn select_note(db: &Db, opts: &TerminalOptions) -> Result<Note, String> {
+fn select_note(db: &Db, opts: &TerminalOptions, config: &ThemeConfig) -> Result<Note, String> {
     if opts.create_new {
-        return new_note(db);
+        return new_note(db, config);
     }
 
     if let Some(id) = &opts.note_id {
@@ -5890,23 +6351,20 @@ fn select_note(db: &Db, opts: &TerminalOptions) -> Result<Note, String> {
         return Ok(note);
     }
 
-    new_note(db)
+    new_note(db, config)
 }
 
-fn new_note(db: &Db) -> Result<Note, String> {
+fn new_note(db: &Db, config: &ThemeConfig) -> Result<Note, String> {
     let id = Ulid::new().to_string();
-    db.save_note(&id, "")?;
-    db.set_note_modules(&id, default_note_modules_from_config())
-}
-
-fn default_note_modules_from_config() -> NoteModules {
-    let cfg = crate::config::load_theme_config();
-    NoteModules {
-        math: cfg.default_modules.math,
-        table: cfg.default_modules.table,
-        variables: cfg.default_modules.variables,
-        style: cfg.default_modules.style,
-    }
+    let security = crate::config::note_security_config_from_theme(config);
+    let default_password = crate::config::resolve_default_note_encryption_password(&security)?;
+    let modules = NoteModules {
+        math: config.default_modules.math,
+        table: config.default_modules.table,
+        variables: config.default_modules.variables,
+        style: config.default_modules.style,
+    };
+    db.create_note_with_defaults(&id, modules, default_password.as_deref())
 }
 
 fn load_note_reminder_ghosts(
@@ -6394,8 +6852,10 @@ mod tests {
     use super::{display_cols_for_prefix, line_char_len};
     use super::{TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
+    use app_core::storage::NoteAccessMode;
     use std::fs;
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
     use ulid::Ulid;
 
     fn temp_db_path() -> PathBuf {
@@ -8124,6 +8584,94 @@ mod tests {
     }
 
     #[test]
+    fn note_unprotect_command_removes_lock() {
+        let (db, mut app, path) = app_with_note("top secret");
+
+        app.execute_terminal_command(&db, "note lock pass123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+        assert_eq!(app.status, "note locked");
+
+        app.execute_terminal_command(&db, "note unprotect pass123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+        assert_eq!(app.lines, vec!["top secret".to_string()]);
+        assert_eq!(app.status, "note unprotected");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn note_unprotect_command_removes_at_rest_encryption() {
+        let (db, mut app, path) = app_with_note("classified");
+
+        app.execute_terminal_command(&db, "note encrypt enc123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+        assert_eq!(app.status, "note encrypted at rest");
+
+        app.execute_terminal_command(&db, "note unprotect enc123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+        assert_eq!(app.lines, vec!["classified".to_string()]);
+        assert_eq!(app.status, "note unprotected");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn note_security_aliases_accept_password_arguments() {
+        let (db, mut app, path) = app_with_note("top secret");
+
+        app.execute_terminal_command(&db, "lock-note pass123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+        assert!(!app.active_note.is_unlocked);
+        assert_eq!(app.status, "note locked");
+
+        app.execute_terminal_command(&db, "unlock-note pass123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+        assert!(app.active_note.is_unlocked);
+        assert_eq!(app.status, "note unlocked");
+
+        app.execute_terminal_command(&db, "encrypt-note enc123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+        assert!(app.active_note.is_unlocked);
+        assert_eq!(app.status, "note encrypted at rest");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn locked_notes_block_editor_mutations_and_autosave_errors() {
+        let (db, mut app, path) = app_with_note("top secret");
+
+        app.execute_terminal_command(&db, "note lock pass123");
+        assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+        assert!(!app.active_note.is_unlocked);
+        assert_eq!(app.lines, vec![String::new()]);
+        assert!(!app.dirty);
+
+        app.handle_editor_key(&db, Key::Char('x'))
+            .expect("locked edit should not fail");
+        assert_eq!(app.lines, vec![String::new()]);
+        assert!(!app.dirty);
+        assert!(app.status.contains("unlock first"));
+
+        app.dirty = true;
+        app.last_edit =
+            Instant::now() - Duration::from_millis(super::AUTOSAVE_DEBOUNCE_MS + 5);
+        app.maybe_autosave(&db)
+            .expect("locked autosave should not terminate loop");
+        assert!(app.status.contains("unlock first"));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
     fn switcher_delete_cancel_keeps_note() {
         let (db, mut app, path) = app_with_note("first note");
         db.save_note("n2", "second note")
@@ -8204,6 +8752,92 @@ mod tests {
         assert_eq!(app.active_note.id, "n2");
         assert_eq!(app.mode, UiMode::Normal);
         assert_eq!(app.vim_state.mode, crate::editor_core::vim::VimMode::Normal);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
+        let (db, mut app, path) = app_with_note("first note");
+        db.save_note("n2", "second note")
+            .expect("second note saved");
+        db.lock_note("n2", "pass123").expect("lock second note");
+        app.refresh_switcher_items(&db)
+            .expect("switcher items refreshed");
+        app.mode = UiMode::Editor;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Ctrl('p'), Key::Paste("second".to_string()), Key::Enter],
+        );
+        assert_eq!(app.mode, UiMode::Switcher);
+        assert!(app.switcher_open_confirm.is_some());
+        assert_eq!(app.active_note.id, "n1");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Paste("wrong".to_string()), Key::Enter],
+        );
+        assert!(app.switcher_open_confirm.is_some());
+        assert_eq!(app.active_note.id, "n1");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Paste("pass123".to_string()), Key::Enter],
+        );
+        assert!(app.switcher_open_confirm.is_none());
+        assert_eq!(app.active_note.id, "n2");
+        assert_eq!(app.mode, UiMode::Normal);
+        assert_eq!(app.vim_state.mode, crate::editor_core::vim::VimMode::Normal);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn startup_with_locked_recent_note_prompts_for_password() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "first note").expect("first note saved");
+        db.save_note("n2", "second note")
+            .expect("second note saved");
+        db.lock_note("n2", "pass123").expect("lock second note");
+        let opts = TerminalOptions {
+            create_new: false,
+            note_id: None,
+            list_only: false,
+        };
+
+        let (app, _) = TerminalApp::new_with_startup_metrics(
+            &db,
+            &opts,
+            true,
+            false,
+            true,
+            true,
+            true,
+            3,
+            super::render::RenderPalette::default(),
+            "%Y-%m-%d".to_string(),
+            "%Y-%m-%d %H:%M".to_string(),
+        )
+        .expect("terminal app");
+
+        assert_eq!(app.active_note.id, "n2");
+        assert_eq!(app.mode, UiMode::Switcher);
+        assert_eq!(app.status, "password required to open protected note");
+        let confirm = app
+            .switcher_open_confirm
+            .as_ref()
+            .expect("startup should request password");
+        assert_eq!(confirm.note_id, "n2");
+        assert_eq!(confirm.password, "");
 
         drop(app);
         drop(db);

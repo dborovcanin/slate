@@ -8,7 +8,48 @@ pub struct CommandHistoryStep {
 
 pub fn sanitize_command(raw_command: &str) -> String {
     let trimmed = raw_command.trim();
-    trimmed.strip_prefix(':').unwrap_or(trimmed).to_string()
+    let base = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    redact_command_arguments(base)
+}
+
+fn normalize_note_security_action(token: &str) -> Option<&'static str> {
+    let normalized = token.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "lock" | "note-lock" | "lock-note" => Some("lock"),
+        "unlock" | "note-unlock" | "unlock-note" => Some("unlock"),
+        "encrypt" | "note-encrypt" | "encrypt-note" => Some("encrypt"),
+        "decrypt" | "note-decrypt" | "decrypt-note" => Some("decrypt"),
+        "unprotect"
+        | "unencrypt"
+        | "note-unprotect"
+        | "unprotect-note"
+        | "note-unencrypt"
+        | "unencrypt-note" => Some("unprotect"),
+        _ => None,
+    }
+}
+
+fn redact_command_arguments(command: &str) -> String {
+    let mut tokens = command.split_whitespace();
+    let Some(first) = tokens.next() else {
+        return String::new();
+    };
+    let second = tokens.next();
+
+    if first.eq_ignore_ascii_case("note") {
+        let Some(action_token) = second else {
+            return command.to_string();
+        };
+        if normalize_note_security_action(action_token).is_some() && tokens.next().is_some() {
+            return format!("{first} {action_token}");
+        }
+        return command.to_string();
+    }
+
+    if normalize_note_security_action(first).is_some() && second.is_some() {
+        return first.to_string();
+    }
+    command.to_string()
 }
 
 pub fn remember_command(history: &mut Vec<String>, raw_command: &str, max_entries: usize) {
@@ -68,6 +109,21 @@ mod tests {
     fn sanitize_strips_whitespace_and_colon() {
         assert_eq!(sanitize_command(" :sum "), "sum");
         assert_eq!(sanitize_command("format"), "format");
+    }
+
+    #[test]
+    fn sanitize_redacts_note_password_arguments() {
+        assert_eq!(sanitize_command(":note lock hunter2"), "note lock");
+        assert_eq!(
+            sanitize_command("note encrypt super secret"),
+            "note encrypt"
+        );
+        assert_eq!(sanitize_command("note unprotect pass123"), "note unprotect");
+        assert_eq!(sanitize_command(":lock-note hunter2"), "lock-note");
+        assert_eq!(sanitize_command("encrypt-note super secret"), "encrypt-note");
+        assert_eq!(sanitize_command("note-encrypt pass123"), "note-encrypt");
+        assert_eq!(sanitize_command("note unlock"), "note unlock");
+        assert_eq!(sanitize_command("sum"), "sum");
     }
 
     #[test]

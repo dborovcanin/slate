@@ -131,6 +131,11 @@ test("core command suggestions are mode-aware", async () => {
     "clist",
     "ulist",
     "olist",
+    "note lock",
+    "note unlock",
+    "note encrypt",
+    "note decrypt",
+    "note unprotect",
   ]);
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);

@@ -2,6 +2,7 @@ import {
   getOrCreateNote,
   getNote,
   getNoteMeta,
+  unlockNoteAccess,
   listNotesMeta,
   createNote,
   deleteNote,
@@ -45,11 +46,16 @@ import {
 
 function ensureSummaryIncludesActive(noteId: string, body: string, summaries: NoteSummary[]): NoteSummary[] {
   if (summaries.some((summary) => summary.id === noteId)) return summaries;
+  const active = state.activeNote;
+  const activeEntry = state.notes.find((entry) => entry.id === noteId);
   return [
     {
       id: noteId,
+      title: activeEntry?.title ?? (active && active.is_unlocked ? body.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Untitled" : "Untitled"),
       body_prefix: body.slice(0, 200),
-      updated_at: state.activeNote?.id === noteId ? state.activeNote.updated_at : "",
+      access_mode: active?.id === noteId ? active.access_mode : "none",
+      is_unlocked: active?.id === noteId ? active.is_unlocked : true,
+      updated_at: active?.id === noteId ? active.updated_at : "",
     },
     ...summaries,
   ];
@@ -187,8 +193,42 @@ function startActiveNoteSyncLoop() {
 
 async function switchToNote(id: string) {
   await flushSave();
-  const note = await getNote(id);
-  if (!note) return;
+  const summary = await getNoteMeta(id);
+  if (!summary) {
+    showToast("Note not found");
+    return;
+  }
+
+  let note: Note | null = null;
+  if (summary.access_mode !== "none" && !summary.is_unlocked) {
+    const password = await promptPasswordInApp(
+      `Enter password to open "${summary.title}".`,
+      "Open",
+    );
+    if (password === null) return;
+    try {
+      note = await unlockNoteAccess(id, password);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+      if (message.includes("invalid password")) {
+        showToast("Invalid password");
+      } else if (message.includes("password")) {
+        showToast("Password required");
+      } else {
+        console.error("Open note failed:", error);
+        showToast("Open failed");
+      }
+      return;
+    }
+  } else {
+    note = await getNote(id);
+    if (!note) {
+      showToast("Note not found");
+      return;
+    }
+  }
+
   state.setActiveNote(note);
   reconfigureEditorForNote(note);
   setEditorContent(note.body, { forceStateReset: true });
@@ -201,6 +241,35 @@ async function switchToNote(id: string) {
     .catch(() => {
       // Keep existing note list when metadata refresh fails.
     });
+}
+
+async function unlockStartupNoteIfNeeded(note: Note, summaries: NoteSummary[]): Promise<Note> {
+  if (note.access_mode === "none" || note.is_unlocked) {
+    return note;
+  }
+  const title = summaries.find((entry) => entry.id === note.id)?.title ?? note.id;
+  const password = await promptPasswordInApp(
+    `Enter password to open "${title}".`,
+    "Open",
+  );
+  if (password === null) {
+    return note;
+  }
+  try {
+    return await unlockNoteAccess(note.id, password);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+    if (message.includes("invalid password")) {
+      showToast("Invalid password");
+    } else if (message.includes("password")) {
+      showToast("Password required");
+    } else {
+      console.error("Startup note unlock failed:", error);
+      showToast("Open failed");
+    }
+    return note;
+  }
 }
 
 async function handleCreateNote() {
@@ -235,7 +304,30 @@ async function handleDeleteNoteById(noteId: string) {
     await flushSave();
   }
 
-  await deleteNote(noteId);
+  let deletePassword: string | null = null;
+  if (noteEntry.accessMode !== "none") {
+    deletePassword = await promptPasswordInApp(
+      `Enter password to delete "${noteEntry.title}".`,
+      "Delete",
+    );
+    if (deletePassword === null) return;
+  }
+
+  try {
+    await deleteNote(noteId, deletePassword);
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
+    if (message.includes("invalid password")) {
+      showToast("Invalid password");
+    } else if (message.includes("password required")) {
+      showToast("Password required");
+    } else {
+      console.error("Delete note failed:", error);
+      showToast("Delete failed");
+    }
+    return;
+  }
   state.removeNote(noteId);
 
   if (!deletingActive) {
@@ -428,6 +520,113 @@ function confirmInApp(
     confirmBtn.addEventListener("click", () => finish(true));
     window.addEventListener("keydown", onKeydown, true);
     cancelBtn.focus();
+  });
+}
+
+function promptPasswordInApp(message: string, confirmText = "Continue"): Promise<string | null> {
+  return new Promise((resolve) => {
+    const restoreTarget =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const overlay = document.createElement("div");
+    overlay.className = "app-confirm-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "Password required");
+
+    const panel = document.createElement("div");
+    panel.className = "app-confirm-panel";
+
+    const messageEl = document.createElement("p");
+    messageEl.className = "app-confirm-message";
+    messageEl.textContent = message;
+
+    const input = document.createElement("input");
+    input.type = "password";
+    input.className = "app-confirm-input";
+    input.placeholder = "Password";
+    input.autocomplete = "current-password";
+
+    const actions = document.createElement("div");
+    actions.className = "app-confirm-actions";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "app-confirm-btn";
+    cancelBtn.textContent = "Cancel";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "app-confirm-btn app-confirm-btn-danger";
+    confirmBtn.textContent = confirmText;
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+    panel.appendChild(messageEl);
+    panel.appendChild(input);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    let finished = false;
+
+    const finish = (value: string | null) => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener("keydown", onKeydown, true);
+      overlay.remove();
+      if (restoreTarget && restoreTarget.isConnected) {
+        restoreTarget.focus();
+      }
+      resolve(value);
+    };
+
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(null);
+        return;
+      }
+      if (
+        event.key === "Enter" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(input.value.trim().length > 0 ? input.value : null);
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusables = [input, cancelBtn, confirmBtn];
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target === overlay) {
+        finish(null);
+      }
+    });
+
+    cancelBtn.addEventListener("click", () => finish(null));
+    confirmBtn.addEventListener("click", () =>
+      finish(input.value.trim().length > 0 ? input.value : null),
+    );
+    window.addEventListener("keydown", onKeydown, true);
+    input.focus();
   });
 }
 
@@ -682,12 +881,16 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   editorEl.style.overflow = "hidden";
   container.appendChild(editorEl);
 
-  const note = await getOrCreateNote();
-  const [summaries, config, runtimeFlags] = await Promise.all([
+  let note = await getOrCreateNote();
+  let [summaries, config, runtimeFlags] = await Promise.all([
     listNotesMeta().catch(() => []),
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
     getRuntimeFlagsOrDefault(),
   ]);
+  note = await unlockStartupNoteIfNeeded(note, summaries);
+  if (note.access_mode !== "none") {
+    summaries = await listNotesMeta().catch(() => summaries);
+  }
   appConfig = config;
   appRuntimeFlags = runtimeFlags;
   startupMark("ui_data_loaded");
