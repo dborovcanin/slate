@@ -63,6 +63,13 @@ pub struct IncrementalCalcPlan {
     pub eval_lines: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CalcEvalScopeDecision {
+    pub touches_any_assignment: bool,
+    pub touches_builtin_formula: bool,
+    pub can_use_partial: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommitMarkerLoc {
     pub doc_pos: usize,
@@ -578,6 +585,76 @@ pub fn contains_builtin_formula(lines: &[String]) -> bool {
     })
 }
 
+pub fn decide_eval_scope(
+    eval_lines: &[String],
+    prev_changed_lines: &[String],
+    has_prev: bool,
+    variables_enabled: bool,
+) -> CalcEvalScopeDecision {
+    let prev_changed_had_assignment = contains_variable_assignment(prev_changed_lines);
+    let prev_changed_had_builtin_formula = contains_builtin_formula(prev_changed_lines);
+    decide_eval_scope_with_flags(
+        eval_lines,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        has_prev,
+        variables_enabled,
+    )
+}
+
+pub fn decide_eval_scope_with_flags(
+    eval_lines: &[String],
+    prev_changed_had_assignment: bool,
+    prev_changed_had_builtin_formula: bool,
+    has_prev: bool,
+    variables_enabled: bool,
+) -> CalcEvalScopeDecision {
+    let touches_any_assignment = variables_enabled
+        && (contains_variable_assignment(eval_lines) || prev_changed_had_assignment);
+    let touches_builtin_formula =
+        contains_builtin_formula(eval_lines) || prev_changed_had_builtin_formula;
+    let can_use_partial = has_prev && !touches_any_assignment && !touches_builtin_formula;
+    CalcEvalScopeDecision {
+        touches_any_assignment,
+        touches_builtin_formula,
+        can_use_partial,
+    }
+}
+
+pub fn should_schedule_calc_eval(
+    doc_line_count: usize,
+    max_eval_lines: usize,
+    has_global_syntax: bool,
+    touches_calc_expression: bool,
+    visible_has_calc_syntax: bool,
+) -> bool {
+    if doc_line_count > max_eval_lines {
+        return false;
+    }
+    if has_global_syntax {
+        return true;
+    }
+    if touches_calc_expression {
+        return true;
+    }
+    visible_has_calc_syntax
+}
+
+pub fn should_attempt_calc_trailer_refresh(
+    prev_line_hash: u64,
+    next_line_hash: u64,
+    prev_result: Option<&str>,
+    line_is_selected: bool,
+) -> bool {
+    if line_is_selected {
+        return false;
+    }
+    if prev_line_hash != next_line_hash {
+        return false;
+    }
+    prev_result.is_none()
+}
+
 pub fn find_table_formula_segment(line: &str) -> Option<TableFormulaSegment> {
     find_table_formula_segments(line).into_iter().next()
 }
@@ -989,5 +1066,46 @@ mod tests {
     fn format_formula_value_rounds_and_drops_approx_prefixes() {
         assert_eq!(format_formula_display_value("≈ 12.345"), "12.35");
         assert_eq!(format_formula_display_value("about 5.0 kg"), "5 kg");
+    }
+
+    #[test]
+    fn decide_eval_scope_prefers_partial_only_without_global_dependencies() {
+        let eval_lines = vec!["2 + 2".to_string()];
+        let prev_changed = vec!["plain text".to_string()];
+        let decision = decide_eval_scope(&eval_lines, &prev_changed, true, true);
+        assert!(decision.can_use_partial);
+        assert!(!decision.touches_any_assignment);
+        assert!(!decision.touches_builtin_formula);
+    }
+
+    #[test]
+    fn decide_eval_scope_detects_assignment_and_formula_dependencies() {
+        let eval_assignment = vec!["a := 2 + 2".to_string()];
+        let from_assignment =
+            decide_eval_scope_with_flags(&eval_assignment, false, false, true, true);
+        assert!(from_assignment.touches_any_assignment);
+        assert!(!from_assignment.can_use_partial);
+
+        let eval_formula = vec!["sum_col() + 1".to_string()];
+        let from_formula = decide_eval_scope_with_flags(&eval_formula, false, false, true, true);
+        assert!(from_formula.touches_builtin_formula);
+        assert!(!from_formula.can_use_partial);
+    }
+
+    #[test]
+    fn should_schedule_calc_eval_follows_shared_trigger_rules() {
+        assert!(should_schedule_calc_eval(10, 100, true, false, false));
+        assert!(should_schedule_calc_eval(10, 100, false, true, false));
+        assert!(should_schedule_calc_eval(10, 100, false, false, true));
+        assert!(!should_schedule_calc_eval(200, 100, true, true, true));
+        assert!(!should_schedule_calc_eval(10, 100, false, false, false));
+    }
+
+    #[test]
+    fn should_attempt_calc_trailer_refresh_requires_unselected_synced_prev_none_line() {
+        assert!(should_attempt_calc_trailer_refresh(1, 1, None, false));
+        assert!(!should_attempt_calc_trailer_refresh(1, 2, None, false));
+        assert!(!should_attempt_calc_trailer_refresh(1, 1, Some("4"), false));
+        assert!(!should_attempt_calc_trailer_refresh(1, 1, None, true));
     }
 }

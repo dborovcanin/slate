@@ -3,7 +3,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::calc_plan::{
-    self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
+    self, CalcEvalScopeDecision, CalcRefreshPlan, CalcSegment, CommitMarkerLoc,
+    IncrementalCalcPlan, TableFormulaSegment,
 };
 use crate::command_history;
 use crate::context::ResolvedContext;
@@ -813,6 +814,26 @@ fn calc_refresh_plan_to_js(plan: &CalcRefreshPlan) -> JsValue {
     out.into()
 }
 
+fn calc_eval_scope_decision_to_js(decision: &CalcEvalScopeDecision) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(
+        &out,
+        "touchesAnyAssignment",
+        JsValue::from_bool(decision.touches_any_assignment),
+    );
+    let _ = set_prop(
+        &out,
+        "touchesBuiltinFormula",
+        JsValue::from_bool(decision.touches_builtin_formula),
+    );
+    let _ = set_prop(
+        &out,
+        "canUsePartial",
+        JsValue::from_bool(decision.can_use_partial),
+    );
+    out.into()
+}
+
 fn markdown_line_info_to_js(info: &MarkdownLineInfo) -> JsValue {
     let out = Object::new();
     let heading_level = info
@@ -1183,6 +1204,41 @@ pub fn wasm_calc_contains_variable_assignment(lines: JsValue) -> Option<bool> {
 pub fn wasm_calc_contains_builtin_formula(lines: JsValue) -> Option<bool> {
     let lines = js_strings(lines)?;
     Some(calc_plan::contains_builtin_formula(&lines))
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_decide_eval_scope(
+    eval_lines: JsValue,
+    prev_changed_lines: JsValue,
+    has_prev: bool,
+    variables_enabled: bool,
+) -> Option<JsValue> {
+    let eval_lines = js_strings(eval_lines)?;
+    let prev_changed_lines = js_strings(prev_changed_lines)?;
+    let decision = calc_plan::decide_eval_scope(
+        &eval_lines,
+        &prev_changed_lines,
+        has_prev,
+        variables_enabled,
+    );
+    Some(calc_eval_scope_decision_to_js(&decision))
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_should_schedule_eval(
+    doc_line_count: usize,
+    max_eval_lines: usize,
+    has_global_syntax: bool,
+    touches_calc_expression: bool,
+    visible_has_calc_syntax: bool,
+) -> bool {
+    calc_plan::should_schedule_calc_eval(
+        doc_line_count,
+        max_eval_lines,
+        has_global_syntax,
+        touches_calc_expression,
+        visible_has_calc_syntax,
+    )
 }
 
 #[wasm_bindgen]

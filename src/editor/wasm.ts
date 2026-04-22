@@ -5,6 +5,7 @@ import init, {
   wasm_calc_builtin_formula_label,
   wasm_calc_builtin_formula_labels,
   wasm_calc_compute_refresh,
+  wasm_calc_decide_eval_scope,
   wasm_calc_contains_builtin_formula,
   wasm_calc_contains_variable_assignment,
   wasm_calc_find_list_segment,
@@ -17,6 +18,7 @@ import init, {
   wasm_calc_line_for_eval,
   wasm_calc_line_uses_assignment_prefix,
   wasm_calc_plan_incremental,
+  wasm_calc_should_schedule_eval,
   wasm_command_history_next,
   wasm_command_history_prev,
   wasm_command_history_remember,
@@ -238,6 +240,12 @@ export interface CalcRefreshPlan {
   syncedLines: number[];
 }
 
+export interface CalcEvalScopeDecision {
+  touchesAnyAssignment: boolean;
+  touchesBuiltinFormula: boolean;
+  canUsePartial: boolean;
+}
+
 export interface IncrementalCalcPlan {
   baseResults: Map<number, string>;
   evalFrom: number;
@@ -261,6 +269,12 @@ interface CalcRefreshPlanPayload {
   changes: CalcRefreshChange[];
   prune: number[];
   syncedLines: number[];
+}
+
+interface CalcEvalScopeDecisionPayload {
+  touchesAnyAssignment: boolean;
+  touchesBuiltinFormula: boolean;
+  canUsePartial: boolean;
 }
 
 export type MarkdownInlineTokenType =
@@ -1398,6 +1412,61 @@ export function calcContainsVariableAssignment(lines: readonly string[]): boolea
 export function calcContainsBuiltinFormula(lines: readonly string[]): boolean {
   if (!ensureWasmReadyNonBlocking()) return false;
   return wasm_calc_contains_builtin_formula([...lines]) ?? false;
+}
+
+export function calcDecideEvalScope(
+  evalLines: readonly string[],
+  prevChangedLines: readonly string[],
+  hasPrev: boolean,
+  variablesEnabled: boolean,
+): CalcEvalScopeDecision {
+  if (!ensureWasmReadyNonBlocking()) {
+    return {
+      touchesAnyAssignment: false,
+      touchesBuiltinFormula: false,
+      canUsePartial: false,
+    };
+  }
+  const raw = wasm_calc_decide_eval_scope(
+    [...evalLines],
+    [...prevChangedLines],
+    hasPrev,
+    variablesEnabled,
+  ) as CalcEvalScopeDecisionPayload | null | undefined;
+  if (
+    !raw ||
+    typeof raw.touchesAnyAssignment !== "boolean" ||
+    typeof raw.touchesBuiltinFormula !== "boolean" ||
+    typeof raw.canUsePartial !== "boolean"
+  ) {
+    return {
+      touchesAnyAssignment: false,
+      touchesBuiltinFormula: false,
+      canUsePartial: false,
+    };
+  }
+  return {
+    touchesAnyAssignment: raw.touchesAnyAssignment,
+    touchesBuiltinFormula: raw.touchesBuiltinFormula,
+    canUsePartial: raw.canUsePartial,
+  };
+}
+
+export function calcShouldScheduleEval(
+  docLineCount: number,
+  maxEvalLines: number,
+  hasGlobalSyntax: boolean,
+  touchesCalcExpression: boolean,
+  visibleHasCalcSyntax: boolean,
+): boolean {
+  if (!ensureWasmReadyNonBlocking()) return false;
+  return wasm_calc_should_schedule_eval(
+    docLineCount,
+    maxEvalLines,
+    hasGlobalSyntax,
+    touchesCalcExpression,
+    visibleHasCalcSyntax,
+  );
 }
 
 export function calcPlanIncremental(

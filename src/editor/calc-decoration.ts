@@ -35,11 +35,13 @@ import { calcFindTableFormulaSegments, type TableFormulaSegment } from "./wasm.t
 import { planIncrementalCalc } from "./calc-incremental.ts";
 import {
   calcBuiltinFormulaLabel,
+  calcDecideEvalScope,
   calcComputeRefresh,
   calcContainsBuiltinFormula,
   calcContainsVariableAssignment,
   calcFormatFormulaDisplayValue,
   calcLineUsesAssignmentPrefix,
+  calcShouldScheduleEval,
 } from "./wasm.ts";
 import {
   editorProfilerNowMs,
@@ -1210,19 +1212,15 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const prevChangedTo =
             prevLines.length - nextLines.length + plan.evalFrom + plan.evalLines.length;
           const prevChangedLines = prevLines.slice(plan.evalFrom, prevChangedTo);
-          const touchesAnyAssignment =
-            containsVariableAssignment(plan.evalLines) ||
-            containsVariableAssignment(prevChangedLines);
-          // Only the edited range matters: inline builtin formulas are
-          // self-contained, so formulas elsewhere in the doc don't need a
-          // full re-eval for an unrelated edit. Table formulas with
-          // cross-row dependencies will briefly show stale results until
-          // the formula row or a variable is touched — acceptable for the
-          // perf win on large prose docs with a handful of formulas.
-          const touchesBuiltinFormula =
-            containsBuiltinFormula(plan.evalLines) ||
-            containsBuiltinFormula(prevChangedLines);
-          const canUsePartial = hasPrev && !touchesAnyAssignment && !touchesBuiltinFormula;
+          // Shared-core decision: eval scope falls back to full whenever the
+          // changed region touches assignment/formula dependencies.
+          const evalScope = calcDecideEvalScope(
+            plan.evalLines,
+            prevChangedLines,
+            hasPrev,
+            variablesEnabled,
+          );
+          const canUsePartial = evalScope.canUsePartial;
           const noteId = getActiveNoteId?.() ?? null;
 
           let evaluated;
@@ -1417,14 +1415,13 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
       touchesCalcExpression: boolean,
     ): boolean {
       const doc = view.state.doc;
-      if (doc.lines > MAX_CALC_EVAL_LINES) return false;
-      // Any doc with a builtin formula or variable assignment has global
-      // dependencies — eval the whole doc so results stay consistent.
-      if (hasGlobalSyntax(doc)) return true;
-      // Otherwise, only eval when the edit touches a calc expression or
-      // the viewport shows one.
-      if (touchesCalcExpression) return true;
-      return visibleSpansTouchCalcSyntax(view);
+      return calcShouldScheduleEval(
+        doc.lines,
+        MAX_CALC_EVAL_LINES,
+        hasGlobalSyntax(doc),
+        touchesCalcExpression,
+        visibleSpansTouchCalcSyntax(view),
+      );
     }
 
     // initial evaluation

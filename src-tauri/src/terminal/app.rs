@@ -4074,13 +4074,14 @@ impl TerminalApp {
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
-        let touches_any_assignment = calc_variables_enabled
-            && (crate::editor_core::calc_plan::contains_variable_assignment(&plan.eval_lines)
-                || prev_changed_had_assignment);
-        let touches_builtin_formula =
-            crate::editor_core::calc_plan::contains_builtin_formula(&plan.eval_lines)
-                || prev_changed_had_builtin_formula;
-        let can_use_partial = has_prev && !touches_any_assignment && !touches_builtin_formula;
+        let eval_scope = crate::editor_core::calc_plan::decide_eval_scope_with_flags(
+            &plan.eval_lines,
+            prev_changed_had_assignment,
+            prev_changed_had_builtin_formula,
+            has_prev,
+            calc_variables_enabled,
+        );
+        let can_use_partial = eval_scope.can_use_partial;
 
         let (mut new_results, mut new_cell_results, variable_names) = if can_use_partial {
             let mut merged_results = vec![None; self.lines.len()];
@@ -4172,19 +4173,18 @@ impl TerminalApp {
                 let Some(new_result) = new_results[i].as_deref() else {
                     continue;
                 };
-                if self.calc.prev_line_hashes[i] != final_hashes[i] {
+                let line_is_selected = if let Some((a, b)) = selection_range {
+                    a <= i && i <= b
+                } else {
+                    false
+                };
+                if !crate::editor_core::calc_plan::should_attempt_calc_trailer_refresh(
+                    self.calc.prev_line_hashes[i],
+                    final_hashes[i],
+                    self.calc.results[i].as_deref(),
+                    line_is_selected,
+                ) {
                     continue;
-                }
-                if self.calc.results[i].is_some() {
-                    // Previous recompute already considered this line stale;
-                    // not eligible for auto-refresh (user hand-typed or
-                    // otherwise never-synced trailer).
-                    continue;
-                }
-                if let Some((a, b)) = selection_range {
-                    if a <= i && i <= b {
-                        continue;
-                    }
                 }
                 let refresh = compute_calc_trailer_refresh(
                     &self.lines[i],
