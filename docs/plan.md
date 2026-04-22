@@ -62,6 +62,7 @@ Non-goals:
 - [x] 5. UI markdown hot-paths now route through batched wasm markdown transactions (single boundary call per candidate sequence), reducing fragmented rule dispatch calls.
 - [x] 6. Folding state transitions now consume a shared-core incremental fold index API (line-edit mapping + rebuild decision in Rust), while rendering remains frontend-owned.
 - [x] 7. Calc/variable trigger, eval-scope, and trailer-refresh eligibility semantics are now shared-core decisions consumed by both UI (wasm bridge) and TUI (native core calls), while UI/TUI keep rendering and scheduling mechanics local.
+- [x] 8. TUI input now flows through a dedicated adapter pipeline (terminal key -> vim intent translation -> shared-core `EditorEngine::step_vim` -> terminal action application), removing duplicated frontend stepping paths.
 
 ### Definition of done for this refactor track
 - Shared core is the canonical source for editing behavior.

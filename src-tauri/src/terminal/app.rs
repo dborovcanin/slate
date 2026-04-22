@@ -1,6 +1,7 @@
 use super::ansi::{
     contrast_fg_for_bg, draw_box_border, draw_row_at_styled, goto, pad_right, AnsiStyle,
 };
+use super::adapter::TerminalVimAdapter;
 use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::{self, DatePickerAction, DatePickerView};
@@ -84,6 +85,13 @@ enum UiMode {
     CommandBar,
     Search,
     DatePicker,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimPipelineResult {
+    NoIntent,
+    Unhandled,
+    Applied,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -901,21 +909,26 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn map_vim_key(key: &Key) -> Option<crate::editor_core::vim::VimKey> {
-        match key {
-            Key::Esc => Some(crate::editor_core::vim::VimKey::Esc),
-            Key::Enter => Some(crate::editor_core::vim::VimKey::Enter),
-            Key::Tab => Some(crate::editor_core::vim::VimKey::Tab),
-            Key::Backspace => Some(crate::editor_core::vim::VimKey::Backspace),
-            Key::Delete => Some(crate::editor_core::vim::VimKey::Delete),
-            Key::ArrowUp => Some(crate::editor_core::vim::VimKey::ArrowUp),
-            Key::ArrowDown => Some(crate::editor_core::vim::VimKey::ArrowDown),
-            Key::ArrowLeft => Some(crate::editor_core::vim::VimKey::ArrowLeft),
-            Key::ArrowRight => Some(crate::editor_core::vim::VimKey::ArrowRight),
-            Key::Char(ch) => Some(crate::editor_core::vim::VimKey::Char(*ch)),
-            Key::Ctrl(ch) => Some(crate::editor_core::vim::VimKey::Ctrl(*ch)),
-            _ => None,
+    fn build_vim_context(&self) -> crate::editor_core::vim::VimContext {
+        crate::editor_core::vim::VimContext {
+            has_search_matches: !self.search_matches.is_empty(),
+            line_count: self.lines.len(),
         }
+    }
+
+    fn run_vim_pipeline(&mut self, key: &Key) -> VimPipelineResult {
+        // Pipeline: terminal input -> vim intent translation -> shared-core
+        // engine step -> terminal action rendering.
+        let context = self.build_vim_context();
+        let Some(step) = TerminalVimAdapter::step(&self.vim_state, key, &context) else {
+            return VimPipelineResult::NoIntent;
+        };
+        self.vim_state = step.state;
+        if !step.handled {
+            return VimPipelineResult::Unhandled;
+        }
+        self.apply_vim_actions(&step.actions);
+        VimPipelineResult::Applied
     }
 
     fn set_clipboard_lines(&mut self, lines: Vec<String>) -> Option<ClipboardWriteBackend> {
@@ -1703,22 +1716,10 @@ impl TerminalApp {
             return Ok(());
         }
 
-        let Some(vim_key) = Self::map_vim_key(&key) else {
-            return Ok(());
-        };
-
-        let context = crate::editor_core::vim::VimContext {
-            has_search_matches: !self.search_matches.is_empty(),
-            line_count: self.lines.len(),
-        };
-        let step = crate::editor_core::vim::step(&self.vim_state, vim_key, &context);
-        self.vim_state = step.state;
-
-        if !step.handled {
-            return Ok(());
+        match self.run_vim_pipeline(&key) {
+            VimPipelineResult::NoIntent | VimPipelineResult::Unhandled => return Ok(()),
+            VimPipelineResult::Applied => {}
         }
-
-        self.apply_vim_actions(&step.actions);
         if key == Key::Esc {
             self.search_matches.clear();
             self.search_query.clear();
@@ -1877,21 +1878,13 @@ impl TerminalApp {
                 }
             }
             _ => {
-                let Some(vim_key) = Self::map_vim_key(&key) else {
-                    self.adjust_cursor();
-                    self.adjust_scroll();
-                    return Ok(());
-                };
-
-                let context = crate::editor_core::vim::VimContext {
-                    has_search_matches: !self.search_matches.is_empty(),
-                    line_count: self.lines.len(),
-                };
-                let step = crate::editor_core::vim::step(&self.vim_state, vim_key, &context);
-                self.vim_state = step.state;
-
-                if step.handled {
-                    self.apply_vim_actions(&step.actions);
+                match self.run_vim_pipeline(&key) {
+                    VimPipelineResult::NoIntent => {
+                        self.adjust_cursor();
+                        self.adjust_scroll();
+                        return Ok(());
+                    }
+                    VimPipelineResult::Unhandled | VimPipelineResult::Applied => {}
                 }
             }
         }

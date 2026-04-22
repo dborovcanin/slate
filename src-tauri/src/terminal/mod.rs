@@ -1,4 +1,5 @@
 mod ansi;
+mod adapter;
 mod app;
 mod calc_cache;
 mod clipboard;
