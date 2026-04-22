@@ -36,7 +36,7 @@ test("module command reports status and updates selected module", async () => {
   });
   assert.equal(status.message, "modules math=on table=on variables=on style=on");
 
-  const off = await executeCommand(snapshot(""), ":module off math", {
+  const off = await executeCommand(snapshot(""), ":module math off", {
     mode: "editor",
     getNoteModules,
     setNoteModules,
@@ -44,7 +44,7 @@ test("module command reports status and updates selected module", async () => {
   assert.equal(off.message, "modules math=off table=on variables=on style=on");
   assert.equal(current.math, false);
 
-  const toggle = await executeCommand(snapshot(""), ":module toggle style", {
+  const toggle = await executeCommand(snapshot(""), ":module style toggle", {
     mode: "editor",
     getNoteModules,
     setNoteModules,
@@ -58,9 +58,9 @@ test("module suggestions are shown for empty input and module prefix", () => {
   assert.ok(empty.length >= 5);
   assert.ok(empty.some((entry) => entry.value === "module status"));
 
-  const filtered = listCommandSuggestions("editor", "module off");
+  const filtered = listCommandSuggestions("editor", "module math");
   assert.ok(filtered.length > 0);
-  assert.ok(filtered.every((entry) => entry.value.startsWith("module off")));
+  assert.ok(filtered.every((entry) => entry.value.startsWith("module math")));
 });
 
 function noteWithModules(modules: NoteModules): Note {

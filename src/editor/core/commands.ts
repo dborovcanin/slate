@@ -332,24 +332,20 @@ async function runModuleCommand(
   }
 
   const next: NoteModules = { ...current };
-  if (normalizedInput === "module on math") next.math = true;
-  else if (normalizedInput === "module off math") next.math = false;
-  else if (normalizedInput === "module toggle math") next.math = !next.math;
-  else if (normalizedInput === "module on table") next.table = true;
-  else if (normalizedInput === "module off table") next.table = false;
-  else if (normalizedInput === "module toggle table") next.table = !next.table;
-  else if (normalizedInput === "module on variables") next.variables = true;
-  else if (normalizedInput === "module off variables") next.variables = false;
-  else if (normalizedInput === "module toggle variables") next.variables = !next.variables;
-  else if (normalizedInput === "module on style") next.style = true;
-  else if (normalizedInput === "module off style") next.style = false;
-  else if (normalizedInput === "module toggle style") next.style = !next.style;
-  else {
+  const moduleMatch = normalizedInput.match(
+    /^module (math|table|variables|style) (on|off|toggle)$/,
+  );
+  if (!moduleMatch) {
     return {
-      message: "module usage: module [status|on|off|toggle] <math|table|variables|style>",
+      message: "module usage: module [status|<math|table|variables|style> <on|off|toggle>]",
       operations: [],
     };
   }
+  const [, moduleName, action] = moduleMatch;
+  const key = moduleName as keyof NoteModules;
+  if (action === "on") next[key] = true;
+  else if (action === "off") next[key] = false;
+  else next[key] = !next[key];
 
   await runtime.setNoteModules?.(next);
   return { message: formatModules(next), operations: [] };
@@ -449,18 +445,18 @@ const EXECUTOR_MAP: Record<string, ExecuteFn> = {
   "notify": runNotifyCommand,
   "notify-delete": runNotifyDeleteCommand,
   "module status": runModuleCommand,
-  "module on math": runModuleCommand,
-  "module off math": runModuleCommand,
-  "module toggle math": runModuleCommand,
-  "module on table": runModuleCommand,
-  "module off table": runModuleCommand,
-  "module toggle table": runModuleCommand,
-  "module on variables": runModuleCommand,
-  "module off variables": runModuleCommand,
-  "module toggle variables": runModuleCommand,
-  "module on style": runModuleCommand,
-  "module off style": runModuleCommand,
-  "module toggle style": runModuleCommand,
+  "module math on": runModuleCommand,
+  "module math off": runModuleCommand,
+  "module math toggle": runModuleCommand,
+  "module table on": runModuleCommand,
+  "module table off": runModuleCommand,
+  "module table toggle": runModuleCommand,
+  "module variables on": runModuleCommand,
+  "module variables off": runModuleCommand,
+  "module variables toggle": runModuleCommand,
+  "module style on": runModuleCommand,
+  "module style off": runModuleCommand,
+  "module style toggle": runModuleCommand,
   "format": runFormatCommand,
   "fold": runFoldCommand,
   "unfold": runFoldCommand,

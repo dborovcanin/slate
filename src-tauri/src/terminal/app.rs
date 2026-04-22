@@ -38,6 +38,7 @@ const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
 const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
 const CALC_VIEWPORT_PREFETCH_MULTIPLIER: usize = 2;
 const VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS: usize = 3;
+const COMMAND_COMPLETION_MAX_OPTIONS: usize = 8;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
@@ -55,6 +56,15 @@ fn gutter_width_for_visible_lines(visible_lines: usize) -> usize {
     // Keep the legacy 4-digit gutter (+2 spaces), but expand once line numbers
     // outgrow it so rendering/cursor math stay aligned at 10k+ lines.
     (decimal_digit_count(visible_lines.max(1)) + 2).max(GUTTER_WIDTH)
+}
+
+fn trim_trailing_word(text: &mut String) {
+    while text.chars().last().is_some_and(|c| !c.is_alphanumeric()) {
+        text.pop();
+    }
+    while text.chars().last().is_some_and(|c| c.is_alphanumeric()) {
+        text.pop();
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -130,6 +140,20 @@ struct VariableAutocompletePopupState {
     cursor_col: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct CommandCompletionOption {
+    token: String,
+    has_more: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CommandCompletionMenuState {
+    visible: bool,
+    prefix_tokens: Vec<String>,
+    options: Vec<CommandCompletionOption>,
+    selected_index: usize,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -147,6 +171,7 @@ struct TerminalApp {
     last_edit: Instant,
     status: String,
     command_input: String,
+    command_completion: CommandCompletionMenuState,
     command_history: Vec<String>,
     command_history_index: Option<usize>,
     quit: bool,
@@ -323,6 +348,7 @@ impl TerminalApp {
             last_edit: Instant::now(),
             status: initial_status,
             command_input: String::new(),
+            command_completion: CommandCompletionMenuState::default(),
             command_history: Vec::new(),
             command_history_index: None,
             quit: false,
@@ -676,6 +702,7 @@ impl TerminalApp {
             }
             Key::Ctrl('e') => {
                 self.command_input.clear();
+                self.dismiss_command_completion_menu();
                 self.command_history_index = None;
                 self.command_bar_from_normal = false;
                 self.command_selection = None;
@@ -1500,6 +1527,7 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::OpenCommandBar => {
                     self.command_input.clear();
+                    self.dismiss_command_completion_menu();
                     self.command_history_index = None;
                     self.command_bar_from_normal = true;
                     self.command_selection = None;
@@ -1606,6 +1634,7 @@ impl TerminalApp {
                 self.command_selection = self.capture_visual_command_selection();
                 self.vim_state = crate::editor_core::vim::VimState::default();
                 self.command_input.clear();
+                self.dismiss_command_completion_menu();
                 self.command_history_index = None;
                 self.command_bar_from_normal = true;
                 self.mode = UiMode::CommandBar;
@@ -1753,21 +1782,7 @@ impl TerminalApp {
                 self.quit = true;
             }
             Key::Ctrl('w') => {
-                // simple word deletion for switcher
-                while let Some(c) = self.switcher_query.chars().last() {
-                    if !c.is_alphanumeric() {
-                        self.switcher_query.pop();
-                    } else {
-                        break;
-                    }
-                }
-                while let Some(c) = self.switcher_query.chars().last() {
-                    if c.is_alphanumeric() {
-                        self.switcher_query.pop();
-                    } else {
-                        break;
-                    }
-                }
+                trim_trailing_word(&mut self.switcher_query);
                 self.recompute_switcher_matches();
             }
             Key::Ctrl('n') => {
@@ -1916,6 +1931,138 @@ impl TerminalApp {
         self.command_history_index = None;
     }
 
+    fn dismiss_command_completion_menu(&mut self) {
+        self.command_completion = CommandCompletionMenuState::default();
+    }
+
+    fn build_command_completion_menu(&self) -> Option<CommandCompletionMenuState> {
+        let suggestions = crate::editor_core::commands::list_command_suggestions(
+            self.command_mode(),
+            &self.command_input,
+        );
+        if suggestions.is_empty() {
+            return None;
+        }
+
+        let normalized_input =
+            crate::editor_core::command_catalog::normalize_command(&self.command_input);
+        let ends_with_space = self
+            .command_input
+            .chars()
+            .last()
+            .is_some_and(char::is_whitespace);
+        let typed_tokens = if normalized_input.is_empty() {
+            Vec::new()
+        } else {
+            normalized_input
+                .split_whitespace()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+
+        let (prefix_tokens, token_prefix) = if ends_with_space {
+            (typed_tokens, String::new())
+        } else if let Some((last, prefix)) = typed_tokens.split_last() {
+            (prefix.to_vec(), last.to_string())
+        } else {
+            (Vec::new(), String::new())
+        };
+        let token_index = prefix_tokens.len();
+
+        let mut options: Vec<CommandCompletionOption> = Vec::new();
+        for suggestion in suggestions {
+            let suggestion_tokens = suggestion.value.split_whitespace().collect::<Vec<_>>();
+            if suggestion_tokens.len() <= token_index {
+                continue;
+            }
+            if !prefix_tokens.iter().enumerate().all(|(idx, token)| {
+                suggestion_tokens
+                    .get(idx)
+                    .is_some_and(|candidate| *candidate == token.as_str())
+            }) {
+                continue;
+            }
+            let token = suggestion_tokens[token_index];
+            if !token.starts_with(&token_prefix) {
+                continue;
+            }
+            let has_more = suggestion_tokens.len() > token_index + 1;
+            if let Some(existing) = options.iter_mut().find(|entry| entry.token == token) {
+                existing.has_more |= has_more;
+                continue;
+            }
+            options.push(CommandCompletionOption {
+                token: token.to_string(),
+                has_more,
+            });
+        }
+
+        if options.is_empty() {
+            return None;
+        }
+        if options.len() > COMMAND_COMPLETION_MAX_OPTIONS {
+            options.truncate(COMMAND_COMPLETION_MAX_OPTIONS);
+        }
+
+        Some(CommandCompletionMenuState {
+            visible: true,
+            prefix_tokens,
+            options,
+            selected_index: 0,
+        })
+    }
+
+    fn open_command_completion_menu(&mut self) -> bool {
+        let Some(menu) = self.build_command_completion_menu() else {
+            self.dismiss_command_completion_menu();
+            self.update_command_status();
+            return false;
+        };
+        if menu.options.len() == 1 {
+            self.command_completion = menu;
+            return self.apply_command_completion_selection();
+        }
+        self.command_completion = menu;
+        self.update_command_status();
+        true
+    }
+
+    fn move_command_completion_selection(&mut self, delta: isize) -> bool {
+        if !self.command_completion.visible || self.command_completion.options.is_empty() {
+            return false;
+        }
+        let len = self.command_completion.options.len();
+        let selected = self
+            .command_completion
+            .selected_index
+            .min(len.saturating_sub(1)) as isize;
+        let next = (selected + delta).rem_euclid(len as isize) as usize;
+        self.command_completion.selected_index = next;
+        self.update_command_status();
+        true
+    }
+
+    fn apply_command_completion_selection(&mut self) -> bool {
+        if !self.command_completion.visible || self.command_completion.options.is_empty() {
+            return false;
+        }
+        let selected_idx = self
+            .command_completion
+            .selected_index
+            .min(self.command_completion.options.len().saturating_sub(1));
+        let selected = self.command_completion.options[selected_idx].clone();
+        let mut tokens = self.command_completion.prefix_tokens.clone();
+        tokens.push(selected.token);
+        self.command_input = tokens.join(" ");
+        if selected.has_more {
+            self.command_input.push(' ');
+        }
+        self.command_history_index = None;
+        self.dismiss_command_completion_menu();
+        self.update_command_status();
+        true
+    }
+
     fn cycle_command_history_prev(&mut self) {
         let Some(step) = crate::editor_core::command_history::cycle_prev(
             &self.command_history,
@@ -1923,6 +2070,7 @@ impl TerminalApp {
         ) else {
             return;
         };
+        self.dismiss_command_completion_menu();
         self.command_history_index = Some(step.index);
         self.command_input = step.command;
         self.update_command_status();
@@ -1935,6 +2083,7 @@ impl TerminalApp {
         ) else {
             return;
         };
+        self.dismiss_command_completion_menu();
         self.command_history_index = Some(step.index);
         self.command_input = step.command;
         self.update_command_status();
@@ -1943,12 +2092,18 @@ impl TerminalApp {
     fn handle_command_bar_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
+                if self.command_completion.visible {
+                    self.dismiss_command_completion_menu();
+                    self.update_command_status();
+                    return Ok(());
+                }
                 self.mode = if self.command_bar_from_normal {
                     UiMode::Normal
                 } else {
                     UiMode::Editor
                 };
                 self.command_input.clear();
+                self.dismiss_command_completion_menu();
                 self.command_history_index = None;
                 self.command_selection = None;
                 self.command_selection_linewise = false;
@@ -1959,6 +2114,9 @@ impl TerminalApp {
                 };
             }
             Key::Enter => {
+                if self.apply_command_completion_selection() {
+                    return Ok(());
+                }
                 let cmd = self.command_input.trim().to_string();
                 let return_to = if self.command_bar_from_normal {
                     UiMode::Normal
@@ -1968,6 +2126,7 @@ impl TerminalApp {
                 self.remember_command_in_history(&cmd);
                 self.mode = return_to;
                 self.command_input.clear();
+                self.dismiss_command_completion_menu();
                 self.command_history_index = None;
                 self.execute_terminal_command(db, &cmd);
                 self.command_selection = None;
@@ -1975,17 +2134,21 @@ impl TerminalApp {
             }
             Key::Tab => {
                 self.command_history_index = None;
-                let suggestions = crate::editor_core::commands::list_command_suggestions(
-                    self.command_mode(),
-                    &self.command_input,
-                );
-                if let Some(top) = suggestions.first() {
-                    self.command_input = top.value.clone();
-                    self.update_command_status();
+                if self.command_completion.visible {
+                    self.apply_command_completion_selection();
+                } else {
+                    self.open_command_completion_menu();
                 }
+            }
+            Key::ArrowLeft => {
+                self.move_command_completion_selection(-1);
+            }
+            Key::ArrowRight => {
+                self.move_command_completion_selection(1);
             }
             Key::Backspace => {
                 self.command_history_index = None;
+                self.dismiss_command_completion_menu();
                 self.command_input.pop();
                 if self.command_input.is_empty() {
                     self.mode = if self.command_bar_from_normal {
@@ -1993,6 +2156,7 @@ impl TerminalApp {
                     } else {
                         UiMode::Editor
                     };
+                    self.dismiss_command_completion_menu();
                     self.command_selection = None;
                     self.command_selection_linewise = false;
                     self.status = if self.command_bar_from_normal {
@@ -2004,6 +2168,12 @@ impl TerminalApp {
                     self.update_command_status();
                 }
             }
+            Key::Ctrl('w') => {
+                self.command_history_index = None;
+                self.dismiss_command_completion_menu();
+                trim_trailing_word(&mut self.command_input);
+                self.update_command_status();
+            }
             Key::ArrowUp => {
                 self.cycle_command_history_prev();
             }
@@ -2012,11 +2182,13 @@ impl TerminalApp {
             }
             Key::Char(ch) => {
                 self.command_history_index = None;
+                self.dismiss_command_completion_menu();
                 self.command_input.push(ch);
                 self.update_command_status();
             }
             Key::Paste(text) => {
                 self.command_history_index = None;
+                self.dismiss_command_completion_menu();
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                     self.command_input.push(ch);
                 }
@@ -2028,16 +2200,31 @@ impl TerminalApp {
     }
 
     fn update_command_status(&mut self) {
-        let suggestions = crate::editor_core::commands::list_command_suggestions(
-            self.command_mode(),
-            &self.command_input,
-        );
-        let hint = suggestions
-            .iter()
-            .take(3)
-            .map(|s| s.value.as_str())
-            .collect::<Vec<_>>()
-            .join("  ");
+        let hint = if self.command_completion.visible {
+            self.command_completion
+                .options
+                .iter()
+                .enumerate()
+                .map(|(idx, option)| {
+                    if idx == self.command_completion.selected_index {
+                        format!(">{}<", option.token)
+                    } else {
+                        option.token.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("  ")
+        } else {
+            self.build_command_completion_menu()
+                .map(|menu| {
+                    menu.options
+                        .into_iter()
+                        .map(|option| option.token)
+                        .collect::<Vec<_>>()
+                        .join("  ")
+                })
+                .unwrap_or_default()
+        };
         if hint.is_empty() {
             self.status = format!(":{}", self.command_input);
         } else {
@@ -3610,22 +3797,7 @@ impl TerminalApp {
                 self.recompute_search();
             }
             Key::Ctrl('w') => {
-                while self
-                    .search_query
-                    .chars()
-                    .last()
-                    .is_some_and(|c| !c.is_alphanumeric())
-                {
-                    self.search_query.pop();
-                }
-                while self
-                    .search_query
-                    .chars()
-                    .last()
-                    .is_some_and(|c| c.is_alphanumeric())
-                {
-                    self.search_query.pop();
-                }
+                trim_trailing_word(&mut self.search_query);
                 self.recompute_search();
             }
             Key::Char(ch) => {
@@ -3934,12 +4106,10 @@ impl TerminalApp {
                 let mut col = self.cursor_col.min(edit_end);
                 let line = self.current_line();
                 let chars: Vec<char> = line.chars().collect();
-                while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric())
-                {
+                while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
                     col -= 1;
                 }
-                while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric())
-                {
+                while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
                     col -= 1;
                 }
                 if col == self.cursor_col {
@@ -7798,8 +7968,11 @@ mod tests {
         app.execute_terminal_command(&db, "module status");
         assert_eq!(app.status, "modules math=on table=on variables=on style=on");
 
-        app.execute_terminal_command(&db, "modules off variables");
-        assert_eq!(app.status, "modules math=on table=on variables=off style=on");
+        app.execute_terminal_command(&db, "modules variables off");
+        assert_eq!(
+            app.status,
+            "modules math=on table=on variables=off style=on"
+        );
         assert!(!app.active_note.modules.variables);
         assert!(!app.variable_autocomplete_popup.visible);
         assert!(app.calc.variable_names.is_empty());
@@ -7810,7 +7983,7 @@ mod tests {
             .expect("note exists");
         assert!(!persisted.modules.variables);
 
-        app.execute_terminal_command(&db, "module toggle variables");
+        app.execute_terminal_command(&db, "module variables toggle");
         assert_eq!(app.status, "modules math=on table=on variables=on style=on");
         assert!(app.active_note.modules.variables);
 
@@ -7826,7 +7999,7 @@ mod tests {
         app.cursor_line = 0;
         app.cursor_col = line_char_len(app.current_line());
 
-        app.execute_terminal_command(&db, "module off math");
+        app.execute_terminal_command(&db, "module math off");
         app.handle_editor_key(&db, Key::Tab)
             .expect("tab falls back when math module is off");
         assert_eq!(app.lines[0], "1 + 1  ");
@@ -7842,11 +8015,11 @@ mod tests {
         app.mode = UiMode::Editor;
         app.cursor_col = 9;
 
-        app.execute_terminal_command(&db, "module off table");
+        app.execute_terminal_command(&db, "module table off");
         app.adjust_cursor();
         assert_eq!(app.cursor_col, 9);
 
-        app.execute_terminal_command(&db, "module on table");
+        app.execute_terminal_command(&db, "module table on");
         app.cursor_col = 9;
         app.adjust_cursor();
         assert_eq!(app.cursor_col, 8);
@@ -7862,7 +8035,7 @@ mod tests {
         app.mode = UiMode::Editor;
         app.cursor_col = line_char_len(app.current_line());
 
-        app.execute_terminal_command(&db, "module off style");
+        app.execute_terminal_command(&db, "module style off");
         app.handle_editor_key(&db, Key::Enter)
             .expect("enter uses plain newline when style module is off");
         assert_eq!(app.lines, vec!["- [ ] task".to_string(), String::new()]);
@@ -8029,6 +8202,108 @@ mod tests {
         assert_eq!(app.command_input, "foo");
         run_keys(&mut app, &db, &[Key::ArrowDown]);
         assert_eq!(app.command_input, "bar");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_options() {
+        let (db, mut app, path) = app_with_note("alpha");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Ctrl('e'), Key::Char('m'), Key::Char('o'), Key::Tab],
+        );
+        assert_eq!(app.mode, UiMode::CommandBar);
+        assert!(!app.command_completion.visible);
+        assert_eq!(app.command_input, "module ");
+
+        run_keys(&mut app, &db, &[Key::Tab]);
+        assert!(app.command_completion.visible);
+        assert_eq!(
+            app.command_completion
+                .options
+                .iter()
+                .map(|entry| entry.token.as_str())
+                .collect::<Vec<_>>(),
+            vec!["math", "status", "style", "table", "variables"]
+        );
+
+        run_keys(&mut app, &db, &[Key::Tab]);
+        assert!(!app.command_completion.visible);
+        assert_eq!(app.command_input, "module math ");
+
+        run_keys(&mut app, &db, &[Key::Tab]);
+        assert!(app.command_completion.visible);
+        assert_eq!(
+            app.command_completion
+                .options
+                .iter()
+                .map(|entry| entry.token.as_str())
+                .collect::<Vec<_>>(),
+            vec!["off", "on", "toggle"]
+        );
+
+        run_keys(&mut app, &db, &[Key::ArrowRight, Key::Tab]);
+        assert!(!app.command_completion.visible);
+        assert_eq!(app.command_input, "module math on");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn command_bar_enter_accepts_picker_selection_before_execute() {
+        let (db, mut app, path) = app_with_note("alpha");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[
+                Key::Ctrl('e'),
+                Key::Char('m'),
+                Key::Char('o'),
+                Key::Tab,
+                Key::Tab,
+                Key::Enter,
+            ],
+        );
+        assert_eq!(app.mode, UiMode::CommandBar);
+        assert_eq!(app.command_input, "module math ");
+        assert!(!app.command_completion.visible);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn command_bar_ctrl_w_deletes_word_and_stays_in_command_mode() {
+        let (db, mut app, path) = app_with_note("alpha");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Ctrl('e'), Key::Paste("module table on".to_string())],
+        );
+        assert_eq!(app.mode, UiMode::CommandBar);
+        assert_eq!(app.command_input, "module table on");
+
+        run_keys(&mut app, &db, &[Key::Ctrl('w')]);
+        assert_eq!(app.command_input, "module table ");
+        assert_eq!(app.mode, UiMode::CommandBar);
+
+        run_keys(&mut app, &db, &[Key::Ctrl('w')]);
+        assert_eq!(app.command_input, "module ");
+        assert_eq!(app.mode, UiMode::CommandBar);
+
+        run_keys(&mut app, &db, &[Key::Ctrl('w')]);
+        assert_eq!(app.command_input, "");
+        assert_eq!(app.mode, UiMode::CommandBar);
 
         drop(app);
         drop(db);

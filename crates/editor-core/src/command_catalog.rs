@@ -153,85 +153,109 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 36] = [
     },
     CommandDefinition {
         id: CommandId::ModuleOnMath,
-        value: "module on math",
-        aliases: &["modules on math"],
+        value: "module math on",
+        aliases: &["module on math", "modules math on", "modules on math"],
         description: "enable math module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOffMath,
-        value: "module off math",
-        aliases: &["modules off math"],
+        value: "module math off",
+        aliases: &["module off math", "modules math off", "modules off math"],
         description: "disable math module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleToggleMath,
-        value: "module toggle math",
-        aliases: &["modules toggle math"],
+        value: "module math toggle",
+        aliases: &[
+            "module toggle math",
+            "modules math toggle",
+            "modules toggle math",
+        ],
         description: "toggle math module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOnTable,
-        value: "module on table",
-        aliases: &["modules on table"],
+        value: "module table on",
+        aliases: &["module on table", "modules table on", "modules on table"],
         description: "enable table module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOffTable,
-        value: "module off table",
-        aliases: &["modules off table"],
+        value: "module table off",
+        aliases: &["module off table", "modules table off", "modules off table"],
         description: "disable table module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleToggleTable,
-        value: "module toggle table",
-        aliases: &["modules toggle table"],
+        value: "module table toggle",
+        aliases: &[
+            "module toggle table",
+            "modules table toggle",
+            "modules toggle table",
+        ],
         description: "toggle table module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOnVariables,
-        value: "module on variables",
-        aliases: &["modules on variables"],
+        value: "module variables on",
+        aliases: &[
+            "module on variables",
+            "modules variables on",
+            "modules on variables",
+        ],
         description: "enable variables module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOffVariables,
-        value: "module off variables",
-        aliases: &["modules off variables"],
+        value: "module variables off",
+        aliases: &[
+            "module off variables",
+            "modules variables off",
+            "modules off variables",
+        ],
         description: "disable variables module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleToggleVariables,
-        value: "module toggle variables",
-        aliases: &["modules toggle variables"],
+        value: "module variables toggle",
+        aliases: &[
+            "module toggle variables",
+            "modules variables toggle",
+            "modules toggle variables",
+        ],
         description: "toggle variables module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOnStyle,
-        value: "module on style",
-        aliases: &["modules on style"],
+        value: "module style on",
+        aliases: &["module on style", "modules style on", "modules on style"],
         description: "enable style module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleOffStyle,
-        value: "module off style",
-        aliases: &["modules off style"],
+        value: "module style off",
+        aliases: &["module off style", "modules style off", "modules off style"],
         description: "disable style module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ModuleToggleStyle,
-        value: "module toggle style",
-        aliases: &["modules toggle style"],
+        value: "module style toggle",
+        aliases: &[
+            "module toggle style",
+            "modules style toggle",
+            "modules toggle style",
+        ],
         description: "toggle style module",
         modes: &MODES_BOTH,
     },
@@ -445,12 +469,16 @@ mod tests {
             Some(CommandId::ModuleStatus)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "modules off variables").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "module variables off").map(|cmd| cmd.id),
             Some(CommandId::ModuleOffVariables)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "module toggle style").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "module style toggle").map(|cmd| cmd.id),
             Some(CommandId::ModuleToggleStyle)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "modules off variables").map(|cmd| cmd.id),
+            Some(CommandId::ModuleOffVariables)
         );
     }
 

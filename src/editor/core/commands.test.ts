@@ -110,18 +110,18 @@ test("core command suggestions are mode-aware", async () => {
     "notify",
     "notify-delete",
     "module status",
-    "module on math",
-    "module off math",
-    "module toggle math",
-    "module on table",
-    "module off table",
-    "module toggle table",
-    "module on variables",
-    "module off variables",
-    "module toggle variables",
-    "module on style",
-    "module off style",
-    "module toggle style",
+    "module math on",
+    "module math off",
+    "module math toggle",
+    "module table on",
+    "module table off",
+    "module table toggle",
+    "module variables on",
+    "module variables off",
+    "module variables toggle",
+    "module style on",
+    "module style off",
+    "module style toggle",
     "format",
     "clip-watch",
     "clip-watch-stop",
@@ -152,7 +152,7 @@ test("core executeCommand handles module status/on/off/toggle", async () => {
   assert.equal(status.message, "modules math=on table=on variables=on style=on");
   assert.deepEqual(status.operations, []);
 
-  const off = await executeCommand(snapshot("", 0), "module off math", {
+  const off = await executeCommand(snapshot("", 0), "module math off", {
     mode: "editor",
     getNoteModules,
     setNoteModules,
@@ -160,7 +160,7 @@ test("core executeCommand handles module status/on/off/toggle", async () => {
   assert.equal(off.message, "modules math=off table=on variables=on style=on");
   assert.equal(current.math, false);
 
-  const toggle = await executeCommand(snapshot("", 0), "modules toggle style", {
+  const toggle = await executeCommand(snapshot("", 0), "modules style toggle", {
     mode: "editor",
     getNoteModules,
     setNoteModules,
