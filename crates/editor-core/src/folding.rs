@@ -29,6 +29,15 @@ pub struct FoldRange {
     pub kind: FoldKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoldLineEdit {
+    pub old_start_line: usize, // 0-based
+    pub old_line_span: usize,  // at least 1
+    pub new_line_span: usize,  // at least 1
+    pub old_line_text: String,
+    pub new_line_text: String,
+}
+
 #[derive(Clone, Copy)]
 struct FoldBuildOptions {
     include_heading: bool,
@@ -64,6 +73,114 @@ fn is_table_fold_line(line: &str) -> bool {
 
 fn is_list_fold_line(line: &str) -> bool {
     markdown_tokens::list_marker_end(line).is_some()
+}
+
+fn fold_structural_signature(line_text: &str) -> &'static str {
+    let trimmed = line_text.trim();
+    if trimmed.is_empty() {
+        return "empty";
+    }
+    if trimmed.starts_with("```") {
+        return "fence";
+    }
+    if trimmed.starts_with('|') && trimmed.ends_with('|') {
+        return "table";
+    }
+    if markdown_tokens::list_marker_end(line_text).is_some() {
+        return "list";
+    }
+    if trimmed.starts_with('#') {
+        return "heading";
+    }
+    if trimmed
+        .chars()
+        .all(|ch| matches!(ch, '-' | '_' | '*' | ' '))
+        && trimmed.chars().any(|ch| matches!(ch, '-' | '_' | '*'))
+    {
+        return "rule";
+    }
+    "paragraph"
+}
+
+pub fn edits_require_rebuild(edits: &[FoldLineEdit]) -> bool {
+    edits.iter().any(|edit| {
+        let old_span = edit.old_line_span.max(1);
+        let new_span = edit.new_line_span.max(1);
+        old_span != 1
+            || new_span != 1
+            || fold_structural_signature(&edit.old_line_text)
+                != fold_structural_signature(&edit.new_line_text)
+    })
+}
+
+pub fn map_ranges_through_line_edits(
+    ranges: &[FoldRange],
+    edits: &[FoldLineEdit],
+    new_line_count: usize,
+) -> Vec<FoldRange> {
+    if ranges.is_empty() || new_line_count <= 1 {
+        return Vec::new();
+    }
+    if edits.is_empty() {
+        return ranges
+            .iter()
+            .copied()
+            .filter(|range| range.end_line > range.start_line && range.end_line < new_line_count)
+            .collect();
+    }
+
+    let mut mapped: Vec<FoldRange> = ranges.to_vec();
+    let mut sorted_edits: Vec<&FoldLineEdit> = edits.iter().collect();
+    sorted_edits.sort_by_key(|edit| edit.old_start_line);
+
+    let mut cumulative_delta: isize = 0;
+    for edit in sorted_edits {
+        let old_span = edit.old_line_span.max(1) as isize;
+        let new_span = edit.new_line_span.max(1) as isize;
+        let edit_start = (edit.old_start_line as isize + cumulative_delta).max(0);
+        let edit_end = edit_start + old_span - 1;
+        let line_delta = new_span - old_span;
+
+        let mut next: Vec<FoldRange> = Vec::with_capacity(mapped.len());
+        for range in mapped {
+            let mut start_line = range.start_line as isize;
+            let mut end_line = range.end_line as isize;
+
+            if end_line < edit_start {
+                // Before the edited block.
+            } else if start_line > edit_end {
+                // After the edited block; shift by line delta.
+                start_line += line_delta;
+                end_line += line_delta;
+            } else {
+                // Overlap with edited lines invalidates the cached fold.
+                continue;
+            }
+
+            if start_line < 0 || end_line <= start_line {
+                continue;
+            }
+            let max_line = (new_line_count.saturating_sub(1)) as isize;
+            if start_line > max_line {
+                continue;
+            }
+            end_line = end_line.min(max_line);
+            if end_line <= start_line {
+                continue;
+            }
+            next.push(FoldRange {
+                start_line: start_line as usize,
+                end_line: end_line as usize,
+                kind: range.kind,
+            });
+        }
+
+        mapped = next;
+        cumulative_delta += line_delta;
+    }
+
+    mapped.sort_by_key(|range| (range.start_line, range.end_line));
+    mapped
 }
 
 fn build_fold_ranges_with_options(lines: &[String], options: FoldBuildOptions) -> Vec<FoldRange> {
@@ -337,6 +454,79 @@ mod tests {
         assert!(
             terminal_described.contains(&(0, 1, "paragraph"))
                 && terminal_described.contains(&(3, 4, "paragraph"))
+        );
+    }
+
+    #[test]
+    fn fold_line_edits_require_rebuild_on_structural_change_or_multiline_change() {
+        let single_line_non_structural = FoldLineEdit {
+            old_start_line: 5,
+            old_line_span: 1,
+            new_line_span: 1,
+            old_line_text: "plain paragraph".to_string(),
+            new_line_text: "plain paragraph changed".to_string(),
+        };
+        assert!(!edits_require_rebuild(&[single_line_non_structural]));
+
+        let structural = FoldLineEdit {
+            old_start_line: 1,
+            old_line_span: 1,
+            new_line_span: 1,
+            old_line_text: "plain paragraph".to_string(),
+            new_line_text: "- list item".to_string(),
+        };
+        assert!(edits_require_rebuild(&[structural]));
+
+        let multiline = FoldLineEdit {
+            old_start_line: 3,
+            old_line_span: 1,
+            new_line_span: 2,
+            old_line_text: "line".to_string(),
+            new_line_text: "line".to_string(),
+        };
+        assert!(edits_require_rebuild(&[multiline]));
+    }
+
+    #[test]
+    fn map_ranges_through_line_edits_shifts_or_drops_overlapping_ranges() {
+        let ranges = vec![
+            FoldRange {
+                start_line: 0,
+                end_line: 4,
+                kind: FoldKind::Heading,
+            },
+            FoldRange {
+                start_line: 8,
+                end_line: 12,
+                kind: FoldKind::Paragraph,
+            },
+        ];
+
+        let edits = vec![
+            FoldLineEdit {
+                old_start_line: 2,
+                old_line_span: 1,
+                new_line_span: 1,
+                old_line_text: "alpha".to_string(),
+                new_line_text: "beta".to_string(),
+            },
+            FoldLineEdit {
+                old_start_line: 6,
+                old_line_span: 1,
+                new_line_span: 2,
+                old_line_text: "x".to_string(),
+                new_line_text: "x".to_string(),
+            },
+        ];
+
+        let mapped = map_ranges_through_line_edits(&ranges, &edits, 20);
+        assert_eq!(
+            mapped,
+            vec![FoldRange {
+                start_line: 9,
+                end_line: 13,
+                kind: FoldKind::Paragraph
+            }]
         );
     }
 }

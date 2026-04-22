@@ -57,6 +57,108 @@ fn build_context(
     )
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MarkdownTransactionKind {
+    DocChange,
+    Enter,
+    Tab,
+    TableCellNavigation,
+    TablePipeInsertColumn,
+    TableHeaderDeleteColumn,
+    TableBoundaryEdit,
+}
+
+impl MarkdownTransactionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::DocChange => "doc_change",
+            Self::Enter => "enter",
+            Self::Tab => "tab",
+            Self::TableCellNavigation => "table_cell_navigation",
+            Self::TablePipeInsertColumn => "table_pipe_insert_column",
+            Self::TableHeaderDeleteColumn => "table_header_delete_column",
+            Self::TableBoundaryEdit => "table_boundary_edit",
+        }
+    }
+
+    fn from_str(value: &str) -> Option<Self> {
+        match value {
+            "doc_change" => Some(Self::DocChange),
+            "enter" => Some(Self::Enter),
+            "tab" => Some(Self::Tab),
+            "table_cell_navigation" => Some(Self::TableCellNavigation),
+            "table_pipe_insert_column" => Some(Self::TablePipeInsertColumn),
+            "table_header_delete_column" => Some(Self::TableHeaderDeleteColumn),
+            "table_boundary_edit" => Some(Self::TableBoundaryEdit),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MarkdownTransactionRequest {
+    kind: MarkdownTransactionKind,
+    markdown_autoformat: bool,
+    checklist_auto_reorder: bool,
+    outdent: bool,
+    backward: bool,
+    structural_merge: bool,
+    table_enabled: bool,
+}
+
+fn run_markdown_transaction(
+    ctx: &ResolvedContext,
+    request: MarkdownTransactionRequest,
+) -> Option<crate::types::EditOperation> {
+    match request.kind {
+        MarkdownTransactionKind::DocChange => run_doc_change_rules(
+            ctx,
+            TextRuleOptions {
+                markdown_autoformat: request.markdown_autoformat,
+                checklist_auto_reorder: request.checklist_auto_reorder,
+                table_enabled: request.table_enabled,
+            },
+        ),
+        MarkdownTransactionKind::Enter => run_enter_rules(
+            ctx,
+            TextRuleOptions {
+                markdown_autoformat: request.markdown_autoformat,
+                checklist_auto_reorder: true,
+                table_enabled: request.table_enabled,
+            },
+        ),
+        MarkdownTransactionKind::Tab => run_tab_rules(
+            ctx,
+            TabRuleOptions {
+                markdown_autoformat: request.markdown_autoformat,
+                outdent: request.outdent,
+                table_enabled: request.table_enabled,
+            },
+        ),
+        MarkdownTransactionKind::TableCellNavigation => run_table_cell_navigation_rules(
+            ctx,
+            TabRuleOptions {
+                markdown_autoformat: request.markdown_autoformat,
+                outdent: request.outdent,
+                table_enabled: request.table_enabled,
+            },
+        ),
+        MarkdownTransactionKind::TablePipeInsertColumn => run_table_pipe_insert_column_rule(ctx),
+        MarkdownTransactionKind::TableHeaderDeleteColumn => {
+            run_table_header_delete_column_rule(ctx)
+        }
+        MarkdownTransactionKind::TableBoundaryEdit => run_table_boundary_edit_rules(
+            ctx,
+            TableBoundaryEditOptions {
+                markdown_autoformat: request.markdown_autoformat,
+                backward: request.backward,
+                structural_merge: request.structural_merge,
+                table_enabled: request.table_enabled,
+            },
+        ),
+    }
+}
+
 /// Run document-change text rules. Returns a structured JsValue {changes, selection?} or null.
 #[wasm_bindgen]
 pub fn wasm_run_doc_change_rules(
@@ -233,6 +335,67 @@ pub fn wasm_run_table_boundary_edit_rules(
     };
     let op = run_table_boundary_edit_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
+}
+
+fn js_markdown_transaction_requests(value: JsValue) -> Option<Vec<MarkdownTransactionRequest>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for entry in array.iter() {
+        let kind = MarkdownTransactionKind::from_str(&js_prop_string(&entry, "kind")?)?;
+        let markdown_autoformat = js_prop_bool(&entry, "markdownAutoformat").unwrap_or(true);
+        let checklist_auto_reorder = js_prop_bool(&entry, "checklistAutoReorder").unwrap_or(true);
+        let outdent = js_prop_bool(&entry, "outdent").unwrap_or(false);
+        let backward = js_prop_bool(&entry, "backward").unwrap_or(true);
+        let structural_merge = js_prop_bool(&entry, "structuralMerge").unwrap_or(false);
+        let table_enabled = js_prop_bool(&entry, "tableEnabled").unwrap_or(true);
+        out.push(MarkdownTransactionRequest {
+            kind,
+            markdown_autoformat,
+            checklist_auto_reorder,
+            outdent,
+            backward,
+            structural_merge,
+            table_enabled,
+        });
+    }
+    Some(out)
+}
+
+/// Run one-or-more markdown transactions through a single wasm boundary crossing.
+/// Returns {kind, operation} for the first transaction that produced an edit operation.
+#[wasm_bindgen]
+pub fn wasm_run_markdown_transaction_batch(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    has_changed_range: bool,
+    changed_from: usize,
+    changed_to: usize,
+    transactions: JsValue,
+) -> Option<JsValue> {
+    let requests = js_markdown_transaction_requests(transactions)?;
+    if requests.is_empty() {
+        return None;
+    }
+
+    let ctx = build_context(
+        text,
+        selection_anchor,
+        selection_head,
+        has_changed_range,
+        changed_from,
+        changed_to,
+    );
+    for request in requests {
+        let Some(operation) = run_markdown_transaction(&ctx, request) else {
+            continue;
+        };
+        let out = Object::new();
+        let _ = set_prop(&out, "kind", JsValue::from_str(request.kind.as_str()));
+        let _ = set_prop(&out, "operation", edit_operation_to_js(&operation));
+        return Some(out.into());
+    }
+    None
 }
 
 /// Rewrite a list line that ends with /x toggle suffix. Returns the rewritten line or null.
@@ -525,6 +688,66 @@ fn js_prop_string(value: &JsValue, key: &str) -> Option<String> {
     Reflect::get(value, &JsValue::from_str(key))
         .ok()?
         .as_string()
+}
+
+fn js_prop_bool(value: &JsValue, key: &str) -> Option<bool> {
+    Reflect::get(value, &JsValue::from_str(key)).ok()?.as_bool()
+}
+
+fn parse_fold_kind(value: &str) -> Option<folding::FoldKind> {
+    match value {
+        "heading" => Some(folding::FoldKind::Heading),
+        "fence" => Some(folding::FoldKind::Fence),
+        "list" => Some(folding::FoldKind::List),
+        "table" => Some(folding::FoldKind::Table),
+        "paragraph" => Some(folding::FoldKind::Paragraph),
+        _ => None,
+    }
+}
+
+fn js_fold_ranges_1_based(value: JsValue) -> Option<Vec<folding::FoldRange>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for value in array.iter() {
+        let start_line_1 = js_prop_usize(&value, "startLine")?;
+        let end_line_1 = js_prop_usize(&value, "endLine")?;
+        if start_line_1 == 0 || end_line_1 == 0 {
+            return None;
+        }
+        let kind = parse_fold_kind(&js_prop_string(&value, "kind")?)?;
+        let start_line = start_line_1 - 1;
+        let end_line = end_line_1 - 1;
+        if end_line <= start_line {
+            continue;
+        }
+        out.push(folding::FoldRange {
+            start_line,
+            end_line,
+            kind,
+        });
+    }
+    Some(out)
+}
+
+fn js_fold_line_edits_1_based(value: JsValue) -> Option<Vec<folding::FoldLineEdit>> {
+    let array: Array = value.dyn_into().ok()?;
+    let mut out = Vec::with_capacity(array.length() as usize);
+    for value in array.iter() {
+        let old_start_line_1 = js_prop_usize(&value, "oldStartLine")?;
+        if old_start_line_1 == 0 {
+            return None;
+        }
+        let old_line_span = js_prop_usize(&value, "oldLineSpan")?.max(1);
+        let new_line_span = js_prop_usize(&value, "newLineSpan")?.max(1);
+        out.push(folding::FoldLineEdit {
+            old_start_line: old_start_line_1 - 1,
+            old_line_span,
+            new_line_span,
+            old_line_text: js_prop_string(&value, "oldLineText")?,
+            new_line_text: js_prop_string(&value, "newLineText")?,
+        });
+    }
+    Some(out)
 }
 
 fn js_commit_markers(value: JsValue) -> Option<Vec<CommitMarkerLoc>> {
@@ -858,6 +1081,28 @@ pub fn wasm_markdown_build_fold_ranges_ui(lines: JsValue) -> Option<JsValue> {
         out.push(&fold_range_to_js_1_based(range));
     }
     Some(out.into())
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_fold_map_ranges_ui(
+    ranges: JsValue,
+    edits: JsValue,
+    new_line_count: usize,
+) -> Option<JsValue> {
+    let ranges = js_fold_ranges_1_based(ranges)?;
+    let edits = js_fold_line_edits_1_based(edits)?;
+    let mapped = folding::map_ranges_through_line_edits(&ranges, &edits, new_line_count.max(1));
+    let out = Array::new();
+    for range in &mapped {
+        out.push(&fold_range_to_js_1_based(range));
+    }
+    Some(out.into())
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_fold_edits_require_rebuild_ui(edits: JsValue) -> Option<bool> {
+    let edits = js_fold_line_edits_1_based(edits)?;
+    Some(folding::edits_require_rebuild(&edits))
 }
 
 #[wasm_bindgen]

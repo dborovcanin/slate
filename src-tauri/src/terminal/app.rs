@@ -2667,10 +2667,9 @@ impl TerminalApp {
             variables: self.active_note.modules.variables,
             style: self.active_note.modules.style,
         };
-        let Some(plan) = crate::editor_core::engine::EditorEngine::plan_module_command(
-            command_id,
-            current,
-        ) else {
+        let Some(plan) =
+            crate::editor_core::engine::EditorEngine::plan_module_command(command_id, current)
+        else {
             return false;
         };
         if !plan.changed {
@@ -2740,7 +2739,9 @@ impl TerminalApp {
             return;
         }
 
-        if let Some(parsed) = crate::editor_core::engine::EditorEngine::parse_note_security_command(cmd) {
+        if let Some(parsed) =
+            crate::editor_core::engine::EditorEngine::parse_note_security_command(cmd)
+        {
             let action = parsed.action;
             let action_label = action.as_str();
             let password = parsed.password;

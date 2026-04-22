@@ -10,6 +10,8 @@ This document defines the canonical shared-core contract for editor semantics.
   - note-security command parsing
   - vim key stepping (`VimState` + `VimContext` -> `VimStep`)
   - module-command planning (`CommandId` + current module state -> deterministic plan)
+- `crates/editor-core/src/wasm.rs` exposes batched markdown transaction execution for UI hot-path text rules.
+- `crates/editor-core/src/folding.rs` owns fold-range computation plus incremental line-edit mapping/rebuild decisions.
 - Frontends (Tauri UI and TUI) must call this contract for semantic decisions.
 - Frontends remain responsible for rendering, UI state, persistence side effects, and I/O.
 
@@ -24,6 +26,12 @@ This document defines the canonical shared-core contract for editor semantics.
 - Module command contract:
   - input: `CommandId`, `ModuleState`
   - output: `ModuleCommandPlan` (`changed`, `next`, `message`)
+- Markdown transaction contract:
+  - input: `EditorContextSnapshot` + ordered markdown transaction requests
+  - output: first matching `{ kind, operation }` edit operation
+- Fold incremental contract:
+  - input: existing fold ranges + line-edit deltas
+  - output: mapped fold ranges plus rebuild-needed decision
 
 ## Determinism requirements
 

@@ -82,7 +82,11 @@ fn vim_replay_golden_cases() {
             state = step.state;
         }
 
-        assert_eq!(last_mode, case.expected.mode, "mode mismatch in {}", case.name);
+        assert_eq!(
+            last_mode, case.expected.mode,
+            "mode mismatch in {}",
+            case.name
+        );
         assert_eq!(
             last_handled, case.expected.handled,
             "handled mismatch in {}",
@@ -103,15 +107,20 @@ fn module_command_replay_golden_cases() {
             .expect("parse module replay fixture");
 
     for case in suite.cases {
-        let command = EditorEngine::resolve_command(case.mode, &case.raw_input).unwrap_or_else(|| {
-            panic!("case {} failed to resolve command '{}'", case.name, case.raw_input)
-        });
-        let plan = EditorEngine::plan_module_command(command.id, case.current).unwrap_or_else(|| {
-            panic!(
-                "case {} did not produce module plan for '{}'",
-                case.name, case.raw_input
-            )
-        });
+        let command =
+            EditorEngine::resolve_command(case.mode, &case.raw_input).unwrap_or_else(|| {
+                panic!(
+                    "case {} failed to resolve command '{}'",
+                    case.name, case.raw_input
+                )
+            });
+        let plan =
+            EditorEngine::plan_module_command(command.id, case.current).unwrap_or_else(|| {
+                panic!(
+                    "case {} did not produce module plan for '{}'",
+                    case.name, case.raw_input
+                )
+            });
         assert_eq!(plan, case.expected, "module plan mismatch in {}", case.name);
     }
 }

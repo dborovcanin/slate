@@ -134,7 +134,10 @@ impl EditorEngine {
         })
     }
 
-    pub fn plan_module_command(command_id: CommandId, current: ModuleState) -> Option<ModuleCommandPlan> {
+    pub fn plan_module_command(
+        command_id: CommandId,
+        current: ModuleState,
+    ) -> Option<ModuleCommandPlan> {
         if command_id == CommandId::ModuleStatus {
             return Some(ModuleCommandPlan {
                 changed: false,
@@ -214,8 +217,8 @@ mod tests {
             variables: true,
             style: true,
         };
-        let plan = EditorEngine::plan_module_command(CommandId::ModuleOnMath, current)
-            .expect("plan");
+        let plan =
+            EditorEngine::plan_module_command(CommandId::ModuleOnMath, current).expect("plan");
         assert!(!plan.changed);
         assert_eq!(plan.next, current);
         assert_eq!(plan.message, "module math already on");
@@ -229,8 +232,8 @@ mod tests {
             variables: true,
             style: true,
         };
-        let plan = EditorEngine::plan_module_command(CommandId::ModuleToggleStyle, current)
-            .expect("plan");
+        let plan =
+            EditorEngine::plan_module_command(CommandId::ModuleToggleStyle, current).expect("plan");
         assert!(plan.changed);
         assert!(!plan.next.style);
         assert_eq!(
@@ -247,8 +250,8 @@ mod tests {
             variables: false,
             style: true,
         };
-        let plan = EditorEngine::plan_module_command(CommandId::ModuleStatus, current)
-            .expect("plan");
+        let plan =
+            EditorEngine::plan_module_command(CommandId::ModuleStatus, current).expect("plan");
         assert!(!plan.changed);
         assert_eq!(plan.next, current);
         assert_eq!(

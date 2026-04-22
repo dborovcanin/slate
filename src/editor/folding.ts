@@ -22,7 +22,14 @@ import {
   foldedRanges,
   unfoldEffect,
 } from "@codemirror/language";
-import { ensureWasmReady, markdownBuildFoldRangesUi } from "./wasm.ts";
+import {
+  ensureWasmReady,
+  markdownBuildFoldRangesUi,
+  markdownFoldEditsRequireRebuildUi,
+  markdownFoldMapRangesUi,
+  type MarkdownFoldLineEdit,
+  type MarkdownFoldRange,
+} from "./wasm.ts";
 
 type FoldKind = "heading" | "fence" | "list" | "table" | "paragraph";
 const MAX_FOLD_ANALYSIS_LINES = 20_000;
@@ -67,17 +74,12 @@ function foldRangeToSpan(range: FoldRange): number {
   return range.endLine - range.startLine;
 }
 
-function buildFoldRanges(doc: Text): Map<number, FoldRange> {
+function foldRangeMapFromSharedRanges(
+  doc: Text,
+  sharedRanges: readonly MarkdownFoldRange[],
+): Map<number, FoldRange> {
   const lineCount = doc.lines;
   const ranges = new Map<number, FoldRange>();
-  if (lineCount <= 1) return ranges;
-  if (lineCount > MAX_FOLD_ANALYSIS_LINES) return ranges;
-
-  const lines: string[] = [];
-  for (let lineNo = 1; lineNo <= lineCount; lineNo++) {
-    lines.push(doc.line(lineNo).text);
-  }
-  const sharedRanges = markdownBuildFoldRangesUi(lines);
   for (const range of sharedRanges) {
     const startLine = Math.max(1, Math.min(lineCount, range.startLine));
     const endLine = Math.max(startLine, Math.min(lineCount, range.endLine));
@@ -95,8 +97,28 @@ function buildFoldRanges(doc: Text): Map<number, FoldRange> {
       });
     }
   }
-
   return ranges;
+}
+
+function foldRangesToSharedRanges(ranges: Map<number, FoldRange>): MarkdownFoldRange[] {
+  return [...ranges.values()].map((range) => ({
+    startLine: range.startLine,
+    endLine: range.endLine,
+    kind: range.kind,
+  }));
+}
+
+function buildFoldRanges(doc: Text): Map<number, FoldRange> {
+  const lineCount = doc.lines;
+  if (lineCount <= 1) return new Map<number, FoldRange>();
+  if (lineCount > MAX_FOLD_ANALYSIS_LINES) return new Map<number, FoldRange>();
+
+  const lines: string[] = [];
+  for (let lineNo = 1; lineNo <= lineCount; lineNo++) {
+    lines.push(doc.line(lineNo).text);
+  }
+  const sharedRanges = markdownBuildFoldRangesUi(lines);
+  return foldRangeMapFromSharedRanges(doc, sharedRanges);
 }
 
 function mapFoldRangesThroughChanges(
@@ -157,6 +179,39 @@ function foldRangesEqual(a: Map<number, FoldRange>, b: Map<number, FoldRange>): 
   return true;
 }
 
+function collectFoldLineEdits(
+  startDoc: Text,
+  nextDoc: Text,
+  changes: ChangeSet,
+): MarkdownFoldLineEdit[] {
+  const edits: MarkdownFoldLineEdit[] = [];
+  changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    const oldStartLine = startDoc.lineAt(fromA).number;
+    const oldEndLine = startDoc.lineAt(toA).number;
+    const newStartLine = nextDoc.lineAt(fromB).number;
+    const newEndLine = nextDoc.lineAt(toB).number;
+    edits.push({
+      oldStartLine,
+      oldLineSpan: Math.max(1, oldEndLine - oldStartLine + 1),
+      newLineSpan: Math.max(1, newEndLine - newStartLine + 1),
+      oldLineText: startDoc.line(oldStartLine).text,
+      newLineText: nextDoc.line(newStartLine).text,
+    });
+  });
+  return edits;
+}
+
+function mapFoldRangesThroughSharedIndex(
+  ranges: Map<number, FoldRange>,
+  edits: readonly MarkdownFoldLineEdit[],
+  newDoc: Text,
+): Map<number, FoldRange> | null {
+  if (ranges.size === 0) return ranges;
+  const mapped = markdownFoldMapRangesUi(foldRangesToSharedRanges(ranges), edits, newDoc.lines);
+  if (!mapped) return null;
+  return foldRangeMapFromSharedRanges(newDoc, mapped);
+}
+
 const foldRangesField = StateField.define<FoldRangesValue>({
   create(state) {
     return { ranges: buildFoldRanges(state.doc) };
@@ -166,8 +221,11 @@ const foldRangesField = StateField.define<FoldRangesValue>({
     let changed = false;
 
     if (tr.docChanged) {
-      const nextRanges = mapFoldRangesThroughChanges(ranges, tr.changes, tr.state.doc);
-      if (nextRanges !== ranges) {
+      const edits = collectFoldLineEdits(tr.startState.doc, tr.state.doc, tr.changes);
+      const nextRanges =
+        mapFoldRangesThroughSharedIndex(ranges, edits, tr.state.doc) ??
+        mapFoldRangesThroughChanges(ranges, tr.changes, tr.state.doc);
+      if (!foldRangesEqual(ranges, nextRanges)) {
         ranges = nextRanges;
         changed = true;
       }
@@ -219,7 +277,7 @@ function foldStructuralSignature(lineText: string): string {
   return "paragraph";
 }
 
-function editMightAffectFolds(update: ViewUpdate): boolean {
+function editMightAffectFoldsFallback(update: ViewUpdate): boolean {
   let might = false;
   update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
     if (might) return;
@@ -236,6 +294,16 @@ function editMightAffectFolds(update: ViewUpdate): boolean {
     might = foldStructuralSignature(beforeLine) !== foldStructuralSignature(afterLine);
   });
   return might;
+}
+
+function editMightAffectFolds(update: ViewUpdate): boolean {
+  const edits = collectFoldLineEdits(update.startState.doc, update.state.doc, update.changes);
+  if (edits.length === 0) return false;
+  const fromSharedCore = markdownFoldEditsRequireRebuildUi(edits);
+  if (typeof fromSharedCore === "boolean") {
+    return fromSharedCore;
+  }
+  return editMightAffectFoldsFallback(update);
 }
 
 const foldAnalyzerPlugin = ViewPlugin.define((view) => {

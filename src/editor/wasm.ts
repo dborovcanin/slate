@@ -26,6 +26,8 @@ import init, {
   wasm_list_command_suggestions,
   wasm_markdown_analyze_lines,
   wasm_markdown_build_fold_ranges_ui,
+  wasm_markdown_fold_edits_require_rebuild_ui,
+  wasm_markdown_fold_map_ranges_ui,
   wasm_markdown_classify_line,
   wasm_markdown_find_inline_tokens,
   wasm_markdown_inline_marker_component_ranges,
@@ -38,13 +40,7 @@ import init, {
   wasm_parse_note_security_command,
   wasm_plan_module_command,
   wasm_try_execute_vim_substitute,
-  wasm_run_doc_change_rules,
-  wasm_run_enter_rules,
-  wasm_run_table_boundary_edit_rules,
-  wasm_run_table_header_delete_column_rule,
-  wasm_run_table_pipe_insert_column_rule,
-  wasm_run_tab_rules,
-  wasm_run_table_cell_navigation_rules,
+  wasm_run_markdown_transaction_batch,
 } from "../../pkg/editor-core/editor_core.js";
 // NOTE: wasm functions for text rules now receive direct args instead of JSON snapshots.
 import type {
@@ -132,6 +128,30 @@ export interface TableBoundaryEditOptions {
   backward?: boolean;
   structuralMerge?: boolean;
   tableEnabled?: boolean;
+}
+
+export type MarkdownTransactionKind =
+  | "doc_change"
+  | "enter"
+  | "tab"
+  | "table_cell_navigation"
+  | "table_pipe_insert_column"
+  | "table_header_delete_column"
+  | "table_boundary_edit";
+
+export interface MarkdownTransactionRequest {
+  kind: MarkdownTransactionKind;
+  markdownAutoformat?: boolean;
+  checklistAutoReorder?: boolean;
+  outdent?: boolean;
+  backward?: boolean;
+  structuralMerge?: boolean;
+  tableEnabled?: boolean;
+}
+
+export interface MarkdownTransactionResult {
+  kind: MarkdownTransactionKind;
+  operation: EditOperation;
 }
 
 export type VimMode = "insert" | "normal" | "visual" | "visual_line";
@@ -282,6 +302,14 @@ export interface MarkdownFoldRange {
   startLine: number; // 1-based
   endLine: number; // 1-based
   kind: "heading" | "fence" | "list" | "table" | "paragraph";
+}
+
+export interface MarkdownFoldLineEdit {
+  oldStartLine: number; // 1-based
+  oldLineSpan: number;
+  newLineSpan: number;
+  oldLineText: string;
+  newLineText: string;
 }
 
 export interface VimSubstituteExecutionResult {
@@ -492,113 +520,149 @@ function decodeVimSubstituteExecutionResult(
   };
 }
 
+function asMarkdownTransactionKind(value: unknown): MarkdownTransactionKind | null {
+  if (typeof value !== "string") return null;
+  if (
+    value === "doc_change" ||
+    value === "enter" ||
+    value === "tab" ||
+    value === "table_cell_navigation" ||
+    value === "table_pipe_insert_column" ||
+    value === "table_header_delete_column" ||
+    value === "table_boundary_edit"
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function decodeMarkdownTransactionResult(
+  raw: unknown,
+  sourceText: string,
+): MarkdownTransactionResult | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+  const kind = asMarkdownTransactionKind(obj["kind"]);
+  if (!kind) return null;
+  const operation = decodeEditOperation(obj["operation"], sourceText);
+  if (!operation) return null;
+  return { kind, operation };
+}
+
+export function runMarkdownTransactions(
+  snapshot: EditorContextSnapshot,
+  transactions: readonly MarkdownTransactionRequest[],
+): MarkdownTransactionResult | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  if (transactions.length === 0) return null;
+  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
+  const raw = wasm_run_markdown_transaction_batch(
+    text,
+    anchor,
+    head,
+    hasRange,
+    changedFrom,
+    changedTo,
+    [...transactions],
+  ) as unknown;
+  return decodeMarkdownTransactionResult(raw, snapshot.text);
+}
+
 export function runDocChangeRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return decodeEditOperation(
-    wasm_run_doc_change_rules(
-      text, anchor, head, hasRange, changedFrom, changedTo,
-      options.markdownAutoformat ?? true,
-      options.checklistAutoReorder ?? true,
-      options.tableEnabled ?? true,
-    ),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "doc_change",
+      markdownAutoformat: options.markdownAutoformat ?? true,
+      checklistAutoReorder: options.checklistAutoReorder ?? true,
+      tableEnabled: options.tableEnabled ?? true,
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function runEnterRules(
   snapshot: EditorContextSnapshot,
   options: TextRuleOptions = {},
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return decodeEditOperation(
-    wasm_run_enter_rules(
-      text, anchor, head, hasRange, changedFrom, changedTo,
-      options.markdownAutoformat ?? true,
-      options.tableEnabled ?? true,
-    ),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "enter",
+      markdownAutoformat: options.markdownAutoformat ?? true,
+      tableEnabled: options.tableEnabled ?? true,
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function runTabRules(
   snapshot: EditorContextSnapshot,
   options: TabRuleOptions = {},
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return decodeEditOperation(
-    wasm_run_tab_rules(
-      text, anchor, head, hasRange, changedFrom, changedTo,
-      options.markdownAutoformat ?? true,
-      options.outdent ?? false,
-      options.tableEnabled ?? true,
-    ),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "tab",
+      markdownAutoformat: options.markdownAutoformat ?? true,
+      outdent: options.outdent ?? false,
+      tableEnabled: options.tableEnabled ?? true,
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function runTableCellNavigationRules(
   snapshot: EditorContextSnapshot,
   options: TabRuleOptions = {},
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return decodeEditOperation(
-    wasm_run_table_cell_navigation_rules(
-      text, anchor, head, hasRange, changedFrom, changedTo,
-      options.markdownAutoformat ?? true,
-      options.outdent ?? false,
-      options.tableEnabled ?? true,
-    ),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "table_cell_navigation",
+      markdownAutoformat: options.markdownAutoformat ?? true,
+      outdent: options.outdent ?? false,
+      tableEnabled: options.tableEnabled ?? true,
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function runTableHeaderDeleteColumnRule(
   snapshot: EditorContextSnapshot,
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const text = snapshot.text;
-  const [anchor, head] = batchUtf16ToUtf8(text, [snapshot.selection.anchor, snapshot.selection.head]);
-  return decodeEditOperation(
-    wasm_run_table_header_delete_column_rule(text, anchor!, head!),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "table_header_delete_column",
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function runTablePipeInsertColumnRule(
   snapshot: EditorContextSnapshot,
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const text = snapshot.text;
-  const [anchor, head] = batchUtf16ToUtf8(text, [snapshot.selection.anchor, snapshot.selection.head]);
-  return decodeEditOperation(
-    wasm_run_table_pipe_insert_column_rule(text, anchor!, head!),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "table_pipe_insert_column",
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function runTableBoundaryEditRules(
   snapshot: EditorContextSnapshot,
   options: TableBoundaryEditOptions = {},
 ): EditOperation | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const [text, anchor, head, hasRange, changedFrom, changedTo] = snapshotToArgs(snapshot);
-  return decodeEditOperation(
-    wasm_run_table_boundary_edit_rules(
-      text, anchor, head, hasRange, changedFrom, changedTo,
-      options.markdownAutoformat ?? true,
-      options.backward ?? true,
-      options.structuralMerge ?? false,
-      options.tableEnabled ?? true,
-    ),
-    snapshot.text,
-  );
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "table_boundary_edit",
+      markdownAutoformat: options.markdownAutoformat ?? true,
+      backward: options.backward ?? true,
+      structuralMerge: options.structuralMerge ?? false,
+      tableEnabled: options.tableEnabled ?? true,
+    },
+  ]);
+  return result?.operation ?? null;
 }
 
 export function rewriteLineWithChecklistToggleSuffix(lineText: string): string | null {
@@ -1233,6 +1297,25 @@ export function markdownBuildFoldRangesUi(
 ): MarkdownFoldRange[] {
   if (!ensureWasmReadyNonBlocking()) return [];
   return asMarkdownFoldRanges(wasm_markdown_build_fold_ranges_ui([...lines]));
+}
+
+export function markdownFoldMapRangesUi(
+  ranges: readonly MarkdownFoldRange[],
+  edits: readonly MarkdownFoldLineEdit[],
+  newLineCount: number,
+): MarkdownFoldRange[] | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  if (newLineCount < 1) return [];
+  const raw = wasm_markdown_fold_map_ranges_ui([...ranges], [...edits], newLineCount) as unknown;
+  return asMarkdownFoldRanges(raw);
+}
+
+export function markdownFoldEditsRequireRebuildUi(
+  edits: readonly MarkdownFoldLineEdit[],
+): boolean | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const raw = wasm_markdown_fold_edits_require_rebuild_ui([...edits]) as unknown;
+  return typeof raw === "boolean" ? raw : null;
 }
 
 export function calcFindSingleTableCell(lineText: string): CalcSegment | null {

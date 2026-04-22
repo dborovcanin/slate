@@ -11,13 +11,7 @@ import {
 } from "./core/codemirror-adapter.ts";
 import {
   markdownClassifyLine,
-  runDocChangeRules,
-  runEnterRules,
-  runTableBoundaryEditRules,
-  runTableCellNavigationRules,
-  runTableHeaderDeleteColumnRule,
-  runTablePipeInsertColumnRule,
-  runTabRules,
+  runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
 
@@ -280,12 +274,15 @@ function continueListOnEnter(
   tableEnabled: boolean,
 ): boolean {
   const scoped = snapshotFromViewLines(view, ENTER_WINDOW_LINES);
-  const operation = runEnterRules(scoped.snapshot, {
-    markdownAutoformat: autoformat,
-    tableEnabled,
-  });
-  if (!operation) return false;
-  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    {
+      kind: "enter",
+      markdownAutoformat: autoformat,
+      tableEnabled,
+    },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
 }
 
@@ -301,13 +298,16 @@ function indentListOnTab(
   if (!outdent && getCalcResultAtCursor(view) !== null) return false;
 
   const scoped = snapshotFromViewLines(view, TAB_WINDOW_LINES);
-  const operation = runTabRules(scoped.snapshot, {
-    markdownAutoformat: autoformat,
-    outdent,
-    tableEnabled,
-  });
-  if (!operation) return false;
-  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    {
+      kind: "tab",
+      markdownAutoformat: autoformat,
+      outdent,
+      tableEnabled,
+    },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
 }
 
@@ -361,14 +361,17 @@ function tableBoundaryEdit(
   if (!isMarkdownTableLine(line.text)) return false;
   const scoped = snapshotFromViewTableBlock(view);
   if (!scoped) return false;
-  const operation = runTableBoundaryEditRules(scoped.snapshot, {
-    markdownAutoformat: autoformat,
-    backward,
-    structuralMerge,
-    tableEnabled,
-  });
-  if (!operation) return false;
-  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    {
+      kind: "table_boundary_edit",
+      markdownAutoformat: autoformat,
+      backward,
+      structuralMerge,
+      tableEnabled,
+    },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
 }
 
@@ -379,9 +382,11 @@ function tablePipeInsertColumn(view: EditorView): boolean {
   if (!isMarkdownTableLine(line.text)) return false;
   const scoped = snapshotFromViewTableBlock(view);
   if (!scoped) return false;
-  const operation = runTablePipeInsertColumnRule(scoped.snapshot);
-  if (!operation) return false;
-  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    { kind: "table_pipe_insert_column" },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
 }
 
@@ -399,9 +404,38 @@ function tableHeaderDeleteColumn(view: EditorView): boolean {
   if (!isMarkdownTableLine(line.text)) return false;
   const scoped = snapshotFromViewTableBlock(view);
   if (!scoped) return false;
-  const operation = runTableHeaderDeleteColumnRule(scoped.snapshot);
-  if (!operation) return false;
-  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    { kind: "table_header_delete_column" },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
+  return true;
+}
+
+function tableHeaderDeleteOrBoundaryEdit(
+  view: EditorView,
+  autoformat: boolean,
+  tableEnabled: boolean,
+  backward: boolean,
+): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const scoped = snapshotFromViewTableBlock(view);
+  if (!scoped) return false;
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    { kind: "table_header_delete_column" },
+    {
+      kind: "table_boundary_edit",
+      markdownAutoformat: autoformat,
+      backward,
+      structuralMerge: true,
+      tableEnabled,
+    },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
 }
 
@@ -425,13 +459,16 @@ export function runTableCellNavigationCommand(
   if (!isMarkdownTableLine(line.text)) return false;
   const scoped = snapshotFromViewTableBlock(view);
   if (!scoped) return false;
-  const operation = runTableCellNavigationRules(scoped.snapshot, {
-    markdownAutoformat: options.markdownAutoformat ?? true,
-    outdent: options.outdent ?? false,
-    tableEnabled: options.tableEnabled ?? true,
-  });
-  if (!operation) return false;
-  applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
+  const result = runMarkdownTransactions(scoped.snapshot, [
+    {
+      kind: "table_cell_navigation",
+      markdownAutoformat: options.markdownAutoformat ?? true,
+      outdent: options.outdent ?? false,
+      tableEnabled: options.tableEnabled ?? true,
+    },
+  ]);
+  if (!result) return false;
+  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
 }
 
@@ -495,16 +532,12 @@ function tableCursorKeymap(autoformat: boolean, tableEnabled: boolean): KeyBindi
     {
       key: "Ctrl-Backspace",
       preventDefault: true,
-      run: (view) =>
-        tableHeaderDeleteColumn(view) ||
-        tableBoundaryEdit(view, autoformat, tableEnabled, true, true),
+      run: (view) => tableHeaderDeleteOrBoundaryEdit(view, autoformat, tableEnabled, true),
     },
     {
       key: "Ctrl-Delete",
       preventDefault: true,
-      run: (view) =>
-        tableHeaderDeleteColumn(view) ||
-        tableBoundaryEdit(view, autoformat, tableEnabled, false, true),
+      run: (view) => tableHeaderDeleteOrBoundaryEdit(view, autoformat, tableEnabled, false),
     },
     {
       key: "ArrowLeft",
@@ -543,16 +576,22 @@ function textRulesPlugin(
         try {
           const changedRange = changedRangeFromChanges(update.changes);
           const scoped = snapshotFromViewLines(update.view, DOC_CHANGE_WINDOW_LINES, changedRange);
-          const operation = runDocChangeRules(scoped.snapshot, {
-            markdownAutoformat: autoformat,
-            checklistAutoReorder,
-            tableEnabled,
-          });
-          if (operation) {
+          const result = runMarkdownTransactions(scoped.snapshot, [
+            {
+              kind: "doc_change",
+              markdownAutoformat: autoformat,
+              checklistAutoReorder,
+              tableEnabled,
+            },
+          ]);
+          if (result) {
             Promise.resolve().then(() => {
               applying = true;
               try {
-                applyEditOperation(update.view, offsetEditOperation(operation, scoped.offset));
+                applyEditOperation(
+                  update.view,
+                  offsetEditOperation(result.operation, scoped.offset),
+                );
               } catch (error) {
                 console.error("Markdown text rule dispatch failed:", error);
               } finally {

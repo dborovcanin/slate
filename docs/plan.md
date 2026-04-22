@@ -54,11 +54,13 @@ Non-goals:
 11. Migrate subsystem-by-subsystem behind feature flags, not big-bang.
    - Suggested order: commands/vim -> markdown/table/list -> folding -> calc semantics.
 
-### Progress snapshot (2026-04-22)
+### Progress snapshot (2026-04-23)
 - [x] 1. Canonical `EditorEngine` contract introduced in shared Rust core and re-exported for adapters.
 - [x] 2. Golden replay fixtures and replay test harness added for command, module command, and vim stepping.
 - [ ] 3. Cross-frontend parity harness remains next and intentionally deferred.
 - [x] 4. Command/motion semantics consolidated into shared core for command resolution, note-security parsing, vim stepping, and module command planning in both Tauri UI and TUI command paths.
+- [x] 5. UI markdown hot-paths now route through batched wasm markdown transactions (single boundary call per candidate sequence), reducing fragmented rule dispatch calls.
+- [x] 6. Folding state transitions now consume a shared-core incremental fold index API (line-edit mapping + rebuild decision in Rust), while rendering remains frontend-owned.
 
 ### Definition of done for this refactor track
 - Shared core is the canonical source for editing behavior.
