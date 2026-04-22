@@ -27,6 +27,7 @@ import {
   tryExecuteEditorProfilerCommand,
 } from "../perf/editor-profiler.ts";
 import type { NoteModules } from "../api.ts";
+import { parseNoteSecurityCommand } from "./wasm.ts";
 
 export type { CommandMode, CommandSuggestion };
 
@@ -45,53 +46,6 @@ export interface CommandExecutionOptions {
   };
 }
 
-function parseNoteSecurityCommand(rawInput: string): {
-  action: "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect";
-  password: string | null;
-} | null {
-  const normalized = rawInput.replace(/^:/, "").trimStart();
-  if (!normalized) return null;
-  const [head, ...tailParts] = normalized.split(/\s+/);
-  const tail = normalized.slice((head ?? "").length).trimStart();
-  const normalizeAction = (
-    token: string,
-  ): "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect" | null => {
-    const lowered = token.toLowerCase();
-    if (lowered === "lock" || lowered === "note-lock" || lowered === "lock-note") return "lock";
-    if (lowered === "unlock" || lowered === "note-unlock" || lowered === "unlock-note")
-      return "unlock";
-    if (lowered === "encrypt" || lowered === "note-encrypt" || lowered === "encrypt-note")
-      return "encrypt";
-    if (lowered === "decrypt" || lowered === "note-decrypt" || lowered === "decrypt-note")
-      return "decrypt";
-    if (
-      lowered === "unprotect" ||
-      lowered === "unencrypt" ||
-      lowered === "note-unprotect" ||
-      lowered === "unprotect-note" ||
-      lowered === "note-unencrypt" ||
-      lowered === "unencrypt-note"
-    ) {
-      return "unprotect";
-    }
-    return null;
-  };
-
-  if ((head ?? "").toLowerCase() === "note") {
-    const actionToken = tailParts[0] ?? "";
-    const action = normalizeAction(actionToken);
-    if (!action) return null;
-    const passwordRaw = tail
-      .slice(actionToken.length)
-      .trimStart();
-    return { action, password: passwordRaw.trim().length > 0 ? passwordRaw : null };
-  }
-
-  const action = normalizeAction(head ?? "");
-  if (!action) return null;
-  return { action, password: tail.trim().length > 0 ? tail : null };
-}
-
 async function tryExecuteNoteSecurityCommand(
   view: EditorView,
   rawInput: string,
@@ -100,16 +54,17 @@ async function tryExecuteNoteSecurityCommand(
   if (!parsed) return null;
   const active = state.activeNote;
   if (!active) return "no active note";
-  if (!parsed.password) {
+  const password = parsed.password.trim().length > 0 ? parsed.password : null;
+  if (!password) {
     return `usage: note ${parsed.action} <password>`;
   }
 
   const next = await (async () => {
-    if (parsed.action === "lock") return lockNoteAccess(active.id, parsed.password!);
-    if (parsed.action === "unlock") return unlockNoteAccess(active.id, parsed.password!);
-    if (parsed.action === "encrypt") return encryptNote(active.id, parsed.password!);
-    if (parsed.action === "unprotect") return decryptNote(active.id, parsed.password!);
-    return decryptNote(active.id, parsed.password!);
+    if (parsed.action === "lock") return lockNoteAccess(active.id, password);
+    if (parsed.action === "unlock") return unlockNoteAccess(active.id, password);
+    if (parsed.action === "encrypt") return encryptNote(active.id, password);
+    if (parsed.action === "unprotect") return decryptNote(active.id, password);
+    return decryptNote(active.id, password);
   })();
 
   state.setActiveNote(next);

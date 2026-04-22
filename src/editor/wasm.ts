@@ -35,6 +35,7 @@ import init, {
   wasm_normalize_command,
   wasm_rewrite_line_with_checklist_toggle_suffix,
   wasm_resolve_command,
+  wasm_parse_note_security_command,
   wasm_try_execute_vim_substitute,
   wasm_run_doc_change_rules,
   wasm_run_enter_rules,
@@ -648,6 +649,85 @@ export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): str
   return wasm_resolve_command(mode, rawInput) ?? null;
 }
 
+export type NoteSecurityAction =
+  | "lock"
+  | "unlock"
+  | "encrypt"
+  | "decrypt"
+  | "unprotect";
+
+export interface ParsedNoteSecurityCommand {
+  action: NoteSecurityAction;
+  password: string;
+}
+
+function parseNoteSecurityCommandFallback(rawInput: string): ParsedNoteSecurityCommand | null {
+  const normalized = rawInput.replace(/^:/, "").trimStart();
+  if (!normalized) return null;
+  const [head, ...tailParts] = normalized.split(/\s+/);
+  const tail = normalized.slice((head ?? "").length).trimStart();
+  const normalizeAction = (
+    token: string,
+  ): NoteSecurityAction | null => {
+    const lowered = token.toLowerCase();
+    if (lowered === "lock" || lowered === "note-lock" || lowered === "lock-note") return "lock";
+    if (lowered === "unlock" || lowered === "note-unlock" || lowered === "unlock-note")
+      return "unlock";
+    if (lowered === "encrypt" || lowered === "note-encrypt" || lowered === "encrypt-note")
+      return "encrypt";
+    if (lowered === "decrypt" || lowered === "note-decrypt" || lowered === "decrypt-note")
+      return "decrypt";
+    if (
+      lowered === "unprotect" ||
+      lowered === "unencrypt" ||
+      lowered === "note-unprotect" ||
+      lowered === "unprotect-note" ||
+      lowered === "note-unencrypt" ||
+      lowered === "unencrypt-note"
+    ) {
+      return "unprotect";
+    }
+    return null;
+  };
+
+  if ((head ?? "").toLowerCase() === "note") {
+    const actionToken = tailParts[0] ?? "";
+    const action = normalizeAction(actionToken);
+    if (!action) return null;
+    const password = tail.slice(actionToken.length).trimStart();
+    return { action, password };
+  }
+
+  const action = normalizeAction(head ?? "");
+  if (!action) return null;
+  return { action, password: tail };
+}
+
+export function parseNoteSecurityCommand(
+  rawInput: string,
+): ParsedNoteSecurityCommand | null {
+  if (!ensureWasmReadyNonBlocking()) {
+    return parseNoteSecurityCommandFallback(rawInput);
+  }
+  const raw = wasm_parse_note_security_command(rawInput) as unknown;
+  if (typeof raw !== "object" || raw === null) return null;
+  const parsed = raw as Partial<ParsedNoteSecurityCommand>;
+  if (
+    parsed.action !== "lock" &&
+    parsed.action !== "unlock" &&
+    parsed.action !== "encrypt" &&
+    parsed.action !== "decrypt" &&
+    parsed.action !== "unprotect"
+  ) {
+    return null;
+  }
+  if (typeof parsed.password !== "string") return null;
+  return {
+    action: parsed.action,
+    password: parsed.password,
+  };
+}
+
 export function tryExecuteVimSubstituteFromWasm(
   snapshot: EditorContextSnapshot,
   rawInput: string,
@@ -674,33 +754,14 @@ export function sanitizeCommandHistoryCommand(rawCommand: string): string {
     const trimmed = rawCommand.trim();
     const base = trimmed.replace(/^:/, "");
     const tokens = base.split(/\s+/).filter((token) => token.length > 0);
-    const normalizedHead = (tokens[0] ?? "").toLowerCase();
-    const noteActionAliases = new Set([
-      "lock",
-      "unlock",
-      "encrypt",
-      "decrypt",
-      "unencrypt",
-      "unprotect",
-      "note-lock",
-      "lock-note",
-      "note-unlock",
-      "unlock-note",
-      "note-encrypt",
-      "encrypt-note",
-      "note-decrypt",
-      "decrypt-note",
-      "note-unprotect",
-      "unprotect-note",
-      "note-unencrypt",
-      "unencrypt-note",
-    ]);
-    if (normalizedHead === "note" && tokens.length >= 3) {
-      if (noteActionAliases.has((tokens[1] ?? "").toLowerCase())) {
+    const parsed = parseNoteSecurityCommandFallback(rawCommand);
+    if (parsed) {
+      if ((tokens[0] ?? "").toLowerCase() === "note" && tokens.length >= 3) {
         return `${tokens[0]} ${tokens[1]}`;
       }
-    } else if (noteActionAliases.has(normalizedHead) && tokens.length >= 2) {
-      return tokens[0] ?? base;
+      if (tokens.length >= 2) {
+        return tokens[0] ?? base;
+      }
     }
     return base;
   }

@@ -2,6 +2,7 @@ import {
   getOrCreateNote,
   getNote,
   getNoteMeta,
+  getNoteRevision,
   unlockNoteAccess,
   listNotesMeta,
   createNote,
@@ -35,6 +36,7 @@ import {
 import { state } from "./state";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 import { openDatePicker } from "./editor/date-picker";
 import { startupMark } from "./perf/startup.ts";
@@ -72,10 +74,18 @@ function moduleIndicatorText(modules: NoteModules): string {
 }
 
 const ACTIVE_NOTE_SYNC_INTERVAL_MS = 2500;
+const NOTE_CHANGED_EVENT = "slate://note-changed";
 let activeNoteSyncTimer: number | null = null;
 let activeNoteSyncInFlight = false;
+let stopBackendNoteChangeListener: UnlistenFn | null = null;
 let appConfig: ThemeConfig | null = null;
 let appRuntimeFlags: RuntimeFlags | null = null;
+
+interface BackendNoteChangedEvent {
+  id: string;
+  updatedAt?: string | null;
+  deleted?: boolean;
+}
 
 function applyNoteSummaries(summaries: NoteSummary[]) {
   const active = state.activeNote;
@@ -147,11 +157,11 @@ async function syncActiveNoteIfBackendChanged() {
   const activeUpdatedAt = active.updated_at;
   activeNoteSyncInFlight = true;
   try {
-    const remote = await getNoteMeta(activeId);
+    const remoteRevision = await getNoteRevision(activeId);
     if (state.activeNote?.id !== activeId || hasPendingLocalChanges()) {
       return;
     }
-    if (!remote || remote.updated_at === activeUpdatedAt) {
+    if (!remoteRevision || remoteRevision === activeUpdatedAt) {
       return;
     }
 
@@ -189,6 +199,31 @@ function startActiveNoteSyncLoop() {
   activeNoteSyncTimer = window.setInterval(() => {
     void syncActiveNoteIfBackendChanged();
   }, ACTIVE_NOTE_SYNC_INTERVAL_MS);
+}
+
+async function startBackendNoteChangeListener() {
+  if (stopBackendNoteChangeListener) {
+    stopBackendNoteChangeListener();
+    stopBackendNoteChangeListener = null;
+  }
+  stopBackendNoteChangeListener = await listen<BackendNoteChangedEvent>(
+    NOTE_CHANGED_EVENT,
+    (event) => {
+      const payload = event.payload;
+      if (!payload?.id) return;
+
+      if (state.activeNote?.id === payload.id) {
+        void syncActiveNoteIfBackendChanged();
+      }
+      void listNotesMeta()
+        .then((summaries) => {
+          applyNoteSummaries(summaries);
+        })
+        .catch(() => {
+          // Keep current list when event-driven metadata refresh fails.
+        });
+    },
+  );
 }
 
 async function switchToNote(id: string) {
@@ -270,6 +305,28 @@ async function unlockStartupNoteIfNeeded(note: Note, summaries: NoteSummary[]): 
     }
     return note;
   }
+}
+
+async function unlockStartupActiveNoteAfterMount(note: Note, summaries: NoteSummary[]) {
+  if (note.access_mode === "none" || note.is_unlocked) {
+    return;
+  }
+
+  const unlocked = await unlockStartupNoteIfNeeded(note, summaries);
+  if (!unlocked.is_unlocked) {
+    return;
+  }
+  if (state.activeNote?.id !== note.id || hasPendingLocalChanges()) {
+    return;
+  }
+
+  state.setActiveNote(unlocked);
+  reconfigureEditorForNote(unlocked);
+  setEditorContent(unlocked.body, { forceStateReset: true });
+  focusEditor();
+
+  const refreshed = await listNotesMeta().catch(() => summaries);
+  applyNoteSummaries(refreshed);
 }
 
 async function handleCreateNote() {
@@ -887,10 +944,6 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
     getRuntimeFlagsOrDefault(),
   ]);
-  note = await unlockStartupNoteIfNeeded(note, summaries);
-  if (note.access_mode !== "none") {
-    summaries = await listNotesMeta().catch(() => summaries);
-  }
   appConfig = config;
   appRuntimeFlags = runtimeFlags;
   startupMark("ui_data_loaded");
@@ -921,5 +974,13 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     refreshSwitcher();
   });
 
+  void startBackendNoteChangeListener().catch((error) => {
+    console.error("Backend note-change listener failed:", error);
+  });
   startActiveNoteSyncLoop();
+
+  // Defer unlock prompt until after mount so init can complete and the window can show.
+  void unlockStartupActiveNoteAfterMount(note, summaries).catch((error) => {
+    console.error("Startup unlock follow-up failed:", error);
+  });
 }

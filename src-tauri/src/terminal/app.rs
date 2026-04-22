@@ -67,51 +67,6 @@ fn trim_trailing_word(text: &mut String) {
     }
 }
 
-fn normalize_note_security_action(token: &str) -> Option<&'static str> {
-    let normalized = token.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "lock" | "note-lock" | "lock-note" => Some("lock"),
-        "unlock" | "note-unlock" | "unlock-note" => Some("unlock"),
-        "encrypt" | "note-encrypt" | "encrypt-note" => Some("encrypt"),
-        "decrypt" | "note-decrypt" | "decrypt-note" => Some("decrypt"),
-        "unprotect"
-        | "unencrypt"
-        | "note-unprotect"
-        | "unprotect-note"
-        | "note-unencrypt"
-        | "unencrypt-note" => Some("unprotect"),
-        _ => None,
-    }
-}
-
-fn parse_note_security_command(input: &str) -> Option<(&'static str, String)> {
-    let normalized = input.trim_start().trim_start_matches(':').trim_start();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let split_at = normalized.find(char::is_whitespace).unwrap_or(normalized.len());
-    let head = &normalized[..split_at];
-    let mut rest = normalized[split_at..].trim_start();
-
-    if head.eq_ignore_ascii_case("note") {
-        if rest.is_empty() {
-            return None;
-        }
-        let action_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let action = normalize_note_security_action(&rest[..action_end])?;
-        rest = if action_end >= rest.len() {
-            ""
-        } else {
-            rest[action_end..].trim_start()
-        };
-        return Some((action, rest.to_string()));
-    }
-
-    let action = normalize_note_security_action(head)?;
-    Some((action, rest.to_string()))
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalOptions {
     pub create_new: bool,
@@ -359,11 +314,11 @@ impl TerminalApp {
         self.recompute_switcher_matches();
 
         let mut note_title = self.active_note.id.clone();
-        if let Some((match_idx, switcher_idx)) =
-            self.switcher_matches
-                .iter()
-                .enumerate()
-                .find(|(_, idx)| self.switcher_items[**idx].id == self.active_note.id)
+        if let Some((match_idx, switcher_idx)) = self
+            .switcher_matches
+            .iter()
+            .enumerate()
+            .find(|(_, idx)| self.switcher_items[**idx].id == self.active_note.id)
         {
             self.switcher_selected = match_idx;
             note_title = self.switcher_items[*switcher_idx].title.clone();
@@ -2794,9 +2749,13 @@ impl TerminalApp {
             return;
         }
 
-        if let Some((action, password)) = parse_note_security_command(cmd) {
-            if password.is_empty() {
-                self.status = format!("usage: note {action} <password>");
+        if let Some(parsed) = crate::editor_core::command_catalog::parse_note_security_command(cmd)
+        {
+            let action = parsed.action;
+            let action_label = action.as_str();
+            let password = parsed.password;
+            if password.trim().is_empty() {
+                self.status = format!("usage: note {action_label} <password>");
                 return;
             }
             if self.dirty {
@@ -2806,30 +2765,48 @@ impl TerminalApp {
                 }
             }
             let result = match action {
-                "lock" => db.lock_note(&self.active_note.id, &password),
-                "unlock" => db.unlock_note(&self.active_note.id, &password),
-                "encrypt" => db.encrypt_note(&self.active_note.id, &password),
-                "decrypt" => db.decrypt_note(&self.active_note.id, &password),
-                "unprotect" => db.decrypt_note(&self.active_note.id, &password),
-                _ => Err("unknown note security action".to_string()),
+                crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
+                    db.lock_note(&self.active_note.id, &password)
+                }
+                crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
+                    db.unlock_note(&self.active_note.id, &password)
+                }
+                crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
+                    db.encrypt_note(&self.active_note.id, &password)
+                }
+                crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
+                    db.decrypt_note(&self.active_note.id, &password)
+                }
+                crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
+                    db.decrypt_note(&self.active_note.id, &password)
+                }
             };
             match result {
                 Ok(note) => {
                     if let Err(error) = self.set_active_note(db, note) {
-                        self.status = format!("note {action} failed: {error}");
+                        self.status = format!("note {action_label} failed: {error}");
                         return;
                     }
                     self.status = match action {
-                        "lock" => "note locked".to_string(),
-                        "unlock" => "note unlocked".to_string(),
-                        "encrypt" => "note encrypted at rest".to_string(),
-                        "decrypt" => "note decrypted".to_string(),
-                        "unprotect" => "note unprotected".to_string(),
-                        _ => format!("note {action}"),
+                        crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
+                            "note locked".to_string()
+                        }
+                        crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
+                            "note unlocked".to_string()
+                        }
+                        crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
+                            "note encrypted at rest".to_string()
+                        }
+                        crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
+                            "note decrypted".to_string()
+                        }
+                        crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
+                            "note unprotected".to_string()
+                        }
                     };
                 }
                 Err(error) => {
-                    self.status = format!("note {action} failed: {error}");
+                    self.status = format!("note {action_label} failed: {error}");
                 }
             }
             return;
@@ -8660,8 +8637,7 @@ mod tests {
         assert!(app.status.contains("unlock first"));
 
         app.dirty = true;
-        app.last_edit =
-            Instant::now() - Duration::from_millis(super::AUTOSAVE_DEBOUNCE_MS + 5);
+        app.last_edit = Instant::now() - Duration::from_millis(super::AUTOSAVE_DEBOUNCE_MS + 5);
         app.maybe_autosave(&db)
             .expect("locked autosave should not terminate loop");
         assert!(app.status.contains("unlock first"));

@@ -45,6 +45,94 @@ pub enum CommandId {
     Quit,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoteSecurityAction {
+    Lock,
+    Unlock,
+    Encrypt,
+    Decrypt,
+    Unprotect,
+}
+
+impl NoteSecurityAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Lock => "lock",
+            Self::Unlock => "unlock",
+            Self::Encrypt => "encrypt",
+            Self::Decrypt => "decrypt",
+            Self::Unprotect => "unprotect",
+        }
+    }
+
+    pub fn command_id(self) -> CommandId {
+        match self {
+            Self::Lock => CommandId::NoteLock,
+            Self::Unlock => CommandId::NoteUnlock,
+            Self::Encrypt => CommandId::NoteEncrypt,
+            Self::Decrypt => CommandId::NoteDecrypt,
+            Self::Unprotect => CommandId::NoteUnprotect,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedNoteSecurityCommand {
+    pub action: NoteSecurityAction,
+    pub password: String,
+    pub used_note_prefix: bool,
+}
+
+pub fn note_security_action_from_token(token: &str) -> Option<NoteSecurityAction> {
+    match token.trim().to_ascii_lowercase().as_str() {
+        "lock" | "note-lock" | "lock-note" => Some(NoteSecurityAction::Lock),
+        "unlock" | "note-unlock" | "unlock-note" => Some(NoteSecurityAction::Unlock),
+        "encrypt" | "note-encrypt" | "encrypt-note" => Some(NoteSecurityAction::Encrypt),
+        "decrypt" | "note-decrypt" | "decrypt-note" => Some(NoteSecurityAction::Decrypt),
+        "unprotect" | "unencrypt" | "note-unprotect" | "unprotect-note" | "note-unencrypt"
+        | "unencrypt-note" => Some(NoteSecurityAction::Unprotect),
+        _ => None,
+    }
+}
+
+pub fn parse_note_security_command(input: &str) -> Option<ParsedNoteSecurityCommand> {
+    let normalized = input.trim_start().trim_start_matches(':').trim_start();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let split_at = normalized
+        .find(char::is_whitespace)
+        .unwrap_or(normalized.len());
+    let head = &normalized[..split_at];
+    let mut rest = normalized[split_at..].trim_start();
+
+    if head.eq_ignore_ascii_case("note") {
+        if rest.is_empty() {
+            return None;
+        }
+        let action_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let action = note_security_action_from_token(&rest[..action_end])?;
+        rest = if action_end >= rest.len() {
+            ""
+        } else {
+            rest[action_end..].trim_start()
+        };
+        return Some(ParsedNoteSecurityCommand {
+            action,
+            password: rest.to_string(),
+            used_note_prefix: true,
+        });
+    }
+
+    let action = note_security_action_from_token(head)?;
+    Some(ParsedNoteSecurityCommand {
+        action,
+        password: rest.to_string(),
+        used_note_prefix: false,
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CommandDefinition {
     pub id: CommandId,
@@ -365,7 +453,8 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 41] = [
             "note-unencrypt",
             "unencrypt-note",
         ],
-        description: "remove note protection (locked or encrypted) and password (requires password)",
+        description:
+            "remove note protection (locked or encrypted) and password (requires password)",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -389,20 +478,11 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
     if matches_exact {
         return true;
     }
-    match def.id {
-        CommandId::NoteLock
-        | CommandId::NoteUnlock
-        | CommandId::NoteEncrypt
-        | CommandId::NoteDecrypt
-        | CommandId::NoteUnprotect => std::iter::once(def.value)
-            .chain(def.aliases.iter().copied())
-            .any(|candidate| {
-                normalized_input
-                    .strip_prefix(candidate)
-                    .is_some_and(|rest| rest.starts_with(' '))
-            }),
-        _ => false,
+
+    if let Some(parsed) = parse_note_security_command(normalized_input) {
+        return parsed.action.command_id() == def.id;
     }
+    false
 }
 
 fn available_commands(mode: CommandMode) -> Vec<&'static CommandDefinition> {
@@ -564,6 +644,29 @@ mod tests {
             resolve_command(CommandMode::Editor, "note unprotect hunter2").map(|cmd| cmd.id),
             Some(CommandId::NoteUnprotect)
         );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "lock pass123").map(|cmd| cmd.id),
+            Some(CommandId::NoteLock)
+        );
+    }
+
+    #[test]
+    fn parse_note_security_command_supports_prefixed_and_alias_forms() {
+        let note_prefixed =
+            parse_note_security_command("note encrypt top secret").expect("parse note-prefixed");
+        assert_eq!(note_prefixed.action, NoteSecurityAction::Encrypt);
+        assert_eq!(note_prefixed.password, "top secret");
+        assert!(note_prefixed.used_note_prefix);
+
+        let alias = parse_note_security_command(":unencrypt-note pass123").expect("parse alias");
+        assert_eq!(alias.action, NoteSecurityAction::Unprotect);
+        assert_eq!(alias.password, "pass123");
+        assert!(!alias.used_note_prefix);
+
+        let no_password = parse_note_security_command("note lock").expect("parse usage form");
+        assert_eq!(no_password.action, NoteSecurityAction::Lock);
+        assert_eq!(no_password.password, "");
+        assert!(no_password.used_note_prefix);
     }
 
     #[test]

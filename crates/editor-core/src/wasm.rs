@@ -292,6 +292,19 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
 }
 
 #[wasm_bindgen]
+pub fn wasm_parse_note_security_command(raw_input: &str) -> Option<JsValue> {
+    let parsed = command_catalog::parse_note_security_command(raw_input)?;
+    let out = Object::new();
+    let _ = set_prop(&out, "action", JsValue::from_str(parsed.action.as_str()));
+    let _ = set_prop(
+        &out,
+        "password",
+        JsValue::from_str(parsed.password.as_str()),
+    );
+    Some(out.into())
+}
+
+#[wasm_bindgen]
 pub fn wasm_try_execute_vim_substitute(
     text: &str,
     selection_anchor: usize,

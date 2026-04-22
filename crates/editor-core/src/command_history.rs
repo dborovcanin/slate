@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::command_catalog;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandHistoryStep {
     pub index: usize,
@@ -12,24 +14,11 @@ pub fn sanitize_command(raw_command: &str) -> String {
     redact_command_arguments(base)
 }
 
-fn normalize_note_security_action(token: &str) -> Option<&'static str> {
-    let normalized = token.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "lock" | "note-lock" | "lock-note" => Some("lock"),
-        "unlock" | "note-unlock" | "unlock-note" => Some("unlock"),
-        "encrypt" | "note-encrypt" | "encrypt-note" => Some("encrypt"),
-        "decrypt" | "note-decrypt" | "decrypt-note" => Some("decrypt"),
-        "unprotect"
-        | "unencrypt"
-        | "note-unprotect"
-        | "unprotect-note"
-        | "note-unencrypt"
-        | "unencrypt-note" => Some("unprotect"),
-        _ => None,
-    }
-}
-
 fn redact_command_arguments(command: &str) -> String {
+    if command_catalog::parse_note_security_command(command).is_none() {
+        return command.to_string();
+    }
+
     let mut tokens = command.split_whitespace();
     let Some(first) = tokens.next() else {
         return String::new();
@@ -40,13 +29,15 @@ fn redact_command_arguments(command: &str) -> String {
         let Some(action_token) = second else {
             return command.to_string();
         };
-        if normalize_note_security_action(action_token).is_some() && tokens.next().is_some() {
+        if command_catalog::note_security_action_from_token(action_token).is_some()
+            && tokens.next().is_some()
+        {
             return format!("{first} {action_token}");
         }
         return command.to_string();
     }
 
-    if normalize_note_security_action(first).is_some() && second.is_some() {
+    if command_catalog::note_security_action_from_token(first).is_some() && second.is_some() {
         return first.to_string();
     }
     command.to_string()
@@ -120,7 +111,10 @@ mod tests {
         );
         assert_eq!(sanitize_command("note unprotect pass123"), "note unprotect");
         assert_eq!(sanitize_command(":lock-note hunter2"), "lock-note");
-        assert_eq!(sanitize_command("encrypt-note super secret"), "encrypt-note");
+        assert_eq!(
+            sanitize_command("encrypt-note super secret"),
+            "encrypt-note"
+        );
         assert_eq!(sanitize_command("note-encrypt pass123"), "note-encrypt");
         assert_eq!(sanitize_command("note unlock"), "note unlock");
         assert_eq!(sanitize_command("sum"), "sum");

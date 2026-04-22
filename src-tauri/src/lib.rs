@@ -59,6 +59,7 @@ fn run_gui() -> Result<(), String> {
             commands::notes::list_notes,
             commands::notes::list_notes_meta,
             commands::notes::get_note_meta,
+            commands::notes::get_note_revision,
             commands::notes::delete_note,
             commands::notes::set_note_modules,
             commands::notes::lock_note_access,

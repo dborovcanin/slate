@@ -1,6 +1,28 @@
 use app_core::storage::{Note, NoteModules, NoteSummary};
 use app_core::AppCore;
-use tauri::State;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, State};
+
+const NOTE_CHANGED_EVENT: &str = "slate://note-changed";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NoteChangedEvent {
+    id: String,
+    updated_at: Option<String>,
+    deleted: bool,
+}
+
+fn emit_note_changed(app: &AppHandle, id: &str, updated_at: Option<String>, deleted: bool) {
+    let payload = NoteChangedEvent {
+        id: id.to_string(),
+        updated_at,
+        deleted,
+    };
+    if let Err(error) = app.emit(NOTE_CHANGED_EVENT, payload) {
+        eprintln!("failed to emit note change event: {error}");
+    }
+}
 
 fn note_defaults_from_config() -> Result<(NoteModules, Option<String>), String> {
     let cfg = app_core::config::load_theme_config();
@@ -16,7 +38,7 @@ fn note_defaults_from_config() -> Result<(NoteModules, Option<String>), String> 
 }
 
 #[tauri::command]
-pub fn get_or_create_note(core: State<'_, AppCore>) -> Result<Note, String> {
+pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, String> {
     let special = app_core::config::load_special_notes_config();
     if let Some(note) = core
         .db()
@@ -30,13 +52,23 @@ pub fn get_or_create_note(core: State<'_, AppCore>) -> Result<Note, String> {
     }
     let id = ulid::Ulid::new().to_string();
     let (modules, default_password) = note_defaults_from_config()?;
-    core.db()
-        .create_note_with_defaults(&id, modules, default_password.as_deref())
+    let note = core
+        .db()
+        .create_note_with_defaults(&id, modules, default_password.as_deref())?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
-pub fn save_note(core: State<'_, AppCore>, id: String, body: String) -> Result<Note, String> {
-    core.db().save_note(&id, &body)
+pub fn save_note(
+    core: State<'_, AppCore>,
+    app: AppHandle,
+    id: String,
+    body: String,
+) -> Result<Note, String> {
+    let note = core.db().save_note(&id, &body)?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
@@ -45,11 +77,14 @@ pub fn get_note(core: State<'_, AppCore>, id: String) -> Result<Option<Note>, St
 }
 
 #[tauri::command]
-pub fn create_note(core: State<'_, AppCore>) -> Result<Note, String> {
+pub fn create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, String> {
     let id = ulid::Ulid::new().to_string();
     let (modules, default_password) = note_defaults_from_config()?;
-    core.db()
-        .create_note_with_defaults(&id, modules, default_password.as_deref())
+    let note = core
+        .db()
+        .create_note_with_defaults(&id, modules, default_password.as_deref())?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
@@ -68,55 +103,80 @@ pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<Note
 }
 
 #[tauri::command]
+pub fn get_note_revision(core: State<'_, AppCore>, id: String) -> Result<Option<String>, String> {
+    core.db().get_note_updated_at(&id)
+}
+
+#[tauri::command]
 pub fn delete_note(
     core: State<'_, AppCore>,
+    app: AppHandle,
     id: String,
     password: Option<String>,
 ) -> Result<bool, String> {
-    core.db().delete_note(&id, password.as_deref())
+    let deleted = core.db().delete_note(&id, password.as_deref())?;
+    if deleted {
+        emit_note_changed(&app, &id, None, true);
+    }
+    Ok(deleted)
 }
 
 #[tauri::command]
 pub fn set_note_modules(
     core: State<'_, AppCore>,
+    app: AppHandle,
     id: String,
     modules: NoteModules,
 ) -> Result<Note, String> {
-    core.db().set_note_modules(&id, modules)
+    let note = core.db().set_note_modules(&id, modules)?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
 pub fn lock_note_access(
     core: State<'_, AppCore>,
+    app: AppHandle,
     id: String,
     password: String,
 ) -> Result<Note, String> {
-    core.db().lock_note(&id, &password)
+    let note = core.db().lock_note(&id, &password)?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
 pub fn unlock_note_access(
     core: State<'_, AppCore>,
+    app: AppHandle,
     id: String,
     password: String,
 ) -> Result<Note, String> {
-    core.db().unlock_note(&id, &password)
+    let note = core.db().unlock_note(&id, &password)?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
 pub fn encrypt_note(
     core: State<'_, AppCore>,
+    app: AppHandle,
     id: String,
     password: String,
 ) -> Result<Note, String> {
-    core.db().encrypt_note(&id, &password)
+    let note = core.db().encrypt_note(&id, &password)?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }
 
 #[tauri::command]
 pub fn decrypt_note(
     core: State<'_, AppCore>,
+    app: AppHandle,
     id: String,
     password: String,
 ) -> Result<Note, String> {
-    core.db().decrypt_note(&id, &password)
+    let note = core.db().decrypt_note(&id, &password)?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
 }

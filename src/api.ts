@@ -158,6 +158,10 @@ export function getNoteMeta(id: string): Promise<NoteSummary | null> {
   return invoke<NoteSummary | null>("get_note_meta", { id });
 }
 
+export function getNoteRevision(id: string): Promise<string | null> {
+  return invoke<string | null>("get_note_revision", { id });
+}
+
 export function deleteNote(id: string, password?: string | null): Promise<boolean> {
   return invoke<boolean>("delete_note", { id, password: password ?? null });
 }
