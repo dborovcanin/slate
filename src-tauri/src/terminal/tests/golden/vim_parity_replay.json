@@ -1,0 +1,84 @@
+{
+  "cases": [
+    {
+      "name": "normal_j_dd_delete_line",
+      "initial_text": "one\ntwo\nthree",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:j", "char:d", "char:d"]
+    },
+    {
+      "name": "normal_2dd_deletes_two_lines",
+      "initial_text": "alpha\nbeta\ngamma\ndelta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:2", "char:d", "char:d"]
+    },
+    {
+      "name": "normal_gg_moves_to_first_line",
+      "initial_text": "a\nb\nc\nd",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 3,
+      "initial_cursor_col": 0,
+      "keys": ["char:g", "char:g"]
+    },
+    {
+      "name": "normal_o_then_esc_inserts_line_below",
+      "initial_text": "a\nb\nc",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:o", "esc"]
+    },
+    {
+      "name": "normal_O_then_esc_inserts_line_above",
+      "initial_text": "a\nb\nc",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 1,
+      "initial_cursor_col": 0,
+      "keys": ["char:O", "esc"]
+    },
+    {
+      "name": "normal_dollar_motion_then_dd",
+      "initial_text": "alpha\nbeta\ngamma",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 1,
+      "initial_cursor_col": 0,
+      "keys": ["char:$", "char:d", "char:d"]
+    },
+    {
+      "name": "normal_d0_deletes_to_line_start",
+      "initial_text": "alpha beta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 5,
+      "keys": ["char:d", "char:0"]
+    },
+    {
+      "name": "normal_2x_deletes_two_chars",
+      "initial_text": "abcdef",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 1,
+      "keys": ["char:2", "char:x"]
+    }
+  ]
+}

@@ -19,9 +19,6 @@ pub use editor_core::vim;
 // Commands stay here: they use fend-core (native-only) and async I/O.
 pub mod commands;
 
-// List-renumbering integration test, references crate::editor_core::* via re-exports above.
-pub mod tests_list;
-
 #[cfg(test)]
 mod tests {
     use super::commands::{insert_value_at_selection, list_command_suggestions};

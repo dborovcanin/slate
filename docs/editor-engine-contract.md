@@ -52,3 +52,11 @@ Behavior is frozen by fixture-backed tests in `crates/editor-core/tests/golden_r
 - `golden/vim_replay.json`
 - `golden/module_command_replay.json`
 - `golden/command_replay.json`
+
+Cross-frontend parity is enforced in `src-tauri/src/terminal/app.rs` tests by replaying:
+
+- `src-tauri/src/terminal/tests/golden/vim_parity_replay.json`
+
+against both adapter paths:
+- TUI runtime adapter (`TerminalVimAdapter` + terminal action application)
+- GUI adapter simulation (shared-core step + UI action application model)

@@ -57,13 +57,59 @@ Non-goals:
 ### Progress snapshot (2026-04-23)
 - [x] 1. Canonical `EditorEngine` contract introduced in shared Rust core and re-exported for adapters.
 - [x] 2. Golden replay fixtures and replay test harness added for command, module command, and vim stepping.
-- [ ] 3. Cross-frontend parity harness remains next and intentionally deferred.
+- [x] 3. Cross-frontend parity replay harness added: shared fixture corpus now executes through TUI adapter path and GUI adapter simulation path, asserting identical final doc/cursor/mode/vim-state snapshots.
 - [x] 4. Command/motion semantics consolidated into shared core for command resolution, note-security parsing, vim stepping, and module command planning in both Tauri UI and TUI command paths.
 - [x] 5. UI markdown hot-paths now route through batched wasm markdown transactions (single boundary call per candidate sequence), reducing fragmented rule dispatch calls.
 - [x] 6. Folding state transitions now consume a shared-core incremental fold index API (line-edit mapping + rebuild decision in Rust), while rendering remains frontend-owned.
 - [x] 7. Calc/variable trigger, eval-scope, and trailer-refresh eligibility semantics are now shared-core decisions consumed by both UI (wasm bridge) and TUI (native core calls), while UI/TUI keep rendering and scheduling mechanics local.
 - [x] 8. TUI input now flows through a dedicated adapter pipeline (terminal key -> vim intent translation -> shared-core `EditorEngine::step_vim` -> terminal action application), removing duplicated frontend stepping paths.
 - [x] 9. Tauri UI now routes Vim key handling through a dedicated adapter pipeline (DOM key event -> vim key intent translation -> shared-core wasm vim step -> CodeMirror action application), while keeping CodeMirror rendering mechanics local.
+- [ ] 10. CI architecture/correctness gates are intentionally deferred for now.
+- [ ] 11. Subsystem feature-flag migration is only pending for *remaining* semantic moves; most ownership migration is already complete.
+
+### Subsystem migration audit (code-verified, 2026-04-23)
+`commands/vim`
+- Ownership status: mostly migrated to shared core (`EditorEngine` command resolution/module planning/vim stepping).
+- Adapter status: migrated (TUI `TerminalVimAdapter`, UI `runUiVimPipeline`).
+- Remaining frontend semantics: `VimAction` execution (cursor/doc/register side effects) is still implemented in frontend adapters.
+- Parity status: core golden replay + cross-frontend vim parity replay exists; corpus still baseline-sized.
+- Feature-flag status: no migration-path flag (only global runtime disable flags exist).
+
+`markdown/table/list`
+- Ownership status: mostly migrated (`editor_core::text_rules` is canonical).
+- Adapter status: UI uses batched wasm markdown transactions; TUI calls shared `text_rules` directly.
+- Remaining frontend semantics: rule trigger/scheduling heuristics, scoped snapshot plumbing, and some cursor/table clamping remain frontend-local.
+- Parity status: strong per-frontend tests; no dedicated cross-frontend markdown/table/list parity suite yet.
+- Feature-flag status: no migration-path flag.
+
+`folding`
+- Ownership status: mostly migrated (shared core fold range build + incremental map/rebuild decisions).
+- Adapter status: UI uses wasm fold index helpers; TUI uses shared core folding module.
+- Remaining frontend semantics: fold rendering and viewport/state presentation remain frontend-local by design.
+- Parity status: per-frontend tests only; no cross-frontend folding parity corpus yet.
+- Feature-flag status: no migration-path flag.
+
+`calc/variables`
+- Ownership status: partial-but-substantial migration (shared trigger/eval-scope/trailer-refresh decisions + shared calc planning helpers).
+- Adapter status: UI/TUI consume shared calc decisions while keeping rendering local.
+- Remaining frontend semantics: async eval scheduling, backend sync lifecycle, cache management, and ghost/widget rendering remain frontend-local.
+- Parity status: per-frontend calc tests; no cross-frontend calc parity suite yet.
+- Feature-flag status: no migration-path flag.
+
+### Next architecture updates (CI deferred)
+1. Decide step 11 scope explicitly:
+   - either add migration flags for remaining semantic moves only, or
+   - close step 11 with rationale that ownership migration is complete enough without flags.
+2. Expand parity replay corpus from baseline Vim cases to full editing semantics.
+   - Include visual flows, text objects, yank/paste, command mode, markdown/table/list edits, folding transitions, and calc updates.
+3. Reduce remaining frontend semantic ownership.
+   - Move more `VimIntent` execution into shared core (`intent -> EditOperation + cursor/selection delta`) so UI/TUI adapters stay thin.
+4. Add cross-frontend parity suites for command/rule pipelines, not only key replay.
+   - Run shared command and markdown-rule scenarios through both adapters and require identical final semantic snapshots.
+5. Add cross-frontend parity suites for folding and calc semantics.
+   - Assert equivalent fold index transitions and calc semantic outputs across adapters.
+6. Add a live GUI parity runner as a complement to the current GUI simulation harness.
+   - Keep simulation for fast checks, but also execute parity scenarios against live CodeMirror integration for end-to-end confidence.
 
 ### Definition of done for this refactor track
 - Shared core is the canonical source for editing behavior.

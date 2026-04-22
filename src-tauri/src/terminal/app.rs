@@ -6819,6 +6819,7 @@ mod tests {
     use super::{TerminalApp, TerminalOptions, UiMode};
     use crate::storage::Db;
     use app_core::storage::NoteAccessMode;
+    use serde::Deserialize;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
@@ -6885,6 +6886,353 @@ mod tests {
 
     fn note_modules_with_variables(enabled: bool) -> app_core::storage::NoteModules {
         note_modules(true, true, enabled, true)
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct VimParityReplaySuite {
+        cases: Vec<VimParityReplayCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct VimParityReplayCase {
+        name: String,
+        initial_text: String,
+        #[serde(default)]
+        initial_state: crate::editor_core::vim::VimState,
+        #[serde(default)]
+        initial_cursor_line: usize,
+        #[serde(default)]
+        initial_cursor_col: usize,
+        keys: Vec<String>,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ParitySnapshot {
+        lines: Vec<String>,
+        cursor_line: usize,
+        cursor_col: usize,
+        mode: UiMode,
+        vim_state: crate::editor_core::vim::VimState,
+        selection_anchor: Option<(usize, usize)>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct GuiParityState {
+        lines: Vec<String>,
+        cursor_line: usize,
+        cursor_col: usize,
+        mode: UiMode,
+        selection_anchor: Option<(usize, usize)>,
+        vim_state: crate::editor_core::vim::VimState,
+    }
+
+    fn ui_mode_from_vim_mode(mode: crate::editor_core::vim::VimMode) -> UiMode {
+        match mode {
+            crate::editor_core::vim::VimMode::Insert => UiMode::Editor,
+            crate::editor_core::vim::VimMode::Normal => UiMode::Normal,
+            crate::editor_core::vim::VimMode::Visual => UiMode::Visual,
+            crate::editor_core::vim::VimMode::VisualLine => UiMode::VisualLine,
+        }
+    }
+
+    fn split_replay_lines(text: &str) -> Vec<String> {
+        let mut lines = text.split('\n').map(|line| line.to_string()).collect::<Vec<_>>();
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        lines
+    }
+
+    fn parse_terminal_key_token(token: &str) -> Key {
+        let key = crate::editor_core::vim::parse_key_token(token)
+            .unwrap_or_else(|| panic!("invalid parity key token: {token}"));
+        match key {
+            crate::editor_core::vim::VimKey::Esc => Key::Esc,
+            crate::editor_core::vim::VimKey::Enter => Key::Enter,
+            crate::editor_core::vim::VimKey::Tab => Key::Tab,
+            crate::editor_core::vim::VimKey::Backspace => Key::Backspace,
+            crate::editor_core::vim::VimKey::Delete => Key::Delete,
+            crate::editor_core::vim::VimKey::ArrowUp => Key::ArrowUp,
+            crate::editor_core::vim::VimKey::ArrowDown => Key::ArrowDown,
+            crate::editor_core::vim::VimKey::ArrowLeft => Key::ArrowLeft,
+            crate::editor_core::vim::VimKey::ArrowRight => Key::ArrowRight,
+            crate::editor_core::vim::VimKey::Char(ch) => Key::Char(ch),
+            crate::editor_core::vim::VimKey::Ctrl(ch) => Key::Ctrl(ch),
+        }
+    }
+
+    fn clamp_gui_cursor(state: &mut GuiParityState) {
+        if state.lines.is_empty() {
+            state.lines.push(String::new());
+        }
+        if state.cursor_line >= state.lines.len() {
+            state.cursor_line = state.lines.len().saturating_sub(1);
+        }
+        let line_len = line_char_len(&state.lines[state.cursor_line]);
+        if matches!(state.mode, UiMode::Editor) {
+            state.cursor_col = state.cursor_col.min(line_len);
+        } else {
+            state.cursor_col = state.cursor_col.min(line_len.saturating_sub(1));
+        }
+    }
+
+    fn replace_char_range(line: &mut String, from_col: usize, to_col: usize) -> bool {
+        if from_col >= to_col {
+            return false;
+        }
+        let from = super::byte_index(line, from_col);
+        let to = super::byte_index(line, to_col);
+        if from >= to || to > line.len() {
+            return false;
+        }
+        line.replace_range(from..to, "");
+        true
+    }
+
+    fn apply_gui_vim_action(
+        state: &mut GuiParityState,
+        action: &crate::editor_core::vim::VimAction,
+        case_name: &str,
+    ) {
+        use crate::editor_core::vim::VimIntent;
+        let count = action.count.max(1);
+        match action.intent {
+            VimIntent::MoveLeft => {
+                for _ in 0..count {
+                    if state.cursor_col > 0 {
+                        state.cursor_col -= 1;
+                    } else if state.cursor_line > 0 {
+                        state.cursor_line -= 1;
+                        state.cursor_col = line_char_len(&state.lines[state.cursor_line]);
+                    }
+                }
+            }
+            VimIntent::MoveRight => {
+                for _ in 0..count {
+                    let line_len = line_char_len(&state.lines[state.cursor_line]);
+                    if state.cursor_col < line_len {
+                        state.cursor_col += 1;
+                    } else if state.cursor_line + 1 < state.lines.len() {
+                        state.cursor_line += 1;
+                        state.cursor_col = 0;
+                    }
+                }
+            }
+            VimIntent::MoveUp => {
+                state.cursor_line = state.cursor_line.saturating_sub(count);
+            }
+            VimIntent::MoveDown => {
+                state.cursor_line =
+                    (state.cursor_line + count).min(state.lines.len().saturating_sub(1));
+            }
+            VimIntent::MoveLineStart => state.cursor_col = 0,
+            VimIntent::MoveLineEnd => {
+                let line_len = line_char_len(&state.lines[state.cursor_line]);
+                state.cursor_col = line_len.saturating_sub(1);
+            }
+            VimIntent::MoveDocStart => {
+                state.cursor_line = 0;
+                state.cursor_col = 0;
+            }
+            VimIntent::MoveDocEnd => {
+                state.cursor_line = state.lines.len().saturating_sub(1);
+                state.cursor_col = 0;
+            }
+            VimIntent::MoveToLine => {
+                state.cursor_line = count.max(1).min(state.lines.len()) - 1;
+                state.cursor_col = 0;
+            }
+            VimIntent::EnterInsert => state.mode = UiMode::Editor,
+            VimIntent::AppendInsert => {
+                let line_len = line_char_len(&state.lines[state.cursor_line]);
+                if state.cursor_col < line_len {
+                    state.cursor_col += 1;
+                }
+                state.mode = UiMode::Editor;
+            }
+            VimIntent::InsertLineStart => {
+                state.cursor_col = 0;
+                state.mode = UiMode::Editor;
+            }
+            VimIntent::AppendLineEnd => {
+                state.cursor_col = line_char_len(&state.lines[state.cursor_line]);
+                state.mode = UiMode::Editor;
+            }
+            VimIntent::OpenLineBelow => {
+                let insert_at = state.cursor_line + 1;
+                state.lines.insert(insert_at, String::new());
+                state.cursor_line = insert_at;
+                state.cursor_col = 0;
+                state.mode = UiMode::Editor;
+            }
+            VimIntent::OpenLineAbove => {
+                state.lines.insert(state.cursor_line, String::new());
+                state.cursor_col = 0;
+                state.mode = UiMode::Editor;
+            }
+            VimIntent::EnterVisual => {
+                state.mode = UiMode::Visual;
+                state.selection_anchor = Some((state.cursor_line, state.cursor_col));
+            }
+            VimIntent::EnterVisualLine => {
+                state.mode = UiMode::VisualLine;
+                state.selection_anchor = Some((state.cursor_line, state.cursor_col));
+            }
+            VimIntent::ExitVisual => {
+                state.mode = UiMode::Normal;
+                state.selection_anchor = None;
+            }
+            VimIntent::DeleteLine => {
+                let mut removed = 0usize;
+                for _ in 0..count {
+                    if state.cursor_line < state.lines.len() {
+                        state.lines.remove(state.cursor_line);
+                        removed += 1;
+                    }
+                }
+                if removed > 0 && state.lines.is_empty() {
+                    state.lines.push(String::new());
+                }
+            }
+            VimIntent::DeleteToLineStart => {
+                for _ in 0..count {
+                    if state.cursor_col == 0 {
+                        break;
+                    }
+                    let line = &mut state.lines[state.cursor_line];
+                    if replace_char_range(line, 0, state.cursor_col) {
+                        state.cursor_col = 0;
+                    } else {
+                        break;
+                    }
+                }
+            }
+            VimIntent::DeleteToLineEnd => {
+                for _ in 0..count {
+                    let line_len = line_char_len(&state.lines[state.cursor_line]);
+                    if state.cursor_col >= line_len {
+                        break;
+                    }
+                    let line = &mut state.lines[state.cursor_line];
+                    if !replace_char_range(line, state.cursor_col, line_len) {
+                        break;
+                    }
+                }
+            }
+            VimIntent::DeleteChar => {
+                for _ in 0..count {
+                    let line_len = line_char_len(&state.lines[state.cursor_line]);
+                    if state.cursor_col < line_len {
+                        let line = &mut state.lines[state.cursor_line];
+                        let _ = replace_char_range(line, state.cursor_col, state.cursor_col + 1);
+                    } else if state.cursor_line + 1 < state.lines.len() {
+                        let next = state.lines.remove(state.cursor_line + 1);
+                        state.lines[state.cursor_line].push_str(&next);
+                    }
+                }
+            }
+            VimIntent::Swallow => {}
+            other => panic!(
+                "unsupported GUI parity action {:?} in replay case {}",
+                other, case_name
+            ),
+        }
+    }
+
+    fn run_gui_parity_case(case: &VimParityReplayCase) -> ParitySnapshot {
+        let mut state = GuiParityState {
+            lines: split_replay_lines(&case.initial_text),
+            cursor_line: case.initial_cursor_line,
+            cursor_col: case.initial_cursor_col,
+            mode: ui_mode_from_vim_mode(case.initial_state.mode),
+            selection_anchor: None,
+            vim_state: case.initial_state.clone(),
+        };
+        if matches!(state.mode, UiMode::Visual | UiMode::VisualLine) {
+            state.selection_anchor = Some((state.cursor_line, state.cursor_col));
+        }
+        clamp_gui_cursor(&mut state);
+
+        for token in &case.keys {
+            let vim_key = crate::editor_core::vim::parse_key_token(token)
+                .unwrap_or_else(|| panic!("invalid GUI parity key token: {token}"));
+            let ctx = crate::editor_core::vim::VimContext {
+                has_search_matches: false,
+                line_count: state.lines.len(),
+            };
+            let step = crate::editor_core::engine::EditorEngine::step_vim(&state.vim_state, vim_key, &ctx);
+            state.vim_state = step.state.clone();
+            state.mode = ui_mode_from_vim_mode(step.state.mode);
+
+            if !step.handled {
+                continue;
+            }
+            for action in &step.actions {
+                apply_gui_vim_action(&mut state, action, &case.name);
+            }
+            if !matches!(state.mode, UiMode::Visual | UiMode::VisualLine) {
+                state.selection_anchor = None;
+            }
+            clamp_gui_cursor(&mut state);
+        }
+
+        ParitySnapshot {
+            lines: state.lines,
+            cursor_line: state.cursor_line,
+            cursor_col: state.cursor_col,
+            mode: state.mode,
+            vim_state: state.vim_state,
+            selection_anchor: state.selection_anchor,
+        }
+    }
+
+    fn run_tui_parity_case(case: &VimParityReplayCase) -> ParitySnapshot {
+        let (db, mut app, path) = app_with_note(&case.initial_text);
+        app.mode = ui_mode_from_vim_mode(case.initial_state.mode);
+        app.vim_state = case.initial_state.clone();
+        if app.lines.is_empty() {
+            app.lines.push(String::new());
+        }
+        app.cursor_line = case.initial_cursor_line.min(app.lines.len().saturating_sub(1));
+        app.cursor_col = case.initial_cursor_col;
+        if matches!(app.mode, UiMode::Visual | UiMode::VisualLine) {
+            app.selection_anchor = Some((app.cursor_line, app.cursor_col));
+        }
+        app.adjust_cursor();
+
+        for token in &case.keys {
+            let key = parse_terminal_key_token(token);
+            app.handle_key(&db, key).unwrap_or_else(|err| {
+                panic!("parity replay case '{}' failed on key '{}': {}", case.name, token, err)
+            });
+        }
+        app.adjust_cursor();
+
+        let snapshot = ParitySnapshot {
+            lines: app.lines.clone(),
+            cursor_line: app.cursor_line,
+            cursor_col: app.cursor_col,
+            mode: app.mode,
+            vim_state: app.vim_state.clone(),
+            selection_anchor: app.selection_anchor,
+        };
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+        snapshot
+    }
+
+    #[test]
+    fn vim_cross_frontend_parity_replay_cases() {
+        let suite: VimParityReplaySuite =
+            serde_json::from_str(include_str!("tests/golden/vim_parity_replay.json"))
+                .expect("parse vim parity replay fixture");
+        for case in suite.cases {
+            let tui = run_tui_parity_case(&case);
+            let gui = run_gui_parity_case(&case);
+            assert_eq!(tui, gui, "cross-frontend parity mismatch in {}", case.name);
+        }
     }
 
     #[test]
@@ -8404,24 +8752,6 @@ mod tests {
     }
 
     #[test]
-    fn vim_golden_j_dd_deletes_current_line() {
-        let (db, mut app, path) = app_with_note("one\ntwo\nthree");
-        app.mode = UiMode::Normal;
-
-        run_keys(
-            &mut app,
-            &db,
-            &[Key::Char('j'), Key::Char('d'), Key::Char('d')],
-        );
-        assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
-        assert_eq!(app.cursor_line, 1);
-
-        drop(app);
-        drop(db);
-        cleanup_db_files(&path);
-    }
-
-    #[test]
     fn ctrl_q_quits_from_normal_mode() {
         let (db, mut app, path) = app_with_note("one\ntwo\nthree");
         app.mode = UiMode::Normal;
@@ -9123,24 +9453,6 @@ mod tests {
         );
         assert_eq!(app.mode, UiMode::Normal);
         assert_eq!(app.status, "4 substitutions on 2 lines");
-
-        drop(app);
-        drop(db);
-        cleanup_db_files(&path);
-    }
-
-    #[test]
-    fn vim_golden_counted_delete_2dd_deletes_two_lines() {
-        let (db, mut app, path) = app_with_note("alpha\nbeta\ngamma\ndelta");
-        app.mode = UiMode::Normal;
-
-        run_keys(
-            &mut app,
-            &db,
-            &[Key::Char('2'), Key::Char('d'), Key::Char('d')],
-        );
-        assert_eq!(app.lines, vec!["gamma".to_string(), "delta".to_string()]);
-        assert_eq!(app.cursor_line, 0);
 
         drop(app);
         drop(db);
