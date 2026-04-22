@@ -151,7 +151,6 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     const query = getQuery();
     items = getItems(query);
     selectedIndex = Math.min(selectedIndex, Math.max(items.length - 1, 0));
-    animateItems = true;
     renderList();
   }
 

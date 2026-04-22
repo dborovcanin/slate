@@ -660,7 +660,7 @@
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
-  color: inherit;
+  color: var(--fg);
   text-align: left;
   cursor: pointer;
   animation: ui-popup-item-in var(--motion-duration-item) var(--motion-ease) both;
@@ -672,20 +672,33 @@
 }
 
 .command-picker-item--active {
-  background: color-mix(in srgb, var(--bg-overlay) 82%, var(--accent) 18%);
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border) 64%);
-  transform: translateX(1px);
+  background: transparent;
+  border-color: transparent;
+  transform: none;
 }
 
 .command-picker-item-title {
-  color: var(--fg);
+  display: inline-block;
+  color: inherit;
   font-size: 12px;
   font-family: var(--font-mono);
+  padding: 0 2px;
+  border-radius: 3px;
 }
 
 .command-picker-item-hint {
   color: var(--fg-dim);
   font-size: 11px;
+}
+
+.command-picker-item--active .command-picker-item-title {
+  background: var(--fg);
+  color: var(--bg-surface);
+}
+
+.command-picker-item--active .command-picker-item-hint {
+  color: var(--fg-dim);
+  opacity: 1;
 }
 
 .command-picker-empty {

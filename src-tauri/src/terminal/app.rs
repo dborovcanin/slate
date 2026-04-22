@@ -2135,7 +2135,7 @@ impl TerminalApp {
             Key::Tab => {
                 self.command_history_index = None;
                 if self.command_completion.visible {
-                    self.apply_command_completion_selection();
+                    self.move_command_completion_selection(1);
                 } else {
                     self.open_command_completion_menu();
                 }
@@ -2204,14 +2204,7 @@ impl TerminalApp {
             self.command_completion
                 .options
                 .iter()
-                .enumerate()
-                .map(|(idx, option)| {
-                    if idx == self.command_completion.selected_index {
-                        format!(">{}<", option.token)
-                    } else {
-                        option.token.clone()
-                    }
-                })
+                .map(|option| option.token.clone())
                 .collect::<Vec<_>>()
                 .join("  ")
         } else {
@@ -2230,6 +2223,89 @@ impl TerminalApp {
         } else {
             self.status = format!(":{}  [{}]", self.command_input, hint);
         }
+    }
+
+    fn draw_status_segment(
+        buf: &mut String,
+        row: usize,
+        col: &mut usize,
+        cols: usize,
+        text: &str,
+        style: AnsiStyle,
+    ) {
+        if *col > cols || text.is_empty() {
+            return;
+        }
+        let remaining = cols.saturating_sub(*col).saturating_add(1);
+        if remaining == 0 {
+            return;
+        }
+        let clipped: String = text.chars().take(remaining).collect();
+        if clipped.is_empty() {
+            return;
+        }
+        buf.push_str(&goto(row, *col));
+        style.write_to(buf);
+        buf.push_str(&clipped);
+        buf.push_str(render::RESET);
+        *col += clipped.chars().count();
+    }
+
+    fn draw_command_completion_status_row(
+        &self,
+        buf: &mut String,
+        row: usize,
+        cols: usize,
+        status_bg: u8,
+    ) -> bool {
+        if self.mode != UiMode::CommandBar || !self.command_completion.visible {
+            return false;
+        }
+        if self.command_completion.options.is_empty() {
+            return false;
+        }
+        let selected_idx = self
+            .command_completion
+            .selected_index
+            .min(self.command_completion.options.len().saturating_sub(1));
+
+        let base_fg = contrast_fg_for_bg(status_bg);
+        let base_style = AnsiStyle {
+            fg: Some(base_fg),
+            bg: Some(status_bg),
+            ..Default::default()
+        };
+        let selected_style = AnsiStyle {
+            fg: Some(status_bg),
+            bg: Some(base_fg),
+            bold: true,
+            ..Default::default()
+        };
+
+        draw_row_at_styled(buf, row, 1, cols, "", base_style);
+
+        let mut col = 1usize;
+        Self::draw_status_segment(
+            buf,
+            row,
+            &mut col,
+            cols,
+            &format!(":{}  [", self.command_input),
+            base_style,
+        );
+        for (idx, option) in self.command_completion.options.iter().enumerate() {
+            if idx > 0 {
+                Self::draw_status_segment(buf, row, &mut col, cols, "  ", base_style);
+            }
+            let style = if idx == selected_idx {
+                selected_style
+            } else {
+                base_style
+            };
+            Self::draw_status_segment(buf, row, &mut col, cols, &option.token, style);
+        }
+        Self::draw_status_segment(buf, row, &mut col, cols, "]", base_style);
+        true
     }
 
     fn format_active_note_modules_status(&self) -> String {
@@ -5568,18 +5644,20 @@ impl TerminalApp {
             }
         };
         let status_bg = self.render_palette.search_match;
-        draw_row_at_styled(
-            &mut buf,
-            rows,
-            1,
-            cols,
-            status,
-            AnsiStyle {
-                fg: Some(contrast_fg_for_bg(status_bg)),
-                bg: Some(status_bg),
-                ..Default::default()
-            },
-        );
+        if !self.draw_command_completion_status_row(&mut buf, rows, cols, status_bg) {
+            draw_row_at_styled(
+                &mut buf,
+                rows,
+                1,
+                cols,
+                status,
+                AnsiStyle {
+                    fg: Some(contrast_fg_for_bg(status_bg)),
+                    bg: Some(status_bg),
+                    ..Default::default()
+                },
+            );
+        }
 
         if self.mode == UiMode::Switcher {
             switcher::draw_switcher(
@@ -8231,10 +8309,21 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["math", "status", "style", "table", "variables"]
         );
+        assert_eq!(app.command_completion.selected_index, 0);
 
         run_keys(&mut app, &db, &[Key::Tab]);
+        assert!(app.command_completion.visible);
+        assert_eq!(app.command_input, "module ");
+        assert_eq!(app.command_completion.selected_index, 1);
+
+        run_keys(&mut app, &db, &[Key::Tab, Key::Tab, Key::Tab]);
+        assert!(app.command_completion.visible);
+        assert_eq!(app.command_input, "module ");
+        assert_eq!(app.command_completion.selected_index, 4);
+
+        run_keys(&mut app, &db, &[Key::Enter]);
         assert!(!app.command_completion.visible);
-        assert_eq!(app.command_input, "module math ");
+        assert_eq!(app.command_input, "module variables ");
 
         run_keys(&mut app, &db, &[Key::Tab]);
         assert!(app.command_completion.visible);
@@ -8246,10 +8335,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["off", "on", "toggle"]
         );
+        assert_eq!(app.command_completion.selected_index, 0);
 
-        run_keys(&mut app, &db, &[Key::ArrowRight, Key::Tab]);
+        run_keys(&mut app, &db, &[Key::Tab]);
+        assert!(app.command_completion.visible);
+        assert_eq!(app.command_input, "module variables ");
+        assert_eq!(app.command_completion.selected_index, 1);
+
+        run_keys(&mut app, &db, &[Key::Enter]);
         assert!(!app.command_completion.visible);
-        assert_eq!(app.command_input, "module math on");
+        assert_eq!(app.command_input, "module variables on");
 
         drop(app);
         drop(db);

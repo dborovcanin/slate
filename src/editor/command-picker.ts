@@ -34,8 +34,77 @@ interface CommandModeExtensionOptions {
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
 
+interface CommandCompletionOption {
+  token: string;
+  hasMore: boolean;
+}
+
+interface CommandCompletionMenu {
+  prefixTokens: string[];
+  options: CommandCompletionOption[];
+}
+
 function sanitizeCommand(rawInput: string): string {
   return rawInput.trim().replace(/^:/, "");
+}
+
+function normalizeCommandInputForCompletion(rawInput: string): string {
+  const sanitized = sanitizeCommand(rawInput).toLowerCase();
+  if (sanitized.length === 0) return "";
+  return sanitized.split(/\s+/).filter((token) => token.length > 0).join(" ");
+}
+
+function buildCommandCompletionMenu(
+  rawInput: string,
+  suggestions: CommandSuggestion[],
+): CommandCompletionMenu | null {
+  if (suggestions.length === 0) return null;
+
+  const normalizedInput = normalizeCommandInputForCompletion(rawInput);
+  const endsWithSpace = /\s$/.test(rawInput);
+  const typedTokens = normalizedInput.length > 0 ? normalizedInput.split(" ") : [];
+
+  const tokenPrefix = endsWithSpace
+    ? ""
+    : (typedTokens.length > 0 ? typedTokens[typedTokens.length - 1]! : "");
+  const prefixTokens = endsWithSpace ? typedTokens : typedTokens.slice(0, -1);
+  const tokenIndex = prefixTokens.length;
+
+  const options: CommandCompletionOption[] = [];
+  for (const suggestion of suggestions) {
+    const suggestionTokens = suggestion.value.toLowerCase().split(/\s+/).filter((token) => token.length > 0);
+    if (suggestionTokens.length <= tokenIndex) continue;
+    if (!prefixTokens.every((token, idx) => suggestionTokens[idx] === token)) continue;
+
+    const token = suggestionTokens[tokenIndex]!;
+    if (!token.startsWith(tokenPrefix)) continue;
+
+    const hasMore = suggestionTokens.length > tokenIndex + 1;
+    const existing = options.find((entry) => entry.token === token);
+    if (existing) {
+      existing.hasMore = existing.hasMore || hasMore;
+      continue;
+    }
+    options.push({ token, hasMore });
+  }
+
+  if (options.length === 0) return null;
+  return { prefixTokens, options };
+}
+
+function applySingleWordCompletion(state: ListOverlayState<CommandSuggestion>): boolean {
+  const completion = buildCommandCompletionMenu(state.query, state.items);
+  if (!completion || completion.options.length !== 1) return false;
+
+  const option = completion.options[0]!;
+  const nextTokens = [...completion.prefixTokens, option.token];
+  state.inputEl.value = nextTokens.join(" ");
+  if (option.hasMore) {
+    state.inputEl.value += " ";
+  }
+  state.selectedIndex = 0;
+  state.refresh();
+  return true;
 }
 
 function isInsideCommandPicker(target: EventTarget | null): boolean {
@@ -195,9 +264,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         if (state.items.length === 0) return false;
         event.preventDefault();
         event.stopPropagation();
-        const best = state.items[Math.max(state.selectedIndex, 0)];
-        if (best) state.inputEl.value = best.value;
-        state.refresh();
+        applySingleWordCompletion(state);
         return true;
       }
       if (event.key === "Enter") {
