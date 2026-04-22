@@ -4,6 +4,7 @@ pub use editor_core::calc_plan;
 pub use editor_core::command_catalog;
 pub use editor_core::command_history;
 pub use editor_core::context;
+pub use editor_core::engine;
 pub use editor_core::folding;
 pub use editor_core::format;
 pub use editor_core::markdown_tokens;

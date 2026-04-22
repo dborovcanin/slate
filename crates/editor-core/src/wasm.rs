@@ -5,9 +5,9 @@ use wasm_bindgen::JsCast;
 use crate::calc_plan::{
     self, CalcRefreshPlan, CalcSegment, CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
 };
-use crate::command_catalog;
 use crate::command_history;
 use crate::context::ResolvedContext;
+use crate::engine::{EditorEngine, ModuleCommandPlan, ModuleState};
 use crate::folding;
 use crate::format::format_markdown;
 use crate::markdown_tokens::{
@@ -282,7 +282,7 @@ fn parse_mode(mode: &str) -> Option<CommandMode> {
 
 #[wasm_bindgen]
 pub fn wasm_normalize_command(raw_input: &str) -> String {
-    command_catalog::normalize_command(raw_input)
+    EditorEngine::normalize_command(raw_input)
 }
 
 #[wasm_bindgen]
@@ -290,20 +290,20 @@ pub fn wasm_list_command_suggestions(mode: &str, raw_input: &str) -> String {
     let Some(mode) = parse_mode(mode) else {
         return "[]".to_string();
     };
-    let suggestions = command_catalog::list_command_suggestions(mode, raw_input);
+    let suggestions = EditorEngine::list_command_suggestions(mode, raw_input);
     serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".to_string())
 }
 
 #[wasm_bindgen]
 pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
     let mode = parse_mode(mode)?;
-    let command = command_catalog::resolve_command(mode, raw_input)?;
+    let command = EditorEngine::resolve_command(mode, raw_input)?;
     Some(command.value.to_string())
 }
 
 #[wasm_bindgen]
 pub fn wasm_parse_note_security_command(raw_input: &str) -> Option<JsValue> {
-    let parsed = command_catalog::parse_note_security_command(raw_input)?;
+    let parsed = EditorEngine::parse_note_security_command(raw_input)?;
     let out = Object::new();
     let _ = set_prop(&out, "action", JsValue::from_str(parsed.action.as_str()));
     let _ = set_prop(
@@ -312,6 +312,27 @@ pub fn wasm_parse_note_security_command(raw_input: &str) -> Option<JsValue> {
         JsValue::from_str(parsed.password.as_str()),
     );
     Some(out.into())
+}
+
+#[wasm_bindgen]
+pub fn wasm_plan_module_command(
+    mode: &str,
+    raw_input: &str,
+    math: bool,
+    table: bool,
+    variables: bool,
+    style: bool,
+) -> Option<JsValue> {
+    let mode = parse_mode(mode)?;
+    let command = EditorEngine::resolve_command(mode, raw_input)?;
+    let current = ModuleState {
+        math,
+        table,
+        variables,
+        style,
+    };
+    let plan = EditorEngine::plan_module_command(command.id, current)?;
+    Some(module_command_plan_to_js(&plan))
 }
 
 #[wasm_bindgen]
@@ -716,6 +737,23 @@ fn command_execution_result_to_js(result: &CommandExecutionResult) -> JsValue {
     out.into()
 }
 
+fn module_state_to_js(state: &ModuleState) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "math", JsValue::from_bool(state.math));
+    let _ = set_prop(&out, "table", JsValue::from_bool(state.table));
+    let _ = set_prop(&out, "variables", JsValue::from_bool(state.variables));
+    let _ = set_prop(&out, "style", JsValue::from_bool(state.style));
+    out.into()
+}
+
+fn module_command_plan_to_js(plan: &ModuleCommandPlan) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "changed", JsValue::from_bool(plan.changed));
+    let _ = set_prop(&out, "next", module_state_to_js(&plan.next));
+    let _ = set_prop(&out, "message", JsValue::from_str(&plan.message));
+    out.into()
+}
+
 fn markdown_analyzed_line_to_js(line: &MarkdownAnalyzedLine) -> JsValue {
     let out = Object::new();
     let _ = set_prop(&out, "info", markdown_line_info_to_js(&line.info));
@@ -1073,7 +1111,7 @@ impl WasmVimSession {
             has_search_matches,
             line_count,
         };
-        let step = vim::step(&self.state, key, &context);
+        let step = EditorEngine::step_vim(&self.state, key, &context);
         self.state = step.state.clone();
         encode_step(&step)
     }

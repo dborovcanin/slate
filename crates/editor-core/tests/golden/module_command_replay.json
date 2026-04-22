@@ -1,0 +1,88 @@
+{
+  "cases": [
+    {
+      "name": "module_status_reports_all_flags",
+      "mode": "editor",
+      "raw_input": "modules",
+      "current": {
+        "math": true,
+        "table": true,
+        "variables": false,
+        "style": true
+      },
+      "expected": {
+        "changed": false,
+        "next": {
+          "math": true,
+          "table": true,
+          "variables": false,
+          "style": true
+        },
+        "message": "modules math=on table=on variables=off style=on"
+      }
+    },
+    {
+      "name": "module_alias_turns_variables_off",
+      "mode": "editor",
+      "raw_input": "modules off variables",
+      "current": {
+        "math": true,
+        "table": true,
+        "variables": true,
+        "style": true
+      },
+      "expected": {
+        "changed": true,
+        "next": {
+          "math": true,
+          "table": true,
+          "variables": false,
+          "style": true
+        },
+        "message": "modules math=on table=on variables=off style=on"
+      }
+    },
+    {
+      "name": "module_set_is_idempotent",
+      "mode": "editor",
+      "raw_input": "module style on",
+      "current": {
+        "math": false,
+        "table": true,
+        "variables": false,
+        "style": true
+      },
+      "expected": {
+        "changed": false,
+        "next": {
+          "math": false,
+          "table": true,
+          "variables": false,
+          "style": true
+        },
+        "message": "module style already on"
+      }
+    },
+    {
+      "name": "module_toggle_flips_target_flag",
+      "mode": "editor",
+      "raw_input": "module table toggle",
+      "current": {
+        "math": false,
+        "table": true,
+        "variables": true,
+        "style": false
+      },
+      "expected": {
+        "changed": true,
+        "next": {
+          "math": false,
+          "table": false,
+          "variables": true,
+          "style": false
+        },
+        "message": "modules math=off table=off variables=on style=off"
+      }
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "cases": [
+    {
+      "name": "normalize_command_strips_colon_and_lowercases",
+      "raw_input": " :SUM LIST ",
+      "expected_normalized": "sum list",
+      "mode": "editor",
+      "expected_resolved": "sum list",
+      "expected_note_security": null
+    },
+    {
+      "name": "note_lock_with_note_prefix",
+      "raw_input": "note lock pass123",
+      "expected_normalized": "note lock pass123",
+      "mode": "editor",
+      "expected_resolved": "note lock",
+      "expected_note_security": {
+        "action": "lock",
+        "password": "pass123",
+        "used_note_prefix": true
+      }
+    },
+    {
+      "name": "note_unprotect_alias_without_prefix",
+      "raw_input": "unencrypt-note p",
+      "expected_normalized": "unencrypt-note p",
+      "mode": "editor",
+      "expected_resolved": "note unprotect",
+      "expected_note_security": {
+        "action": "unprotect",
+        "password": "p",
+        "used_note_prefix": false
+      }
+    },
+    {
+      "name": "quit_is_vim_only",
+      "raw_input": "q!",
+      "expected_normalized": "q!",
+      "mode": "editor",
+      "expected_resolved": null,
+      "expected_note_security": null
+    },
+    {
+      "name": "quit_resolves_in_vim_mode",
+      "raw_input": "q!",
+      "expected_normalized": "q!",
+      "mode": "vim",
+      "expected_resolved": "q",
+      "expected_note_security": null
+    }
+  ]
+}

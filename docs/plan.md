@@ -54,6 +54,12 @@ Non-goals:
 11. Migrate subsystem-by-subsystem behind feature flags, not big-bang.
    - Suggested order: commands/vim -> markdown/table/list -> folding -> calc semantics.
 
+### Progress snapshot (2026-04-22)
+- [x] 1. Canonical `EditorEngine` contract introduced in shared Rust core and re-exported for adapters.
+- [x] 2. Golden replay fixtures and replay test harness added for command, module command, and vim stepping.
+- [ ] 3. Cross-frontend parity harness remains next and intentionally deferred.
+- [x] 4. Command/motion semantics consolidated into shared core for command resolution, note-security parsing, vim stepping, and module command planning in both Tauri UI and TUI command paths.
+
 ### Definition of done for this refactor track
 - Shared core is the canonical source for editing behavior.
 - GUI and TUI parity checks pass for replay corpus.

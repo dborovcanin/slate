@@ -1,5 +1,6 @@
-use super::command_catalog::{self, CommandId};
+use super::command_catalog::CommandId;
 use super::context::ResolvedContext;
+use super::engine::EditorEngine;
 use super::format::format_markdown;
 use super::operations::replace_range;
 use super::sum::{
@@ -408,7 +409,7 @@ fn run_list_convert_command(
 }
 
 pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<CommandSuggestion> {
-    command_catalog::list_command_suggestions(mode, raw_input)
+    EditorEngine::list_command_suggestions(mode, raw_input)
 }
 
 /// Replaces the content of the table cell the cursor is currently in with `value`,
@@ -478,12 +479,12 @@ pub fn execute_command(
         return result;
     }
 
-    let normalized = command_catalog::normalize_command(raw_input);
+    let normalized = EditorEngine::normalize_command(raw_input);
     if normalized.is_empty() {
         return result_with_message("");
     }
 
-    let Some(command) = command_catalog::resolve_command(mode, raw_input) else {
+    let Some(command) = EditorEngine::resolve_command(mode, raw_input) else {
         return result_with_message(format!("unknown command: {normalized}"));
     };
 

@@ -36,6 +36,7 @@ import init, {
   wasm_rewrite_line_with_checklist_toggle_suffix,
   wasm_resolve_command,
   wasm_parse_note_security_command,
+  wasm_plan_module_command,
   wasm_try_execute_vim_substitute,
   wasm_run_doc_change_rules,
   wasm_run_enter_rules,
@@ -669,6 +670,19 @@ export interface ParsedNoteSecurityCommand {
   password: string;
 }
 
+export interface ModuleStateSnapshot {
+  math: boolean;
+  table: boolean;
+  variables: boolean;
+  style: boolean;
+}
+
+export interface ModuleCommandPlan {
+  changed: boolean;
+  next: ModuleStateSnapshot;
+  message: string;
+}
+
 function parseNoteSecurityCommandFallback(rawInput: string): ParsedNoteSecurityCommand | null {
   const normalized = rawInput.replace(/^:/, "").trimStart();
   if (!normalized) return null;
@@ -733,6 +747,85 @@ export function parseNoteSecurityCommand(
   return {
     action: parsed.action,
     password: parsed.password,
+  };
+}
+
+function parseModuleCommandPlanFallback(
+  rawInput: string,
+  mode: CommandMode,
+  current: ModuleStateSnapshot,
+): ModuleCommandPlan | null {
+  const normalize = (value: string) =>
+    value.trim().replace(/^:/, "").toLowerCase();
+  const resolved = resolveCommandFromWasm(mode, rawInput) ?? normalize(rawInput);
+
+  const statusMessage = (state: ModuleStateSnapshot) =>
+    `modules math=${state.math ? "on" : "off"} table=${state.table ? "on" : "off"} variables=${state.variables ? "on" : "off"} style=${state.style ? "on" : "off"}`;
+
+  if (resolved === "module status") {
+    return { changed: false, next: { ...current }, message: statusMessage(current) };
+  }
+
+  const parsed = resolved.match(/^module (math|table|variables|style) (on|off|toggle)$/);
+  if (!parsed) return null;
+  const key = parsed[1] as keyof ModuleStateSnapshot;
+  const action = parsed[2];
+  const next = { ...current };
+  if (action === "toggle") {
+    next[key] = !next[key];
+    return { changed: true, next, message: statusMessage(next) };
+  }
+  const enabled = action === "on";
+  if (next[key] === enabled) {
+    return {
+      changed: false,
+      next,
+      message: `module ${key} already ${enabled ? "on" : "off"}`,
+    };
+  }
+  next[key] = enabled;
+  return { changed: true, next, message: statusMessage(next) };
+}
+
+export function planModuleCommandFromWasm(
+  mode: CommandMode,
+  rawInput: string,
+  current: ModuleStateSnapshot,
+): ModuleCommandPlan | null {
+  if (!ensureWasmReadyNonBlocking()) {
+    return parseModuleCommandPlanFallback(rawInput, mode, current);
+  }
+  const raw = wasm_plan_module_command(
+    mode,
+    rawInput,
+    current.math,
+    current.table,
+    current.variables,
+    current.style,
+  ) as unknown;
+  if (typeof raw !== "object" || raw === null) return null;
+  const parsed = raw as Partial<ModuleCommandPlan>;
+  const next = parsed.next as Partial<ModuleStateSnapshot> | undefined;
+  if (typeof parsed.changed !== "boolean") return null;
+  if (typeof parsed.message !== "string") return null;
+  if (
+    !next ||
+    typeof next.math !== "boolean" ||
+    typeof next.table !== "boolean" ||
+    typeof next.variables !== "boolean" ||
+    typeof next.style !== "boolean"
+  ) {
+    return null;
+  }
+  return {
+    changed: parsed.changed,
+    message: parsed.message,
+    next: {
+      math: next.math,
+      table: next.table,
+      variables: next.variables,
+      style: next.style,
+    },
   };
 }
 

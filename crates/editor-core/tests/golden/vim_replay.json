@@ -1,0 +1,119 @@
+{
+  "cases": [
+    {
+      "name": "counted_dd_deletes_ten_lines",
+      "initial_state": {
+        "mode": "normal",
+        "count_buffer": "",
+        "pending": null
+      },
+      "context": {
+        "has_search_matches": false,
+        "line_count": 200
+      },
+      "keys": ["char:1", "char:0", "char:d", "char:d"],
+      "expected": {
+        "mode": "normal",
+        "handled": true,
+        "actions": [
+          {
+            "intent": "delete_line",
+            "count": 10
+          }
+        ]
+      }
+    },
+    {
+      "name": "visual_colon_opens_command_bar_without_exit_intent",
+      "initial_state": {
+        "mode": "visual",
+        "count_buffer": "",
+        "pending": null
+      },
+      "context": {
+        "has_search_matches": false,
+        "line_count": 50
+      },
+      "keys": ["char::"],
+      "expected": {
+        "mode": "normal",
+        "handled": true,
+        "actions": [
+          {
+            "intent": "open_command_bar",
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "visual_counted_gg_moves_to_requested_line",
+      "initial_state": {
+        "mode": "visual",
+        "count_buffer": "",
+        "pending": null
+      },
+      "context": {
+        "has_search_matches": false,
+        "line_count": 20
+      },
+      "keys": ["char:3", "char:g", "char:g"],
+      "expected": {
+        "mode": "visual",
+        "handled": true,
+        "actions": [
+          {
+            "intent": "move_to_line",
+            "count": 3
+          }
+        ]
+      }
+    },
+    {
+      "name": "search_next_requires_active_search_matches",
+      "initial_state": {
+        "mode": "normal",
+        "count_buffer": "",
+        "pending": null
+      },
+      "context": {
+        "has_search_matches": false,
+        "line_count": 20
+      },
+      "keys": ["char:n"],
+      "expected": {
+        "mode": "normal",
+        "handled": true,
+        "actions": [
+          {
+            "intent": "swallow",
+            "count": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "search_next_emits_intent_when_matches_exist",
+      "initial_state": {
+        "mode": "normal",
+        "count_buffer": "",
+        "pending": null
+      },
+      "context": {
+        "has_search_matches": true,
+        "line_count": 20
+      },
+      "keys": ["char:n"],
+      "expected": {
+        "mode": "normal",
+        "handled": true,
+        "actions": [
+          {
+            "intent": "search_next",
+            "count": 1
+          }
+        ]
+      }
+    }
+  ]
+}

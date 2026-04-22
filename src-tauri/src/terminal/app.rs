@@ -2656,44 +2656,34 @@ impl TerminalApp {
         true
     }
 
-    fn format_active_note_modules_status(&self) -> String {
-        let modules = self.active_note.modules;
-        format!(
-            "modules math={} table={} variables={} style={}",
-            if modules.math { "on" } else { "off" },
-            if modules.table { "on" } else { "off" },
-            if modules.variables { "on" } else { "off" },
-            if modules.style { "on" } else { "off" },
-        )
-    }
-
     fn handle_terminal_module_command(
         &mut self,
         db: &Db,
         command_id: crate::editor_core::command_catalog::CommandId,
     ) -> bool {
-        use crate::editor_core::command_catalog::CommandId;
-
-        let mut next_modules = self.active_note.modules;
-        match command_id {
-            CommandId::ModuleStatus => {
-                self.status = self.format_active_note_modules_status();
-                return true;
-            }
-            CommandId::ModuleOnMath => next_modules.math = true,
-            CommandId::ModuleOffMath => next_modules.math = false,
-            CommandId::ModuleToggleMath => next_modules.math = !next_modules.math,
-            CommandId::ModuleOnTable => next_modules.table = true,
-            CommandId::ModuleOffTable => next_modules.table = false,
-            CommandId::ModuleToggleTable => next_modules.table = !next_modules.table,
-            CommandId::ModuleOnVariables => next_modules.variables = true,
-            CommandId::ModuleOffVariables => next_modules.variables = false,
-            CommandId::ModuleToggleVariables => next_modules.variables = !next_modules.variables,
-            CommandId::ModuleOnStyle => next_modules.style = true,
-            CommandId::ModuleOffStyle => next_modules.style = false,
-            CommandId::ModuleToggleStyle => next_modules.style = !next_modules.style,
-            _ => return false,
+        let current = crate::editor_core::engine::ModuleState {
+            math: self.active_note.modules.math,
+            table: self.active_note.modules.table,
+            variables: self.active_note.modules.variables,
+            style: self.active_note.modules.style,
+        };
+        let Some(plan) = crate::editor_core::engine::EditorEngine::plan_module_command(
+            command_id,
+            current,
+        ) else {
+            return false;
+        };
+        if !plan.changed {
+            self.status = plan.message;
+            return true;
         }
+
+        let next_modules = NoteModules {
+            math: plan.next.math,
+            table: plan.next.table,
+            variables: plan.next.variables,
+            style: plan.next.style,
+        };
 
         let previous_modules = self.active_note.modules;
         match db.set_note_modules(&self.active_note.id, next_modules) {
@@ -2734,7 +2724,7 @@ impl TerminalApp {
                     self.adjust_cursor();
                     self.adjust_scroll();
                 }
-                self.status = self.format_active_note_modules_status();
+                self.status = plan.message;
             }
             Err(error) => {
                 self.status = format!("module update failed: {error}");
@@ -2750,8 +2740,7 @@ impl TerminalApp {
             return;
         }
 
-        if let Some(parsed) = crate::editor_core::command_catalog::parse_note_security_command(cmd)
-        {
+        if let Some(parsed) = crate::editor_core::engine::EditorEngine::parse_note_security_command(cmd) {
             let action = parsed.action;
             let action_label = action.as_str();
             let password = parsed.password;
@@ -2814,7 +2803,7 @@ impl TerminalApp {
         }
 
         if let Some(command) =
-            crate::editor_core::command_catalog::resolve_command(self.command_mode(), cmd)
+            crate::editor_core::engine::EditorEngine::resolve_command(self.command_mode(), cmd)
         {
             if self.handle_terminal_module_command(db, command.id) {
                 return;

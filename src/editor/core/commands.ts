@@ -6,6 +6,7 @@ import {
   isWasmReady,
   listCommandSuggestionsFromWasm,
   normalizeCommand,
+  planModuleCommandFromWasm,
   resolveCommandFromWasm,
   tryExecuteVimSubstituteFromWasm,
   type ListKind,
@@ -310,13 +311,6 @@ async function runFoldCommand(
   };
 }
 
-const MODULE_NAMES: Array<keyof NoteModules> = ["math", "table", "variables", "style"];
-
-function formatModules(modules: NoteModules): string {
-  const parts = MODULE_NAMES.map((name) => `${name}=${modules[name] ? "on" : "off"}`);
-  return `modules ${parts.join(" ")}`;
-}
-
 async function runModuleCommand(
   normalizedInput: string,
   _ctx: ResolvedContext,
@@ -326,49 +320,26 @@ async function runModuleCommand(
   if (!current) {
     return { message: "module unavailable", operations: [] };
   }
-
-  if (normalizedInput === "module status") {
-    return { message: formatModules(current), operations: [] };
+  const plan = planModuleCommandFromWasm(runtime.mode, normalizedInput, current);
+  if (!plan) {
+    return { message: "module unavailable", operations: [] };
   }
-
-  const next: NoteModules = { ...current };
-  const moduleMatch = normalizedInput.match(
-    /^module (math|table|variables|style) (on|off|toggle)$/,
-  );
-  if (!moduleMatch) {
-    return {
-      message: "module usage: module [status|<math|table|variables|style> <on|off|toggle>]",
-      operations: [],
-    };
-  }
-  const [, moduleName, action] = moduleMatch;
-  const key = moduleName as keyof NoteModules;
-  if (action === "on") {
-    if (current[key]) {
-      return { message: `module ${key} already on`, operations: [] };
-    }
-    next[key] = true;
-  } else if (action === "off") {
-    if (!current[key]) {
-      return { message: `module ${key} already off`, operations: [] };
-    }
-    next[key] = false;
-  } else {
-    next[key] = !next[key];
+  if (!plan.changed) {
+    return { message: plan.message, operations: [] };
   }
 
   if (!runtime.setNoteModules) {
     return { message: "module unavailable", operations: [] };
   }
   try {
-    await runtime.setNoteModules(next);
+    await runtime.setNoteModules(plan.next as NoteModules);
   } catch (error) {
     return {
       message: `module update failed: ${errorToMessage(error, "unknown module error")}`,
       operations: [],
     };
   }
-  return { message: formatModules(next), operations: [] };
+  return { message: plan.message, operations: [] };
 }
 
 function listConversionLabel(kind: ListKind): string {
