@@ -22,11 +22,10 @@ import {
 } from "./search";
 import {
   VimSession,
-  VIM_KEY_KIND,
   type VimAction,
-  type VimKeyInput,
   type VimMode,
 } from "./wasm.ts";
+import { runUiVimPipeline, syncUiVimSessionEsc } from "./vim-adapter.ts";
 import { vimAppendInsertPos, vimNormalLineEndPos } from "./vim-utils.ts";
 
 type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
@@ -180,62 +179,6 @@ function vimMoveWordBackward(view: EditorView): boolean {
 
   view.dispatch({ selection: { anchor: line.from + col }, scrollIntoView: true });
   return true;
-}
-
-function firstCodePoint(value: string): number | null {
-  if (!value) return null;
-  const codePoint = value.codePointAt(0);
-  return typeof codePoint === "number" ? codePoint : null;
-}
-
-function toVimKeyInput(event: KeyboardEvent): VimKeyInput | null {
-  const key = event.key;
-  const code = event.code;
-
-  if (key === "Escape" || key === "Esc" || code === "Escape") {
-    return { kind: VIM_KEY_KIND.ESC };
-  }
-  if (event.key === "Enter") return { kind: VIM_KEY_KIND.ENTER };
-  if (event.key === "Tab") return { kind: VIM_KEY_KIND.TAB };
-  if (event.key === "Backspace") return { kind: VIM_KEY_KIND.BACKSPACE };
-  if (key === "Delete" || key === "Del") return { kind: VIM_KEY_KIND.DELETE };
-  if (key === "ArrowUp" || key === "Up" || code === "ArrowUp") {
-    return { kind: VIM_KEY_KIND.ARROW_UP };
-  }
-  if (key === "ArrowDown" || key === "Down" || code === "ArrowDown") {
-    return { kind: VIM_KEY_KIND.ARROW_DOWN };
-  }
-  if (key === "ArrowLeft" || key === "Left" || code === "ArrowLeft") {
-    return { kind: VIM_KEY_KIND.ARROW_LEFT };
-  }
-  if (key === "ArrowRight" || key === "Right" || code === "ArrowRight") {
-    return { kind: VIM_KEY_KIND.ARROW_RIGHT };
-  }
-
-  const isPlain = !event.ctrlKey && !event.altKey && !event.metaKey;
-  if (isPlain && (key === "Home" || code === "Home")) {
-    return { kind: VIM_KEY_KIND.CHAR, charCode: "0".charCodeAt(0) };
-  }
-  if (isPlain && (key === "End" || code === "End")) {
-    return { kind: VIM_KEY_KIND.CHAR, charCode: "$".charCodeAt(0) };
-  }
-
-  if (event.ctrlKey && !event.altKey && !event.metaKey) {
-    const codePoint = firstCodePoint(event.key.toLowerCase());
-    if (codePoint !== null) {
-      return { kind: VIM_KEY_KIND.CTRL, charCode: codePoint };
-    }
-    return null;
-  }
-
-  if (isPlain && key.length === 1) {
-    const codePoint = firstCodePoint(key);
-    if (codePoint !== null) {
-      return { kind: VIM_KEY_KIND.CHAR, charCode: codePoint };
-    }
-  }
-
-  return null;
 }
 
 function shouldSwallowInNormalLikeMode(event: KeyboardEvent): boolean {
@@ -1091,7 +1034,7 @@ export function vimModeExtension(options: VimOptions = {}) {
         if (event.key === "Escape" || event.key === "Esc" || event.code === "Escape") {
           event.preventDefault();
           setModeLocally(view, "normal");
-          session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: view.state.doc.lines });
+          syncUiVimSessionEsc(session, view.state.doc.lines);
           return true;
         }
 
@@ -1107,7 +1050,7 @@ export function vimModeExtension(options: VimOptions = {}) {
             }
             if (deleted) {
               setModeLocally(view, "normal");
-              session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: view.state.doc.lines });
+              syncUiVimSessionEsc(session, view.state.doc.lines);
             }
             return true;
           }
@@ -1119,21 +1062,11 @@ export function vimModeExtension(options: VimOptions = {}) {
         return false;
       }
 
-      const keyInput = toVimKeyInput(event);
-      if (!keyInput) {
-        if (activeMode !== "insert" && shouldSwallowInNormalLikeMode(event)) {
-          event.preventDefault();
-          return true;
-        }
-        return false;
-      }
-
-      const step = session.step(keyInput, {
-        has_search_matches: editorSearchHasMatches(view),
-        line_count: view.state.doc.lines,
+      const pipeline = runUiVimPipeline(session, event, {
+        hasSearchMatches: editorSearchHasMatches(view),
+        lineCount: view.state.doc.lines,
       });
-
-      if (!step) {
+      if (pipeline.kind === "no_intent" || pipeline.kind === "no_step") {
         if (activeMode !== "insert" && shouldSwallowInNormalLikeMode(event)) {
           event.preventDefault();
           return true;
@@ -1141,10 +1074,11 @@ export function vimModeExtension(options: VimOptions = {}) {
         return false;
       }
 
+      const step = pipeline.step;
       currentMode = toUiMode(step.mode);
       syncModeClasses(view);
 
-      if (!step.handled) {
+      if (pipeline.kind === "unhandled") {
         const isVisualYank =
           (mode() === "visual" || mode() === "visual-line") &&
           !event.ctrlKey &&
@@ -1155,7 +1089,7 @@ export function vimModeExtension(options: VimOptions = {}) {
           event.preventDefault();
           yankVisualSelection(view);
           setModeLocally(view, "normal");
-          session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: view.state.doc.lines });
+          syncUiVimSessionEsc(session, view.state.doc.lines);
           return true;
         }
         if (mode() !== "insert" && shouldSwallowInNormalLikeMode(event)) {

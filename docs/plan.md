@@ -63,6 +63,7 @@ Non-goals:
 - [x] 6. Folding state transitions now consume a shared-core incremental fold index API (line-edit mapping + rebuild decision in Rust), while rendering remains frontend-owned.
 - [x] 7. Calc/variable trigger, eval-scope, and trailer-refresh eligibility semantics are now shared-core decisions consumed by both UI (wasm bridge) and TUI (native core calls), while UI/TUI keep rendering and scheduling mechanics local.
 - [x] 8. TUI input now flows through a dedicated adapter pipeline (terminal key -> vim intent translation -> shared-core `EditorEngine::step_vim` -> terminal action application), removing duplicated frontend stepping paths.
+- [x] 9. Tauri UI now routes Vim key handling through a dedicated adapter pipeline (DOM key event -> vim key intent translation -> shared-core wasm vim step -> CodeMirror action application), while keeping CodeMirror rendering mechanics local.
 
 ### Definition of done for this refactor track
 - Shared core is the canonical source for editing behavior.
