@@ -19,6 +19,46 @@ Non-goals:
 - duplicating core behavior in each front end
 - prioritizing feature breadth over responsiveness and architecture
 
+## Architecture-first refactor plan (ordered by architecture quality and correctness)
+
+### Target ownership
+- Shared Rust core owns editing semantics: vim intent resolution, markdown/table/list transforms, folding model, calc/variable semantics, and undo/redo intent boundaries.
+- Tauri UI and terminal/TUI own input translation and rendering only.
+- Storage/config/notifications stay in backend command layer.
+
+### Ordered action points
+1. Define a canonical Rust `EditorEngine` contract before moving logic.
+   - Input: document state + selection + mode + intent/command.
+   - Output: deterministic delta (text edits, cursor/selection, fold/calc/variable semantic updates, status/diagnostics).
+2. Freeze current behavior with golden replay tests.
+   - Cover vim motions/actions, markdown/table edits, folding, calc/variables, undo/redo.
+3. Add a cross-frontend parity harness.
+   - Run the same replay corpus against GUI adapter and TUI adapter.
+   - Require identical resulting doc, selection, and semantic state.
+4. Consolidate command/motion semantics into shared core first.
+   - Migrate high-risk drift areas from UI/TUI adapters into Rust core.
+5. Replace fragmented wasm helper usage with batched transaction calls.
+   - Keep hot path in-process; reduce boundary crossings per edit.
+6. Move folding to an incremental shared core index.
+   - Keep frontend fold rendering local, but make fold range computation/state transitions core-owned.
+7. Normalize calc/variable behavior ownership.
+   - Keep rendering local; move trigger/range/commit semantics to shared core.
+8. Refactor TUI into adapter shape.
+   - Pipeline: input -> intent -> engine -> terminal render.
+9. Refactor Tauri UI into adapter shape.
+   - Keep CodeMirror visual mechanics local; semantics come from shared core.
+10. Enforce CI gates for architecture and correctness.
+   - Parity suite required.
+   - Startup and hot-path perf checks required.
+   - No new duplicated editing semantics in frontends.
+11. Migrate subsystem-by-subsystem behind feature flags, not big-bang.
+   - Suggested order: commands/vim -> markdown/table/list -> folding -> calc semantics.
+
+### Definition of done for this refactor track
+- Shared core is the canonical source for editing behavior.
+- GUI and TUI parity checks pass for replay corpus.
+- Large-note responsiveness is not regressed.
+- Frontends remain thin adapters with no semantic drift.
 
 ## Features to be added after refactoring include:
 ### Global features
