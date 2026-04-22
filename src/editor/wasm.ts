@@ -117,17 +117,20 @@ function ensureWasmReadyNonBlocking(): boolean {
 export interface TextRuleOptions {
   markdownAutoformat?: boolean;
   checklistAutoReorder?: boolean;
+  tableEnabled?: boolean;
 }
 
 export interface TabRuleOptions {
   markdownAutoformat?: boolean;
   outdent?: boolean;
+  tableEnabled?: boolean;
 }
 
 export interface TableBoundaryEditOptions {
   markdownAutoformat?: boolean;
   backward?: boolean;
   structuralMerge?: boolean;
+  tableEnabled?: boolean;
 }
 
 export type VimMode = "insert" | "normal" | "visual" | "visual_line";
@@ -499,6 +502,7 @@ export function runDocChangeRules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.checklistAutoReorder ?? true,
+      options.tableEnabled ?? true,
     ),
     snapshot.text,
   );
@@ -514,6 +518,7 @@ export function runEnterRules(
     wasm_run_enter_rules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
+      options.tableEnabled ?? true,
     ),
     snapshot.text,
   );
@@ -530,6 +535,7 @@ export function runTabRules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
+      options.tableEnabled ?? true,
     ),
     snapshot.text,
   );
@@ -546,6 +552,7 @@ export function runTableCellNavigationRules(
       text, anchor, head, hasRange, changedFrom, changedTo,
       options.markdownAutoformat ?? true,
       options.outdent ?? false,
+      options.tableEnabled ?? true,
     ),
     snapshot.text,
   );
@@ -587,6 +594,7 @@ export function runTableBoundaryEditRules(
       options.markdownAutoformat ?? true,
       options.backward ?? true,
       options.structuralMerge ?? false,
+      options.tableEnabled ?? true,
     ),
     snapshot.text,
   );

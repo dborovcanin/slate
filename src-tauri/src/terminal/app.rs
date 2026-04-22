@@ -1733,6 +1733,7 @@ impl TerminalApp {
             let options = crate::editor_core::text_rules::TextRuleOptions {
                 markdown_autoformat: self.markdown_autoformat_enabled(),
                 checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
+                table_enabled: self.note_table_module_enabled(),
             };
             if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
                 self.apply_edit_operation(&op);
@@ -4967,7 +4968,7 @@ impl TerminalApp {
     }
 
     fn try_autoformat_rules(&mut self) {
-        if !self.note_style_module_enabled() {
+        if !self.note_style_module_enabled() && !self.note_table_module_enabled() {
             return;
         }
         if !Self::line_might_trigger_doc_change_rules(self.current_line()) {
@@ -4978,6 +4979,7 @@ impl TerminalApp {
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
+            table_enabled: self.note_table_module_enabled(),
         };
         if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
             self.apply_edit_operation(&op);
@@ -4989,6 +4991,7 @@ impl TerminalApp {
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
+            table_enabled: self.note_table_module_enabled(),
         };
         if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&ctx, options) {
             self.apply_edit_operation(&op);
@@ -5002,6 +5005,7 @@ impl TerminalApp {
         let options = crate::editor_core::text_rules::TabRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             outdent,
+            table_enabled: self.note_table_module_enabled(),
         };
         if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&ctx, options) {
             self.apply_edit_operation(&op);
@@ -5018,6 +5022,7 @@ impl TerminalApp {
         let options = crate::editor_core::text_rules::TabRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             outdent,
+            table_enabled: true,
         };
         if let Some(op) =
             crate::editor_core::text_rules::run_table_cell_navigation_rules(&ctx, options)
@@ -5066,6 +5071,7 @@ impl TerminalApp {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             backward,
             structural_merge,
+            table_enabled: true,
         };
         let op = crate::editor_core::text_rules::run_table_boundary_edit_rules(&ctx, options)?;
         let changed = !op.changes.is_empty();
@@ -8554,6 +8560,47 @@ mod tests {
         app.handle_editor_key(&db, Key::Enter)
             .expect("enter uses plain newline when style module is off");
         assert_eq!(app.lines, vec!["- [ ] task".to_string(), String::new()]);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn module_style_off_keeps_table_autoformat_when_table_module_is_on() {
+        let (db, mut app, path) = app_with_note("| a | b |\n| --- | --- |\n|1|2|");
+        app.mode = UiMode::Editor;
+        app.cursor_line = 2;
+        app.cursor_col = 4; // before trailing pipe in "|1|2|"
+
+        app.execute_terminal_command(&db, "module style off");
+        app.handle_editor_key(&db, Key::Char('0'))
+            .expect("typing still triggers table autoformat");
+
+        assert_ne!(app.lines[2], "|1|20|");
+        assert!(app.lines[2].contains("20"));
+        assert!(app.lines[2].starts_with("| "));
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn module_style_off_keeps_table_ctrl_navigation_when_table_module_is_on() {
+        let (db, mut app, path) = app_with_note("| aaa | bb  |");
+        app.mode = UiMode::Editor;
+        app.cursor_col = 5; // first cell end anchor
+
+        app.execute_terminal_command(&db, "module style off");
+
+        app.handle_editor_key(&db, Key::CtrlArrowRight)
+            .expect("ctrl-right jumps to next table cell");
+        assert_eq!(app.cursor_col, 10);
+
+        app.handle_editor_key(&db, Key::CtrlArrowLeft)
+            .expect("ctrl-left jumps back to previous table cell");
+        assert_eq!(app.cursor_col, 5);
 
         drop(app);
         drop(db);

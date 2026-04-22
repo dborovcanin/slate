@@ -68,6 +68,7 @@ pub fn wasm_run_doc_change_rules(
     changed_to: usize,
     markdown_autoformat: bool,
     checklist_auto_reorder: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let ctx = build_context(
         text,
@@ -80,6 +81,7 @@ pub fn wasm_run_doc_change_rules(
     let options = TextRuleOptions {
         markdown_autoformat,
         checklist_auto_reorder,
+        table_enabled,
     };
     let op = run_doc_change_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
@@ -95,6 +97,7 @@ pub fn wasm_run_enter_rules(
     changed_from: usize,
     changed_to: usize,
     markdown_autoformat: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let ctx = build_context(
         text,
@@ -107,6 +110,7 @@ pub fn wasm_run_enter_rules(
     let options = TextRuleOptions {
         markdown_autoformat,
         checklist_auto_reorder: true,
+        table_enabled,
     };
     let op = run_enter_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
@@ -123,6 +127,7 @@ pub fn wasm_run_tab_rules(
     changed_to: usize,
     markdown_autoformat: bool,
     outdent: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let ctx = build_context(
         text,
@@ -135,6 +140,7 @@ pub fn wasm_run_tab_rules(
     let options = TabRuleOptions {
         markdown_autoformat,
         outdent,
+        table_enabled,
     };
     let op = run_tab_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
@@ -151,6 +157,7 @@ pub fn wasm_run_table_cell_navigation_rules(
     changed_to: usize,
     markdown_autoformat: bool,
     outdent: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let ctx = build_context(
         text,
@@ -163,6 +170,7 @@ pub fn wasm_run_table_cell_navigation_rules(
     let options = TabRuleOptions {
         markdown_autoformat,
         outdent,
+        table_enabled,
     };
     let op = run_table_cell_navigation_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))
@@ -207,6 +215,7 @@ pub fn wasm_run_table_boundary_edit_rules(
     markdown_autoformat: bool,
     backward: bool,
     structural_merge: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let ctx = build_context(
         text,
@@ -220,6 +229,7 @@ pub fn wasm_run_table_boundary_edit_rules(
         markdown_autoformat,
         backward,
         structural_merge,
+        table_enabled,
     };
     let op = run_table_boundary_edit_rules(&ctx, options)?;
     Some(edit_operation_to_js(&op))

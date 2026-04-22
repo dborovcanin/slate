@@ -7,6 +7,7 @@ use crate::types::{EditOperation, OperationSelection, TextChange};
 pub struct TextRuleOptions {
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
+    pub table_enabled: bool,
 }
 
 impl Default for TextRuleOptions {
@@ -14,6 +15,7 @@ impl Default for TextRuleOptions {
         Self {
             markdown_autoformat: true,
             checklist_auto_reorder: true,
+            table_enabled: true,
         }
     }
 }
@@ -22,6 +24,7 @@ impl Default for TextRuleOptions {
 pub struct TabRuleOptions {
     pub markdown_autoformat: bool,
     pub outdent: bool,
+    pub table_enabled: bool,
 }
 
 impl Default for TabRuleOptions {
@@ -29,6 +32,7 @@ impl Default for TabRuleOptions {
         Self {
             markdown_autoformat: true,
             outdent: false,
+            table_enabled: true,
         }
     }
 }
@@ -38,6 +42,7 @@ pub struct TableBoundaryEditOptions {
     pub markdown_autoformat: bool,
     pub backward: bool,
     pub structural_merge: bool,
+    pub table_enabled: bool,
 }
 
 impl Default for TableBoundaryEditOptions {
@@ -46,6 +51,7 @@ impl Default for TableBoundaryEditOptions {
             markdown_autoformat: true,
             backward: true,
             structural_merge: false,
+            table_enabled: true,
         }
     }
 }
@@ -769,22 +775,20 @@ pub fn run_doc_change_rules(
         return Some(op);
     }
 
-    if !options.markdown_autoformat {
-        return None;
+    if options.table_enabled {
+        if let Some(op) = table_autoformat_rule(ctx) {
+            return Some(op);
+        }
     }
 
-    if let Some(op) = table_autoformat_rule(ctx) {
-        return Some(op);
+    if !options.markdown_autoformat {
+        return None;
     }
 
     list_autoformat_rule(&ctx)
 }
 
 pub fn run_enter_rules(ctx: &ResolvedContext, options: TextRuleOptions) -> Option<EditOperation> {
-    if !options.markdown_autoformat {
-        return None;
-    }
-
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -792,9 +796,15 @@ pub fn run_enter_rules(ctx: &ResolvedContext, options: TextRuleOptions) -> Optio
 
     let line = ctx.current_line();
 
-    // Try table continuation first
-    if let Some(op) = table_continuation_rule(&line, &selection) {
-        return Some(op);
+    // Try table continuation first when table handling is enabled.
+    if options.table_enabled {
+        if let Some(op) = table_continuation_rule(&line, &selection) {
+            return Some(op);
+        }
+    }
+
+    if !options.markdown_autoformat {
+        return None;
     }
 
     if selection.head != line.to {
@@ -1059,12 +1069,14 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
 }
 
 pub fn run_tab_rules(ctx: &ResolvedContext, options: TabRuleOptions) -> Option<EditOperation> {
-    if !options.markdown_autoformat {
-        return None;
+    if options.table_enabled {
+        if let Some(op) = table_tab_rule(ctx, &options) {
+            return Some(op);
+        }
     }
 
-    if let Some(op) = table_tab_rule(ctx, &options) {
-        return Some(op);
+    if !options.markdown_autoformat {
+        return None;
     }
 
     let (start_line, end_line) = selection_line_span(ctx);
@@ -1122,7 +1134,7 @@ pub fn run_table_cell_navigation_rules(
     ctx: &ResolvedContext,
     options: TabRuleOptions,
 ) -> Option<EditOperation> {
-    if !options.markdown_autoformat {
+    if !options.table_enabled {
         return None;
     }
     table_tab_rule(ctx, &options)
@@ -1416,7 +1428,7 @@ pub fn run_table_boundary_edit_rules(
     ctx: &ResolvedContext,
     options: TableBoundaryEditOptions,
 ) -> Option<EditOperation> {
-    if !options.markdown_autoformat {
+    if !options.table_enabled {
         return None;
     }
 
@@ -1657,6 +1669,7 @@ mod tests {
             TabRuleOptions {
                 markdown_autoformat: true,
                 outdent: true,
+                ..TabRuleOptions::default()
             },
         )
         .expect("outdent op");
@@ -1682,6 +1695,7 @@ mod tests {
             TabRuleOptions {
                 markdown_autoformat: true,
                 outdent: true,
+                ..TabRuleOptions::default()
             },
         )
         .expect("outdent op");
@@ -1777,6 +1791,38 @@ mod tests {
         let doc = snapshot(text, head, head);
         let op = run_tab_rules(&doc, TabRuleOptions::default()).expect("operation");
         assert_eq!(op.selection.expect("selection").anchor, 10);
+    }
+
+    #[test]
+    fn run_table_navigation_still_works_when_markdown_autoformat_is_off() {
+        let text = "| aaa | bb  |";
+        let head = text.find('a').unwrap() + 1;
+        let doc = snapshot(text, head, head);
+        let op = run_table_cell_navigation_rules(
+            &doc,
+            TabRuleOptions {
+                markdown_autoformat: false,
+                table_enabled: true,
+                ..TabRuleOptions::default()
+            },
+        )
+        .expect("operation");
+        assert_eq!(op.selection.expect("selection").anchor, 10);
+    }
+
+    #[test]
+    fn run_table_navigation_is_disabled_when_table_module_is_off() {
+        let text = "| aaa | bb  |";
+        let head = text.find('a').unwrap() + 1;
+        let doc = snapshot(text, head, head);
+        let op = run_table_cell_navigation_rules(
+            &doc,
+            TabRuleOptions {
+                table_enabled: false,
+                ..TabRuleOptions::default()
+            },
+        );
+        assert!(op.is_none());
     }
 
     #[test]
@@ -1891,6 +1937,41 @@ mod tests {
             &doc,
             TextRuleOptions {
                 markdown_autoformat: false,
+                ..TextRuleOptions::default()
+            },
+        );
+        assert!(op.is_none());
+    }
+
+    #[test]
+    fn run_doc_change_rules_table_autoformats_when_style_is_off_and_table_is_on() {
+        let text = "| a | b |\n| --- | --- |\n|1|2|";
+        let head = text.len();
+        let doc = snapshot_with_changed_range(text, head, head, head.saturating_sub(1), head);
+        let op = run_doc_change_rules(
+            &doc,
+            TextRuleOptions {
+                markdown_autoformat: false,
+                table_enabled: true,
+                ..TextRuleOptions::default()
+            },
+        )
+        .expect("operation");
+        assert_eq!(
+            apply_operation(doc.text(), &op),
+            "| a   | b   |\n| --- | --- |\n| 1   | 2   |"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_skips_table_autoformat_when_table_module_is_off() {
+        let text = "| a | b |\n| --- | --- |\n|1|2|";
+        let head = text.len();
+        let doc = snapshot_with_changed_range(text, head, head, head.saturating_sub(1), head);
+        let op = run_doc_change_rules(
+            &doc,
+            TextRuleOptions {
+                table_enabled: false,
                 ..TextRuleOptions::default()
             },
         );

@@ -274,22 +274,38 @@ const TAB_WINDOW_LINES = 50;
 // Doc-change rules scan the checklist/list block outward from the changed region.
 const DOC_CHANGE_WINDOW_LINES = 200;
 
-function continueListOnEnter(view: EditorView, autoformat: boolean): boolean {
+function continueListOnEnter(
+  view: EditorView,
+  autoformat: boolean,
+  tableEnabled: boolean,
+): boolean {
   const scoped = snapshotFromViewLines(view, ENTER_WINDOW_LINES);
-  const operation = runEnterRules(scoped.snapshot, { markdownAutoformat: autoformat });
+  const operation = runEnterRules(scoped.snapshot, {
+    markdownAutoformat: autoformat,
+    tableEnabled,
+  });
   if (!operation) return false;
   applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
-function indentListOnTab(view: EditorView, autoformat: boolean, outdent = false): boolean {
-  if (!autoformat) return false;
+function indentListOnTab(
+  view: EditorView,
+  autoformat: boolean,
+  tableEnabled: boolean,
+  outdent = false,
+): boolean {
+  if (!autoformat && !tableEnabled) return false;
 
   // Prefer calc Tab-apply behavior when a ghost result is available.
   if (!outdent && getCalcResultAtCursor(view) !== null) return false;
 
   const scoped = snapshotFromViewLines(view, TAB_WINDOW_LINES);
-  const operation = runTabRules(scoped.snapshot, { markdownAutoformat: autoformat, outdent });
+  const operation = runTabRules(scoped.snapshot, {
+    markdownAutoformat: autoformat,
+    outdent,
+    tableEnabled,
+  });
   if (!operation) return false;
   applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
@@ -335,6 +351,7 @@ function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
 function tableBoundaryEdit(
   view: EditorView,
   autoformat: boolean,
+  tableEnabled: boolean,
   backward: boolean,
   structuralMerge = false,
 ): boolean {
@@ -348,6 +365,7 @@ function tableBoundaryEdit(
     markdownAutoformat: autoformat,
     backward,
     structuralMerge,
+    tableEnabled,
   });
   if (!operation) return false;
   applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
@@ -394,6 +412,7 @@ export function runTableHeaderDeleteColumnCommand(view: EditorView): boolean {
 interface TableCellNavigationCommandOptions {
   markdownAutoformat?: boolean;
   outdent?: boolean;
+  tableEnabled?: boolean;
 }
 
 export function runTableCellNavigationCommand(
@@ -409,20 +428,27 @@ export function runTableCellNavigationCommand(
   const operation = runTableCellNavigationRules(scoped.snapshot, {
     markdownAutoformat: options.markdownAutoformat ?? true,
     outdent: options.outdent ?? false,
+    tableEnabled: options.tableEnabled ?? true,
   });
   if (!operation) return false;
   applyEditOperation(view, offsetEditOperation(operation, scoped.offset));
   return true;
 }
 
-function tableCellJump(view: EditorView, autoformat: boolean, outdent: boolean): boolean {
+function tableCellJump(
+  view: EditorView,
+  autoformat: boolean,
+  tableEnabled: boolean,
+  outdent: boolean,
+): boolean {
   return runTableCellNavigationCommand(view, {
     markdownAutoformat: autoformat,
     outdent,
+    tableEnabled,
   });
 }
 
-function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
+function markdownShortcutKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   const keys: KeyBinding[] = [
     { key: "Mod-b", preventDefault: true, run: (view) => toggleWrap(view, "**") },
     { key: "Mod-i", preventDefault: true, run: (view) => toggleWrap(view, "*") },
@@ -430,10 +456,10 @@ function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
     { key: "Mod-k", preventDefault: true, run: wrapLink },
   ];
 
-  if (autoformat) {
+  if (autoformat || tableEnabled) {
     keys.push({
       key: "Enter",
-      run: (view) => continueListOnEnter(view, autoformat),
+      run: (view) => continueListOnEnter(view, autoformat, tableEnabled),
       preventDefault: true,
     });
   }
@@ -441,40 +467,44 @@ function markdownShortcutKeymap(autoformat: boolean): KeyBinding[] {
   return keys;
 }
 
-function markdownTabKeymap(autoformat: boolean): KeyBinding[] {
+function markdownTabKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   return [
     {
       key: "Tab",
       preventDefault: true,
-      run: (view) => indentListOnTab(view, autoformat, false),
+      run: (view) => indentListOnTab(view, autoformat, tableEnabled, false),
     },
     {
       key: "Shift-Tab",
       preventDefault: true,
-      run: (view) => indentListOnTab(view, autoformat, true),
+      run: (view) => indentListOnTab(view, autoformat, tableEnabled, true),
     },
   ];
 }
 
-function tableCursorKeymap(autoformat: boolean): KeyBinding[] {
+function tableCursorKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   return [
     {
       key: "Backspace",
-      run: (view) => tableBoundaryEdit(view, autoformat, true),
+      run: (view) => tableBoundaryEdit(view, autoformat, tableEnabled, true),
     },
     {
       key: "Delete",
-      run: (view) => tableBoundaryEdit(view, autoformat, false),
+      run: (view) => tableBoundaryEdit(view, autoformat, tableEnabled, false),
     },
     {
       key: "Ctrl-Backspace",
       preventDefault: true,
-      run: (view) => tableHeaderDeleteColumn(view) || tableBoundaryEdit(view, autoformat, true, true),
+      run: (view) =>
+        tableHeaderDeleteColumn(view) ||
+        tableBoundaryEdit(view, autoformat, tableEnabled, true, true),
     },
     {
       key: "Ctrl-Delete",
       preventDefault: true,
-      run: (view) => tableHeaderDeleteColumn(view) || tableBoundaryEdit(view, autoformat, false, true),
+      run: (view) =>
+        tableHeaderDeleteColumn(view) ||
+        tableBoundaryEdit(view, autoformat, tableEnabled, false, true),
     },
     {
       key: "ArrowLeft",
@@ -487,17 +517,21 @@ function tableCursorKeymap(autoformat: boolean): KeyBinding[] {
     {
       key: "Ctrl-ArrowLeft",
       preventDefault: true,
-      run: (view) => tableCellJump(view, autoformat, true),
+      run: (view) => tableCellJump(view, autoformat, tableEnabled, true),
     },
     {
       key: "Ctrl-ArrowRight",
       preventDefault: true,
-      run: (view) => tableCellJump(view, autoformat, false),
+      run: (view) => tableCellJump(view, autoformat, tableEnabled, false),
     },
   ];
 }
 
-function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
+function textRulesPlugin(
+  autoformat: boolean,
+  checklistAutoReorder: boolean,
+  tableEnabled: boolean,
+) {
   return ViewPlugin.define(() => {
     let applying = false;
     return {
@@ -512,6 +546,7 @@ function textRulesPlugin(autoformat: boolean, checklistAutoReorder: boolean) {
           const operation = runDocChangeRules(scoped.snapshot, {
             markdownAutoformat: autoformat,
             checklistAutoReorder,
+            tableEnabled,
           });
           if (operation) {
             Promise.resolve().then(() => {
@@ -650,15 +685,15 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   const tableExtensions = tableEnabled
     ? [
       Prec.high(tablePipeInputHandler()),
-      Prec.high(keymap.of(tableCursorKeymap(autoformat))),
+      Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled))),
       tableCursorGuards(),
     ]
     : [];
   return [
     ...tableExtensions,
-    Prec.high(keymap.of(markdownShortcutKeymap(autoformat))),
-    Prec.low(keymap.of(markdownTabKeymap(autoformat))),
+    Prec.high(keymap.of(markdownShortcutKeymap(autoformat, tableEnabled))),
+    Prec.low(keymap.of(markdownTabKeymap(autoformat, tableEnabled))),
     checklistClickHandlers(),
-    textRulesPlugin(autoformat, checklistAutoReorder),
+    textRulesPlugin(autoformat, checklistAutoReorder, tableEnabled),
   ];
 }
