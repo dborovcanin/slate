@@ -75,9 +75,18 @@ fn display_cols_for_prefix_counts_wide_chars_as_two_columns() {
 #[test]
 fn gutter_width_expands_after_four_digit_line_numbers() {
     assert_eq!(crate::terminal::app::gutter_width_for_visible_lines(1), 6);
-    assert_eq!(crate::terminal::app::gutter_width_for_visible_lines(9_999), 6);
-    assert_eq!(crate::terminal::app::gutter_width_for_visible_lines(10_000), 7);
-    assert_eq!(crate::terminal::app::gutter_width_for_visible_lines(100_000), 8);
+    assert_eq!(
+        crate::terminal::app::gutter_width_for_visible_lines(9_999),
+        6
+    );
+    assert_eq!(
+        crate::terminal::app::gutter_width_for_visible_lines(10_000),
+        7
+    );
+    assert_eq!(
+        crate::terminal::app::gutter_width_for_visible_lines(100_000),
+        8
+    );
 }
 
 #[test]
@@ -90,7 +99,8 @@ fn cursor_position_respects_expanded_gutter_width() {
 
     let (rows, cols) = crate::terminal::input::terminal_size();
     let (_row, cursor_col) = app.cursor_position(rows, cols);
-    let expected = crate::terminal::app::gutter_width_for_visible_lines(app.visible_line_count()) + 1;
+    let expected =
+        crate::terminal::app::gutter_width_for_visible_lines(app.visible_line_count()) + 1;
 
     assert_eq!(expected, 8);
     assert_eq!(cursor_col, expected);

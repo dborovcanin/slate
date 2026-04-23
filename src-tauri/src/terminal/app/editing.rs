@@ -4,9 +4,10 @@ use super::{
     find_calc_segment_range, gutter_width_for_visible_lines, line_char_len, line_display_cols,
     split_lines, table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
     table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode, VariableAutocompletePopupState,
-    VariableAutocompleteState, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
-    FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
-    UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    VariableAutocompleteState, CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS,
+    CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
+    HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
+    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, join_lines, remove_char_at, viewport_col_for_display_col,
@@ -162,6 +163,7 @@ impl TerminalApp {
         self.calc.prev_line_has_builtin_formula.clear();
         self.calc.stale = false;
         self.calc_last_view_eval_range = None;
+        self.calc_recompute_pending = false;
     }
 
     pub(super) fn defer_calc_state_after_edit(&mut self) {
@@ -573,10 +575,25 @@ impl TerminalApp {
             // prev_line_hashes may drift from `lines` until the next real
             // recompute, but the planner falls back to full eval safely when
             // the diff looks large, so correctness holds.
+            self.calc_recompute_pending = false;
         } else if self.should_defer_calc_recompute() {
             self.defer_calc_state_after_edit();
+            self.calc_recompute_pending = false;
         } else {
-            self.recompute_calc_full();
+            if self.lines.len() >= CALC_ASYNC_MIN_LINES {
+                // Keep large-note typing non-blocking: schedule calc for the
+                // next idle tick and clear only the edited line's cached
+                // result so we don't show stale ghosts while pending.
+                if let Some(slot) = self.calc.results.get_mut(self.cursor_line) {
+                    *slot = None;
+                }
+                if let Some(slot) = self.calc.cell_results.get_mut(self.cursor_line) {
+                    slot.clear();
+                }
+                self.calc_recompute_pending = true;
+            } else {
+                self.recompute_calc_full();
+            }
         }
         self.history.record_edit(
             &self.lines,
@@ -648,6 +665,7 @@ impl TerminalApp {
     pub(super) fn recompute_calc_full(&mut self) {
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
+            self.calc_recompute_pending = false;
             return;
         }
         let calc_variables_enabled = self.calc_variables_enabled();
@@ -673,6 +691,7 @@ impl TerminalApp {
             self.calc.cell_results = calc_data.cell_results;
             self.calc.variable_names = calc_data.variable_names;
             self.calc.stale = false;
+            self.calc_recompute_pending = false;
             return;
         }
 
@@ -860,6 +879,17 @@ impl TerminalApp {
         self.calc.cell_results = new_cell_results;
         self.calc.variable_names = variable_names;
         self.calc.stale = false;
+        self.calc_recompute_pending = false;
+    }
+
+    pub(super) fn maybe_recompute_calc_after_idle(&mut self) {
+        if !self.calc_recompute_pending {
+            return;
+        }
+        if self.last_edit.elapsed() < Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS) {
+            return;
+        }
+        self.recompute_calc_full();
     }
 
     // --- Search ---
@@ -1317,6 +1347,9 @@ impl TerminalApp {
     pub(super) fn apply_calc_tab(&mut self) -> bool {
         if !self.note_math_module_enabled() {
             return false;
+        }
+        if self.calc_recompute_pending {
+            self.recompute_calc_full();
         }
         let text = self.current_line().to_string();
         let Some(result) = self

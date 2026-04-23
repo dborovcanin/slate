@@ -1194,10 +1194,9 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           }
 
           const snapshotDoc = doc;
-          // Build lines via a single rope traversal (O(N)) instead of
-          // N × O(log N) doc.line(i) calls. lineStarts computed in one pass.
-          const docText = doc.toString();
-          const nextLines = docText.split('\n');
+          // Build lines directly from the rope representation to avoid
+          // allocating a full-document string on every eval pass.
+          const nextLines = doc.toJSON();
           const lineStarts: number[] = new Array(nextLines.length);
           for (let i = 0, pos = 0; i < nextLines.length; i++) {
             lineStarts[i] = pos;

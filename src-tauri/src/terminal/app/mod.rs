@@ -25,6 +25,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
+const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
+const CALC_ASYNC_MIN_LINES: usize = 2_000;
 const UNDO_DEBOUNCE_MS: u64 = 300;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
 const FOLD_PREFIX_TIMEOUT_MS: u64 = 900;
@@ -255,6 +257,7 @@ struct TerminalApp {
     command_selection_linewise: bool,
     // Calc ghost cache
     calc: CalcCache,
+    calc_recompute_pending: bool,
     calc_viewport_only: bool,
     calc_last_view_eval_range: Option<(usize, usize)>,
     reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
@@ -291,6 +294,7 @@ struct TerminalApp {
     fence_checkpoints: Vec<(bool, Option<String>)>,
     fence_checkpoints_valid_through: usize,
     draw_buf: String,
+    last_drawn_frame: String,
 }
 
 mod calc_helpers;
@@ -547,6 +551,7 @@ impl TerminalApp {
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,
             },
+            calc_recompute_pending: false,
             calc_viewport_only,
             calc_last_view_eval_range: None,
             reminder_ghosts,
@@ -575,6 +580,7 @@ impl TerminalApp {
             fence_checkpoints: vec![(false, None)],
             fence_checkpoints_valid_through: 0,
             draw_buf: String::new(),
+            last_drawn_frame: String::new(),
         };
 
         app.recompute_folding_from_cached_structure();
@@ -632,6 +638,7 @@ impl TerminalApp {
             self.folds.rescan_pending = false;
             self.recompute_folding();
         }
+        self.maybe_recompute_calc_after_idle();
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
             match self.save(db) {
                 Ok(()) => {

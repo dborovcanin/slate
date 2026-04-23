@@ -1,7 +1,10 @@
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use std::sync::{Mutex, OnceLock};
 
 pub struct CalcEngine;
 
@@ -119,6 +122,8 @@ struct VariableResolver<'a> {
     raw_eval_cache: HashMap<String, Option<String>>,
 }
 
+static VARIABLE_REGEX_CACHE: OnceLock<Mutex<HashMap<u64, Regex>>> = OnceLock::new();
+
 struct NoInterrupt;
 impl fend_core::Interrupt for NoInterrupt {
     fn should_interrupt(&self) -> bool {
@@ -133,7 +138,7 @@ impl<'a> VariableResolver<'a> {
         let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
         // Longest-first so leftmost-first regex alternation picks the longest match.
         names_sorted.sort_by_key(|name| (Reverse(name.len()), name.clone()));
-        let variable_regex = build_variable_regex(&names_sorted);
+        let variable_regex = cached_variable_regex(&names_sorted);
 
         Self {
             defs,
@@ -304,6 +309,39 @@ impl<'a> VariableResolver<'a> {
             message,
         });
     }
+}
+
+fn variable_regex_cache_key(names_sorted: &[String]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    names_sorted.len().hash(&mut hasher);
+    for name in names_sorted {
+        name.hash(&mut hasher);
+        '\u{1f}'.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+fn cached_variable_regex(names_sorted: &[String]) -> Option<Regex> {
+    if names_sorted.is_empty() {
+        return None;
+    }
+
+    let key = variable_regex_cache_key(names_sorted);
+    let cache = VARIABLE_REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(hit) = guard.get(&key) {
+            return Some(hit.clone());
+        }
+    }
+
+    let compiled = build_variable_regex(names_sorted)?;
+    if let Ok(mut guard) = cache.lock() {
+        if guard.len() >= 256 {
+            guard.clear();
+        }
+        guard.insert(key, compiled.clone());
+    }
+    Some(compiled)
 }
 
 impl CalcEngine {

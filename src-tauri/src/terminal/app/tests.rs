@@ -1,4 +1,3 @@
-use crate::terminal::folding::describe_fold_ranges;
 use super::input::Key;
 use super::{
     build_variable_suggestions, builtin_formula_label, compute_calc_results,
@@ -10,6 +9,7 @@ use super::{
 use super::{display_cols_for_prefix, line_char_len};
 use super::{TerminalApp, TerminalOptions, UiMode, VimRegister, VimRegisterMode};
 use crate::storage::Db;
+use crate::terminal::folding::describe_fold_ranges;
 use app_core::storage::NoteAccessMode;
 use serde::Deserialize;
 use std::fs;

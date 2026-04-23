@@ -58,13 +58,18 @@ pub fn evaluate_note_context_delta(
     eval_from: Option<usize>,
     eval_to: Option<usize>,
 ) -> Result<NoteEvaluationResult, String> {
-    let cache = core
-        .note_line_cache
-        .lock()
-        .map_err(|_| "line cache lock poisoned".to_string())?;
-    let lines = cache
-        .get(&note_id)
-        .ok_or_else(|| format!("no cached lines for note '{note_id}'"))?;
+    // Snapshot lines under the mutex, then release it before evaluation so
+    // expensive calc work doesn't block other cache updates.
+    let lines = {
+        let cache = core
+            .note_line_cache
+            .lock()
+            .map_err(|_| "line cache lock poisoned".to_string())?;
+        cache
+            .get(&note_id)
+            .cloned()
+            .ok_or_else(|| format!("no cached lines for note '{note_id}'"))?
+    };
     let line_count = lines.len();
     let eval_range = match (eval_from, eval_to) {
         (Some(from), Some(to)) if to >= from => Some((from.min(line_count), to.min(line_count))),
@@ -74,5 +79,5 @@ pub fn evaluate_note_context_delta(
         variables_enabled: variables_enabled.unwrap_or(true),
         eval_range,
     };
-    Ok(core.calc_engine().evaluate_note_context(lines, options))
+    Ok(core.calc_engine().evaluate_note_context(&lines, options))
 }

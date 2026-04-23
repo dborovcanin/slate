@@ -847,10 +847,17 @@ impl TerminalApp {
         buf.push_str(cursor_style);
         buf.push_str("\x1b[?25h");
 
+        if self.last_drawn_frame == buf {
+            self.draw_buf = buf;
+            return Ok(());
+        }
+
         let result = out
             .write_all(buf.as_bytes())
             .and_then(|_| out.flush())
             .map_err(|e| format!("Failed to draw terminal UI: {e}"));
+        self.last_drawn_frame.clear();
+        self.last_drawn_frame.push_str(&buf);
         self.draw_buf = buf;
         result
     }

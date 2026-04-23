@@ -1164,6 +1164,7 @@ impl TerminalApp {
             self.calc.prev_line_has_assignment.clear();
             self.calc.prev_line_has_builtin_formula.clear();
             self.calc.stale = false;
+            self.calc_recompute_pending = false;
         } else if self.should_defer_calc_recompute() {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
@@ -1172,6 +1173,7 @@ impl TerminalApp {
             self.calc.prev_line_has_assignment.clear();
             self.calc.prev_line_has_builtin_formula.clear();
             self.calc.stale = true;
+            self.calc_recompute_pending = false;
         } else {
             self.recompute_calc_full();
         }
