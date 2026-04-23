@@ -423,7 +423,8 @@ The split committed in `405144d` produced:
 ### Estimated impact
 
 Rough, uninstrumented:
-- Fix (1) + (2): **5–20× faster keystroke on 50k-line notes with calc**. This is the headline win.
+
+~~- Fix (1) + (2): **5–20× faster keystroke on 50k-line notes with calc**. This is the headline win.~~
 - Fix (3) + (9): **~30% smaller wasm bridge, 2–3× fewer allocations per call** on hot paths that snapshot.
 - Fix (4) + (5) + (6): **unblock IPC during calc, enable cancellation**, no direct latency number but unblocks the app during long calcs.
 - Fix (8) + (10): **2–4× faster TUI draw loop on large docs** with folds or calc.

@@ -712,7 +712,7 @@ impl TerminalApp {
                             let editor_height = self.editor_height();
                             self.ensure_calc_for_viewport(editor_height, true);
                         } else {
-                            self.recompute_calc_full();
+                            self.run_calc_recompute();
                         }
                     } else {
                         self.clear_calc_cache();
@@ -972,7 +972,7 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn build_context(&self) -> crate::editor_core::context::ResolvedContext {
+    pub(super) fn build_context(&self) -> crate::editor_core::context::ResolvedContext<'static> {
         crate::editor_core::context::ResolvedContext::new(self.build_snapshot())
     }
 
@@ -1160,6 +1160,7 @@ impl TerminalApp {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
+            self.calc.line_metadata.clear();
             self.calc.prev_line_metadata.clear();
             self.calc.stale = false;
             self.calc_recompute_pending = false;
@@ -1167,11 +1168,12 @@ impl TerminalApp {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
+            self.calc.line_metadata.clear();
             self.calc.prev_line_metadata.clear();
             self.calc.stale = true;
             self.calc_recompute_pending = false;
         } else {
-            self.recompute_calc_full();
+            self.run_calc_recompute();
         }
         self.recompute_folding();
         self.adjust_cursor();

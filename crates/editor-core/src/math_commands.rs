@@ -204,7 +204,7 @@ fn average_term_values(terms: &[String]) -> Option<String> {
     Some(format_sum_result(numeric / terms.len() as f64))
 }
 
-fn cursor_table_column(ctx: &ResolvedContext) -> Option<usize> {
+fn cursor_table_column(ctx: &ResolvedContext<'_>) -> Option<usize> {
     let line = ctx.current_line();
     if !line.text.trim_start().starts_with('|') {
         return None;
@@ -224,7 +224,7 @@ fn cursor_table_column(ctx: &ResolvedContext) -> Option<usize> {
 }
 
 fn collect_table_terms(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
     scope: SumScope,
     range: BlockLineRange,
 ) -> Vec<String> {

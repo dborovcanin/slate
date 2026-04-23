@@ -40,14 +40,14 @@ pub fn init() {
     console_error_panic_hook::set_once();
 }
 
-fn build_context(
-    text: &str,
+fn build_context<'a>(
+    text: &'a str,
     selection_anchor: usize,
     selection_head: usize,
     has_changed_range: bool,
     changed_from: usize,
     changed_to: usize,
-) -> ResolvedContext {
+) -> ResolvedContext<'a> {
     ResolvedContext::from_parts(
         text,
         SelectionSnapshot {
@@ -119,7 +119,7 @@ fn from_js_value<T: for<'de> Deserialize<'de>>(value: JsValue) -> Option<T> {
 }
 
 fn run_markdown_transaction(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
     request: MarkdownTransactionRequest,
 ) -> Option<crate::types::EditOperation> {
     match request.kind {

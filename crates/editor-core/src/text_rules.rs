@@ -440,7 +440,7 @@ pub fn rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option<Stri
 }
 
 fn checklist_toggle_from_suffix(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
 ) -> Option<(usize, usize, usize, String, bool)> {
     let selection = ctx.selection();
     if !selection.empty {
@@ -458,7 +458,7 @@ fn checklist_toggle_from_suffix(
 }
 
 fn checklist_toggle_from_marker_change(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
 ) -> Option<(usize, usize, usize, String, bool)> {
     let changed = ctx.changed_range()?;
     if changed.to <= changed.from {
@@ -482,7 +482,7 @@ fn checklist_toggle_from_marker_change(
 }
 
 fn reorder_checklist_toggle(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
     line_number: usize,
     replacement: &str,
     move_to_bottom: bool,
@@ -548,7 +548,10 @@ fn reorder_checklist_toggle(
     ))
 }
 
-fn checklist_toggle_rule(ctx: &ResolvedContext, options: TextRuleOptions) -> Option<EditOperation> {
+fn checklist_toggle_rule(
+    ctx: &ResolvedContext<'_>,
+    options: TextRuleOptions,
+) -> Option<EditOperation> {
     let (line_number, line_from, line_to, replacement, checked) =
         checklist_toggle_from_suffix(ctx).or_else(|| checklist_toggle_from_marker_change(ctx))?;
 
@@ -578,7 +581,7 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     table::format_table_lines(lines)
 }
 
-fn collect_table_blocks_for_autoformat(ctx: &ResolvedContext) -> Vec<(usize, usize)> {
+fn collect_table_blocks_for_autoformat(ctx: &ResolvedContext<'_>) -> Vec<(usize, usize)> {
     let mut blocks: Vec<(usize, usize)> = Vec::new();
 
     if let Some(changed) = ctx.changed_range() {
@@ -609,7 +612,7 @@ fn collect_table_blocks_for_autoformat(ctx: &ResolvedContext) -> Vec<(usize, usi
     blocks
 }
 
-fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+fn table_autoformat_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     let blocks = collect_table_blocks_for_autoformat(ctx);
     if blocks.is_empty() {
         return None;
@@ -685,7 +688,7 @@ fn table_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
     })
 }
 
-fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+fn list_autoformat_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     let line = ctx.current_line();
     let block = ctx.list_range_at_line(line.number)?;
 
@@ -768,7 +771,7 @@ fn list_autoformat_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
 }
 
 pub fn run_doc_change_rules(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
     options: TextRuleOptions,
 ) -> Option<EditOperation> {
     if let Some(op) = checklist_toggle_rule(ctx, options) {
@@ -788,7 +791,10 @@ pub fn run_doc_change_rules(
     list_autoformat_rule(&ctx)
 }
 
-pub fn run_enter_rules(ctx: &ResolvedContext, options: TextRuleOptions) -> Option<EditOperation> {
+pub fn run_enter_rules(
+    ctx: &ResolvedContext<'_>,
+    options: TextRuleOptions,
+) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -827,7 +833,11 @@ fn is_table_separator(text: &str) -> bool {
     table::is_delimiter_row(&cells)
 }
 
-fn table_header_line_number(ctx: &ResolvedContext, start_line: usize, end_line: usize) -> usize {
+fn table_header_line_number(
+    ctx: &ResolvedContext<'_>,
+    start_line: usize,
+    end_line: usize,
+) -> usize {
     for line_no in start_line..=end_line {
         if is_table_separator(ctx.line_text(line_no)) {
             if line_no > start_line {
@@ -906,7 +916,7 @@ fn table_continuation_rule(
 }
 
 fn list_continuation_rule(
-    _ctx: &ResolvedContext,
+    _ctx: &ResolvedContext<'_>,
     line: &crate::types::LineContext,
     _selection: &crate::types::SelectionContext,
 ) -> Option<EditOperation> {
@@ -956,7 +966,7 @@ fn list_continuation_rule(
     ))
 }
 
-fn selection_line_span(ctx: &ResolvedContext) -> (usize, usize) {
+fn selection_line_span(ctx: &ResolvedContext<'_>) -> (usize, usize) {
     let selection = ctx.selection();
     let start_line = ctx.line_at(selection.from).number;
     let mut end_line = ctx.line_at(selection.to).number;
@@ -980,7 +990,7 @@ fn marker_depth(indent: &str) -> usize {
         / 2
 }
 
-fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<EditOperation> {
+fn table_tab_rule(ctx: &ResolvedContext<'_>, options: &TabRuleOptions) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1068,7 +1078,7 @@ fn table_tab_rule(ctx: &ResolvedContext, options: &TabRuleOptions) -> Option<Edi
     None
 }
 
-pub fn run_tab_rules(ctx: &ResolvedContext, options: TabRuleOptions) -> Option<EditOperation> {
+pub fn run_tab_rules(ctx: &ResolvedContext<'_>, options: TabRuleOptions) -> Option<EditOperation> {
     if options.table_enabled {
         if let Some(op) = table_tab_rule(ctx, &options) {
             return Some(op);
@@ -1131,7 +1141,7 @@ pub fn run_tab_rules(ctx: &ResolvedContext, options: TabRuleOptions) -> Option<E
 }
 
 pub fn run_table_cell_navigation_rules(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
     options: TabRuleOptions,
 ) -> Option<EditOperation> {
     if !options.table_enabled {
@@ -1152,7 +1162,7 @@ pub fn run_table_cell_navigation_rules(
 /// - the cursor is not on the header row of a pipe table,
 /// - the table has no recognizable structure,
 /// - or the cursor sits on a pipe character itself.
-pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1239,7 +1249,7 @@ pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext) -> Option<EditOp
 /// - the cursor is not on the header row of a pipe table,
 /// - the current header cell is non-empty,
 /// - or the table only has a single column (deletion would destroy the table).
-pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext) -> Option<EditOperation> {
+pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1425,7 +1435,7 @@ fn merge_cells_on_line(
 }
 
 pub fn run_table_boundary_edit_rules(
-    ctx: &ResolvedContext,
+    ctx: &ResolvedContext<'_>,
     options: TableBoundaryEditOptions,
 ) -> Option<EditOperation> {
     if !options.table_enabled {
@@ -1534,7 +1544,7 @@ mod tests {
     use crate::context::ResolvedContext;
     use crate::types::{EditorContextSnapshot, SelectionSnapshot, TextRange};
 
-    fn snapshot(text: &str, head: usize, anchor: usize) -> ResolvedContext {
+    fn snapshot(text: &str, head: usize, anchor: usize) -> ResolvedContext<'static> {
         ResolvedContext::new(EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },
@@ -1548,7 +1558,7 @@ mod tests {
         anchor: usize,
         from: usize,
         to: usize,
-    ) -> ResolvedContext {
+    ) -> ResolvedContext<'static> {
         ResolvedContext::new(EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },

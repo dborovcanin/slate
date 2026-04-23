@@ -31,7 +31,7 @@ pub fn format_sum_result(value: f64) -> String {
     format!("{value:.2}")
 }
 
-pub fn resolve_scope_range(ctx: &ResolvedContext, scope: SumScope) -> Option<BlockLineRange> {
+pub fn resolve_scope_range(ctx: &ResolvedContext<'_>, scope: SumScope) -> Option<BlockLineRange> {
     let current_line = ctx.current_line().number;
     match scope {
         SumScope::Paragraph => Some(ctx.paragraph_range_at_line(current_line)),
@@ -49,7 +49,7 @@ mod tests {
     use super::*;
     use crate::types::{EditorContextSnapshot, SelectionSnapshot};
 
-    fn ctx(text: &str, cursor: usize) -> ResolvedContext {
+    fn ctx(text: &str, cursor: usize) -> ResolvedContext<'static> {
         ResolvedContext::new(EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot {

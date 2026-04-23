@@ -16,6 +16,27 @@ use crate::terminal::{folding, input};
 use std::cmp::min;
 use std::time::{Duration, Instant};
 
+fn map_offset_through_changes(
+    mut offset: usize,
+    changes_desc: &[crate::editor_core::types::TextChange],
+) -> usize {
+    for change in changes_desc {
+        let from = change.from;
+        let to = change.to.max(from);
+        let added = change.insert.len();
+        let removed = to.saturating_sub(from);
+        if from <= offset {
+            if to <= offset {
+                offset = offset.saturating_add(added).saturating_sub(removed);
+            } else {
+                let inside = offset.saturating_sub(from);
+                offset = from.saturating_add(inside.min(added));
+            }
+        }
+    }
+    offset
+}
+
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
     pub(super) fn current_line(&self) -> &str {
@@ -94,6 +115,65 @@ impl TerminalApp {
         }
     }
 
+    fn rebuild_calc_line_metadata(&mut self) {
+        self.calc.line_metadata =
+            crate::editor_core::calc_plan::line_metadata_for_lines(&self.lines);
+    }
+
+    fn ensure_calc_line_metadata(&mut self) {
+        if self.calc.line_metadata.len() != self.lines.len() {
+            self.rebuild_calc_line_metadata();
+        }
+    }
+
+    fn refresh_calc_line_metadata_at(&mut self, line_idx: usize) {
+        if self.calc.line_metadata.is_empty() && self.lines.is_empty() {
+            return;
+        }
+        self.ensure_calc_line_metadata();
+        if line_idx >= self.lines.len() || line_idx >= self.calc.line_metadata.len() {
+            return;
+        }
+        self.calc.line_metadata[line_idx] =
+            crate::editor_core::calc_plan::line_metadata(&self.lines[line_idx]);
+    }
+
+    fn splice_calc_line_metadata(
+        &mut self,
+        start_line: usize,
+        old_line_span: usize,
+        new_line_span: usize,
+    ) {
+        if self.calc.line_metadata.is_empty() && self.lines.is_empty() {
+            return;
+        }
+        // If dimensions are inconsistent, fall back to a full rebuild rather than corrupting state.
+        let expected_prev_len = self
+            .lines
+            .len()
+            .saturating_add(old_line_span)
+            .saturating_sub(new_line_span);
+        if self.calc.line_metadata.len() != expected_prev_len {
+            self.rebuild_calc_line_metadata();
+            return;
+        }
+        let start = start_line.min(self.calc.line_metadata.len());
+        let old_end = start
+            .saturating_add(old_line_span)
+            .min(self.calc.line_metadata.len());
+        let new_end = start_line
+            .saturating_add(new_line_span)
+            .min(self.lines.len());
+        let replacement = self
+            .lines
+            .get(start_line.min(self.lines.len())..new_end)
+            .unwrap_or(&[])
+            .iter()
+            .map(crate::editor_core::calc_plan::line_metadata)
+            .collect::<Vec<_>>();
+        self.calc.line_metadata.splice(start..old_end, replacement);
+    }
+
     pub(super) fn line_has_fold_structure(text: &str) -> bool {
         let trimmed = text.trim_start();
         trimmed.starts_with('#')
@@ -158,6 +238,7 @@ impl TerminalApp {
         self.calc.results = vec![None; self.lines.len()];
         self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         self.calc.variable_names.clear();
+        self.calc.line_metadata.clear();
         self.calc.prev_line_metadata.clear();
         self.calc.stale = false;
         self.calc_last_view_eval_range = None;
@@ -688,7 +769,7 @@ impl TerminalApp {
                 }
                 self.calc_recompute_pending = true;
             } else {
-                self.recompute_calc_full();
+                self.run_calc_recompute();
             }
         }
         self.history.record_edit(
@@ -723,7 +804,7 @@ impl TerminalApp {
             // Full lines replacement: invalidate all caches.
             self.fence_checkpoints.truncate(1);
             self.fence_checkpoints_valid_through = 0;
-            self.recompute_calc_full();
+            self.run_calc_recompute();
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
@@ -746,7 +827,7 @@ impl TerminalApp {
             }
             self.fence_checkpoints.truncate(1);
             self.fence_checkpoints_valid_through = 0;
-            self.recompute_calc_full();
+            self.run_calc_recompute();
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
@@ -758,18 +839,22 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn recompute_calc_full(&mut self) {
+    pub(super) fn run_calc_recompute(&mut self) {
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
             self.calc_recompute_pending = false;
             return;
         }
+        self.ensure_calc_line_metadata();
+        if !self.lines.is_empty() {
+            let cursor_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+            self.refresh_calc_line_metadata_at(cursor_line);
+        }
         let calc_variables_enabled = self.calc_variables_enabled();
         if self.calc.stale {
             let calc_data =
                 compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
-            self.calc.prev_line_metadata =
-                crate::editor_core::calc_plan::line_metadata_for_lines(&self.lines);
+            self.calc.prev_line_metadata = self.calc.line_metadata.clone();
             self.calc.results = calc_data.line_results;
             self.calc.cell_results = calc_data.cell_results;
             self.calc.variable_names = calc_data.variable_names;
@@ -778,22 +863,13 @@ impl TerminalApp {
             return;
         }
 
-        let mut next_line_metadata =
-            crate::editor_core::calc_plan::line_metadata_for_lines(&self.lines);
-        let next_hashes: Vec<u64> = next_line_metadata.iter().map(|meta| meta.hash).collect();
-        let prev_hashes: Vec<u64> = self
-            .calc
-            .prev_line_metadata
-            .iter()
-            .map(|meta| meta.hash)
-            .collect();
-        let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_hashes(
-            &prev_hashes,
+        let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
+            &self.calc.prev_line_metadata,
             &self.calc.results,
             &self.lines,
-            &next_hashes,
+            &self.calc.line_metadata,
         );
-        let has_prev = !prev_hashes.is_empty();
+        let has_prev = !self.calc.prev_line_metadata.is_empty();
 
         // Only scan the changed region for variable assignments and builtin
         // formulas (not all lines). Partial eval is safe as long as the edit
@@ -902,6 +978,7 @@ impl TerminalApp {
         // recompute once the user resumes normal in-line editing.
         let aligned = self.calc.prev_line_metadata.len() == self.lines.len()
             && self.calc.results.len() == self.lines.len();
+        let mut trailer_rewritten_lines: Vec<usize> = Vec::new();
 
         if aligned {
             let cursor_line = self.cursor_line;
@@ -930,7 +1007,7 @@ impl TerminalApp {
                 };
                 if !crate::editor_core::calc_plan::should_attempt_calc_trailer_refresh(
                     self.calc.prev_line_metadata[i].hash,
-                    next_line_metadata[i].hash,
+                    self.calc.line_metadata[i].hash,
                     self.calc.results[i].as_deref(),
                     line_is_selected,
                 ) {
@@ -953,13 +1030,38 @@ impl TerminalApp {
                     }
                     // Trailer rewrite changed the line bytes; rehash so the
                     // snapshot stays in sync for the next recompute.
-                    next_line_metadata[i] =
+                    self.calc.line_metadata[i] =
                         crate::editor_core::calc_plan::line_metadata(&self.lines[i]);
+                    trailer_rewritten_lines.push(i);
                 }
             }
         }
 
-        self.calc.prev_line_metadata = next_line_metadata;
+        // Sync only the changed window into prev_line_metadata. prev_line_metadata tracks
+        // the hash state that `results` was computed against; the unchanged prefix and suffix
+        // are already correct, so only the eval window needs to be brought forward.
+        let prev_len = self.calc.prev_line_metadata.len();
+        let next_len = self.calc.line_metadata.len();
+        let suffix_len = next_len.saturating_sub(plan.eval_to.min(next_len));
+        let changed_from = plan.eval_from.min(prev_len).min(next_len);
+        let prev_changed_to = prev_len.saturating_sub(suffix_len).max(changed_from);
+        let next_changed_to = next_len.saturating_sub(suffix_len).max(changed_from);
+        let replacement = self
+            .calc
+            .line_metadata
+            .get(changed_from..next_changed_to)
+            .unwrap_or(&[])
+            .to_vec();
+        self.calc
+            .prev_line_metadata
+            .splice(changed_from..prev_changed_to, replacement);
+        for line_idx in trailer_rewritten_lines {
+            if line_idx < self.calc.prev_line_metadata.len()
+                && line_idx < self.calc.line_metadata.len()
+            {
+                self.calc.prev_line_metadata[line_idx] = self.calc.line_metadata[line_idx].clone();
+            }
+        }
         self.calc.results = new_results;
         self.calc.cell_results = new_cell_results;
         self.calc.variable_names = variable_names;
@@ -974,7 +1076,7 @@ impl TerminalApp {
         if self.last_edit.elapsed() < Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS) {
             return;
         }
-        self.recompute_calc_full();
+        self.run_calc_recompute();
     }
 
     // --- Search ---
@@ -1117,6 +1219,7 @@ impl TerminalApp {
                 let text = self.current_line_mut();
                 text.replace_range(start_byte..end_byte, "");
                 self.cursor_col = col;
+                self.refresh_calc_line_metadata_at(self.cursor_line);
                 self.mark_edited();
                 return true;
             }
@@ -1136,6 +1239,7 @@ impl TerminalApp {
         let text = self.current_line_mut();
         text.replace_range(start_byte..end_byte, "");
         self.cursor_col = col;
+        self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
         true
     }
@@ -1149,6 +1253,7 @@ impl TerminalApp {
         let idx = byte_index(line, col);
         line.insert(idx, ch);
         self.cursor_col += 1;
+        self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
     }
 
@@ -1161,6 +1266,7 @@ impl TerminalApp {
         let idx = byte_index(line, col);
         line.insert_str(idx, text);
         self.cursor_col += text.chars().count();
+        self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
     }
 
@@ -1190,6 +1296,7 @@ impl TerminalApp {
             self.lines[line_idx] = format!("{left}{}{right}", parts[0]);
             self.cursor_line = line_idx;
             self.cursor_col = col + parts[0].chars().count();
+            self.splice_calc_line_metadata(line_idx, 1, 1);
             self.mark_edited_from_line(line_idx);
             return;
         }
@@ -1205,6 +1312,7 @@ impl TerminalApp {
         self.lines.insert(insert_at, format!("{tail}{right}"));
         self.cursor_line = insert_at;
         self.cursor_col = tail.chars().count();
+        self.splice_calc_line_metadata(line_idx, 1, parts.len());
         self.mark_edited_from_line(line_idx);
     }
 
@@ -1218,6 +1326,7 @@ impl TerminalApp {
         self.lines.insert(insert_at, right);
         self.cursor_line += 1;
         self.cursor_col = 0;
+        self.splice_calc_line_metadata(changed_from_line, 1, 2);
         self.mark_edited_from_line(changed_from_line);
     }
 
@@ -1355,6 +1464,7 @@ impl TerminalApp {
         let to_byte = byte_index(self.current_line(), to_col);
         self.lines[self.cursor_line].replace_range(from_byte..to_byte, &pick);
         self.cursor_col = from_col + pick.chars().count();
+        self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
         self.status = format!("autocomplete: {pick}");
         self.dismiss_variable_autocomplete_popup();
@@ -1434,7 +1544,7 @@ impl TerminalApp {
             return false;
         }
         if self.calc_recompute_pending {
-            self.recompute_calc_full();
+            self.run_calc_recompute();
         }
         let text = self.current_line().to_string();
         let Some(result) = self
@@ -1455,6 +1565,7 @@ impl TerminalApp {
                 [..from_byte.saturating_add(result.len())]
                 .chars()
                 .count();
+            self.refresh_calc_line_metadata_at(self.cursor_line);
             self.mark_edited();
             return true;
         }
@@ -1617,10 +1728,21 @@ impl TerminalApp {
             .map(|change| change.from.min(text.len()))
             .min()
             .unwrap_or(0);
+        let changed_to_offset_old = op
+            .changes
+            .iter()
+            .map(|change| change.to.min(text.len()))
+            .max()
+            .unwrap_or(changed_from_offset);
         let changed_from_line = text.as_bytes()[..changed_from_offset]
             .iter()
             .filter(|&&b| b == b'\n')
             .count();
+        let old_changed_to_line_exclusive = text.as_bytes()[..changed_to_offset_old]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1;
 
         // Track initial cursor byte offset
         let mut mapped_anchor = 0;
@@ -1654,6 +1776,23 @@ impl TerminalApp {
             }
         }
         self.lines = split_lines(&text);
+        let mapped_from =
+            map_offset_through_changes(changed_from_offset, &changes).min(text.len());
+        let mapped_to =
+            map_offset_through_changes(changed_to_offset_old, &changes).min(text.len());
+        let mapped_changed_to = mapped_from.max(mapped_to);
+        let new_changed_to_line_exclusive = text.as_bytes()[..mapped_changed_to]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1;
+        let old_line_span = old_changed_to_line_exclusive
+            .saturating_sub(changed_from_line)
+            .max(1);
+        let new_line_span = new_changed_to_line_exclusive
+            .saturating_sub(changed_from_line)
+            .max(1);
+        self.splice_calc_line_metadata(changed_from_line, old_line_span, new_line_span);
 
         let final_anchor = if let Some(sel) = &op.selection {
             sel.anchor
@@ -1696,6 +1835,7 @@ impl TerminalApp {
                 }
                 remove_char_at(&mut self.lines[self.cursor_line], new_col);
                 self.cursor_col = new_col;
+                self.refresh_calc_line_metadata_at(self.cursor_line);
                 self.mark_edited();
                 return;
             }
@@ -1705,6 +1845,7 @@ impl TerminalApp {
             let new_col = self.cursor_col - 1;
             remove_char_at(&mut self.lines[self.cursor_line], new_col);
             self.cursor_col = new_col;
+            self.refresh_calc_line_metadata_at(self.cursor_line);
             self.mark_edited();
             return;
         }
@@ -1718,6 +1859,7 @@ impl TerminalApp {
         let prev_len = line_char_len(&self.lines[self.cursor_line]);
         self.lines[self.cursor_line].push_str(&removed);
         self.cursor_col = prev_len;
+        self.splice_calc_line_metadata(self.cursor_line, 2, 1);
         self.mark_edited();
     }
 
@@ -1735,6 +1877,7 @@ impl TerminalApp {
                 }
                 let col = self.cursor_col;
                 remove_char_at(&mut self.lines[self.cursor_line], col);
+                self.refresh_calc_line_metadata_at(self.cursor_line);
                 self.mark_edited();
                 return;
             }
@@ -1744,6 +1887,7 @@ impl TerminalApp {
         if self.cursor_col < line_len {
             let col = self.cursor_col;
             remove_char_at(&mut self.lines[self.cursor_line], col);
+            self.refresh_calc_line_metadata_at(self.cursor_line);
             self.mark_edited();
             return;
         }
@@ -1754,6 +1898,7 @@ impl TerminalApp {
 
         let next = self.lines.remove(self.cursor_line + 1);
         self.lines[self.cursor_line].push_str(&next);
+        self.splice_calc_line_metadata(self.cursor_line, 2, 1);
         self.mark_edited();
     }
 

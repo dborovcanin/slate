@@ -594,12 +594,12 @@ fn recompute_calc_refreshes_stale_trailer_after_variable_change() {
     app.cursor_line = 0;
     app.cursor_col = 0;
     // Seed: a recompute now should leave the trailer alone (already in sync).
-    app.recompute_calc_full();
+    app.run_calc_recompute();
     assert_eq!(app.lines[1], "2 * rate = 20");
 
     // Change the variable definition.
     app.lines[0] = "rate := 15".to_string();
-    app.recompute_calc_full();
+    app.run_calc_recompute();
 
     // Trailer should have been refreshed from `= 20` to `= 30`.
     assert_eq!(app.lines[1], "2 * rate = 30");
@@ -618,11 +618,11 @@ fn recompute_calc_does_not_refresh_hand_typed_trailer() {
     let (db, mut app, path) = app_with_note("rate := 10\n2 * rate = FOO");
     app.cursor_line = 0;
     app.cursor_col = 0;
-    app.recompute_calc_full();
+    app.run_calc_recompute();
     assert_eq!(app.lines[1], "2 * rate = FOO");
 
     app.lines[0] = "rate := 15".to_string();
-    app.recompute_calc_full();
+    app.run_calc_recompute();
     assert_eq!(app.lines[1], "2 * rate = FOO");
 
     drop(app);
@@ -635,13 +635,13 @@ fn recompute_calc_skips_refresh_when_cursor_in_trailer() {
     let (db, mut app, path) = app_with_note("rate := 10\n2 * rate = 20");
     app.cursor_line = 0;
     app.cursor_col = 0;
-    app.recompute_calc_full();
+    app.run_calc_recompute();
 
     // Park the cursor inside the trailer on line 1.
     app.cursor_line = 1;
     app.cursor_col = app.lines[1].chars().count(); // end of line, inside trailer
     app.lines[0] = "rate := 15".to_string();
-    app.recompute_calc_full();
+    app.run_calc_recompute();
 
     // Untouched because cursor is in the trailer region.
     assert_eq!(app.lines[1], "2 * rate = 20");

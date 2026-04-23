@@ -1297,6 +1297,7 @@ fn shared_suffix_len_hashed(a: &[u64], b: &[u64], prefix_len: usize) -> usize {
     i
 }
 
+
 pub fn plan_incremental_calc_from_hashes(
     prev_hashes: &[u64],
     prev_results: &[Option<String>],
@@ -1356,6 +1357,17 @@ pub fn plan_incremental_calc(
 ) -> IncrementalCalcPlan {
     let prev_hashes = hash_lines(prev_lines);
     let next_hashes = hash_lines(next_lines);
+    plan_incremental_calc_from_hashes(&prev_hashes, prev_results, next_lines, &next_hashes)
+}
+
+pub fn plan_incremental_calc_from_line_metadata(
+    prev_line_metadata: &[LineMetadata],
+    prev_results: &[Option<String>],
+    next_lines: &[String],
+    next_line_metadata: &[LineMetadata],
+) -> IncrementalCalcPlan {
+    let prev_hashes: Vec<u64> = prev_line_metadata.iter().map(|m| m.hash).collect();
+    let next_hashes: Vec<u64> = next_line_metadata.iter().map(|m| m.hash).collect();
     plan_incremental_calc_from_hashes(&prev_hashes, prev_results, next_lines, &next_hashes)
 }
 

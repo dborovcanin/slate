@@ -974,7 +974,9 @@ fn run_tui_parity_case(case: &VimParityReplayCase) -> ParitySnapshot {
     snapshot
 }
 
-fn gui_markdown_context(state: &GuiParityState) -> crate::editor_core::context::ResolvedContext {
+fn gui_markdown_context(
+    state: &GuiParityState,
+) -> crate::editor_core::context::ResolvedContext<'static> {
     let text = super::join_lines(&state.lines);
     let anchor = gui_byte_offset_for_line_col(state, state.cursor_line, state.cursor_col);
     crate::editor_core::context::ResolvedContext::new(

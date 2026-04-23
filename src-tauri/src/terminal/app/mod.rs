@@ -465,7 +465,7 @@ impl TerminalApp {
         };
         let loading_calc_engine = calc_begin.elapsed();
 
-        let prev_line_metadata = if skip_initial_calc {
+        let line_metadata = if skip_initial_calc {
             Vec::new()
         } else {
             crate::editor_core::calc_plan::line_metadata_for_lines(&lines)
@@ -532,7 +532,8 @@ impl TerminalApp {
                 results: calc_data.line_results,
                 cell_results: calc_data.cell_results,
                 variable_names: calc_data.variable_names,
-                prev_line_metadata,
+                line_metadata: line_metadata.clone(),
+                prev_line_metadata: line_metadata,
                 stale: false,
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,

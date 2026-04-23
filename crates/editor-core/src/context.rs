@@ -1,11 +1,12 @@
 use crate::types::{
     BlockLineRange, EditorContextSnapshot, LineContext, SelectionContext, TextRange, WordContext,
 };
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 struct ParsedLines {
     starts: Vec<usize>,
-    lines: Vec<String>,
+    ends: Vec<usize>,
 }
 
 fn clamp(value: usize, min: usize, max: usize) -> usize {
@@ -16,24 +17,24 @@ fn parse_lines(text: &str) -> ParsedLines {
     if text.is_empty() {
         return ParsedLines {
             starts: vec![0],
-            lines: vec![String::new()],
+            ends: vec![0],
         };
     }
 
     let mut starts = Vec::new();
-    let mut lines = Vec::new();
+    let mut ends = Vec::new();
     let mut start = 0;
     for (idx, ch) in text.char_indices() {
         if ch == '\n' {
             starts.push(start);
-            lines.push(text[start..idx].to_string());
+            ends.push(idx);
             start = idx + 1;
         }
     }
     starts.push(start);
-    lines.push(text[start..].to_string());
+    ends.push(text.len());
 
-    ParsedLines { starts, lines }
+    ParsedLines { starts, ends }
 }
 
 fn is_list_line(line: &str) -> bool {
@@ -73,47 +74,58 @@ fn is_word_byte(byte: u8) -> bool {
 }
 
 #[derive(Debug, Clone)]
-pub struct ResolvedContext {
-    snapshot: EditorContextSnapshot,
+pub struct ResolvedContext<'a> {
+    text: Cow<'a, str>,
+    selection: crate::types::SelectionSnapshot,
+    changed_range: Option<TextRange>,
     parsed: ParsedLines,
 }
 
-impl ResolvedContext {
+impl ResolvedContext<'static> {
     pub fn new(snapshot: EditorContextSnapshot) -> Self {
         let parsed = parse_lines(&snapshot.text);
-        Self { snapshot, parsed }
+        Self {
+            text: Cow::Owned(snapshot.text),
+            selection: snapshot.selection,
+            changed_range: snapshot.changed_range,
+            parsed,
+        }
     }
+}
 
-    /// Construct directly from parts, avoiding an intermediate snapshot clone.
-    /// Used by the wasm hot path where `text` arrives as a `&str` borrow.
+impl<'a> ResolvedContext<'a> {
+    /// Construct from borrowed text with owned selection/range metadata.
+    /// Used by wasm hot paths to avoid cloning full document text.
     pub fn from_parts(
-        text: &str,
+        text: &'a str,
         selection: crate::types::SelectionSnapshot,
         changed_range: Option<TextRange>,
     ) -> Self {
         let parsed = parse_lines(text);
         Self {
-            snapshot: EditorContextSnapshot {
-                text: text.to_owned(),
-                selection,
-                changed_range,
-            },
+            text: Cow::Borrowed(text),
+            selection,
+            changed_range,
             parsed,
         }
     }
 
-    pub fn snapshot(&self) -> &EditorContextSnapshot {
-        &self.snapshot
+    pub fn to_snapshot(&self) -> EditorContextSnapshot {
+        EditorContextSnapshot {
+            text: self.text().to_string(),
+            selection: self.selection,
+            changed_range: self.changed_range,
+        }
     }
 
     pub fn text(&self) -> &str {
-        &self.snapshot.text
+        self.text.as_ref()
     }
 
     pub fn selection(&self) -> SelectionContext {
-        let max = self.snapshot.text.len();
-        let anchor = self.snapshot.selection.anchor.min(max);
-        let head = self.snapshot.selection.head.min(max);
+        let max = self.text().len();
+        let anchor = self.selection.anchor.min(max);
+        let head = self.selection.head.min(max);
         let from = anchor.min(head);
         let to = anchor.max(head);
         SelectionContext {
@@ -130,24 +142,24 @@ impl ResolvedContext {
     }
 
     pub fn changed_range(&self) -> Option<TextRange> {
-        self.snapshot.changed_range
+        self.changed_range
     }
 
     pub fn line_count(&self) -> usize {
-        self.parsed.lines.len()
+        self.parsed.starts.len()
     }
 
     pub fn line(&self, number: usize) -> LineContext {
         let idx = clamp(
             number.saturating_sub(1),
             0,
-            self.parsed.lines.len().saturating_sub(1),
+            self.parsed.starts.len().saturating_sub(1),
         );
         self.line_from_index(idx)
     }
 
     pub fn line_at(&self, pos: usize) -> LineContext {
-        let p = pos.min(self.snapshot.text.len());
+        let p = pos.min(self.text().len());
         let idx = match self.parsed.starts.binary_search(&p) {
             Ok(found) => found,
             Err(insert) => insert.saturating_sub(1),
@@ -168,25 +180,27 @@ impl ResolvedContext {
         let idx = clamp(
             number.saturating_sub(1),
             0,
-            self.parsed.lines.len().saturating_sub(1),
+            self.parsed.starts.len().saturating_sub(1),
         );
-        &self.parsed.lines[idx]
+        let from = self.parsed.starts[idx];
+        let to = self.parsed.ends[idx];
+        &self.text()[from..to]
     }
 
     pub fn text_for_line_range(&self, range: BlockLineRange) -> &str {
         let start_idx = clamp(
             range.start_line.saturating_sub(1),
             0,
-            self.parsed.lines.len().saturating_sub(1),
+            self.parsed.starts.len().saturating_sub(1),
         );
         let end_idx = clamp(
             range.end_line.saturating_sub(1),
             0,
-            self.parsed.lines.len().saturating_sub(1),
+            self.parsed.starts.len().saturating_sub(1),
         );
         let from = self.parsed.starts[start_idx];
-        let to = self.parsed.starts[end_idx] + self.parsed.lines[end_idx].len();
-        &self.snapshot.text[from..to]
+        let to = self.parsed.ends[end_idx];
+        &self.text()[from..to]
     }
 
     pub fn paragraph_range_at_line(&self, line_number: usize) -> BlockLineRange {
@@ -261,7 +275,7 @@ impl ResolvedContext {
     }
 
     pub fn word_at(&self, pos: Option<usize>) -> Option<WordContext> {
-        let bytes = self.snapshot.text.as_bytes();
+        let bytes = self.text().as_bytes();
         if bytes.is_empty() {
             return None;
         }
@@ -298,13 +312,14 @@ impl ResolvedContext {
     }
 
     fn line_from_index(&self, idx: usize) -> LineContext {
-        let safe_idx = idx.min(self.parsed.lines.len().saturating_sub(1));
-        let text = self.parsed.lines[safe_idx].clone();
+        let safe_idx = idx.min(self.parsed.starts.len().saturating_sub(1));
         let from = self.parsed.starts[safe_idx];
+        let to = self.parsed.ends[safe_idx];
+        let text = self.text()[from..to].to_string();
         LineContext {
             number: safe_idx + 1,
             from,
-            to: from + text.len(),
+            to,
             text,
         }
     }
@@ -315,7 +330,7 @@ mod tests {
     use super::*;
     use crate::types::SelectionSnapshot;
 
-    fn ctx(text: &str, head: usize, anchor: usize) -> ResolvedContext {
+    fn ctx(text: &str, head: usize, anchor: usize) -> ResolvedContext<'static> {
         ResolvedContext::new(EditorContextSnapshot {
             text: text.to_string(),
             selection: SelectionSnapshot { anchor, head },

@@ -6,6 +6,9 @@ pub struct CalcCache {
     pub results: Vec<Option<String>>,
     pub cell_results: Vec<Vec<(usize, String)>>,
     pub variable_names: Vec<String>,
+    /// Metadata for current `lines`, incrementally patched on edits.
+    pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,
+    /// Snapshot aligned with `results` from the last recompute.
     pub prev_line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,
     pub stale: bool,
     pub cached_has_builtin_formula: bool,
