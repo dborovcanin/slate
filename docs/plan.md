@@ -1,249 +1,270 @@
-# Project identity
+# Slate Plan
 
-This project is a multiplatform note-taking editor with:
-- Tauri UI
-- terminal/TUI mode
-- shared vim-like editing core
-- markdown-style structured editing
-- Linux-first development focus
+## Product Intent
 
-Primary product goals:
-- maintain a strong shared architecture
-- support large notes efficiently
-- keep UI and terminal fast and lightweight
-- preserve consistent core editing semantics across front ends
-- remain portable across platforms without sacrificing simplicity
+Slate is a notes application with:
 
-Non-goals:
-- becoming a bloated workspace app
-- duplicating core behavior in each front end
-- prioritizing feature breadth over responsiveness and architecture
+1. A powerful math and calculations engine, including variables and autocomplete.
+2. Fast, lightweight, and highly usable table manipulation inspired by Excel workflows.
+3. Markdown-style text editing as the primary content model.
+4. Clean architecture boundaries where UI focuses on editing and decoration/rendering, and can be replaced with limited core churn.
+5. A shared editor core with vim-like behavior and separate rendering engines for UI and terminal.
+6. Performance-first modularity: UI/TUI are decoupled as much as possible, while preserving separate hot paths when performance justifies it.
+7. Extensible command surfaces (vim-like command model) for fast, scriptable editing workflows.
 
-## Architecture-first refactor plan (ordered by architecture quality and correctness)
+## Architecture Principles
 
-### Target ownership
-- Shared Rust core owns editing semantics: vim intent resolution, markdown/table/list transforms, folding model, calc/variable semantics, and undo/redo intent boundaries.
-- Tauri UI and terminal/TUI own input translation and rendering only.
-- Storage/config/notifications stay in backend command layer.
+- Shared-core first for editing semantics.
+- Thin frontends (UI/TUI as adapters + rendering layers).
+- Deterministic editor behavior across frontends unless divergence is explicitly intentional.
+- Performance and responsiveness before convenience abstractions.
+- Incremental computation over full-document recomputation.
+- Small, reviewable, subsystem-scoped changes.
 
-### Ordered action points
-1. Define a canonical Rust `EditorEngine` contract before moving logic.
-   - Input: document state + selection + mode + intent/command.
-   - Output: deterministic delta (text edits, cursor/selection, fold/calc/variable semantic updates, status/diagnostics).
-2. Freeze current behavior with golden replay tests.
-   - Cover vim motions/actions, markdown/table edits, folding, calc/variables, undo/redo.
-3. Add a cross-frontend parity harness.
-   - Run the same replay corpus against GUI adapter and TUI adapter.
-   - Require identical resulting doc, selection, and semantic state.
-4. Consolidate command/motion semantics into shared core first.
-   - Migrate high-risk drift areas from UI/TUI adapters into Rust core.
-5. Replace fragmented wasm helper usage with batched transaction calls.
-   - Keep hot path in-process; reduce boundary crossings per edit.
-6. Move folding to an incremental shared core index.
-   - Keep frontend fold rendering local, but make fold range computation/state transitions core-owned.
-7. Normalize calc/variable behavior ownership.
-   - Keep rendering local; move trigger/range/commit semantics to shared core.
-8. Refactor TUI into adapter shape.
-   - Pipeline: input -> intent -> engine -> terminal render.
-9. Refactor Tauri UI into adapter shape.
-   - Keep CodeMirror visual mechanics local; semantics come from shared core.
-10. Enforce CI gates for architecture and correctness.
-   - Parity suite required.
-   - Startup and hot-path perf checks required.
-   - No new duplicated editing semantics in frontends.
-11. Migrate subsystem-by-subsystem behind feature flags, not big-bang.
-   - Suggested order: commands/vim -> markdown/table/list -> folding -> calc semantics.
+## Target Architecture
 
-### Progress snapshot (2026-04-23)
-- [x] 1. Canonical `EditorEngine` contract introduced in shared Rust core and re-exported for adapters.
-- [x] 2. Golden replay fixtures and replay test harness added for command, module command, and vim stepping.
-- [x] 3. Cross-frontend parity replay harness added: shared fixture corpus now executes through TUI adapter path and GUI adapter simulation path, asserting identical final doc/cursor/mode/vim-state snapshots.
-- [x] 4. Command/motion semantics consolidated into shared core for command resolution, note-security parsing, vim stepping, and module command planning in both Tauri UI and TUI command paths.
-- [x] 5. UI markdown hot-paths now route through batched wasm markdown transactions (single boundary call per candidate sequence), reducing fragmented rule dispatch calls.
-- [x] 6. Folding state transitions now consume a shared-core incremental fold index API (line-edit mapping + rebuild decision in Rust), while rendering remains frontend-owned.
-- [x] 7. Calc/variable trigger, eval-scope, and trailer-refresh eligibility semantics are now shared-core decisions consumed by both UI (wasm bridge) and TUI (native core calls), while UI/TUI keep rendering and scheduling mechanics local.
-- [x] 8. TUI input now flows through a dedicated adapter pipeline (terminal key -> vim intent translation -> shared-core `EditorEngine::step_vim` -> terminal action application), removing duplicated frontend stepping paths.
-- [x] 9. Tauri UI now routes Vim key handling through a dedicated adapter pipeline (DOM key event -> vim key intent translation -> shared-core wasm vim step -> CodeMirror action application), while keeping CodeMirror rendering mechanics local.
-- [ ] 10. CI architecture/correctness gates are intentionally deferred for now.
-- [ ] 11. Subsystem feature-flag migration is only pending for *remaining* semantic moves; most ownership migration is already complete.
+### Layering
 
-### Subsystem migration audit (code-verified, 2026-04-23)
-`commands/vim`
-- Ownership status: mostly migrated to shared core (`EditorEngine` command resolution/module planning/vim stepping).
-- Adapter status: migrated (TUI `TerminalVimAdapter`, UI `runUiVimPipeline`).
-- Remaining frontend semantics: non-migrated `VimAction` execution (cursor/mode/search side effects) is still implemented in frontend adapters.
-- Parity status: core golden replay + cross-frontend vim parity replay exists with expanded command coverage, but still incomplete for full command/rule/folding/calc parity.
-- Feature-flag status: no migration-path flag (only global runtime disable flags exist).
+- `editor-core` (Rust): canonical editing semantics, vim intent resolution, markdown/table/list transforms, folding index semantics, calc/variable semantics, command planning.
+- UI adapter (Tauri + CodeMirror): key/input mapping, rendering, decorations, viewport scheduling, UI-only UX.
+- TUI adapter (terminal): key/input mapping, terminal rendering, terminal-only UX.
+- Backend/runtime layer: persistence, reminders/notifications, clipboard watchers, note security IO, module persistence.
 
-`markdown/table/list`
-- Ownership status: mostly migrated (`editor_core::text_rules` is canonical).
-- Adapter status: UI uses batched wasm markdown transactions; TUI calls shared `text_rules` directly.
-- Remaining frontend semantics: rule trigger/scheduling heuristics, scoped snapshot plumbing, and some cursor/table clamping remain frontend-local.
-- Parity status: strong per-frontend tests; no dedicated cross-frontend markdown/table/list parity suite yet.
-- Feature-flag status: no migration-path flag.
+### Ownership Rules
 
-`folding`
-- Ownership status: mostly migrated (shared core fold range build + incremental map/rebuild decisions).
-- Adapter status: UI uses wasm fold index helpers; TUI uses shared core folding module.
-- Remaining frontend semantics: fold rendering and viewport/state presentation remain frontend-local by design.
-- Parity status: per-frontend tests only; no cross-frontend folding parity corpus yet.
-- Feature-flag status: no migration-path flag.
+- If behavior changes document text, cursor/selection semantics, vim semantics, calc semantics, or fold semantics, it should default to shared core ownership.
+- UI/TUI may keep local implementation only for:
+  - rendering and viewport concerns,
+  - host/runtime side effects,
+  - proven hot paths where wasm/native boundary crossing regresses UX.
 
-`calc/variables`
-- Ownership status: partial-but-substantial migration (shared trigger/eval-scope/trailer-refresh decisions + shared calc planning helpers).
-- Adapter status: UI/TUI consume shared calc decisions while keeping rendering local.
-- Remaining frontend semantics: async eval scheduling, backend sync lifecycle, cache management, and ghost/widget rendering remain frontend-local.
-- Parity status: per-frontend calc tests; no cross-frontend calc parity suite yet.
-- Feature-flag status: no migration-path flag.
+### Hot Path Policy
 
-### Next architecture updates (CI deferred)
-1. Decide step 11 scope explicitly:
-   - either add migration flags for remaining semantic moves only, or
-   - close step 11 with rationale that ownership migration is complete enough without flags.
-2. Expand parity replay corpus from baseline Vim cases to full editing semantics.
-   - Include visual flows, text objects, yank/paste, command mode, markdown/table/list edits, folding transitions, and calc updates.
-3. Reduce remaining frontend semantic ownership.
-   - Move more `VimIntent` execution into shared core (`intent -> EditOperation + cursor/selection delta`) so UI/TUI adapters stay thin.
-4. Add cross-frontend parity suites for command/rule pipelines, not only key replay.
-   - Run shared command and markdown-rule scenarios through both adapters and require identical final semantic snapshots.
-5. Add cross-frontend parity suites for folding and calc semantics.
-   - Assert equivalent fold index transitions and calc semantic outputs across adapters.
-6. Add a live GUI parity runner as a complement to the current GUI simulation harness.
-   - Keep simulation for fast checks, but also execute parity scenarios against live CodeMirror integration for end-to-end confidence.
+- Do not force per-keystroke wasm roundtrips for insert-mode/UI hot paths.
+- Shared semantics should be batched where possible.
+- Keep fast local paths when measured latency or responsiveness would otherwise regress.
 
-### Original gap audit refresh (2026-04-23)
-1. Gap `1` (command math semantics split/divergent): **done**.
-   - Done: UI and TUI now execute `sum/avg` through shared Rust math execution (`editor-core`), including row/column scopes and unit-aware behavior.
-   - Evidence: shared core `crates/editor-core/src/math_commands.rs`, wasm bridge `crates/editor-core/src/wasm.rs` (`wasm_execute_math_command`), UI path `src/editor/core/commands.ts` + `src/editor/wasm.ts`, TUI path `src-tauri/src/editor_core/commands.rs`.
-2. Gap `3` (vim action execution duplicated): **partial**.
-   - Progress: shared execution slice now covers line/char actions plus word actions (`dd/yy/d0/d$/y0/y$/x/p/yw/yb/dw/db/de`) via `crates/editor-core/src/vim_actions.rs`, consumed by both UI (`src/editor/vim.ts` + wasm bridge) and TUI (`src-tauri/src/terminal/app.rs`).
-   - Progress: operator+motion counts now support pending forms in shared vim parser (for example `d2w`, `d2b`, `2d3w`), and `de` is parsed/executed as a first-class intent.
-   - Progress: UI now gates shared wasm action execution to migrated intents only, so non-migrated motion/edit hot paths stay local (no extra wasm boundary call per action).
-   - Progress: GUI parity simulator now reuses the same shared migrated execution path for those intents to avoid drift with TUI parity checks.
-   - Remaining: most `VimIntent -> document/cursor/register` semantics are still frontend-owned for non-migrated intents.
-3. Gap `4` (visual fast paths bypass shared action handling): **done**.
-   - Visual `y/d/x/:/Esc` now flow through the same shared vim pipeline/action handling path.
-   - Evidence: Rust intents `YankVisualSelection` / `DeleteVisualSelection` in `crates/editor-core/src/vim.rs`, UI action handling in `src/editor/vim.ts`, TUI action handling in `src-tauri/src/terminal/app.rs` (`apply_visual_selection_action`, `handle_visual_key`).
-4. Gap `5` (command side-effect dispatch frontend-specific): **done**.
-   - Shared core now emits a canonical host-command plan (`EditorEngine::plan_host_command`) consumed by both UI and TUI before runtime side effects execute.
-   - Runtime side effects remain frontend-owned by design (notify/fold/clipboard/runtime wiring), but command parsing/planning drift risk is removed.
-   - Evidence: shared dispatch kind in `crates/editor-core/src/engine.rs` + wasm bridge, UI dispatch/runtime wiring in `src/editor/command-engine.ts` + `src/editor/core/commands.ts`, TUI command dispatch in `src-tauri/src/terminal/app.rs` (`execute_terminal_command`).
-5. Gap `6` (vim intent numeric ID coupling brittle): **done**.
-   - UI now consumes wasm-exported intent IDs at runtime (`wasm_vim_intent_id_map`) instead of a hardcoded TS numeric mirror.
-   - Evidence: Rust wasm export in `crates/editor-core/src/wasm.rs` (`wasm_vim_intent_id_map`), UI dynamic map decode/proxy in `src/editor/wasm.ts` (`ensureVimIntentMap`, `VIM_INTENT`).
-6. Gap `7` (Home/End mapping parity gap): **done**.
-   - `Home -> 0` and `End -> $` now mapped in both adapters.
-   - Evidence: `src/editor/vim-adapter.ts`, `src-tauri/src/terminal/adapter.rs`.
-7. Gap `8` (parity coverage too small): **partial**.
-   - Done: replay corpus expanded substantially (now 45 cases, including `yy/yw + p`, `d2w`, `d2b`, `2d3w`, `d3e`, `d2aw`, `de`, `y0`, and `y$` flows) and GUI simulator support widened.
-   - Remaining: simulator still supports a subset and panics on unsupported intents; corpus still not full command/rule/folding/calc parity.
-   - Evidence: fixture `src-tauri/src/terminal/tests/golden/vim_parity_replay.json`, unsupported-intent guard in `src-tauri/src/terminal/app.rs` (`unsupported GUI parity action ...`).
-8. Gap `9` (UI startup fallback introduces alternate parsing paths): **done**.
-   - Command execution now awaits wasm readiness before parsing/planning, and vim no-step windows now suppress normal/visual key fallback behavior instead of drifting to alternate editor handling.
-   - Evidence: `src/editor/command-engine.ts` (`await ensureWasmReady()`), `src/editor/wasm.ts` (no command-parser fallback paths), `src/editor/vim.ts` (`no_step` gating/suppression).
+## Consolidated Subsystem Migration Plan
 
-### Commands/Vim closure plan (ordered by architecture quality + correctness)
-1. [x] Close gap `1` ownership split: UI `sum/avg row/column` now routes through shared Rust command execution (wasm command path).
-2. [x] Start gap `3` migration with the current shared `VimIntent` subset (`dd/yy/d0/d$/y0/y$/x/p/yw/yb/dw/db/de`) in shared Rust action execution (`EditOperation + register delta`), consumed by UI/TUI adapters.
-3. [x] Close gap `4`: visual fast paths now route through shared vim pipeline/action handling.
-4. Continue gap `8`: expand replay corpus to cover more migrated intents and command/rule flows; keep extending GUI parity support to avoid unsupported-action panics.
-5. [x] Reduce gap `5`: shared host-command planning contract now drives both UI/TUI; keep runtime effects in adapters only.
-6. [x] Address gap `9`: wasm-not-ready semantic fallback paths are removed/narrowed on vim/command critical paths.
-7. Optional hardening for gap `6`: generate/derive intent IDs from one source to remove manual mirror risk between Rust and TS maps.
+### Commands/Vim
 
-### Definition of done for this refactor track
-- Shared core is the canonical source for editing behavior.
-- GUI and TUI parity checks pass for replay corpus.
-- Large-note responsiveness is not regressed.
-- Frontends remain thin adapters with no semantic drift.
+Current state:
 
-## Features to be added after refactoring include:
-### Global features
-- [ ] Global quick-capture — slate capture "thought" CLI flag that appends to today's inbox note without opening the UI. Append-only target = no lock contention with a  running TUI.
-- [ ] Clipboard-watch into a named note (you have watch — extend to route captures to a specific note/section)
-- [ ] Pipe-in — cmd | slate append so terminal output flows into notes. Natural for aTUI.
-- [ ] Email forwarding address — SMTP receiver that drops mail into inbox note
-- [ ] Ability to open markdown files
-### Time & recall                                             
-- [ ] Daily note auto-create with a configurable template (date, weather, TODO rollover)
-- [ ] "On this day" — show notes/lines dated N years ago today
-- [ ] Random note — serendipity, surfaces old knowledge
-- [ ] Recurring reminders — you have reminders; add cron-style recurrence
-- [ ] Snooze — punt a reminder forward by a keystroke                                 
-- [ ] Agenda digest — dail summary of active reminders, dues, open tasks
+- Vim step parsing/intents and command planning are shared-core owned.
+- A substantial execution subset is shared for line/word/text-object actions.
+- UI and TUI both consume shared execution where migrated.
+- Non-migrated action semantics still exist in frontend adapters.
+- Parity replay is significantly expanded but not complete for all editing semantics.
 
-### Structure (without turning it into Obsidian)                                      
-- Tags (#tag) — first-class with a tag-index page listing occurrences
-- Backlinks ([[note]]) — wiki-style references, auto-resolved, with a "mentions" footer per note
-- [ ] Templates — :template meeting inserts a named template
-- [ ] Pinned notes — always at top of switcher
-- [ ] Archive — moves notes out of active set without deleting
-                                                                                    
-### Aggregation (plays well with your calc mindset)                                                                                                                   
-- [ ] TODO aggregator — virtual note listing all - [ ] across all notes, clickable to jump
-- [ ] Saved searches — name a query, run it with :q name
-- [ ] Inline query blocks — ```query tag:book ``` renders a live list inside a note
-- [ ] Habit tracker — checklist lines with streak counts computed inline (fits your calc engine)
-- [ ] Time tracking — :track start / :track stop logs sessions to a note; daily totals available
+Action points:
 
-### External                                                            
-- [ ] Export per note — markdown/html/pdf via one command
-- [ ] URL unfurl on paste — fetch title/description, inline as [title](url)
-- [ ] Calendar sync (one-way) — reminders appear in Google/iCal via ICS feed          
-- [ ] Web clipper — bookmarklet POSTs to a local HTTP endpoint slate exposes          
+1. Continue migrating non-hot-path `VimIntent -> EditOperation + register/selection delta` execution into shared core.
+2. Keep high-frequency UI movement/insert interactions local when wasm boundary cost is measurable.
+3. Expand parity corpus for visual/linewise variants, command-bar interactions, and corner-count semantics.
+4. Remove unsupported-intent panic paths from parity simulation by covering or explicitly skipping with rationale.
+5. Keep one canonical intent mapping source and avoid frontend numeric coupling.
 
-### Privacy
-- [ ] Encrypted notes — per-note passphrase, stored encrypted in DB; hidden from search unless unlocked
-- [ ] Vault mode — hide tagged notes from switcher/search by default
+Acceptance criteria:
 
-### Personal data
-- [ ] Contacts as notes — @person references, person-page auto-aggregates mentions    
-- [ ] Book/movie notes — lightweight structured frontmatter (author:, rating:) with a library view
-- [ ] Journal mode — simple mood/energy number; calc engine already supports charting these
+- Same semantic result across UI/TUI for migrated intents.
+- No measurable UI regression on normal typing/navigation hot paths.
+
+### Markdown/Table/List
+
+Current state:
+
+- Core markdown/table/list transforms are mostly shared in `editor-core`.
+- UI consumes batched wasm transactions.
+- TUI consumes shared rules natively.
+- Some trigger/scheduling heuristics and cursor clamping remain frontend-local.
+
+Action points:
+
+1. Define and document canonical trigger points for markdown/table/list rules.
+2. Migrate remaining semantics that affect document correctness (not rendering cadence) into shared core.
+3. Add cross-frontend parity fixtures for table edits, list rewrites, and markdown autoformat transitions.
+4. Keep frontend-local only the pieces tied to viewport/event cadence.
+
+Acceptance criteria:
+
+- Rule output parity for shared scenarios.
+- No full-document recomputation introduced into typing hot paths.
+
+### Folding
+
+Current state:
+
+- Fold structure/index and incremental remap decisions are shared-core oriented.
+- Rendering/state presentation remains frontend-local by design.
+- Cross-frontend fold parity corpus is still missing.
+
+Action points:
+
+1. Add fold transition parity fixtures (insert/delete near boundaries, heading-level interactions, fence transitions).
+2. Enforce shared fold index decisions as canonical for both adapters.
+3. Keep fold visualization and viewport expansion behavior frontend-specific.
+
+Acceptance criteria:
+
+- Equivalent fold ranges and transition decisions for shared scenarios.
+- No fold-state drift between UI and TUI for identical edits.
+
+### Calc/Variables
+
+Current state:
+
+- Trigger/eval-scope/trailer-refresh semantics are largely shared.
+- Scheduling, async lifecycle, and ghost/widget rendering remain frontend-local.
+- Parity coverage across adapters is still partial.
+
+Action points:
+
+1. Add cross-frontend parity scenarios for assignment lines, formula cells, trailer refresh, and variable dependencies.
+2. Keep async scheduling and UI widget rendering local, but centralize correctness semantics in core.
+3. Tighten invalidation/remap behavior for large-note edits to avoid stale calc state.
+
+Acceptance criteria:
+
+- Equivalent semantic outputs for shared calc scenarios.
+- Large-note responsiveness remains stable during incremental recalculation.
+
+## Cross-Subsystem Architecture Action Plan (Ordered)
+
+1. Define explicit migration boundary policy for the remaining semantics:
+
+- what must move to shared core,
+- what remains adapter-local for performance or rendering reasons,
+- and why.
+
+1. Expand parity from vim key replay to command/rule/folding/calc semantic parity suites.
+
+2. Introduce a live GUI parity runner (in addition to simulator parity) for end-to-end confidence against real CodeMirror integration.
+
+3. Close remaining frontend semantic drift in non-hot paths subsystem-by-subsystem.
+
+4. Add architecture guardrails in CI:
+
+- parity suites,
+- startup/hot-path performance checks,
+- protections against reintroducing duplicated semantics.
+
+1. Decide migration feature-flag policy for remaining moves:
+
+- either add focused migration flags,
+- or explicitly document why permanent adapter-local ownership is intentional.
+
+## Definition of Done for This Track
+
+- Shared core is canonical for agreed semantic domains.
+- UI/TUI parity suites cover vim, command/rule, folding, and calc semantics at meaningful depth.
+- Hot path performance remains equal or better.
+- Frontends stay adapter- and rendering-focused.
+- Architecture intent is documented and enforced by tests/checks.
+
+## Future Updates
+
+### Global
+
+- [ ] Ability to open markdown files directly and save (export) to them
+- [ ] Global quick-capture: `slate capture "thought"` appends to today's inbox note without opening UI.
+- [ ] Clipboard-watch into a named note/section.
+- [ ] Pipe-in mode: `cmd | slate append`.
+- [ ] Email forwarding address that ingests into inbox note.
+- [ ] Templates (`:template meeting`).
+- [ ] Daily note auto-create with configurable template.
+- [ ] "On this day" recall view.
+- [ ] Random note resurfacing.
+- [ ] Recurring reminders (cron-like).
+- [ ] Reminder snooze.
+- [ ] Agenda digest of active reminders and open tasks.
+- [ ] Tags (`#tag`) with tag index views.
+- [ ] Backlinks (`[[note]]`) with mentions footer.
+- [ ] Pinned notes.
+- [ ] Archive mode.
+
+### Aggregation
+
+- TODO aggregator across all notes.
+- Saved searches.
+- Inline query blocks.
+- Habit tracker using checklist + calc semantics.
+- Time tracking commands with daily totals.
+
+### External
+
+- Per-note export (markdown/html/pdf).
+- URL unfurl on paste.
+- One-way calendar sync (ICS/Google/iCal).
+- Web clipper endpoint.
+
+### Personal Data
+
+- Contacts as notes via `@person` references.
+- Book/movie note schema with lightweight metadata.
+- Journal mode with mood/energy metrics.
 
 ### Reflective
-- [ ] Weekly review — scheduled prompt (Sunday evening) that opens a review template pre-filled with the week's notes/todos
-- [ ] Writing streak — words/day stats, gentle streak indicator
+
+- Weekly review prompt/template.
+- Writing streak tracking.
 
 ### Other
-- [ ] *Multicursor support*
-- [ ] Context menu - choose simple formatting and options to convert
-- [ ] Select - right click for context menu - convert to checklist, ordered list, unordered list
-- [ ] Allow assigning variables to a := sum_column() kind of values so later it can be reused.
-- [ ] UI settings page
-- [ ] Code folding
-- [ ] Search notes content
-- [ ] Auto backups
-- [ ] Add support for multiple formulas in a row/column
-- [ ] Automatic link handling in the form of [link](link) with optional [link] text update. Show only [link] by default.
-- [ ] Add support for currency conversions (store conversion rate locally, sync on startup in the background)
-- [ ] Allow multiple formulas per row in tables
-- [ ] Create shortcuts for everything + add menues to the UI, and also enable all of that in command version
-- [ ] Add export command
-- [ ] Micro-optimize further by precomputing all derived UI styles once (instead of recomputing small bits each draw).
-- [ ] Improve overflow to full soft-wrap
-- [ ] Improve date vs list handling
 
-## Bugs and Fixes
+- [ ] Multicursor support.
+- [ ] Context menu for formatting conversions.
+- [ ] Right-click conversion to checklist/ordered/unordered list.
+- [ ] Support variable assignment from formula helpers like `a := sum_column()`.
+- [ ] UI settings page.
+- [ ] Code folding UX improvements.
+- [ ] Search notes content.
+- [ ] Auto backups.
+- [ ] Support multiple formulas in row/column contexts.
+- [ ] Link handling polish for `[text](url)` display behavior.
+- [ ] Currency conversion support with local cache and startup sync.
+- [ ] Keyboard shortcut expansion and menu coverage in UI and terminal flows.
+- [ ] Export command enhancements.
+- [ ] Micro-optimizations for precomputed derived UI styles.
+- [ ] Improve overflow to full soft-wrap.
+- [ ] Improve date-vs-list parsing edge cases.
 
-- [ ] **Stability and performance**
-- [ ] Fix dedup ghost:
-5. Dedup: Unify the text-object methods, undo/redo, and VimIntent line-range      
-- [ ] **Calc engine enhancements and testing**
-- [ ] Improve swithcing between notes
-- [ ] Pasting deleted text in UI
-- [ ] Banner as the top priority over H1
-- [ ] Beautify command selection and add some nice animation in UI mode, also window decoration in the UI
-- [ ] Optimize checkbox rebuild - now it rebuilds the whole visible range
-- [ ] Checkbox UI style performance check
-- [ ] Fix TUI shortcuts in non-vim
-- [ ] Fix "db" command in TUI
-- [ ] Visual and v-line modes do not accept 10k 10j commands keeping selection
-- [ ] Notification handling (cross platform)
-- [ ] Improve folding
-- [ ] Fix terminal handling of auto-reordering checklist (cursor should not follow the list)
-- [ ] Fix padding between window border and TUI (check in floating mode and resize)
-- [ ] Fix UI cutting selection (cutting char works), terminal xx for cut line,
-- [ ] Fix ui cursor movement when hit esc after moving around
-- [ ] Add option to evaluate expression at the end: e.g. val := value1 - value2 = 44 (remove ghost = 44 and add it tot the result on tab)
-- [ ] Always stay in insert mode after command
+## Bugs and Fixes Backlog
+
+- [ ] Stability and performance hardening.
+- [ ] Dedup cleanup: unify text-object methods, undo/redo semantics, and vim line-range behavior.
+- [ ] Calc engine enhancements and extensive testing.
+- [ ] Improve note switching behavior.
+- [ ] Fix pasting deleted text behavior in UI.
+- [ ] Ensure banner priority over H1 where intended.
+- [ ] Improve command selection UX and UI window decoration polish.
+- [ ] Optimize checkbox rebuild to avoid full visible-range rebuilds.
+- [ ] Checkbox UI style performance review.
+- [ ] Fix TUI shortcuts in non-vim mode.
+- [ ] Fix `db` behavior in TUI.
+- [ ] Fix visual and visual-line large-count motions (for example `10k`, `10j`) while preserving selection.
+- [ ] Cross-platform notification handling: test and improve the flow.
+- [ ] Folding behavior improvements.
+- [ ] Fix terminal auto-reordering checklist cursor behavior.
+- [ ] Fix TUI border padding during floating mode and resize.
+- [ ] Fix UI cut selection behavior; align terminal cut line behavior (`xx`).
+- [ ] Fix UI cursor movement after `Esc` navigation flows.
+- [ ] Add assignment-trailer evaluation support (`val := a - b = 44` style reconciliation on tab).
+- [ ] Revisit insert-mode persistence after command execution where expected.
+- [ ] Table movement bugfixes.
+- [ ] Architecture assessment.
+- [ ] Fix UI cursor sometimes showing as block in insert mode.
+- [ ] Tab replaces value in table cell with calculated value.
+- [ ] Consider removing `:sum`, `:avg` commands (**probably not**).
+- [ ] Fix Markdown decoration around `**` before and after `,`, `(`, or `{...`, not only whitespace.
+- [ ] Fix memory leak.
+- [ ] 3-time password block.
+- [ ] Enrich table with `(1,2)` access for better experience.
+- [ ] Improve overflow handling.
+- [ ] Improve theming and overall visual polish in UI and TUI.
+- [ ] Memory consumption and micro-optimizations.
+- [ ] Add `Ctrl+Q` UI exit.
+- [ ] Improve exports.
+- [ ] Do we need a hard stop on modules (note size) since we can manually control it?
+- [ ] Fix modules in TUI to apply actual changes.
+- [ ] Do not follow cursor for a checkbox that is moved to the bottom because it was checked.
+- [ ] Improve encrypted notes (per-note passphrase, locked from search until unlock).
+- [ ] Vault mode for hidden tagged notes.
