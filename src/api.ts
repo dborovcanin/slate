@@ -146,10 +146,6 @@ export function createNote(): Promise<Note> {
   return invoke<Note>("create_note");
 }
 
-export function listNotes(): Promise<Note[]> {
-  return invoke<Note[]>("list_notes");
-}
-
 export function listNotesMeta(): Promise<NoteSummary[]> {
   return invoke<NoteSummary[]>("list_notes_meta");
 }

@@ -88,11 +88,6 @@ pub fn create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, Str
 }
 
 #[tauri::command]
-pub fn list_notes(core: State<'_, AppCore>) -> Result<Vec<Note>, String> {
-    core.db().list_notes()
-}
-
-#[tauri::command]
 pub fn list_notes_meta(core: State<'_, AppCore>) -> Result<Vec<NoteSummary>, String> {
     core.db().list_notes_meta()
 }

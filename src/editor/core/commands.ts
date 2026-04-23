@@ -1,6 +1,5 @@
 import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
-import type { SumExpressionEvaluator } from "./sum.ts";
 import {
   convertLineToList,
   executeMathCommandFromWasm,
@@ -23,6 +22,9 @@ import type { NoteModules } from "../../api.ts";
 export type { CommandMode, CommandSuggestion } from "./types.ts";
 
 export type FoldCommandAction = "fold" | "unfold" | "fold-toggle";
+export type SumExpressionEvaluator = (
+  expression: string,
+) => Promise<string | null> | string | null;
 
 export interface CommandRuntime {
   mode: CommandMode;

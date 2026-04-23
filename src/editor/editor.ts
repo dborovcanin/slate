@@ -134,7 +134,6 @@ interface EditorMountOptions {
 }
 
 let currentFormatOnSave = false;
-let currentDateFormat = "%Y-%m-%d";
 let backendDetached = false;
 let tableModuleEnabled = true;
 
@@ -311,7 +310,6 @@ function buildEditorExtensions(options: EditorMountOptions): {
 
   backendDetached = plainTextMode || !!options.detachBackend;
   currentFormatOnSave = !!options.formatOnSave;
-  currentDateFormat = options.dateFormat || "%Y-%m-%d";
   tableModuleEnabled = tableEnabled;
 
   const extensions = [

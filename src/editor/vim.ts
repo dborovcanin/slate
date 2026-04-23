@@ -470,20 +470,6 @@ export function vimModeExtension(options: VimOptions = {}) {
     visualHeadLine = null;
   };
 
-  const setModeLocally = (view: EditorView, next: VimUiMode) => {
-    const prev = currentMode;
-    currentMode = next;
-
-    if (next === "normal") {
-      resetVisualAnchors();
-      if (prev === "visual" || prev === "visual-line") {
-        collapseSelection(view);
-      }
-    }
-
-    syncModeClasses(view);
-  };
-
   const getHeadInfo = (view: EditorView) => {
     const head = view.state.selection.main.head;
     const line = view.state.doc.lineAt(head);

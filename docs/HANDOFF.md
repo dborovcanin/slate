@@ -129,8 +129,6 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 - `src/editor/core/commands.test.ts`
   - mode-aware command suggestions
   - core command execution outputs (sum/date/q)
-- `src/editor/ex-commands.test.ts`
-  - sum scope and number parsing coverage
 - `src/editor/command-engine.test.ts`
   - mode-gated command availability (`vim` vs `editor`)
   - suggestion filtering behavior

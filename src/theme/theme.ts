@@ -21,9 +21,6 @@ export interface ThemeSelection {
 }
 
 let currentSelection: ThemeSelection | null = null;
-let reloadTimer: number | null = null;
-let reloadInFlight = false;
-const LIVE_RELOAD_INTERVAL_MS = 1200;
 
 interface Rgb {
   r: number;
@@ -420,19 +417,6 @@ function sameSelection(a: ThemeSelection | null, b: ThemeSelection): boolean {
     a.animationMode === b.animationMode &&
     a.animationStyle === b.animationStyle
   );
-}
-
-async function fetchSelection() {
-  const config = await getThemeConfigOrDefault();
-  return resolveThemeSelection(config);
-}
-
-async function reloadThemeIfChanged() {
-  const selection = await fetchSelection();
-  if (sameSelection(currentSelection, selection)) {
-    return null;
-  }
-  return applyTheme(selection);
 }
 
 export function getCurrentThemeSelection(): ThemeSelection | null {
