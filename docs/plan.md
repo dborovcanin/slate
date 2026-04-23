@@ -231,6 +231,7 @@ Acceptance criteria:
 ## Bugs and Fixes Backlog
 
 - [ ] Stability and performance hardening.
+- [ ] Allow multiple rows in table cell
 - [ ] Dedup cleanup: unify text-object methods, undo/redo semantics, and vim line-range behavior.
 - [ ] Calc engine enhancements and extensive testing.
 - [ ] Improve note switching behavior.
