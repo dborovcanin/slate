@@ -1,5 +1,7 @@
+use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 /// Compute a deterministic 64-bit hash for a line. `DefaultHasher` uses
@@ -65,6 +67,15 @@ pub struct IncrementalCalcPlan {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CalcEvalScopeDecision {
+    pub touches_any_assignment: bool,
+    pub touches_builtin_formula: bool,
+    pub can_use_partial: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CalcEvalWindowDecision {
+    pub eval_from: usize,
+    pub eval_to: usize,
     pub touches_any_assignment: bool,
     pub touches_builtin_formula: bool,
     pub can_use_partial: bool,
@@ -621,6 +632,442 @@ pub fn decide_eval_scope_with_flags(
     }
 }
 
+fn collapse_spaces(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_valid_variable_name(name: &str) -> bool {
+    let mut has_word = false;
+    let mut has_alpha_or_underscore = false;
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            has_word = true;
+            if ch.is_ascii_alphabetic() || ch == '_' {
+                has_alpha_or_underscore = true;
+            }
+            continue;
+        }
+        if ch == ' ' {
+            continue;
+        }
+        return false;
+    }
+    has_word && has_alpha_or_underscore
+}
+
+fn strip_applied_result_tail(input: &str) -> &str {
+    if let Some(idx) = input.rfind(" = ") {
+        let left = input[..idx].trim();
+        if !left.is_empty() {
+            return left;
+        }
+    }
+    input
+}
+
+fn parse_variable_assignment_name_rhs(input: &str) -> Option<(String, String)> {
+    let idx = input.find(":=")?;
+    let left = collapse_spaces(input[..idx].trim());
+    if left.is_empty() || !is_valid_variable_name(&left) {
+        return None;
+    }
+    let right = strip_applied_result_tail(input[idx + 2..].trim())
+        .trim()
+        .to_string();
+    if right.is_empty() {
+        return None;
+    }
+    Some((left.to_ascii_lowercase(), right))
+}
+
+pub fn assignment_name(line: &str) -> Option<String> {
+    let eval_target = line_for_calc_evaluation(line);
+    if let Some((name, _)) = parse_variable_assignment_name_rhs(eval_target.trim()) {
+        return Some(name);
+    }
+
+    if is_table_line(line) {
+        let mut pipes = Vec::new();
+        for (idx, b) in line.as_bytes().iter().enumerate() {
+            if *b == b'|' {
+                pipes.push(idx);
+            }
+        }
+        for pair in pipes.windows(2) {
+            let start = pair[0] + 1;
+            let end = pair[1];
+            if start >= end {
+                continue;
+            }
+            let candidate = line[start..end].trim();
+            if let Some((name, _)) = parse_variable_assignment_name_rhs(candidate) {
+                return Some(name);
+            }
+        }
+    }
+
+    if let Some((from_byte, to_byte)) = list_body_byte_range(line) {
+        let candidate = line[from_byte..to_byte].trim();
+        if let Some((name, _)) = parse_variable_assignment_name_rhs(candidate) {
+            return Some(name);
+        }
+    }
+
+    parse_variable_assignment_name_rhs(line.trim()).map(|(name, _)| name)
+}
+
+pub fn collect_assignment_names(lines: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for line in lines {
+        let Some(name) = assignment_name(line) else {
+            continue;
+        };
+        if seen.insert(name.clone()) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+#[derive(Debug, Clone)]
+struct VariableDependencyDef {
+    line_idx: usize,
+    rhs: String,
+}
+
+fn collect_variable_dependency_defs(lines: &[String]) -> HashMap<String, VariableDependencyDef> {
+    let mut defs = HashMap::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        let eval_target = line_for_calc_evaluation(line);
+        let Some((name, rhs)) = parse_variable_assignment_name_rhs(eval_target.trim()) else {
+            continue;
+        };
+        defs.insert(name, VariableDependencyDef { line_idx, rhs });
+    }
+    defs
+}
+
+fn build_variable_ref_regex(names_sorted: &[String]) -> Option<regex::Regex> {
+    let escaped: Vec<String> = names_sorted
+        .iter()
+        .filter(|name| !name.is_empty())
+        .map(|name| regex::escape(name))
+        .collect();
+    if escaped.is_empty() {
+        return None;
+    }
+    let pattern = format!(r"\b(?:{})\b", escaped.join("|"));
+    RegexBuilder::new(&pattern)
+        .unicode(false)
+        .case_insensitive(true)
+        .build()
+        .ok()
+}
+
+fn expression_references_any(
+    expression: &str,
+    variable_regex: &regex::Regex,
+    affected_variables: &HashSet<String>,
+) -> bool {
+    variable_regex
+        .find_iter(expression)
+        .any(|m| affected_variables.contains(&expression[m.start()..m.end()].to_ascii_lowercase()))
+}
+
+fn table_range_maybe_impacts_formulas(lines: &[String], from: usize, to: usize) -> bool {
+    if from >= to {
+        return false;
+    }
+    lines
+        .get(from..to)
+        .map(|slice| slice.iter().any(|line| is_table_line(line)))
+        .unwrap_or(false)
+}
+
+fn formula_dependency_window(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+) -> Option<(usize, usize)> {
+    if changed_from >= changed_to {
+        return None;
+    }
+
+    let mut min_line = usize::MAX;
+    let mut max_line_exclusive = 0usize;
+    for line_idx in 0..lines.len() {
+        let line = &lines[line_idx];
+        if !is_table_line(line) {
+            continue;
+        }
+
+        let segments = find_table_formula_segments(line);
+        if segments.is_empty() {
+            continue;
+        }
+        let has_row_formula = segments.iter().any(|segment| {
+            segment
+                .labels
+                .iter()
+                .any(|label| label == "sum_row()" || label == "avg_row()")
+        });
+        let has_col_formula = segments.iter().any(|segment| {
+            segment
+                .labels
+                .iter()
+                .any(|label| label == "sum_col()" || label == "avg_col()")
+        });
+
+        let mut impacted = line_idx >= changed_from && line_idx < changed_to;
+        if !impacted && has_col_formula {
+            let Some((table_start, _)) = table_block_range(lines, line_idx) else {
+                continue;
+            };
+            let dep_from = table_start;
+            let dep_to = line_idx;
+            impacted = dep_from < dep_to && dep_from < changed_to && changed_from < dep_to;
+        }
+        if !impacted && has_row_formula {
+            impacted = line_idx >= changed_from && line_idx < changed_to;
+        }
+
+        if impacted {
+            min_line = min_line.min(line_idx);
+            max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
+        }
+    }
+
+    if min_line == usize::MAX {
+        None
+    } else {
+        Some((min_line, max_line_exclusive))
+    }
+}
+
+fn table_block_range(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
+    if lines
+        .get(line_idx)
+        .map(|line| !is_table_line(line))
+        .unwrap_or(true)
+    {
+        return None;
+    }
+
+    let mut start = line_idx;
+    while start > 0 {
+        let prev = start - 1;
+        if !is_table_line(lines.get(prev)?) {
+            break;
+        }
+        start = prev;
+    }
+
+    let mut end = line_idx;
+    while end + 1 < lines.len() {
+        if !is_table_line(lines.get(end + 1)?) {
+            break;
+        }
+        end += 1;
+    }
+
+    Some((start, end))
+}
+
+fn variable_dependency_window(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+) -> Option<(usize, usize)> {
+    let mut changed_variables: HashSet<String> = HashSet::new();
+
+    if let Some(slice) = lines.get(changed_from..changed_to) {
+        for name in collect_assignment_names(slice) {
+            changed_variables.insert(name);
+        }
+    }
+    for name in prev_changed_assignment_names {
+        if !name.is_empty() {
+            changed_variables.insert(name.to_ascii_lowercase());
+        }
+    }
+
+    if changed_variables.is_empty() {
+        if prev_changed_had_assignment {
+            return Some((0, lines.len()));
+        }
+        return None;
+    }
+
+    let defs = collect_variable_dependency_defs(lines);
+    if defs.is_empty() {
+        return Some((0, lines.len()));
+    }
+
+    let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
+    names_sorted.extend(changed_variables.iter().cloned());
+    names_sorted.sort();
+    names_sorted.dedup();
+    names_sorted.sort_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
+    let Some(variable_regex) = build_variable_ref_regex(&names_sorted) else {
+        return Some((0, lines.len()));
+    };
+
+    let mut reverse_dependencies: HashMap<String, HashSet<String>> = HashMap::new();
+    for (name, def) in &defs {
+        for m in variable_regex.find_iter(def.rhs.as_str()) {
+            let referenced = def.rhs[m.start()..m.end()].to_ascii_lowercase();
+            if referenced == *name {
+                continue;
+            }
+            reverse_dependencies
+                .entry(referenced)
+                .or_default()
+                .insert(name.clone());
+        }
+    }
+
+    let mut affected_variables = changed_variables.clone();
+    let mut stack: Vec<String> = changed_variables.into_iter().collect();
+    while let Some(variable) = stack.pop() {
+        let Some(dependents) = reverse_dependencies.get(&variable) else {
+            continue;
+        };
+        for dependent in dependents {
+            if affected_variables.insert(dependent.clone()) {
+                stack.push(dependent.clone());
+            }
+        }
+    }
+
+    let mut min_line = changed_from.min(lines.len());
+    let mut max_line_exclusive = changed_to.min(lines.len()).max(min_line);
+    let mut found_any = changed_from < changed_to;
+
+    for variable in &affected_variables {
+        if let Some(def) = defs.get(variable) {
+            min_line = min_line.min(def.line_idx);
+            max_line_exclusive = max_line_exclusive.max(def.line_idx.saturating_add(1));
+            found_any = true;
+        }
+    }
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        let eval_target = line_for_calc_evaluation(line);
+        let trimmed = eval_target.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let assignment_rhs = parse_variable_assignment_name_rhs(trimmed).map(|(_, rhs)| rhs);
+        let expression_for_refs = assignment_rhs.as_deref().unwrap_or(trimmed);
+        if expression_references_any(expression_for_refs, &variable_regex, &affected_variables) {
+            min_line = min_line.min(line_idx);
+            max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
+            found_any = true;
+        }
+    }
+
+    if found_any {
+        Some((min_line, max_line_exclusive))
+    } else {
+        None
+    }
+}
+
+pub fn decide_eval_window(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_lines: &[String],
+    has_prev: bool,
+    variables_enabled: bool,
+) -> CalcEvalWindowDecision {
+    let prev_changed_assignment_names = collect_assignment_names(prev_changed_lines);
+    let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
+        || contains_variable_assignment(prev_changed_lines);
+    let prev_changed_had_builtin_formula = contains_builtin_formula(prev_changed_lines);
+    decide_eval_window_with_flags(
+        lines,
+        changed_from,
+        changed_to,
+        &prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        has_prev,
+        variables_enabled,
+    )
+}
+
+pub fn decide_eval_window_with_flags(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+    prev_changed_had_builtin_formula: bool,
+    has_prev: bool,
+    variables_enabled: bool,
+) -> CalcEvalWindowDecision {
+    let line_count = lines.len();
+    let mut eval_from = changed_from.min(line_count);
+    let mut eval_to = changed_to.min(line_count).max(eval_from);
+
+    let changed_lines: &[String] = lines.get(eval_from..eval_to).unwrap_or(&[]);
+    let touches_any_assignment = variables_enabled
+        && (contains_variable_assignment(changed_lines) || prev_changed_had_assignment);
+    let touches_builtin_formula =
+        contains_builtin_formula(changed_lines) || prev_changed_had_builtin_formula;
+
+    if !has_prev {
+        return CalcEvalWindowDecision {
+            eval_from: 0,
+            eval_to: line_count,
+            touches_any_assignment,
+            touches_builtin_formula,
+            can_use_partial: false,
+        };
+    }
+
+    if touches_any_assignment {
+        if let Some((from, to)) = variable_dependency_window(
+            lines,
+            eval_from,
+            eval_to,
+            prev_changed_assignment_names,
+            prev_changed_had_assignment,
+        ) {
+            eval_from = eval_from.min(from);
+            eval_to = eval_to.max(to);
+        } else if prev_changed_had_assignment {
+            eval_from = 0;
+            eval_to = line_count;
+        }
+    }
+
+    let maybe_formula_deps = touches_builtin_formula
+        || prev_changed_had_builtin_formula
+        || table_range_maybe_impacts_formulas(lines, eval_from, eval_to);
+    if maybe_formula_deps {
+        if let Some((from, to)) = formula_dependency_window(lines, eval_from, eval_to) {
+            eval_from = eval_from.min(from);
+            eval_to = eval_to.max(to);
+        } else if touches_builtin_formula || prev_changed_had_builtin_formula {
+            eval_from = 0;
+            eval_to = line_count;
+        }
+    }
+
+    CalcEvalWindowDecision {
+        eval_from,
+        eval_to,
+        touches_any_assignment,
+        touches_builtin_formula,
+        can_use_partial: true,
+    }
+}
+
 pub fn should_schedule_calc_eval(
     doc_line_count: usize,
     max_eval_lines: usize,
@@ -1107,5 +1554,67 @@ mod tests {
         assert!(!should_attempt_calc_trailer_refresh(1, 2, None, false));
         assert!(!should_attempt_calc_trailer_refresh(1, 1, Some("4"), false));
         assert!(!should_attempt_calc_trailer_refresh(1, 1, None, true));
+    }
+
+    #[test]
+    fn decide_eval_window_expands_for_variable_dependents() {
+        let lines = vec![
+            "a := 1".to_string(),
+            "b := a + 1".to_string(),
+            "c := b + 1".to_string(),
+            "c".to_string(),
+            "x := 9".to_string(),
+            "x".to_string(),
+        ];
+        let prev_changed = vec!["a := 0".to_string()];
+        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 0);
+        assert_eq!(decision.eval_to, 4);
+    }
+
+    #[test]
+    fn decide_eval_window_tracks_removed_assignment_dependencies() {
+        let lines = vec![
+            "plain text".to_string(),
+            "b := a + 1".to_string(),
+            "b".to_string(),
+            "x := 3".to_string(),
+            "x".to_string(),
+        ];
+        let prev_changed = vec!["a := 1".to_string()];
+        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 0);
+        assert_eq!(decision.eval_to, 3);
+    }
+
+    #[test]
+    fn decide_eval_window_expands_table_column_formula_dependents() {
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| ---- | ----- | ----- |".to_string(),
+            "| a | 1 | 1 |".to_string(),
+            "| b | 2 | 2 |".to_string(),
+            "| total |  | =sum_col() |".to_string(),
+            "| grand |  | =sum_col() |".to_string(),
+        ];
+        let decision = decide_eval_window(&lines, 3, 4, &[], true, true);
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 3);
+        assert_eq!(decision.eval_to, 6);
+    }
+
+    #[test]
+    fn assignment_name_extracts_normalized_name_from_list_and_table_lines() {
+        assert_eq!(
+            assignment_name("- [ ] Total Cost := 12"),
+            Some("total cost".to_string())
+        );
+        assert_eq!(
+            assignment_name("| item | total_cost := 12 |"),
+            Some("total_cost".to_string())
+        );
+        assert_eq!(assignment_name("not assignment"), None);
     }
 }

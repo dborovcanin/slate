@@ -7,6 +7,7 @@ pub struct CalcCache {
     pub cell_results: Vec<Vec<(usize, String)>>,
     pub variable_names: Vec<String>,
     pub prev_line_hashes: Vec<u64>,
+    pub prev_line_assignment_name: Vec<Option<String>>,
     pub prev_line_has_assignment: Vec<bool>,
     pub prev_line_has_builtin_formula: Vec<bool>,
     pub stale: bool,

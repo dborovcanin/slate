@@ -1161,6 +1161,7 @@ impl TerminalApp {
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
             self.calc.prev_line_hashes.clear();
+            self.calc.prev_line_assignment_name.clear();
             self.calc.prev_line_has_assignment.clear();
             self.calc.prev_line_has_builtin_formula.clear();
             self.calc.stale = false;
@@ -1170,6 +1171,7 @@ impl TerminalApp {
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
             self.calc.prev_line_hashes.clear();
+            self.calc.prev_line_assignment_name.clear();
             self.calc.prev_line_has_assignment.clear();
             self.calc.prev_line_has_builtin_formula.clear();
             self.calc.stale = true;

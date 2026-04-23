@@ -6,6 +6,7 @@ import init, {
   wasm_calc_builtin_formula_labels,
   wasm_calc_compute_refresh,
   wasm_calc_decide_eval_scope,
+  wasm_calc_decide_eval_window,
   wasm_calc_contains_builtin_formula,
   wasm_calc_contains_variable_assignment,
   wasm_calc_find_list_segment,
@@ -391,6 +392,14 @@ export interface CalcEvalScopeDecision {
   canUsePartial: boolean;
 }
 
+export interface CalcEvalWindowDecision {
+  evalFrom: number;
+  evalTo: number;
+  touchesAnyAssignment: boolean;
+  touchesBuiltinFormula: boolean;
+  canUsePartial: boolean;
+}
+
 export interface IncrementalCalcPlan {
   baseResults: Map<number, string>;
   evalFrom: number;
@@ -417,6 +426,14 @@ interface CalcRefreshPlanPayload {
 }
 
 interface CalcEvalScopeDecisionPayload {
+  touchesAnyAssignment: boolean;
+  touchesBuiltinFormula: boolean;
+  canUsePartial: boolean;
+}
+
+interface CalcEvalWindowDecisionPayload {
+  evalFrom: number;
+  evalTo: number;
   touchesAnyAssignment: boolean;
   touchesBuiltinFormula: boolean;
   canUsePartial: boolean;
@@ -1708,6 +1725,56 @@ export function calcDecideEvalScope(
     };
   }
   return {
+    touchesAnyAssignment: raw.touchesAnyAssignment,
+    touchesBuiltinFormula: raw.touchesBuiltinFormula,
+    canUsePartial: raw.canUsePartial,
+  };
+}
+
+export function calcDecideEvalWindow(
+  lines: readonly string[],
+  changedFrom: number,
+  changedTo: number,
+  prevChangedLines: readonly string[],
+  hasPrev: boolean,
+  variablesEnabled: boolean,
+): CalcEvalWindowDecision {
+  if (!ensureWasmReadyNonBlocking()) {
+    return {
+      evalFrom: 0,
+      evalTo: lines.length,
+      touchesAnyAssignment: false,
+      touchesBuiltinFormula: false,
+      canUsePartial: false,
+    };
+  }
+  const raw = wasm_calc_decide_eval_window(
+    [...lines],
+    changedFrom,
+    changedTo,
+    [...prevChangedLines],
+    hasPrev,
+    variablesEnabled,
+  ) as CalcEvalWindowDecisionPayload | null | undefined;
+  if (
+    !raw ||
+    typeof raw.evalFrom !== "number" ||
+    typeof raw.evalTo !== "number" ||
+    typeof raw.touchesAnyAssignment !== "boolean" ||
+    typeof raw.touchesBuiltinFormula !== "boolean" ||
+    typeof raw.canUsePartial !== "boolean"
+  ) {
+    return {
+      evalFrom: 0,
+      evalTo: lines.length,
+      touchesAnyAssignment: false,
+      touchesBuiltinFormula: false,
+      canUsePartial: false,
+    };
+  }
+  return {
+    evalFrom: raw.evalFrom,
+    evalTo: raw.evalTo,
     touchesAnyAssignment: raw.touchesAnyAssignment,
     touchesBuiltinFormula: raw.touchesBuiltinFormula,
     canUsePartial: raw.canUsePartial,

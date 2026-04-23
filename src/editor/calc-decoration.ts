@@ -35,7 +35,7 @@ import { calcFindTableFormulaSegments, type TableFormulaSegment } from "./wasm.t
 import { planIncrementalCalc } from "./calc-incremental.ts";
 import {
   calcBuiltinFormulaLabel,
-  calcDecideEvalScope,
+  calcDecideEvalWindow,
   calcComputeRefresh,
   calcContainsBuiltinFormula,
   calcContainsVariableAssignment,
@@ -1211,22 +1211,22 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const prevChangedTo =
             prevLines.length - nextLines.length + plan.evalFrom + plan.evalLines.length;
           const prevChangedLines = prevLines.slice(plan.evalFrom, prevChangedTo);
-          // Shared-core decision: eval scope falls back to full whenever the
-          // changed region touches assignment/formula dependencies.
-          const evalScope = calcDecideEvalScope(
-            plan.evalLines,
+          const evalWindow = calcDecideEvalWindow(
+            nextLines,
+            plan.evalFrom,
+            plan.evalFrom + plan.evalLines.length,
             prevChangedLines,
             hasPrev,
             variablesEnabled,
           );
-          const canUsePartial = evalScope.canUsePartial;
+          const canUsePartial = evalWindow.canUsePartial;
           const noteId = getActiveNoteId?.() ?? null;
 
           let evaluated;
-          let evalFrom = 0;
-          let evalTo = nextLines.length;
+          let evalFrom = evalWindow.evalFrom;
+          let evalTo = evalWindow.evalTo;
 
-          if (canUsePartial && plan.evalLines.length === 0) {
+          if (canUsePartial && plan.evalLines.length === 0 && evalFrom >= evalTo) {
             if (noteId && serverCacheSeeded && prevChangedTo > plan.evalFrom) {
               // Delete-only delta: keep backend line cache aligned even when no
               // lines need evaluation.
@@ -1245,11 +1245,9 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           }
 
           if (canUsePartial) {
-            evalFrom = plan.evalFrom;
-            evalTo = plan.evalFrom + plan.evalLines.length;
             if (noteId && serverCacheSeeded) {
               // Delta path: sync only the changed window, then eval.
-              await syncNoteLines(noteId, evalFrom, evalFrom + (prevChangedTo - plan.evalFrom), plan.evalLines);
+              await syncNoteLines(noteId, plan.evalFrom, prevChangedTo, plan.evalLines);
               evaluated = await evaluateNoteContextDelta(noteId, variablesEnabled, { evalFrom, evalTo });
             } else {
               evaluated = await evaluateNoteContext(nextLines, variablesEnabled, { evalFrom, evalTo });

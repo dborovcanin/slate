@@ -3,8 +3,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::calc_plan::{
-    self, CalcEvalScopeDecision, CalcRefreshPlan, CalcSegment, CommitMarkerLoc,
-    IncrementalCalcPlan, TableFormulaSegment,
+    self, CalcEvalScopeDecision, CalcEvalWindowDecision, CalcRefreshPlan, CalcSegment,
+    CommitMarkerLoc, IncrementalCalcPlan, TableFormulaSegment,
 };
 use crate::command_catalog::CommandId;
 use crate::command_history;
@@ -819,6 +819,32 @@ fn calc_eval_scope_decision_to_js(decision: &CalcEvalScopeDecision) -> JsValue {
     out.into()
 }
 
+fn calc_eval_window_decision_to_js(decision: &CalcEvalWindowDecision) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(
+        &out,
+        "evalFrom",
+        JsValue::from_f64(decision.eval_from as f64),
+    );
+    let _ = set_prop(&out, "evalTo", JsValue::from_f64(decision.eval_to as f64));
+    let _ = set_prop(
+        &out,
+        "touchesAnyAssignment",
+        JsValue::from_bool(decision.touches_any_assignment),
+    );
+    let _ = set_prop(
+        &out,
+        "touchesBuiltinFormula",
+        JsValue::from_bool(decision.touches_builtin_formula),
+    );
+    let _ = set_prop(
+        &out,
+        "canUsePartial",
+        JsValue::from_bool(decision.can_use_partial),
+    );
+    out.into()
+}
+
 fn markdown_line_info_to_js(info: &MarkdownLineInfo) -> JsValue {
     let out = Object::new();
     let heading_level = info
@@ -1252,6 +1278,28 @@ pub fn wasm_calc_decide_eval_scope(
         variables_enabled,
     );
     Some(calc_eval_scope_decision_to_js(&decision))
+}
+
+#[wasm_bindgen]
+pub fn wasm_calc_decide_eval_window(
+    lines: JsValue,
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_lines: JsValue,
+    has_prev: bool,
+    variables_enabled: bool,
+) -> Option<JsValue> {
+    let lines = js_strings(lines)?;
+    let prev_changed_lines = js_strings(prev_changed_lines)?;
+    let decision = calc_plan::decide_eval_window(
+        &lines,
+        changed_from,
+        changed_to,
+        &prev_changed_lines,
+        has_prev,
+        variables_enabled,
+    );
+    Some(calc_eval_window_decision_to_js(&decision))
 }
 
 #[wasm_bindgen]

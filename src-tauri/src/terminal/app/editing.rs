@@ -159,6 +159,7 @@ impl TerminalApp {
         self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         self.calc.variable_names.clear();
         self.calc.prev_line_hashes.clear();
+        self.calc.prev_line_assignment_name.clear();
         self.calc.prev_line_has_assignment.clear();
         self.calc.prev_line_has_builtin_formula.clear();
         self.calc.stale = false;
@@ -673,6 +674,11 @@ impl TerminalApp {
             let calc_data =
                 compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
             self.calc.prev_line_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
+            self.calc.prev_line_assignment_name = self
+                .lines
+                .iter()
+                .map(|line| crate::editor_core::calc_plan::assignment_name(line))
+                .collect();
             self.calc.prev_line_has_assignment = self
                 .lines
                 .iter()
@@ -722,20 +728,36 @@ impl TerminalApp {
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
+        let prev_changed_assignment_names = self
+            .calc
+            .prev_line_assignment_name
+            .get(prev_changed_from..prev_changed_to)
+            .map(|slice| {
+                slice
+                    .iter()
+                    .filter_map(|name| name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
         let prev_changed_had_builtin_formula = self
             .calc
             .prev_line_has_builtin_formula
             .get(prev_changed_from..prev_changed_to)
             .map(|slice| slice.iter().any(|&flag| flag))
             .unwrap_or(false);
-        let eval_scope = crate::editor_core::calc_plan::decide_eval_scope_with_flags(
-            &plan.eval_lines,
+        let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_flags(
+            &self.lines,
+            plan.eval_from,
+            plan.eval_to,
+            &prev_changed_assignment_names,
             prev_changed_had_assignment,
             prev_changed_had_builtin_formula,
             has_prev,
             calc_variables_enabled,
         );
-        let can_use_partial = eval_scope.can_use_partial;
+        let can_use_partial = eval_window.can_use_partial;
+        let eval_from = eval_window.eval_from;
+        let eval_to = eval_window.eval_to;
 
         let (mut new_results, mut new_cell_results, variable_names) = if can_use_partial {
             let mut merged_results = vec![None; self.lines.len()];
@@ -755,14 +777,14 @@ impl TerminalApp {
                 }
             }
 
-            if plan.eval_from < plan.eval_to {
+            if eval_from < eval_to {
                 let calc_data = compute_calc_data(
                     &self.calc.engine,
                     &self.lines,
                     calc_variables_enabled,
-                    Some((plan.eval_from, plan.eval_to)),
+                    Some((eval_from, eval_to)),
                 );
-                for idx in plan.eval_from..plan.eval_to {
+                for idx in eval_from..eval_to {
                     if let Some(slot) = merged_results.get_mut(idx) {
                         *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
                     }
@@ -863,6 +885,11 @@ impl TerminalApp {
         }
 
         self.calc.prev_line_hashes = final_hashes;
+        self.calc.prev_line_assignment_name = self
+            .lines
+            .iter()
+            .map(|line| crate::editor_core::calc_plan::assignment_name(line))
+            .collect();
         self.calc.prev_line_has_assignment = self
             .lines
             .iter()
