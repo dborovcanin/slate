@@ -1,4 +1,13 @@
-use super::*;
+use super::{
+    line_char_len, load_note_reminder_ghosts, new_note, trim_trailing_word,
+    CommandCompletionMenuState, CommandCompletionOption, DatePickerAction, Db, Key, Note,
+    SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES,
+    COMMAND_COMPLETION_MAX_OPTIONS, MAX_COMMAND_HISTORY_ENTRIES,
+};
+use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
+use crate::terminal::{notifications, switcher};
+use app_core::storage::{NoteAccessMode, NoteModules};
+use std::time::{Duration, Instant};
 
 // Ownership: switcher, command bar execution, and search workflows.
 impl TerminalApp {

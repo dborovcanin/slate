@@ -4,14 +4,13 @@ use super::ansi::{
 };
 use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};
-use super::date_picker::{self, DatePickerAction, DatePickerView};
-use super::folding::{self, FoldKind};
+use super::date_picker::DatePickerAction;
+use super::folding::FoldKind;
 use super::folding_state::FoldingState;
 use super::history::LineHistory;
 use super::input::{self, Key, TerminalGuard};
-use super::notifications;
 use super::render;
-use super::switcher::{self, NoteMeta, SwitcherView};
+use super::switcher::{self, NoteMeta};
 use super::text_utils::*;
 
 use crate::config::ThemeConfig;
@@ -20,8 +19,8 @@ use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::cmp::min;
-use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
+use std::collections::HashMap;
+use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 

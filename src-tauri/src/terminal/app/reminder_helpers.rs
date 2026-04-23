@@ -1,4 +1,6 @@
-use super::*;
+use super::LineReminderGhost;
+use crate::storage::Db;
+use std::collections::{HashMap, HashSet};
 
 pub(super) fn load_note_reminder_ghosts(
     db: &Db,

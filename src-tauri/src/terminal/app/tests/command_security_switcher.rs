@@ -1,0 +1,648 @@
+use super::*;
+
+#[test]
+fn editor_paste_multiline_inserts_as_single_bulk_edit() {
+    let (db, mut app, path) = app_with_note("start end");
+    app.mode = UiMode::Editor;
+    app.cursor_line = 0;
+    app.cursor_col = 6; // after "start "
+
+    app.handle_editor_key(&db, Key::Paste("a\nb\n".to_string()))
+        .expect("paste applies");
+
+    assert_eq!(
+        app.lines,
+        vec!["start a".to_string(), "b".to_string(), "end".to_string()]
+    );
+    assert_eq!(app.cursor_line, 2);
+    assert_eq!(app.cursor_col, 0);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn ctrl_q_quits_from_normal_mode() {
+    let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+    app.mode = UiMode::Normal;
+
+    run_keys(&mut app, &db, &[Key::Ctrl('q')]);
+    assert!(app.quit);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn clip_watch_commands_toggle_terminal_watcher() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.mode = UiMode::Normal;
+
+    app.execute_terminal_command(&db, "clip-watch");
+    assert!(app.clipboard_watch_enabled);
+    assert_eq!(app.status, "clip-watch started");
+
+    app.execute_terminal_command(&db, "clip-watch");
+    assert!(app.clipboard_watch_enabled);
+    assert_eq!(app.status, "clip-watch already active");
+
+    app.execute_terminal_command(&db, "clip-watch-stop");
+    assert!(!app.clipboard_watch_enabled);
+    assert_eq!(app.status, "clip-watch stopped");
+
+    app.execute_terminal_command(&db, "clip-watch-stop");
+    assert!(!app.clipboard_watch_enabled);
+    assert_eq!(app.status, "clip-watch not active");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_commands_update_and_persist_note_modules() {
+    let (db, mut app, path) = app_with_note("alpha := 10\nalp");
+    app.mode = UiMode::Editor;
+    app.cursor_line = 1;
+    app.cursor_col = line_char_len(app.current_line());
+    app.refresh_variable_autocomplete_popup();
+    assert!(app.variable_autocomplete_popup.visible);
+
+    app.execute_terminal_command(&db, "module status");
+    assert_eq!(app.status, "modules math=on table=on variables=on style=on");
+
+    app.execute_terminal_command(&db, "modules variables off");
+    assert_eq!(
+        app.status,
+        "modules math=on table=on variables=off style=on"
+    );
+    assert!(!app.active_note.modules.variables);
+    assert!(!app.variable_autocomplete_popup.visible);
+    assert!(app.calc.variable_names.is_empty());
+
+    let persisted = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert!(!persisted.modules.variables);
+
+    app.execute_terminal_command(&db, "module variables toggle");
+    assert_eq!(app.status, "modules math=on table=on variables=on style=on");
+    assert!(app.active_note.modules.variables);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_math_toggle_disables_calc_tab_path() {
+    let (db, mut app, path) = app_with_note("1 + 1");
+    app.mode = UiMode::Editor;
+    app.cursor_line = 0;
+    app.cursor_col = line_char_len(app.current_line());
+
+    app.execute_terminal_command(&db, "module math off");
+    app.handle_editor_key(&db, Key::Tab)
+        .expect("tab falls back when math module is off");
+    assert_eq!(app.lines[0], "1 + 1  ");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_table_toggle_disables_table_cursor_clamping() {
+    let (db, mut app, path) = app_with_note("| aaa |     | bb  |");
+    app.mode = UiMode::Editor;
+    app.cursor_col = 9;
+
+    app.execute_terminal_command(&db, "module table off");
+    app.adjust_cursor();
+    assert_eq!(app.cursor_col, 9);
+
+    app.execute_terminal_command(&db, "module table on");
+    app.cursor_col = 9;
+    app.adjust_cursor();
+    assert_eq!(app.cursor_col, 8);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_style_toggle_disables_enter_autoformat_rules() {
+    let (db, mut app, path) = app_with_note("- [ ] task");
+    app.mode = UiMode::Editor;
+    app.cursor_col = line_char_len(app.current_line());
+
+    app.execute_terminal_command(&db, "module style off");
+    app.handle_editor_key(&db, Key::Enter)
+        .expect("enter uses plain newline when style module is off");
+    assert_eq!(app.lines, vec!["- [ ] task".to_string(), String::new()]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_style_off_keeps_table_autoformat_when_table_module_is_on() {
+    let (db, mut app, path) = app_with_note("| a | b |\n| --- | --- |\n|1|2|");
+    app.mode = UiMode::Editor;
+    app.cursor_line = 2;
+    app.cursor_col = 4; // before trailing pipe in "|1|2|"
+
+    app.execute_terminal_command(&db, "module style off");
+    app.handle_editor_key(&db, Key::Char('0'))
+        .expect("typing still triggers table autoformat");
+
+    assert_ne!(app.lines[2], "|1|20|");
+    assert!(app.lines[2].contains("20"));
+    assert!(app.lines[2].starts_with("| "));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn module_style_off_keeps_table_ctrl_navigation_when_table_module_is_on() {
+    let (db, mut app, path) = app_with_note("| aaa | bb  |");
+    app.mode = UiMode::Editor;
+    app.cursor_col = 5; // first cell end anchor
+
+    app.execute_terminal_command(&db, "module style off");
+
+    app.handle_editor_key(&db, Key::CtrlArrowRight)
+        .expect("ctrl-right jumps to next table cell");
+    assert_eq!(app.cursor_col, 10);
+
+    app.handle_editor_key(&db, Key::CtrlArrowLeft)
+        .expect("ctrl-left jumps back to previous table cell");
+    assert_eq!(app.cursor_col, 5);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn note_unprotect_command_removes_lock() {
+    let (db, mut app, path) = app_with_note("top secret");
+
+    app.execute_terminal_command(&db, "note lock pass123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+    assert_eq!(app.status, "note locked");
+
+    app.execute_terminal_command(&db, "note unprotect pass123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.lines, vec!["top secret".to_string()]);
+    assert_eq!(app.status, "note unprotected");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn note_unprotect_command_removes_at_rest_encryption() {
+    let (db, mut app, path) = app_with_note("classified");
+
+    app.execute_terminal_command(&db, "note encrypt enc123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert_eq!(app.status, "note encrypted at rest");
+
+    app.execute_terminal_command(&db, "note unprotect enc123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(app.lines, vec!["classified".to_string()]);
+    assert_eq!(app.status, "note unprotected");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn note_security_aliases_accept_password_arguments() {
+    let (db, mut app, path) = app_with_note("top secret");
+
+    app.execute_terminal_command(&db, "lock-note pass123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+    assert!(!app.active_note.is_unlocked);
+    assert_eq!(app.status, "note locked");
+
+    app.execute_terminal_command(&db, "unlock-note pass123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+    assert!(app.active_note.is_unlocked);
+    assert_eq!(app.status, "note unlocked");
+
+    app.execute_terminal_command(&db, "encrypt-note enc123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    assert!(app.active_note.is_unlocked);
+    assert_eq!(app.status, "note encrypted at rest");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn locked_notes_block_editor_mutations_and_autosave_errors() {
+    let (db, mut app, path) = app_with_note("top secret");
+
+    app.execute_terminal_command(&db, "note lock pass123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+    assert!(!app.active_note.is_unlocked);
+    assert_eq!(app.lines, vec![String::new()]);
+    assert!(!app.dirty);
+
+    app.handle_editor_key(&db, Key::Char('x'))
+        .expect("locked edit should not fail");
+    assert_eq!(app.lines, vec![String::new()]);
+    assert!(!app.dirty);
+    assert!(app.status.contains("unlock first"));
+
+    app.dirty = true;
+    app.last_edit =
+        Instant::now() - Duration::from_millis(crate::terminal::app::AUTOSAVE_DEBOUNCE_MS + 5);
+    app.maybe_autosave(&db)
+        .expect("locked autosave should not terminate loop");
+    assert!(app.status.contains("unlock first"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn switcher_delete_cancel_keeps_note() {
+    let (db, mut app, path) = app_with_note("first note");
+    db.save_note("n2", "second note")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('p'), Key::Char('s'), Key::Delete],
+    );
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.switcher_delete_confirm.is_some());
+
+    run_keys(&mut app, &db, &[Key::Char('n')]);
+    assert!(app.switcher_delete_confirm.is_none());
+    assert!(db.get_note("n2").expect("lookup works").is_some());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn switcher_ctrl_backspace_delete_removes_active_after_confirmation() {
+    let (db, mut app, path) = app_with_note("first note");
+    db.save_note("n2", "second note")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Ctrl('p'),
+            Key::Paste("first".to_string()),
+            Key::CtrlBackspace,
+        ],
+    );
+    assert_eq!(app.mode, UiMode::Switcher);
+    let pending = app
+        .switcher_delete_confirm
+        .as_ref()
+        .expect("delete confirmation requested");
+    assert_eq!(pending.note_id, "n1");
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert!(app.switcher_delete_confirm.is_none());
+    assert!(db.get_note("n1").expect("lookup works").is_none());
+    assert_ne!(app.active_note.id, "n1");
+    assert!(db
+        .get_note(&app.active_note.id)
+        .expect("active note lookup")
+        .is_some());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn switcher_enter_opens_note_in_normal_mode() {
+    let (db, mut app, path) = app_with_note("first note");
+    db.save_note("n2", "second note")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+    app.mode = UiMode::Editor;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('p'), Key::Paste("second".to_string()), Key::Enter],
+    );
+
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.mode, UiMode::Normal);
+    assert_eq!(app.vim_state.mode, crate::editor_core::vim::VimMode::Normal);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
+    let (db, mut app, path) = app_with_note("first note");
+    db.save_note("n2", "second note")
+        .expect("second note saved");
+    db.lock_note("n2", "pass123").expect("lock second note");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+    app.mode = UiMode::Editor;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('p'), Key::Paste("second".to_string()), Key::Enter],
+    );
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.switcher_open_confirm.is_some());
+    assert_eq!(app.active_note.id, "n1");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Paste("wrong".to_string()), Key::Enter],
+    );
+    assert!(app.switcher_open_confirm.is_some());
+    assert_eq!(app.active_note.id, "n1");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Paste("pass123".to_string()), Key::Enter],
+    );
+    assert!(app.switcher_open_confirm.is_none());
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.mode, UiMode::Normal);
+    assert_eq!(app.vim_state.mode, crate::editor_core::vim::VimMode::Normal);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn startup_with_locked_recent_note_prompts_for_password() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db opens");
+    db.save_note("n1", "first note").expect("first note saved");
+    db.save_note("n2", "second note")
+        .expect("second note saved");
+    db.lock_note("n2", "pass123").expect("lock second note");
+    let opts = TerminalOptions {
+        create_new: false,
+        note_id: None,
+        list_only: false,
+    };
+
+    let (app, _) = TerminalApp::new_with_startup_metrics(
+        &db,
+        &opts,
+        true,
+        false,
+        true,
+        true,
+        true,
+        3,
+        crate::terminal::render::RenderPalette::default(),
+        "%Y-%m-%d".to_string(),
+        "%Y-%m-%d %H:%M".to_string(),
+    )
+    .expect("terminal app");
+
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert_eq!(app.status, "password required to open protected note");
+    let confirm = app
+        .switcher_open_confirm
+        .as_ref()
+        .expect("startup should request password");
+    assert_eq!(confirm.note_id, "n2");
+    assert_eq!(confirm.password, "");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn fold_commands_toggle_terminal_folds_and_aliases() {
+    let (db, mut app, path) = app_with_note("# h1\none\ntwo\n# h2\nthree");
+    app.mode = UiMode::Normal;
+    app.cursor_line = 0;
+
+    app.execute_terminal_command(&db, "fold");
+    assert!(app.folds.collapsed_starts.contains(&0));
+    assert_eq!(app.folds.visible_to_real, vec![0, 3, 4]);
+
+    app.execute_terminal_command(&db, "fold");
+    assert_eq!(app.status, "fold: already folded");
+
+    app.execute_terminal_command(&db, "unfold");
+    assert!(!app.folds.collapsed_starts.contains(&0));
+
+    app.execute_terminal_command(&db, "za");
+    assert!(app.folds.collapsed_starts.contains(&0));
+
+    app.execute_terminal_command(&db, "zo");
+    assert!(!app.folds.collapsed_starts.contains(&0));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn command_bar_arrow_history_cycles_latest_commands() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.mode = UiMode::Normal;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char(':'),
+            Key::Char('f'),
+            Key::Char('o'),
+            Key::Char('o'),
+            Key::Enter,
+        ],
+    );
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char(':'),
+            Key::Char('b'),
+            Key::Char('a'),
+            Key::Char('r'),
+            Key::Enter,
+        ],
+    );
+
+    run_keys(&mut app, &db, &[Key::Char(':')]);
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert_eq!(app.command_input, "");
+
+    run_keys(&mut app, &db, &[Key::ArrowUp]);
+    assert_eq!(app.command_input, "bar");
+    run_keys(&mut app, &db, &[Key::ArrowUp]);
+    assert_eq!(app.command_input, "foo");
+    run_keys(&mut app, &db, &[Key::ArrowUp]);
+    assert_eq!(app.command_input, "bar");
+
+    run_keys(&mut app, &db, &[Key::ArrowDown]);
+    assert_eq!(app.command_input, "foo");
+    run_keys(&mut app, &db, &[Key::ArrowDown]);
+    assert_eq!(app.command_input, "bar");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_options() {
+    let (db, mut app, path) = app_with_note("alpha");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('e'), Key::Char('m'), Key::Char('o'), Key::Tab],
+    );
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert!(!app.command_completion.visible);
+    assert_eq!(app.command_input, "module ");
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert!(app.command_completion.visible);
+    assert_eq!(
+        app.command_completion
+            .options
+            .iter()
+            .map(|entry| entry.token.as_str())
+            .collect::<Vec<_>>(),
+        vec!["math", "status", "style", "table", "variables"]
+    );
+    assert_eq!(app.command_completion.selected_index, 0);
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert!(app.command_completion.visible);
+    assert_eq!(app.command_input, "module ");
+    assert_eq!(app.command_completion.selected_index, 1);
+
+    run_keys(&mut app, &db, &[Key::Tab, Key::Tab, Key::Tab]);
+    assert!(app.command_completion.visible);
+    assert_eq!(app.command_input, "module ");
+    assert_eq!(app.command_completion.selected_index, 4);
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert!(!app.command_completion.visible);
+    assert_eq!(app.command_input, "module variables ");
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert!(app.command_completion.visible);
+    assert_eq!(
+        app.command_completion
+            .options
+            .iter()
+            .map(|entry| entry.token.as_str())
+            .collect::<Vec<_>>(),
+        vec!["off", "on", "toggle"]
+    );
+    assert_eq!(app.command_completion.selected_index, 0);
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert!(app.command_completion.visible);
+    assert_eq!(app.command_input, "module variables ");
+    assert_eq!(app.command_completion.selected_index, 1);
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert!(!app.command_completion.visible);
+    assert_eq!(app.command_input, "module variables on");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn command_bar_enter_accepts_picker_selection_before_execute() {
+    let (db, mut app, path) = app_with_note("alpha");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Ctrl('e'),
+            Key::Char('m'),
+            Key::Char('o'),
+            Key::Tab,
+            Key::Tab,
+            Key::Enter,
+        ],
+    );
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert_eq!(app.command_input, "module math ");
+    assert!(!app.command_completion.visible);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn command_bar_ctrl_w_deletes_word_and_stays_in_command_mode() {
+    let (db, mut app, path) = app_with_note("alpha");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('e'), Key::Paste("module table on".to_string())],
+    );
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert_eq!(app.command_input, "module table on");
+
+    run_keys(&mut app, &db, &[Key::Ctrl('w')]);
+    assert_eq!(app.command_input, "module table ");
+    assert_eq!(app.mode, UiMode::CommandBar);
+
+    run_keys(&mut app, &db, &[Key::Ctrl('w')]);
+    assert_eq!(app.command_input, "module ");
+    assert_eq!(app.mode, UiMode::CommandBar);
+
+    run_keys(&mut app, &db, &[Key::Ctrl('w')]);
+    assert_eq!(app.command_input, "");
+    assert_eq!(app.mode, UiMode::CommandBar);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

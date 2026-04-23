@@ -1,4 +1,7 @@
-use super::*;
+use super::VariableCompletionPrefix;
+#[cfg(test)]
+use crate::terminal::text_utils::line_display_cols;
+use app_core::calc::CalcEngine;
 
 #[cfg(test)]
 pub(super) fn calc_ghost_prefix(text: &str, calc_ghost: Option<&str>) -> &'static str {

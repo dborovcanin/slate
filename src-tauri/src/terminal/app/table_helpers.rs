@@ -1,4 +1,4 @@
-use super::*;
+use crate::terminal::text_utils::byte_index;
 
 pub(super) struct TableCellInfo {
     pub(super) left_pipe: usize,

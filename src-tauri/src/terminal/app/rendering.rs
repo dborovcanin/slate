@@ -1,4 +1,15 @@
-use super::*;
+use super::{
+    contrast_fg_for_bg, cursor_render_char_col, display_cols_for_prefix, draw_box_border,
+    draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
+    formula_marker_token, goto, line_display_cols, min, pad_right, table_cell_info_at_char,
+    viewport_col_for_display_col, AnsiStyle, DatePickerAction, TableFormulaSegment, TerminalApp,
+    UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER, OVERFLOW_RIGHT_MARKER, TITLE_ROW,
+};
+use crate::terminal::render;
+use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines};
+use crate::terminal::{date_picker, input, notifications, switcher};
+use crate::terminal::{date_picker::DatePickerView, switcher::SwitcherView};
+use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {

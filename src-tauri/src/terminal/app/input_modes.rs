@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    is_markdown_table_line, new_note, DatePickerAction, Db, Key, LineReminderGhost, TerminalApp,
+    UiMode, VimPipelineResult, FOLD_PREFIX_TIMEOUT_MS,
+};
+use crate::terminal::date_picker;
+use crate::terminal::text_utils::line_char_len;
+use std::time::{Duration, Instant};
 
 // Ownership: key dispatch and per-mode key handling entry points.
 impl TerminalApp {

@@ -1,4 +1,9 @@
-use super::*;
+use super::{
+    byte_index, line_char_len, min, split_lines, Key, TerminalApp, TerminalVimAdapter, UiMode,
+    VimPipelineResult, VimRegister, VimRegisterMode,
+};
+use super::{clipboard, ClipboardWriteBackend};
+use crate::terminal::text_utils::{is_word_char, join_lines};
 
 // Ownership: vim intent pipeline, text objects, and vim action application.
 impl TerminalApp {
