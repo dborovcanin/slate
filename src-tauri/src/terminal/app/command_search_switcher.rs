@@ -1160,20 +1160,14 @@ impl TerminalApp {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
-            self.calc.prev_line_hashes.clear();
-            self.calc.prev_line_assignment_name.clear();
-            self.calc.prev_line_has_assignment.clear();
-            self.calc.prev_line_has_builtin_formula.clear();
+            self.calc.prev_line_metadata.clear();
             self.calc.stale = false;
             self.calc_recompute_pending = false;
         } else if self.should_defer_calc_recompute() {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
-            self.calc.prev_line_hashes.clear();
-            self.calc.prev_line_assignment_name.clear();
-            self.calc.prev_line_has_assignment.clear();
-            self.calc.prev_line_has_builtin_formula.clear();
+            self.calc.prev_line_metadata.clear();
             self.calc.stale = true;
             self.calc_recompute_pending = false;
         } else {

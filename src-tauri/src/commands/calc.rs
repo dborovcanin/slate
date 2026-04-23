@@ -1,29 +1,63 @@
-use app_core::calc::{NoteEvaluationOptions, NoteEvaluationResult};
+use app_core::calc::{
+    start_eval_generation, CalcEngine, NoteEvaluationOptions, NoteEvaluationResult,
+};
 use app_core::AppCore;
 use tauri::State;
 
-#[tauri::command]
-pub fn evaluate_lines(core: State<'_, AppCore>, lines: Vec<String>) -> Vec<Option<String>> {
-    core.calc_engine().evaluate_lines(&lines)
+fn resolve_eval_range(
+    line_count: usize,
+    eval_from: Option<usize>,
+    eval_to: Option<usize>,
+) -> Option<(usize, usize)> {
+    match (eval_from, eval_to) {
+        (Some(from), Some(to)) if to >= from => Some((from.min(line_count), to.min(line_count))),
+        _ => None,
+    }
 }
 
 #[tauri::command]
-pub fn evaluate_note_context(
-    core: State<'_, AppCore>,
+pub async fn evaluate_lines(lines: Vec<String>) -> Result<Vec<Option<String>>, String> {
+    let generation = start_eval_generation();
+    let fallback_lines = lines.clone();
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        CalcEngine::new().evaluate_lines_with_generation(&lines, generation)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => CalcEngine::new().evaluate_lines_with_generation(&fallback_lines, generation),
+    };
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn evaluate_note_context(
     lines: Vec<String>,
     variables_enabled: Option<bool>,
     eval_from: Option<usize>,
     eval_to: Option<usize>,
-) -> NoteEvaluationResult {
-    let eval_range = match (eval_from, eval_to) {
-        (Some(from), Some(to)) if to >= from => Some((from, to)),
-        _ => None,
-    };
+) -> Result<NoteEvaluationResult, String> {
+    let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let options = NoteEvaluationOptions {
         variables_enabled: variables_enabled.unwrap_or(true),
         eval_range,
     };
-    core.calc_engine().evaluate_note_context(&lines, options)
+    let generation = start_eval_generation();
+    let fallback_lines = lines.clone();
+    let fallback_options = options;
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => CalcEngine::new().evaluate_note_context_with_generation(
+            &fallback_lines,
+            fallback_options,
+            generation,
+        ),
+    };
+    Ok(result)
 }
 
 /// Sync a range of lines into the server-side note cache.
@@ -51,7 +85,7 @@ pub fn sync_note_lines(
 /// Evaluate the cached lines for a note, sending only a partial range.
 /// Requires a prior `sync_note_lines` call that seeded the cache.
 #[tauri::command]
-pub fn evaluate_note_context_delta(
+pub async fn evaluate_note_context_delta(
     core: State<'_, AppCore>,
     note_id: String,
     variables_enabled: Option<bool>,
@@ -70,14 +104,24 @@ pub fn evaluate_note_context_delta(
             .cloned()
             .ok_or_else(|| format!("no cached lines for note '{note_id}'"))?
     };
-    let line_count = lines.len();
-    let eval_range = match (eval_from, eval_to) {
-        (Some(from), Some(to)) if to >= from => Some((from.min(line_count), to.min(line_count))),
-        _ => None,
-    };
+    let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let options = NoteEvaluationOptions {
         variables_enabled: variables_enabled.unwrap_or(true),
         eval_range,
     };
-    Ok(core.calc_engine().evaluate_note_context(&lines, options))
+    let generation = start_eval_generation();
+    let fallback_lines = lines.clone();
+    let fallback_options = options;
+    match tauri::async_runtime::spawn_blocking(move || {
+        CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
+    })
+    .await
+    {
+        Ok(result) => Ok(result),
+        Err(_) => Ok(CalcEngine::new().evaluate_note_context_with_generation(
+            &fallback_lines,
+            fallback_options,
+            generation,
+        )),
+    }
 }

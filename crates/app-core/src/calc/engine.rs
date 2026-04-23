@@ -1,9 +1,11 @@
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 pub struct CalcEngine;
@@ -124,14 +126,40 @@ struct VariableResolver<'a> {
 
 static VARIABLE_REGEX_CACHE: OnceLock<Mutex<HashMap<u64, Regex>>> = OnceLock::new();
 
-struct NoInterrupt;
-impl fend_core::Interrupt for NoInterrupt {
+static EVAL_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+thread_local! {
+    static ACTIVE_EVAL_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+pub fn start_eval_generation() -> u64 {
+    EVAL_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+pub fn current_eval_generation() -> u64 {
+    EVAL_GENERATION.load(Ordering::Relaxed)
+}
+
+fn with_eval_generation<R>(generation: u64, f: impl FnOnce() -> R) -> R {
+    ACTIVE_EVAL_GENERATION.with(|active| {
+        let previous = active.replace(generation);
+        let result = f();
+        active.set(previous);
+        result
+    })
+}
+
+struct GenerationInterrupt;
+impl fend_core::Interrupt for GenerationInterrupt {
     fn should_interrupt(&self) -> bool {
-        false
+        ACTIVE_EVAL_GENERATION.with(|active| {
+            let expected = active.get();
+            expected != 0 && EVAL_GENERATION.load(Ordering::Relaxed) != expected
+        })
     }
 }
 
-static NO_INTERRUPT: NoInterrupt = NoInterrupt;
+static GENERATION_INTERRUPT: GenerationInterrupt = GenerationInterrupt;
 
 impl<'a> VariableResolver<'a> {
     fn new(defs: &'a HashMap<String, VariableDefinition>) -> Self {
@@ -350,19 +378,54 @@ impl CalcEngine {
     }
 
     pub fn evaluate(&self, input: &str) -> Option<String> {
-        let mut ctx = new_context();
-        evaluate_single(input, &mut ctx)
+        self.evaluate_with_generation(input, current_eval_generation())
+    }
+
+    pub fn evaluate_with_generation(&self, input: &str, generation: u64) -> Option<String> {
+        with_eval_generation(generation, || {
+            let mut ctx = new_context();
+            evaluate_single(input, &mut ctx)
+        })
     }
 
     pub fn evaluate_lines(&self, lines: &[String]) -> Vec<Option<String>> {
-        let mut ctx = new_context();
-        lines
-            .iter()
-            .map(|line| evaluate_single(line, &mut ctx))
-            .collect()
+        self.evaluate_lines_with_generation(lines, current_eval_generation())
+    }
+
+    pub fn evaluate_lines_with_generation(
+        &self,
+        lines: &[String],
+        generation: u64,
+    ) -> Vec<Option<String>> {
+        with_eval_generation(generation, || {
+            let mut ctx = new_context();
+            lines
+                .iter()
+                .map(|line| evaluate_single(line, &mut ctx))
+                .collect()
+        })
     }
 
     pub fn evaluate_note_context(
+        &self,
+        lines: &[String],
+        options: NoteEvaluationOptions,
+    ) -> NoteEvaluationResult {
+        self.evaluate_note_context_with_generation(lines, options, current_eval_generation())
+    }
+
+    pub fn evaluate_note_context_with_generation(
+        &self,
+        lines: &[String],
+        options: NoteEvaluationOptions,
+        generation: u64,
+    ) -> NoteEvaluationResult {
+        with_eval_generation(generation, || {
+            self.evaluate_note_context_inner(lines, options)
+        })
+    }
+
+    fn evaluate_note_context_inner(
         &self,
         lines: &[String],
         options: NoteEvaluationOptions,
@@ -666,7 +729,7 @@ fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> 
 }
 
 fn evaluate_raw_expression(expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
-    match fend_core::evaluate_with_interrupt(expr, ctx, &NO_INTERRUPT) {
+    match fend_core::evaluate_with_interrupt(expr, ctx, &GENERATION_INTERRUPT) {
         Ok(result) => Some(result.get_main_result().to_string()),
         Err(_) => None,
     }

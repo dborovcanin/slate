@@ -3,8 +3,10 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use pbkdf2::pbkdf2_hmac;
 use rusqlite::{Connection, OptionalExtension};
 use sha2::Sha256;
+use std::ops::{Deref, DerefMut};
+use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
@@ -36,31 +38,113 @@ struct UnlockedEncryptedNote {
     encryption_salt: Vec<u8>,
 }
 
-pub struct Db {
-    conn: Mutex<Connection>,
-    note_access: NoteAccessService,
+const SQLITE_POOL_SIZE: usize = 4;
+
+struct SqlitePool {
+    connections: Mutex<Vec<Connection>>,
+    available: Condvar,
 }
 
-impl Db {
-    pub fn open(path: PathBuf) -> Result<Self, String> {
-        let conn = Connection::open(&path).map_err(|e| format!("Failed to open DB: {e}"))?;
+struct SqlitePoolGuard<'a> {
+    pool: &'a SqlitePool,
+    connection: Option<Connection>,
+}
 
+impl SqlitePool {
+    fn configure_connection(conn: &Connection) -> Result<(), String> {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA foreign_keys=ON;",
         )
-        .map_err(|e| format!("Failed to set pragmas: {e}"))?;
+        .map_err(|e| format!("Failed to set pragmas: {e}"))
+    }
+
+    fn new(path: &Path, pool_size: usize) -> Result<Self, String> {
+        let first = Connection::open(path).map_err(|e| format!("Failed to open DB: {e}"))?;
+        Self::configure_connection(&first)?;
 
         let migration = include_str!("../../migrations/0001_init.sql");
-        conn.execute_batch(migration)
+        first
+            .execute_batch(migration)
             .map_err(|e| format!("Failed to run migration: {e}"))?;
-        ensure_notes_schema(&conn)?;
-        ensure_reminders_schema(&conn)?;
-        ensure_ingest_schema(&conn)?;
+        ensure_notes_schema(&first)?;
+        ensure_reminders_schema(&first)?;
+        ensure_ingest_schema(&first)?;
+
+        let mut connections = Vec::with_capacity(pool_size.max(1));
+        connections.push(first);
+        for _ in 1..pool_size.max(1) {
+            let conn = Connection::open(path).map_err(|e| format!("Failed to open DB: {e}"))?;
+            Self::configure_connection(&conn)?;
+            connections.push(conn);
+        }
+        Ok(Self {
+            connections: Mutex::new(connections),
+            available: Condvar::new(),
+        })
+    }
+
+    fn lock(&self) -> Result<SqlitePoolGuard<'_>, String> {
+        let mut guard = self
+            .connections
+            .lock()
+            .map_err(|_| "db pool lock poisoned".to_string())?;
+        loop {
+            if let Some(connection) = guard.pop() {
+                return Ok(SqlitePoolGuard {
+                    pool: self,
+                    connection: Some(connection),
+                });
+            }
+            guard = self
+                .available
+                .wait(guard)
+                .map_err(|_| "db pool lock poisoned".to_string())?;
+        }
+    }
+}
+
+impl Deref for SqlitePoolGuard<'_> {
+    type Target = Connection;
+
+    fn deref(&self) -> &Self::Target {
+        self.connection
+            .as_ref()
+            .expect("sqlite pool guard missing connection")
+    }
+}
+
+impl DerefMut for SqlitePoolGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.connection
+            .as_mut()
+            .expect("sqlite pool guard missing connection")
+    }
+}
+
+impl Drop for SqlitePoolGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            if let Ok(mut guard) = self.pool.connections.lock() {
+                guard.push(connection);
+                self.pool.available.notify_one();
+            }
+        }
+    }
+}
+
+pub struct Db {
+    conn: SqlitePool,
+    note_access: NoteAccessService,
+}
+
+impl Db {
+    pub fn open(path: PathBuf) -> Result<Self, String> {
+        let conn = SqlitePool::new(&path, SQLITE_POOL_SIZE)?;
 
         Ok(Self {
-            conn: Mutex::new(conn),
+            conn,
             note_access: NoteAccessService::new(),
         })
     }

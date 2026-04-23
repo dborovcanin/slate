@@ -465,38 +465,16 @@ impl TerminalApp {
         };
         let loading_calc_engine = calc_begin.elapsed();
 
-        let (
-            prev_line_hashes,
-            prev_line_assignment_name,
-            prev_line_has_assignment,
-            prev_line_has_builtin_formula,
-        ) = if skip_initial_calc {
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new())
+        let prev_line_metadata = if skip_initial_calc {
+            Vec::new()
         } else {
-            (
-                crate::editor_core::calc_plan::hash_lines(&lines),
-                lines
-                    .iter()
-                    .map(|line| crate::editor_core::calc_plan::assignment_name(line))
-                    .collect::<Vec<_>>(),
-                lines
-                    .iter()
-                    .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
-                    .collect::<Vec<_>>(),
-                lines
-                    .iter()
-                    .map(|line| {
-                        crate::editor_core::calc_plan::contains_builtin_formula(
-                            std::slice::from_ref(line),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            )
+            crate::editor_core::calc_plan::line_metadata_for_lines(&lines)
         };
         let line_has_fold_structure = lines
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect::<Vec<_>>();
+        let line_text_snapshot = lines.clone();
         let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
         let initial_mode = if vim_mode {
             UiMode::Normal
@@ -554,10 +532,7 @@ impl TerminalApp {
                 results: calc_data.line_results,
                 cell_results: calc_data.cell_results,
                 variable_names: calc_data.variable_names,
-                prev_line_hashes,
-                prev_line_assignment_name,
-                prev_line_has_assignment,
-                prev_line_has_builtin_formula,
+                prev_line_metadata,
                 stale: false,
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,
@@ -582,7 +557,7 @@ impl TerminalApp {
             ),
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             render_palette,
-            folds: FoldingState::empty(line_has_fold_structure),
+            folds: FoldingState::empty(line_has_fold_structure, line_text_snapshot),
             command_bar_from_normal: false,
             clipboard_watch_enabled: false,
             clipboard_watch_last_text: None,

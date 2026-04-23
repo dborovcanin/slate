@@ -875,13 +875,11 @@ export function listCommandSuggestionsFromWasm(
   rawInput: string,
 ): CommandSuggestion[] {
   if (!ensureWasmReadyNonBlocking()) return [];
-  const raw = wasm_list_command_suggestions(mode, rawInput);
-  if (!raw) return [];
-  try {
-    return JSON.parse(raw) as CommandSuggestion[];
-  } catch {
-    return [];
-  }
+  const raw = wasm_list_command_suggestions(mode, rawInput) as
+    | CommandSuggestion[]
+    | null
+    | undefined;
+  return Array.isArray(raw) ? raw : [];
 }
 
 export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): string | null {

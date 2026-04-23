@@ -1,6 +1,6 @@
 mod engine;
 
 pub use engine::{
-    CalcEngine, NoteEvaluationDiagnostic, NoteEvaluationOptions, NoteEvaluationResult,
-    VariableIndexEntry,
+    current_eval_generation, start_eval_generation, CalcEngine, NoteEvaluationDiagnostic,
+    NoteEvaluationOptions, NoteEvaluationResult, VariableIndexEntry,
 };

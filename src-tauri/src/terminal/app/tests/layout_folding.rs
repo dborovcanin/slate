@@ -334,8 +334,12 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
 
     assert!(app.calc.cached_has_variable_assignment);
     assert!(!app.calc.stale);
-    assert_eq!(app.calc.prev_line_hashes.len(), app.lines.len());
-    assert_eq!(app.calc.prev_line_has_assignment.len(), app.lines.len());
+    assert_eq!(app.calc.prev_line_metadata.len(), app.lines.len());
+    assert!(app
+        .calc
+        .prev_line_metadata
+        .iter()
+        .any(|entry| entry.has_assignment));
     assert!(app.calc.variable_names.iter().any(|name| name == "total"));
 
     drop(app);

@@ -343,12 +343,10 @@ pub fn wasm_normalize_command(raw_input: &str) -> String {
 }
 
 #[wasm_bindgen]
-pub fn wasm_list_command_suggestions(mode: &str, raw_input: &str) -> String {
-    let Some(mode) = parse_mode(mode) else {
-        return "[]".to_string();
-    };
+pub fn wasm_list_command_suggestions(mode: &str, raw_input: &str) -> Option<JsValue> {
+    let mode = parse_mode(mode)?;
     let suggestions = EditorEngine::list_command_suggestions(mode, raw_input);
-    serde_json::to_string(&suggestions).unwrap_or_else(|_| "[]".to_string())
+    to_js_value(&suggestions)
 }
 
 #[wasm_bindgen]
@@ -809,11 +807,8 @@ pub fn wasm_calc_builtin_formula_label(text: &str) -> Option<String> {
 
 #[wasm_bindgen]
 pub fn wasm_calc_builtin_formula_labels(text: &str) -> JsValue {
-    calc_plan::builtin_formula_labels_in_text(text)
-        .into_iter()
-        .map(|label| JsValue::from_str(&label))
-        .collect::<Array>()
-        .into()
+    let labels = calc_plan::builtin_formula_labels_in_text(text);
+    to_js_value(&labels).unwrap_or_else(|| Array::new().into())
 }
 
 #[wasm_bindgen]

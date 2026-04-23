@@ -158,10 +158,7 @@ impl TerminalApp {
         self.calc.results = vec![None; self.lines.len()];
         self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         self.calc.variable_names.clear();
-        self.calc.prev_line_hashes.clear();
-        self.calc.prev_line_assignment_name.clear();
-        self.calc.prev_line_has_assignment.clear();
-        self.calc.prev_line_has_builtin_formula.clear();
+        self.calc.prev_line_metadata.clear();
         self.calc.stale = false;
         self.calc_last_view_eval_range = None;
         self.calc_recompute_pending = false;
@@ -196,71 +193,125 @@ impl TerminalApp {
             return;
         }
 
+        if self.lines.is_empty() {
+            self.folds.line_has_structure.clear();
+            self.folds.line_text_snapshot.clear();
+            self.apply_fold_ranges(Vec::new());
+            return;
+        }
+
+        let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
         let line_count_changed = self.lines.len() != self.folds.line_has_structure.len();
 
         if line_count_changed {
-            if self.folds.collapsed_starts.is_empty() {
-                // No active folds — skip the expensive analyze_lines pass.
-                // Update line_has_fold_structure incrementally (Vec::insert/remove)
-                // instead of rebuilding 106k entries, then rebuild the sequential
-                // view map and defer the full fold analysis to the next idle tick.
-                let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
-                let next_len = self.lines.len();
-                let prev_len = self.folds.line_has_structure.len();
-                if next_len == prev_len + 1 {
-                    // One line inserted. Update the upper half of the split, insert new entry.
-                    if cl > 0 {
-                        if let Some(flag) = self.folds.line_has_structure.get_mut(cl - 1) {
-                            *flag = self
-                                .lines
-                                .get(cl - 1)
-                                .map(|l| Self::line_has_fold_structure(l))
-                                .unwrap_or(false);
-                        }
-                    }
-                    let new_flag = self
-                        .lines
-                        .get(cl)
-                        .map(|l| Self::line_has_fold_structure(l))
-                        .unwrap_or(false);
-                    self.folds
-                        .line_has_structure
-                        .insert(cl.min(prev_len), new_flag);
-                } else if next_len + 1 == prev_len {
-                    // One line deleted. Remove the entry; update the merged line.
-                    if cl < prev_len {
-                        self.folds.line_has_structure.remove(cl);
-                    }
-                    let update_at = cl.min(next_len.saturating_sub(1));
-                    if let Some(flag) = self.folds.line_has_structure.get_mut(update_at) {
+            let next_len = self.lines.len();
+            let prev_len = self.folds.line_has_structure.len();
+            let mut remap_edits: Vec<crate::editor_core::folding::FoldLineEdit> = Vec::new();
+            if next_len == prev_len + 1 {
+                // One line inserted near cursor.
+                let insert_at = cl.min(prev_len);
+                let old_line_text = self
+                    .folds
+                    .line_text_snapshot
+                    .get(insert_at)
+                    .cloned()
+                    .unwrap_or_default();
+                let new_line_text = self.lines.get(insert_at).cloned().unwrap_or_default();
+                remap_edits.push(crate::editor_core::folding::FoldLineEdit {
+                    old_start_line: insert_at,
+                    old_line_span: 1,
+                    new_line_span: 2,
+                    old_line_text,
+                    new_line_text: new_line_text.clone(),
+                });
+
+                if cl > 0 {
+                    if let Some(flag) = self.folds.line_has_structure.get_mut(cl - 1) {
                         *flag = self
                             .lines
-                            .get(update_at)
+                            .get(cl - 1)
                             .map(|l| Self::line_has_fold_structure(l))
                             .unwrap_or(false);
                     }
-                } else {
-                    // Bulk change (paste, format, etc.): rebuild entirely.
-                    self.folds.line_has_structure = self
-                        .lines
-                        .iter()
-                        .map(|l| Self::line_has_fold_structure(l))
-                        .collect();
+                    if let Some(text) = self.folds.line_text_snapshot.get_mut(cl - 1) {
+                        *text = self.lines.get(cl - 1).cloned().unwrap_or_default();
+                    }
                 }
+                let new_flag = self
+                    .lines
+                    .get(insert_at)
+                    .map(|l| Self::line_has_fold_structure(l))
+                    .unwrap_or(false);
+                self.folds.line_has_structure.insert(insert_at, new_flag);
+                self.folds
+                    .line_text_snapshot
+                    .insert(insert_at, new_line_text);
+            } else if next_len + 1 == prev_len {
+                // One line deleted near cursor.
+                let remove_at = cl.min(prev_len.saturating_sub(1));
+                let old_start_line = remove_at.min(prev_len.saturating_sub(2));
+                let old_line_text = self
+                    .folds
+                    .line_text_snapshot
+                    .get(old_start_line)
+                    .cloned()
+                    .unwrap_or_default();
+                let new_line_text = self.lines.get(old_start_line).cloned().unwrap_or_default();
+                remap_edits.push(crate::editor_core::folding::FoldLineEdit {
+                    old_start_line,
+                    old_line_span: 2,
+                    new_line_span: 1,
+                    old_line_text,
+                    new_line_text: new_line_text.clone(),
+                });
+
+                if remove_at < prev_len {
+                    self.folds.line_has_structure.remove(remove_at);
+                }
+                if remove_at < self.folds.line_text_snapshot.len() {
+                    self.folds.line_text_snapshot.remove(remove_at);
+                }
+                let update_at = remove_at.min(next_len.saturating_sub(1));
+                if let Some(flag) = self.folds.line_has_structure.get_mut(update_at) {
+                    *flag = self
+                        .lines
+                        .get(update_at)
+                        .map(|l| Self::line_has_fold_structure(l))
+                        .unwrap_or(false);
+                }
+                if let Some(text) = self.folds.line_text_snapshot.get_mut(update_at) {
+                    *text = self.lines.get(update_at).cloned().unwrap_or_default();
+                }
+            } else {
+                // Bulk change (paste, format, etc.): rebuild entirely.
+                self.recompute_folding();
+                return;
+            }
+
+            if self.try_incremental_fold_remap(&remap_edits) {
+                return;
+            }
+
+            if self.folds.collapsed_starts.is_empty() {
                 self.folds.ranges.clear();
                 self.folds.range_by_start = vec![None; self.lines.len()];
                 self.rebuild_fold_view_map();
                 self.folds.rescan_pending = true;
             } else {
-                // Active collapsed folds present: must recompute for correctness.
                 self.recompute_folding();
             }
             return;
         }
 
         // Same-line edit: check whether the current line touches fold structure.
-        let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let old_text = self
+            .folds
+            .line_text_snapshot
+            .get(cl)
+            .cloned()
+            .unwrap_or_default();
         let current_text = self.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
+        let new_text = current_text.to_string();
         let next_flag = Self::line_has_fold_structure(current_text);
         let prev_flag = self
             .folds
@@ -274,11 +325,29 @@ impl TerminalApp {
                 *flag = next_flag;
             }
         }
+        if let Some(text) = self.folds.line_text_snapshot.get_mut(cl) {
+            *text = new_text.clone();
+        }
+
+        let remap_edits = [crate::editor_core::folding::FoldLineEdit {
+            old_start_line: cl,
+            old_line_span: 1,
+            new_line_span: 1,
+            old_line_text: old_text,
+            new_line_text: new_text,
+        }];
+        if self.try_incremental_fold_remap(&remap_edits) {
+            return;
+        }
 
         if next_flag || prev_flag {
-            // Defer: fold analysis is O(N) and doesn't need to block typing.
-            // The idle tick (100 ms with no keypress) will run recompute_folding.
-            self.folds.rescan_pending = true;
+            if self.folds.collapsed_starts.is_empty() {
+                // Defer: fold analysis is O(N) and doesn't need to block typing.
+                // The idle tick (100 ms with no keypress) will run recompute_folding.
+                self.folds.rescan_pending = true;
+            } else {
+                self.recompute_folding();
+            }
         }
     }
 
@@ -288,12 +357,38 @@ impl TerminalApp {
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect();
+        self.folds.line_text_snapshot = self.lines.clone();
         self.recompute_folding_from_cached_structure();
     }
 
     pub(super) fn recompute_folding_from_cached_structure(&mut self) {
         self.folds.rescan_pending = false;
-        self.folds.ranges = folding::build_fold_ranges(&self.lines);
+        let ranges = folding::build_fold_ranges(&self.lines);
+        self.apply_fold_ranges(ranges);
+    }
+
+    fn try_incremental_fold_remap(
+        &mut self,
+        edits: &[crate::editor_core::folding::FoldLineEdit],
+    ) -> bool {
+        if edits.is_empty() {
+            return false;
+        }
+        if crate::editor_core::folding::edits_require_rebuild(edits) {
+            return false;
+        }
+        let mapped = crate::editor_core::folding::map_ranges_through_line_edits(
+            &self.folds.ranges,
+            edits,
+            self.lines.len().max(1),
+        );
+        self.folds.rescan_pending = false;
+        self.apply_fold_ranges(mapped);
+        true
+    }
+
+    fn apply_fold_ranges(&mut self, ranges: Vec<crate::editor_core::folding::FoldRange>) {
+        self.folds.ranges = ranges;
         self.folds.range_by_start = vec![None; self.lines.len()];
         for range in &self.folds.ranges {
             if range.start_line < self.folds.range_by_start.len() {
@@ -573,7 +668,7 @@ impl TerminalApp {
         if self.can_skip_calc_recompute() {
             // No calc syntax anywhere in the doc and this edit didn't add any —
             // calc_results are already correct (all None). Skip the scan.
-            // prev_line_hashes may drift from `lines` until the next real
+            // prev_line_metadata may drift from `lines` until the next real
             // recompute, but the planner falls back to full eval safely when
             // the diff looks large, so correctness holds.
             self.calc_recompute_pending = false;
@@ -673,26 +768,8 @@ impl TerminalApp {
         if self.calc.stale {
             let calc_data =
                 compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
-            self.calc.prev_line_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
-            self.calc.prev_line_assignment_name = self
-                .lines
-                .iter()
-                .map(|line| crate::editor_core::calc_plan::assignment_name(line))
-                .collect();
-            self.calc.prev_line_has_assignment = self
-                .lines
-                .iter()
-                .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
-                .collect();
-            self.calc.prev_line_has_builtin_formula = self
-                .lines
-                .iter()
-                .map(|line| {
-                    crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(
-                        line,
-                    ))
-                })
-                .collect();
+            self.calc.prev_line_metadata =
+                crate::editor_core::calc_plan::line_metadata_for_lines(&self.lines);
             self.calc.results = calc_data.line_results;
             self.calc.cell_results = calc_data.cell_results;
             self.calc.variable_names = calc_data.variable_names;
@@ -701,50 +778,48 @@ impl TerminalApp {
             return;
         }
 
-        let next_hashes = crate::editor_core::calc_plan::hash_lines(&self.lines);
+        let mut next_line_metadata =
+            crate::editor_core::calc_plan::line_metadata_for_lines(&self.lines);
+        let next_hashes: Vec<u64> = next_line_metadata.iter().map(|meta| meta.hash).collect();
+        let prev_hashes: Vec<u64> = self
+            .calc
+            .prev_line_metadata
+            .iter()
+            .map(|meta| meta.hash)
+            .collect();
         let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_hashes(
-            &self.calc.prev_line_hashes,
+            &prev_hashes,
             &self.calc.results,
             &self.lines,
             &next_hashes,
         );
-        let has_prev = !self.calc.prev_line_hashes.is_empty();
+        let has_prev = !prev_hashes.is_empty();
 
         // Only scan the changed region for variable assignments and builtin
         // formulas (not all lines). Partial eval is safe as long as the edit
         // doesn't touch a formula/assignment — whole-doc presence of formulas
         // elsewhere doesn't force recomputation of unchanged lines.
         let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
-        let prev_changed_from = plan.eval_from.min(self.calc.prev_line_hashes.len());
+        let prev_changed_from = plan.eval_from.min(self.calc.prev_line_metadata.len());
         let prev_changed_to = self
             .calc
-            .prev_line_hashes
+            .prev_line_metadata
             .len()
             .saturating_sub(suffix_len)
             .max(prev_changed_from);
-        let prev_changed_had_assignment = self
+        let prev_changed_slice = self
             .calc
-            .prev_line_has_assignment
+            .prev_line_metadata
             .get(prev_changed_from..prev_changed_to)
-            .map(|slice| slice.iter().any(|&flag| flag))
-            .unwrap_or(false);
-        let prev_changed_assignment_names = self
-            .calc
-            .prev_line_assignment_name
-            .get(prev_changed_from..prev_changed_to)
-            .map(|slice| {
-                slice
-                    .iter()
-                    .filter_map(|name| name.clone())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let prev_changed_had_builtin_formula = self
-            .calc
-            .prev_line_has_builtin_formula
-            .get(prev_changed_from..prev_changed_to)
-            .map(|slice| slice.iter().any(|&flag| flag))
-            .unwrap_or(false);
+            .unwrap_or(&[]);
+        let prev_changed_had_assignment = prev_changed_slice.iter().any(|meta| meta.has_assignment);
+        let prev_changed_assignment_names = prev_changed_slice
+            .iter()
+            .filter_map(|meta| meta.assignment_name.clone())
+            .collect::<Vec<_>>();
+        let prev_changed_had_builtin_formula = prev_changed_slice
+            .iter()
+            .any(|meta| meta.has_builtin_formula);
         let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_flags(
             &self.lines,
             plan.eval_from,
@@ -825,10 +900,9 @@ impl TerminalApp {
         // delete) invalidate per-index alignment; we skip the pass and
         // reseed the snapshot below, so eligibility returns on the next
         // recompute once the user resumes normal in-line editing.
-        let aligned = self.calc.prev_line_hashes.len() == self.lines.len()
+        let aligned = self.calc.prev_line_metadata.len() == self.lines.len()
             && self.calc.results.len() == self.lines.len();
 
-        let mut final_hashes = next_hashes;
         if aligned {
             let cursor_line = self.cursor_line;
             let cursor_col = self.cursor_col;
@@ -855,8 +929,8 @@ impl TerminalApp {
                     false
                 };
                 if !crate::editor_core::calc_plan::should_attempt_calc_trailer_refresh(
-                    self.calc.prev_line_hashes[i],
-                    final_hashes[i],
+                    self.calc.prev_line_metadata[i].hash,
+                    next_line_metadata[i].hash,
                     self.calc.results[i].as_deref(),
                     line_is_selected,
                 ) {
@@ -879,29 +953,13 @@ impl TerminalApp {
                     }
                     // Trailer rewrite changed the line bytes; rehash so the
                     // snapshot stays in sync for the next recompute.
-                    final_hashes[i] = crate::editor_core::calc_plan::hash_line(&self.lines[i]);
+                    next_line_metadata[i] =
+                        crate::editor_core::calc_plan::line_metadata(&self.lines[i]);
                 }
             }
         }
 
-        self.calc.prev_line_hashes = final_hashes;
-        self.calc.prev_line_assignment_name = self
-            .lines
-            .iter()
-            .map(|line| crate::editor_core::calc_plan::assignment_name(line))
-            .collect();
-        self.calc.prev_line_has_assignment = self
-            .lines
-            .iter()
-            .map(|line| crate::editor_core::calc_plan::contains_assignment_operator(line))
-            .collect();
-        self.calc.prev_line_has_builtin_formula = self
-            .lines
-            .iter()
-            .map(|line| {
-                crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(line))
-            })
-            .collect();
+        self.calc.prev_line_metadata = next_line_metadata;
         self.calc.results = new_results;
         self.calc.cell_results = new_cell_results;
         self.calc.variable_names = variable_names;

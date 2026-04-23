@@ -519,16 +519,16 @@ Rough, uninstrumented:
 
 ## Top 10 Recommended Next Steps
 
-1. Land **serde-based wasm marshaling** (A1, A11) — biggest lever per LoC removed.
-2. Make **calc async + interruptible** (A5) — unblocks IPC thread, foundation for cancellation.
-3. Introduce **`LineMetadata`** in shared core (A3) — turns O(N) per-edit rebuilds into O(Δ).
+1. ~~Land **serde-based wasm marshaling** (A1, A11) — biggest lever per LoC removed.~~
+2. ~~Make **calc async + interruptible** (A5) — unblocks IPC thread, foundation for cancellation.~~
+3. ~~Introduce **`LineMetadata`** in shared core (A3) — turns O(N) per-edit rebuilds into O(Δ).~~
 4. Decompose **`TerminalApp`** (A2) — pays off every future TUI change.
-5. Replace **`Mutex<Connection>` with a pool** (A6) — low effort, removes save/calc contention.
+5. ~~Replace **`Mutex<Connection>` with a pool** (A6) — low effort, removes save/calc contention.~~
 6. Introduce **`BackendClient` interface** (A7) — puts UI portability on rails.
 7. Split **`calc-decoration.ts` into 4 files** (A8) — makes the calc pipeline comprehensible.
 8. Consolidate **table parsing into one `TableModel`** (A9) — prerequisite for the multi-row-cell roadmap item.
 9. Add **calc + folding parity suites** (A14) — mandatory before further shared-core migrations.
-10. Switch **TUI folding to the incremental remap path** (A10) — the code already exists in core.
+10. ~~Switch **TUI folding to the incremental remap path** (A10) — the code already exists in core.~~
 
 ---
 

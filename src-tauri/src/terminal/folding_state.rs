@@ -12,12 +12,13 @@ pub struct FoldingState {
     pub hidden_owner: Vec<Option<usize>>,
     pub placeholder_hidden_lines: Vec<Option<usize>>,
     pub line_has_structure: Vec<bool>,
+    pub line_text_snapshot: Vec<String>,
     pub rescan_pending: bool,
     pub pending_prefix_until: Option<Instant>,
 }
 
 impl FoldingState {
-    pub fn empty(line_has_structure: Vec<bool>) -> Self {
+    pub fn empty(line_has_structure: Vec<bool>, line_text_snapshot: Vec<String>) -> Self {
         Self {
             ranges: Vec::new(),
             range_by_start: Vec::new(),
@@ -27,6 +28,7 @@ impl FoldingState {
             hidden_owner: Vec::new(),
             placeholder_hidden_lines: Vec::new(),
             line_has_structure,
+            line_text_snapshot,
             rescan_pending: false,
             pending_prefix_until: None,
         }

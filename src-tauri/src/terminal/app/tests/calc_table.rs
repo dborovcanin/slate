@@ -182,9 +182,7 @@ fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
     assert_eq!(app.calc.results.len(), app.lines.len());
     assert!(app.calc.results.iter().all(|entry| entry.is_none()));
     assert!(app.calc.cell_results.iter().all(|row| row.is_empty()));
-    assert!(app.calc.prev_line_hashes.is_empty());
-    assert!(app.calc.prev_line_has_assignment.is_empty());
-    assert!(app.calc.prev_line_has_builtin_formula.is_empty());
+    assert!(app.calc.prev_line_metadata.is_empty());
 
     drop(app);
     drop(db);
@@ -255,7 +253,7 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
 fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
     let (db, mut app, path) = app_with_note("x := 4\nx + 2");
     assert!(app.calc.cached_has_variable_assignment);
-    assert!(!app.calc.prev_line_hashes.is_empty());
+    assert!(!app.calc.prev_line_metadata.is_empty());
 
     let plain_note = db
         .save_note("n2", "plain line\nstill plain")
@@ -269,9 +267,7 @@ fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
     assert_eq!(app.calc.results.len(), app.lines.len());
     assert!(app.calc.results.iter().all(|entry| entry.is_none()));
     assert!(app.calc.cell_results.iter().all(|row| row.is_empty()));
-    assert!(app.calc.prev_line_hashes.is_empty());
-    assert!(app.calc.prev_line_has_assignment.is_empty());
-    assert!(app.calc.prev_line_has_builtin_formula.is_empty());
+    assert!(app.calc.prev_line_metadata.is_empty());
 
     drop(app);
     drop(db);

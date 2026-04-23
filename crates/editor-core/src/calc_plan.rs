@@ -19,6 +19,36 @@ pub fn hash_lines(lines: &[String]) -> Vec<u64> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct LineMetadata {
+    pub hash: u64,
+    pub assignment_name: Option<String>,
+    pub has_assignment: bool,
+    pub has_builtin_formula: bool,
+}
+
+pub fn line_metadata(line: &String) -> LineMetadata {
+    LineMetadata {
+        hash: hash_line(line),
+        assignment_name: assignment_name(line),
+        has_assignment: contains_assignment_operator(line),
+        has_builtin_formula: contains_builtin_formula(std::slice::from_ref(line)),
+    }
+}
+
+pub fn line_metadata_for_lines(lines: &[String]) -> Vec<LineMetadata> {
+    lines
+        .iter()
+        .map(|line| LineMetadata {
+            hash: hash_line(line),
+            assignment_name: assignment_name(line),
+            has_assignment: contains_assignment_operator(line),
+            has_builtin_formula: contains_builtin_formula(std::slice::from_ref(line)),
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalcSegment {
     pub expr: String,
     pub from_col: usize,
