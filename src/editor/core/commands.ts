@@ -1,8 +1,9 @@
 import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
-import { executeAvgCommand, executeSumCommand, type SumExpressionEvaluator } from "./sum.ts";
+import type { SumExpressionEvaluator } from "./sum.ts";
 import {
   convertLineToList,
+  executeMathCommandFromWasm,
   isWasmReady,
   listCommandSuggestionsFromWasm,
   normalizeCommand,
@@ -204,16 +205,24 @@ async function runSumCommand(
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
-  const result = await executeSumCommand(normalizedInput, ctx, {
-    evaluateExpression: runtime.evaluateExpression,
-  });
+  const selection = ctx.selection();
+  const result = executeMathCommandFromWasm({
+    text: ctx.text(),
+    selection: {
+      anchor: selection.anchor,
+      head: selection.head,
+    },
+  }, normalizedInput, runtime.mode);
+  if (!result) {
+    return { message: "sum unavailable", operations: [] };
+  }
   if (result.clipboardText) {
     await runtime.copyText?.(result.clipboardText);
   }
 
   return {
     message: result.message,
-    operations: result.operation ? [result.operation] : [],
+    operations: result.operations,
   };
 }
 
@@ -222,16 +231,24 @@ async function runAvgCommand(
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
-  const result = await executeAvgCommand(normalizedInput, ctx, {
-    evaluateExpression: runtime.evaluateExpression,
-  });
+  const selection = ctx.selection();
+  const result = executeMathCommandFromWasm({
+    text: ctx.text(),
+    selection: {
+      anchor: selection.anchor,
+      head: selection.head,
+    },
+  }, normalizedInput, runtime.mode);
+  if (!result) {
+    return { message: "avg unavailable", operations: [] };
+  }
   if (result.clipboardText) {
     await runtime.copyText?.(result.clipboardText);
   }
 
   return {
     message: result.message,
-    operations: result.operation ? [result.operation] : [],
+    operations: result.operations,
   };
 }
 

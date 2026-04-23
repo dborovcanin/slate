@@ -348,6 +348,7 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::DeleteAroundPipe
                 | crate::editor_core::vim::VimIntent::DeleteWordForward
                 | crate::editor_core::vim::VimIntent::DeleteWordBackward
+                | crate::editor_core::vim::VimIntent::DeleteWordEnd
                 | crate::editor_core::vim::VimIntent::DeleteVisualSelection
                 | crate::editor_core::vim::VimIntent::Undo
                 | crate::editor_core::vim::VimIntent::Redo
@@ -995,6 +996,61 @@ impl TerminalApp {
         self.set_clipboard_register(VimRegister::charwise(text))
     }
 
+    fn shared_vim_register(&self) -> Option<crate::editor_core::vim_actions::VimRegisterValue> {
+        if self.clipboard.is_empty() {
+            return None;
+        }
+        Some(crate::editor_core::vim_actions::VimRegisterValue {
+            text: self.clipboard.text.clone(),
+            mode: match self.clipboard.mode {
+                VimRegisterMode::Charwise => {
+                    crate::editor_core::vim_actions::VimRegisterMode::Charwise
+                }
+                VimRegisterMode::Linewise => {
+                    crate::editor_core::vim_actions::VimRegisterMode::Linewise
+                }
+            },
+        })
+    }
+
+    fn try_execute_shared_vim_action(
+        &self,
+        intent: crate::editor_core::vim::VimIntent,
+        count: usize,
+    ) -> Option<crate::editor_core::vim_actions::VimActionExecutionResult> {
+        let snapshot = self.build_snapshot();
+        let register = self.shared_vim_register();
+        crate::editor_core::vim_actions::execute_vim_action(
+            &snapshot,
+            intent,
+            count.max(1),
+            register.as_ref(),
+        )
+    }
+
+    fn apply_shared_vim_action_result(
+        &mut self,
+        result: crate::editor_core::vim_actions::VimActionExecutionResult,
+    ) {
+        for operation in &result.operations {
+            self.apply_edit_operation(operation);
+        }
+        if let Some(register) = result.register {
+            let mode = match register.mode {
+                crate::editor_core::vim_actions::VimRegisterMode::Charwise => {
+                    VimRegisterMode::Charwise
+                }
+                crate::editor_core::vim_actions::VimRegisterMode::Linewise => {
+                    VimRegisterMode::Linewise
+                }
+            };
+            let _ = self.set_clipboard_register(VimRegister {
+                text: register.text,
+                mode,
+            });
+        }
+    }
+
     fn with_clipboard_status(&self, base: impl Into<String>) -> String {
         let base = base.into();
         match self.last_clipboard_backend {
@@ -1408,6 +1464,76 @@ impl TerminalApp {
             let count = action.count.max(1);
             if !self.active_note_is_editable() && Self::vim_intent_mutates_document(action.intent) {
                 self.set_locked_note_status();
+                continue;
+            }
+            if let Some(shared) = self.try_execute_shared_vim_action(action.intent, count) {
+                let had_register = shared.register.is_some();
+                self.apply_shared_vim_action_result(shared);
+                if had_register {
+                    let status = match action.intent {
+                        crate::editor_core::vim::VimIntent::DeleteLine => {
+                            Some(self.with_clipboard_status(format!("deleted {} lines", count)))
+                        }
+                        crate::editor_core::vim::VimIntent::YankLine => {
+                            Some(self.with_clipboard_status(format!("yanked {} lines", count)))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteToLineStart => {
+                            Some(self.with_clipboard_status("deleted to line start"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteToLineEnd => {
+                            Some(self.with_clipboard_status("deleted to line end"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankToLineStart => {
+                            Some(self.with_clipboard_status("yanked to line start"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankToLineEnd => {
+                            Some(self.with_clipboard_status("yanked to line end"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankWordForward => {
+                            Some(self.with_clipboard_status("yanked word forward"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankWordBackward => {
+                            Some(self.with_clipboard_status("yanked word backward"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteWordForward => {
+                            Some(self.with_clipboard_status("deleted word forward"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteWordBackward => {
+                            Some(self.with_clipboard_status("deleted word backward"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteWordEnd => {
+                            Some(self.with_clipboard_status("deleted to word end"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideWord => {
+                            Some(self.with_clipboard_status("deleted inside word"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundWord => {
+                            Some(self.with_clipboard_status("deleted around word"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankInsideWord => {
+                            Some(self.with_clipboard_status("yanked inside word"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankAroundWord => {
+                            Some(self.with_clipboard_status("yanked around word"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsidePipe => {
+                            Some(self.with_clipboard_status("deleted inside | |"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundPipe => {
+                            Some(self.with_clipboard_status("deleted around | |"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankInsidePipe => {
+                            Some(self.with_clipboard_status("yanked inside | |"))
+                        }
+                        crate::editor_core::vim::VimIntent::YankAroundPipe => {
+                            Some(self.with_clipboard_status("yanked around | |"))
+                        }
+                        _ => None,
+                    };
+                    if let Some(status) = status {
+                        self.status = status;
+                    }
+                }
                 continue;
             }
             match action.intent {
@@ -1894,6 +2020,7 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::DeleteVisualSelection => {
                     let _ = self.apply_visual_selection_action(true);
                 }
+                crate::editor_core::vim::VimIntent::DeleteWordEnd => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
         }
@@ -2813,92 +2940,87 @@ impl TerminalApp {
     }
 
     fn execute_terminal_command(&mut self, db: &Db, cmd: &str) {
-        if cmd == "q!" || cmd == "q" {
-            self.force_quit = cmd == "q!";
-            self.quit = true;
-            return;
-        }
-
-        if let Some(parsed) =
-            crate::editor_core::engine::EditorEngine::parse_note_security_command(cmd)
+        if let Some(plan) =
+            crate::editor_core::engine::EditorEngine::plan_host_command(self.command_mode(), cmd)
         {
-            let action = parsed.action;
-            let action_label = action.as_str();
-            let password = parsed.password;
-            if password.trim().is_empty() {
-                self.status = format!("usage: note {action_label} <password>");
-                return;
-            }
-            if self.dirty {
-                if let Err(error) = self.save(db) {
-                    self.status = format!("save failed: {error}");
+            match plan {
+                crate::editor_core::engine::HostCommandPlan::Quit { force } => {
+                    self.force_quit = force;
+                    self.quit = true;
                     return;
                 }
-            }
-            let result = match action {
-                crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
-                    db.lock_note(&self.active_note.id, &password)
-                }
-                crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
-                    db.unlock_note(&self.active_note.id, &password)
-                }
-                crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
-                    db.encrypt_note(&self.active_note.id, &password)
-                }
-                crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
-                    db.decrypt_note(&self.active_note.id, &password)
-                }
-                crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
-                    db.decrypt_note(&self.active_note.id, &password)
-                }
-            };
-            match result {
-                Ok(note) => {
-                    if let Err(error) = self.set_active_note(db, note) {
-                        self.status = format!("note {action_label} failed: {error}");
+                crate::editor_core::engine::HostCommandPlan::NoteSecurity { action, password } => {
+                    let action_label = action.as_str();
+                    if password.trim().is_empty() {
+                        self.status = format!("usage: note {action_label} <password>");
                         return;
                     }
-                    self.status = match action {
+                    if self.dirty {
+                        if let Err(error) = self.save(db) {
+                            self.status = format!("save failed: {error}");
+                            return;
+                        }
+                    }
+                    let result = match action {
                         crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
-                            "note locked".to_string()
+                            db.lock_note(&self.active_note.id, &password)
                         }
                         crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
-                            "note unlocked".to_string()
+                            db.unlock_note(&self.active_note.id, &password)
                         }
                         crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
-                            "note encrypted at rest".to_string()
+                            db.encrypt_note(&self.active_note.id, &password)
                         }
                         crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
-                            "note decrypted".to_string()
+                            db.decrypt_note(&self.active_note.id, &password)
                         }
                         crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
-                            "note unprotected".to_string()
+                            db.decrypt_note(&self.active_note.id, &password)
                         }
                     };
+                    match result {
+                        Ok(note) => {
+                            if let Err(error) = self.set_active_note(db, note) {
+                                self.status = format!("note {action_label} failed: {error}");
+                                return;
+                            }
+                            self.status = match action {
+                                crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
+                                    "note locked".to_string()
+                                }
+                                crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
+                                    "note unlocked".to_string()
+                                }
+                                crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
+                                    "note encrypted at rest".to_string()
+                                }
+                                crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
+                                    "note decrypted".to_string()
+                                }
+                                crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
+                                    "note unprotected".to_string()
+                                }
+                            };
+                        }
+                        Err(error) => {
+                            self.status = format!("note {action_label} failed: {error}");
+                        }
+                    }
+                    return;
                 }
-                Err(error) => {
-                    self.status = format!("note {action_label} failed: {error}");
+                crate::editor_core::engine::HostCommandPlan::Module { command_id } => {
+                    let _ = self.handle_terminal_module_command(db, command_id);
+                    return;
                 }
-            }
-            return;
-        }
-
-        if let Some(command) =
-            crate::editor_core::engine::EditorEngine::resolve_command(self.command_mode(), cmd)
-        {
-            if self.handle_terminal_module_command(db, command.id) {
-                return;
-            }
-            match command.id {
-                crate::editor_core::command_catalog::CommandId::Date => {
+                crate::editor_core::engine::HostCommandPlan::Date => {
                     self.open_date_picker(DatePickerAction::InsertDate, false);
                     return;
                 }
-                crate::editor_core::command_catalog::CommandId::Notify => {
+                crate::editor_core::engine::HostCommandPlan::Notify => {
                     self.open_date_picker(DatePickerAction::SetNotify, true);
                     return;
                 }
-                crate::editor_core::command_catalog::CommandId::NotifyDelete => {
+                crate::editor_core::engine::HostCommandPlan::NotifyDelete => {
                     let line_number = (self.cursor_line + 1) as i64;
                     match db.delete_reminder(&self.active_note.id, line_number) {
                         Ok(true) => {
@@ -2918,35 +3040,39 @@ impl TerminalApp {
                     }
                     return;
                 }
-                crate::editor_core::command_catalog::CommandId::ClipWatch => {
-                    if self.start_clipboard_watch() {
-                        self.status = "clip-watch started".to_string();
-                    } else {
-                        self.status = "clip-watch already active".to_string();
+                crate::editor_core::engine::HostCommandPlan::ClipWatch { action } => {
+                    match action {
+                        crate::editor_core::engine::HostClipWatchAction::Start => {
+                            if self.start_clipboard_watch() {
+                                self.status = "clip-watch started".to_string();
+                            } else {
+                                self.status = "clip-watch already active".to_string();
+                            }
+                        }
+                        crate::editor_core::engine::HostClipWatchAction::Stop => {
+                            if self.stop_clipboard_watch() {
+                                self.status = "clip-watch stopped".to_string();
+                            } else {
+                                self.status = "clip-watch not active".to_string();
+                            }
+                        }
                     }
                     return;
                 }
-                crate::editor_core::command_catalog::CommandId::ClipWatchStop => {
-                    if self.stop_clipboard_watch() {
-                        self.status = "clip-watch stopped".to_string();
-                    } else {
-                        self.status = "clip-watch not active".to_string();
+                crate::editor_core::engine::HostCommandPlan::Fold { action } => {
+                    match action {
+                        crate::editor_core::engine::HostFoldAction::Fold => {
+                            self.set_fold_collapsed_at_cursor(true);
+                        }
+                        crate::editor_core::engine::HostFoldAction::Unfold => {
+                            self.set_fold_collapsed_at_cursor(false);
+                        }
+                        crate::editor_core::engine::HostFoldAction::Toggle => {
+                            self.toggle_fold_at_cursor();
+                        }
                     }
                     return;
                 }
-                crate::editor_core::command_catalog::CommandId::Fold => {
-                    self.set_fold_collapsed_at_cursor(true);
-                    return;
-                }
-                crate::editor_core::command_catalog::CommandId::Unfold => {
-                    self.set_fold_collapsed_at_cursor(false);
-                    return;
-                }
-                crate::editor_core::command_catalog::CommandId::FoldToggle => {
-                    self.toggle_fold_at_cursor();
-                    return;
-                }
-                _ => {}
             }
         }
 
@@ -7001,6 +7127,8 @@ mod tests {
         mode: UiMode,
         vim_state: crate::editor_core::vim::VimState,
         selection_anchor: Option<(usize, usize)>,
+        clipboard_text: String,
+        clipboard_mode: VimRegisterMode,
     }
 
     #[derive(Debug, Clone)]
@@ -7106,6 +7234,124 @@ mod tests {
             offset += line.len() + 1;
         }
         offset
+    }
+
+    fn gui_cursor_from_anchor(state: &mut GuiParityState, target: usize) {
+        let mut offset = 0usize;
+        for (idx, line) in state.lines.iter().enumerate() {
+            let line_end = offset + line.len();
+            if target <= line_end {
+                state.cursor_line = idx;
+                state.cursor_col = line[..target.saturating_sub(offset)].chars().count();
+                return;
+            }
+            offset = line_end + 1;
+        }
+    }
+
+    fn gui_apply_edit_operation(
+        state: &mut GuiParityState,
+        op: &crate::editor_core::types::EditOperation,
+    ) {
+        if op.changes.is_empty() {
+            if let Some(selection) = &op.selection {
+                let max = super::join_lines(&state.lines).len();
+                gui_cursor_from_anchor(state, selection.anchor.min(max));
+                clamp_gui_cursor(state);
+            }
+            return;
+        }
+
+        let mut text = super::join_lines(&state.lines);
+        let mut mapped_anchor =
+            gui_byte_offset_for_line_col(state, state.cursor_line, state.cursor_col);
+
+        let mut changes = op.changes.clone();
+        changes.sort_by(|a, b| b.from.cmp(&a.from));
+        for change in &changes {
+            let from = change.from.min(text.len());
+            let to = change.to.min(text.len());
+            text.replace_range(from..to, &change.insert);
+            if from <= mapped_anchor {
+                if to <= mapped_anchor {
+                    let removed = to - from;
+                    let added = change.insert.len();
+                    mapped_anchor = mapped_anchor + added - removed;
+                } else {
+                    let inside = mapped_anchor.saturating_sub(from);
+                    mapped_anchor = from + inside.min(change.insert.len());
+                }
+            }
+        }
+
+        state.lines = super::split_lines(&text);
+        let final_anchor = op
+            .selection
+            .as_ref()
+            .map_or(mapped_anchor, |selection| selection.anchor);
+        gui_cursor_from_anchor(state, final_anchor.min(text.len()));
+        clamp_gui_cursor(state);
+    }
+
+    fn gui_shared_vim_register(
+        state: &GuiParityState,
+    ) -> Option<crate::editor_core::vim_actions::VimRegisterValue> {
+        if state.clipboard.is_empty() {
+            return None;
+        }
+        Some(crate::editor_core::vim_actions::VimRegisterValue {
+            text: state.clipboard.text.clone(),
+            mode: match state.clipboard.mode {
+                VimRegisterMode::Charwise => {
+                    crate::editor_core::vim_actions::VimRegisterMode::Charwise
+                }
+                VimRegisterMode::Linewise => {
+                    crate::editor_core::vim_actions::VimRegisterMode::Linewise
+                }
+            },
+        })
+    }
+
+    fn gui_try_apply_shared_vim_action(
+        state: &mut GuiParityState,
+        action: &crate::editor_core::vim::VimAction,
+    ) -> bool {
+        let text = super::join_lines(&state.lines);
+        let cursor = gui_byte_offset_for_line_col(state, state.cursor_line, state.cursor_col);
+        let snapshot = crate::editor_core::types::EditorContextSnapshot {
+            text,
+            selection: crate::editor_core::types::SelectionSnapshot {
+                anchor: cursor,
+                head: cursor,
+            },
+            changed_range: None,
+        };
+        let register = gui_shared_vim_register(state);
+        let Some(result) = crate::editor_core::vim_actions::execute_vim_action(
+            &snapshot,
+            action.intent,
+            action.count.max(1),
+            register.as_ref(),
+        ) else {
+            return false;
+        };
+        for operation in &result.operations {
+            gui_apply_edit_operation(state, operation);
+        }
+        if let Some(register) = result.register {
+            state.clipboard = VimRegister {
+                text: register.text,
+                mode: match register.mode {
+                    crate::editor_core::vim_actions::VimRegisterMode::Charwise => {
+                        VimRegisterMode::Charwise
+                    }
+                    crate::editor_core::vim_actions::VimRegisterMode::Linewise => {
+                        VimRegisterMode::Linewise
+                    }
+                },
+            };
+        }
+        true
     }
 
     fn gui_slice_cols_range(
@@ -7273,11 +7519,16 @@ mod tests {
         }
     }
 
-    fn gui_apply_visual_selection_action(state: &mut GuiParityState, delete: bool) -> bool {
-        if !matches!(state.mode, UiMode::Visual | UiMode::VisualLine) {
+    fn gui_apply_visual_selection_action(
+        state: &mut GuiParityState,
+        source_mode: UiMode,
+        delete: bool,
+    ) -> bool {
+        if !matches!(source_mode, UiMode::Visual | UiMode::VisualLine) {
             return false;
         }
 
+        let linewise = source_mode == UiMode::VisualLine;
         let anchor = state
             .selection_anchor
             .unwrap_or((state.cursor_line, state.cursor_col));
@@ -7290,7 +7541,7 @@ mod tests {
         end_line = end_line.min(state.lines.len().saturating_sub(1));
 
         let mut yanked = Vec::new();
-        if state.mode == UiMode::VisualLine {
+        if linewise {
             for i in start_line..=end_line {
                 if i < state.lines.len() {
                     yanked.push(state.lines[i].clone());
@@ -7364,7 +7615,7 @@ mod tests {
         if yanked.is_empty() {
             return false;
         }
-        if state.mode == UiMode::VisualLine {
+        if linewise {
             gui_set_clipboard_linewise(state, yanked);
         } else {
             gui_set_clipboard_charwise(state, yanked.join("\n"));
@@ -7377,9 +7628,13 @@ mod tests {
     fn apply_gui_vim_action(
         state: &mut GuiParityState,
         action: &crate::editor_core::vim::VimAction,
+        source_mode: UiMode,
         case_name: &str,
     ) {
         use crate::editor_core::vim::VimIntent;
+        if gui_try_apply_shared_vim_action(state, action) {
+            return;
+        }
         let count = action.count.max(1);
         match action.intent {
             VimIntent::MoveLeft => {
@@ -7577,10 +7832,10 @@ mod tests {
                 }
             }
             VimIntent::YankVisualSelection => {
-                let _ = gui_apply_visual_selection_action(state, false);
+                let _ = gui_apply_visual_selection_action(state, source_mode, false);
             }
             VimIntent::DeleteVisualSelection => {
-                let _ = gui_apply_visual_selection_action(state, true);
+                let _ = gui_apply_visual_selection_action(state, source_mode, true);
             }
             VimIntent::OpenCommandBar => {
                 state.mode = UiMode::CommandBar;
@@ -7620,6 +7875,7 @@ mod tests {
             };
             let step =
                 crate::editor_core::engine::EditorEngine::step_vim(&state.vim_state, vim_key, &ctx);
+            let source_mode = state.mode;
             state.vim_state = step.state.clone();
             state.mode = ui_mode_from_vim_mode(step.state.mode);
 
@@ -7627,7 +7883,7 @@ mod tests {
                 continue;
             }
             for action in &step.actions {
-                apply_gui_vim_action(&mut state, action, &case.name);
+                apply_gui_vim_action(&mut state, action, source_mode, &case.name);
             }
             if !matches!(
                 state.mode,
@@ -7645,6 +7901,8 @@ mod tests {
             mode: state.mode,
             vim_state: state.vim_state,
             selection_anchor: state.selection_anchor,
+            clipboard_text: state.clipboard.text,
+            clipboard_mode: state.clipboard.mode,
         }
     }
 
@@ -7682,6 +7940,8 @@ mod tests {
             mode: app.mode,
             vim_state: app.vim_state.clone(),
             selection_anchor: app.selection_anchor,
+            clipboard_text: app.clipboard.text.clone(),
+            clipboard_mode: app.clipboard.mode,
         };
 
         drop(app);
@@ -10242,6 +10502,77 @@ mod tests {
         assert_eq!(app.lines, vec!["alphabeta".to_string()]);
         assert_eq!(app.cursor_line, 0);
         assert_eq!(app.cursor_col, 5);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_d2w_deletes_two_words_forward() {
+        let (db, mut app, path) = app_with_note("foo bar baz qux");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 0;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('d'), Key::Char('2'), Key::Char('w')],
+        );
+
+        assert_eq!(app.lines, vec!["baz qux".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "foo bar ");
+        assert_eq!(app.cursor_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_d2b_deletes_two_words_backward() {
+        let (db, mut app, path) = app_with_note("foo bar baz");
+        app.mode = UiMode::Normal;
+        app.cursor_col = app.current_line().find("baz").expect("baz");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('d'), Key::Char('2'), Key::Char('b')],
+        );
+
+        assert_eq!(app.lines, vec!["baz".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "foo bar ");
+        assert_eq!(app.cursor_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_de_uses_word_end_semantics_distinct_from_dw() {
+        let (db, mut app, path) = app_with_note("foo bar baz");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 0;
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('e')]);
+        assert_eq!(app.lines, vec![" bar baz".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "foo");
+        assert_eq!(app.cursor_col, 0);
+
+        run_keys(&mut app, &db, &[Key::Char('u')]);
+        assert_eq!(app.lines, vec!["foo bar baz".to_string()]);
+
+        app.cursor_col = 2;
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('e')]);
+        assert_eq!(app.lines, vec!["fo baz".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "o bar");
+        assert_eq!(app.cursor_col, 2);
 
         drop(app);
         drop(db);

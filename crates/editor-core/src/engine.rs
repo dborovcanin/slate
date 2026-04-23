@@ -1,4 +1,6 @@
-use crate::command_catalog::{self, CommandDefinition, CommandId, ParsedNoteSecurityCommand};
+use crate::command_catalog::{
+    self, CommandDefinition, CommandId, NoteSecurityAction, ParsedNoteSecurityCommand,
+};
 use crate::types::{CommandMode, CommandSuggestion};
 use crate::vim::{self, VimContext, VimKey, VimState, VimStep};
 use serde::{Deserialize, Serialize};
@@ -59,6 +61,58 @@ pub struct ModuleCommandPlan {
 
 pub struct EditorEngine;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandDispatchKind {
+    Core,
+    HostDate,
+    HostNotify,
+    HostNotifyDelete,
+    HostModule,
+    HostFold,
+    HostClipWatch,
+    HostNoteSecurity,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostFoldAction {
+    Fold,
+    Unfold,
+    Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostClipWatchAction {
+    Start,
+    Stop,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostCommandPlan {
+    Date,
+    Notify,
+    NotifyDelete,
+    Module {
+        command_id: CommandId,
+    },
+    Fold {
+        action: HostFoldAction,
+    },
+    ClipWatch {
+        action: HostClipWatchAction,
+    },
+    NoteSecurity {
+        action: NoteSecurityAction,
+        password: String,
+    },
+    Quit {
+        force: bool,
+    },
+}
+
 impl EditorEngine {
     pub fn normalize_command(raw_input: &str) -> String {
         command_catalog::normalize_command(raw_input)
@@ -77,6 +131,81 @@ impl EditorEngine {
 
     pub fn parse_note_security_command(raw_input: &str) -> Option<ParsedNoteSecurityCommand> {
         command_catalog::parse_note_security_command(raw_input)
+    }
+
+    pub fn classify_command_dispatch(
+        mode: CommandMode,
+        raw_input: &str,
+    ) -> Option<CommandDispatchKind> {
+        if let Some(host) = Self::plan_host_command(mode, raw_input) {
+            return Some(match host {
+                HostCommandPlan::Date => CommandDispatchKind::HostDate,
+                HostCommandPlan::Notify => CommandDispatchKind::HostNotify,
+                HostCommandPlan::NotifyDelete => CommandDispatchKind::HostNotifyDelete,
+                HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
+                HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
+                HostCommandPlan::ClipWatch { .. } => CommandDispatchKind::HostClipWatch,
+                HostCommandPlan::NoteSecurity { .. } => CommandDispatchKind::HostNoteSecurity,
+                HostCommandPlan::Quit { .. } => CommandDispatchKind::Quit,
+            });
+        }
+
+        let command = command_catalog::resolve_command(mode, raw_input)?;
+        Some(match command.id {
+            CommandId::Quit => CommandDispatchKind::Quit,
+            _ => CommandDispatchKind::Core,
+        })
+    }
+
+    pub fn plan_host_command(mode: CommandMode, raw_input: &str) -> Option<HostCommandPlan> {
+        if let Some(parsed) = command_catalog::parse_note_security_command(raw_input) {
+            return Some(HostCommandPlan::NoteSecurity {
+                action: parsed.action,
+                password: parsed.password,
+            });
+        }
+
+        let normalized = command_catalog::normalize_command(raw_input);
+        let command = command_catalog::resolve_command(mode, raw_input)?;
+        match command.id {
+            CommandId::Date => Some(HostCommandPlan::Date),
+            CommandId::Notify => Some(HostCommandPlan::Notify),
+            CommandId::NotifyDelete => Some(HostCommandPlan::NotifyDelete),
+            CommandId::ModuleStatus
+            | CommandId::ModuleOnMath
+            | CommandId::ModuleOffMath
+            | CommandId::ModuleToggleMath
+            | CommandId::ModuleOnTable
+            | CommandId::ModuleOffTable
+            | CommandId::ModuleToggleTable
+            | CommandId::ModuleOnVariables
+            | CommandId::ModuleOffVariables
+            | CommandId::ModuleToggleVariables
+            | CommandId::ModuleOnStyle
+            | CommandId::ModuleOffStyle
+            | CommandId::ModuleToggleStyle => Some(HostCommandPlan::Module {
+                command_id: command.id,
+            }),
+            CommandId::Fold => Some(HostCommandPlan::Fold {
+                action: HostFoldAction::Fold,
+            }),
+            CommandId::Unfold => Some(HostCommandPlan::Fold {
+                action: HostFoldAction::Unfold,
+            }),
+            CommandId::FoldToggle => Some(HostCommandPlan::Fold {
+                action: HostFoldAction::Toggle,
+            }),
+            CommandId::ClipWatch => Some(HostCommandPlan::ClipWatch {
+                action: HostClipWatchAction::Start,
+            }),
+            CommandId::ClipWatchStop => Some(HostCommandPlan::ClipWatch {
+                action: HostClipWatchAction::Stop,
+            }),
+            CommandId::Quit => Some(HostCommandPlan::Quit {
+                force: normalized == "q!",
+            }),
+            _ => None,
+        }
     }
 
     pub fn step_vim(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
@@ -257,6 +386,87 @@ mod tests {
         assert_eq!(
             plan.message,
             "modules math=off table=on variables=off style=on"
+        );
+    }
+
+    #[test]
+    fn command_dispatch_classifies_host_and_core_commands() {
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "sum row"),
+            Some(CommandDispatchKind::Core)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "notify"),
+            Some(CommandDispatchKind::HostNotify)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "module math on"),
+            Some(CommandDispatchKind::HostModule)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "fold"),
+            Some(CommandDispatchKind::HostFold)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "clip-watch"),
+            Some(CommandDispatchKind::HostClipWatch)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "note lock pass"),
+            Some(CommandDispatchKind::HostNoteSecurity)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Vim, "q"),
+            Some(CommandDispatchKind::Quit)
+        );
+    }
+
+    #[test]
+    fn host_command_plan_parses_note_security_and_q_force() {
+        let note = EditorEngine::plan_host_command(CommandMode::Editor, "note lock pass123")
+            .expect("note plan");
+        assert_eq!(
+            note,
+            HostCommandPlan::NoteSecurity {
+                action: NoteSecurityAction::Lock,
+                password: "pass123".to_string(),
+            }
+        );
+
+        let quit_force =
+            EditorEngine::plan_host_command(CommandMode::Vim, "q!").expect("quit force");
+        assert_eq!(quit_force, HostCommandPlan::Quit { force: true });
+
+        let quit_normal =
+            EditorEngine::plan_host_command(CommandMode::Vim, "q").expect("quit normal");
+        assert_eq!(quit_normal, HostCommandPlan::Quit { force: false });
+    }
+
+    #[test]
+    fn host_command_plan_maps_fold_clip_watch_and_module() {
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "fold"),
+            Some(HostCommandPlan::Fold {
+                action: HostFoldAction::Fold,
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "zo"),
+            Some(HostCommandPlan::Fold {
+                action: HostFoldAction::Unfold,
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "clip-watch-stop"),
+            Some(HostCommandPlan::ClipWatch {
+                action: HostClipWatchAction::Stop,
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "module table toggle"),
+            Some(HostCommandPlan::Module {
+                command_id: CommandId::ModuleToggleTable,
+            })
         );
     }
 }

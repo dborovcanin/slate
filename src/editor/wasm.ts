@@ -39,6 +39,10 @@ import init, {
   wasm_normalize_command,
   wasm_rewrite_line_with_checklist_toggle_suffix,
   wasm_resolve_command,
+  wasm_classify_command_dispatch,
+  wasm_plan_host_command,
+  wasm_execute_vim_action,
+  wasm_execute_math_command,
   wasm_parse_note_security_command,
   wasm_plan_module_command,
   wasm_vim_intent_id_map,
@@ -240,6 +244,7 @@ type VimIntentMap = {
   SWALLOW: number;
   DELETE_WORD_FORWARD: number;
   DELETE_WORD_BACKWARD: number;
+  DELETE_WORD_END: number;
   YANK_WORD_FORWARD: number;
   YANK_WORD_BACKWARD: number;
   YANK_VISUAL_SELECTION: number;
@@ -301,6 +306,7 @@ function decodeVimIntentMap(raw: unknown): VimIntentMap | null {
     "SWALLOW",
     "DELETE_WORD_FORWARD",
     "DELETE_WORD_BACKWARD",
+    "DELETE_WORD_END",
     "YANK_WORD_FORWARD",
     "YANK_WORD_BACKWARD",
     "YANK_VISUAL_SELECTION",
@@ -470,6 +476,49 @@ export interface VimSubstituteExecutionResult {
   operations: EditOperation[];
 }
 
+export interface WasmCommandExecutionResult {
+  message: string;
+  operations: EditOperation[];
+  clipboardText: string | null;
+  quitRequested: boolean;
+}
+
+export type VimRegisterMode = "charwise" | "linewise";
+
+export interface VimRegisterValue {
+  text: string;
+  mode: VimRegisterMode;
+}
+
+export interface VimActionExecutionResult {
+  operations: EditOperation[];
+  register: VimRegisterValue | null;
+}
+
+export type CommandDispatchKind =
+  | "core"
+  | "host_date"
+  | "host_notify"
+  | "host_notify_delete"
+  | "host_module"
+  | "host_fold"
+  | "host_clip_watch"
+  | "host_note_security"
+  | "quit";
+
+export type HostFoldAction = "fold" | "unfold" | "toggle";
+export type HostClipWatchAction = "start" | "stop";
+
+export type HostCommandPlan =
+  | { kind: "date" }
+  | { kind: "notify" }
+  | { kind: "notify_delete" }
+  | { kind: "module"; command: string }
+  | { kind: "fold"; action: HostFoldAction }
+  | { kind: "clip_watch"; action: HostClipWatchAction }
+  | { kind: "note_security"; action: NoteSecurityAction; password: string }
+  | { kind: "quit"; force: boolean };
+
 interface CommandHistoryStepPayload {
   index: number;
   command: string;
@@ -604,10 +653,13 @@ function mapOperationFromUtf8ToUtf16(sourceText: string, operation: EditOperatio
       (operation.selection as { head?: number | null }).head,
     );
     const postText = applyChangesToText(sourceText, convertedChanges);
-    mapped.selection = {
+    const mappedSelection: NonNullable<EditOperation["selection"]> = {
       anchor: utf8ToUtf16Offset(postText, operation.selection.anchor),
-      head: rawHead === undefined ? undefined : utf8ToUtf16Offset(postText, rawHead),
     };
+    if (rawHead !== undefined) {
+      mappedSelection.head = utf8ToUtf16Offset(postText, rawHead);
+    }
+    mapped.selection = mappedSelection;
   }
 
   return mapped;
@@ -656,6 +708,18 @@ function decodeVimSubstituteExecutionResult(
   raw: unknown,
   sourceText: string,
 ): VimSubstituteExecutionResult | null {
+  const decoded = decodeCommandExecutionResult(raw, sourceText);
+  if (!decoded) return null;
+  return {
+    message: decoded.message,
+    operations: decoded.operations,
+  };
+}
+
+function decodeCommandExecutionResult(
+  raw: unknown,
+  sourceText: string,
+): WasmCommandExecutionResult | null {
   if (typeof raw !== "object" || raw === null) return null;
   const obj = raw as Record<string, unknown>;
   if (typeof obj["message"] !== "string") return null;
@@ -670,7 +734,43 @@ function decodeVimSubstituteExecutionResult(
   return {
     message: obj["message"],
     operations,
+    clipboardText: typeof obj["clipboardText"] === "string" ? obj["clipboardText"] : null,
+    quitRequested: obj["quitRequested"] === true,
   };
+}
+
+function decodeVimActionExecutionResult(
+  raw: unknown,
+  sourceText: string,
+): VimActionExecutionResult | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const obj = raw as Record<string, unknown>;
+  const operations: EditOperation[] = [];
+  if (Array.isArray(obj["operations"])) {
+    for (const rawOp of obj["operations"]) {
+      const decoded = decodeEditOperation(rawOp, sourceText);
+      if (!decoded) continue;
+      operations.push(decoded);
+    }
+  }
+
+  let register: VimRegisterValue | null = null;
+  if (typeof obj["register"] === "object" && obj["register"] !== null) {
+    const rawRegister = obj["register"] as Record<string, unknown>;
+    const mode = rawRegister["mode"];
+    const text = rawRegister["text"];
+    if (
+      (mode === "charwise" || mode === "linewise") &&
+      typeof text === "string"
+    ) {
+      register = {
+        mode,
+        text,
+      };
+    }
+  }
+
+  return { operations, register };
 }
 
 function asMarkdownTransactionKind(value: unknown): MarkdownTransactionKind | null {
@@ -873,6 +973,76 @@ export function resolveCommandFromWasm(mode: CommandMode, rawInput: string): str
   return wasm_resolve_command(mode, rawInput) ?? null;
 }
 
+export function classifyCommandDispatchFromWasm(
+  mode: CommandMode,
+  rawInput: string,
+): CommandDispatchKind | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const raw = wasm_classify_command_dispatch(mode, rawInput);
+  if (
+    raw === "core" ||
+    raw === "host_date" ||
+    raw === "host_notify" ||
+    raw === "host_notify_delete" ||
+    raw === "host_module" ||
+    raw === "host_fold" ||
+    raw === "host_clip_watch" ||
+    raw === "host_note_security" ||
+    raw === "quit"
+  ) {
+    return raw;
+  }
+  return null;
+}
+
+export function planHostCommandFromWasm(
+  mode: CommandMode,
+  rawInput: string,
+): HostCommandPlan | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const raw = wasm_plan_host_command(mode, rawInput) as unknown;
+  if (typeof raw !== "object" || raw === null) return null;
+  const plan = raw as Record<string, unknown>;
+  const kind = plan["kind"];
+  if (kind === "date" || kind === "notify" || kind === "notify_delete") {
+    return { kind };
+  }
+  if (kind === "module" && typeof plan["command"] === "string") {
+    return { kind, command: plan["command"] };
+  }
+  if (
+    kind === "fold" &&
+    (plan["action"] === "fold" || plan["action"] === "unfold" || plan["action"] === "toggle")
+  ) {
+    return { kind, action: plan["action"] };
+  }
+  if (
+    kind === "clip_watch" &&
+    (plan["action"] === "start" || plan["action"] === "stop")
+  ) {
+    return { kind, action: plan["action"] };
+  }
+  if (
+    kind === "note_security" &&
+    (plan["action"] === "lock" ||
+      plan["action"] === "unlock" ||
+      plan["action"] === "encrypt" ||
+      plan["action"] === "decrypt" ||
+      plan["action"] === "unprotect") &&
+    typeof plan["password"] === "string"
+  ) {
+    return {
+      kind,
+      action: plan["action"],
+      password: plan["password"],
+    };
+  }
+  if (kind === "quit" && typeof plan["force"] === "boolean") {
+    return { kind, force: plan["force"] };
+  }
+  return null;
+}
+
 export type NoteSecurityAction =
   | "lock"
   | "unlock"
@@ -980,6 +1150,47 @@ export function tryExecuteVimSubstituteFromWasm(
     mode,
   ) as unknown;
   return decodeVimSubstituteExecutionResult(raw, text);
+}
+
+export function executeMathCommandFromWasm(
+  snapshot: EditorContextSnapshot,
+  rawInput: string,
+  mode: CommandMode,
+): WasmCommandExecutionResult | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const [text, anchor, head] = snapshotToArgs(snapshot);
+  const raw = wasm_execute_math_command(
+    text,
+    anchor!,
+    head!,
+    rawInput,
+    mode,
+  ) as unknown;
+  return decodeCommandExecutionResult(raw, text);
+}
+
+export function executeVimActionFromWasm(
+  snapshot: EditorContextSnapshot,
+  intent: number,
+  count: number,
+  register: VimRegisterValue | null,
+): VimActionExecutionResult | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const text = snapshot.text;
+  const [anchor, head] = batchUtf16ToUtf8(text, [
+    snapshot.selection.anchor,
+    snapshot.selection.head,
+  ]);
+  const raw = wasm_execute_vim_action(
+    text,
+    anchor!,
+    head!,
+    intent,
+    count,
+    register?.text ?? "",
+    register?.mode ?? "",
+  ) as unknown;
+  return decodeVimActionExecutionResult(raw, text);
 }
 
 export function sanitizeCommandHistoryCommand(rawCommand: string): string {

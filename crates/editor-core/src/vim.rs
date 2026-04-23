@@ -29,6 +29,8 @@ pub struct VimState {
     pub count_buffer: String,
     #[serde(default)]
     pub pending: Option<VimPending>,
+    #[serde(default)]
+    pub pending_count: Option<usize>,
 }
 
 fn default_mode() -> VimMode {
@@ -41,6 +43,7 @@ impl Default for VimState {
             mode: VimMode::Normal,
             count_buffer: String::new(),
             pending: None,
+            pending_count: None,
         }
     }
 }
@@ -102,6 +105,7 @@ pub enum VimIntent {
     DeleteAroundWord,
     DeleteWordForward,
     DeleteWordBackward,
+    DeleteWordEnd,
     YankInsideWord,
     YankAroundWord,
     YankWordForward,
@@ -152,6 +156,12 @@ fn consume_count(state: &mut VimState) -> usize {
     let count = state.count_buffer.parse::<usize>().ok().unwrap_or(1).max(1);
     state.count_buffer.clear();
     count
+}
+
+fn consume_pending_effective_count(state: &mut VimState) -> usize {
+    let operator_count = state.pending_count.take().unwrap_or(1);
+    let motion_count = consume_count(state);
+    operator_count.saturating_mul(motion_count).max(1)
 }
 
 pub fn parse_key_token(token: &str) -> Option<VimKey> {
@@ -220,6 +230,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
     if key == VimKey::Esc {
         next.mode = VimMode::Normal;
         next.pending = None;
+        next.pending_count = None;
         next.count_buffer.clear();
         actions.push(make_action(VimIntent::ExitVisual, 1));
         handled = true;
@@ -279,6 +290,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             VimKey::Char('y') => {
                 next.mode = VimMode::Normal;
                 next.pending = None;
+                next.pending_count = None;
                 next.count_buffer.clear();
                 actions.push(make_action(VimIntent::YankVisualSelection, 1));
                 handled = true;
@@ -286,6 +298,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             VimKey::Char('d') | VimKey::Char('x') => {
                 next.mode = VimMode::Normal;
                 next.pending = None;
+                next.pending_count = None;
                 next.count_buffer.clear();
                 actions.push(make_action(VimIntent::DeleteVisualSelection, 1));
                 handled = true;
@@ -306,6 +319,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 // while mode transitions to normal.
                 next.mode = VimMode::Normal;
                 next.pending = None;
+                next.pending_count = None;
                 next.count_buffer.clear();
                 actions.push(make_action(VimIntent::OpenCommandBar, 1));
                 handled = true;
@@ -372,6 +386,19 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
     }
 
     if let VimKey::Char(digit) = key {
+        if digit.is_ascii_digit() {
+            if matches!(next.pending, Some(VimPending::Delete | VimPending::Yank))
+                && !(digit == '0' && !has_count(&next))
+            {
+                next.count_buffer.push(digit);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+        }
         if digit.is_ascii_digit() && next.pending.is_none() {
             if digit == '0' && !has_count(&next) && next.pending.is_none() {
                 actions.push(make_action(VimIntent::MoveLineStart, 1));
@@ -395,7 +422,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
     if let Some(pending) = next.pending.take() {
         match (pending, key) {
             (VimPending::Delete, VimKey::Char('d')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteLine, count));
                 handled = true;
                 return VimStep {
@@ -405,7 +432,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Delete, VimKey::Char('0')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteToLineStart, count));
                 handled = true;
                 return VimStep {
@@ -415,7 +442,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Delete, VimKey::Char('$')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteToLineEnd, count));
                 handled = true;
                 return VimStep {
@@ -434,7 +461,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Delete, VimKey::Char('w')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteWordForward, count));
                 handled = true;
                 return VimStep {
@@ -444,8 +471,18 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Delete, VimKey::Char('b')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteWordBackward, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Delete, VimKey::Char('e')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteWordEnd, count));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -463,7 +500,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Yank, VimKey::Char('y')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankLine, count));
                 handled = true;
                 return VimStep {
@@ -473,7 +510,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Yank, VimKey::Char('0')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankToLineStart, count));
                 handled = true;
                 return VimStep {
@@ -483,7 +520,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Yank, VimKey::Char('$')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankToLineEnd, count));
                 handled = true;
                 return VimStep {
@@ -502,7 +539,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Yank, VimKey::Char('w')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankWordForward, count));
                 handled = true;
                 return VimStep {
@@ -512,7 +549,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::Yank, VimKey::Char('b')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankWordBackward, count));
                 handled = true;
                 return VimStep {
@@ -548,7 +585,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::DeleteInner, VimKey::Char('w')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteInsideWord, count));
                 handled = true;
                 return VimStep {
@@ -558,7 +595,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::DeleteAround, VimKey::Char('w')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteAroundWord, count));
                 handled = true;
                 return VimStep {
@@ -568,7 +605,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::YankInner, VimKey::Char('w')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankInsideWord, count));
                 handled = true;
                 return VimStep {
@@ -578,7 +615,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::YankAround, VimKey::Char('w')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankAroundWord, count));
                 handled = true;
                 return VimStep {
@@ -588,7 +625,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::DeleteInner, VimKey::Char('|')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteInsidePipe, count));
                 handled = true;
                 return VimStep {
@@ -598,7 +635,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::DeleteAround, VimKey::Char('|')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteAroundPipe, count));
                 handled = true;
                 return VimStep {
@@ -608,7 +645,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::YankInner, VimKey::Char('|')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankInsidePipe, count));
                 handled = true;
                 return VimStep {
@@ -618,7 +655,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 };
             }
             (VimPending::YankAround, VimKey::Char('|')) => {
-                let count = consume_count(&mut next);
+                let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankAroundPipe, count));
                 handled = true;
                 return VimStep {
@@ -629,6 +666,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             }
             _ => {}
         }
+        next.pending_count = None;
     }
 
     match key {
@@ -768,14 +806,19 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             handled = true;
         }
         VimKey::Char('d') => {
+            let pending_count = consume_count(&mut next);
             next.pending = Some(VimPending::Delete);
+            next.pending_count = Some(pending_count);
             handled = true;
         }
         VimKey::Char('y') => {
+            let pending_count = consume_count(&mut next);
             next.pending = Some(VimPending::Yank);
+            next.pending_count = Some(pending_count);
             handled = true;
         }
         VimKey::Char('g') => {
+            next.pending_count = None;
             next.pending = Some(VimPending::Go);
             handled = true;
         }
@@ -822,6 +865,35 @@ mod tests {
         assert_eq!(three.actions.len(), 1);
         assert_eq!(three.actions[0].intent, VimIntent::DeleteLine);
         assert_eq!(three.actions[0].count, 2);
+    }
+
+    #[test]
+    fn d_motion_counts_support_prefix_and_pending_forms() {
+        let start = VimState::default();
+        let one = step_token(&start, "char:d");
+        let two = step_token(&one.state, "char:2");
+        let three = step_token(&two.state, "char:w");
+        assert!(three.handled);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteWordForward);
+        assert_eq!(three.actions[0].count, 2);
+
+        let start = VimState::default();
+        let one = step_token(&start, "char:2");
+        let two = step_token(&one.state, "char:d");
+        let three = step_token(&two.state, "char:3");
+        let four = step_token(&three.state, "char:b");
+        assert!(four.handled);
+        assert_eq!(four.actions[0].intent, VimIntent::DeleteWordBackward);
+        assert_eq!(four.actions[0].count, 6);
+    }
+
+    #[test]
+    fn de_emits_delete_word_end() {
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:e");
+        assert!(two.handled);
+        assert_eq!(two.actions[0].intent, VimIntent::DeleteWordEnd);
+        assert_eq!(two.actions[0].count, 1);
     }
 
     #[test]

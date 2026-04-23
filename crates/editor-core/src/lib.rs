@@ -6,6 +6,7 @@ pub mod engine;
 pub mod folding;
 pub mod format;
 pub mod markdown_tokens;
+pub mod math_commands;
 pub mod operations;
 pub mod substitute;
 pub mod sum;
@@ -13,6 +14,7 @@ pub mod table;
 pub mod text_rules;
 pub mod types;
 pub mod vim;
+pub mod vim_actions;
 
 #[cfg(target_arch = "wasm32")]
 mod wasm;

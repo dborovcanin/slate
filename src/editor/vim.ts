@@ -13,6 +13,7 @@ import { EditorView } from "@codemirror/view";
 import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
 import type { NoteModules } from "../api.ts";
 import { toggleFoldAtCursor } from "./folding.ts";
+import { applyEditOperations } from "./core/codemirror-adapter.ts";
 import {
   editorSearchHasMatches,
   editorSearchNext,
@@ -23,8 +24,10 @@ import {
 import {
   VIM_INTENT,
   VimSession,
+  executeVimActionFromWasm,
   type VimAction,
   type VimMode,
+  type VimRegisterValue,
 } from "./wasm.ts";
 import { runUiVimPipeline } from "./vim-adapter.ts";
 import { vimAppendInsertPos, vimNormalLineEndPos } from "./vim-utils.ts";
@@ -46,6 +49,35 @@ type VimRegisterMode = "charwise" | "linewise";
 interface VimRegister {
   text: string;
   mode: VimRegisterMode;
+}
+
+function shouldExecuteSharedVimAction(intent: number): boolean {
+  switch (intent) {
+    case VIM_INTENT.DELETE_LINE:
+    case VIM_INTENT.YANK_LINE:
+    case VIM_INTENT.DELETE_TO_LINE_START:
+    case VIM_INTENT.DELETE_TO_LINE_END:
+    case VIM_INTENT.YANK_TO_LINE_START:
+    case VIM_INTENT.YANK_TO_LINE_END:
+    case VIM_INTENT.DELETE_CHAR:
+    case VIM_INTENT.PASTE_AFTER:
+    case VIM_INTENT.DELETE_WORD_FORWARD:
+    case VIM_INTENT.DELETE_WORD_BACKWARD:
+    case VIM_INTENT.DELETE_WORD_END:
+    case VIM_INTENT.YANK_WORD_FORWARD:
+    case VIM_INTENT.YANK_WORD_BACKWARD:
+    case VIM_INTENT.DELETE_INSIDE_WORD:
+    case VIM_INTENT.DELETE_AROUND_WORD:
+    case VIM_INTENT.YANK_INSIDE_WORD:
+    case VIM_INTENT.YANK_AROUND_WORD:
+    case VIM_INTENT.DELETE_INSIDE_PIPE:
+    case VIM_INTENT.DELETE_AROUND_PIPE:
+    case VIM_INTENT.YANK_INSIDE_PIPE:
+    case VIM_INTENT.YANK_AROUND_PIPE:
+      return true;
+    default:
+      return false;
+  }
 }
 
 function isPrintableTextKey(event: KeyboardEvent): boolean {
@@ -180,6 +212,51 @@ function vimMoveWordBackward(view: EditorView): boolean {
 
   view.dispatch({ selection: { anchor: line.from + col }, scrollIntoView: true });
   return true;
+}
+
+function runEndByClass(text: string, start: number, klass: number): number {
+  let cursor = Math.max(0, Math.min(start, text.length));
+  while (cursor < text.length) {
+    const next = cursor + 1;
+    if (next >= text.length || getCharClass(text[next] ?? "") !== klass) {
+      break;
+    }
+    cursor = next;
+  }
+  return cursor;
+}
+
+function findNextNonWhitespace(text: string, start: number): number | null {
+  let cursor = Math.max(0, Math.min(start, text.length));
+  while (cursor < text.length) {
+    if (getCharClass(text[cursor] ?? "") !== 0) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+  return null;
+}
+
+function moveWordEndPos(text: string, offset: number): number | null {
+  if (text.length === 0) return null;
+  const cursor = Math.max(0, Math.min(offset, text.length - 1));
+  const klass = getCharClass(text[cursor] ?? "");
+  if (klass !== 0) {
+    const next = cursor + 1;
+    if (next < text.length && getCharClass(text[next] ?? "") === klass) {
+      return runEndByClass(text, cursor, klass);
+    }
+    const nextWord = findNextNonWhitespace(text, next);
+    if (nextWord !== null) {
+      return runEndByClass(text, nextWord, getCharClass(text[nextWord] ?? ""));
+    }
+    return cursor;
+  }
+  const nextWord = findNextNonWhitespace(text, cursor);
+  if (nextWord !== null) {
+    return runEndByClass(text, nextWord, getCharClass(text[nextWord] ?? ""));
+  }
+  return runEndByClass(text, cursor, 0);
 }
 
 function shouldSwallowInNormalLikeMode(event: KeyboardEvent): boolean {
@@ -671,6 +748,25 @@ export function vimModeExtension(options: VimOptions = {}) {
     return changed;
   };
 
+  const deleteWordEnd = (view: EditorView, count: number) => {
+    const text = view.state.doc.toString();
+    const from = view.state.selection.main.head;
+    let target = from;
+    let resolved = false;
+    for (let i = 0; i < count; i++) {
+      const next = moveWordEndPos(text, target);
+      if (next === null) break;
+      target = next;
+      resolved = true;
+    }
+    if (!resolved) return false;
+    const to = Math.min(text.length, target + 1);
+    if (to <= from) return false;
+    setRegister(text.slice(from, to));
+    deleteRange(view, from, to);
+    return true;
+  };
+
   const yankWordForward = (view: EditorView, count: number) => {
     const chunks: string[] = [];
     const origHead = view.state.selection.main.head;
@@ -823,6 +919,32 @@ export function vimModeExtension(options: VimOptions = {}) {
     sourceMode: VimUiMode = mode(),
   ) => {
     const count = action.count > 0 ? action.count : 1;
+    if (shouldExecuteSharedVimAction(action.intent)) {
+      const sharedRegister: VimRegisterValue | null = unnamedRegister
+        ? { text: unnamedRegister.text, mode: unnamedRegister.mode }
+        : null;
+      const sharedResult = executeVimActionFromWasm(
+        {
+          text: view.state.doc.toString(),
+          selection: {
+            anchor: view.state.selection.main.anchor,
+            head: view.state.selection.main.head,
+          },
+        },
+        action.intent,
+        count,
+        sharedRegister,
+      );
+      if (sharedResult) {
+        if (sharedResult.register) {
+          setRegister(sharedResult.register.text, sharedResult.register.mode);
+        }
+        if (sharedResult.operations.length > 0) {
+          applyEditOperations(view, sharedResult.operations);
+        }
+        return true;
+      }
+    }
 
     switch (action.intent) {
       case VIM_INTENT.MOVE_LEFT:
@@ -953,6 +1075,8 @@ export function vimModeExtension(options: VimOptions = {}) {
         return deleteWordForward(view, count);
       case VIM_INTENT.DELETE_WORD_BACKWARD:
         return deleteWordBackward(view, count);
+      case VIM_INTENT.DELETE_WORD_END:
+        return deleteWordEnd(view, count);
       case VIM_INTENT.YANK_WORD_FORWARD:
         return yankWordForward(view, count);
       case VIM_INTENT.YANK_WORD_BACKWARD:

@@ -6,15 +6,20 @@ use crate::calc_plan::{
     self, CalcEvalScopeDecision, CalcRefreshPlan, CalcSegment, CommitMarkerLoc,
     IncrementalCalcPlan, TableFormulaSegment,
 };
+use crate::command_catalog::CommandId;
 use crate::command_history;
 use crate::context::ResolvedContext;
-use crate::engine::{EditorEngine, ModuleCommandPlan, ModuleState};
+use crate::engine::{
+    CommandDispatchKind, EditorEngine, HostClipWatchAction, HostCommandPlan, HostFoldAction,
+    ModuleCommandPlan, ModuleState,
+};
 use crate::folding;
 use crate::format::format_markdown;
 use crate::markdown_tokens::{
     self, CodeToken, InlineMarkerComponentRange, InlineToken, MarkdownAnalyzeResult,
     MarkdownAnalyzedLine, MarkdownLineInfo,
 };
+use crate::math_commands;
 use crate::substitute;
 use crate::table;
 use crate::text_rules::{
@@ -27,6 +32,7 @@ use crate::types::{
     CommandExecutionResult, CommandMode, EditorContextSnapshot, SelectionSnapshot, TextRange,
 };
 use crate::vim::{self, VimContext, VimIntent, VimKey, VimMode, VimState};
+use crate::vim_actions::{self, VimActionExecutionResult, VimRegisterMode, VimRegisterValue};
 
 #[wasm_bindgen(start)]
 pub fn init() {
@@ -444,6 +450,54 @@ fn parse_mode(mode: &str) -> Option<CommandMode> {
     }
 }
 
+fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
+    match kind {
+        CommandDispatchKind::Core => "core",
+        CommandDispatchKind::HostDate => "host_date",
+        CommandDispatchKind::HostNotify => "host_notify",
+        CommandDispatchKind::HostNotifyDelete => "host_notify_delete",
+        CommandDispatchKind::HostModule => "host_module",
+        CommandDispatchKind::HostFold => "host_fold",
+        CommandDispatchKind::HostClipWatch => "host_clip_watch",
+        CommandDispatchKind::HostNoteSecurity => "host_note_security",
+        CommandDispatchKind::Quit => "quit",
+    }
+}
+
+fn host_fold_action_to_str(action: HostFoldAction) -> &'static str {
+    match action {
+        HostFoldAction::Fold => "fold",
+        HostFoldAction::Unfold => "unfold",
+        HostFoldAction::Toggle => "toggle",
+    }
+}
+
+fn host_clip_watch_action_to_str(action: HostClipWatchAction) -> &'static str {
+    match action {
+        HostClipWatchAction::Start => "start",
+        HostClipWatchAction::Stop => "stop",
+    }
+}
+
+fn module_command_value(command_id: CommandId) -> Option<&'static str> {
+    match command_id {
+        CommandId::ModuleStatus => Some("module status"),
+        CommandId::ModuleOnMath => Some("module math on"),
+        CommandId::ModuleOffMath => Some("module math off"),
+        CommandId::ModuleToggleMath => Some("module math toggle"),
+        CommandId::ModuleOnTable => Some("module table on"),
+        CommandId::ModuleOffTable => Some("module table off"),
+        CommandId::ModuleToggleTable => Some("module table toggle"),
+        CommandId::ModuleOnVariables => Some("module variables on"),
+        CommandId::ModuleOffVariables => Some("module variables off"),
+        CommandId::ModuleToggleVariables => Some("module variables toggle"),
+        CommandId::ModuleOnStyle => Some("module style on"),
+        CommandId::ModuleOffStyle => Some("module style off"),
+        CommandId::ModuleToggleStyle => Some("module style toggle"),
+        _ => None,
+    }
+}
+
 #[wasm_bindgen]
 pub fn wasm_normalize_command(raw_input: &str) -> String {
     EditorEngine::normalize_command(raw_input)
@@ -463,6 +517,87 @@ pub fn wasm_resolve_command(mode: &str, raw_input: &str) -> Option<String> {
     let mode = parse_mode(mode)?;
     let command = EditorEngine::resolve_command(mode, raw_input)?;
     Some(command.value.to_string())
+}
+
+#[wasm_bindgen]
+pub fn wasm_classify_command_dispatch(mode: &str, raw_input: &str) -> Option<String> {
+    let mode = parse_mode(mode)?;
+    let kind = EditorEngine::classify_command_dispatch(mode, raw_input)?;
+    Some(command_dispatch_kind_to_str(kind).to_string())
+}
+
+#[wasm_bindgen]
+pub fn wasm_plan_host_command(mode: &str, raw_input: &str) -> Option<JsValue> {
+    let mode = parse_mode(mode)?;
+    let plan = EditorEngine::plan_host_command(mode, raw_input)?;
+    let out = Object::new();
+    match plan {
+        HostCommandPlan::Date => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("date"));
+        }
+        HostCommandPlan::Notify => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("notify"));
+        }
+        HostCommandPlan::NotifyDelete => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("notify_delete"));
+        }
+        HostCommandPlan::Module { command_id } => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("module"));
+            let _ = set_prop(
+                &out,
+                "command",
+                JsValue::from_str(module_command_value(command_id)?),
+            );
+        }
+        HostCommandPlan::Fold { action } => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("fold"));
+            let _ = set_prop(
+                &out,
+                "action",
+                JsValue::from_str(host_fold_action_to_str(action)),
+            );
+        }
+        HostCommandPlan::ClipWatch { action } => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("clip_watch"));
+            let _ = set_prop(
+                &out,
+                "action",
+                JsValue::from_str(host_clip_watch_action_to_str(action)),
+            );
+        }
+        HostCommandPlan::NoteSecurity { action, password } => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("note_security"));
+            let _ = set_prop(&out, "action", JsValue::from_str(action.as_str()));
+            let _ = set_prop(&out, "password", JsValue::from_str(password.as_str()));
+        }
+        HostCommandPlan::Quit { force } => {
+            let _ = set_prop(&out, "kind", JsValue::from_str("quit"));
+            let _ = set_prop(&out, "force", JsValue::from_bool(force));
+        }
+    }
+    Some(out.into())
+}
+
+#[wasm_bindgen]
+pub fn wasm_execute_math_command(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    raw_input: &str,
+    mode: &str,
+) -> Option<JsValue> {
+    let mode = parse_mode(mode)?;
+    let command = EditorEngine::resolve_command(mode, raw_input)?;
+    let snapshot = EditorContextSnapshot {
+        text: text.to_string(),
+        selection: SelectionSnapshot {
+            anchor: selection_anchor,
+            head: selection_head,
+        },
+        changed_range: None,
+    };
+    let result = math_commands::execute_math_command(&snapshot, command.id)?;
+    Some(command_execution_result_to_js(&result))
 }
 
 #[wasm_bindgen]
@@ -518,6 +653,34 @@ pub fn wasm_try_execute_vim_substitute(
     };
     let result = substitute::try_execute_vim_substitute(&snapshot, raw_input, mode)?;
     Some(command_execution_result_to_js(&result))
+}
+
+#[wasm_bindgen]
+pub fn wasm_execute_vim_action(
+    text: &str,
+    selection_anchor: usize,
+    selection_head: usize,
+    intent_id: u32,
+    count: usize,
+    register_text: &str,
+    register_mode: &str,
+) -> Option<JsValue> {
+    let intent = intent_from_id(intent_id)?;
+    let snapshot = EditorContextSnapshot {
+        text: text.to_string(),
+        selection: SelectionSnapshot {
+            anchor: selection_anchor,
+            head: selection_head,
+        },
+        changed_range: None,
+    };
+    let register_mode = parse_vim_register_mode(register_mode);
+    let register = register_mode.map(|mode| VimRegisterValue {
+        text: register_text.to_string(),
+        mode,
+    });
+    let result = vim_actions::execute_vim_action(&snapshot, intent, count, register.as_ref())?;
+    Some(vim_action_execution_result_to_js(&result))
 }
 
 #[wasm_bindgen]
@@ -981,6 +1144,51 @@ fn command_execution_result_to_js(result: &CommandExecutionResult) -> JsValue {
     out.into()
 }
 
+fn vim_register_mode_to_str(mode: VimRegisterMode) -> &'static str {
+    match mode {
+        VimRegisterMode::Charwise => "charwise",
+        VimRegisterMode::Linewise => "linewise",
+    }
+}
+
+fn parse_vim_register_mode(value: &str) -> Option<VimRegisterMode> {
+    match value {
+        "charwise" => Some(VimRegisterMode::Charwise),
+        "linewise" => Some(VimRegisterMode::Linewise),
+        _ => None,
+    }
+}
+
+fn vim_register_value_to_js(value: &VimRegisterValue) -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(&out, "text", JsValue::from_str(&value.text));
+    let _ = set_prop(
+        &out,
+        "mode",
+        JsValue::from_str(vim_register_mode_to_str(value.mode)),
+    );
+    out.into()
+}
+
+fn vim_action_execution_result_to_js(result: &VimActionExecutionResult) -> JsValue {
+    let out = Object::new();
+    let operations = Array::new();
+    for operation in &result.operations {
+        operations.push(&edit_operation_to_js(operation));
+    }
+    let _ = set_prop(&out, "operations", operations.into());
+    let _ = set_prop(
+        &out,
+        "register",
+        result
+            .register
+            .as_ref()
+            .map(vim_register_value_to_js)
+            .unwrap_or(JsValue::NULL),
+    );
+    out.into()
+}
+
 fn module_state_to_js(state: &ModuleState) -> JsValue {
     let out = Object::new();
     let _ = set_prop(&out, "math", JsValue::from_bool(state.math));
@@ -1362,10 +1570,67 @@ fn intent_to_id(intent: VimIntent) -> u32 {
         VimIntent::Swallow => 42,
         VimIntent::DeleteWordForward => 43,
         VimIntent::DeleteWordBackward => 44,
-        VimIntent::YankWordForward => 45,
-        VimIntent::YankWordBackward => 46,
-        VimIntent::YankVisualSelection => 47,
-        VimIntent::DeleteVisualSelection => 48,
+        VimIntent::DeleteWordEnd => 45,
+        VimIntent::YankWordForward => 46,
+        VimIntent::YankWordBackward => 47,
+        VimIntent::YankVisualSelection => 48,
+        VimIntent::DeleteVisualSelection => 49,
+    }
+}
+
+fn intent_from_id(id: u32) -> Option<VimIntent> {
+    match id {
+        0 => Some(VimIntent::MoveLeft),
+        1 => Some(VimIntent::MoveRight),
+        2 => Some(VimIntent::MoveUp),
+        3 => Some(VimIntent::MoveDown),
+        4 => Some(VimIntent::MoveWordForward),
+        5 => Some(VimIntent::MoveWordBackward),
+        6 => Some(VimIntent::MoveLineStart),
+        7 => Some(VimIntent::MoveLineEnd),
+        8 => Some(VimIntent::MoveDocStart),
+        9 => Some(VimIntent::MoveDocEnd),
+        10 => Some(VimIntent::MoveToLine),
+        11 => Some(VimIntent::EnterInsert),
+        12 => Some(VimIntent::AppendInsert),
+        13 => Some(VimIntent::InsertLineStart),
+        14 => Some(VimIntent::AppendLineEnd),
+        15 => Some(VimIntent::OpenLineBelow),
+        16 => Some(VimIntent::OpenLineAbove),
+        17 => Some(VimIntent::EnterVisual),
+        18 => Some(VimIntent::EnterVisualLine),
+        19 => Some(VimIntent::ExitVisual),
+        20 => Some(VimIntent::DeleteLine),
+        21 => Some(VimIntent::YankLine),
+        22 => Some(VimIntent::DeleteToLineStart),
+        23 => Some(VimIntent::DeleteToLineEnd),
+        24 => Some(VimIntent::YankToLineStart),
+        25 => Some(VimIntent::YankToLineEnd),
+        26 => Some(VimIntent::DeleteChar),
+        27 => Some(VimIntent::PasteAfter),
+        28 => Some(VimIntent::Undo),
+        29 => Some(VimIntent::Redo),
+        30 => Some(VimIntent::OpenCommandBar),
+        31 => Some(VimIntent::OpenSearch),
+        32 => Some(VimIntent::SearchNext),
+        33 => Some(VimIntent::SearchPrev),
+        34 => Some(VimIntent::DeleteInsideWord),
+        35 => Some(VimIntent::DeleteAroundWord),
+        36 => Some(VimIntent::YankInsideWord),
+        37 => Some(VimIntent::YankAroundWord),
+        38 => Some(VimIntent::DeleteInsidePipe),
+        39 => Some(VimIntent::DeleteAroundPipe),
+        40 => Some(VimIntent::YankInsidePipe),
+        41 => Some(VimIntent::YankAroundPipe),
+        42 => Some(VimIntent::Swallow),
+        43 => Some(VimIntent::DeleteWordForward),
+        44 => Some(VimIntent::DeleteWordBackward),
+        45 => Some(VimIntent::DeleteWordEnd),
+        46 => Some(VimIntent::YankWordForward),
+        47 => Some(VimIntent::YankWordBackward),
+        48 => Some(VimIntent::YankVisualSelection),
+        49 => Some(VimIntent::DeleteVisualSelection),
+        _ => None,
     }
 }
 
@@ -1596,6 +1861,11 @@ pub fn wasm_vim_intent_id_map() -> JsValue {
         &out,
         "DELETE_WORD_BACKWARD",
         JsValue::from_f64(intent_to_id(VimIntent::DeleteWordBackward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_WORD_END",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteWordEnd) as f64),
     );
     let _ = set_prop(
         &out,

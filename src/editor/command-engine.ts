@@ -27,7 +27,10 @@ import {
   tryExecuteEditorProfilerCommand,
 } from "../perf/editor-profiler.ts";
 import type { NoteModules } from "../api.ts";
-import { ensureWasmReady, parseNoteSecurityCommand } from "./wasm.ts";
+import {
+  ensureWasmReady,
+  planHostCommandFromWasm,
+} from "./wasm.ts";
 
 export type { CommandMode, CommandSuggestion };
 
@@ -48,10 +51,11 @@ export interface CommandExecutionOptions {
 
 async function tryExecuteNoteSecurityCommand(
   view: EditorView,
-  rawInput: string,
+  parsed: {
+    action: "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect";
+    password: string;
+  },
 ): Promise<string | null> {
-  const parsed = parseNoteSecurityCommand(rawInput);
-  if (!parsed) return null;
   const active = state.activeNote;
   if (!active) return "no active note";
   const password = parsed.password.trim().length > 0 ? parsed.password : null;
@@ -209,8 +213,13 @@ export async function executeCommand(
   const profilerMessage = tryExecuteEditorProfilerCommand(rawInput);
   if (profilerMessage !== null) return profilerMessage;
 
-  const noteSecurityMessage = await tryExecuteNoteSecurityCommand(view, rawInput);
-  if (noteSecurityMessage !== null) return noteSecurityMessage;
+  const hostPlan = planHostCommandFromWasm(options.mode, rawInput);
+  if (hostPlan?.kind === "note_security") {
+    const noteSecurityMessage = await tryExecuteNoteSecurityCommand(view, hostPlan);
+    if (noteSecurityMessage !== null) {
+      return noteSecurityMessage;
+    }
+  }
 
   const snapshot = snapshotFromView(view);
   if (options.selectionOverride) {

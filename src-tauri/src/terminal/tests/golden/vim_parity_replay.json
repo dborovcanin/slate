@@ -71,6 +71,66 @@
       "keys": ["char:d", "char:0"]
     },
     {
+      "name": "normal_d2w_deletes_two_words_forward",
+      "initial_text": "foo bar baz qux",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:d", "char:2", "char:w"]
+    },
+    {
+      "name": "normal_d2b_deletes_two_words_backward",
+      "initial_text": "foo bar baz",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 8,
+      "keys": ["char:d", "char:2", "char:b"]
+    },
+    {
+      "name": "normal_2d3w_multiplies_operator_and_motion_counts",
+      "initial_text": "zero one two three four five six",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:2", "char:d", "char:3", "char:w"]
+    },
+    {
+      "name": "normal_de_deletes_to_word_end_not_trailing_space",
+      "initial_text": "foo bar baz",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:d", "char:e"]
+    },
+    {
+      "name": "normal_de_from_word_end_crosses_to_next_word_end",
+      "initial_text": "foo bar baz",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 2,
+      "keys": ["char:d", "char:e"]
+    },
+    {
+      "name": "normal_d3e_repeats_delete_to_word_end",
+      "initial_text": "foo bar baz qux quux",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:d", "char:3", "char:e"]
+    },
+    {
       "name": "normal_2x_deletes_two_chars",
       "initial_text": "abcdef",
       "initial_state": {
@@ -219,6 +279,126 @@
       "initial_cursor_line": 0,
       "initial_cursor_col": 5,
       "keys": ["char:y", "char:w", "char:p"]
+    },
+    {
+      "name": "normal_diw_deletes_inside_word",
+      "initial_text": "foo bar baz",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 5,
+      "keys": ["char:d", "char:i", "char:w"]
+    },
+    {
+      "name": "normal_daw_deletes_around_word",
+      "initial_text": "foo bar baz",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 4,
+      "keys": ["char:d", "char:a", "char:w"]
+    },
+    {
+      "name": "normal_d2aw_deletes_two_around_word_objects",
+      "initial_text": "foo bar baz qux",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 4,
+      "keys": ["char:d", "char:2", "char:a", "char:w"]
+    },
+    {
+      "name": "normal_yiw_then_p_pastes_inner_word",
+      "initial_text": "foo bar baz",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 5,
+      "keys": ["char:y", "char:i", "char:w", "char:p"]
+    },
+    {
+      "name": "normal_di_pipe_deletes_between_pipes",
+      "initial_text": "| left | right |",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 2,
+      "keys": ["char:d", "char:i", "char:|"]
+    },
+    {
+      "name": "normal_da_pipe_deletes_with_pipe_markers",
+      "initial_text": "| left | right |",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 2,
+      "keys": ["char:d", "char:a", "char:|"]
+    },
+    {
+      "name": "normal_yi_pipe_then_p_pastes_pipe_contents",
+      "initial_text": "| left | right |",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 2,
+      "keys": ["char:y", "char:i", "char:|", "char:p"]
+    },
+    {
+      "name": "normal_y0_yanks_to_line_start",
+      "initial_text": "alpha beta gamma",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 6,
+      "keys": ["char:y", "char:0"]
+    },
+    {
+      "name": "normal_y_dollar_yanks_to_line_end",
+      "initial_text": "alpha beta gamma",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 6,
+      "keys": ["char:y", "char:$"]
+    },
+    {
+      "name": "visual_mode_yank_then_p_charwise",
+      "initial_text": "abcde",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:v", "char:l", "char:y", "char:p"]
+    },
+    {
+      "name": "visual_mode_delete_selection",
+      "initial_text": "abcde",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:v", "char:l", "char:d"]
+    },
+    {
+      "name": "visual_line_mode_yank_then_p_linewise",
+      "initial_text": "one\ntwo\nthree",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:V", "char:j", "char:y", "char:p"]
     },
     {
       "name": "visual_mode_enter_move_exit",
