@@ -1364,7 +1364,260 @@ fn intent_to_id(intent: VimIntent) -> u32 {
         VimIntent::DeleteWordBackward => 44,
         VimIntent::YankWordForward => 45,
         VimIntent::YankWordBackward => 46,
+        VimIntent::YankVisualSelection => 47,
+        VimIntent::DeleteVisualSelection => 48,
     }
+}
+
+#[wasm_bindgen]
+pub fn wasm_vim_intent_id_map() -> JsValue {
+    let out = Object::new();
+    let _ = set_prop(
+        &out,
+        "MOVE_LEFT",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveLeft) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_RIGHT",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveRight) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_UP",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveUp) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_DOWN",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveDown) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_WORD_FORWARD",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveWordForward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_WORD_BACKWARD",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveWordBackward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_LINE_START",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveLineStart) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_LINE_END",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveLineEnd) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_DOC_START",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveDocStart) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_DOC_END",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveDocEnd) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "MOVE_TO_LINE",
+        JsValue::from_f64(intent_to_id(VimIntent::MoveToLine) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "ENTER_INSERT",
+        JsValue::from_f64(intent_to_id(VimIntent::EnterInsert) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "APPEND_INSERT",
+        JsValue::from_f64(intent_to_id(VimIntent::AppendInsert) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "INSERT_LINE_START",
+        JsValue::from_f64(intent_to_id(VimIntent::InsertLineStart) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "APPEND_LINE_END",
+        JsValue::from_f64(intent_to_id(VimIntent::AppendLineEnd) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "OPEN_LINE_BELOW",
+        JsValue::from_f64(intent_to_id(VimIntent::OpenLineBelow) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "OPEN_LINE_ABOVE",
+        JsValue::from_f64(intent_to_id(VimIntent::OpenLineAbove) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "ENTER_VISUAL",
+        JsValue::from_f64(intent_to_id(VimIntent::EnterVisual) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "ENTER_VISUAL_LINE",
+        JsValue::from_f64(intent_to_id(VimIntent::EnterVisualLine) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "EXIT_VISUAL",
+        JsValue::from_f64(intent_to_id(VimIntent::ExitVisual) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_LINE",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteLine) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_LINE",
+        JsValue::from_f64(intent_to_id(VimIntent::YankLine) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_TO_LINE_START",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteToLineStart) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_TO_LINE_END",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteToLineEnd) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_TO_LINE_START",
+        JsValue::from_f64(intent_to_id(VimIntent::YankToLineStart) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_TO_LINE_END",
+        JsValue::from_f64(intent_to_id(VimIntent::YankToLineEnd) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_CHAR",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteChar) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "PASTE_AFTER",
+        JsValue::from_f64(intent_to_id(VimIntent::PasteAfter) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "UNDO",
+        JsValue::from_f64(intent_to_id(VimIntent::Undo) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "REDO",
+        JsValue::from_f64(intent_to_id(VimIntent::Redo) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "OPEN_COMMAND_BAR",
+        JsValue::from_f64(intent_to_id(VimIntent::OpenCommandBar) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "OPEN_SEARCH",
+        JsValue::from_f64(intent_to_id(VimIntent::OpenSearch) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "SEARCH_NEXT",
+        JsValue::from_f64(intent_to_id(VimIntent::SearchNext) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "SEARCH_PREV",
+        JsValue::from_f64(intent_to_id(VimIntent::SearchPrev) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_INSIDE_WORD",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteInsideWord) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_AROUND_WORD",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteAroundWord) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_INSIDE_WORD",
+        JsValue::from_f64(intent_to_id(VimIntent::YankInsideWord) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_AROUND_WORD",
+        JsValue::from_f64(intent_to_id(VimIntent::YankAroundWord) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_INSIDE_PIPE",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteInsidePipe) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_AROUND_PIPE",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteAroundPipe) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_INSIDE_PIPE",
+        JsValue::from_f64(intent_to_id(VimIntent::YankInsidePipe) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_AROUND_PIPE",
+        JsValue::from_f64(intent_to_id(VimIntent::YankAroundPipe) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "SWALLOW",
+        JsValue::from_f64(intent_to_id(VimIntent::Swallow) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_WORD_FORWARD",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteWordForward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_WORD_BACKWARD",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteWordBackward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_WORD_FORWARD",
+        JsValue::from_f64(intent_to_id(VimIntent::YankWordForward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_WORD_BACKWARD",
+        JsValue::from_f64(intent_to_id(VimIntent::YankWordBackward) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "YANK_VISUAL_SELECTION",
+        JsValue::from_f64(intent_to_id(VimIntent::YankVisualSelection) as f64),
+    );
+    let _ = set_prop(
+        &out,
+        "DELETE_VISUAL_SELECTION",
+        JsValue::from_f64(intent_to_id(VimIntent::DeleteVisualSelection) as f64),
+    );
+    out.into()
 }
 
 fn encode_empty_step(mode: VimMode) -> Box<[u32]> {

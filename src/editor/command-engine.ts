@@ -27,7 +27,7 @@ import {
   tryExecuteEditorProfilerCommand,
 } from "../perf/editor-profiler.ts";
 import type { NoteModules } from "../api.ts";
-import { parseNoteSecurityCommand } from "./wasm.ts";
+import { ensureWasmReady, parseNoteSecurityCommand } from "./wasm.ts";
 
 export type { CommandMode, CommandSuggestion };
 
@@ -203,6 +203,9 @@ export async function executeCommand(
   rawInput: string,
   options: CommandExecutionOptions,
 ): Promise<string> {
+  // Command semantics are wasm-owned; avoid temporary fallback parsing paths.
+  await ensureWasmReady();
+
   const profilerMessage = tryExecuteEditorProfilerCommand(rawInput);
   if (profilerMessage !== null) return profilerMessage;
 

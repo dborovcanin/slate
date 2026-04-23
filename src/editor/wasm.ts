@@ -41,6 +41,7 @@ import init, {
   wasm_resolve_command,
   wasm_parse_note_security_command,
   wasm_plan_module_command,
+  wasm_vim_intent_id_map,
   wasm_try_execute_vim_substitute,
   wasm_run_markdown_transaction_batch,
 } from "../../pkg/editor-core/editor_core.js";
@@ -193,56 +194,143 @@ export const VIM_KEY_KIND = {
   CTRL: 10,
 } as const;
 
-// Kept in sync with crates/editor-core/src/wasm.rs:intent_to_id.
-export const VIM_INTENT = {
-  MOVE_LEFT: 0,
-  MOVE_RIGHT: 1,
-  MOVE_UP: 2,
-  MOVE_DOWN: 3,
-  MOVE_WORD_FORWARD: 4,
-  MOVE_WORD_BACKWARD: 5,
-  MOVE_LINE_START: 6,
-  MOVE_LINE_END: 7,
-  MOVE_DOC_START: 8,
-  MOVE_DOC_END: 9,
-  MOVE_TO_LINE: 10,
-  ENTER_INSERT: 11,
-  APPEND_INSERT: 12,
-  INSERT_LINE_START: 13,
-  APPEND_LINE_END: 14,
-  OPEN_LINE_BELOW: 15,
-  OPEN_LINE_ABOVE: 16,
-  ENTER_VISUAL: 17,
-  ENTER_VISUAL_LINE: 18,
-  EXIT_VISUAL: 19,
-  DELETE_LINE: 20,
-  YANK_LINE: 21,
-  DELETE_TO_LINE_START: 22,
-  DELETE_TO_LINE_END: 23,
-  YANK_TO_LINE_START: 24,
-  YANK_TO_LINE_END: 25,
-  DELETE_CHAR: 26,
-  PASTE_AFTER: 27,
-  UNDO: 28,
-  REDO: 29,
-  OPEN_COMMAND_BAR: 30,
-  OPEN_SEARCH: 31,
-  SEARCH_NEXT: 32,
-  SEARCH_PREV: 33,
-  DELETE_INSIDE_WORD: 34,
-  DELETE_AROUND_WORD: 35,
-  YANK_INSIDE_WORD: 36,
-  YANK_AROUND_WORD: 37,
-  DELETE_INSIDE_PIPE: 38,
-  DELETE_AROUND_PIPE: 39,
-  YANK_INSIDE_PIPE: 40,
-  YANK_AROUND_PIPE: 41,
-  SWALLOW: 42,
-  DELETE_WORD_FORWARD: 43,
-  DELETE_WORD_BACKWARD: 44,
-  YANK_WORD_FORWARD: 45,
-  YANK_WORD_BACKWARD: 46,
-} as const;
+type VimIntentMap = {
+  MOVE_LEFT: number;
+  MOVE_RIGHT: number;
+  MOVE_UP: number;
+  MOVE_DOWN: number;
+  MOVE_WORD_FORWARD: number;
+  MOVE_WORD_BACKWARD: number;
+  MOVE_LINE_START: number;
+  MOVE_LINE_END: number;
+  MOVE_DOC_START: number;
+  MOVE_DOC_END: number;
+  MOVE_TO_LINE: number;
+  ENTER_INSERT: number;
+  APPEND_INSERT: number;
+  INSERT_LINE_START: number;
+  APPEND_LINE_END: number;
+  OPEN_LINE_BELOW: number;
+  OPEN_LINE_ABOVE: number;
+  ENTER_VISUAL: number;
+  ENTER_VISUAL_LINE: number;
+  EXIT_VISUAL: number;
+  DELETE_LINE: number;
+  YANK_LINE: number;
+  DELETE_TO_LINE_START: number;
+  DELETE_TO_LINE_END: number;
+  YANK_TO_LINE_START: number;
+  YANK_TO_LINE_END: number;
+  DELETE_CHAR: number;
+  PASTE_AFTER: number;
+  UNDO: number;
+  REDO: number;
+  OPEN_COMMAND_BAR: number;
+  OPEN_SEARCH: number;
+  SEARCH_NEXT: number;
+  SEARCH_PREV: number;
+  DELETE_INSIDE_WORD: number;
+  DELETE_AROUND_WORD: number;
+  YANK_INSIDE_WORD: number;
+  YANK_AROUND_WORD: number;
+  DELETE_INSIDE_PIPE: number;
+  DELETE_AROUND_PIPE: number;
+  YANK_INSIDE_PIPE: number;
+  YANK_AROUND_PIPE: number;
+  SWALLOW: number;
+  DELETE_WORD_FORWARD: number;
+  DELETE_WORD_BACKWARD: number;
+  YANK_WORD_FORWARD: number;
+  YANK_WORD_BACKWARD: number;
+  YANK_VISUAL_SELECTION: number;
+  DELETE_VISUAL_SELECTION: number;
+};
+
+let _vimIntentMap: VimIntentMap | null = null;
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function decodeVimIntentMap(raw: unknown): VimIntentMap | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const map = raw as Partial<VimIntentMap>;
+  const required: Array<keyof VimIntentMap> = [
+    "MOVE_LEFT",
+    "MOVE_RIGHT",
+    "MOVE_UP",
+    "MOVE_DOWN",
+    "MOVE_WORD_FORWARD",
+    "MOVE_WORD_BACKWARD",
+    "MOVE_LINE_START",
+    "MOVE_LINE_END",
+    "MOVE_DOC_START",
+    "MOVE_DOC_END",
+    "MOVE_TO_LINE",
+    "ENTER_INSERT",
+    "APPEND_INSERT",
+    "INSERT_LINE_START",
+    "APPEND_LINE_END",
+    "OPEN_LINE_BELOW",
+    "OPEN_LINE_ABOVE",
+    "ENTER_VISUAL",
+    "ENTER_VISUAL_LINE",
+    "EXIT_VISUAL",
+    "DELETE_LINE",
+    "YANK_LINE",
+    "DELETE_TO_LINE_START",
+    "DELETE_TO_LINE_END",
+    "YANK_TO_LINE_START",
+    "YANK_TO_LINE_END",
+    "DELETE_CHAR",
+    "PASTE_AFTER",
+    "UNDO",
+    "REDO",
+    "OPEN_COMMAND_BAR",
+    "OPEN_SEARCH",
+    "SEARCH_NEXT",
+    "SEARCH_PREV",
+    "DELETE_INSIDE_WORD",
+    "DELETE_AROUND_WORD",
+    "YANK_INSIDE_WORD",
+    "YANK_AROUND_WORD",
+    "DELETE_INSIDE_PIPE",
+    "DELETE_AROUND_PIPE",
+    "YANK_INSIDE_PIPE",
+    "YANK_AROUND_PIPE",
+    "SWALLOW",
+    "DELETE_WORD_FORWARD",
+    "DELETE_WORD_BACKWARD",
+    "YANK_WORD_FORWARD",
+    "YANK_WORD_BACKWARD",
+    "YANK_VISUAL_SELECTION",
+    "DELETE_VISUAL_SELECTION",
+  ];
+  for (const key of required) {
+    if (asNumber(map[key]) === null) return null;
+  }
+  return map as VimIntentMap;
+}
+
+function ensureVimIntentMap(): VimIntentMap {
+  if (_vimIntentMap) return _vimIntentMap;
+  if (!ensureWasmReadyNonBlocking()) {
+    throw new Error("vim intent map unavailable before wasm initialization");
+  }
+  const decoded = decodeVimIntentMap(wasm_vim_intent_id_map() as unknown);
+  if (!decoded) {
+    throw new Error("failed to decode vim intent id map from wasm");
+  }
+  _vimIntentMap = decoded;
+  return decoded;
+}
+
+export const VIM_INTENT: VimIntentMap = new Proxy({} as VimIntentMap, {
+  get(_target, prop: string) {
+    const map = ensureVimIntentMap();
+    return map[prop as keyof VimIntentMap];
+  },
+});
 
 const VIM_MODE_ID = {
   INSERT: 0,
@@ -762,9 +850,7 @@ export function formatTableLines(lines: readonly string[]): string[] {
 }
 
 export function normalizeCommand(rawInput: string): string {
-  if (!ensureWasmReadyNonBlocking()) {
-    return rawInput.trim().replace(/^:/, "").toLowerCase();
-  }
+  if (!ensureWasmReadyNonBlocking()) return "";
   return wasm_normalize_command(rawInput);
 }
 
@@ -812,54 +898,10 @@ export interface ModuleCommandPlan {
   message: string;
 }
 
-function parseNoteSecurityCommandFallback(rawInput: string): ParsedNoteSecurityCommand | null {
-  const normalized = rawInput.replace(/^:/, "").trimStart();
-  if (!normalized) return null;
-  const [head, ...tailParts] = normalized.split(/\s+/);
-  const tail = normalized.slice((head ?? "").length).trimStart();
-  const normalizeAction = (
-    token: string,
-  ): NoteSecurityAction | null => {
-    const lowered = token.toLowerCase();
-    if (lowered === "lock" || lowered === "note-lock" || lowered === "lock-note") return "lock";
-    if (lowered === "unlock" || lowered === "note-unlock" || lowered === "unlock-note")
-      return "unlock";
-    if (lowered === "encrypt" || lowered === "note-encrypt" || lowered === "encrypt-note")
-      return "encrypt";
-    if (lowered === "decrypt" || lowered === "note-decrypt" || lowered === "decrypt-note")
-      return "decrypt";
-    if (
-      lowered === "unprotect" ||
-      lowered === "unencrypt" ||
-      lowered === "note-unprotect" ||
-      lowered === "unprotect-note" ||
-      lowered === "note-unencrypt" ||
-      lowered === "unencrypt-note"
-    ) {
-      return "unprotect";
-    }
-    return null;
-  };
-
-  if ((head ?? "").toLowerCase() === "note") {
-    const actionToken = tailParts[0] ?? "";
-    const action = normalizeAction(actionToken);
-    if (!action) return null;
-    const password = tail.slice(actionToken.length).trimStart();
-    return { action, password };
-  }
-
-  const action = normalizeAction(head ?? "");
-  if (!action) return null;
-  return { action, password: tail };
-}
-
 export function parseNoteSecurityCommand(
   rawInput: string,
 ): ParsedNoteSecurityCommand | null {
-  if (!ensureWasmReadyNonBlocking()) {
-    return parseNoteSecurityCommandFallback(rawInput);
-  }
+  if (!ensureWasmReadyNonBlocking()) return null;
   const raw = wasm_parse_note_security_command(rawInput) as unknown;
   if (typeof raw !== "object" || raw === null) return null;
   const parsed = raw as Partial<ParsedNoteSecurityCommand>;
@@ -879,51 +921,12 @@ export function parseNoteSecurityCommand(
   };
 }
 
-function parseModuleCommandPlanFallback(
-  rawInput: string,
-  mode: CommandMode,
-  current: ModuleStateSnapshot,
-): ModuleCommandPlan | null {
-  const normalize = (value: string) =>
-    value.trim().replace(/^:/, "").toLowerCase();
-  const resolved = resolveCommandFromWasm(mode, rawInput) ?? normalize(rawInput);
-
-  const statusMessage = (state: ModuleStateSnapshot) =>
-    `modules math=${state.math ? "on" : "off"} table=${state.table ? "on" : "off"} variables=${state.variables ? "on" : "off"} style=${state.style ? "on" : "off"}`;
-
-  if (resolved === "module status") {
-    return { changed: false, next: { ...current }, message: statusMessage(current) };
-  }
-
-  const parsed = resolved.match(/^module (math|table|variables|style) (on|off|toggle)$/);
-  if (!parsed) return null;
-  const key = parsed[1] as keyof ModuleStateSnapshot;
-  const action = parsed[2];
-  const next = { ...current };
-  if (action === "toggle") {
-    next[key] = !next[key];
-    return { changed: true, next, message: statusMessage(next) };
-  }
-  const enabled = action === "on";
-  if (next[key] === enabled) {
-    return {
-      changed: false,
-      next,
-      message: `module ${key} already ${enabled ? "on" : "off"}`,
-    };
-  }
-  next[key] = enabled;
-  return { changed: true, next, message: statusMessage(next) };
-}
-
 export function planModuleCommandFromWasm(
   mode: CommandMode,
   rawInput: string,
   current: ModuleStateSnapshot,
 ): ModuleCommandPlan | null {
-  if (!ensureWasmReadyNonBlocking()) {
-    return parseModuleCommandPlanFallback(rawInput, mode, current);
-  }
+  if (!ensureWasmReadyNonBlocking()) return null;
   const raw = wasm_plan_module_command(
     mode,
     rawInput,
@@ -984,14 +987,11 @@ export function sanitizeCommandHistoryCommand(rawCommand: string): string {
     const trimmed = rawCommand.trim();
     const base = trimmed.replace(/^:/, "");
     const tokens = base.split(/\s+/).filter((token) => token.length > 0);
-    const parsed = parseNoteSecurityCommandFallback(rawCommand);
-    if (parsed) {
-      if ((tokens[0] ?? "").toLowerCase() === "note" && tokens.length >= 3) {
-        return `${tokens[0]} ${tokens[1]}`;
-      }
-      if (tokens.length >= 2) {
-        return tokens[0] ?? base;
-      }
+    if ((tokens[0] ?? "").toLowerCase() === "note" && tokens.length >= 3) {
+      return `${tokens[0]} ${tokens[1]}`;
+    }
+    if (tokens.length >= 2) {
+      return tokens[0] ?? base;
     }
     return base;
   }

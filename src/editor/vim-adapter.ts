@@ -96,7 +96,3 @@ export function runUiVimPipeline(
   if (!step) return { kind: "no_step" };
   return step.handled ? { kind: "handled", step } : { kind: "unhandled", step };
 }
-
-export function syncUiVimSessionEsc(session: VimSession, lineCount: number): void {
-  session.step({ kind: VIM_KEY_KIND.ESC }, { line_count: lineCount });
-}

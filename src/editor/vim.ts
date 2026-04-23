@@ -26,7 +26,7 @@ import {
   type VimAction,
   type VimMode,
 } from "./wasm.ts";
-import { runUiVimPipeline, syncUiVimSessionEsc } from "./vim-adapter.ts";
+import { runUiVimPipeline } from "./vim-adapter.ts";
 import { vimAppendInsertPos, vimNormalLineEndPos } from "./vim-utils.ts";
 
 type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
@@ -286,7 +286,6 @@ export function vimModeExtension(options: VimOptions = {}) {
   const session = new VimSession("insert");
   let currentMode: VimUiMode = "insert";
   let unnamedRegister: VimRegister | null = null;
-  let swallowVisualDdUntilMs = 0;
   let pendingFoldPrefixUntilMs = 0;
 
   let visualAnchorPos: number | null = null;
@@ -709,8 +708,9 @@ export function vimModeExtension(options: VimOptions = {}) {
     return false;
   };
 
-  const yankVisualSelection = (view: EditorView) => {
-    if (mode() === "visual-line") {
+  const yankVisualSelection = (view: EditorView, forceLinewise = false) => {
+    const linewise = forceLinewise || mode() === "visual-line";
+    if (linewise) {
       const main = view.state.selection.main;
       const start = view.state.doc.lineAt(main.from).number;
       const end = view.state.doc.lineAt(main.to).number;
@@ -727,8 +727,9 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
-  const deleteVisualSelection = (view: EditorView) => {
-    if (mode() === "visual-line") {
+  const deleteVisualSelection = (view: EditorView, forceLinewise = false) => {
+    const linewise = forceLinewise || mode() === "visual-line";
+    if (linewise) {
       const main = view.state.selection.main;
       let startLine = visualAnchorLine ?? view.state.doc.lineAt(main.from).number;
       let endLine = visualHeadLine ?? view.state.doc.lineAt(main.to).number;
@@ -816,7 +817,11 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
-  const applyAction = (view: EditorView, action: VimAction) => {
+  const applyAction = (
+    view: EditorView,
+    action: VimAction,
+    sourceMode: VimUiMode = mode(),
+  ) => {
     const count = action.count > 0 ? action.count : 1;
 
     switch (action.intent) {
@@ -952,6 +957,10 @@ export function vimModeExtension(options: VimOptions = {}) {
         return yankWordForward(view, count);
       case VIM_INTENT.YANK_WORD_BACKWARD:
         return yankWordBackward(view, count);
+      case VIM_INTENT.YANK_VISUAL_SELECTION:
+        return yankVisualSelection(view, sourceMode === "visual-line");
+      case VIM_INTENT.DELETE_VISUAL_SELECTION:
+        return deleteVisualSelection(view, sourceMode === "visual-line");
       default:
         return true;
     }
@@ -1015,49 +1024,6 @@ export function vimModeExtension(options: VimOptions = {}) {
         }
       }
 
-      if (
-        activeMode === "normal"
-        && now <= swallowVisualDdUntilMs
-        && !event.ctrlKey
-        && !event.altKey
-        && !event.metaKey
-        && event.key === "d"
-      ) {
-        swallowVisualDdUntilMs = 0;
-        event.preventDefault();
-        return true;
-      }
-
-      // Hard guarantee for visual behavior: Esc exits and x/d delete the
-      // current selection in a single keypress. Navigation remains in the
-      // shared Vim state machine so counts/motions work consistently.
-      if (activeMode === "visual" || activeMode === "visual-line") {
-        if (event.key === "Escape" || event.key === "Esc" || event.code === "Escape") {
-          event.preventDefault();
-          setModeLocally(view, "normal");
-          syncUiVimSessionEsc(session, view.state.doc.lines);
-          return true;
-        }
-
-        const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
-        if (plain) {
-          if (event.key === "x" || event.key === "d") {
-            event.preventDefault();
-            const deleted = deleteVisualSelection(view);
-            if (event.key === "d") {
-              // Let `dd` in visual modes behave like single delete by swallowing
-              // the immediate follow-up `d` from that key sequence.
-              swallowVisualDdUntilMs = now + 180;
-            }
-            if (deleted) {
-              setModeLocally(view, "normal");
-              syncUiVimSessionEsc(session, view.state.doc.lines);
-            }
-            return true;
-          }
-        }
-      }
-
       // Insert-mode fast path: avoid wasm roundtrip for regular insert editing.
       if (activeMode === "insert" && event.key !== "Escape") {
         return false;
@@ -1067,7 +1033,14 @@ export function vimModeExtension(options: VimOptions = {}) {
         hasSearchMatches: editorSearchHasMatches(view),
         lineCount: view.state.doc.lines,
       });
-      if (pipeline.kind === "no_intent" || pipeline.kind === "no_step") {
+      if (pipeline.kind === "no_step") {
+        if (activeMode !== "insert" || event.key === "Escape") {
+          event.preventDefault();
+          return true;
+        }
+        return false;
+      }
+      if (pipeline.kind === "no_intent") {
         if (activeMode !== "insert" && shouldSwallowInNormalLikeMode(event)) {
           event.preventDefault();
           return true;
@@ -1080,19 +1053,6 @@ export function vimModeExtension(options: VimOptions = {}) {
       syncModeClasses(view);
 
       if (pipeline.kind === "unhandled") {
-        const isVisualYank =
-          (mode() === "visual" || mode() === "visual-line") &&
-          !event.ctrlKey &&
-          !event.altKey &&
-          !event.metaKey &&
-          event.key === "y";
-        if (isVisualYank) {
-          event.preventDefault();
-          yankVisualSelection(view);
-          setModeLocally(view, "normal");
-          syncUiVimSessionEsc(session, view.state.doc.lines);
-          return true;
-        }
         if (mode() !== "insert" && shouldSwallowInNormalLikeMode(event)) {
           event.preventDefault();
           return true;
@@ -1101,8 +1061,9 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       event.preventDefault();
+      const sourceMode = activeMode;
       for (const action of step.actions) {
-        applyAction(view, action);
+        applyAction(view, action, sourceMode);
       }
 
       if (mode() === "visual" || mode() === "visual-line") {

@@ -111,6 +111,43 @@ Non-goals:
 6. Add a live GUI parity runner as a complement to the current GUI simulation harness.
    - Keep simulation for fast checks, but also execute parity scenarios against live CodeMirror integration for end-to-end confidence.
 
+### Original gap audit refresh (2026-04-23)
+1. Gap `1` (command math semantics split/divergent): **partial**.
+   - Done: `sum/avg row/column` semantics were aligned to replace the active table cell in both UI and Rust paths; both now have unit-aware row/column handling + dedicated tests.
+   - Evidence: `src/editor/core/sum.ts` (`replaceTableCellAtCursor`, `executeSumCommand`, `executeAvgCommand`), `src-tauri/src/editor_core/commands.rs` (`replace_table_cell_at_cursor`, row/column tests).
+   - Remaining: ownership is still split (UI executes in TS, TUI executes in Rust), so drift risk remains.
+2. Gap `3` (vim action execution duplicated): **partial**.
+   - Progress: visual-mode mutation/yank execution now routes through shared `VimIntent` actions in both frontends, reducing one major duplication pocket.
+   - Remaining: the overall `VimIntent -> document/cursor/register` execution layer is still frontend-owned in UI (`src/editor/vim.ts`) and TUI (`src-tauri/src/terminal/app.rs`, `apply_vim_actions`).
+3. Gap `4` (visual fast paths bypass shared action handling): **done**.
+   - Visual `y/d/x/:/Esc` now flow through the same shared vim pipeline/action handling path.
+   - Evidence: Rust intents `YankVisualSelection` / `DeleteVisualSelection` in `crates/editor-core/src/vim.rs`, UI action handling in `src/editor/vim.ts`, TUI action handling in `src-tauri/src/terminal/app.rs` (`apply_visual_selection_action`, `handle_visual_key`).
+4. Gap `5` (command side-effect dispatch frontend-specific): **partial**.
+   - Parsing/catalog/planning are shared, but side effects remain frontend-owned (note security, notify, fold, clip-watch, runtime wiring).
+   - Evidence: UI dispatch/runtime wiring in `src/editor/command-engine.ts` + `src/editor/core/commands.ts`; TUI command dispatch in `src-tauri/src/terminal/app.rs` (`execute_terminal_command`).
+5. Gap `6` (vim intent numeric ID coupling brittle): **done**.
+   - UI now consumes wasm-exported intent IDs at runtime (`wasm_vim_intent_id_map`) instead of a hardcoded TS numeric mirror.
+   - Evidence: Rust wasm export in `crates/editor-core/src/wasm.rs` (`wasm_vim_intent_id_map`), UI dynamic map decode/proxy in `src/editor/wasm.ts` (`ensureVimIntentMap`, `VIM_INTENT`).
+6. Gap `7` (Home/End mapping parity gap): **done**.
+   - `Home -> 0` and `End -> $` now mapped in both adapters.
+   - Evidence: `src/editor/vim-adapter.ts`, `src-tauri/src/terminal/adapter.rs`.
+7. Gap `8` (parity coverage too small): **partial**.
+   - Done: replay corpus expanded substantially (now 27 cases, including `yy/yw + p` flows) and GUI simulator support widened.
+   - Remaining: simulator still supports a subset and panics on unsupported intents; corpus still not full command/rule/folding/calc parity.
+   - Evidence: fixture `src-tauri/src/terminal/tests/golden/vim_parity_replay.json`, unsupported-intent guard in `src-tauri/src/terminal/app.rs` (`unsupported GUI parity action ...`).
+8. Gap `9` (UI startup fallback introduces alternate parsing paths): **done**.
+   - Command execution now awaits wasm readiness before parsing/planning, and vim no-step windows now suppress normal/visual key fallback behavior instead of drifting to alternate editor handling.
+   - Evidence: `src/editor/command-engine.ts` (`await ensureWasmReady()`), `src/editor/wasm.ts` (no command-parser fallback paths), `src/editor/vim.ts` (`no_step` gating/suppression).
+
+### Commands/Vim closure plan (ordered by architecture quality + correctness)
+1. Close gap `1` ownership split: route UI `sum/avg row/column` through shared Rust command execution (wasm command path), keep UI-only rendering/runtime side effects as adapters.
+2. Start gap `3` migration: move a first `VimIntent` subset (`dd/yy/d0/d$/yw/p/x`) into shared Rust action execution that returns `EditOperation + cursor/register delta`; keep frontends as thin appliers.
+3. Close gap `4`: remove dedicated visual fast paths by routing visual `x/d/y/Esc` through the same shared execution path used by normal-mode actions.
+4. Continue gap `8`: expand replay corpus to cover the migrated intents and visual flows, and extend GUI parity simulator until it no longer panics for supported corpus intents.
+5. Reduce gap `5`: define one shared command side-effect contract (`pure result + side-effect intents`) and keep UI/TUI as effect adapters only.
+6. Address gap `9`: remove or sharply narrow wasm-not-ready fallback for vim/command critical paths (block until ready, or keep only explicitly non-semantic fallbacks).
+7. Optional hardening for gap `6`: generate/derive intent IDs from one source to remove manual mirror risk between Rust and TS maps.
+
 ### Definition of done for this refactor track
 - Shared core is the canonical source for editing behavior.
 - GUI and TUI parity checks pass for replay corpus.

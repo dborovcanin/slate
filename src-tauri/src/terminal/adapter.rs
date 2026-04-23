@@ -41,14 +41,26 @@ mod tests {
             TerminalVimAdapter::to_vim_key(&Key::Char('j')),
             Some(VimKey::Char('j'))
         );
-        assert_eq!(TerminalVimAdapter::to_vim_key(&Key::Ctrl('w')), Some(VimKey::Ctrl('w')));
-        assert_eq!(TerminalVimAdapter::to_vim_key(&Key::Home), Some(VimKey::Char('0')));
-        assert_eq!(TerminalVimAdapter::to_vim_key(&Key::End), Some(VimKey::Char('$')));
+        assert_eq!(
+            TerminalVimAdapter::to_vim_key(&Key::Ctrl('w')),
+            Some(VimKey::Ctrl('w'))
+        );
+        assert_eq!(
+            TerminalVimAdapter::to_vim_key(&Key::Home),
+            Some(VimKey::Char('0'))
+        );
+        assert_eq!(
+            TerminalVimAdapter::to_vim_key(&Key::End),
+            Some(VimKey::Char('$'))
+        );
     }
 
     #[test]
     fn to_vim_key_ignores_non_vim_terminal_inputs() {
-        assert_eq!(TerminalVimAdapter::to_vim_key(&Key::Paste("x".into())), None);
+        assert_eq!(
+            TerminalVimAdapter::to_vim_key(&Key::Paste("x".into())),
+            None
+        );
         assert_eq!(TerminalVimAdapter::to_vim_key(&Key::CtrlArrowLeft), None);
         assert_eq!(TerminalVimAdapter::to_vim_key(&Key::CtrlDelete), None);
     }

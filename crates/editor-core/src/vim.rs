@@ -110,6 +110,8 @@ pub enum VimIntent {
     DeleteAroundPipe,
     YankInsidePipe,
     YankAroundPipe,
+    YankVisualSelection,
+    DeleteVisualSelection,
     Swallow,
 }
 
@@ -274,6 +276,20 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
         }
 
         match key {
+            VimKey::Char('y') => {
+                next.mode = VimMode::Normal;
+                next.pending = None;
+                next.count_buffer.clear();
+                actions.push(make_action(VimIntent::YankVisualSelection, 1));
+                handled = true;
+            }
+            VimKey::Char('d') | VimKey::Char('x') => {
+                next.mode = VimMode::Normal;
+                next.pending = None;
+                next.count_buffer.clear();
+                actions.push(make_action(VimIntent::DeleteVisualSelection, 1));
+                handled = true;
+            }
             VimKey::Char('v') if next.mode == VimMode::Visual => {
                 next.mode = VimMode::Normal;
                 actions.push(make_action(VimIntent::ExitVisual, 1));
@@ -939,5 +955,31 @@ mod tests {
         let two = step_token(&one.state, "char:$");
         assert_eq!(two.actions.len(), 1);
         assert_eq!(two.actions[0].intent, VimIntent::DeleteToLineEnd);
+    }
+
+    #[test]
+    fn visual_y_and_d_emit_selection_actions_and_exit_visual_mode() {
+        let visual = VimState {
+            mode: VimMode::Visual,
+            ..VimState::default()
+        };
+
+        let yank = step_token(&visual, "char:y");
+        assert!(yank.handled);
+        assert_eq!(yank.state.mode, VimMode::Normal);
+        assert_eq!(yank.actions.len(), 1);
+        assert_eq!(yank.actions[0].intent, VimIntent::YankVisualSelection);
+
+        let delete = step_token(&visual, "char:d");
+        assert!(delete.handled);
+        assert_eq!(delete.state.mode, VimMode::Normal);
+        assert_eq!(delete.actions.len(), 1);
+        assert_eq!(delete.actions[0].intent, VimIntent::DeleteVisualSelection);
+
+        let cut = step_token(&visual, "char:x");
+        assert!(cut.handled);
+        assert_eq!(cut.state.mode, VimMode::Normal);
+        assert_eq!(cut.actions.len(), 1);
+        assert_eq!(cut.actions[0].intent, VimIntent::DeleteVisualSelection);
     }
 }
