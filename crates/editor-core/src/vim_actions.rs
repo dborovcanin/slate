@@ -1081,8 +1081,7 @@ mod tests {
         let text = "hello world";
         let cursor = text.find("world").expect("cursor");
         let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::YankToLineEnd, 1, None).expect("handled");
+        let result = execute_vim_action(&doc, VimIntent::YankToLineEnd, 1, None).expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("world"));
     }
