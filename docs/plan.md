@@ -227,6 +227,7 @@ Acceptance criteria:
 - [ ] Improve overflow to full soft-wrap.
 - [ ] Improve date-vs-list parsing edge cases.
 - [ ] GD to go to link, header, tag
+- [ ] Store version in note in case we decide to extend MD sometime
 
 ## Bugs and Fixes Backlog
 
