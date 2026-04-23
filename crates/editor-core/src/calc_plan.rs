@@ -18,6 +18,7 @@ pub fn hash_lines(lines: &[String]) -> Vec<u64> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalcSegment {
     pub expr: String,
     pub from_col: usize,
@@ -27,6 +28,7 @@ pub struct CalcSegment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TableFormulaSegment {
     /// Byte range of the formula expression inside the cell (excludes pipes/padding).
     pub from_byte: usize,
@@ -52,12 +54,14 @@ pub struct CalcTrailerRefresh {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LineCalcResult {
     pub line_idx: usize,
     pub result: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct IncrementalCalcPlan {
     pub base_results: Vec<LineCalcResult>,
     pub eval_from: usize,
@@ -66,6 +70,7 @@ pub struct IncrementalCalcPlan {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalcEvalScopeDecision {
     pub touches_any_assignment: bool,
     pub touches_builtin_formula: bool,
@@ -73,6 +78,7 @@ pub struct CalcEvalScopeDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalcEvalWindowDecision {
     pub eval_from: usize,
     pub eval_to: usize,
@@ -82,6 +88,7 @@ pub struct CalcEvalWindowDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommitMarkerLoc {
     pub doc_pos: usize,
     pub line_idx: usize,
@@ -90,6 +97,7 @@ pub struct CommitMarkerLoc {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CalcRefreshChange {
     pub line_idx: usize,
     pub from: usize,
@@ -99,6 +107,7 @@ pub struct CalcRefreshChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CalcRefreshPlan {
     pub changes: Vec<CalcRefreshChange>,
     pub prune: Vec<usize>,

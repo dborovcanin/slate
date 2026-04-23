@@ -92,6 +92,7 @@ pub struct CommandSuggestion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CommandExecutionResult {
     pub message: String,
     pub operations: Vec<EditOperation>,

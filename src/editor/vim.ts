@@ -26,6 +26,7 @@ import {
   VimSession,
   executeVimActionFromWasm,
   type VimAction,
+  type VimIntent,
   type VimMode,
   type VimRegisterValue,
 } from "./wasm.ts";
@@ -51,7 +52,7 @@ interface VimRegister {
   mode: VimRegisterMode;
 }
 
-function shouldExecuteSharedVimAction(intent: number): boolean {
+function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
   switch (intent) {
     case VIM_INTENT.DELETE_LINE:
     case VIM_INTENT.YANK_LINE:

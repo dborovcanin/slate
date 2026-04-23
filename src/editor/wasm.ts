@@ -46,7 +46,6 @@ import init, {
   wasm_execute_math_command,
   wasm_parse_note_security_command,
   wasm_plan_module_command,
-  wasm_vim_intent_id_map,
   wasm_try_execute_vim_substitute,
   wasm_run_markdown_transaction_batch,
 } from "../../pkg/editor-core/editor_core.js";
@@ -174,8 +173,63 @@ export interface VimKeyInput {
   charCode?: number;
 }
 
+export const VIM_INTENT = {
+  MOVE_LEFT: "move_left",
+  MOVE_RIGHT: "move_right",
+  MOVE_UP: "move_up",
+  MOVE_DOWN: "move_down",
+  MOVE_WORD_FORWARD: "move_word_forward",
+  MOVE_WORD_BACKWARD: "move_word_backward",
+  MOVE_LINE_START: "move_line_start",
+  MOVE_LINE_END: "move_line_end",
+  MOVE_DOC_START: "move_doc_start",
+  MOVE_DOC_END: "move_doc_end",
+  MOVE_TO_LINE: "move_to_line",
+  ENTER_INSERT: "enter_insert",
+  APPEND_INSERT: "append_insert",
+  INSERT_LINE_START: "insert_line_start",
+  APPEND_LINE_END: "append_line_end",
+  OPEN_LINE_BELOW: "open_line_below",
+  OPEN_LINE_ABOVE: "open_line_above",
+  ENTER_VISUAL: "enter_visual",
+  ENTER_VISUAL_LINE: "enter_visual_line",
+  EXIT_VISUAL: "exit_visual",
+  DELETE_LINE: "delete_line",
+  YANK_LINE: "yank_line",
+  DELETE_TO_LINE_START: "delete_to_line_start",
+  DELETE_TO_LINE_END: "delete_to_line_end",
+  YANK_TO_LINE_START: "yank_to_line_start",
+  YANK_TO_LINE_END: "yank_to_line_end",
+  DELETE_CHAR: "delete_char",
+  PASTE_AFTER: "paste_after",
+  UNDO: "undo",
+  REDO: "redo",
+  OPEN_COMMAND_BAR: "open_command_bar",
+  OPEN_SEARCH: "open_search",
+  SEARCH_NEXT: "search_next",
+  SEARCH_PREV: "search_prev",
+  DELETE_INSIDE_WORD: "delete_inside_word",
+  DELETE_AROUND_WORD: "delete_around_word",
+  YANK_INSIDE_WORD: "yank_inside_word",
+  YANK_AROUND_WORD: "yank_around_word",
+  DELETE_INSIDE_PIPE: "delete_inside_pipe",
+  DELETE_AROUND_PIPE: "delete_around_pipe",
+  YANK_INSIDE_PIPE: "yank_inside_pipe",
+  YANK_AROUND_PIPE: "yank_around_pipe",
+  SWALLOW: "swallow",
+  DELETE_WORD_FORWARD: "delete_word_forward",
+  DELETE_WORD_BACKWARD: "delete_word_backward",
+  DELETE_WORD_END: "delete_word_end",
+  YANK_WORD_FORWARD: "yank_word_forward",
+  YANK_WORD_BACKWARD: "yank_word_backward",
+  YANK_VISUAL_SELECTION: "yank_visual_selection",
+  DELETE_VISUAL_SELECTION: "delete_visual_selection",
+} as const;
+
+export type VimIntent = (typeof VIM_INTENT)[keyof typeof VIM_INTENT];
+
 export interface VimAction {
-  intent: number;
+  intent: VimIntent;
   count: number;
 }
 
@@ -199,145 +253,15 @@ export const VIM_KEY_KIND = {
   CTRL: 10,
 } as const;
 
-type VimIntentMap = {
-  MOVE_LEFT: number;
-  MOVE_RIGHT: number;
-  MOVE_UP: number;
-  MOVE_DOWN: number;
-  MOVE_WORD_FORWARD: number;
-  MOVE_WORD_BACKWARD: number;
-  MOVE_LINE_START: number;
-  MOVE_LINE_END: number;
-  MOVE_DOC_START: number;
-  MOVE_DOC_END: number;
-  MOVE_TO_LINE: number;
-  ENTER_INSERT: number;
-  APPEND_INSERT: number;
-  INSERT_LINE_START: number;
-  APPEND_LINE_END: number;
-  OPEN_LINE_BELOW: number;
-  OPEN_LINE_ABOVE: number;
-  ENTER_VISUAL: number;
-  ENTER_VISUAL_LINE: number;
-  EXIT_VISUAL: number;
-  DELETE_LINE: number;
-  YANK_LINE: number;
-  DELETE_TO_LINE_START: number;
-  DELETE_TO_LINE_END: number;
-  YANK_TO_LINE_START: number;
-  YANK_TO_LINE_END: number;
-  DELETE_CHAR: number;
-  PASTE_AFTER: number;
-  UNDO: number;
-  REDO: number;
-  OPEN_COMMAND_BAR: number;
-  OPEN_SEARCH: number;
-  SEARCH_NEXT: number;
-  SEARCH_PREV: number;
-  DELETE_INSIDE_WORD: number;
-  DELETE_AROUND_WORD: number;
-  YANK_INSIDE_WORD: number;
-  YANK_AROUND_WORD: number;
-  DELETE_INSIDE_PIPE: number;
-  DELETE_AROUND_PIPE: number;
-  YANK_INSIDE_PIPE: number;
-  YANK_AROUND_PIPE: number;
-  SWALLOW: number;
-  DELETE_WORD_FORWARD: number;
-  DELETE_WORD_BACKWARD: number;
-  DELETE_WORD_END: number;
-  YANK_WORD_FORWARD: number;
-  YANK_WORD_BACKWARD: number;
-  YANK_VISUAL_SELECTION: number;
-  DELETE_VISUAL_SELECTION: number;
-};
+const VIM_INTENT_VALUES = new Set<VimIntent>(
+  Object.values(VIM_INTENT) as VimIntent[],
+);
 
-let _vimIntentMap: VimIntentMap | null = null;
-
-function asNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
+function asVimIntent(value: unknown): VimIntent | null {
+  return typeof value === "string" && VIM_INTENT_VALUES.has(value as VimIntent)
+    ? (value as VimIntent)
+    : null;
 }
-
-function decodeVimIntentMap(raw: unknown): VimIntentMap | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const map = raw as Partial<VimIntentMap>;
-  const required: Array<keyof VimIntentMap> = [
-    "MOVE_LEFT",
-    "MOVE_RIGHT",
-    "MOVE_UP",
-    "MOVE_DOWN",
-    "MOVE_WORD_FORWARD",
-    "MOVE_WORD_BACKWARD",
-    "MOVE_LINE_START",
-    "MOVE_LINE_END",
-    "MOVE_DOC_START",
-    "MOVE_DOC_END",
-    "MOVE_TO_LINE",
-    "ENTER_INSERT",
-    "APPEND_INSERT",
-    "INSERT_LINE_START",
-    "APPEND_LINE_END",
-    "OPEN_LINE_BELOW",
-    "OPEN_LINE_ABOVE",
-    "ENTER_VISUAL",
-    "ENTER_VISUAL_LINE",
-    "EXIT_VISUAL",
-    "DELETE_LINE",
-    "YANK_LINE",
-    "DELETE_TO_LINE_START",
-    "DELETE_TO_LINE_END",
-    "YANK_TO_LINE_START",
-    "YANK_TO_LINE_END",
-    "DELETE_CHAR",
-    "PASTE_AFTER",
-    "UNDO",
-    "REDO",
-    "OPEN_COMMAND_BAR",
-    "OPEN_SEARCH",
-    "SEARCH_NEXT",
-    "SEARCH_PREV",
-    "DELETE_INSIDE_WORD",
-    "DELETE_AROUND_WORD",
-    "YANK_INSIDE_WORD",
-    "YANK_AROUND_WORD",
-    "DELETE_INSIDE_PIPE",
-    "DELETE_AROUND_PIPE",
-    "YANK_INSIDE_PIPE",
-    "YANK_AROUND_PIPE",
-    "SWALLOW",
-    "DELETE_WORD_FORWARD",
-    "DELETE_WORD_BACKWARD",
-    "DELETE_WORD_END",
-    "YANK_WORD_FORWARD",
-    "YANK_WORD_BACKWARD",
-    "YANK_VISUAL_SELECTION",
-    "DELETE_VISUAL_SELECTION",
-  ];
-  for (const key of required) {
-    if (asNumber(map[key]) === null) return null;
-  }
-  return map as VimIntentMap;
-}
-
-function ensureVimIntentMap(): VimIntentMap {
-  if (_vimIntentMap) return _vimIntentMap;
-  if (!ensureWasmReadyNonBlocking()) {
-    throw new Error("vim intent map unavailable before wasm initialization");
-  }
-  const decoded = decodeVimIntentMap(wasm_vim_intent_id_map() as unknown);
-  if (!decoded) {
-    throw new Error("failed to decode vim intent id map from wasm");
-  }
-  _vimIntentMap = decoded;
-  return decoded;
-}
-
-export const VIM_INTENT: VimIntentMap = new Proxy({} as VimIntentMap, {
-  get(_target, prop: string) {
-    const map = ensureVimIntentMap();
-    return map[prop as keyof VimIntentMap];
-  },
-});
 
 const VIM_MODE_ID = {
   INSERT: 0,
@@ -419,24 +343,26 @@ interface IncrementalCalcPlanPayload {
   evalLines: string[];
 }
 
-interface CalcRefreshPlanPayload {
-  changes: CalcRefreshChange[];
-  prune: number[];
-  syncedLines: number[];
+interface EditOperationWire {
+  changes: EditOperation["changes"];
+  selection?: { anchor: number; head?: number | null } | null;
 }
 
-interface CalcEvalScopeDecisionPayload {
-  touchesAnyAssignment: boolean;
-  touchesBuiltinFormula: boolean;
-  canUsePartial: boolean;
+interface WasmCommandExecutionResultWire {
+  message: string;
+  operations: EditOperationWire[];
+  clipboardText?: string | null;
+  quitRequested?: boolean;
 }
 
-interface CalcEvalWindowDecisionPayload {
-  evalFrom: number;
-  evalTo: number;
-  touchesAnyAssignment: boolean;
-  touchesBuiltinFormula: boolean;
-  canUsePartial: boolean;
+interface VimActionExecutionResultWire {
+  operations: EditOperationWire[];
+  register?: VimRegisterValue | null;
+}
+
+interface MarkdownTransactionResultWire {
+  kind: MarkdownTransactionKind;
+  operation: EditOperationWire;
 }
 
 export type MarkdownInlineTokenType =
@@ -568,19 +494,11 @@ export interface MarkdownAnalyzeResult {
   finalCodeFenceLang: string | null;
 }
 
-function modeFromId(modeId: number): VimMode {
-  switch (modeId) {
-    case VIM_MODE_ID.INSERT:
-      return "insert";
-    case VIM_MODE_ID.NORMAL:
-      return "normal";
-    case VIM_MODE_ID.VISUAL:
-      return "visual";
-    case VIM_MODE_ID.VISUAL_LINE:
-      return "visual_line";
-    default:
-      return "normal";
+function asVimMode(mode: unknown): VimMode {
+  if (mode === "insert" || mode === "normal" || mode === "visual" || mode === "visual_line") {
+    return mode;
   }
+  return "normal";
 }
 
 function modeToId(mode: VimMode): number {
@@ -694,31 +612,28 @@ function snapshotToArgs(snapshot: EditorContextSnapshot): [string, number, numbe
   return [text, anchor!, head!, hasRange, changedFrom!, changedTo!];
 }
 
-function decodeEditOperation(raw: unknown, sourceText: string): EditOperation | null {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw !== "object") return null;
-  const obj = raw as Record<string, unknown>;
-  const rawChanges = obj["changes"];
-  if (!Array.isArray(rawChanges)) return null;
-  const changes: EditOperation["changes"] = [];
-  for (const c of rawChanges) {
-    if (typeof c !== "object" || c === null) return null;
-    const cc = c as Record<string, unknown>;
-    if (typeof cc["from"] !== "number" || typeof cc["to"] !== "number" || typeof cc["insert"] !== "string") return null;
-    changes.push({ from: cc["from"] as number, to: cc["to"] as number, insert: cc["insert"] as string });
-  }
-  let selection: EditOperation["selection"];
-  const rawSel = obj["selection"];
-  if (rawSel !== null && rawSel !== undefined && typeof rawSel === "object") {
-    const sel = rawSel as Record<string, unknown>;
-    if (typeof sel["anchor"] === "number") {
-      selection = {
-        anchor: sel["anchor"] as number,
-        head: typeof sel["head"] === "number" ? (sel["head"] as number) : undefined,
-      };
+function mapOperationWireFromUtf8ToUtf16(
+  sourceText: string,
+  operation: EditOperationWire,
+): EditOperation {
+  const selection = operation.selection
+    ? {
+      anchor: operation.selection.anchor,
+      head: normalizeOptionalOffset(operation.selection.head),
     }
-  }
-  return mapOperationFromUtf8ToUtf16(sourceText, { changes, selection });
+    : undefined;
+  return mapOperationFromUtf8ToUtf16(sourceText, {
+    changes: operation.changes,
+    selection,
+  });
+}
+
+function mapOperationWiresFromUtf8ToUtf16(
+  sourceText: string,
+  operations: readonly EditOperationWire[] | null | undefined,
+): EditOperation[] {
+  if (!Array.isArray(operations)) return [];
+  return operations.map((operation) => mapOperationWireFromUtf8ToUtf16(sourceText, operation));
 }
 
 function decodeVimSubstituteExecutionResult(
@@ -738,21 +653,13 @@ function decodeCommandExecutionResult(
   sourceText: string,
 ): WasmCommandExecutionResult | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const obj = raw as Record<string, unknown>;
-  if (typeof obj["message"] !== "string") return null;
-  const operations: EditOperation[] = [];
-  if (Array.isArray(obj["operations"])) {
-    for (const rawOp of obj["operations"]) {
-      const decoded = decodeEditOperation(rawOp, sourceText);
-      if (!decoded) continue;
-      operations.push(decoded);
-    }
-  }
+  const payload = raw as WasmCommandExecutionResultWire;
+  if (typeof payload.message !== "string") return null;
   return {
-    message: obj["message"],
-    operations,
-    clipboardText: typeof obj["clipboardText"] === "string" ? obj["clipboardText"] : null,
-    quitRequested: obj["quitRequested"] === true,
+    message: payload.message,
+    operations: mapOperationWiresFromUtf8ToUtf16(sourceText, payload.operations),
+    clipboardText: typeof payload.clipboardText === "string" ? payload.clipboardText : null,
+    quitRequested: payload.quitRequested === true,
   };
 }
 
@@ -761,21 +668,11 @@ function decodeVimActionExecutionResult(
   sourceText: string,
 ): VimActionExecutionResult | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const obj = raw as Record<string, unknown>;
-  const operations: EditOperation[] = [];
-  if (Array.isArray(obj["operations"])) {
-    for (const rawOp of obj["operations"]) {
-      const decoded = decodeEditOperation(rawOp, sourceText);
-      if (!decoded) continue;
-      operations.push(decoded);
-    }
-  }
-
+  const payload = raw as VimActionExecutionResultWire;
   let register: VimRegisterValue | null = null;
-  if (typeof obj["register"] === "object" && obj["register"] !== null) {
-    const rawRegister = obj["register"] as Record<string, unknown>;
-    const mode = rawRegister["mode"];
-    const text = rawRegister["text"];
+  if (typeof payload.register === "object" && payload.register !== null) {
+    const mode = payload.register.mode;
+    const text = payload.register.text;
     if (
       (mode === "charwise" || mode === "linewise") &&
       typeof text === "string"
@@ -787,7 +684,10 @@ function decodeVimActionExecutionResult(
     }
   }
 
-  return { operations, register };
+  return {
+    operations: mapOperationWiresFromUtf8ToUtf16(sourceText, payload.operations),
+    register,
+  };
 }
 
 function asMarkdownTransactionKind(value: unknown): MarkdownTransactionKind | null {
@@ -811,11 +711,10 @@ function decodeMarkdownTransactionResult(
   sourceText: string,
 ): MarkdownTransactionResult | null {
   if (typeof raw !== "object" || raw === null) return null;
-  const obj = raw as Record<string, unknown>;
-  const kind = asMarkdownTransactionKind(obj["kind"]);
+  const payload = raw as MarkdownTransactionResultWire;
+  const kind = asMarkdownTransactionKind(payload.kind);
   if (!kind) return null;
-  const operation = decodeEditOperation(obj["operation"], sourceText);
-  if (!operation) return null;
+  const operation = mapOperationWireFromUtf8ToUtf16(sourceText, payload.operation);
   return { kind, operation };
 }
 
@@ -1017,47 +916,8 @@ export function planHostCommandFromWasm(
   rawInput: string,
 ): HostCommandPlan | null {
   if (!ensureWasmReadyNonBlocking()) return null;
-  const raw = wasm_plan_host_command(mode, rawInput) as unknown;
-  if (typeof raw !== "object" || raw === null) return null;
-  const plan = raw as Record<string, unknown>;
-  const kind = plan["kind"];
-  if (kind === "date" || kind === "notify" || kind === "notify_delete") {
-    return { kind };
-  }
-  if (kind === "module" && typeof plan["command"] === "string") {
-    return { kind, command: plan["command"] };
-  }
-  if (
-    kind === "fold" &&
-    (plan["action"] === "fold" || plan["action"] === "unfold" || plan["action"] === "toggle")
-  ) {
-    return { kind, action: plan["action"] };
-  }
-  if (
-    kind === "clip_watch" &&
-    (plan["action"] === "start" || plan["action"] === "stop")
-  ) {
-    return { kind, action: plan["action"] };
-  }
-  if (
-    kind === "note_security" &&
-    (plan["action"] === "lock" ||
-      plan["action"] === "unlock" ||
-      plan["action"] === "encrypt" ||
-      plan["action"] === "decrypt" ||
-      plan["action"] === "unprotect") &&
-    typeof plan["password"] === "string"
-  ) {
-    return {
-      kind,
-      action: plan["action"],
-      password: plan["password"],
-    };
-  }
-  if (kind === "quit" && typeof plan["force"] === "boolean") {
-    return { kind, force: plan["force"] };
-  }
-  return null;
+  const raw = wasm_plan_host_command(mode, rawInput) as HostCommandPlan | null | undefined;
+  return raw ?? null;
 }
 
 export type NoteSecurityAction =
@@ -1089,23 +949,8 @@ export function parseNoteSecurityCommand(
   rawInput: string,
 ): ParsedNoteSecurityCommand | null {
   if (!ensureWasmReadyNonBlocking()) return null;
-  const raw = wasm_parse_note_security_command(rawInput) as unknown;
-  if (typeof raw !== "object" || raw === null) return null;
-  const parsed = raw as Partial<ParsedNoteSecurityCommand>;
-  if (
-    parsed.action !== "lock" &&
-    parsed.action !== "unlock" &&
-    parsed.action !== "encrypt" &&
-    parsed.action !== "decrypt" &&
-    parsed.action !== "unprotect"
-  ) {
-    return null;
-  }
-  if (typeof parsed.password !== "string") return null;
-  return {
-    action: parsed.action,
-    password: parsed.password,
-  };
+  const raw = wasm_parse_note_security_command(rawInput) as ParsedNoteSecurityCommand | null | undefined;
+  return raw ?? null;
 }
 
 export function planModuleCommandFromWasm(
@@ -1121,31 +966,8 @@ export function planModuleCommandFromWasm(
     current.table,
     current.variables,
     current.style,
-  ) as unknown;
-  if (typeof raw !== "object" || raw === null) return null;
-  const parsed = raw as Partial<ModuleCommandPlan>;
-  const next = parsed.next as Partial<ModuleStateSnapshot> | undefined;
-  if (typeof parsed.changed !== "boolean") return null;
-  if (typeof parsed.message !== "string") return null;
-  if (
-    !next ||
-    typeof next.math !== "boolean" ||
-    typeof next.table !== "boolean" ||
-    typeof next.variables !== "boolean" ||
-    typeof next.style !== "boolean"
-  ) {
-    return null;
-  }
-  return {
-    changed: parsed.changed,
-    message: parsed.message,
-    next: {
-      math: next.math,
-      table: next.table,
-      variables: next.variables,
-      style: next.style,
-    },
-  };
+  ) as ModuleCommandPlan | null | undefined;
+  return raw ?? null;
 }
 
 export function tryExecuteVimSubstituteFromWasm(
@@ -1188,7 +1010,7 @@ export function executeMathCommandFromWasm(
 
 export function executeVimActionFromWasm(
   snapshot: EditorContextSnapshot,
-  intent: number,
+  intent: VimIntent,
   count: number,
   register: VimRegisterValue | null,
 ): VimActionExecutionResult | null {
@@ -1308,13 +1130,6 @@ const DEFAULT_MARKDOWN_LINE_INFO: MarkdownLineInfo = {
 function asMarkdownLineInfo(value: unknown): MarkdownLineInfo | null {
   if (typeof value !== "object" || value === null) return null;
   const raw = value as Partial<MarkdownLineInfo>;
-  if (
-    typeof raw.checklistChecked !== "boolean" ||
-    typeof raw.isHorizontalRule !== "boolean" ||
-    typeof raw.isCodeFence !== "boolean"
-  ) {
-    return null;
-  }
   return {
     headingLevel: typeof raw.headingLevel === "number" ? raw.headingLevel : null,
     headingMarkerEnd: typeof raw.headingMarkerEnd === "number" ? raw.headingMarkerEnd : null,
@@ -1325,90 +1140,28 @@ function asMarkdownLineInfo(value: unknown): MarkdownLineInfo | null {
     checklistMarkerEnd: typeof raw.checklistMarkerEnd === "number" ? raw.checklistMarkerEnd : null,
     checklistContentStart:
       typeof raw.checklistContentStart === "number" ? raw.checklistContentStart : null,
-    checklistChecked: raw.checklistChecked,
-    isHorizontalRule: raw.isHorizontalRule,
-    isCodeFence: raw.isCodeFence,
+    checklistChecked: raw.checklistChecked === true,
+    isHorizontalRule: raw.isHorizontalRule === true,
+    isCodeFence: raw.isCodeFence === true,
   };
 }
 
 function asMarkdownInlineTokens(value: unknown): MarkdownInlineToken[] {
-  if (!Array.isArray(value)) return [];
-  const out: MarkdownInlineToken[] = [];
-  for (const token of value) {
-    if (typeof token !== "object" || token === null) continue;
-    const raw = token as Partial<MarkdownInlineToken>;
-    if (
-      typeof raw.from !== "number" ||
-      typeof raw.to !== "number" ||
-      typeof raw.type !== "string"
-    ) {
-      continue;
-    }
-    out.push({
-      from: raw.from,
-      to: raw.to,
-      type: raw.type as MarkdownInlineTokenType,
-    });
-  }
-  return out;
+  return Array.isArray(value) ? (value as MarkdownInlineToken[]) : [];
 }
 
 function asMarkdownCodeTokens(value: unknown): MarkdownCodeToken[] {
-  if (!Array.isArray(value)) return [];
-  const out: MarkdownCodeToken[] = [];
-  for (const token of value) {
-    if (typeof token !== "object" || token === null) continue;
-    const raw = token as Partial<MarkdownCodeToken>;
-    if (
-      typeof raw.from !== "number" ||
-      typeof raw.to !== "number" ||
-      typeof raw.type !== "string"
-    ) {
-      continue;
-    }
-    out.push({
-      from: raw.from,
-      to: raw.to,
-      type: raw.type as MarkdownCodeTokenType,
-    });
-  }
-  return out;
+  return Array.isArray(value) ? (value as MarkdownCodeToken[]) : [];
 }
 
 function asMarkdownInlineMarkerComponentRanges(
   value: unknown,
 ): MarkdownInlineMarkerComponentRange[] {
-  if (!Array.isArray(value)) return [];
-  const out: MarkdownInlineMarkerComponentRange[] = [];
-  for (const range of value) {
-    if (typeof range !== "object" || range === null) continue;
-    const raw = range as Partial<MarkdownInlineMarkerComponentRange>;
-    if (typeof raw.from !== "number" || typeof raw.to !== "number") continue;
-    out.push({ from: raw.from, to: raw.to });
-  }
-  return out;
+  return Array.isArray(value) ? (value as MarkdownInlineMarkerComponentRange[]) : [];
 }
 
 function asMarkdownFoldRanges(value: unknown): MarkdownFoldRange[] {
-  if (!Array.isArray(value)) return [];
-  const out: MarkdownFoldRange[] = [];
-  for (const range of value) {
-    if (typeof range !== "object" || range === null) continue;
-    const raw = range as Partial<MarkdownFoldRange>;
-    if (
-      typeof raw.startLine !== "number" ||
-      typeof raw.endLine !== "number" ||
-      typeof raw.kind !== "string"
-    ) {
-      continue;
-    }
-    out.push({
-      startLine: raw.startLine,
-      endLine: raw.endLine,
-      kind: raw.kind as MarkdownFoldRange["kind"],
-    });
-  }
-  return out;
+  return Array.isArray(value) ? (value as MarkdownFoldRange[]) : [];
 }
 
 function singleLinePayloadMetrics(lineText: string): EditorProfilerMetrics {
@@ -1525,7 +1278,7 @@ export function markdownAnalyzeLines(
     start.codeFenceLang ?? undefined,
   ) as unknown;
 
-  if (typeof raw !== "object" || raw === null) {
+  if (typeof raw !== "object" || raw === null || !Array.isArray((raw as MarkdownAnalyzeResult).lines)) {
     const fallback: MarkdownAnalyzeResult = {
       lines: [],
       finalInCodeBlock: start.inCodeBlock,
@@ -1544,33 +1297,23 @@ export function markdownAnalyzeLines(
     return fallback;
   }
 
-  const payload = raw as Partial<MarkdownAnalyzeResult>;
-  const outLines: MarkdownAnalyzedLine[] = [];
-  if (Array.isArray(payload.lines)) {
-    for (const line of payload.lines as unknown[]) {
-      if (typeof line !== "object" || line === null) continue;
-      const rawLine = line as Partial<MarkdownAnalyzedLine>;
-      const info = asMarkdownLineInfo(rawLine.info);
-      if (!info || typeof rawLine.inCodeBlock !== "boolean") continue;
-      outLines.push({
-        info,
-        inCodeBlock: rawLine.inCodeBlock,
-        codeFenceLang:
-          typeof rawLine.codeFenceLang === "string" ? rawLine.codeFenceLang : null,
-        inlineTokens: asMarkdownInlineTokens(rawLine.inlineTokens),
-        codeTokens: asMarkdownCodeTokens(rawLine.codeTokens),
-      });
-    }
-  }
+  const payload = raw as MarkdownAnalyzeResult;
+
+  const outLines: MarkdownAnalyzedLine[] = payload.lines.map((line) => {
+    const rawLine = line as Partial<MarkdownAnalyzedLine>;
+    return {
+      info: asMarkdownLineInfo(rawLine.info) ?? DEFAULT_MARKDOWN_LINE_INFO,
+      inCodeBlock: rawLine.inCodeBlock === true,
+      codeFenceLang: typeof rawLine.codeFenceLang === "string" ? rawLine.codeFenceLang : null,
+      inlineTokens: asMarkdownInlineTokens(rawLine.inlineTokens),
+      codeTokens: asMarkdownCodeTokens(rawLine.codeTokens),
+    };
+  });
 
   const out: MarkdownAnalyzeResult = {
     lines: outLines,
-    finalInCodeBlock:
-      typeof payload.finalInCodeBlock === "boolean"
-        ? payload.finalInCodeBlock
-        : start.inCodeBlock,
-    finalCodeFenceLang:
-      typeof payload.finalCodeFenceLang === "string" ? payload.finalCodeFenceLang : null,
+    finalInCodeBlock: payload.finalInCodeBlock ?? start.inCodeBlock,
+    finalCodeFenceLang: payload.finalCodeFenceLang ?? null,
   };
   if (profiling) {
     recordEditorProfilerSample(
@@ -1699,36 +1442,21 @@ export function calcDecideEvalScope(
   hasPrev: boolean,
   variablesEnabled: boolean,
 ): CalcEvalScopeDecision {
+  const fallback: CalcEvalScopeDecision = {
+    touchesAnyAssignment: false,
+    touchesBuiltinFormula: false,
+    canUsePartial: false,
+  };
   if (!ensureWasmReadyNonBlocking()) {
-    return {
-      touchesAnyAssignment: false,
-      touchesBuiltinFormula: false,
-      canUsePartial: false,
-    };
+    return fallback;
   }
   const raw = wasm_calc_decide_eval_scope(
     [...evalLines],
     [...prevChangedLines],
     hasPrev,
     variablesEnabled,
-  ) as CalcEvalScopeDecisionPayload | null | undefined;
-  if (
-    !raw ||
-    typeof raw.touchesAnyAssignment !== "boolean" ||
-    typeof raw.touchesBuiltinFormula !== "boolean" ||
-    typeof raw.canUsePartial !== "boolean"
-  ) {
-    return {
-      touchesAnyAssignment: false,
-      touchesBuiltinFormula: false,
-      canUsePartial: false,
-    };
-  }
-  return {
-    touchesAnyAssignment: raw.touchesAnyAssignment,
-    touchesBuiltinFormula: raw.touchesBuiltinFormula,
-    canUsePartial: raw.canUsePartial,
-  };
+  ) as CalcEvalScopeDecision | null | undefined;
+  return raw ?? fallback;
 }
 
 export function calcDecideEvalWindow(
@@ -1739,14 +1467,15 @@ export function calcDecideEvalWindow(
   hasPrev: boolean,
   variablesEnabled: boolean,
 ): CalcEvalWindowDecision {
+  const fallback: CalcEvalWindowDecision = {
+    evalFrom: 0,
+    evalTo: lines.length,
+    touchesAnyAssignment: false,
+    touchesBuiltinFormula: false,
+    canUsePartial: false,
+  };
   if (!ensureWasmReadyNonBlocking()) {
-    return {
-      evalFrom: 0,
-      evalTo: lines.length,
-      touchesAnyAssignment: false,
-      touchesBuiltinFormula: false,
-      canUsePartial: false,
-    };
+    return fallback;
   }
   const raw = wasm_calc_decide_eval_window(
     [...lines],
@@ -1755,30 +1484,8 @@ export function calcDecideEvalWindow(
     [...prevChangedLines],
     hasPrev,
     variablesEnabled,
-  ) as CalcEvalWindowDecisionPayload | null | undefined;
-  if (
-    !raw ||
-    typeof raw.evalFrom !== "number" ||
-    typeof raw.evalTo !== "number" ||
-    typeof raw.touchesAnyAssignment !== "boolean" ||
-    typeof raw.touchesBuiltinFormula !== "boolean" ||
-    typeof raw.canUsePartial !== "boolean"
-  ) {
-    return {
-      evalFrom: 0,
-      evalTo: lines.length,
-      touchesAnyAssignment: false,
-      touchesBuiltinFormula: false,
-      canUsePartial: false,
-    };
-  }
-  return {
-    evalFrom: raw.evalFrom,
-    evalTo: raw.evalTo,
-    touchesAnyAssignment: raw.touchesAnyAssignment,
-    touchesBuiltinFormula: raw.touchesBuiltinFormula,
-    canUsePartial: raw.canUsePartial,
-  };
+  ) as CalcEvalWindowDecision | null | undefined;
+  return raw ?? fallback;
 }
 
 export function calcShouldScheduleEval(
@@ -1803,13 +1510,14 @@ export function calcPlanIncremental(
   prevResults: ReadonlyMap<number, string>,
   nextLines: string[],
 ): IncrementalCalcPlan {
+  const fallback: IncrementalCalcPlan = {
+    baseResults: new Map(),
+    evalFrom: 0,
+    evalTo: nextLines.length,
+    evalLines: [...nextLines],
+  };
   if (!ensureWasmReadyNonBlocking()) {
-    return {
-      baseResults: new Map(),
-      evalFrom: 0,
-      evalTo: nextLines.length,
-      evalLines: [...nextLines],
-    };
+    return fallback;
   }
 
   const prevDense: (string | null)[] = [];
@@ -1823,24 +1531,10 @@ export function calcPlanIncremental(
     nextLines,
   ) as IncrementalCalcPlanPayload | null | undefined;
 
-  if (
-    !rawPlan ||
-    !Array.isArray(rawPlan.baseResults) ||
-    !Array.isArray(rawPlan.evalLines) ||
-    typeof rawPlan.evalFrom !== "number" ||
-    typeof rawPlan.evalTo !== "number"
-  ) {
-    return {
-      baseResults: new Map(),
-      evalFrom: 0,
-      evalTo: nextLines.length,
-      evalLines: [...nextLines],
-    };
-  }
+  if (!rawPlan) return fallback;
 
   const baseResults = new Map<number, string>();
   for (const entry of rawPlan.baseResults) {
-    if (typeof entry?.lineIdx !== "number" || typeof entry?.result !== "string") continue;
     baseResults.set(entry.lineIdx, entry.result);
   }
 
@@ -1859,8 +1553,9 @@ export function calcComputeRefresh(
   nextResults: ReadonlyMap<number, string>,
   selection: { from: number; to: number },
 ): CalcRefreshPlan {
+  const fallback: CalcRefreshPlan = { changes: [], prune: [], syncedLines: [] };
   if (!ensureWasmReadyNonBlocking()) {
-    return { changes: [], prune: [], syncedLines: [] };
+    return fallback;
   }
 
   const denseResults: (string | null)[] = [];
@@ -1875,36 +1570,29 @@ export function calcComputeRefresh(
     denseResults,
     selection.from,
     selection.to,
-  ) as CalcRefreshPlanPayload | null | undefined;
-
-  if (
-    !rawPlan ||
-    !Array.isArray(rawPlan.changes) ||
-    !Array.isArray(rawPlan.prune) ||
-    !Array.isArray(rawPlan.syncedLines)
-  ) {
-    return { changes: [], prune: [], syncedLines: [] };
-  }
-
-  return {
-    changes: rawPlan.changes,
-    prune: rawPlan.prune,
-    syncedLines: rawPlan.syncedLines,
-  };
+  ) as CalcRefreshPlan | null | undefined;
+  return rawPlan ?? fallback;
 }
 
-function decodeVimStep(raw: Uint32Array): VimStep {
-  const handled = raw[0] === 1;
-  const mode = modeFromId(raw[1] ?? VIM_MODE_ID.NORMAL);
-  const actionCount = raw[2] ?? 0;
-  const actions: VimAction[] = [];
+function decodeVimStep(raw: unknown): VimStep {
+  if (typeof raw !== "object" || raw === null) {
+    return { mode: "normal", actions: [], handled: false };
+  }
 
-  for (let i = 0; i < actionCount; i++) {
-    const base = 3 + i * 2;
-    if (base + 1 >= raw.length) break;
-    const intent = raw[base] ?? 42;
-    const count = Math.max(1, raw[base + 1] ?? 1);
-    actions.push({ intent, count });
+  const payload = raw as Record<string, unknown>;
+  const handled = payload.handled === true;
+  const mode = asVimMode(payload.mode);
+
+  const actions: VimAction[] = [];
+  if (Array.isArray(payload.actions)) {
+    for (const rawAction of payload.actions) {
+      if (typeof rawAction !== "object" || rawAction === null) continue;
+      const action = rawAction as Record<string, unknown>;
+      const intent = asVimIntent(action.intent);
+      if (!intent) continue;
+      const rawCount = typeof action.count === "number" ? action.count : 1;
+      actions.push({ intent, count: Math.max(1, rawCount) });
+    }
   }
 
   return { mode, actions, handled };
