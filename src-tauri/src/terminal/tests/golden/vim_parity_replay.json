@@ -79,6 +79,196 @@
       "initial_cursor_line": 0,
       "initial_cursor_col": 1,
       "keys": ["char:2", "char:x"]
+    },
+    {
+      "name": "normal_G_moves_to_last_line",
+      "initial_text": "a\nb\nc\nd",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:G"]
+    },
+    {
+      "name": "normal_30G_clamps_to_last_line",
+      "initial_text": "a\nb\nc\nd\ne",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:3", "char:0", "char:G"]
+    },
+    {
+      "name": "normal_3j_moves_down_three_lines",
+      "initial_text": "a\nb\nc\nd\ne",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:3", "char:j"]
+    },
+    {
+      "name": "normal_2k_moves_up_two_lines",
+      "initial_text": "a\nb\nc\nd\ne",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 4,
+      "initial_cursor_col": 0,
+      "keys": ["char:2", "char:k"]
+    },
+    {
+      "name": "normal_0_moves_to_line_start",
+      "initial_text": "alpha beta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 7,
+      "keys": ["char:0"]
+    },
+    {
+      "name": "normal_h_wraps_to_previous_line_end",
+      "initial_text": "abc\ndef",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 1,
+      "initial_cursor_col": 0,
+      "keys": ["char:h"]
+    },
+    {
+      "name": "normal_gg_after_movement",
+      "initial_text": "line1\nline2\nline3\nline4",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:j", "char:j", "char:g", "char:g"]
+    },
+    {
+      "name": "normal_a_then_esc_switches_insert_and_back",
+      "initial_text": "abc",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:a", "esc"]
+    },
+    {
+      "name": "normal_I_then_esc_moves_to_start",
+      "initial_text": "alpha beta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 7,
+      "keys": ["char:I", "esc"]
+    },
+    {
+      "name": "normal_A_then_esc_moves_to_end",
+      "initial_text": "alpha beta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:A", "esc"]
+    },
+    {
+      "name": "normal_x_on_empty_line_joins_next_line",
+      "initial_text": "\nabc",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:x"]
+    },
+    {
+      "name": "normal_yy_then_p_pastes_linewise_below",
+      "initial_text": "one\ntwo",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:y", "char:y", "char:p"]
+    },
+    {
+      "name": "normal_2yy_then_2p_repeats_linewise_register",
+      "initial_text": "one\ntwo\nthree",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:2", "char:y", "char:y", "char:2", "char:p"]
+    },
+    {
+      "name": "normal_yw_then_p_charwise_newline_split",
+      "initial_text": "alpha\nbeta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 5,
+      "keys": ["char:y", "char:w", "char:p"]
+    },
+    {
+      "name": "visual_mode_enter_move_exit",
+      "initial_text": "one\ntwo\nthree",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:v", "char:j", "esc"]
+    },
+    {
+      "name": "visual_mode_counted_down_motion",
+      "initial_text": "one\ntwo\nthree\nfour\nfive\nsix",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:v", "char:1", "char:0", "char:j", "esc"]
+    },
+    {
+      "name": "visual_line_mode_counted_up_motion",
+      "initial_text": "one\ntwo\nthree\nfour\nfive\nsix",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 5,
+      "initial_cursor_col": 0,
+      "keys": ["char:V", "char:2", "char:k", "esc"]
+    },
+    {
+      "name": "visual_v_toggles_back_to_normal",
+      "initial_text": "alpha\nbeta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:v", "char:v"]
+    },
+    {
+      "name": "visual_line_V_toggles_back_to_normal",
+      "initial_text": "alpha\nbeta",
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_cursor_line": 0,
+      "initial_cursor_col": 0,
+      "keys": ["char:V", "char:V"]
     }
   ]
 }

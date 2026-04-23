@@ -106,17 +106,6 @@ function isTableDelimiterRowCells(cells: readonly string[]): boolean {
   return cells.length > 0 && cells.every((cell) => cell.length === 0 || tableDelimiterCellRe.test(cell));
 }
 
-function parseTableDataRows(text: string): string[][] {
-  const rows: string[][] = [];
-  for (const line of text.split("\n")) {
-    if (!tableLineRe.test(line)) continue;
-    const cells = splitTableCells(line);
-    if (isTableDelimiterRowCells(cells)) continue;
-    rows.push(cells);
-  }
-  return rows;
-}
-
 async function evaluateCellValue(
   cell: string,
   evaluateExpression?: SumExpressionEvaluator,
@@ -182,78 +171,68 @@ async function averageTerms(
   return formatNumber(numeric / terms.length);
 }
 
-async function sumRows(
-  text: string,
+function cursorTableColumn(ctx: ResolvedContext): number | null {
+  const line = ctx.currentLine();
+  if (!tableLineRe.test(line.text)) return null;
+  const colInLine = Math.min(Math.max(ctx.cursorPos() - line.from, 0), line.text.length);
+  const pipesBefore = [...line.text.slice(0, colInLine)].filter((char) => char === "|").length;
+  if (pipesBefore === 0) return null;
+  return pipesBefore - 1;
+}
+
+async function collectRowTerms(
+  ctx: ResolvedContext,
   evaluateExpression?: SumExpressionEvaluator,
 ): Promise<string[]> {
-  const rows = parseTableDataRows(text);
+  const cursorCol = cursorTableColumn(ctx);
+  if (cursorCol === null) return [];
+  const cells = splitTableCells(ctx.currentLine().text);
   const out: string[] = [];
-
-  for (const row of rows) {
-    const evaluated = await Promise.all(row.map((cell) => evaluateCellValue(cell, evaluateExpression)));
-    const terms = evaluated.filter((value): value is string => value !== null);
-    const summed = await sumTerms(terms, evaluateExpression);
-    if (summed) out.push(summed);
+  for (const cell of cells.slice(0, Math.min(cursorCol, cells.length))) {
+    const evaluated = await evaluateCellValue(cell, evaluateExpression);
+    if (evaluated !== null) out.push(evaluated);
   }
-
   return out;
 }
 
-async function sumColumns(
-  text: string,
+async function collectColumnTerms(
+  ctx: ResolvedContext,
+  range: LineRange,
   evaluateExpression?: SumExpressionEvaluator,
 ): Promise<string[]> {
-  const rows = parseTableDataRows(text);
-  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+  const cursorCol = cursorTableColumn(ctx);
+  if (cursorCol === null) return [];
+  const cursorLine = ctx.currentLine().number;
   const out: string[] = [];
-
-  for (let col = 0; col < columnCount; col++) {
-    const evaluated = await Promise.all(
-      rows.map((row) => evaluateCellValue(row[col] ?? "", evaluateExpression)),
-    );
-    const terms = evaluated.filter((value): value is string => value !== null);
-    const summed = await sumTerms(terms, evaluateExpression);
-    if (summed) out.push(summed);
+  for (let lineNo = range.startLine; lineNo < cursorLine; lineNo++) {
+    const cells = splitTableCells(ctx.lineText(lineNo));
+    if (isTableDelimiterRowCells(cells)) continue;
+    const evaluated = await evaluateCellValue(cells[cursorCol] ?? "", evaluateExpression);
+    if (evaluated !== null) out.push(evaluated);
   }
-
   return out;
 }
 
-async function averageRows(
-  text: string,
-  evaluateExpression?: SumExpressionEvaluator,
-): Promise<string[]> {
-  const rows = parseTableDataRows(text);
-  const out: string[] = [];
-
-  for (const row of rows) {
-    const evaluated = await Promise.all(row.map((cell) => evaluateCellValue(cell, evaluateExpression)));
-    const terms = evaluated.filter((value): value is string => value !== null);
-    const averaged = await averageTerms(terms, evaluateExpression);
-    if (averaged) out.push(averaged);
+function replaceTableCellAtCursor(
+  ctx: ResolvedContext,
+  value: string,
+): EditOperation {
+  const selection = ctx.selection();
+  const line = ctx.currentLine();
+  const cursorInLine = Math.min(Math.max(ctx.cursorPos() - line.from, 0), line.text.length);
+  const leftPipe = line.text.slice(0, cursorInLine).lastIndexOf("|");
+  const rightPipeRel = line.text.slice(cursorInLine).indexOf("|");
+  if (leftPipe < 0 || rightPipeRel < 0) {
+    return replaceRange(selection.from, selection.to, value, {
+      anchor: selection.from + value.length,
+    });
   }
-
-  return out;
-}
-
-async function averageColumns(
-  text: string,
-  evaluateExpression?: SumExpressionEvaluator,
-): Promise<string[]> {
-  const rows = parseTableDataRows(text);
-  const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
-  const out: string[] = [];
-
-  for (let col = 0; col < columnCount; col++) {
-    const evaluated = await Promise.all(
-      rows.map((row) => evaluateCellValue(row[col] ?? "", evaluateExpression)),
-    );
-    const terms = evaluated.filter((value): value is string => value !== null);
-    const averaged = await averageTerms(terms, evaluateExpression);
-    if (averaged) out.push(averaged);
-  }
-
-  return out;
+  const cellFrom = line.from + leftPipe + 1;
+  const cellTo = line.from + cursorInLine + rightPipeRel;
+  const formatted = ` ${value} `;
+  return replaceRange(cellFrom, cellTo, formatted, {
+    anchor: cellFrom + formatted.length,
+  });
 }
 
 export function resolveScopeRange(
@@ -287,7 +266,7 @@ export function resolveScopeRangeInContext(
       return ctx.listRangeAtLine(lineNo);
     case "row":
     case "column":
-      return ctx.tableRangeAtLine(lineNo);
+      return ctx.tableRangeAtLine(lineNo, 1);
     case "doc":
       return { startLine: 1, endLine: ctx.lineCount() };
   }
@@ -348,29 +327,31 @@ export async function executeSumCommand(
   }
 
   const range = resolveScopeRangeInContext(ctx, scope);
-  const text = range ? ctx.textForLineRange(range) : "";
-  const selection = ctx.selection();
 
   if (scope === "row" || scope === "column") {
-    const totals =
-      scope === "row"
-        ? await sumRows(text, options.evaluateExpression)
-        : await sumColumns(text, options.evaluateExpression);
-    if (totals.length === 0) {
+    if (!range) {
+      return { message: `sum(${scope}): no block at cursor` };
+    }
+    const terms = scope === "row"
+      ? await collectRowTerms(ctx, options.evaluateExpression)
+      : await collectColumnTerms(ctx, range, options.evaluateExpression);
+    if (terms.length === 0) {
       return { message: `sum(${scope}): no numbers` };
     }
-
-    const formatted = totals.join("\n");
-    const operation = replaceRange(selection.from, selection.to, formatted, {
-      anchor: selection.from + formatted.length,
-    });
+    const total = await sumTerms(terms, options.evaluateExpression);
+    if (!total) {
+      return { message: `sum(${scope}): incompatible units` };
+    }
+    const operation = replaceTableCellAtCursor(ctx, total);
     return {
-      message: `sum(${scope}) = [${totals.join(", ")}] (${totals.length} totals, inserted at cursor + copied)`,
+      message: `sum(${scope}) = ${total}`,
       operation,
-      clipboardText: formatted,
+      clipboardText: total,
     };
   }
 
+  const text = range ? ctx.textForLineRange(range) : "";
+  const selection = ctx.selection();
   const numbers = parseNumbers(text);
   if (numbers.length === 0) {
     return { message: `sum(${scope}): no numbers` };
@@ -401,29 +382,31 @@ export async function executeAvgCommand(
   }
 
   const range = resolveScopeRangeInContext(ctx, scope);
-  const text = range ? ctx.textForLineRange(range) : "";
-  const selection = ctx.selection();
 
   if (scope === "row" || scope === "column") {
-    const averages =
-      scope === "row"
-        ? await averageRows(text, options.evaluateExpression)
-        : await averageColumns(text, options.evaluateExpression);
-    if (averages.length === 0) {
+    if (!range) {
+      return { message: `avg(${scope}): no block at cursor` };
+    }
+    const terms = scope === "row"
+      ? await collectRowTerms(ctx, options.evaluateExpression)
+      : await collectColumnTerms(ctx, range, options.evaluateExpression);
+    if (terms.length === 0) {
       return { message: `avg(${scope}): no numbers` };
     }
-
-    const formatted = averages.join("\n");
-    const operation = replaceRange(selection.from, selection.to, formatted, {
-      anchor: selection.from + formatted.length,
-    });
+    const avg = await averageTerms(terms, options.evaluateExpression);
+    if (!avg) {
+      return { message: `avg(${scope}): incompatible units` };
+    }
+    const operation = replaceTableCellAtCursor(ctx, avg);
     return {
-      message: `avg(${scope}) = [${averages.join(", ")}] (${averages.length} averages, inserted at cursor + copied)`,
+      message: `avg(${scope}) = ${avg}`,
       operation,
-      clipboardText: formatted,
+      clipboardText: avg,
     };
   }
 
+  const text = range ? ctx.textForLineRange(range) : "";
+  const selection = ctx.selection();
   const numbers = parseNumbers(text);
   if (numbers.length === 0) {
     return { message: `avg(${scope}): no numbers` };

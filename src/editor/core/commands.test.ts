@@ -411,29 +411,25 @@ test("core executeCommand handles fold/unfold/toggle via runtime", async () => {
 });
 
 test("core executeCommand supports unit-aware sum row", async () => {
-  const text = [
-    "| item | a | b |",
-    "| --- | --- | --- |",
-    "| x | 2m | 2km |",
-    "| y | 3m | 4m |",
-  ].join("\n");
-  const result = await executeCommand(snapshot(text, 0), "sum row", {
+  const text = "| item | 2m | 2km |  |";
+  const cursor = text.lastIndexOf("|  |") + 1;
+  const result = await executeCommand(snapshot(text, cursor), "sum row", {
     mode: "editor",
     evaluateExpression: unitAwareEvaluator,
   });
 
-  assert.equal(result.message.includes("sum(row)"), true);
+  assert.equal(result.message, "sum(row) = 2002.00 m");
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "2002.00 m\n7.00 m" });
+  assert.equal(
+    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
+    "2002.00m",
+  );
 });
 
 test("core executeCommand strips approximate wording and rounds unit totals", async () => {
-  const text = [
-    "| item | value |",
-    "| --- | --- |",
-    "| x | 2km |",
-  ].join("\n");
-  const result = await executeCommand(snapshot(text, 0), "sum row", {
+  const text = "| item | 2km |  |";
+  const cursor = text.lastIndexOf("|  |") + 1;
+  const result = await executeCommand(snapshot(text, cursor), "sum row", {
     mode: "editor",
     evaluateExpression: async (expression) => {
       if (expression.trim() === "2km") return "approximately 2.004 km";
@@ -441,9 +437,12 @@ test("core executeCommand strips approximate wording and rounds unit totals", as
     },
   });
 
-  assert.equal(result.message.includes("sum(row)"), true);
+  assert.equal(result.message, "sum(row) = 2.00 km");
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "2.00 km" });
+  assert.equal(
+    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
+    "2.00km",
+  );
 });
 
 test("core executeCommand supports unit-aware sum column via underscore alias", async () => {
@@ -453,14 +452,18 @@ test("core executeCommand supports unit-aware sum column via underscore alias", 
     "| x | 2m | 2km |",
     "| y | 3m | 4m |",
   ].join("\n");
-  const result = await executeCommand(snapshot(text, 0), "sum_column", {
+  const cursor = text.lastIndexOf("4m");
+  const result = await executeCommand(snapshot(text, cursor), "sum_column", {
     mode: "editor",
     evaluateExpression: unitAwareEvaluator,
   });
 
-  assert.equal(result.message.includes("sum(column)"), true);
+  assert.equal(result.message, "sum(column) = 2.00 km");
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "5.00 m\n2.00 km" });
+  assert.equal(
+    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
+    "2.00km",
+  );
 });
 
 test("core executeCommand ignores non-numeric header cells for sum column", async () => {
@@ -470,14 +473,15 @@ test("core executeCommand ignores non-numeric header cells for sum column", asyn
     "| a      | 3      |",
     "| b      | 4      |",
   ].join("\n");
-  const result = await executeCommand(snapshot(text, 0), "sum column", {
+  const cursor = text.lastIndexOf("4");
+  const result = await executeCommand(snapshot(text, cursor), "sum column", {
     mode: "editor",
     evaluateExpression: numberLeakingEvaluator,
   });
 
-  assert.equal(result.message.includes("sum(column)"), true);
+  assert.equal(result.message, "sum(column) = 3.00");
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "7.00" });
+  assert.equal(result.operations[0]?.changes[0]?.insert.trim(), "3.00");
 });
 
 test("core executeCommand computes avg paragraph", async () => {
@@ -587,20 +591,19 @@ test("core executeCommand clist in vim mode treats endpoint lines as selected", 
 });
 
 test("core executeCommand supports unit-aware avg row", async () => {
-  const text = [
-    "| item | a | b |",
-    "| --- | --- | --- |",
-    "| x | 2m | 2km |",
-    "| y | 3m | 4m |",
-  ].join("\n");
-  const result = await executeCommand(snapshot(text, 0), "avg row", {
+  const text = "| x | 3m | 4m |  |";
+  const cursor = text.lastIndexOf("|  |") + 1;
+  const result = await executeCommand(snapshot(text, cursor), "avg row", {
     mode: "editor",
     evaluateExpression: unitAwareEvaluator,
   });
 
-  assert.equal(result.message.includes("avg(row)"), true);
+  assert.equal(result.message, "avg(row) = 3.50 m");
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "1001.00 m\n3.50 m" });
+  assert.equal(
+    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
+    "3.50m",
+  );
 });
 
 test("core executeCommand ignores non-numeric header cells for avg column", async () => {
@@ -610,12 +613,13 @@ test("core executeCommand ignores non-numeric header cells for avg column", asyn
     "| a      | 3      |",
     "| b      | 4      |",
   ].join("\n");
-  const result = await executeCommand(snapshot(text, 0), "avg column", {
+  const cursor = text.lastIndexOf("4");
+  const result = await executeCommand(snapshot(text, cursor), "avg column", {
     mode: "editor",
     evaluateExpression: numberLeakingEvaluator,
   });
 
-  assert.equal(result.message.includes("avg(column)"), true);
+  assert.equal(result.message, "avg(column) = 3.00");
   assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "3.50" });
+  assert.equal(result.operations[0]?.changes[0]?.insert.trim(), "3.00");
 });

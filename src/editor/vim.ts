@@ -21,6 +21,7 @@ import {
   openEditorSearch,
 } from "./search";
 import {
+  VIM_INTENT,
   VimSession,
   type VimAction,
   type VimMode,
@@ -819,35 +820,35 @@ export function vimModeExtension(options: VimOptions = {}) {
     const count = action.count > 0 ? action.count : 1;
 
     switch (action.intent) {
-      case 0: // move_left
+      case VIM_INTENT.MOVE_LEFT:
         return runMove(view, cursorCharLeft, count);
-      case 1: // move_right
+      case VIM_INTENT.MOVE_RIGHT:
         return runMove(view, cursorCharRight, count);
-      case 2: // move_up
+      case VIM_INTENT.MOVE_UP:
         return runMove(view, cursorLineUp, count);
-      case 3: // move_down
+      case VIM_INTENT.MOVE_DOWN:
         return runMove(view, cursorLineDown, count);
-      case 4: // move_word_forward
+      case VIM_INTENT.MOVE_WORD_FORWARD:
         return runMove(view, vimMoveWordForward, count);
-      case 5: // move_word_backward
+      case VIM_INTENT.MOVE_WORD_BACKWARD:
         return runMove(view, vimMoveWordBackward, count);
-      case 6: // move_line_start
+      case VIM_INTENT.MOVE_LINE_START:
         return runMove(view, cursorLineStart, count);
-      case 7: // move_line_end
+      case VIM_INTENT.MOVE_LINE_END:
         return runMove(view, moveToLineEndNormalLike, count);
-      case 8: // move_doc_start
+      case VIM_INTENT.MOVE_DOC_START:
         moveToDocStart(view);
         if (mode() === "visual" || mode() === "visual-line") {
           updateVisualSelection(view);
         }
         return true;
-      case 9: // move_doc_end
+      case VIM_INTENT.MOVE_DOC_END:
         moveToDocEnd(view);
         if (mode() === "visual" || mode() === "visual-line") {
           updateVisualSelection(view);
         }
         return true;
-      case 10: { // move_to_line
+      case VIM_INTENT.MOVE_TO_LINE: {
         const lineNo = Math.min(Math.max(count, 1), view.state.doc.lines);
         const pos = view.state.doc.line(lineNo).from;
         view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
@@ -856,49 +857,49 @@ export function vimModeExtension(options: VimOptions = {}) {
         }
         return true;
       }
-      case 11: // enter_insert
+      case VIM_INTENT.ENTER_INSERT:
         return true;
-      case 12: // append_insert
+      case VIM_INTENT.APPEND_INSERT:
         return appendInsertWithinLine(view);
-      case 13: // insert_line_start
+      case VIM_INTENT.INSERT_LINE_START:
         return cursorLineStart(view);
-      case 14: // append_line_end
+      case VIM_INTENT.APPEND_LINE_END:
         return cursorLineEnd(view);
-      case 15: // open_line_below
+      case VIM_INTENT.OPEN_LINE_BELOW:
         return insertLineBelow(view);
-      case 16: // open_line_above
+      case VIM_INTENT.OPEN_LINE_ABOVE:
         return insertLineAbove(view);
-      case 17: // enter_visual
+      case VIM_INTENT.ENTER_VISUAL:
         startVisualMode(view, "visual");
         return true;
-      case 18: // enter_visual_line
+      case VIM_INTENT.ENTER_VISUAL_LINE:
         startVisualMode(view, "visual-line");
         return true;
-      case 19: // exit_visual
+      case VIM_INTENT.EXIT_VISUAL:
         resetVisualAnchors();
         collapseSelection(view);
         return true;
-      case 20: // delete_line
+      case VIM_INTENT.DELETE_LINE:
         return deleteCurrentLines(view, count);
-      case 21: // yank_line
+      case VIM_INTENT.YANK_LINE:
         return yankCurrentLines(view, count);
-      case 22: // delete_to_line_start
+      case VIM_INTENT.DELETE_TO_LINE_START:
         return deleteToLineStart(view, count);
-      case 23: // delete_to_line_end
+      case VIM_INTENT.DELETE_TO_LINE_END:
         return deleteToLineEnd(view, count);
-      case 24: // yank_to_line_start
+      case VIM_INTENT.YANK_TO_LINE_START:
         return yankToLineStart(view, count);
-      case 25: // yank_to_line_end
+      case VIM_INTENT.YANK_TO_LINE_END:
         return yankToLineEnd(view, count);
-      case 26: // delete_char
+      case VIM_INTENT.DELETE_CHAR:
         return runCounted(view, deleteCharForward, count);
-      case 27: // paste_after
+      case VIM_INTENT.PASTE_AFTER:
         return pasteAfter(view, count);
-      case 28: // undo
+      case VIM_INTENT.UNDO:
         return runCounted(view, undo, count);
-      case 29: // redo
+      case VIM_INTENT.REDO:
         return runCounted(view, redo, count);
-      case 30: // open_command_bar
+      case VIM_INTENT.OPEN_COMMAND_BAR:
         // Preserve visual selection for command execution: command-bar focus
         // can collapse the CM selection when mode is normal.
         const preservedSelection =
@@ -919,37 +920,37 @@ export function vimModeExtension(options: VimOptions = {}) {
           selectionOverride: preservedSelection,
         });
         return true;
-      case 31: // open_search
+      case VIM_INTENT.OPEN_SEARCH:
         return openEditorSearch(view);
-      case 32: // search_next
+      case VIM_INTENT.SEARCH_NEXT:
         return editorSearchNext(view);
-      case 33: // search_prev
+      case VIM_INTENT.SEARCH_PREV:
         return editorSearchPrev(view);
-      case 34: // delete_inside_word
+      case VIM_INTENT.DELETE_INSIDE_WORD:
         return applyTextObject(view, "word", false, true, count) > 0;
-      case 35: // delete_around_word
+      case VIM_INTENT.DELETE_AROUND_WORD:
         return applyTextObject(view, "word", true, true, count) > 0;
-      case 36: // yank_inside_word
+      case VIM_INTENT.YANK_INSIDE_WORD:
         return applyTextObject(view, "word", false, false, count) > 0;
-      case 37: // yank_around_word
+      case VIM_INTENT.YANK_AROUND_WORD:
         return applyTextObject(view, "word", true, false, count) > 0;
-      case 38: // delete_inside_pipe
+      case VIM_INTENT.DELETE_INSIDE_PIPE:
         return applyTextObject(view, "pipe", false, true, count) > 0;
-      case 39: // delete_around_pipe
+      case VIM_INTENT.DELETE_AROUND_PIPE:
         return applyTextObject(view, "pipe", true, true, count) > 0;
-      case 40: // yank_inside_pipe
+      case VIM_INTENT.YANK_INSIDE_PIPE:
         return applyTextObject(view, "pipe", false, false, count) > 0;
-      case 41: // yank_around_pipe
+      case VIM_INTENT.YANK_AROUND_PIPE:
         return applyTextObject(view, "pipe", true, false, count) > 0;
-      case 42: // swallow
+      case VIM_INTENT.SWALLOW:
         return true;
-      case 43: // delete_word_forward
+      case VIM_INTENT.DELETE_WORD_FORWARD:
         return deleteWordForward(view, count);
-      case 44: // delete_word_backward
+      case VIM_INTENT.DELETE_WORD_BACKWARD:
         return deleteWordBackward(view, count);
-      case 45: // yank_word_forward
+      case VIM_INTENT.YANK_WORD_FORWARD:
         return yankWordForward(view, count);
-      case 46: // yank_word_backward
+      case VIM_INTENT.YANK_WORD_BACKWARD:
         return yankWordBackward(view, count);
       default:
         return true;

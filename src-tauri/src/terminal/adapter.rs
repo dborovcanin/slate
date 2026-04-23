@@ -16,6 +16,8 @@ impl TerminalVimAdapter {
             Key::ArrowDown => Some(VimKey::ArrowDown),
             Key::ArrowLeft => Some(VimKey::ArrowLeft),
             Key::ArrowRight => Some(VimKey::ArrowRight),
+            Key::Home => Some(VimKey::Char('0')),
+            Key::End => Some(VimKey::Char('$')),
             Key::Char(ch) => Some(VimKey::Char(*ch)),
             Key::Ctrl(ch) => Some(VimKey::Ctrl(*ch)),
             _ => None,
@@ -40,6 +42,8 @@ mod tests {
             Some(VimKey::Char('j'))
         );
         assert_eq!(TerminalVimAdapter::to_vim_key(&Key::Ctrl('w')), Some(VimKey::Ctrl('w')));
+        assert_eq!(TerminalVimAdapter::to_vim_key(&Key::Home), Some(VimKey::Char('0')));
+        assert_eq!(TerminalVimAdapter::to_vim_key(&Key::End), Some(VimKey::Char('$')));
     }
 
     #[test]

@@ -94,6 +94,47 @@ enum VimPipelineResult {
     Applied,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimRegisterMode {
+    Charwise,
+    Linewise,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VimRegister {
+    text: String,
+    mode: VimRegisterMode,
+}
+
+impl Default for VimRegister {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            mode: VimRegisterMode::Charwise,
+        }
+    }
+}
+
+impl VimRegister {
+    fn charwise(text: String) -> Self {
+        Self {
+            text,
+            mode: VimRegisterMode::Charwise,
+        }
+    }
+
+    fn linewise(text: String) -> Self {
+        Self {
+            text,
+            mode: VimRegisterMode::Linewise,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.mode == VimRegisterMode::Charwise && self.text.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct TerminalStartupMetrics {
     loading_note: Duration,
@@ -208,7 +249,7 @@ struct TerminalApp {
     date_time_format: String,
     // Vim state
     vim_state: crate::editor_core::vim::VimState,
-    clipboard: Vec<String>,
+    clipboard: VimRegister,
     last_clipboard_backend: Option<ClipboardWriteBackend>,
     selection_anchor: Option<(usize, usize)>, // (line, col)
     command_selection: Option<crate::editor_core::types::SelectionSnapshot>,
@@ -473,7 +514,7 @@ impl TerminalApp {
             date_format,
             date_time_format,
             vim_state: crate::editor_core::vim::VimState::default(),
-            clipboard: Vec::new(),
+            clipboard: VimRegister::default(),
             last_clipboard_backend: None,
             selection_anchor: None,
             command_selection: None,
@@ -931,16 +972,29 @@ impl TerminalApp {
         VimPipelineResult::Applied
     }
 
-    fn set_clipboard_lines(&mut self, lines: Vec<String>) -> Option<ClipboardWriteBackend> {
+    fn set_clipboard_register(
+        &mut self,
+        register: VimRegister,
+    ) -> Option<ClipboardWriteBackend> {
+        if register.mode == VimRegisterMode::Charwise && register.text.is_empty() {
+            return None;
+        }
+        self.clipboard_watch_last_text = Some(register.text.clone());
+        let backend = clipboard::copy_text_to_clipboard(&register.text);
+        self.last_clipboard_backend = backend;
+        self.clipboard = register;
+        backend
+    }
+
+    fn set_clipboard_linewise(&mut self, lines: Vec<String>) -> Option<ClipboardWriteBackend> {
         if lines.is_empty() {
             return None;
         }
-        let joined = lines.join("\n");
-        self.clipboard_watch_last_text = Some(joined.clone());
-        let backend = clipboard::copy_text_to_clipboard(&joined);
-        self.last_clipboard_backend = backend;
-        self.clipboard = lines;
-        backend
+        self.set_clipboard_register(VimRegister::linewise(lines.join("\n")))
+    }
+
+    fn set_clipboard_charwise(&mut self, text: String) -> Option<ClipboardWriteBackend> {
+        self.set_clipboard_register(VimRegister::charwise(text))
     }
 
     fn with_clipboard_status(&self, base: impl Into<String>) -> String {
@@ -951,20 +1005,14 @@ impl TerminalApp {
         }
     }
 
-    fn read_system_clipboard_lines(&self) -> Option<Vec<String>> {
-        let text = clipboard::read_clipboard_via_commands().or_else(|| {
+    fn read_system_clipboard_text(&self) -> Option<String> {
+        clipboard::read_clipboard_via_commands().or_else(|| {
             if let Ok(mut ctx) = arboard::Clipboard::new() {
                 ctx.get_text().ok()
             } else {
                 None
             }
-        })?;
-        let lines = text.split('\n').map(|s| s.to_string()).collect::<Vec<_>>();
-        if lines.is_empty() {
-            None
-        } else {
-            Some(lines)
-        }
+        })
     }
 
     fn slice_current_line_cols(&self, start_col: usize, end_col: usize) -> Option<String> {
@@ -1175,7 +1223,7 @@ impl TerminalApp {
             return 0;
         }
 
-        self.set_clipboard_lines(chunks);
+        self.set_clipboard_charwise(chunks.join("\n"));
         if changed {
             self.mark_edited();
             self.adjust_cursor();
@@ -1213,7 +1261,7 @@ impl TerminalApp {
             return 0;
         }
 
-        self.set_clipboard_lines(chunks);
+        self.set_clipboard_charwise(chunks.join("\n"));
         if changed {
             self.mark_edited();
             self.adjust_cursor();
@@ -1331,7 +1379,7 @@ impl TerminalApp {
                         self.lines.push(String::new());
                     }
                     if !deleted.is_empty() {
-                        self.set_clipboard_lines(deleted);
+                        self.set_clipboard_linewise(deleted);
                         self.status =
                             self.with_clipboard_status(format!("deleted {} lines", count));
                         self.mark_edited();
@@ -1346,7 +1394,7 @@ impl TerminalApp {
                         }
                     }
                     if !yanked.is_empty() {
-                        self.set_clipboard_lines(yanked);
+                        self.set_clipboard_linewise(yanked);
                         self.status = self.with_clipboard_status(format!("yanked {} lines", count));
                     }
                 }
@@ -1363,7 +1411,7 @@ impl TerminalApp {
                         }
                     }
                     if !chunks.is_empty() {
-                        self.set_clipboard_lines(chunks);
+                        self.set_clipboard_charwise(chunks.join("\n"));
                         self.status = self.with_clipboard_status("deleted to line start");
                         self.mark_edited();
                         self.adjust_cursor();
@@ -1385,7 +1433,7 @@ impl TerminalApp {
                         }
                     }
                     if !chunks.is_empty() {
-                        self.set_clipboard_lines(chunks);
+                        self.set_clipboard_charwise(chunks.join("\n"));
                         self.status = self.with_clipboard_status("deleted to line end");
                         self.mark_edited();
                         self.adjust_cursor();
@@ -1404,7 +1452,7 @@ impl TerminalApp {
                         }
                     }
                     if !chunks.is_empty() {
-                        self.set_clipboard_lines(chunks);
+                        self.set_clipboard_charwise(chunks.join("\n"));
                         self.status = self.with_clipboard_status("yanked to line start");
                     }
                 }
@@ -1423,7 +1471,7 @@ impl TerminalApp {
                         }
                     }
                     if !chunks.is_empty() {
-                        self.set_clipboard_lines(chunks);
+                        self.set_clipboard_charwise(chunks.join("\n"));
                         self.status = self.with_clipboard_status("yanked to line end");
                     }
                 }
@@ -1433,24 +1481,58 @@ impl TerminalApp {
                     }
                 }
                 crate::editor_core::vim::VimIntent::PasteAfter => {
-                    if let Some(sys_clip) = self.read_system_clipboard_lines() {
-                        if sys_clip != self.clipboard || self.clipboard.is_empty() {
-                            self.clipboard = sys_clip;
+                    if let Some(sys_clip_text) = self.read_system_clipboard_text() {
+                        if self.clipboard.is_empty() || self.clipboard.text != sys_clip_text {
+                            self.clipboard = VimRegister::charwise(sys_clip_text);
                         }
                     }
                     if !self.clipboard.is_empty() {
-                        for _ in 0..count {
-                            let mut insert_at = self.cursor_line;
-                            if !self.lines[self.cursor_line].is_empty() {
-                                insert_at += 1;
+                        match self.clipboard.mode {
+                            VimRegisterMode::Linewise => {
+                                let normalized =
+                                    self.clipboard.text.strip_suffix('\n').unwrap_or_else(|| {
+                                        self.clipboard.text.as_str()
+                                    });
+                                let lines = if normalized.is_empty() {
+                                    vec![String::new()]
+                                } else {
+                                    normalized
+                                        .split('\n')
+                                        .map(|line| line.to_string())
+                                        .collect::<Vec<_>>()
+                                };
+                                let mut repeated = Vec::with_capacity(lines.len() * count);
+                                for _ in 0..count {
+                                    repeated.extend(lines.iter().cloned());
+                                }
+                                if !repeated.is_empty() {
+                                    let insert_at = self.cursor_line + 1;
+                                    for (offset, line) in repeated.iter().enumerate() {
+                                        self.lines.insert(insert_at + offset, line.clone());
+                                    }
+                                    self.cursor_line = insert_at;
+                                    self.cursor_col = 0;
+                                    self.mark_edited();
+                                }
                             }
-                            for (i, line) in self.clipboard.iter().enumerate() {
-                                self.lines.insert(insert_at + i, line.clone());
+                            VimRegisterMode::Charwise => {
+                                let text = self.clipboard.text.clone();
+                                let mut inserted = false;
+                                for _ in 0..count {
+                                    let line_len = line_char_len(self.current_line());
+                                    if self.cursor_col < line_len {
+                                        self.cursor_col += 1;
+                                    } else {
+                                        self.cursor_col = line_len;
+                                    }
+                                    self.insert_paste(&text);
+                                    inserted = true;
+                                }
+                                if inserted {
+                                    self.adjust_cursor();
+                                }
                             }
-                            self.cursor_line = insert_at + self.clipboard.len().saturating_sub(1);
-                            self.cursor_col = 0;
-                        }
-                        self.mark_edited();
+                        };
                     }
                 }
                 crate::editor_core::vim::VimIntent::DeleteInsideWord => {
@@ -1562,7 +1644,7 @@ impl TerminalApp {
                         }
                     }
                     if !deleted.is_empty() {
-                        self.set_clipboard_lines(deleted);
+                        self.set_clipboard_charwise(deleted.join(""));
                         self.status = self.with_clipboard_status("deleted word forward");
                         self.mark_edited();
                         self.adjust_cursor();
@@ -1590,7 +1672,7 @@ impl TerminalApp {
                     }
                     if !deleted.is_empty() {
                         deleted.reverse();
-                        self.set_clipboard_lines(deleted);
+                        self.set_clipboard_charwise(deleted.join(""));
                         self.status = self.with_clipboard_status("deleted word backward");
                         self.mark_edited();
                         self.adjust_cursor();
@@ -1621,7 +1703,7 @@ impl TerminalApp {
                     self.cursor_line = origin_line;
                     self.cursor_col = origin_col;
                     if !yanked.is_empty() {
-                        self.set_clipboard_lines(yanked);
+                        self.set_clipboard_charwise(yanked.join(""));
                         self.status = self.with_clipboard_status("yanked word forward");
                     }
                 }
@@ -1651,7 +1733,7 @@ impl TerminalApp {
                     self.cursor_col = origin_col;
                     if !yanked.is_empty() {
                         yanked.reverse();
-                        self.set_clipboard_lines(yanked);
+                        self.set_clipboard_charwise(yanked.join(""));
                         self.status = self.with_clipboard_status("yanked word backward");
                     }
                 }
@@ -1861,7 +1943,11 @@ impl TerminalApp {
                 }
 
                 if !yanked.is_empty() {
-                    self.set_clipboard_lines(yanked);
+                    if self.mode == UiMode::VisualLine {
+                        self.set_clipboard_linewise(yanked);
+                    } else {
+                        self.set_clipboard_charwise(yanked.join("\n"));
+                    }
                 }
 
                 self.mode = UiMode::Normal;
@@ -6816,7 +6902,7 @@ mod tests {
         table_cell_navigation_anchor,
     };
     use super::{display_cols_for_prefix, line_char_len};
-    use super::{TerminalApp, TerminalOptions, UiMode};
+    use super::{TerminalApp, TerminalOptions, UiMode, VimRegister, VimRegisterMode};
     use crate::storage::Db;
     use app_core::storage::NoteAccessMode;
     use serde::Deserialize;
@@ -6924,6 +7010,7 @@ mod tests {
         mode: UiMode,
         selection_anchor: Option<(usize, usize)>,
         vim_state: crate::editor_core::vim::VimState,
+        clipboard: VimRegister,
     }
 
     fn ui_mode_from_vim_mode(mode: crate::editor_core::vim::VimMode) -> UiMode {
@@ -6969,11 +7056,7 @@ mod tests {
             state.cursor_line = state.lines.len().saturating_sub(1);
         }
         let line_len = line_char_len(&state.lines[state.cursor_line]);
-        if matches!(state.mode, UiMode::Editor) {
-            state.cursor_col = state.cursor_col.min(line_len);
-        } else {
-            state.cursor_col = state.cursor_col.min(line_len.saturating_sub(1));
-        }
+        state.cursor_col = state.cursor_col.min(line_len);
     }
 
     fn replace_char_range(line: &mut String, from_col: usize, to_col: usize) -> bool {
@@ -6987,6 +7070,198 @@ mod tests {
         }
         line.replace_range(from..to, "");
         true
+    }
+
+    fn gui_set_clipboard_charwise(state: &mut GuiParityState, text: String) {
+        state.clipboard = VimRegister::charwise(text);
+    }
+
+    fn gui_set_clipboard_linewise(state: &mut GuiParityState, lines: Vec<String>) {
+        if lines.is_empty() {
+            return;
+        }
+        state.clipboard = VimRegister::linewise(lines.join("\n"));
+    }
+
+    fn gui_line_col_lt(left_line: usize, left_col: usize, right_line: usize, right_col: usize) -> bool {
+        left_line < right_line || (left_line == right_line && left_col < right_col)
+    }
+
+    fn gui_byte_offset_for_line_col(state: &GuiParityState, line_idx: usize, col: usize) -> usize {
+        let mut offset = 0usize;
+        for (idx, line) in state.lines.iter().enumerate() {
+            if idx == line_idx {
+                offset += super::byte_index(line, col);
+                break;
+            }
+            offset += line.len() + 1;
+        }
+        offset
+    }
+
+    fn gui_slice_cols_range(
+        state: &GuiParityState,
+        from_line: usize,
+        from_col: usize,
+        to_line: usize,
+        to_col: usize,
+    ) -> Option<String> {
+        if !gui_line_col_lt(from_line, from_col, to_line, to_col) {
+            return None;
+        }
+        if from_line == to_line {
+            let line = state.lines.get(from_line)?;
+            let start = super::byte_index(line, from_col);
+            let end = super::byte_index(line, to_col);
+            if start >= end || end > line.len() {
+                return None;
+            }
+            return Some(line[start..end].to_string());
+        }
+        let text = super::join_lines(&state.lines);
+        let start = gui_byte_offset_for_line_col(state, from_line, from_col);
+        let end = gui_byte_offset_for_line_col(state, to_line, to_col);
+        if start >= end || end > text.len() {
+            return None;
+        }
+        Some(text[start..end].to_string())
+    }
+
+    fn gui_move_cursor_right_word(state: &mut GuiParityState) {
+        let line = &state.lines[state.cursor_line];
+        let chars: Vec<char> = line.chars().collect();
+        let len = chars.len();
+        if state.cursor_col >= len {
+            if state.cursor_line + 1 < state.lines.len() {
+                state.cursor_line += 1;
+                state.cursor_col = 0;
+            }
+            return;
+        }
+
+        let mut col = state.cursor_col;
+        let start_class = chars.get(col).map_or(0, |c| {
+            if c.is_whitespace() {
+                0
+            } else if c.is_alphanumeric() || *c == '_' {
+                1
+            } else {
+                2
+            }
+        });
+
+        while col < len {
+            let current_class = chars.get(col).map_or(0, |c| {
+                if c.is_whitespace() {
+                    0
+                } else if c.is_alphanumeric() || *c == '_' {
+                    1
+                } else {
+                    2
+                }
+            });
+            if current_class == start_class {
+                col += 1;
+            } else {
+                break;
+            }
+        }
+
+        if start_class != 0 {
+            while col < len && chars.get(col).is_some_and(|c| c.is_whitespace()) {
+                col += 1;
+            }
+        }
+
+        state.cursor_col = col;
+    }
+
+    fn gui_insert_paste(state: &mut GuiParityState, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        if state.lines.is_empty() {
+            state.lines.push(String::new());
+        }
+
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let parts: Vec<&str> = normalized.split('\n').collect();
+        if parts.is_empty() {
+            return;
+        }
+
+        let line_idx = state.cursor_line.min(state.lines.len().saturating_sub(1));
+        let col = state.cursor_col;
+        let current = state.lines[line_idx].clone();
+        let split_idx = super::byte_index(&current, col);
+        let (left, right) = current.split_at(split_idx);
+
+        if parts.len() == 1 {
+            state.lines[line_idx] = format!("{left}{}{right}", parts[0]);
+            state.cursor_line = line_idx;
+            state.cursor_col = col + parts[0].chars().count();
+            return;
+        }
+
+        state.lines[line_idx] = format!("{left}{}", parts[0]);
+        let mut insert_at = line_idx + 1;
+        for part in &parts[1..parts.len() - 1] {
+            state.lines.insert(insert_at, (*part).to_string());
+            insert_at += 1;
+        }
+
+        let tail = *parts.last().unwrap_or(&"");
+        state.lines.insert(insert_at, format!("{tail}{right}"));
+        state.cursor_line = insert_at;
+        state.cursor_col = tail.chars().count();
+    }
+
+    fn gui_paste_after(state: &mut GuiParityState, count: usize) {
+        if state.clipboard.is_empty() {
+            return;
+        }
+        match state.clipboard.mode {
+            VimRegisterMode::Linewise => {
+                let normalized = state
+                    .clipboard
+                    .text
+                    .strip_suffix('\n')
+                    .unwrap_or_else(|| state.clipboard.text.as_str());
+                let lines = if normalized.is_empty() {
+                    vec![String::new()]
+                } else {
+                    normalized
+                        .split('\n')
+                        .map(|line| line.to_string())
+                        .collect::<Vec<_>>()
+                };
+                let mut repeated = Vec::with_capacity(lines.len() * count.max(1));
+                for _ in 0..count.max(1) {
+                    repeated.extend(lines.iter().cloned());
+                }
+                if repeated.is_empty() {
+                    return;
+                }
+                let insert_at = state.cursor_line + 1;
+                for (offset, line) in repeated.iter().enumerate() {
+                    state.lines.insert(insert_at + offset, line.clone());
+                }
+                state.cursor_line = insert_at;
+                state.cursor_col = 0;
+            }
+            VimRegisterMode::Charwise => {
+                let text = state.clipboard.text.clone();
+                for _ in 0..count.max(1) {
+                    let line_len = line_char_len(&state.lines[state.cursor_line]);
+                    if state.cursor_col < line_len {
+                        state.cursor_col += 1;
+                    } else {
+                        state.cursor_col = line_len;
+                    }
+                    gui_insert_paste(state, &text);
+                }
+            }
+        }
     }
 
     fn apply_gui_vim_action(
@@ -7083,40 +7358,72 @@ mod tests {
                 state.selection_anchor = None;
             }
             VimIntent::DeleteLine => {
+                let mut deleted = Vec::new();
                 let mut removed = 0usize;
                 for _ in 0..count {
                     if state.cursor_line < state.lines.len() {
-                        state.lines.remove(state.cursor_line);
+                        deleted.push(state.lines.remove(state.cursor_line));
                         removed += 1;
                     }
                 }
                 if removed > 0 && state.lines.is_empty() {
                     state.lines.push(String::new());
                 }
+                if !deleted.is_empty() {
+                    gui_set_clipboard_linewise(state, deleted);
+                }
+            }
+            VimIntent::YankLine => {
+                let mut yanked = Vec::new();
+                for i in 0..count {
+                    if state.cursor_line + i < state.lines.len() {
+                        yanked.push(state.lines[state.cursor_line + i].clone());
+                    }
+                }
+                gui_set_clipboard_linewise(state, yanked);
             }
             VimIntent::DeleteToLineStart => {
+                let mut chunks = Vec::new();
                 for _ in 0..count {
                     if state.cursor_col == 0 {
                         break;
                     }
+                    let deleted = state.lines[state.cursor_line]
+                        .chars()
+                        .take(state.cursor_col)
+                        .collect::<String>();
                     let line = &mut state.lines[state.cursor_line];
                     if replace_char_range(line, 0, state.cursor_col) {
                         state.cursor_col = 0;
+                        chunks.push(deleted);
                     } else {
                         break;
                     }
                 }
+                if !chunks.is_empty() {
+                    gui_set_clipboard_charwise(state, chunks.join("\n"));
+                }
             }
             VimIntent::DeleteToLineEnd => {
+                let mut chunks = Vec::new();
                 for _ in 0..count {
                     let line_len = line_char_len(&state.lines[state.cursor_line]);
                     if state.cursor_col >= line_len {
                         break;
                     }
+                    let deleted = state.lines[state.cursor_line]
+                        .chars()
+                        .skip(state.cursor_col)
+                        .collect::<String>();
                     let line = &mut state.lines[state.cursor_line];
-                    if !replace_char_range(line, state.cursor_col, line_len) {
+                    if replace_char_range(line, state.cursor_col, line_len) {
+                        chunks.push(deleted);
+                    } else {
                         break;
                     }
+                }
+                if !chunks.is_empty() {
+                    gui_set_clipboard_charwise(state, chunks.join("\n"));
                 }
             }
             VimIntent::DeleteChar => {
@@ -7130,6 +7437,37 @@ mod tests {
                         state.lines[state.cursor_line].push_str(&next);
                     }
                 }
+            }
+            VimIntent::YankWordForward => {
+                let mut yanked = Vec::new();
+                let origin_line = state.cursor_line;
+                let origin_col = state.cursor_col;
+                for _ in 0..count {
+                    let from_line = state.cursor_line;
+                    let from_col = state.cursor_col;
+                    gui_move_cursor_right_word(state);
+                    let to_line = state.cursor_line;
+                    let to_col = state.cursor_col;
+                    if gui_line_col_lt(from_line, from_col, to_line, to_col) {
+                        if let Some(chunk) =
+                            gui_slice_cols_range(state, from_line, from_col, to_line, to_col)
+                        {
+                            yanked.push(chunk);
+                        }
+                    } else {
+                        state.cursor_line = from_line;
+                        state.cursor_col = from_col;
+                        break;
+                    }
+                }
+                state.cursor_line = origin_line;
+                state.cursor_col = origin_col;
+                if !yanked.is_empty() {
+                    gui_set_clipboard_charwise(state, yanked.join(""));
+                }
+            }
+            VimIntent::PasteAfter => {
+                gui_paste_after(state, count);
             }
             VimIntent::Swallow => {}
             other => panic!(
@@ -7147,6 +7485,7 @@ mod tests {
             mode: ui_mode_from_vim_mode(case.initial_state.mode),
             selection_anchor: None,
             vim_state: case.initial_state.clone(),
+            clipboard: VimRegister::default(),
         };
         if matches!(state.mode, UiMode::Visual | UiMode::VisualLine) {
             state.selection_anchor = Some((state.cursor_line, state.cursor_col));
@@ -9696,7 +10035,8 @@ mod tests {
         );
 
         assert_eq!(app.lines, vec!["foo bar baz".to_string()]);
-        assert_eq!(app.clipboard, vec!["bar ".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "bar ");
 
         drop(app);
         drop(db);
@@ -9753,7 +10093,8 @@ mod tests {
             &[Key::Char('2'), Key::Char('y'), Key::Char('w')],
         );
 
-        assert_eq!(app.clipboard, vec!["one ".to_string(), "two ".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "one two ");
         assert_eq!(app.cursor_col, 0);
 
         drop(app);
@@ -9789,9 +10130,121 @@ mod tests {
         run_keys(&mut app, &db, &[Key::Char('y'), Key::Char('w')]);
 
         assert_eq!(app.lines, vec!["alpha".to_string(), "beta".to_string()]);
-        assert_eq!(app.clipboard, vec!["\n".to_string()]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "\n");
         assert_eq!(app.cursor_line, 0);
         assert_eq!(app.cursor_col, 5);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_p_after_yy_pastes_linewise_below_cursor_line() {
+        let (db, mut app, path) = app_with_note("one\ntwo");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+
+        run_keys(&mut app, &db, &[Key::Char('y'), Key::Char('y')]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Linewise);
+        assert_eq!(app.clipboard.text, "one");
+
+        run_keys(&mut app, &db, &[Key::Char('p')]);
+
+        assert_eq!(
+            app.lines,
+            vec!["one".to_string(), "one".to_string(), "two".to_string()]
+        );
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_counted_p_repeats_linewise_register_in_original_order() {
+        let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = 0;
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('2'), Key::Char('y'), Key::Char('y')],
+        );
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Linewise);
+        assert_eq!(app.clipboard.text, "one\ntwo");
+
+        run_keys(
+            &mut app,
+            &db,
+            &[Key::Char('2'), Key::Char('p')],
+        );
+        assert_eq!(
+            app.lines,
+            vec![
+                "one".to_string(),
+                "one".to_string(),
+                "two".to_string(),
+                "one".to_string(),
+                "two".to_string(),
+                "two".to_string(),
+                "three".to_string(),
+            ]
+        );
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_p_after_dollar_uses_charwise_register() {
+        let (db, mut app, path) = app_with_note("alpha beta");
+        app.mode = UiMode::Normal;
+        app.cursor_col = 6;
+
+        run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('$')]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "beta");
+        assert_eq!(app.lines, vec!["alpha ".to_string()]);
+
+        run_keys(&mut app, &db, &[Key::Char('p')]);
+
+        assert_eq!(app.lines, vec!["alpha beta".to_string()]);
+        assert_eq!(app.cursor_line, 0);
+        assert_eq!(app.cursor_col, 10);
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    #[test]
+    fn vim_p_charwise_newline_splits_line_when_register_contains_newline() {
+        let (db, mut app, path) = app_with_note("alpha\nbeta");
+        app.mode = UiMode::Normal;
+        app.cursor_line = 0;
+        app.cursor_col = line_char_len(app.current_line());
+
+        run_keys(&mut app, &db, &[Key::Char('y'), Key::Char('w')]);
+        assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+        assert_eq!(app.clipboard.text, "\n");
+
+        run_keys(&mut app, &db, &[Key::Char('p')]);
+        assert_eq!(
+            app.lines,
+            vec!["alpha".to_string(), "".to_string(), "beta".to_string()]
+        );
+        assert_eq!(app.cursor_line, 1);
+        assert_eq!(app.cursor_col, 0);
 
         drop(app);
         drop(db);
