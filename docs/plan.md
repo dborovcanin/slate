@@ -226,6 +226,7 @@ Acceptance criteria:
 - [ ] Micro-optimizations for precomputed derived UI styles.
 - [ ] Improve overflow to full soft-wrap.
 - [ ] Improve date-vs-list parsing edge cases.
+- [ ] GD to go to link, header, tag
 
 ## Bugs and Fixes Backlog
 
