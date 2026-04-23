@@ -7119,6 +7119,22 @@ mod tests {
         keys: Vec<String>,
     }
 
+    #[derive(Debug, Deserialize)]
+    struct MarkdownParityReplaySuite {
+        cases: Vec<MarkdownParityReplayCase>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MarkdownParityReplayCase {
+        name: String,
+        initial_text: String,
+        #[serde(default)]
+        initial_cursor_line: usize,
+        #[serde(default)]
+        initial_cursor_col: usize,
+        keys: Vec<String>,
+    }
+
     #[derive(Debug, Clone, PartialEq, Eq)]
     struct ParitySnapshot {
         lines: Vec<String>,
@@ -7129,6 +7145,13 @@ mod tests {
         selection_anchor: Option<(usize, usize)>,
         clipboard_text: String,
         clipboard_mode: VimRegisterMode,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct MarkdownParitySnapshot {
+        lines: Vec<String>,
+        cursor_line: usize,
+        cursor_col: usize,
     }
 
     #[derive(Debug, Clone)]
@@ -7177,6 +7200,37 @@ mod tests {
             crate::editor_core::vim::VimKey::ArrowRight => Key::ArrowRight,
             crate::editor_core::vim::VimKey::Char(ch) => Key::Char(ch),
             crate::editor_core::vim::VimKey::Ctrl(ch) => Key::Ctrl(ch),
+        }
+    }
+
+    fn parse_markdown_key_token(token: &str) -> Key {
+        if let Some(raw) = token.strip_prefix("char:") {
+            let ch = if raw.eq_ignore_ascii_case("space") {
+                ' '
+            } else {
+                let mut chars = raw.chars();
+                let ch = chars
+                    .next()
+                    .unwrap_or_else(|| panic!("missing char token in {token}"));
+                assert!(
+                    chars.next().is_none(),
+                    "markdown parity char token must be a single character: {token}"
+                );
+                ch
+            };
+            return Key::Char(ch);
+        }
+
+        match token {
+            "enter" => Key::Enter,
+            "tab" => Key::Tab,
+            "backtab" | "shift-tab" => Key::BackTab,
+            "backspace" => Key::Backspace,
+            "delete" => Key::Delete,
+            "ctrl-backspace" => Key::CtrlBackspace,
+            "ctrl-delete" => Key::CtrlDelete,
+            "ctrl-w" => Key::Ctrl('w'),
+            _ => panic!("invalid markdown parity key token: {token}"),
         }
     }
 
@@ -7950,6 +8004,375 @@ mod tests {
         snapshot
     }
 
+    fn gui_markdown_context(
+        state: &GuiParityState,
+    ) -> crate::editor_core::context::ResolvedContext {
+        let text = super::join_lines(&state.lines);
+        let anchor = gui_byte_offset_for_line_col(state, state.cursor_line, state.cursor_col);
+        crate::editor_core::context::ResolvedContext::new(
+            crate::editor_core::types::EditorContextSnapshot {
+                text,
+                selection: crate::editor_core::types::SelectionSnapshot {
+                    anchor,
+                    head: anchor,
+                },
+                changed_range: None,
+            },
+        )
+    }
+
+    fn gui_current_line(state: &GuiParityState) -> &str {
+        state
+            .lines
+            .get(state.cursor_line)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
+
+    fn gui_insert_char(state: &mut GuiParityState, ch: char) {
+        if ch.is_control() {
+            return;
+        }
+        let idx = super::byte_index(&state.lines[state.cursor_line], state.cursor_col);
+        state.lines[state.cursor_line].insert(idx, ch);
+        state.cursor_col += 1;
+    }
+
+    fn gui_insert_text(state: &mut GuiParityState, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let idx = super::byte_index(&state.lines[state.cursor_line], state.cursor_col);
+        state.lines[state.cursor_line].insert_str(idx, text);
+        state.cursor_col += text.chars().count();
+    }
+
+    fn gui_insert_newline(state: &mut GuiParityState) {
+        let idx = super::byte_index(&state.lines[state.cursor_line], state.cursor_col);
+        let right = state.lines[state.cursor_line][idx..].to_string();
+        state.lines[state.cursor_line].truncate(idx);
+        let insert_at = state.cursor_line + 1;
+        state.lines.insert(insert_at, right);
+        state.cursor_line = insert_at;
+        state.cursor_col = 0;
+    }
+
+    fn gui_backspace(state: &mut GuiParityState) {
+        if state.cursor_col > 0 {
+            let new_col = state.cursor_col - 1;
+            crate::terminal::text_utils::remove_char_at(
+                &mut state.lines[state.cursor_line],
+                new_col,
+            );
+            state.cursor_col = new_col;
+            return;
+        }
+        if state.cursor_line == 0 {
+            return;
+        }
+        let removed = state.lines.remove(state.cursor_line);
+        state.cursor_line -= 1;
+        let prev_len = line_char_len(&state.lines[state.cursor_line]);
+        state.lines[state.cursor_line].push_str(&removed);
+        state.cursor_col = prev_len;
+    }
+
+    fn gui_delete_forward(state: &mut GuiParityState) {
+        let line_len = line_char_len(&state.lines[state.cursor_line]);
+        if state.cursor_col < line_len {
+            crate::terminal::text_utils::remove_char_at(
+                &mut state.lines[state.cursor_line],
+                state.cursor_col,
+            );
+            return;
+        }
+        if state.cursor_line + 1 >= state.lines.len() {
+            return;
+        }
+        let next = state.lines.remove(state.cursor_line + 1);
+        state.lines[state.cursor_line].push_str(&next);
+    }
+
+    fn gui_delete_word_backward(state: &mut GuiParityState) -> bool {
+        if state.cursor_col == 0 {
+            if state.cursor_line > 0 {
+                gui_backspace(state);
+                return true;
+            }
+            return false;
+        }
+        let chars: Vec<char> = state.lines[state.cursor_line].chars().collect();
+        let mut col = state.cursor_col;
+        while col > 0 && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
+            col -= 1;
+        }
+        while col > 0 && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
+            col -= 1;
+        }
+        let start = super::byte_index(&state.lines[state.cursor_line], col);
+        let end = super::byte_index(&state.lines[state.cursor_line], state.cursor_col);
+        state.lines[state.cursor_line].replace_range(start..end, "");
+        state.cursor_col = col;
+        true
+    }
+
+    fn gui_line_might_trigger_doc_change_rules(line: &str) -> bool {
+        let trimmed = line.trim_start();
+        let might_be_list = trimmed.starts_with('-')
+            || trimmed.starts_with('*')
+            || trimmed.starts_with('+')
+            || trimmed.starts_with("->")
+            || trimmed.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let might_be_table = trimmed.starts_with('|') && line.trim_end().ends_with('|');
+        might_be_list || might_be_table
+    }
+
+    fn gui_try_markdown_doc_change_rule(state: &mut GuiParityState) {
+        if !gui_line_might_trigger_doc_change_rules(gui_current_line(state)) {
+            return;
+        }
+        let ctx = gui_markdown_context(state);
+        let options = crate::editor_core::text_rules::TextRuleOptions {
+            markdown_autoformat: true,
+            checklist_auto_reorder: true,
+            table_enabled: true,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
+            gui_apply_edit_operation(state, &op);
+        }
+    }
+
+    fn gui_try_markdown_enter_rule(state: &mut GuiParityState) -> bool {
+        let ctx = gui_markdown_context(state);
+        let options = crate::editor_core::text_rules::TextRuleOptions {
+            markdown_autoformat: true,
+            checklist_auto_reorder: true,
+            table_enabled: true,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&ctx, options) {
+            gui_apply_edit_operation(state, &op);
+            return true;
+        }
+        false
+    }
+
+    fn gui_try_markdown_tab_rule(state: &mut GuiParityState, outdent: bool) -> bool {
+        let ctx = gui_markdown_context(state);
+        let options = crate::editor_core::text_rules::TabRuleOptions {
+            markdown_autoformat: true,
+            outdent,
+            table_enabled: true,
+        };
+        if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&ctx, options) {
+            gui_apply_edit_operation(state, &op);
+            return true;
+        }
+        false
+    }
+
+    fn gui_try_markdown_table_navigation_rule(state: &mut GuiParityState, outdent: bool) -> bool {
+        let ctx = gui_markdown_context(state);
+        let options = crate::editor_core::text_rules::TabRuleOptions {
+            markdown_autoformat: true,
+            outdent,
+            table_enabled: true,
+        };
+        if let Some(op) =
+            crate::editor_core::text_rules::run_table_cell_navigation_rules(&ctx, options)
+        {
+            gui_apply_edit_operation(state, &op);
+            return true;
+        }
+        false
+    }
+
+    fn gui_try_markdown_table_pipe_insert_column_rule(state: &mut GuiParityState) -> bool {
+        let ctx = gui_markdown_context(state);
+        if let Some(op) = crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx) {
+            gui_apply_edit_operation(state, &op);
+            return true;
+        }
+        false
+    }
+
+    fn gui_try_markdown_table_header_delete_column_rule(state: &mut GuiParityState) -> bool {
+        let ctx = gui_markdown_context(state);
+        if let Some(op) = crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
+        {
+            gui_apply_edit_operation(state, &op);
+            return true;
+        }
+        false
+    }
+
+    fn gui_try_markdown_table_boundary_edit_rule(
+        state: &mut GuiParityState,
+        backward: bool,
+        structural_merge: bool,
+    ) -> Option<bool> {
+        let ctx = gui_markdown_context(state);
+        let options = crate::editor_core::text_rules::TableBoundaryEditOptions {
+            markdown_autoformat: true,
+            backward,
+            structural_merge,
+            table_enabled: true,
+        };
+        let op = crate::editor_core::text_rules::run_table_boundary_edit_rules(&ctx, options)?;
+        let changed = !op.changes.is_empty();
+        gui_apply_edit_operation(state, &op);
+        Some(changed)
+    }
+
+    fn apply_gui_markdown_key(state: &mut GuiParityState, key: Key, case_name: &str, token: &str) {
+        let mut should_autoformat = false;
+        match key {
+            Key::Enter => {
+                if !gui_try_markdown_enter_rule(state) {
+                    gui_insert_newline(state);
+                }
+                should_autoformat = true;
+            }
+            Key::Tab => {
+                if !gui_try_markdown_table_navigation_rule(state, false)
+                    && !gui_try_markdown_tab_rule(state, false)
+                {
+                    gui_insert_text(state, "  ");
+                    should_autoformat = true;
+                }
+            }
+            Key::BackTab => {
+                if !gui_try_markdown_table_navigation_rule(state, true)
+                    && gui_try_markdown_tab_rule(state, true)
+                {
+                    should_autoformat = true;
+                }
+            }
+            Key::Backspace => {
+                if let Some(changed) = gui_try_markdown_table_boundary_edit_rule(state, true, false)
+                {
+                    should_autoformat = changed;
+                } else {
+                    gui_backspace(state);
+                    should_autoformat = true;
+                }
+            }
+            Key::Delete => {
+                if let Some(changed) =
+                    gui_try_markdown_table_boundary_edit_rule(state, false, false)
+                {
+                    should_autoformat = changed;
+                } else {
+                    gui_delete_forward(state);
+                    should_autoformat = true;
+                }
+            }
+            Key::Ctrl('w') | Key::CtrlBackspace => {
+                if gui_try_markdown_table_header_delete_column_rule(state) {
+                    should_autoformat = false;
+                } else if let Some(changed) =
+                    gui_try_markdown_table_boundary_edit_rule(state, true, true)
+                {
+                    should_autoformat = changed;
+                } else {
+                    should_autoformat = gui_delete_word_backward(state);
+                }
+            }
+            Key::CtrlDelete => {
+                if gui_try_markdown_table_header_delete_column_rule(state) {
+                    should_autoformat = false;
+                } else if let Some(changed) =
+                    gui_try_markdown_table_boundary_edit_rule(state, false, true)
+                {
+                    should_autoformat = changed;
+                } else {
+                    gui_delete_forward(state);
+                    should_autoformat = true;
+                }
+            }
+            Key::Char(ch) => {
+                if ch == '|' && gui_try_markdown_table_pipe_insert_column_rule(state) {
+                    should_autoformat = false;
+                } else {
+                    gui_insert_char(state, ch);
+                    should_autoformat = true;
+                }
+                if ch == ' ' && super::is_markdown_table_line(gui_current_line(state)) {
+                    should_autoformat = false;
+                }
+            }
+            other => {
+                panic!(
+                    "unsupported GUI markdown parity key {:?} in case {} token {}",
+                    other, case_name, token
+                );
+            }
+        }
+
+        if should_autoformat {
+            gui_try_markdown_doc_change_rule(state);
+        }
+        clamp_gui_cursor(state);
+    }
+
+    fn run_gui_markdown_parity_case(case: &MarkdownParityReplayCase) -> MarkdownParitySnapshot {
+        let mut state = GuiParityState {
+            lines: split_replay_lines(&case.initial_text),
+            cursor_line: case.initial_cursor_line,
+            cursor_col: case.initial_cursor_col,
+            mode: UiMode::Editor,
+            selection_anchor: None,
+            vim_state: crate::editor_core::vim::VimState::default(),
+            clipboard: VimRegister::default(),
+        };
+        clamp_gui_cursor(&mut state);
+
+        for token in &case.keys {
+            let key = parse_markdown_key_token(token);
+            apply_gui_markdown_key(&mut state, key, &case.name, token);
+        }
+
+        MarkdownParitySnapshot {
+            lines: state.lines,
+            cursor_line: state.cursor_line,
+            cursor_col: state.cursor_col,
+        }
+    }
+
+    fn run_tui_markdown_parity_case(case: &MarkdownParityReplayCase) -> MarkdownParitySnapshot {
+        let (db, mut app, path) = app_with_note(&case.initial_text);
+        app.mode = UiMode::Editor;
+        if app.lines.is_empty() {
+            app.lines.push(String::new());
+        }
+        app.cursor_line = case
+            .initial_cursor_line
+            .min(app.lines.len().saturating_sub(1));
+        app.cursor_col = case.initial_cursor_col;
+        app.adjust_cursor();
+
+        for token in &case.keys {
+            let key = parse_markdown_key_token(token);
+            app.handle_key(&db, key).unwrap_or_else(|err| {
+                panic!(
+                    "markdown parity case '{}' failed on key '{}': {}",
+                    case.name, token, err
+                )
+            });
+        }
+        app.adjust_cursor();
+
+        let snapshot = MarkdownParitySnapshot {
+            lines: app.lines.clone(),
+            cursor_line: app.cursor_line,
+            cursor_col: app.cursor_col,
+        };
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+        snapshot
+    }
+
     #[test]
     fn vim_cross_frontend_parity_replay_cases() {
         let suite: VimParityReplaySuite =
@@ -7959,6 +8382,18 @@ mod tests {
             let tui = run_tui_parity_case(&case);
             let gui = run_gui_parity_case(&case);
             assert_eq!(tui, gui, "cross-frontend parity mismatch in {}", case.name);
+        }
+    }
+
+    #[test]
+    fn markdown_cross_frontend_parity_replay_cases() {
+        let suite: MarkdownParityReplaySuite =
+            serde_json::from_str(include_str!("tests/golden/markdown_parity_replay.json"))
+                .expect("parse markdown parity replay fixture");
+        for case in suite.cases {
+            let tui = run_tui_markdown_parity_case(&case);
+            let gui = run_gui_markdown_parity_case(&case);
+            assert_eq!(tui, gui, "markdown parity mismatch in {}", case.name);
         }
     }
 

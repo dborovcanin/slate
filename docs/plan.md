@@ -82,7 +82,7 @@ Action points:
 
 1. Define and document canonical trigger points for markdown/table/list rules.
 2. Migrate remaining semantics that affect document correctness (not rendering cadence) into shared core.
-3. Add cross-frontend parity fixtures for table edits, list rewrites, and markdown autoformat transitions.
+3. [x] Add cross-frontend parity fixtures for table edits, list rewrites, and markdown autoformat transitions.
 4. Keep frontend-local only the pieces tied to viewport/event cadence.
 
 Acceptance criteria:
