@@ -210,64 +210,66 @@ Acceptance criteria:
 
 ### Other
 
-- [ ] Multicursor support.
-- [ ] Context menu for formatting conversions.
-- [ ] Right-click conversion to checklist/ordered/unordered list.
-- [ ] Support variable assignment from formula helpers like `a := sum_column()`.
-- [ ] UI settings page.
+- [ ] Multicursor support
+- [ ] Context menu for formatting conversions
+- [ ] Right-click conversion to checklist/ordered/unordered list
+- [ ] Support variable assignment from formula helpers like `a := sum_column()`
+- [ ] UI settings page
 - [ ] Code folding UX improvements.
-- [ ] Search notes content.
-- [ ] Auto backups.
-- [ ] Support multiple formulas in row/column contexts.
-- [ ] Link handling polish for `[text](url)` display behavior.
-- [ ] Currency conversion support with local cache and startup sync.
-- [ ] Keyboard shortcut expansion and menu coverage in UI and terminal flows.
-- [ ] Export command enhancements.
-- [ ] Micro-optimizations for precomputed derived UI styles.
-- [ ] Improve overflow to full soft-wrap.
-- [ ] Improve date-vs-list parsing edge cases.
+- [ ] Search notes content
+- [ ] Auto backups
+- [ ] Support multiple formulas in row/column contexts
+- [ ] Link handling polish for `[text](url)` display behavior
+- [ ] Currency conversion support with local cache and startup sync
+- [ ] Keyboard shortcut expansion and menu coverage in UI and terminal flows
+- [ ] Export command enhancements
+- [ ] Micro-optimizations for precomputed derived UI styles
+- [ ] Improve overflow to full soft-wrap
+- [ ] Improve date-vs-list parsing edge cases
 - [ ] GD to go to link, header, tag
 - [ ] Store version in note in case we decide to extend MD sometime
+- [ ] Search notes by text
+- [ ] Add Archive mode - read only, special search
 
 ## Bugs and Fixes Backlog
 
-- [ ] Stability and performance hardening.
+- [ ] Stability and performance hardening
 - [ ] Allow multiple rows in table cell
-- [ ] Dedup cleanup: unify text-object methods, undo/redo semantics, and vim line-range behavior.
-- [ ] Calc engine enhancements and extensive testing.
-- [ ] Improve note switching behavior.
-- [ ] Fix pasting deleted text behavior in UI.
-- [ ] Ensure banner priority over H1 where intended.
-- [ ] Improve command selection UX and UI window decoration polish.
-- [ ] Optimize checkbox rebuild to avoid full visible-range rebuilds.
-- [ ] Checkbox UI style performance review.
-- [ ] Fix TUI shortcuts in non-vim mode.
-- [ ] Fix `db` behavior in TUI.
-- [ ] Fix visual and visual-line large-count motions (for example `10k`, `10j`) while preserving selection.
-- [ ] Cross-platform notification handling: test and improve the flow.
-- [ ] Folding behavior improvements.
-- [ ] Fix terminal auto-reordering checklist cursor behavior.
-- [ ] Fix TUI border padding during floating mode and resize.
-- [ ] Fix UI cut selection behavior; align terminal cut line behavior (`xx`).
-- [ ] Fix UI cursor movement after `Esc` navigation flows.
-- [ ] Add assignment-trailer evaluation support (`val := a - b = 44` style reconciliation on tab).
-- [ ] Revisit insert-mode persistence after command execution where expected.
-- [ ] Table movement bugfixes.
-- [ ] Architecture assessment.
-- [ ] Fix UI cursor sometimes showing as block in insert mode.
-- [ ] Tab replaces value in table cell with calculated value.
-- [ ] Consider removing `:sum`, `:avg` commands (**probably not**).
-- [ ] Fix Markdown decoration around `**` before and after `,`, `(`, or `{...`, not only whitespace.
-- [ ] Fix memory leak.
-- [ ] 3-time password block.
-- [ ] Enrich table with `(1,2)` access for better experience.
-- [ ] Improve overflow handling.
-- [ ] Improve theming and overall visual polish in UI and TUI.
-- [ ] Memory consumption and micro-optimizations.
-- [ ] Add `Ctrl+Q` UI exit.
-- [ ] Improve exports.
+- [ ] Dedup cleanup: unify text-object methods, undo/redo semantics, and vim line-range behavior
+- [ ] Calc engine enhancements and extensive testing
+- [ ] Improve note switching behavior
+- [ ] Fix pasting deleted text behavior in UI
+- [ ] Ensure banner priority over H1 where intended
+- [ ] Improve command selection UX and UI window decoration polish
+- [ ] Optimize checkbox rebuild to avoid full visible-range rebuilds
+- [ ] Checkbox UI style performance review
+- [ ] Fix TUI shortcuts in non-vim mode
+- [ ] Fix `db` behavior in TUI
+- [ ] Fix visual and visual-line large-count motions (for example `10k`, `10j`) while preserving selection
+- [ ] Cross-platform notification handling: test and improve the flow
+- [ ] Folding behavior improvements
+- [ ] Fix terminal auto-reordering checklist cursor behavior
+- [ ] Fix TUI border padding during floating mode and resize
+- [ ] Fix UI cut selection behavior; align terminal cut line behavior (`xx`)
+- [ ] Fix UI cursor movement after `Esc` navigation flows
+- [ ] Add assignment-trailer evaluation support (`val := a - b = 44` style reconciliation on tab)
+- [ ] Revisit insert-mode persistence after command execution where expected
+- [ ] Table movement bugfixes
+- [ ] Architecture assessment
+- [ ] Fix UI cursor sometimes showing as block in insert mode
+- [ ] Tab replaces value in table cell with calculated value
+- [ ] Consider removing `:sum`, `:avg` commands (**probably not**)
+- [ ] Fix Markdown decoration around `**` before and after `,`, `(`, or `{...`, not only whitespace
+- [ ] Fix memory leak
+- [ ] 3-time password block
+- [ ] Enrich table with `(1,2)` access for better experience
+- [ ] Improve overflow handling
+- [ ] Improve theming and overall visual polish in UI and TUI
+- [ ] Memory consumption and micro-optimizations
+- [ ] Add `Ctrl+Q` UI exit
+- [ ] Improve exports
 - [ ] Do we need a hard stop on modules (note size) since we can manually control it?
-- [ ] Fix modules in TUI to apply actual changes.
-- [ ] Do not follow cursor for a checkbox that is moved to the bottom because it was checked.
-- [ ] Improve encrypted notes (per-note passphrase, locked from search until unlock).
-- [ ] Vault mode for hidden tagged notes.
+- [ ] Fix modules in TUI to apply actual changes
+- [ ] Do not follow cursor for a checkbox that is moved to the bottom because it was checked
+- [ ] Improve encrypted notes (per-note passphrase, locked from search until unlock)
+- [ ] Vault mode for hidden tagged notes
