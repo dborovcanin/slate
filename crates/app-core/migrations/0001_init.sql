@@ -30,3 +30,25 @@ CREATE TABLE IF NOT EXISTS reminders (
 
 CREATE INDEX IF NOT EXISTS idx_reminders_note_line ON reminders(note_id, line_number);
 CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(remind_at_ms);
+
+CREATE TABLE IF NOT EXISTS ingest_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,
+    message_id TEXT,
+    note_id TEXT NOT NULL,
+    received_at TEXT NOT NULL,
+    raw_payload BLOB NOT NULL,
+    body_truncated INTEGER NOT NULL DEFAULT 0,
+    message_truncated INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_events_received_at ON ingest_events(received_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ingest_events_source_message_id
+    ON ingest_events(source, message_id)
+    WHERE message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS ingest_offsets (
+    source_key TEXT PRIMARY KEY,
+    last_uid INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);

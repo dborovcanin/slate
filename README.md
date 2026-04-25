@@ -459,15 +459,17 @@ src-tauri/                    # Backend (Rust)
       notes.rs                # Note CRUD
       calc.rs                 # Batch line evaluation
       export.rs               # File export
-    storage/
-      sqlite.rs               # Connection, migrations, WAL, queries
-      models.rs               # Note struct
     calc/
       engine.rs               # fend-core wrapper + heuristics
     ipc/
       server.rs               # Unix socket listener
+
+crates/app-core/              # Shared backend core
+  src/storage/
+    sqlite.rs                 # Connection pool, schema bootstrap, WAL, queries
+    models.rs                 # Note + reminder models
   migrations/
-    0001_init.sql             # Schema
+    0001_init.sql             # Canonical DB schema
 ```
 
 ## License

@@ -64,13 +64,10 @@ impl SqlitePool {
         let first = Connection::open(path).map_err(|e| format!("Failed to open DB: {e}"))?;
         Self::configure_connection(&first)?;
 
-        let migration = include_str!("../../migrations/0001_init.sql");
+        let schema = include_str!("../../migrations/0001_init.sql");
         first
-            .execute_batch(migration)
-            .map_err(|e| format!("Failed to run migration: {e}"))?;
-        ensure_notes_schema(&first)?;
-        ensure_reminders_schema(&first)?;
-        ensure_ingest_schema(&first)?;
+            .execute_batch(schema)
+            .map_err(|e| format!("Failed to initialize schema: {e}"))?;
 
         let mut connections = Vec::with_capacity(pool_size.max(1));
         connections.push(first);
@@ -1711,114 +1708,6 @@ fn load_reminder(
     Ok(reminder)
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(|e| format!("Failed to inspect schema for {table}: {e}"))?;
-
-    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let name: String = row.get(1).map_err(|e| e.to_string())?;
-        if name == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn ensure_column(
-    conn: &Connection,
-    table: &str,
-    column: &str,
-    sql_def: &str,
-) -> Result<(), String> {
-    if has_column(conn, table, column)? {
-        return Ok(());
-    }
-    conn.execute_batch(&format!(
-        "ALTER TABLE {table} ADD COLUMN {column} {sql_def}"
-    ))
-    .map_err(|e| format!("Failed to add column {table}.{column}: {e}"))?;
-    Ok(())
-}
-
-fn ensure_notes_schema(conn: &Connection) -> Result<(), String> {
-    ensure_column(conn, "notes", "note_title", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(
-        conn,
-        "notes",
-        "modules_json",
-        "TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}'",
-    )?;
-    ensure_column(conn, "notes", "access_mode", "TEXT NOT NULL DEFAULT 'none'")?;
-    ensure_column(conn, "notes", "password_salt", "BLOB")?;
-    ensure_column(conn, "notes", "password_hash", "BLOB")?;
-    ensure_column(conn, "notes", "encryption_salt", "BLOB")?;
-    ensure_column(conn, "notes", "encryption_nonce", "BLOB")?;
-    ensure_column(conn, "notes", "encrypted_body", "BLOB")?;
-    Ok(())
-}
-
-fn ensure_reminders_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS reminders (
-            note_id TEXT NOT NULL,
-            line_number INTEGER NOT NULL CHECK(line_number > 0),
-            remind_at_ms INTEGER NOT NULL,
-            display_at TEXT NOT NULL,
-            line_text TEXT NOT NULL DEFAULT '',
-            notified_at_ms INTEGER,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (note_id, line_number),
-            FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_reminders_note_line ON reminders(note_id, line_number);
-        CREATE INDEX IF NOT EXISTS idx_reminders_due ON reminders(remind_at_ms);",
-    )
-    .map_err(|e| format!("Failed to ensure reminders schema: {e}"))?;
-
-    // Legacy DBs may have an older reminders table shape. Add missing columns in-place.
-    ensure_column(
-        conn,
-        "reminders",
-        "remind_at_ms",
-        "INTEGER NOT NULL DEFAULT 0",
-    )?;
-    ensure_column(conn, "reminders", "display_at", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "reminders", "line_text", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "reminders", "notified_at_ms", "INTEGER")?;
-    ensure_column(conn, "reminders", "created_at", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(conn, "reminders", "updated_at", "TEXT NOT NULL DEFAULT ''")?;
-    Ok(())
-}
-
-fn ensure_ingest_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS ingest_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            source TEXT NOT NULL,
-            message_id TEXT,
-            note_id TEXT NOT NULL,
-            received_at TEXT NOT NULL,
-            raw_payload BLOB NOT NULL,
-            body_truncated INTEGER NOT NULL DEFAULT 0,
-            message_truncated INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_ingest_events_received_at ON ingest_events(received_at DESC);
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_ingest_events_source_message_id
-            ON ingest_events(source, message_id)
-            WHERE message_id IS NOT NULL;
-        CREATE TABLE IF NOT EXISTS ingest_offsets (
-            source_key TEXT PRIMARY KEY,
-            last_uid INTEGER NOT NULL,
-            updated_at TEXT NOT NULL
-        );",
-    )
-    .map_err(|e| format!("Failed to ensure ingest schema: {e}"))?;
-    Ok(())
-}
-
 fn now_iso() -> String {
     let now = OffsetDateTime::now_utc();
     now.format(&time::format_description::well_known::Rfc3339)
@@ -1845,13 +1734,6 @@ mod tests {
 
     fn temp_db_path() -> PathBuf {
         std::env::temp_dir().join(format!("note-test-{}.db", ulid::Ulid::new()))
-    }
-
-    #[test]
-    fn tauri_init_migration_is_in_sync_with_app_core() {
-        let app_core = include_str!("../../migrations/0001_init.sql");
-        let tauri = include_str!("../../../../src-tauri/migrations/0001_init.sql");
-        assert_eq!(app_core, tauri);
     }
 
     #[test]
@@ -2329,44 +2211,6 @@ mod tests {
             .list_reminders("n1")
             .expect("list reminders after delete");
         assert!(after_delete.is_empty());
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn open_upgrades_legacy_reminders_schema() {
-        let path = temp_db_path();
-        let conn = Connection::open(path.clone()).expect("legacy db opens");
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE notes (
-                id TEXT PRIMARY KEY,
-                body TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
-             CREATE TABLE reminders (
-                note_id TEXT NOT NULL,
-                line_number INTEGER NOT NULL CHECK(line_number > 0),
-                remind_at_ms INTEGER NOT NULL,
-                display_at TEXT NOT NULL,
-                notified_at_ms INTEGER,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (note_id, line_number),
-                FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
-             );",
-        )
-        .expect("legacy schema created");
-        drop(conn);
-
-        let db = Db::open(path.clone()).expect("db opens with upgrade");
-        db.save_note("n1", "hello").expect("note saved");
-        let reminder = db
-            .upsert_reminder("n1", 1, 1_900_000_000_000, "13.03.2030. 10:00", "line 1")
-            .expect("upsert reminder works");
-        assert_eq!(reminder.line_text, "line 1");
 
         drop(db);
         let _ = fs::remove_file(path);
