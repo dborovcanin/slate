@@ -39,6 +39,32 @@ fn map_offset_through_changes(
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
+    pub(super) fn bootstrap_folding_for_startup(&mut self) {
+        // Keep startup cheap for very large notes: build a plain 1:1 visible
+        // map and defer expensive fold structure analysis until needed.
+        self.folds.ranges.clear();
+        self.folds.range_by_start = vec![None; self.lines.len()];
+        self.folds.collapsed_starts.clear();
+        self.folds.line_has_structure = vec![false; self.lines.len()];
+        // Preserve length invariants expected by incremental fold remap logic
+        // without cloning full line content at startup.
+        self.folds.line_text_snapshot = vec![String::new(); self.lines.len()];
+        self.folds.rescan_pending = false;
+        self.folds.analysis_ready = false;
+        self.rebuild_fold_view_map();
+    }
+
+    fn ensure_fold_analysis_ready_for_command(&mut self) {
+        if !self.folds.analysis_ready
+            || self.folds.rescan_pending
+            || self.folds.range_by_start.len() != self.lines.len()
+            || self.folds.line_has_structure.len() != self.lines.len()
+            || self.folds.line_text_snapshot.len() != self.lines.len()
+        {
+            self.recompute_folding();
+        }
+    }
+
     pub(super) fn current_line(&self) -> &str {
         self.lines
             .get(self.cursor_line)
@@ -54,10 +80,9 @@ impl TerminalApp {
     }
 
     pub(super) fn rescan_calc_flags(&mut self) {
-        self.calc.cached_has_builtin_formula =
-            crate::editor_core::calc_plan::contains_builtin_formula(&self.lines);
-        self.calc.cached_has_variable_assignment =
-            crate::editor_core::calc_plan::contains_variable_assignment(&self.lines);
+        let flags = crate::editor_core::calc_plan::detect_calc_signal_flags(&self.lines);
+        self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
+        self.calc.cached_has_variable_assignment = flags.has_variable_assignment;
     }
 
     pub(super) fn update_calc_flags_incremental(&mut self) {
@@ -278,6 +303,7 @@ impl TerminalApp {
             self.folds.line_has_structure.clear();
             self.folds.line_text_snapshot.clear();
             self.apply_fold_ranges(Vec::new());
+            self.folds.analysis_ready = true;
             return;
         }
 
@@ -378,6 +404,7 @@ impl TerminalApp {
                 self.folds.range_by_start = vec![None; self.lines.len()];
                 self.rebuild_fold_view_map();
                 self.folds.rescan_pending = true;
+                self.folds.analysis_ready = false;
             } else {
                 self.recompute_folding();
             }
@@ -426,6 +453,7 @@ impl TerminalApp {
                 // Defer: fold analysis is O(N) and doesn't need to block typing.
                 // The idle tick (100 ms with no keypress) will run recompute_folding.
                 self.folds.rescan_pending = true;
+                self.folds.analysis_ready = false;
             } else {
                 self.recompute_folding();
             }
@@ -446,6 +474,7 @@ impl TerminalApp {
         self.folds.rescan_pending = false;
         let ranges = folding::build_fold_ranges(&self.lines);
         self.apply_fold_ranges(ranges);
+        self.folds.analysis_ready = true;
     }
 
     fn try_incremental_fold_remap(
@@ -465,6 +494,7 @@ impl TerminalApp {
         );
         self.folds.rescan_pending = false;
         self.apply_fold_ranges(mapped);
+        self.folds.analysis_ready = true;
         true
     }
 
@@ -665,6 +695,7 @@ impl TerminalApp {
     }
 
     pub(super) fn toggle_fold_at_cursor(&mut self) -> bool {
+        self.ensure_fold_analysis_ready_for_command();
         let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
             self.status = "fold: no foldable block at cursor".to_string();
@@ -675,6 +706,7 @@ impl TerminalApp {
     }
 
     pub(super) fn set_fold_collapsed_at_cursor(&mut self, collapsed: bool) -> bool {
+        self.ensure_fold_analysis_ready_for_command();
         let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
             self.status = "fold: no foldable block at cursor".to_string();
@@ -1776,10 +1808,8 @@ impl TerminalApp {
             }
         }
         self.lines = split_lines(&text);
-        let mapped_from =
-            map_offset_through_changes(changed_from_offset, &changes).min(text.len());
-        let mapped_to =
-            map_offset_through_changes(changed_to_offset_old, &changes).min(text.len());
+        let mapped_from = map_offset_through_changes(changed_from_offset, &changes).min(text.len());
+        let mapped_to = map_offset_through_changes(changed_to_offset_old, &changes).min(text.len());
         let mapped_changed_to = mapped_from.max(mapped_to);
         let new_changed_to_line_exclusive = text.as_bytes()[..mapped_changed_to]
             .iter()

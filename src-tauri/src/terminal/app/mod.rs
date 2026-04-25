@@ -432,15 +432,15 @@ impl TerminalApp {
         active_note.body = String::new();
         let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
 
-        let switcher_begin = Instant::now();
-        let switcher_items = switcher::load_note_meta(db)?;
-        let loading_switcher = switcher_begin.elapsed();
+        // Lazy-load switcher note metadata on demand (open/save) so startup
+        // does not scan all notes before first draw.
+        let switcher_items = Vec::new();
+        let loading_switcher = Duration::from_millis(0);
 
         let calc_engine = CalcEngine::new();
-        let initial_has_builtin_formula =
-            crate::editor_core::calc_plan::contains_builtin_formula(&lines);
-        let initial_has_variable_assignment =
-            crate::editor_core::calc_plan::contains_variable_assignment(&lines);
+        let initial_calc_signals = crate::editor_core::calc_plan::detect_calc_signal_flags(&lines);
+        let initial_has_builtin_formula = initial_calc_signals.has_builtin_formula;
+        let initial_has_variable_assignment = initial_calc_signals.has_variable_assignment;
         let note_math_enabled = active_note.modules.math;
         let note_variables_enabled = active_note.modules.variables;
         let active_has_builtin_formula = note_math_enabled && initial_has_builtin_formula;
@@ -469,11 +469,6 @@ impl TerminalApp {
         } else {
             crate::editor_core::calc_plan::line_metadata_for_lines(&lines)
         };
-        let line_has_fold_structure = lines
-            .iter()
-            .map(|line| Self::line_has_fold_structure(line))
-            .collect::<Vec<_>>();
-        let line_text_snapshot = lines.clone();
         let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
         let initial_mode = if vim_mode {
             UiMode::Normal
@@ -557,7 +552,7 @@ impl TerminalApp {
             ),
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             render_palette,
-            folds: FoldingState::empty(line_has_fold_structure, line_text_snapshot),
+            folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,
             clipboard_watch_enabled: false,
             clipboard_watch_last_text: None,
@@ -573,7 +568,7 @@ impl TerminalApp {
             last_cursor_block: false,
         };
 
-        app.recompute_folding_from_cached_structure();
+        app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();
         app.require_startup_password_if_needed();

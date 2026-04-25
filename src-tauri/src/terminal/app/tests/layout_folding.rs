@@ -57,6 +57,23 @@ fn load_note_reminder_ghosts_updates_line_text_when_line_changes_in_place() {
 }
 
 #[test]
+fn load_note_reminder_ghosts_is_empty_when_note_has_no_reminders() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db opens");
+    let note_id = "n1";
+    db.save_note(note_id, "alpha\nbeta\ngamma")
+        .expect("note saved");
+
+    let lines = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+    let ghosts =
+        crate::terminal::app::load_note_reminder_ghosts(&db, note_id, &lines).expect("load ghosts");
+    assert!(ghosts.is_empty());
+
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn display_cols_for_prefix_expands_tabs_without_clamping() {
     assert_eq!(display_cols_for_prefix("\tabc", 1), 4);
     assert_eq!(display_cols_for_prefix("\tabc", 4), 7);

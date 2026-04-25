@@ -81,6 +81,9 @@ impl TerminalApp {
         intent: crate::editor_core::vim::VimIntent,
         count: usize,
     ) -> Option<crate::editor_core::vim_actions::VimActionExecutionResult> {
+        if !crate::editor_core::vim_actions::supports_intent(intent) {
+            return None;
+        }
         let snapshot = self.build_snapshot();
         let register = self.shared_vim_register();
         crate::editor_core::vim_actions::execute_vim_action(

@@ -36,6 +36,10 @@ pub fn execute_vim_action(
     count: usize,
     register: Option<&VimRegisterValue>,
 ) -> Option<VimActionExecutionResult> {
+    if !supports_intent(intent) {
+        return None;
+    }
+
     let repeats = count.max(1);
     match intent {
         VimIntent::DeleteLine => Some(execute_delete_line(snapshot, repeats)),
@@ -73,6 +77,33 @@ pub fn execute_vim_action(
         VimIntent::DeleteChar => Some(execute_delete_char(snapshot, repeats)),
         _ => None,
     }
+}
+
+pub fn supports_intent(intent: VimIntent) -> bool {
+    matches!(
+        intent,
+        VimIntent::DeleteLine
+            | VimIntent::YankLine
+            | VimIntent::DeleteToLineStart
+            | VimIntent::DeleteToLineEnd
+            | VimIntent::YankToLineStart
+            | VimIntent::YankToLineEnd
+            | VimIntent::DeleteWordForward
+            | VimIntent::DeleteWordBackward
+            | VimIntent::DeleteWordEnd
+            | VimIntent::DeleteInsideWord
+            | VimIntent::DeleteAroundWord
+            | VimIntent::YankInsideWord
+            | VimIntent::YankAroundWord
+            | VimIntent::DeleteInsidePipe
+            | VimIntent::DeleteAroundPipe
+            | VimIntent::YankInsidePipe
+            | VimIntent::YankAroundPipe
+            | VimIntent::YankWordForward
+            | VimIntent::YankWordBackward
+            | VimIntent::PasteAfter
+            | VimIntent::DeleteChar
+    )
 }
 
 fn execute_delete_line(snapshot: &EditorContextSnapshot, count: usize) -> VimActionExecutionResult {
@@ -1033,6 +1064,15 @@ mod tests {
             .as_ref()
             .filter(|reg| reg.mode == VimRegisterMode::Linewise)
             .map(|reg| reg.text.as_str())
+    }
+
+    #[test]
+    fn supports_intent_only_for_shared_edit_operations() {
+        assert!(supports_intent(VimIntent::DeleteLine));
+        assert!(supports_intent(VimIntent::PasteAfter));
+        assert!(!supports_intent(VimIntent::MoveDown));
+        assert!(!supports_intent(VimIntent::MoveUp));
+        assert!(!supports_intent(VimIntent::MoveWordForward));
     }
 
     #[test]

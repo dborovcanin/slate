@@ -14,6 +14,7 @@ pub struct FoldingState {
     pub line_has_structure: Vec<bool>,
     pub line_text_snapshot: Vec<String>,
     pub rescan_pending: bool,
+    pub analysis_ready: bool,
     pub pending_prefix_until: Option<Instant>,
 }
 
@@ -30,6 +31,7 @@ impl FoldingState {
             line_has_structure,
             line_text_snapshot,
             rescan_pending: false,
+            analysis_ready: false,
             pending_prefix_until: None,
         }
     }

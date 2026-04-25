@@ -26,12 +26,19 @@ pub struct LineMetadata {
     pub has_builtin_formula: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CalcSignalFlags {
+    pub has_variable_assignment: bool,
+    pub has_builtin_formula: bool,
+}
+
 pub fn line_metadata(line: &String) -> LineMetadata {
     LineMetadata {
         hash: hash_line(line),
         assignment_name: assignment_name(line),
         has_assignment: contains_assignment_operator(line),
-        has_builtin_formula: contains_builtin_formula(std::slice::from_ref(line)),
+        has_builtin_formula: line_has_builtin_formula(line),
     }
 }
 
@@ -42,7 +49,7 @@ pub fn line_metadata_for_lines(lines: &[String]) -> Vec<LineMetadata> {
             hash: hash_line(line),
             assignment_name: assignment_name(line),
             has_assignment: contains_assignment_operator(line),
-            has_builtin_formula: contains_builtin_formula(std::slice::from_ref(line)),
+            has_builtin_formula: line_has_builtin_formula(line),
         })
         .collect()
 }
@@ -522,7 +529,7 @@ fn is_table_line(line: &str) -> bool {
     trimmed.starts_with('|') && trimmed.ends_with('|')
 }
 
-pub fn find_single_calc_table_cell(line: &str) -> Option<CalcSegment> {
+fn find_single_calc_table_cell_range(line: &str) -> Option<(usize, usize)> {
     if !is_table_line(line) {
         return None;
     }
@@ -537,8 +544,8 @@ pub fn find_single_calc_table_cell(line: &str) -> Option<CalcSegment> {
         return None;
     }
 
-    let mut formula_candidates: Vec<CalcSegment> = Vec::new();
-    let mut candidates: Vec<CalcSegment> = Vec::new();
+    let mut formula_candidates: Vec<(usize, usize)> = Vec::new();
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
 
     for pair in pipes.windows(2) {
         let start = pair[0] + 1;
@@ -561,11 +568,10 @@ pub fn find_single_calc_table_cell(line: &str) -> Option<CalcSegment> {
             continue;
         }
 
-        let segment = segment_from_byte_range(line, trimmed, from_byte, to_byte);
         if is_builtin_formula(trimmed) {
-            formula_candidates.push(segment);
+            formula_candidates.push((from_byte, to_byte));
         } else {
-            candidates.push(segment);
+            candidates.push((from_byte, to_byte));
         }
     }
 
@@ -581,6 +587,12 @@ pub fn find_single_calc_table_cell(line: &str) -> Option<CalcSegment> {
     candidates.into_iter().next()
 }
 
+pub fn find_single_calc_table_cell(line: &str) -> Option<CalcSegment> {
+    let (from_byte, to_byte) = find_single_calc_table_cell_range(line)?;
+    let expr = line[from_byte..to_byte].trim();
+    Some(segment_from_byte_range(line, expr, from_byte, to_byte))
+}
+
 pub fn find_list_calc_segment(line: &str) -> Option<CalcSegment> {
     let (from_byte, to_byte) = list_body_byte_range(line)?;
     let expr = line[from_byte..to_byte].trim();
@@ -594,31 +606,47 @@ pub fn find_calc_segment(line: &str) -> Option<CalcSegment> {
     find_single_calc_table_cell(line).or_else(|| find_list_calc_segment(line))
 }
 
-pub fn line_for_calc_evaluation(line: &str) -> String {
-    if let Some(segment) = find_calc_segment(line) {
-        return segment.expr;
+fn line_for_calc_evaluation_slice(line: &str) -> Option<&str> {
+    if let Some((from_byte, to_byte)) = find_single_calc_table_cell_range(line) {
+        return Some(line[from_byte..to_byte].trim());
     }
 
     if is_table_line(line) {
-        return String::new();
+        return None;
     }
 
     if let Some((from_byte, to_byte)) = list_body_byte_range(line) {
         let value = line[from_byte..to_byte].trim();
         if has_calc_signal(value) {
-            return value.to_string();
+            return Some(value);
         }
-        return String::new();
+        return None;
     }
 
-    line.to_string()
+    Some(line)
+}
+
+fn line_has_builtin_formula(line: &str) -> bool {
+    let Some(eval_target) = line_for_calc_evaluation_slice(line) else {
+        return false;
+    };
+    let trimmed = eval_target.trim();
+    !trimmed.is_empty() && !builtin_formula_labels_in_text(trimmed).is_empty()
+}
+
+pub fn line_for_calc_evaluation(line: &str) -> String {
+    if let Some(eval_target) = line_for_calc_evaluation_slice(line) {
+        return eval_target.to_string();
+    }
+    String::new()
 }
 
 pub fn line_uses_assignment_ghost_prefix(line: &str) -> bool {
-    let eval_target = line_for_calc_evaluation(line);
-    let trimmed = eval_target.trim();
-    if !trimmed.is_empty() {
-        return contains_assignment_operator(trimmed);
+    if let Some(eval_target) = line_for_calc_evaluation_slice(line) {
+        let trimmed = eval_target.trim();
+        if !trimmed.is_empty() {
+            return contains_assignment_operator(trimmed);
+        }
     }
     contains_assignment_operator(line)
 }
@@ -628,11 +656,23 @@ pub fn contains_variable_assignment(lines: &[String]) -> bool {
 }
 
 pub fn contains_builtin_formula(lines: &[String]) -> bool {
-    lines.iter().any(|line| {
-        let eval_target = line_for_calc_evaluation(line);
-        let trimmed = eval_target.trim();
-        !trimmed.is_empty() && !builtin_formula_labels_in_text(trimmed).is_empty()
-    })
+    lines.iter().any(|line| line_has_builtin_formula(line))
+}
+
+pub fn detect_calc_signal_flags(lines: &[String]) -> CalcSignalFlags {
+    let mut flags = CalcSignalFlags::default();
+    for line in lines {
+        if !flags.has_variable_assignment && contains_assignment_operator(line) {
+            flags.has_variable_assignment = true;
+        }
+        if !flags.has_builtin_formula && line_has_builtin_formula(line) {
+            flags.has_builtin_formula = true;
+        }
+        if flags.has_variable_assignment && flags.has_builtin_formula {
+            break;
+        }
+    }
+    flags
 }
 
 pub fn decide_eval_scope(
@@ -720,9 +760,10 @@ fn parse_variable_assignment_name_rhs(input: &str) -> Option<(String, String)> {
 }
 
 pub fn assignment_name(line: &str) -> Option<String> {
-    let eval_target = line_for_calc_evaluation(line);
-    if let Some((name, _)) = parse_variable_assignment_name_rhs(eval_target.trim()) {
-        return Some(name);
+    if let Some(eval_target) = line_for_calc_evaluation_slice(line) {
+        if let Some((name, _)) = parse_variable_assignment_name_rhs(eval_target.trim()) {
+            return Some(name);
+        }
     }
 
     if is_table_line(line) {
@@ -778,7 +819,9 @@ struct VariableDependencyDef {
 fn collect_variable_dependency_defs(lines: &[String]) -> HashMap<String, VariableDependencyDef> {
     let mut defs = HashMap::new();
     for (line_idx, line) in lines.iter().enumerate() {
-        let eval_target = line_for_calc_evaluation(line);
+        let Some(eval_target) = line_for_calc_evaluation_slice(line) else {
+            continue;
+        };
         let Some((name, rhs)) = parse_variable_assignment_name_rhs(eval_target.trim()) else {
             continue;
         };
@@ -1297,7 +1340,6 @@ fn shared_suffix_len_hashed(a: &[u64], b: &[u64], prefix_len: usize) -> usize {
     i
 }
 
-
 pub fn plan_incremental_calc_from_hashes(
     prev_hashes: &[u64],
     prev_results: &[Option<String>],
@@ -1509,6 +1551,25 @@ mod tests {
             "| sum_col() * a + 5 |".to_string(),
         ];
         assert!(contains_builtin_formula(&lines));
+    }
+
+    #[test]
+    fn detect_calc_signal_flags_reports_assignment_and_builtin_formula() {
+        let lines = vec![
+            "x := 2".to_string(),
+            "| value | sum_col() * x |".to_string(),
+        ];
+        let flags = detect_calc_signal_flags(&lines);
+        assert!(flags.has_variable_assignment);
+        assert!(flags.has_builtin_formula);
+    }
+
+    #[test]
+    fn detect_calc_signal_flags_ignores_plain_numeric_table_and_list_literals() {
+        let lines = vec!["- [x] 6".to_string(), "| label | 6 |".to_string()];
+        let flags = detect_calc_signal_flags(&lines);
+        assert!(!flags.has_variable_assignment);
+        assert!(!flags.has_builtin_formula);
     }
 
     #[test]

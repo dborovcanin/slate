@@ -69,10 +69,13 @@ pub(super) fn load_note_reminder_ghosts(
     let mut reminders = db.list_reminders(note_id)?;
     reminders.sort_by_key(|reminder| reminder.line_number);
 
-    let mut text_to_lines: HashMap<String, Vec<usize>> = HashMap::new();
-    for (idx, line) in lines.iter().enumerate() {
-        text_to_lines.entry(line.clone()).or_default().push(idx + 1);
+    // Fast path for large notes: avoid building line-text indexes when there
+    // are no reminders at all.
+    if reminders.is_empty() {
+        return Ok(HashMap::new());
     }
+
+    let mut text_to_lines: Option<HashMap<String, Vec<usize>>> = None;
 
     let mut used_lines: HashSet<usize> = HashSet::new();
     let mut planned = Vec::with_capacity(reminders.len());
@@ -100,7 +103,17 @@ pub(super) fn load_note_reminder_ghosts(
         }
 
         if target_line.is_none() {
-            if let Some(candidates) = text_to_lines.get(&reminder.line_text) {
+            if text_to_lines.is_none() {
+                let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+                for (idx, line) in lines.iter().enumerate() {
+                    index.entry(line.clone()).or_default().push(idx + 1);
+                }
+                text_to_lines = Some(index);
+            }
+            if let Some(candidates) = text_to_lines
+                .as_ref()
+                .and_then(|index| index.get(&reminder.line_text))
+            {
                 target_line = nearest_available_line(candidates, preferred_line, &used_lines);
             }
         }
