@@ -545,6 +545,28 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
+  const runVerticalMoveCounted = (
+    view: EditorView,
+    deltaLines: number,
+    explicitCount: number,
+  ) => {
+    const count = Number.isFinite(explicitCount) && explicitCount > 0 ? explicitCount : 1;
+    const delta = Math.trunc(deltaLines * count);
+    if (delta === 0) return true;
+
+    const head = view.state.selection.main.head;
+    const sourceLine = view.state.doc.lineAt(head);
+    const goalCol = head - sourceLine.from;
+    const targetLineNumber = Math.min(
+      Math.max(sourceLine.number + delta, 1),
+      view.state.doc.lines,
+    );
+    const targetLine = view.state.doc.line(targetLineNumber);
+    const targetPos = Math.min(targetLine.from + goalCol, targetLine.to);
+    view.dispatch({ selection: { anchor: targetPos }, scrollIntoView: true });
+    return true;
+  };
+
   const runMove = (
     view: EditorView,
     command: (target: EditorView) => boolean,
@@ -555,11 +577,12 @@ export function vimModeExtension(options: VimOptions = {}) {
     const count = Number.isFinite(explicitCount) && explicitCount > 0 ? explicitCount : 1;
 
     if (currentMode === "visual-line" && (command === cursorLineUp || command === cursorLineDown)) {
-      let headLine = visualHeadLine ?? getHeadInfo(view).lineNumber;
-      for (let i = 0; i < count; i++) {
-        headLine += command === cursorLineUp ? -1 : 1;
-        headLine = Math.min(Math.max(headLine, 1), view.state.doc.lines);
-      }
+      const direction = command === cursorLineUp ? -1 : 1;
+      const baseLine = visualHeadLine ?? getHeadInfo(view).lineNumber;
+      const headLine = Math.min(
+        Math.max(baseLine + direction * count, 1),
+        view.state.doc.lines,
+      );
       visualHeadLine = headLine;
       applyVisualLineSelection(view);
       return true;
@@ -582,7 +605,12 @@ export function vimModeExtension(options: VimOptions = {}) {
         view.dispatch({ selection: { anchor: caret } });
       }
     }
-    runCounted(view, command, count);
+    if (command === cursorLineUp || command === cursorLineDown) {
+      const direction = command === cursorLineUp ? -1 : 1;
+      runVerticalMoveCounted(view, direction, count);
+    } else {
+      runCounted(view, command, count);
+    }
     if (isVisual) {
       if (currentMode === "visual-line") {
         let caret = view.state.selection.main.head;
