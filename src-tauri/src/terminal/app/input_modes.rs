@@ -18,6 +18,7 @@ impl TerminalApp {
             UiMode::Normal => self.handle_normal_key(db, key)?,
             UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
+            UiMode::ContentSearch => self.handle_content_search_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(db, key)?,
             UiMode::Search => self.handle_search_key(key)?,
         }

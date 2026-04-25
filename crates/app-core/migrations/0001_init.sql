@@ -17,6 +17,7 @@ CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at DESC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     note_id UNINDEXED,
+    note_title,
     body,
     tokenize = 'unicode61'
 );
@@ -24,8 +25,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
 CREATE TRIGGER IF NOT EXISTS notes_fts_ai
 AFTER INSERT ON notes
 BEGIN
-    INSERT INTO notes_fts(rowid, note_id, body)
-    SELECT new.rowid, new.id, new.body
+    INSERT INTO notes_fts(rowid, note_id, note_title, body)
+    SELECT new.rowid, new.id, new.note_title, new.body
     WHERE new.access_mode = 'none';
 END;
 
@@ -39,8 +40,8 @@ CREATE TRIGGER IF NOT EXISTS notes_fts_au
 AFTER UPDATE ON notes
 BEGIN
     DELETE FROM notes_fts WHERE rowid = old.rowid;
-    INSERT INTO notes_fts(rowid, note_id, body)
-    SELECT new.rowid, new.id, new.body
+    INSERT INTO notes_fts(rowid, note_id, note_title, body)
+    SELECT new.rowid, new.id, new.note_title, new.body
     WHERE new.access_mode = 'none';
 END;
 

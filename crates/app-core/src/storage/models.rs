@@ -55,6 +55,15 @@ pub struct NoteSummary {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteSearchResult {
+    pub id: String,
+    pub title: String,
+    pub snippet: String,
+    pub rank: f64,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Reminder {
     pub note_id: String,
     pub line_number: i64,

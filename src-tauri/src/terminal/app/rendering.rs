@@ -8,7 +8,10 @@ use super::{
 use crate::terminal::render;
 use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines};
 use crate::terminal::{date_picker, input, notifications, switcher};
-use crate::terminal::{date_picker::DatePickerView, switcher::SwitcherView};
+use crate::terminal::{
+    date_picker::DatePickerView,
+    switcher::{ContentSearchView, SwitcherView},
+};
 use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
@@ -405,6 +408,7 @@ impl TerminalApp {
             UiMode::CommandBar => " CMD",
             UiMode::Search => " SEARCH",
             UiMode::Switcher => " SWITCH",
+            UiMode::ContentSearch => " SEARCH",
             UiMode::DatePicker => " DATE",
         };
         let title_line = format!(
@@ -795,6 +799,13 @@ impl TerminalApp {
                     "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
                 }
             }
+            UiMode::ContentSearch => {
+                if self.switcher_open_confirm.is_some() {
+                    "Open note: type password, Enter confirm, Esc cancel"
+                } else {
+                    "Content search: type to search, Enter open, Tab title search, Esc close"
+                }
+            }
             UiMode::DatePicker => {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
@@ -839,6 +850,30 @@ impl TerminalApp {
                     self.render_palette,
                 );
             }
+            if let Some(confirm) = self.switcher_open_confirm.as_ref() {
+                switcher::draw_open_confirm(
+                    &confirm.note_title,
+                    confirm.password.chars().count(),
+                    &mut buf,
+                    rows,
+                    cols,
+                    self.render_palette,
+                );
+            }
+        }
+
+        if self.mode == UiMode::ContentSearch {
+            switcher::draw_content_search(
+                &ContentSearchView {
+                    query: &self.content_search_query,
+                    results: &self.content_search_results,
+                    selected: self.content_search_selected,
+                },
+                &mut buf,
+                rows,
+                cols,
+                self.render_palette,
+            );
             if let Some(confirm) = self.switcher_open_confirm.as_ref() {
                 switcher::draw_open_confirm(
                     &confirm.note_title,
@@ -1020,6 +1055,17 @@ impl TerminalApp {
                 let prompt = " search: ";
                 let col = (x + 1 + prompt.chars().count() + self.switcher_query.chars().count())
                     .min(cols.max(1));
+                (y + 1, col.max(1))
+            }
+            UiMode::ContentSearch => {
+                let box_w = min(cols.saturating_sub(4).max(30), 72);
+                let box_h = min(rows.saturating_sub(4).max(9), 16);
+                let x = (cols.saturating_sub(box_w)) / 2 + 1;
+                let y = (rows.saturating_sub(box_h)) / 2 + 1;
+                let prompt = " content: ";
+                let col = (x + 1 + prompt.chars().count()
+                    + self.content_search_query.chars().count())
+                .min(cols.max(1));
                 (y + 1, col.max(1))
             }
         }

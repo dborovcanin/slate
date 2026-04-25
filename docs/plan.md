@@ -262,17 +262,21 @@ Acceptance criteria:
 ## Note Search Pass 2 Plan (Post First-Pass FTS)
 
 Context:
+
 - First pass introduced operational content search using SQLite FTS5 in shared core.
 - Current behavior indexes only `access_mode = 'none'` notes and powers switcher search.
 
 Goal:
+
 - Upgrade note search from "working" to "robust and scalable" while preserving architecture boundaries and responsiveness on large note sets.
 
 Affected layers:
+
 - Shared editor/runtime core (`crates/app-core`) owns indexing semantics, query parsing, ranking, and result shaping.
 - UI/TUI stay as thin adapters that call shared search APIs and render results.
 
 Risks to manage:
+
 - Index drift when write paths evolve.
 - Query syntax edge cases causing confusing "no results" behavior.
 - Large-note / large-dataset latency regressions from poorly bounded search requests.
@@ -281,58 +285,70 @@ Risks to manage:
 ### Phase 2.1: Search Contract and Index Lifecycle Hardening
 
 1. Add an explicit shared search contract:
+
 - Request shape: query text, limit, optional paging cursor, optional filters.
 - Response shape: note id, title, optional snippet, rank score, updated_at.
 
-2. Add index maintenance guardrails:
+1. Add index maintenance guardrails:
+
 - Keep trigger-based incremental indexing for note writes.
 - Add `rebuild_note_search_index` in shared core for repair/recovery.
 - Add startup health check with light validation (sampled or bounded consistency checks).
 
-3. Add operational controls:
+1. Add operational controls:
+
 - Bounded limit and query term count in shared core.
 - Optional maintenance hooks (`optimize`) for long-running datasets.
 
 Acceptance criteria:
+
 - Index stays in sync across create/save/append/delete/lock/encrypt/decrypt/ingest flows.
 - Rebuild operation restores correct results after forced index reset.
 
 ### Phase 2.2: Search Quality and UX Semantics
 
 1. Improve query semantics:
+
 - Normalize query tokens (phrase-safe parsing, sane punctuation handling).
 - Support quoted phrase matching and prefix behavior intentionally.
 - Define deterministic behavior for empty/very-short queries.
 
-2. Improve ranking:
+1. Improve ranking:
+
 - Keep `bm25` base ranking.
 - Add deterministic recency tie-break weighting.
 - Optionally boost title hits over body-only hits.
 
-3. Add snippet generation:
+1. Add snippet generation:
+
 - Return short matched excerpt for UI/TUI result context.
 - Keep snippets derived only from indexed plaintext notes.
 
 Acceptance criteria:
+
 - Search results are stable and relevant for mixed short/long queries.
 - UI/TUI can present match context without adding frontend-specific parsing logic.
 
 ### Phase 2.3: Parity, Performance, and Safety
 
 1. Parity:
+
 - Expose identical shared search behavior to both Tauri UI and terminal.
 - Add parity tests around ranking order and query parsing behavior.
 
-2. Performance:
+1. Performance:
+
 - Add benchmark scenarios for 1k/10k+ note metadata sets and large note bodies.
 - Track p50/p95 query latency and enforce bounds in CI/perf checks where feasible.
 
-3. Security and privacy:
+1. Security and privacy:
+
 - Keep protected notes (`locked`/`encrypted`) excluded from persisted searchable content by default.
 - Ensure transitions to protected modes remove searchable rows immediately.
 - Add regression tests that verify no protected content appears in search results/snippets.
 
 Acceptance criteria:
+
 - No measurable regressions to note editing responsiveness.
 - Search remains fast under realistic large datasets.
 - Protected-note content remains non-searchable by default.
@@ -340,6 +356,8 @@ Acceptance criteria:
 ### Implementation checklist (Pass 2)
 
 - [ ] Define and document shared `search_notes` API contract in app-core.
+- [ ] Fix dialog search in TUI.
+- [ ] Fix typing in search
 - [ ] Add shared-core index rebuild command and command surface exposure.
 - [ ] Add phrase/prefix query parser and deterministic token normalization.
 - [ ] Add snippet extraction in shared core response type.

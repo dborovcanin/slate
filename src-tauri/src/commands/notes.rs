@@ -1,4 +1,4 @@
-use app_core::storage::{Note, NoteModules, NoteSummary};
+use app_core::storage::{Note, NoteModules, NoteSearchResult, NoteSummary};
 use app_core::AppCore;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -97,8 +97,13 @@ pub fn search_notes_content(
     core: State<'_, AppCore>,
     query: String,
     limit: Option<usize>,
-) -> Result<Vec<NoteSummary>, String> {
+) -> Result<Vec<NoteSearchResult>, String> {
     core.db().search_notes_content(&query, limit.unwrap_or(40))
+}
+
+#[tauri::command]
+pub fn rebuild_note_search_index(core: State<'_, AppCore>) -> Result<(), String> {
+    core.db().rebuild_note_search_index()
 }
 
 #[tauri::command]

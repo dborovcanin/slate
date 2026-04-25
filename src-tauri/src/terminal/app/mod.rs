@@ -17,7 +17,7 @@ use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
-use app_core::storage::{NoteAccessMode, NoteModules};
+use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
 use std::cmp::min;
 use std::collections::HashMap;
 use std::io;
@@ -83,6 +83,7 @@ enum UiMode {
     Visual,
     VisualLine,
     Switcher,
+    ContentSearch,
     CommandBar,
     Search,
     DatePicker,
@@ -227,6 +228,9 @@ struct TerminalApp {
     switcher_selected: usize,
     switcher_open_confirm: Option<SwitcherOpenConfirm>,
     switcher_delete_confirm: Option<SwitcherDeleteConfirm>,
+    content_search_query: String,
+    content_search_results: Vec<NoteSearchResult>,
+    content_search_selected: usize,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -495,6 +499,9 @@ impl TerminalApp {
             switcher_selected: 0,
             switcher_open_confirm: None,
             switcher_delete_confirm: None,
+            content_search_query: String::new(),
+            content_search_results: Vec::new(),
+            content_search_selected: 0,
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,

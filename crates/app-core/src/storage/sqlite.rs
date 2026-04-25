@@ -10,7 +10,7 @@ use std::sync::{Condvar, Mutex};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
-use super::models::{Note, NoteAccessMode, NoteModules, NoteSummary, Reminder};
+use super::models::{Note, NoteAccessMode, NoteModules, NoteSearchResult, NoteSummary, Reminder};
 use super::note_access::{NoteAccessGrant, NoteAccessService};
 
 const DEFAULT_NOTE_MODULES_JSON: &str =
@@ -70,7 +70,9 @@ impl SqlitePool {
         first
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
+        apply_pending_migrations(&first)?;
         seed_note_search_index_if_empty(&first)?;
+        check_and_heal_search_index(&first)?;
 
         let mut connections = Vec::with_capacity(pool_size.max(1));
         connections.push(first);
@@ -796,7 +798,7 @@ impl Db {
         &self,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<NoteSummary>, String> {
+    ) -> Result<Vec<NoteSearchResult>, String> {
         let fts_query = build_fts_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
@@ -805,34 +807,37 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT n.id, n.note_title, substr(n.body, 1, 200), n.access_mode, n.updated_at
-                 FROM notes_fts f
-                 JOIN notes n ON n.rowid = f.rowid
+                "SELECT n.id, n.note_title,
+                        snippet(notes_fts, 2, '[[', ']]', '…', 16),
+                        bm25(notes_fts, 0.0, 10.0, 1.0),
+                        n.updated_at
+                 FROM notes_fts
+                 JOIN notes n ON n.rowid = notes_fts.rowid
                  WHERE notes_fts MATCH ?1
                    AND n.access_mode = 'none'
-                 ORDER BY bm25(notes_fts), n.updated_at DESC
+                 ORDER BY bm25(notes_fts, 0.0, 10.0, 1.0), n.updated_at DESC
                  LIMIT ?2",
             )
             .map_err(|e| e.to_string())?;
-        let rows = stmt
+        let results = stmt
             .query_map(rusqlite::params![fts_query, bounded_limit], |row| {
-                Ok(NoteSummaryRow {
+                Ok(NoteSearchResult {
                     id: row.get(0)?,
-                    note_title: row.get(1)?,
-                    body_prefix: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(3)?),
+                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    snippet: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    rank: row.get(3)?,
                     updated_at: row.get(4)?,
                 })
             })
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+        Ok(results)
+    }
 
-        let mut notes = Vec::with_capacity(rows.len());
-        for row in &rows {
-            notes.push(self.note_summary_from_row(&conn, row)?);
-        }
-        Ok(notes)
+    pub fn rebuild_note_search_index(&self) -> Result<(), String> {
+        let conn = self.conn.lock().unwrap();
+        rebuild_note_search_index_inner(&conn)
     }
 
     pub fn delete_note(&self, id: &str, password: Option<&str>) -> Result<bool, String> {
@@ -1771,19 +1776,68 @@ fn escape_like_pattern(value: &str) -> String {
     out
 }
 
+fn apply_pending_migrations(conn: &Connection) -> Result<(), String> {
+    let needs_fts_title: bool = conn
+        .query_row(
+            "SELECT COUNT(1) FROM sqlite_master \
+             WHERE type='table' AND name='notes_fts' AND sql NOT LIKE '%note_title%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if needs_fts_title {
+        conn.execute_batch(include_str!("../../migrations/0002_fts_title.sql"))
+            .map_err(|e| format!("Migration 0002 (fts_title) failed: {e}"))?;
+    }
+    Ok(())
+}
+
+fn rebuild_note_search_index_inner(conn: &Connection) -> Result<(), String> {
+    conn.execute("DELETE FROM notes_fts", [])
+        .map_err(|e| format!("Failed to clear FTS index: {e}"))?;
+    conn.execute(
+        "INSERT INTO notes_fts(rowid, note_id, note_title, body)
+         SELECT rowid, id, note_title, body FROM notes WHERE access_mode = 'none'",
+        [],
+    )
+    .map_err(|e| format!("Failed to rebuild FTS index: {e}"))?;
+    Ok(())
+}
+
+fn check_and_heal_search_index(conn: &Connection) -> Result<(), String> {
+    let notes_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(1) FROM notes WHERE access_mode = 'none'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| format!("Failed to count searchable notes: {e}"))?;
+    let indexed_count: i64 = conn
+        .query_row("SELECT COUNT(1) FROM notes_fts", [], |row| row.get(0))
+        .map_err(|e| format!("Failed to count FTS index rows: {e}"))?;
+
+    if notes_count != indexed_count {
+        eprintln!(
+            "note search index drift detected ({notes_count} notes, {indexed_count} indexed): rebuilding"
+        );
+        rebuild_note_search_index_inner(conn)?;
+    }
+    Ok(())
+}
+
 fn seed_note_search_index_if_empty(conn: &Connection) -> Result<(), String> {
-    let indexed_rows = conn
-        .query_row("SELECT COUNT(1) FROM notes_fts", [], |row| {
-            row.get::<_, i64>(0)
-        })
+    let indexed_rows: i64 = conn
+        .query_row("SELECT COUNT(1) FROM notes_fts", [], |row| row.get(0))
         .map_err(|e| format!("Failed to inspect note search index: {e}"))?;
     if indexed_rows > 0 {
         return Ok(());
     }
 
     conn.execute(
-        "INSERT INTO notes_fts(rowid, note_id, body)
-         SELECT rowid, id, body
+        "INSERT INTO notes_fts(rowid, note_id, note_title, body)
+         SELECT rowid, id, note_title, body
          FROM notes
          WHERE access_mode = 'none'",
         [],
@@ -1794,19 +1848,49 @@ fn seed_note_search_index_if_empty(conn: &Connection) -> Result<(), String> {
 
 fn build_fts_query(raw: &str) -> String {
     let mut terms = Vec::new();
-    for token in raw.split_whitespace() {
+    let mut chars = raw.chars().peekable();
+
+    while chars.peek().is_some() {
+        while matches!(chars.peek(), Some(c) if c.is_whitespace()) {
+            chars.next();
+        }
         if terms.len() >= SEARCH_QUERY_MAX_TERMS {
             break;
         }
-        let cleaned: String = token
-            .chars()
-            .filter(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '-')
-            .collect();
-        if cleaned.is_empty() {
-            continue;
+        match chars.peek() {
+            None => break,
+            Some(&'"') => {
+                chars.next();
+                let mut phrase = String::new();
+                for ch in chars.by_ref() {
+                    if ch == '"' {
+                        break;
+                    }
+                    if ch.is_alphanumeric() || ch.is_whitespace() || ch == '_' || ch == '-' {
+                        phrase.push(ch);
+                    }
+                }
+                let phrase = phrase.trim().to_string();
+                if !phrase.is_empty() {
+                    terms.push(format!("\"{}\"", phrase.replace('"', "\"\"")));
+                }
+            }
+            Some(_) => {
+                let mut token = String::new();
+                while let Some(&ch) = chars.peek() {
+                    if ch.is_whitespace() || ch == '"' {
+                        break;
+                    }
+                    chars.next();
+                    if ch.is_alphanumeric() || ch == '_' || ch == '-' {
+                        token.push(ch);
+                    }
+                }
+                if !token.is_empty() {
+                    terms.push(format!("\"{}\"*", token.replace('"', "\"\"")));
+                }
+            }
         }
-        let escaped = cleaned.replace('\"', "\"\"");
-        terms.push(format!("\"{escaped}\"*"));
     }
     terms.join(" ")
 }
@@ -2240,6 +2324,185 @@ mod tests {
 
         drop(db);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_notes_content_returns_snippet_with_highlight_markers() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "the quarterly budget review is scheduled for monday")
+            .expect("save note");
+
+        let hits = db
+            .search_notes_content("budget", 10)
+            .expect("search succeeds");
+        assert_eq!(hits.len(), 1);
+        assert!(
+            hits[0].snippet.contains("[[") && hits[0].snippet.contains("]]"),
+            "snippet should contain highlight markers, got: {:?}",
+            hits[0].snippet
+        );
+        assert!(hits[0].snippet.contains("budget") || hits[0].snippet.contains("[[budget]]"),
+            "snippet should include the matched term");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_notes_content_phrase_query_matches_exact_sequence() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("match", "the quick brown fox jumps over the lazy dog")
+            .expect("save note");
+        db.save_note("no-match", "quick fox brown jumps dog lazy")
+            .expect("save note");
+
+        let hits = db
+            .search_notes_content("\"quick brown fox\"", 10)
+            .expect("search succeeds");
+        let ids: Vec<&str> = hits.iter().map(|r| r.id.as_str()).collect();
+        assert!(ids.contains(&"match"), "phrase should match contiguous sequence");
+        assert!(!ids.contains(&"no-match"), "phrase should not match non-contiguous tokens");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_notes_content_title_hit_ranks_above_body_only_hit() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        // note with "rocket" only in body
+        db.save_note("body-only", "the concept of a rocket propulsion system is complex")
+            .expect("save body-only note");
+        thread::sleep(Duration::from_millis(5));
+        // note with "rocket" in title (first line becomes title)
+        db.save_note("title-hit", "Rocket science overview\nsome content here")
+            .expect("save title-hit note");
+
+        let hits = db
+            .search_notes_content("rocket", 10)
+            .expect("search succeeds");
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].id, "title-hit", "title match should rank first");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn rebuild_note_search_index_restores_results_after_index_reset() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "restore me after rebuild").expect("save note");
+
+        // Manually corrupt the index
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute("DELETE FROM notes_fts", []).expect("corrupt index");
+        }
+
+        let empty = db
+            .search_notes_content("restore", 10)
+            .expect("search on empty index");
+        assert!(empty.is_empty(), "index should be empty after manual clear");
+
+        db.rebuild_note_search_index().expect("rebuild succeeds");
+
+        let hits = db
+            .search_notes_content("restore", 10)
+            .expect("search after rebuild");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "n1");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_index_excludes_note_after_lock_and_encrypt_transitions() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("will-lock", "canary lock content")
+            .expect("save note");
+        db.save_note("will-encrypt", "canary encrypt content")
+            .expect("save note");
+
+        // Both notes indexed initially
+        let before = db.search_notes_content("canary", 10).expect("search");
+        assert_eq!(before.len(), 2);
+
+        db.lock_note("will-lock", "pass1").expect("lock note");
+        let after_lock = db.search_notes_content("canary", 10).expect("search after lock");
+        assert_eq!(after_lock.len(), 1);
+        assert_eq!(after_lock[0].id, "will-encrypt");
+
+        db.encrypt_note("will-encrypt", "pass2").expect("encrypt note");
+        let after_encrypt = db.search_notes_content("canary", 10).expect("search after encrypt");
+        assert!(after_encrypt.is_empty(), "both protected notes must be removed from index");
+
+        // Verify neither title nor snippet leaks protected content
+        assert!(
+            !after_lock.iter().any(|r| r.snippet.contains("lock")),
+            "locked note content must not appear in snippets"
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_index_restores_note_after_decrypt() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("encme", "canary decrypt content").expect("save note");
+        db.encrypt_note("encme", "pass1").expect("encrypt note");
+
+        let encrypted = db.search_notes_content("canary", 10).expect("search after encrypt");
+        assert!(encrypted.is_empty(), "encrypted note should not be searchable");
+
+        db.decrypt_note("encme", "pass1").expect("decrypt note");
+        let decrypted = db.search_notes_content("canary", 10).expect("search after decrypt");
+        assert_eq!(decrypted.len(), 1);
+        assert_eq!(decrypted[0].id, "encme");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_locked_note_stays_unsearchable_after_session_unlock() {
+        // unlock_note for locked notes is in-session only — access_mode stays 'locked' in DB
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("lockme", "canary locked content").expect("save note");
+        db.lock_note("lockme", "pass1").expect("lock note");
+        db.unlock_note("lockme", "pass1").expect("session unlock");
+
+        let hits = db.search_notes_content("canary", 10).expect("search");
+        assert!(hits.is_empty(), "locked note should remain unsearchable even after session unlock");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn build_fts_query_phrase_and_prefix_parsing() {
+        assert_eq!(build_fts_query("hello world"), "\"hello\"* \"world\"*");
+        assert_eq!(build_fts_query("\"exact phrase\""), "\"exact phrase\"");
+        assert_eq!(build_fts_query("\"exact phrase\" prefix"), "\"exact phrase\" \"prefix\"*");
+        assert_eq!(build_fts_query(""), "");
+        assert_eq!(build_fts_query("   "), "");
+        // punctuation stripped from unquoted tokens
+        assert_eq!(build_fts_query("hello!world"), "\"helloworld\"*");
     }
 
     #[test]

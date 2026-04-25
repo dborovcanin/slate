@@ -1,8 +1,8 @@
 use super::{
     line_char_len, load_note_reminder_ghosts, new_note, trim_trailing_word,
     CommandCompletionMenuState, CommandCompletionOption, DatePickerAction, Db, Key, Note,
-    SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES,
-    COMMAND_COMPLETION_MAX_OPTIONS, MAX_COMMAND_HISTORY_ENTRIES,
+    NoteSearchResult, SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode,
+    CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher};
@@ -75,8 +75,10 @@ impl TerminalApp {
                 }
                 self.recompute_switcher_matches();
             }
-            Key::Tab
-            | Key::CtrlDelete
+            Key::Tab => {
+                self.open_content_search(db)?;
+            }
+            Key::CtrlDelete
             | Key::BackTab
             | Key::ArrowLeft
             | Key::ArrowRight
@@ -1119,6 +1121,127 @@ impl TerminalApp {
                 }
             }
         }
+    }
+
+    pub(super) fn open_content_search(&mut self, db: &Db) -> Result<(), String> {
+        self.dismiss_variable_autocomplete_popup();
+        self.mode = UiMode::ContentSearch;
+        self.content_search_query.clear();
+        self.content_search_results.clear();
+        self.content_search_selected = 0;
+        self.switcher_open_confirm = None;
+        self.switcher_delete_confirm = None;
+        self.status =
+            "Content search: type to search, Enter open, Tab title search, Esc close".to_string();
+        // pre-load switcher items so we can fall back to meta lookup on open
+        if self.switcher_items.is_empty() {
+            self.refresh_switcher_items(db)?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn close_content_search(&mut self) {
+        self.dismiss_variable_autocomplete_popup();
+        self.mode = UiMode::Editor;
+        self.content_search_query.clear();
+        self.content_search_results.clear();
+        self.content_search_selected = 0;
+        self.status = format!("editing {}", self.active_note.id);
+    }
+
+    pub(super) fn recompute_content_search(&mut self, db: &Db) {
+        let query = self.content_search_query.trim().to_string();
+        if query.is_empty() {
+            self.content_search_results.clear();
+            self.content_search_selected = 0;
+            return;
+        }
+        match db.search_notes_content(&query, 40) {
+            Ok(results) => {
+                self.content_search_results = results;
+                self.content_search_selected = 0;
+            }
+            Err(error) => {
+                self.status = format!("content search failed: {error}");
+                self.content_search_results.clear();
+            }
+        }
+    }
+
+    pub(super) fn handle_content_search_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        match key {
+            Key::Esc | Key::Ctrl('p') => {
+                self.close_content_search();
+            }
+            Key::Ctrl('q') => {
+                self.quit = true;
+            }
+            Key::Tab => {
+                self.open_switcher(db)?;
+            }
+            Key::Ctrl('w') => {
+                trim_trailing_word(&mut self.content_search_query);
+                self.recompute_content_search(db);
+            }
+            Key::ArrowUp => {
+                if self.content_search_selected > 0 {
+                    self.content_search_selected -= 1;
+                }
+            }
+            Key::ArrowDown => {
+                if self.content_search_selected + 1 < self.content_search_results.len() {
+                    self.content_search_selected += 1;
+                }
+            }
+            Key::Backspace => {
+                self.content_search_query.pop();
+                self.recompute_content_search(db);
+            }
+            Key::Enter => {
+                if let Some(result) = self
+                    .content_search_results
+                    .get(self.content_search_selected)
+                    .cloned()
+                {
+                    // Check if the note is protected
+                    let access_mode = self
+                        .switcher_items
+                        .iter()
+                        .find(|n| n.id == result.id)
+                        .map(|n| n.access_mode)
+                        .unwrap_or(NoteAccessMode::None);
+                    let is_unlocked = self
+                        .switcher_items
+                        .iter()
+                        .find(|n| n.id == result.id)
+                        .map(|n| n.is_unlocked)
+                        .unwrap_or(false);
+                    if access_mode != NoteAccessMode::None && !is_unlocked {
+                        self.switcher_open_confirm = Some(SwitcherOpenConfirm {
+                            note_id: result.id.clone(),
+                            note_title: result.title.clone(),
+                            password: String::new(),
+                        });
+                        self.mode = UiMode::Switcher;
+                        self.recompute_switcher_matches();
+                    } else {
+                        self.open_note_from_switcher(db, &result.id.clone(), None)?;
+                    }
+                }
+            }
+            Key::Char(ch) => {
+                self.content_search_query.push(ch);
+                self.recompute_content_search(db);
+            }
+            Key::Paste(text) => {
+                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                    self.content_search_query.push(ch);
+                }
+                self.recompute_content_search(db);
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {

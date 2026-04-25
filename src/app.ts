@@ -763,7 +763,7 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl+P — toggle switcher
+    // Ctrl+P — title switcher
     if (e.ctrlKey && !e.shiftKey && key === "p") {
       e.preventDefault();
       if (isSwitcherOpen()) {
@@ -771,6 +771,18 @@ function setupKeyboardShortcuts() {
         focusEditor();
       } else {
         openNoteSwitcher();
+      }
+      return;
+    }
+
+    // Ctrl+Shift+P — content search
+    if (e.ctrlKey && e.shiftKey && key === "p") {
+      e.preventDefault();
+      if (isSwitcherOpen()) {
+        closeSwitcher();
+        focusEditor();
+      } else {
+        openSwitcher(switchToNote, undefined, "content");
       }
       return;
     }

@@ -28,6 +28,14 @@ export interface NoteSummary {
   updated_at: string;
 }
 
+export interface NoteSearchResult {
+  id: string;
+  title: string;
+  snippet: string;
+  rank: number;
+  updated_at: string;
+}
+
 export interface NoteReminder {
   note_id: string;
   line_number: number;
@@ -150,8 +158,12 @@ export function listNotesMeta(): Promise<NoteSummary[]> {
   return invoke<NoteSummary[]>("list_notes_meta");
 }
 
-export function searchNotesContent(query: string, limit = 40): Promise<NoteSummary[]> {
-  return invoke<NoteSummary[]>("search_notes_content", { query, limit });
+export function searchNotesContent(query: string, limit = 40): Promise<NoteSearchResult[]> {
+  return invoke<NoteSearchResult[]>("search_notes_content", { query, limit });
+}
+
+export function rebuildNoteSearchIndex(): Promise<void> {
+  return invoke<void>("rebuild_note_search_index");
 }
 
 export function getNoteMeta(id: string): Promise<NoteSummary | null> {
