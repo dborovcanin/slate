@@ -17,7 +17,47 @@ export interface FontPreset {
   stack: string;
 }
 
+export interface AccentPreset {
+  id: string;
+  label: string;
+  value: string;
+}
+
 export const COLOR_SCHEMES: Record<string, ColorScheme> = {
+  slate: {
+    id: "slate",
+    label: "Slate",
+    vars: {
+      "--bg": "#f3efe8",
+      "--bg-surface": "#fbf8f2",
+      "--bg-overlay": "#f6f1e8",
+      "--fg": "#1e1c18",
+      "--fg-dim": "#6d665b",
+      "--fg-muted": "#8f8678",
+      "--accent": "#7a5a3a",
+      "--border": "#d8cec0",
+      "--selection-bg": "rgba(122, 90, 58, 0.18)",
+      "--active-line-bg": "rgba(30, 28, 24, 0.05)",
+      "--pattern-color": "rgba(30, 28, 24, 0.06)",
+    },
+  },
+  "slate-dark": {
+    id: "slate-dark",
+    label: "Slate Dark",
+    vars: {
+      "--bg": "#17161a",
+      "--bg-surface": "#1d1c20",
+      "--bg-overlay": "#26242b",
+      "--fg": "#ece8e0",
+      "--fg-dim": "#b7b1a7",
+      "--fg-muted": "#938d83",
+      "--accent": "#3e5266",
+      "--border": "#3a3740",
+      "--selection-bg": "rgba(62, 82, 102, 0.26)",
+      "--active-line-bg": "rgba(236, 232, 224, 0.05)",
+      "--pattern-color": "rgba(236, 232, 224, 0.06)",
+    },
+  },
   "catppuccin-mocha": {
     id: "catppuccin-mocha",
     label: "Catppuccin Mocha",
@@ -222,6 +262,18 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       "--pattern-color": "rgba(171, 178, 191, 0.07)",
     },
   },
+};
+
+export const DEFAULT_ACCENT = "auto";
+
+export const ACCENT_PRESETS: Record<string, AccentPreset> = {
+  auto: { id: "auto", label: "Auto", value: "" },
+  amber: { id: "amber", label: "Amber", value: "#c7772f" },
+  sage: { id: "sage", label: "Sage", value: "#4f8a64" },
+  rose: { id: "rose", label: "Rose", value: "#b55a79" },
+  plum: { id: "plum", label: "Plum", value: "#7a5fa8" },
+  cobalt: { id: "cobalt", label: "Cobalt", value: "#4e7dd6" },
+  slate: { id: "slate", label: "Slate", value: "#3e5266" },
 };
 
 export const BACKGROUND_PRESETS: Record<string, BackgroundPreset> = {

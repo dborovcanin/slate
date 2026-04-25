@@ -44,7 +44,6 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
         false,
         true,
         true,
-        true,
         3,
         super::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),

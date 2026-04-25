@@ -75,22 +75,16 @@ function noteWithModules(modules: NoteModules): Note {
   };
 }
 
-test("effectiveModules gates variables by per-note module even when global legacy flag is true", () => {
-  const config = {
-    ...DEFAULT_THEME_CONFIG,
-    variables_enabled: true,
-  };
+test("effectiveModules gates variables by per-note module", () => {
+  const config = { ...DEFAULT_THEME_CONFIG };
   const note = noteWithModules({ math: true, table: true, variables: false, style: true });
   const resolved = modulesForNote(note, config);
   const loaded = effectiveModules(resolved, DEFAULT_RUNTIME_FLAGS);
   assert.equal(loaded.variables, false);
 });
 
-test("effectiveModules keeps variables enabled when note module is on even if legacy flag is false", () => {
-  const config = {
-    ...DEFAULT_THEME_CONFIG,
-    variables_enabled: false,
-  };
+test("effectiveModules keeps variables enabled when note module is on", () => {
+  const config = { ...DEFAULT_THEME_CONFIG };
   const note = noteWithModules({ math: true, table: true, variables: true, style: true });
   const resolved = modulesForNote(note, config);
   const loaded = effectiveModules(resolved, DEFAULT_RUNTIME_FLAGS);

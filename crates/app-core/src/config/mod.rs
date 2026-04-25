@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use time::{Month, OffsetDateTime, UtcOffset};
 
 const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
+const DEFAULT_ACCENT: &str = "auto";
 const DEFAULT_BACKGROUND: &str = "plain";
 const DEFAULT_FONT: &str = "jetbrains-mono";
 const DEFAULT_FONT_SIZE: u8 = 14;
@@ -19,7 +20,6 @@ const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
-const DEFAULT_VARIABLES_ENABLED: bool = true;
 const DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 3;
 const DEFAULT_MODULE_MATH_ENABLED: bool = true;
 const DEFAULT_MODULE_TABLE_ENABLED: bool = true;
@@ -50,9 +50,13 @@ const MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 1;
 const MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 100_000;
 const MIN_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 0;
 const MAX_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 3650;
-const DEFAULT_CONFIG: &str = r#"# Note configuration
+const DEFAULT_CONFIG: &str = r#"# Slate configuration
+#
+# All settings are optional. Unknown keys are ignored.
+# Update only values you want to override.
 #
 # Color schemes:
+#   slate, slate-dark,
 #   catppuccin-mocha, catppuccin-latte, gruvbox-dark, gruvbox-light,
 #   dracula, dark, white, solarized-dark, solarized-light,
 #   nord, tokyo-night, one-dark
@@ -72,41 +76,46 @@ const DEFAULT_CONFIG: &str = r#"# Note configuration
 #
 # Date format tokens:
 #   %Y, %y, %m, %d, %b, %B, %H, %M
-# variables.autocomplete_min_chars range:
-#   1..8
 
 [theme]
+# Visual theme palette.
 color_scheme = "gruvbox-light"
+# Accent palette token or custom hex.
+#   auto, amber, sage, rose, plum, cobalt, slate
+#   custom hex also works, e.g. #4f7bd9
+accent = "auto"
+# Canvas background pattern.
 background = "plain"
+# UI/editor font family token.
 font = "jetbrains-mono"
+# UI/editor font size in px. Range: 11..28
 font_size = 14
+# Motion speed profile.
 animation_mode = "fast"
+# Motion entry style for popups/surfaces.
 animation_style = "pop-up"
 
 [editor]
-# Enable markdown editing helpers (list continuation, table alignment, etc.)
+# Enable markdown helpers while typing (list continuation, table alignment).
 markdown_autoformat = true
-# Automatically move checked checklist items to bottom and unchecked to top
+# Move checked checklist items to bottom and unchecked to top.
 checklist_auto_reorder = true
-# Run :format before save (Ctrl+S and save flush path)
+# Run :format before every save.
 format_on_save = false
-# Start in terminal mode by default when launched from a TTY
+# Default to terminal runtime when launched from a TTY.
 terminal_mode = false
-# Enable Vim keybindings in GUI editor
+# Enable Vim keybindings in GUI.
 vim_mode = false
-# Date format used by :date and date picker insert
+# Date format used by :date and date picker insert.
 date_format = "%Y-%m-%d"
-# Date+time format used by :date (when time is included) and :notify
+# Date+time format used by :date (with time) and :notify.
 date_time_format = "%Y-%m-%d %H:%M"
-
-[editor.variables]
-# Legacy compatibility flag (runtime gating is per-note via editor.modules)
-enabled = true
-# Minimum typed characters to show variable completion suggestions
-autocomplete_min_chars = 3
+# Minimum typed chars before variable autocomplete suggestions appear.
+# Range: 1..8
+variable_autocomplete_min_chars = 3
 
 [editor.modules]
-# Default per-note modules for newly created notes
+# Default per-note modules for newly created notes.
 # Runtime behavior uses the active note's modules in both GUI and TUI.
 math = true
 table = true
@@ -114,38 +123,40 @@ variables = true
 style = true
 
 [editor.security]
-# When enabled, newly created notes are encrypted at rest by default.
+# Encrypt newly created notes at rest by default.
 encrypt_notes = false
-# Environment variable used as the default encryption password.
+# Environment variable with default note encryption password.
 password_env = "SLATE_NOTES_PASSWORD"
 
 [special_notes]
-# Prefix for date-partitioned email inbox notes
+# Prefix for date-partitioned email inbox notes.
 email_note_prefix = "inbox-email"
-# Rotation strategy for email captures
+# Rotation strategy for email capture notes.
 email_rotation = "daily-local"
 
 [imap]
-# IMAP server host and implicit TLS port (993 by default)
+# IMAP server host.
 host = "imap.example.com"
+# IMAP TLS port.
 port = 993
-# Account username/login for IMAP
+# IMAP account username/login.
 username = ""
-# Environment variable containing IMAP account password or app password
+# Environment variable containing IMAP password/app password.
 password_env = "SLATE_IMAP_PASSWORD"
-# Folder to pull (typically INBOX)
+# Mailbox folder to sync.
 folder = "INBOX"
-# Poll interval for background IMAP sync loop
+# Poll interval in seconds. Range: 10..86400
 poll_seconds = 60
-# Enable background IMAP polling when running GUI/terminal modes
+# Start background IMAP polling on app startup.
 auto_sync_on_startup = false
-# On first sync (before a UID checkpoint exists), pull only last N messages
+# First sync window before UID checkpoint exists. Range: 1..100000
 initial_sync_max_messages = 200
-# Restrict every IMAP sync to recent days (0 disables date filter)
+# Sync recency filter in days. 0 disables date filter. Range: 0..3650
 initial_sync_past_days = 1
-# Maximum accepted raw message payload size in bytes
+# Maximum accepted raw message payload size in bytes. Range: 1024..67108864
 max_message_bytes = 8388608
-# Maximum stored message body size in bytes (truncated in note body when exceeded)
+# Maximum stored message body bytes. Must be <= max_message_bytes.
+# Range: 1024..67108864
 max_body_bytes = 524288
 "#;
 
@@ -171,6 +182,7 @@ impl Default for EditorModulesConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThemeConfig {
     pub color_scheme: String,
+    pub accent: String,
     pub background: String,
     pub font: String,
     pub font_size: u8,
@@ -183,9 +195,6 @@ pub struct ThemeConfig {
     pub vim_mode: bool,
     pub date_format: String,
     pub date_time_format: String,
-    // Compatibility-only parse field. Runtime variable gating is per-note via
-    // Note.modules.variables.
-    pub variables_enabled: bool,
     pub variables_autocomplete_min_chars: u8,
     pub default_modules: EditorModulesConfig,
     // Compatibility-only fields. Runtime note security should be accessed
@@ -310,6 +319,7 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             color_scheme: DEFAULT_COLOR_SCHEME.to_string(),
+            accent: DEFAULT_ACCENT.to_string(),
             background: DEFAULT_BACKGROUND.to_string(),
             font: DEFAULT_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
@@ -322,7 +332,6 @@ impl Default for ThemeConfig {
             vim_mode: DEFAULT_VIM_MODE,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
-            variables_enabled: DEFAULT_VARIABLES_ENABLED,
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
             default_modules: EditorModulesConfig::default(),
             encrypt_notes: DEFAULT_ENCRYPT_NOTES,
@@ -346,6 +355,7 @@ struct FileConfig {
 #[derive(Debug, Clone, Deserialize, Default)]
 struct ThemeSection {
     color_scheme: Option<String>,
+    accent: Option<String>,
     background: Option<String>,
     font: Option<String>,
     font_size: Option<u16>,
@@ -362,18 +372,11 @@ struct EditorSection {
     vim_mode: Option<bool>,
     date_format: Option<String>,
     date_time_format: Option<String>,
-    #[serde(default)]
-    variables: VariablesSection,
+    variable_autocomplete_min_chars: Option<u16>,
     #[serde(default)]
     modules: ModulesSection,
     #[serde(default)]
     security: SecuritySection,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-struct VariablesSection {
-    enabled: Option<bool>,
-    autocomplete_min_chars: Option<u16>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -542,6 +545,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         normalize_animation_pair(raw.theme.animation_mode, raw.theme.animation_style);
     Ok(ThemeConfig {
         color_scheme: normalize_name(raw.theme.color_scheme, DEFAULT_COLOR_SCHEME),
+        accent: normalize_name(raw.theme.accent, DEFAULT_ACCENT),
         background: normalize_name(raw.theme.background, DEFAULT_BACKGROUND),
         font: normalize_name(raw.theme.font, DEFAULT_FONT),
         font_size: normalize_font_size(raw.theme.font_size),
@@ -560,13 +564,8 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
         date_time_format: normalize_date_time_format(raw.editor.date_time_format, &date_format),
         date_format,
-        variables_enabled: raw
-            .editor
-            .variables
-            .enabled
-            .unwrap_or(DEFAULT_VARIABLES_ENABLED),
         variables_autocomplete_min_chars: normalize_variable_autocomplete_min_chars(
-            raw.editor.variables.autocomplete_min_chars,
+            raw.editor.variable_autocomplete_min_chars,
         ),
         default_modules: EditorModulesConfig {
             math: raw
@@ -850,6 +849,7 @@ mod tests {
             r#"
             [theme]
             color_scheme = "Gruvbox Dark"
+            accent = "rose"
             background = "squares"
             font = "Fira Code"
             font_size = 18
@@ -864,10 +864,7 @@ mod tests {
             vim_mode = true
             date_format = "%d.%m.%Y"
             date_time_format = "%d.%m.%Y. %H:%M"
-
-            [editor.variables]
-            enabled = false
-            autocomplete_min_chars = 5
+            variable_autocomplete_min_chars = 5
 
             [editor.modules]
             math = false
@@ -879,6 +876,7 @@ mod tests {
         .expect("config parsed");
 
         assert_eq!(cfg.color_scheme, "gruvbox-dark");
+        assert_eq!(cfg.accent, "rose");
         assert_eq!(cfg.background, "squares");
         assert_eq!(cfg.font, "fira-code");
         assert_eq!(cfg.font_size, 18);
@@ -891,7 +889,6 @@ mod tests {
         assert!(cfg.vim_mode);
         assert_eq!(cfg.date_format, "%d.%m.%Y");
         assert_eq!(cfg.date_time_format, "%d.%m.%Y. %H:%M");
-        assert!(!cfg.variables_enabled);
         assert_eq!(cfg.variables_autocomplete_min_chars, 5);
         assert!(!cfg.default_modules.math);
         assert!(cfg.default_modules.table);
@@ -991,7 +988,7 @@ mod tests {
         assert_eq!(cfg.animation_style, "pop-up");
         assert_eq!(cfg.date_format, "%Y-%m-%d");
         assert_eq!(cfg.date_time_format, "%Y-%m-%d %H:%M");
-        assert!(cfg.variables_enabled);
+        assert_eq!(cfg.accent, "auto");
         assert_eq!(cfg.variables_autocomplete_min_chars, 3);
         assert!(cfg.default_modules.math);
         assert!(cfg.default_modules.table);

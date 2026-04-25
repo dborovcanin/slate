@@ -1,8 +1,10 @@
 import { getThemeConfigOrDefault, type ThemeConfig } from "../api";
 import {
+  ACCENT_PRESETS,
   BACKGROUND_PRESETS,
   clampFontSize,
   COLOR_SCHEMES,
+  DEFAULT_ACCENT,
   DEFAULT_BACKGROUND,
   DEFAULT_COLOR_SCHEME,
   DEFAULT_FONT,
@@ -13,6 +15,7 @@ import {
 
 export interface ThemeSelection {
   colorScheme: string;
+  accent: string;
   background: string;
   font: string;
   fontSize: number;
@@ -322,8 +325,44 @@ function computeHeadingMetrics(fontSize: number, lineHeightPx: number) {
   };
 }
 
+function toRgba(color: Rgb, alpha: number): string {
+  return `rgba(${clampChannel(color.r)}, ${clampChannel(color.g)}, ${clampChannel(color.b)}, ${alpha})`;
+}
+
+function resolveAccentToken(raw: string | undefined): string {
+  const text = raw?.trim() ?? "";
+  if (!text) return DEFAULT_ACCENT;
+  const normalized = normalizeName(text);
+  if (!normalized || normalized === DEFAULT_ACCENT) return DEFAULT_ACCENT;
+  if (ACCENT_PRESETS[normalized]) return normalized;
+  const parsed = parseCssColor(text) ?? parseCssColor(normalized);
+  if (!parsed) return DEFAULT_ACCENT;
+  return toHex(parsed);
+}
+
+function resolveAccentColor(
+  accentToken: string,
+  schemeAccent: string,
+): { token: string; color: string } {
+  const normalized = normalizeName(accentToken);
+  if (!normalized || normalized === DEFAULT_ACCENT) {
+    return { token: DEFAULT_ACCENT, color: schemeAccent };
+  }
+  const preset = ACCENT_PRESETS[normalized];
+  if (preset) {
+    return { token: normalized, color: preset.value };
+  }
+  const parsed = parseCssColor(accentToken) ?? parseCssColor(normalized);
+  if (!parsed) {
+    return { token: DEFAULT_ACCENT, color: schemeAccent };
+  }
+  const hex = toHex(parsed);
+  return { token: hex, color: hex };
+}
+
 export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelection {
   const colorSchemeKey = normalizeName(input.color_scheme);
+  const accent = resolveAccentToken(input.accent);
   const backgroundKey = normalizeName(input.background);
   const fontKey = normalizeName(input.font);
   const fontSize =
@@ -332,6 +371,7 @@ export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelecti
 
   return {
     colorScheme: COLOR_SCHEMES[colorSchemeKey] ? colorSchemeKey : DEFAULT_COLOR_SCHEME,
+    accent,
     background: BACKGROUND_PRESETS[backgroundKey] ? backgroundKey : DEFAULT_BACKGROUND,
     font: FONT_PRESETS[fontKey] ? fontKey : DEFAULT_FONT,
     fontSize,
@@ -342,6 +382,7 @@ export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelecti
 
 export function applyTheme(selection: ThemeSelection) {
   const scheme = COLOR_SCHEMES[selection.colorScheme] ?? COLOR_SCHEMES[DEFAULT_COLOR_SCHEME];
+  const accent = resolveAccentColor(selection.accent, scheme.vars["--accent"] ?? "#4aa8ff");
   const background =
     BACKGROUND_PRESETS[selection.background] ?? BACKGROUND_PRESETS[DEFAULT_BACKGROUND];
   const font = FONT_PRESETS[selection.font] ?? FONT_PRESETS[DEFAULT_FONT];
@@ -354,13 +395,20 @@ export function applyTheme(selection: ThemeSelection) {
     MOTION_STYLE_PRESETS[animationStyle] ?? MOTION_STYLE_PRESETS[DEFAULT_ANIMATION_STYLE];
   const lineHeightPx = computeEditorLineHeightPx(fontSize);
   const heading = computeHeadingMetrics(fontSize, lineHeightPx);
+  const vars: Record<string, string> = {
+    ...scheme.vars,
+    "--accent": accent.color,
+  };
+  const bgColor = parseCssColor(vars["--bg"]) ?? FALLBACK_BG;
+  const accentColor = parseCssColor(vars["--accent"]) ?? FALLBACK_ACCENT;
+  vars["--selection-bg"] = toRgba(accentColor, luminance(bgColor) < 0.45 ? 0.24 : 0.2);
   const root = document.documentElement;
 
-  for (const [name, value] of Object.entries(scheme.vars)) {
+  for (const [name, value] of Object.entries(vars)) {
     root.style.setProperty(name, value);
   }
 
-  const codePalette = deriveCodePalette(scheme.vars);
+  const codePalette = deriveCodePalette(vars);
   for (const [name, value] of Object.entries(codePalette)) {
     root.style.setProperty(name, value);
   }
@@ -381,6 +429,7 @@ export function applyTheme(selection: ThemeSelection) {
   root.style.setProperty("--heading-line-height", `${heading.headingLineHeight}px`);
 
   root.dataset.theme = scheme.id;
+  root.dataset.accent = accent.token;
   root.dataset.background = background.id;
   root.dataset.font = font.id;
   root.dataset.motion = animationMode;
@@ -397,6 +446,7 @@ export function applyTheme(selection: ThemeSelection) {
 
   const applied = {
     colorScheme: scheme.id,
+    accent: accent.token,
     background: background.id,
     font: font.id,
     fontSize,
@@ -411,6 +461,7 @@ function sameSelection(a: ThemeSelection | null, b: ThemeSelection): boolean {
   return (
     !!a &&
     a.colorScheme === b.colorScheme &&
+    a.accent === b.accent &&
     a.background === b.background &&
     a.font === b.font &&
     a.fontSize === b.fontSize &&

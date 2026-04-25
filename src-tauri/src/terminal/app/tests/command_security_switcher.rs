@@ -429,7 +429,6 @@ fn startup_with_locked_recent_note_prompts_for_password() {
         false,
         true,
         true,
-        true,
         3,
         crate::terminal::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),

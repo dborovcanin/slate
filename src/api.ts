@@ -41,6 +41,7 @@ export interface NoteReminder {
 
 export interface ThemeConfig {
   color_scheme: string;
+  accent: string;
   background: string;
   font: string;
   font_size: number;
@@ -53,7 +54,6 @@ export interface ThemeConfig {
   vim_mode: boolean;
   date_format: string;
   date_time_format: string;
-  variables_enabled: boolean;
   variables_autocomplete_min_chars: number;
   default_modules: NoteModules;
   encrypt_notes: boolean;
@@ -72,6 +72,7 @@ export interface RuntimeFlags {
 
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   color_scheme: "gruvbox-light",
+  accent: "auto",
   background: "plain",
   font: "jetbrains-mono",
   font_size: 14,
@@ -84,7 +85,6 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   vim_mode: false,
   date_format: "%Y-%m-%d",
   date_time_format: "%Y-%m-%d %H:%M",
-  variables_enabled: true,
   variables_autocomplete_min_chars: 3,
   default_modules: {
     math: true,

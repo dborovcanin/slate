@@ -283,6 +283,7 @@ Example:
 ```toml
 [theme]
 color_scheme = "gruvbox-light"
+accent = "auto"
 background = "plain"
 font = "jetbrains-mono"
 font_size = 14
@@ -294,11 +295,8 @@ format_on_save = false
 terminal_mode = false
 vim_mode = false
 date_format = "%Y-%m-%d"
-
-[editor.variables]
-# compatibility-only (runtime uses per-note modules.variables)
-enabled = true
-autocomplete_min_chars = 3
+date_time_format = "%Y-%m-%d %H:%M"
+variable_autocomplete_min_chars = 3
 
 [editor.modules]
 math = true
@@ -325,6 +323,8 @@ max_body_bytes = 524288
 ```
 
 Available `color_scheme` values:
+- `slate`
+- `slate-dark`
 - `catppuccin-mocha`
 - `catppuccin-latte`
 - `gruvbox-dark`
@@ -337,6 +337,16 @@ Available `color_scheme` values:
 - `nord`
 - `tokyo-night`
 - `one-dark`
+
+Available `accent` values:
+- `auto` (use the scheme default accent)
+- `amber`
+- `sage`
+- `rose`
+- `plum`
+- `cobalt`
+- `slate`
+- custom hex (example: `#4f7bd9`)
 
 Available `background` values:
 - `plain`
@@ -365,8 +375,7 @@ Editor options:
 - `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
 
 Variable options:
-- `[editor.variables] enabled = true` is kept for compatibility only (runtime variable gating is controlled by each note's `modules.variables`)
-- `[editor.variables] autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
+- `[editor] variable_autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
 
 Module defaults for new notes:
 - `[editor.modules] math = true` enables calc ghost/evaluation module
