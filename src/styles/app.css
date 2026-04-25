@@ -8,10 +8,19 @@ html, body {
   height: 100%;
   background-color: var(--bg);
   color: var(--fg);
-  font-family: var(--font-sans);
+  font-family: var(--body-font, var(--font-sans));
   font-size: var(--font-size);
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme^="slate"] body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  background: var(--bg-backdrop, var(--bg));
+  text-rendering: optimizeLegibility;
 }
 
 #app {
@@ -24,18 +33,63 @@ html, body {
   background-position: 0 0;
 }
 
+:root[data-theme^="slate"] #app {
+  width: min(1080px, 100%);
+  height: min(820px, calc(100vh - 64px));
+  max-height: 100%;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--window-radius, 14px);
+  box-shadow: var(--shadow-window, none);
+  background: var(--paper, var(--bg-surface));
+  background-image: none;
+}
+
 .status-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 4px 16px;
-  background: var(--bg-surface);
-  border-top: 1px solid var(--border);
+  background: var(--paper, var(--bg-surface));
+  border-top: 1px solid var(--rule, var(--border));
   font-size: 12px;
-  color: var(--fg-dim);
+  color: var(--ink-faint, var(--fg-dim));
   flex-shrink: 0;
   user-select: none;
   min-height: 28px;
+}
+
+:root[data-theme^="slate"] .status-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  pointer-events: none;
+  background: linear-gradient(to top, var(--paper) 65%, transparent);
+  border-top: none;
+  padding: 0 24px;
+  height: 32px;
+  min-height: 32px;
+}
+
+:root[data-theme^="slate"] .status-bar-title {
+  font-family: var(--display-font, Georgia, serif);
+  font-style: italic;
+  font-weight: 500;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+
+:root[data-theme^="slate"] .status-bar-meta {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+:root[data-theme^="slate"] #editor {
+  padding-bottom: 32px;
 }
 
 .status-bar-title {
@@ -86,12 +140,13 @@ html, body {
   bottom: 40px;
   left: 50%;
   transform: translateX(-50%);
-  background: var(--bg-overlay);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: var(--paper, var(--bg-overlay));
+  border: 1px solid var(--rule-strong, var(--border));
+  border-radius: var(--radius-md, var(--radius, 6px));
   padding: 6px 14px;
   font-size: 12px;
-  color: var(--fg);
+  color: var(--ink, var(--fg));
+  box-shadow: var(--shadow-popover, none);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
@@ -114,10 +169,10 @@ html, body {
 
 .app-confirm-panel {
   width: min(460px, calc(100vw - 32px));
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-surface);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--rule-strong, var(--border));
+  border-radius: var(--window-radius, 10px);
+  background: var(--paper, var(--bg-surface));
+  box-shadow: var(--shadow-dialog, 0 16px 36px rgba(0, 0, 0, 0.35));
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -127,15 +182,15 @@ html, body {
 .app-confirm-message {
   font-size: 13px;
   line-height: 1.45;
-  color: var(--fg);
+  color: var(--ink, var(--fg));
 }
 
 .app-confirm-input {
   width: 100%;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule-strong, var(--border));
   border-radius: 6px;
   background: var(--bg-overlay);
-  color: var(--fg);
+  color: var(--ink, var(--fg));
   font: inherit;
   font-size: 13px;
   line-height: 1.4;
@@ -143,13 +198,13 @@ html, body {
 }
 
 .app-confirm-input::placeholder {
-  color: var(--fg-muted);
+  color: var(--ink-faint, var(--fg-muted));
 }
 
 .app-confirm-input:focus,
 .app-confirm-input:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--rule-strong, var(--border)));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
@@ -161,25 +216,25 @@ html, body {
 
 .app-confirm-btn {
   appearance: none;
-  border: 1px solid var(--border);
+  border: 1px solid var(--rule-strong, var(--border));
   border-radius: 6px;
   padding: 6px 12px;
   font-size: 12px;
   cursor: pointer;
-  color: var(--fg);
+  color: var(--ink, var(--fg));
   background: var(--bg-overlay);
   transition: background 0.12s, border-color 0.12s;
 }
 
 .app-confirm-btn:hover {
   background: var(--bg-surface);
-  border-color: var(--fg-dim);
+  border-color: var(--ink-soft, var(--fg-dim));
 }
 
 .app-confirm-btn:focus,
 .app-confirm-btn:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--rule-strong, var(--border)));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
@@ -205,10 +260,10 @@ html, body {
 
 .date-picker-panel {
   width: min(340px, calc(100vw - 32px));
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg-surface);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--rule-strong, var(--border));
+  border-radius: var(--window-radius, 10px);
+  background: var(--paper, var(--bg-surface));
+  box-shadow: var(--shadow-dialog, 0 16px 36px rgba(0, 0, 0, 0.35));
   padding: 16px;
   display: flex;
   flex-direction: column;
@@ -412,4 +467,18 @@ html, body {
 
 .date-picker-btn-primary:hover {
   opacity: 0.9;
+}
+
+@media (max-width: 960px), (max-height: 760px) {
+  :root[data-theme^="slate"] body {
+    display: block;
+    padding: 0;
+  }
+
+  :root[data-theme^="slate"] #app {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    box-shadow: none;
+  }
 }

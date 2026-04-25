@@ -43,6 +43,22 @@
   --motion-popup-enter-transform: translateY(calc(var(--motion-offset) * -0.9)) scale(0.86);
   --motion-popup-exit-transform: translateY(calc(var(--motion-offset) * -0.45)) scale(0.9);
   --motion-item-enter-transform: translateY(calc(var(--motion-offset) * 0.25)) scale(0.95);
+
+  /* Slate semantic tokens — fallbacks for non-Slate themes bridge to existing vars */
+  --ink: var(--fg);
+  --paper: var(--bg-surface);
+  --ink-soft: var(--fg-dim);
+  --ink-faint: var(--fg-dim);
+  --rule: var(--border);
+  --rule-strong: var(--border);
+  --accent-soft: color-mix(in srgb, var(--accent) 12%, transparent);
+  --display-font: var(--font-mono);
+  --body-font: var(--font-sans);
+  --window-radius: 0px;
+  --shadow-window: none;
+  --shadow-dialog: 0 16px 36px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.16);
+  --bg-backdrop: var(--bg);
 }
 
 ::-webkit-scrollbar {
@@ -54,12 +70,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--rule-strong, var(--border));
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--fg-muted);
+  background: var(--ink-soft, var(--fg-muted));
 }
 
 ::selection {

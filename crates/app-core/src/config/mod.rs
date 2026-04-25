@@ -7,6 +7,7 @@ use time::{Month, OffsetDateTime, UtcOffset};
 const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_BACKGROUND: &str = "plain";
 const DEFAULT_FONT: &str = "jetbrains-mono";
+const DEFAULT_DISPLAY_FONT: &str = "literata";
 const DEFAULT_FONT_SIZE: u8 = 14;
 const DEFAULT_ANIMATION_MODE: &str = "fast";
 const DEFAULT_ANIMATION_STYLE: &str = "pop-up";
@@ -50,102 +51,181 @@ const MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 1;
 const MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 100_000;
 const MIN_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 0;
 const MAX_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 3650;
-const DEFAULT_CONFIG: &str = r#"# Note configuration
-#
-# Color schemes:
-#   catppuccin-mocha, catppuccin-latte, gruvbox-dark, gruvbox-light,
-#   dracula, dark, white, solarized-dark, solarized-light,
-#   nord, tokyo-night, one-dark
-#
-# Backgrounds:
-#   plain, lines, squares, dots, diagonal
-#
-# Fonts:
-#   jetbrains-mono, fira-code, cascadia-code, iosevka, hack, source-code-pro
-#
-# Animation modes:
-#   fast, fade, smooth, spring
-#   (compat: none disables all animations)
-#
-# Animation styles:
-#   slide-up, pop-up, none
-#
-# Date format tokens:
-#   %Y, %y, %m, %d, %b, %B, %H, %M
-# variables.autocomplete_min_chars range:
-#   1..8
+const DEFAULT_CONFIG: &str = r#"# Slate configuration
+# -------------------
+# All settings are optional. Uncomment and change the ones you want to override.
+# Unknown keys are silently ignored, so it is safe to leave everything here.
+
+# ── Theme ──────────────────────────────────────────────────────────────────────
 
 [theme]
-color_scheme = "gruvbox-light"
+
+# Color scheme.
+#   slate          — warm paper, serif headings, quiet chrome (default)
+#   slate-dark     — warm dark writing surface
+#   slate-light    — clean white paper with dark ink
+#   catppuccin-mocha   catppuccin-latte
+#   gruvbox-dark       gruvbox-light
+#   dracula
+#   dark               white
+#   solarized-dark     solarized-light
+#   nord
+#   tokyo-night
+#   one-dark
+color_scheme = "slate"
+
+# Background pattern drawn over the editor surface.
+#   plain, lines, squares, dots, diagonal
 background = "plain"
+
+# Editor monospace font (used in the CodeMirror text area).
+#   jetbrains-mono, fira-code, cascadia-code, iosevka, hack, source-code-pro
 font = "jetbrains-mono"
+
+# Display / heading font (used for UI chrome, status bar title, and headings
+# in Slate themes). Has no visible effect on non-Slate color schemes.
+#   literata       — optical-size variable serif (default)
+#   fraunces       — quirky optical-size serif
+#   source-serif-4 — clean readable optical-size serif
+#   eb-garamond    — classic Renaissance Garamond
+display_font = "literata"
+
+# Editor font size in pixels. Range: 11–28.
 font_size = 14
+
+# Animation speed preset.
+#   fast (default), fade, smooth, spring, none
 animation_mode = "fast"
+
+# Animation style / enter direction for popups and lists.
+#   pop-up (default), slide-up, none
 animation_style = "pop-up"
 
+# ── Editor ─────────────────────────────────────────────────────────────────────
+
 [editor]
-# Enable markdown editing helpers (list continuation, table alignment, etc.)
+
+# Apply markdown formatting helpers automatically while typing
+# (list continuation, table re-alignment, etc.).
 markdown_autoformat = true
-# Automatically move checked checklist items to bottom and unchecked to top
+
+# Automatically move checked checklist items to the bottom and unchecked to
+# the top when toggling checkboxes.
 checklist_auto_reorder = true
-# Run :format before save (Ctrl+S and save flush path)
+
+# Run :format before every save (Ctrl+S and background flush path).
 format_on_save = false
-# Start in terminal mode by default when launched from a TTY
+
+# Start in terminal / TUI mode by default when launched from a TTY.
 terminal_mode = false
-# Enable Vim keybindings in GUI editor
+
+# Enable Vim keybindings in the GUI editor.
 vim_mode = false
-# Date format used by :date and date picker insert
+
+# Date format inserted by :date and the date-picker (Ctrl+Shift+D).
+# Tokens: %Y (4-digit year), %y (2-digit year), %m (month), %d (day),
+#         %b (short month name), %B (full month name)
 date_format = "%Y-%m-%d"
-# Date+time format used by :date (when time is included) and :notify
+
+# Date+time format used by :date (when time is requested) and :notify.
+# Defaults to "<date_format> %H:%M" if omitted.
+# Tokens: same as date_format plus %H (hour 00-23), %M (minute 00-59)
 date_time_format = "%Y-%m-%d %H:%M"
 
+# ── Editor — variables ─────────────────────────────────────────────────────────
+
 [editor.variables]
-# Legacy compatibility flag (runtime gating is per-note via editor.modules)
+
+# Legacy top-level toggle (per-note module gating is done via editor.modules).
 enabled = true
-# Minimum typed characters to show variable completion suggestions
+
+# Minimum characters typed before variable completion suggestions appear.
+# Range: 1–8.
 autocomplete_min_chars = 3
 
+# ── Editor — modules ───────────────────────────────────────────────────────────
+
 [editor.modules]
-# Default per-note modules for newly created notes
-# Runtime behavior uses the active note's modules in both GUI and TUI.
+# Default per-note modules assigned to newly created notes.
+# Existing notes keep their own per-note module settings.
+
+# Inline math calculations and :sum / :avg commands.
 math = true
+
+# Markdown table editing and alignment helpers.
 table = true
+
+# Variable definitions and inline substitution.
 variables = true
+
+# Markdown decoration, syntax highlighting, and checklist rendering.
 style = true
 
+# ── Editor — security ──────────────────────────────────────────────────────────
+
 [editor.security]
-# When enabled, newly created notes are encrypted at rest by default.
+
+# Encrypt newly created notes at rest by default.
+# Requires password_env to be set and the env var to be present at startup.
 encrypt_notes = false
-# Environment variable used as the default encryption password.
+
+# Name of the environment variable containing the default note encryption
+# password. Only used when encrypt_notes = true.
+#   export SLATE_NOTES_PASSWORD='your-password'
 password_env = "SLATE_NOTES_PASSWORD"
 
+# ── Special notes ──────────────────────────────────────────────────────────────
+
 [special_notes]
-# Prefix for date-partitioned email inbox notes
+
+# Prefix for date-partitioned email inbox notes created by IMAP ingestion.
 email_note_prefix = "inbox-email"
-# Rotation strategy for email captures
+
+# Rotation strategy for email capture notes.
+#   daily-local — one note per local calendar day (only supported value)
 email_rotation = "daily-local"
 
+# ── IMAP ───────────────────────────────────────────────────────────────────────
+
 [imap]
-# IMAP server host and implicit TLS port (993 by default)
+
+# IMAP server hostname (implicit TLS, port 993 by default).
 host = "imap.example.com"
+
+# IMAP server port.
 port = 993
-# Account username/login for IMAP
+
+# Account username / login (usually your email address).
 username = ""
-# Environment variable containing IMAP account password or app password
+
+# Environment variable containing your IMAP password or app password.
+# Set it before starting Slate:
+#   export SLATE_IMAP_PASSWORD='your-password-or-app-password'
 password_env = "SLATE_IMAP_PASSWORD"
-# Folder to pull (typically INBOX)
+
+# Mailbox folder to pull messages from.
 folder = "INBOX"
-# Poll interval for background IMAP sync loop
+
+# Background poll interval in seconds. Range: 10–86400.
 poll_seconds = 60
-# Enable background IMAP polling when running GUI/terminal modes
+
+# Start background IMAP polling automatically on launch.
 auto_sync_on_startup = false
-# On first sync (before a UID checkpoint exists), pull only last N messages
+
+# On first sync (before a UID checkpoint exists), pull at most this many
+# recent messages. Range: 1–100000.
 initial_sync_max_messages = 200
-# Restrict every IMAP sync to recent days (0 disables date filter)
+
+# Restrict every IMAP sync to messages from the last N days.
+# 0 disables the date filter (pulls all messages up to the count limit).
+# Range: 0–3650.
 initial_sync_past_days = 1
-# Maximum accepted raw message payload size in bytes
+
+# Maximum accepted raw message payload size in bytes. Range: 1024–67108864.
 max_message_bytes = 8388608
-# Maximum stored message body size in bytes (truncated in note body when exceeded)
+
+# Maximum stored message body size in bytes (body is truncated in the note
+# when this limit is exceeded). Range: 1024–67108864. Must be <= max_message_bytes.
 max_body_bytes = 524288
 "#;
 
@@ -173,6 +253,7 @@ pub struct ThemeConfig {
     pub color_scheme: String,
     pub background: String,
     pub font: String,
+    pub display_font: String,
     pub font_size: u8,
     pub animation_mode: String,
     pub animation_style: String,
@@ -312,6 +393,7 @@ impl Default for ThemeConfig {
             color_scheme: DEFAULT_COLOR_SCHEME.to_string(),
             background: DEFAULT_BACKGROUND.to_string(),
             font: DEFAULT_FONT.to_string(),
+            display_font: DEFAULT_DISPLAY_FONT.to_string(),
             font_size: DEFAULT_FONT_SIZE,
             animation_mode: DEFAULT_ANIMATION_MODE.to_string(),
             animation_style: DEFAULT_ANIMATION_STYLE.to_string(),
@@ -348,6 +430,7 @@ struct ThemeSection {
     color_scheme: Option<String>,
     background: Option<String>,
     font: Option<String>,
+    display_font: Option<String>,
     font_size: Option<u16>,
     animation_mode: Option<String>,
     animation_style: Option<String>,
@@ -544,6 +627,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         color_scheme: normalize_name(raw.theme.color_scheme, DEFAULT_COLOR_SCHEME),
         background: normalize_name(raw.theme.background, DEFAULT_BACKGROUND),
         font: normalize_name(raw.theme.font, DEFAULT_FONT),
+        display_font: normalize_name(raw.theme.display_font, DEFAULT_DISPLAY_FONT),
         font_size: normalize_font_size(raw.theme.font_size),
         animation_mode,
         animation_style,

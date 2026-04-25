@@ -1,0 +1,1969 @@
+<!DOCTYPE html><html lang="en" style="--display-font: 'Literata', Georgia, serif; --body-size: 19px; --accent: #3e5266; --accent-soft: rgba(62,82,102,0.12);"><head>
+
+
+<meta charset="utf-8">
+<title>Slate</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,600&amp;family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&amp;family=EB+Garamond:wght@400;500;600&amp;family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600&amp;family=Geist:wght@300;400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    /* editable defaults — keep in sync with TWEAK_DEFAULTS */
+    --bg: #f3efe8;
+    --paper: #fbf8f2;
+    --ink: #1e1c18;
+    --ink-soft: rgba(30,28,24,0.62);
+    --ink-faint: rgba(30,28,24,0.38);
+    --rule: rgba(30,28,24,0.08);
+    --rule-strong: rgba(30,28,24,0.14);
+    --accent: #7a5a3a;
+    --accent-soft: rgba(122,90,58,0.12);
+    --display-font: 'Literata', Georgia, serif;
+    --body-font: 'Geist', -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+    --mono-font: 'JetBrains Mono', ui-monospace, monospace;
+    --body-size: 17px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; padding:0; height:100%; }
+  body {
+    font-family: var(--body-font);
+    color: var(--ink);
+    background:
+      radial-gradient(1200px 800px at 20% 10%, #e8e2d6 0%, transparent 60%),
+      radial-gradient(1200px 900px at 90% 90%, #ded5c6 0%, transparent 55%),
+      var(--bg);
+    min-height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* ── Window ───────────────────────────────────────── */
+  .win {
+    width: min(1080px, 100%);
+    height: min(820px, calc(100vh - 64px));
+    background: var(--paper);
+    border-radius: 14px;
+    box-shadow:
+      0 0 0 0.5px rgba(0,0,0,0.20),
+      0 30px 80px rgba(40,30,15,0.28),
+      0 8px 24px rgba(40,30,15,0.12);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .titlebar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 38px;
+    display: flex;
+    align-items: center;
+    padding: 0 14px;
+    z-index: 20;
+    pointer-events: none;
+  }
+  .lights { display:flex; gap:8px; pointer-events: auto; }
+  .lights i {
+    width: 12px; height: 12px; border-radius: 50%;
+    display: inline-block;
+    box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.15);
+  }
+  .lights i:nth-child(1){ background:#ff5f57; }
+  .lights i:nth-child(2){ background:#febc2e; }
+  .lights i:nth-child(3){ background:#28c840; }
+  .titlebar .doc-title {
+    flex: 1;
+    text-align: center;
+    font-family: var(--display-font);
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    color: var(--ink-faint);
+    font-style: italic;
+  }
+
+  /* Sidebar removed — distraction-free */
+  .sidebar, .sidebar-footer, .note-item, .brand, .new-note, .notes-list, .note-title, .note-preview, .note-meta, .note-tag { display: none !important; }
+  /* ── (legacy sidebar styles below, unused) ───────── */
+  .sidebar {
+    background: transparent;
+    border-right: 1px solid var(--rule);
+    padding: 46px 0 16px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .brand {
+    padding: 4px 22px 18px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+  }
+  .brand-mark {
+    font-family: var(--display-font);
+    font-weight: 400;
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+  }
+  .brand-mark em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .brand-count {
+    font-family: var(--body-font);
+    font-size: 11px;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .new-note {
+    margin: 0 16px 14px;
+    height: 32px;
+    border: 1px dashed var(--rule-strong);
+    border-radius: 8px;
+    background: transparent;
+    font-family: var(--body-font);
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    transition: all 0.15s ease;
+  }
+  .new-note:hover {
+    background: var(--paper);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .new-note .plus { font-size: 15px; line-height: 1; margin-top: -1px; }
+
+  .notes-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 2px 8px 8px;
+  }
+  .note-item {
+    padding: 10px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    position: relative;
+    margin-bottom: 2px;
+  }
+  .note-item:hover { background: rgba(30,28,24,0.04); }
+  .note-item.active {
+    background: rgba(30,28,24,0.06);
+  }
+  .note-item.active::before {
+    content: '';
+    position: absolute;
+    left: 4px; top: 14px; bottom: 14px;
+    width: 2px;
+    background: var(--accent);
+    border-radius: 2px;
+  }
+  .note-title {
+    font-family: var(--display-font);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--ink);
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .note-preview {
+    font-size: 11.5px;
+    color: var(--ink-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.3;
+  }
+  .note-meta {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 4px;
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .note-tag {
+    color: var(--accent);
+    font-family: var(--mono-font);
+    font-size: 10px;
+  }
+
+  .sidebar-footer {
+    padding: 12px 22px;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+  .sidebar-footer .dot { width:6px; height:6px; border-radius:50%; background: var(--accent); display:inline-block; margin-right:6px; vertical-align: middle; }
+
+  /* ── Editor ───────────────────────────────────────── */
+  .editor-wrap {
+    position: relative;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .editor-chrome {
+    position: sticky;
+    top: 0;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 28px 0 16px;
+    gap: 2px;
+    z-index: 10;
+    background: linear-gradient(to bottom, var(--paper) 70%, rgba(251,248,242,0));
+    opacity: 0;
+    transition: opacity 0.25s ease;
+    padding-top: 8px;
+  }
+  .editor-wrap:hover .editor-chrome,
+  .editor-chrome:focus-within { opacity: 1; }
+
+  .chrome-btn {
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    font-family: var(--body-font);
+    font-size: 12px;
+    color: var(--ink-soft);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .chrome-btn:hover { background: rgba(30,28,24,0.05); color: var(--ink); }
+  .chrome-sep { width: 1px; height: 16px; background: var(--rule-strong); margin: 0 6px; }
+
+  .menu {
+    position: absolute;
+    right: 28px;
+    top: 42px;
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(40,30,15,0.16);
+    padding: 6px;
+    min-width: 180px;
+    display: none;
+    z-index: 30;
+  }
+  .menu.open { display: block; }
+  .menu-item {
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    color: var(--ink);
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .menu-item:hover { background: var(--accent-soft); color: var(--accent); }
+  .menu-item .sub { font-size: 11px; color: var(--ink-faint); font-family: var(--mono-font); }
+
+  .editor {
+    max-width: 860px;
+    margin: 8px auto 120px;
+    padding: 20px 64px 40px;
+    font-family: var(--body-font);
+    font-size: var(--body-size);
+    line-height: 1.7;
+    color: var(--ink);
+    outline: none;
+  }
+  .doc-title-input {
+    font-family: var(--display-font);
+    font-size: 40px;
+    font-weight: 400;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    color: var(--ink);
+    outline: none;
+    margin-bottom: 6px;
+    padding: 0;
+    word-break: break-word;
+  }
+  .doc-title-input:empty::before {
+    content: 'Untitled';
+    color: var(--ink-faint);
+    font-style: italic;
+  }
+  .doc-meta {
+    font-family: var(--mono-font);
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-bottom: 28px;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+  }
+  .doc-meta .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-faint); }
+
+  .editor h1, .editor h2, .editor h3 {
+    font-family: var(--display-font);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    line-height: 1.25;
+  }
+  .editor h1 { font-size: 28px; margin: 1.6em 0 0.5em; }
+  .editor h2 { font-size: 22px; margin: 1.5em 0 0.4em; }
+  .editor h3 { font-size: 18px; margin: 1.3em 0 0.3em; font-weight: 600; }
+  .editor p { margin: 0.7em 0; }
+  .editor p:first-child { margin-top: 0; }
+  .editor strong { font-weight: 600; }
+  .editor em { font-style: italic; font-family: var(--display-font); font-weight: 400; }
+  .editor a { color: var(--accent); text-decoration: none; border-bottom: 1px solid var(--accent-soft); }
+  .editor ul, .editor ol { padding-left: 26px; margin: 0.6em 0; }
+  .editor li { margin: 0.2em 0; }
+  .editor code {
+    font-family: var(--mono-font);
+    font-size: 0.88em;
+    background: rgba(30,28,24,0.06);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .editor blockquote {
+    margin: 1em 0;
+    padding: 2px 0 2px 18px;
+    border-left: 2px solid var(--accent);
+    font-family: var(--display-font);
+    font-size: 1.06em;
+    color: var(--ink-soft);
+    font-style: italic;
+  }
+  .editor hr {
+    border: none;
+    height: 1px;
+    background: var(--rule-strong);
+    margin: 1.8em auto;
+    width: 40%;
+  }
+
+  /* Checkbox / to-do */
+  .todo {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 4px 0;
+    padding-left: 2px;
+  }
+  .todo > .cb {
+    width: 16px; height: 16px;
+    border: 1.5px solid var(--rule-strong);
+    border-radius: 4px;
+    flex-shrink: 0;
+    cursor: pointer;
+    margin-top: 6px;
+    position: relative;
+    transition: all 0.15s ease;
+  }
+  .todo > .cb:hover { border-color: var(--accent); }
+  .todo.done > .cb {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .todo.done > .cb::after {
+    content: '';
+    position: absolute;
+    left: 4px; top: 1px;
+    width: 5px; height: 9px;
+    border: solid var(--paper);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+  }
+  .todo.done > .tx { color: var(--ink-faint); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .todo > .tx { flex: 1; outline: none; }
+
+  /* Callout */
+  .callout {
+    margin: 1em 0;
+    padding: 14px 18px;
+    border-radius: 8px;
+    background: var(--accent-soft);
+    border-left: 2px solid var(--accent);
+    font-size: 0.95em;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+  }
+  .callout .icon {
+    font-family: var(--display-font);
+    font-style: italic;
+    font-weight: 500;
+    color: var(--accent);
+    font-size: 16px;
+    line-height: 1.4;
+    flex-shrink: 0;
+  }
+  .callout .body { flex: 1; outline: none; }
+  .callout .body p { margin: 0; }
+
+  /* Code block */
+  .codeblock {
+    margin: 1em 0;
+    padding: 14px 18px;
+    background: #1e1c18;
+    color: #e9e2d3;
+    border-radius: 8px;
+    font-family: var(--mono-font);
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-x: auto;
+    outline: none;
+    white-space: pre;
+  }
+  .codeblock .k { color: #e8a87c; }
+  .codeblock .s { color: #9fbc8f; }
+  .codeblock .c { color: #7a7468; font-style: italic; }
+  .codeblock .n { color: #b8a56f; }
+  .codeblock .f { color: #d5c9a5; }
+
+  /* Table */
+  .tbl-wrap { margin: 1em 0; overflow-x: auto; }
+  .tbl {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  .tbl th, .tbl td {
+    border: 1px solid var(--rule-strong);
+    padding: 8px 12px;
+    text-align: left;
+    outline: none;
+  }
+  .tbl th {
+    background: rgba(30,28,24,0.035);
+    font-family: var(--body-font);
+    font-weight: 600;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-soft);
+  }
+
+  /* Tags / backlinks */
+  .tag {
+    font-family: var(--mono-font);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 1px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+  .backlink {
+    font-family: var(--display-font);
+    font-style: italic;
+    color: var(--accent);
+    border-bottom: 1px dotted var(--accent);
+    cursor: pointer;
+  }
+
+  /* Floating toolbar */
+  .bubble {
+    position: fixed;
+    display: flex;
+    align-items: center;
+    background: #1e1c18;
+    border-radius: 8px;
+    padding: 4px;
+    gap: 1px;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 2px 6px rgba(0,0,0,0.15);
+    opacity: 0;
+    transform: translate(-50%, -6px);
+    pointer-events: none;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+    z-index: 100;
+    font-family: var(--body-font);
+  }
+  .bubble.show {
+    opacity: 1;
+    transform: translate(-50%, 0);
+    pointer-events: auto;
+  }
+  .bubble::after {
+    content: '';
+    position: absolute;
+    bottom: -5px; left: 50%;
+    transform: translateX(-50%) rotate(45deg);
+    width: 8px; height: 8px;
+    background: #1e1c18;
+  }
+  .bb {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 7px;
+    border: none;
+    background: transparent;
+    color: rgba(255,255,255,0.8);
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+  }
+  .bb:hover { background: rgba(255,255,255,0.12); color: white; }
+  .bb.active { color: #e8a87c; }
+  .bb.bold { font-weight: 700; }
+  .bb.italic { font-style: italic; font-family: var(--display-font); }
+  .bb.under { text-decoration: underline; }
+  .bb.strike { text-decoration: line-through; }
+  .bb-sep { width: 1px; height: 16px; background: rgba(255,255,255,0.15); margin: 0 3px; }
+
+  /* Status bar */
+  .statusbar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 24px;
+    font-family: var(--mono-font);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    pointer-events: none;
+    background: linear-gradient(to top, var(--paper) 60%, rgba(251,248,242,0));
+    z-index: 5;
+  }
+  .statusbar .left, .statusbar .right { display: flex; gap: 16px; align-items: center; }
+
+  /* Tweaks panel */
+  .tweaks {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 280px;
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(40,30,15,0.25);
+    padding: 16px 18px;
+    font-family: var(--body-font);
+    font-size: 12px;
+    z-index: 200;
+    display: none;
+  }
+  .tweaks.show { display: block; }
+  .tweaks h4 {
+    margin: 0 0 12px;
+    font-family: var(--display-font);
+    font-size: 14px;
+    font-weight: 500;
+    font-style: italic;
+    color: var(--ink);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .tweaks h4 .close {
+    cursor: pointer;
+    color: var(--ink-faint);
+    font-size: 16px;
+    font-style: normal;
+  }
+  .tweaks .row {
+    margin-bottom: 10px;
+  }
+  .tweaks label {
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-faint);
+    margin-bottom: 5px;
+    font-family: var(--mono-font);
+  }
+  .tweaks .segs {
+    display: flex;
+    gap: 3px;
+    background: rgba(30,28,24,0.05);
+    border-radius: 6px;
+    padding: 3px;
+  }
+  .tweaks .seg {
+    flex: 1;
+    padding: 5px 8px;
+    border-radius: 4px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    transition: all 0.12s;
+  }
+  .tweaks .seg:hover { color: var(--ink); }
+  .tweaks .seg.active {
+    background: var(--paper);
+    color: var(--ink);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  }
+  .tweaks input[type=range] {
+    width: 100%;
+  }
+  .tweaks .swatches {
+    display: flex;
+    gap: 6px;
+  }
+  .tweaks .sw {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: all 0.12s;
+  }
+  .tweaks .sw.active { border-color: var(--ink); }
+
+  /* Theme: dark */
+  body.t-dark {
+    --bg: #17161a;
+    --paper: #1d1c20;
+    --ink: #ece8e0;
+    --ink-soft: rgba(236,232,224,0.66);
+    --ink-faint: rgba(236,232,224,0.40);
+    --rule: rgba(236,232,224,0.08);
+    --rule-strong: rgba(236,232,224,0.16);
+  }
+  body.t-dark .codeblock { background: #0f0e11; }
+  body.t-dark .bubble { background: #f3efe8; }
+  body.t-dark .bb { color: rgba(30,28,24,0.75); }
+  body.t-dark .bb:hover { background: rgba(0,0,0,0.08); color: var(--ink); }
+  body.t-dark .bubble::after { background: #f3efe8; }
+  body.t-dark .bb-sep { background: rgba(0,0,0,0.12); }
+  body.t-dark .todo.done > .cb::after { border-color: #1d1c20; }
+
+  /* Theme: light */
+  body.t-light {
+    --bg: #ececec;
+    --paper: #ffffff;
+    --ink: #111111;
+    --ink-soft: rgba(0,0,0,0.60);
+    --ink-faint: rgba(0,0,0,0.38);
+    --rule: rgba(0,0,0,0.07);
+    --rule-strong: rgba(0,0,0,0.14);
+  }
+
+  /* Tweaks launcher */
+  .tweaks-fab {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 40px; height: 40px;
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 50%;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(40,30,15,0.15);
+    z-index: 199;
+    font-family: var(--display-font);
+    font-style: italic;
+    color: var(--accent);
+  }
+  .tweaks-fab.show { display: flex; }
+
+  /* Subtle floating slash menu */
+  .slash-menu {
+    position: fixed;
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 10px;
+    box-shadow: 0 12px 32px rgba(40,30,15,0.16);
+    padding: 6px;
+    min-width: 220px;
+    display: none;
+    z-index: 150;
+  }
+  .slash-menu.show { display: block; }
+  .slash-menu .mi {
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .slash-menu .mi:hover, .slash-menu .mi.sel { background: var(--accent-soft); color: var(--accent); }
+  .slash-menu .mi .ic {
+    width: 22px; height: 22px;
+    border-radius: 5px;
+    background: rgba(30,28,24,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--display-font);
+    font-size: 12px;
+    font-style: italic;
+    color: var(--ink-soft);
+  }
+  .slash-menu .mi .lbl { flex: 1; }
+  .slash-menu .mi .hint { font-family: var(--mono-font); font-size: 10px; color: var(--ink-faint); }
+
+  /* Dialogs (Browse + Commands) */
+  .overlay {
+    position: fixed; inset: 0;
+    background: rgba(30,28,24,0.28);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 300;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+  }
+  .overlay.show { opacity: 1; pointer-events: auto; }
+  .dialog {
+    position: fixed;
+    left: 50%; top: 14vh;
+    transform: translate(-50%, -8px);
+    width: min(560px, calc(100vw - 48px));
+    background: var(--paper);
+    border: 1px solid var(--rule-strong);
+    border-radius: 14px;
+    box-shadow: 0 30px 80px rgba(40,30,15,0.35), 0 8px 24px rgba(40,30,15,0.18);
+    z-index: 310;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease, transform 0.15s ease;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
+  }
+  .dialog.show {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0);
+  }
+  .dialog-head {
+    padding: 14px 20px 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--rule);
+  }
+  .dialog-title {
+    font-family: var(--display-font);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink);
+  }
+  .dialog-title em {
+    font-style: italic;
+    color: var(--accent);
+  }
+  .dialog-close {
+    cursor: pointer;
+    color: var(--ink-faint);
+    font-size: 22px;
+    line-height: 1;
+    width: 24px; height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+  }
+  .dialog-close:hover { background: rgba(30,28,24,0.06); color: var(--ink); }
+  .browse-search {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--rule);
+    color: var(--ink-faint);
+  }
+  .browse-search input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: var(--body-font);
+    font-size: 14px;
+    color: var(--ink);
+  }
+  .browse-search input::placeholder { color: var(--ink-faint); font-style: italic; }
+  .browse-results {
+    flex: 1;
+    overflow-y: auto;
+    padding: 6px;
+  }
+  .b-item {
+    padding: 10px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .b-item:hover, .b-item.sel { background: var(--accent-soft); }
+  .b-item:hover .b-title, .b-item.sel .b-title { color: var(--accent); }
+  .b-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .b-title {
+    font-family: var(--display-font);
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink);
+  }
+  .b-date {
+    font-family: var(--mono-font);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .b-preview {
+    font-size: 12.5px;
+    color: var(--ink-soft);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .b-tag { color: var(--accent); font-family: var(--mono-font); font-size: 11px; }
+  .dialog-foot {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding: 9px 18px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--mono-font);
+    font-size: 10.5px;
+    color: var(--ink-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .dialog-foot :last-child { margin-left: auto; }
+  .kbd {
+    font-family: var(--mono-font);
+    font-size: 10px;
+    background: rgba(30,28,24,0.07);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--ink-soft);
+    margin-right: 3px;
+  }
+  .empty-state {
+    padding: 44px 24px;
+    text-align: center;
+  }
+  .empty-mark {
+    font-family: var(--display-font);
+    font-style: italic;
+    font-size: 36px;
+    color: var(--accent);
+    opacity: 0.4;
+    margin-bottom: 10px;
+  }
+  .empty-title {
+    font-family: var(--display-font);
+    font-size: 16px;
+    color: var(--ink);
+    margin-bottom: 6px;
+  }
+  .empty-sub {
+    font-size: 12px;
+    color: var(--ink-faint);
+    max-width: 340px;
+    margin: 0 auto;
+    line-height: 1.5;
+  }
+  .empty-sub code {
+    font-family: var(--mono-font);
+    background: rgba(30,28,24,0.06);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--ink-soft);
+  }
+
+  .lock-glyph { font-size: 12px; opacity: 0.7; margin-left: 4px; }
+
+  /* Focus mode exit hint */
+  .focus-hint {
+    position: fixed;
+    bottom: 28px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--mono-font);
+    font-size: 11px;
+    color: var(--ink-faint);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.4s ease;
+    z-index: 50;
+  }
+  body.focus-mode .focus-hint { opacity: 1; }
+  body.focus-mode .focus-hint.fade { opacity: 0; }
+
+  /* Focus mode — hide everything except the editor text */
+  body.focus-mode .titlebar,
+  body.focus-mode .editor-chrome,
+  body.focus-mode .statusbar,
+  body.focus-mode .bubble,
+  body.focus-mode .tweaks,
+  body.focus-mode .tweaks-fab,
+  body.focus-mode .slash-menu {
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: opacity 0.4s ease;
+  }
+  body.focus-mode .win {
+    box-shadow: none;
+    border-radius: 0;
+    width: 100vw;
+    height: 100vh;
+    max-width: none;
+  }
+  body.focus-mode {
+    padding: 0;
+    background: var(--paper);
+  }
+  body.focus-mode .editor {
+    max-width: 720px;
+    margin: 80px auto 120px;
+    padding: 0 48px;
+  }
+  body.focus-mode .editor-wrap {
+    overflow-y: auto;
+    height: 100vh;
+  }
+  /* Exit focus mode on Escape (handled in keydown) */
+  body.focus-mode .editor-wrap:hover .editor-chrome { opacity: 0 !important; }
+
+  ::selection { background: var(--accent-soft); }
+  body.t-dark ::selection { background: rgba(232,168,124,0.25); }
+
+  /* Scrollbar */
+  .editor-wrap::-webkit-scrollbar, .notes-list::-webkit-scrollbar { width: 8px; }
+  .editor-wrap::-webkit-scrollbar-thumb, .notes-list::-webkit-scrollbar-thumb {
+    background: var(--rule-strong);
+    border-radius: 4px;
+  }
+
+  [contenteditable]:focus { outline: none; }
+
+  .ph {
+    color: var(--ink-faint);
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+
+<script>
+  const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "theme": "dark",
+    "font": "fraunces",
+    "size": 17,
+    "accent": "slate"
+  }/*EDITMODE-END*/;
+</script>
+
+<div class="win" id="win">
+  <div class="titlebar">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <div class="doc-title" id="tb-title">Slate — Meeting Notes</div>
+    <div style="width:50px"></div>
+  </div>
+
+  <main class="editor-wrap" id="editor-wrap">
+    <div class="editor-chrome" id="chrome">
+      <button class="chrome-btn" id="btn-focus" title="Focus mode">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="3" stroke="currentColor" stroke-width="1.2"></circle><path d="M1 7h2M11 7h2M7 1v2M7 11v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg>
+        Focus
+      </button>
+      <div class="chrome-sep"></div>
+      <div style="position:relative">
+        <button class="chrome-btn" id="btn-export">
+          Export
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        </button>
+        <div class="menu" id="export-menu" style="text-align: left">
+          <div class="menu-item" data-act="export-txt">Plain text (.txt)</div>
+          <div class="menu-item" data-act="export-md">Markdown (.md) <span class="sub">⌘E</span></div>
+          <div class="menu-item" data-act="export-pdf">PDF (print) <span class="sub">⌘P</span></div>
+          <div class="menu-item" data-act="export-html">HTML</div>
+        </div>
+      </div>
+      <div class="chrome-sep"></div>
+      <button class="chrome-btn" id="btn-browse" title="Browse notes ⌘O">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M1.5 3.5h4l1 1h5v6h-10v-7z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path></svg>
+        Browse
+      </button>
+      <button class="chrome-btn" id="btn-commands" title="Commands ⌘K" data-cc-id="cc-2" style="">
+        <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M4 3.5h5M4 6.5h5M4 9.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path><circle cx="2" cy="3.5" r="0.6" fill="currentColor"></circle><circle cx="2" cy="6.5" r="0.6" fill="currentColor"></circle><circle cx="2" cy="9.5" r="0.6" fill="currentColor"></circle></svg>
+        Commands
+      </button>
+
+    </div>
+
+    <article class="editor" id="editor" spellcheck="false" data-cc-id="cc-3">
+  <div class="doc-title-input" id="doc-title" data-cc-id="cc-7" style="">Title</div>
+  <div class="doc-meta">
+    <span>ongoing</span><span class="dot"></span>
+    <span class="tag">#pad</span>
+  </div>
+
+  <div class="ts-divider" data-cc-id="cc-4" style="">— Thu, Apr 18</div>
+
+  <p>plumber — <strong>Ray</strong> — (415) 555-0198. said wed morning works.</p>
+
+  <p>the thing M. said on the walk: <em>"if it keeps coming back, it's not noise, it's the signal."</em> sit with this.</p>
+
+  <div class="todo done"><div class="cb"></div><div class="tx" contenteditable="true">refill prescription</div></div>
+  <div class="todo"><div class="cb"></div><div class="tx" contenteditable="true">reply to arjun re: fri</div></div>
+  <div class="todo"><div class="cb"></div><div class="tx" contenteditable="true">bring back library book (overdue — think it's the essays?)</div></div>
+
+  <p data-cc-id="cc-6" style=""><s>idea</s> a reading app where the margin <em>is</em> the note. no separate panel. you scribble next to the line and it just… lives there.</p>
+
+  <div class="callout">
+    <div class="icon">§</div>
+    <div class="body" contenteditable="true"><p data-cc-id="cc-5" style="">groceries — milk, lemons, that soft cheese she likes (? brie? camembert? just ask), bread, coffee beans (not the pre-ground one this time)</p></div>
+  </div>
+
+  <p>wifi at the cafe: <code>bluebottle_guest</code> / pw on the receipt.</p>
+
+  <blockquote>you only find out what you think by writing it down. everything before that is weather.</blockquote>
+
+  <p>→ follow up on <span class="backlink">↗ lisbon trip</span>. flights keep going up. book this week?</p>
+
+  <p>???  —  why does the kettle whistle <em>slightly</em> differently when it's almost empty. physics? or am i imagining it.</p>
+
+  <hr>
+
+  <p><br></p>
+</article>
+  </main>
+
+  <div class="statusbar">
+    <div class="left">
+      <span id="word-count">162 words</span>
+      <span id="read-time">1 min read</span>
+    </div>
+    <div class="right">
+      <span id="tag-list"><span style="color:var(--accent)">#pad</span></span>
+      <span id="last-saved">saved just now</span>
+    </div>
+  </div>
+</div>
+
+<!-- Floating selection toolbar -->
+<div class="bubble" id="bubble" style="left: 1291px; top: 204.5px;">
+  <button class="bb bold" data-cmd="bold" title="Bold ⌘B">B</button>
+  <button class="bb italic" data-cmd="italic" title="Italic ⌘I">I</button>
+  <button class="bb under" data-cmd="underline" title="Underline ⌘U">U</button>
+  <button class="bb strike" data-cmd="strikeThrough" title="Strikethrough">S</button>
+  <div class="bb-sep"></div>
+  <button class="bb" data-cmd="h1" title="Heading 1">H1</button>
+  <button class="bb" data-cmd="h2" title="Heading 2">H2</button>
+  <button class="bb" data-cmd="quote" title="Quote">❝</button>
+  <button class="bb" data-cmd="code" title="Inline code">‹›</button>
+  <div class="bb-sep"></div>
+  <button class="bb" data-cmd="link" title="Link">↗</button>
+  <button class="bb" data-cmd="highlight" title="Highlight">◐</button>
+</div>
+
+<!-- Slash-like insert menu (triggered via "/" at line start) -->
+<div class="slash-menu" id="slash">
+  <div class="mi" data-ins="todo"><span class="ic">☐</span><span class="lbl">To-do</span><span class="hint">[] </span></div>
+  <div class="mi" data-ins="h1"><span class="ic">H1</span><span class="lbl">Heading 1</span><span class="hint"># </span></div>
+  <div class="mi" data-ins="h2"><span class="ic">H2</span><span class="lbl">Heading 2</span><span class="hint">## </span></div>
+  <div class="mi" data-ins="quote"><span class="ic">❝</span><span class="lbl">Quote</span><span class="hint">&gt; </span></div>
+  <div class="mi" data-ins="callout"><span class="ic">i</span><span class="lbl">Callout</span><span class="hint">!! </span></div>
+  <div class="mi" data-ins="code"><span class="ic">‹›</span><span class="lbl">Code block</span><span class="hint">``` </span></div>
+  <div class="mi" data-ins="table"><span class="ic">▦</span><span class="lbl">Table</span><span class="hint"></span></div>
+  <div class="mi" data-ins="divider"><span class="ic">—</span><span class="lbl">Divider</span><span class="hint">--- </span></div>
+</div>
+
+<!-- Browse dialog: finder for notes, search by title / first line -->
+<div class="overlay" id="browse-overlay"></div>
+<div class="dialog browse-dialog" id="browse">
+  <div class="dialog-head">
+    <div class="dialog-title"><em>Browse</em> notes</div>
+    <div class="dialog-close" data-close="browse">×</div>
+  </div>
+  <div class="browse-search">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4" stroke="currentColor" stroke-width="1.3"></circle><path d="M9 9l3.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path></svg>
+    <input id="browse-input" placeholder="Search title or first line…" autocomplete="off">
+    <span class="kbd">ESC</span>
+  </div>
+  <div class="browse-results" id="browse-results"></div>
+  <div class="dialog-foot">
+    <span><span class="kbd">↑↓</span> navigate</span>
+    <span><span class="kbd">↵</span> open</span>
+    <span id="browse-count"></span>
+  </div>
+</div>
+
+<!-- Commands dialog -->
+<div class="overlay" id="commands-overlay"></div>
+<div class="dialog commands-dialog" id="commands">
+  <div class="dialog-head">
+    <div class="dialog-title"><em>Commands</em></div>
+    <div class="dialog-close" data-close="commands">×</div>
+  </div>
+  <div class="browse-search">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M4 3.5h5M4 6.5h5M4 9.5h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path></svg>
+    <input id="commands-input" placeholder="Run a command…" autocomplete="off">
+    <span class="kbd">ESC</span>
+  </div>
+  <div class="browse-results" id="commands-results">
+    <div class="empty-state">
+      <div class="empty-mark">¶</div>
+      <div class="empty-title">No commands yet</div>
+      <div class="empty-sub">You can fill these in later. Drop entries into the <code>COMMANDS</code> array in the source.</div>
+    </div>
+  </div>
+  <div class="dialog-foot">
+    <span><span class="kbd">↑↓</span> navigate</span>
+    <span><span class="kbd">↵</span> run</span>
+    <span id="commands-count"></span>
+  </div>
+</div>
+
+<div class="focus-hint" id="focus-hint"><span class="kbd">Esc</span> to exit focus</div>
+
+<div class="tweaks-fab" id="tweaks-fab">𝒯</div>
+
+<div class="tweaks show" id="tweaks">
+  <h4><span>Tweaks</span><span class="close" id="tweaks-close">×</span></h4>
+
+  <div class="row">
+    <label>Theme</label>
+    <div class="segs" data-group="theme">
+      <div class="seg" data-v="light">Light</div>
+      <div class="seg active" data-v="paper">Paper</div>
+      <div class="seg" data-v="dark">Dark</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <label>Font</label>
+    <div class="segs" data-group="font">
+      <div class="seg active" data-v="literata" style="font-family:'Literata',serif">Literata</div>
+      <div class="seg" data-v="fraunces" style="font-family:'Fraunces',serif">Fraunces</div>
+      <div class="seg" data-v="garamond" style="font-family:'EB Garamond',serif">Garamond</div>
+      <div class="seg" data-v="sourceserif" style="font-family:'Source Serif 4',serif">Source</div>
+    </div>
+  </div>
+
+  <div class="row">
+    <label>Size — <span id="size-val">19</span>px</label>
+    <input type="range" id="size-slider" min="14" max="22" step="1" value="17">
+  </div>
+
+  <div class="row">
+    <label>Accent</label>
+    <div class="swatches" data-group="accent">
+      <div class="sw" data-v="sienna" style="background:#7a5a3a"></div>
+      <div class="sw" data-v="olive" style="background:#5d6e3e"></div>
+      <div class="sw" data-v="ink" style="background:#1e1c18"></div>
+      <div class="sw" data-v="rust" style="background:#a85638"></div>
+      <div class="sw" data-v="plum" style="background:#6b3f5c"></div>
+      <div class="sw active" data-v="slate" style="background:#3e5266"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ─── state ─────────────────────────────────────────── */
+const ACCENTS = {
+  sienna: '#7a5a3a', olive: '#5d6e3e', ink: '#1e1c18',
+  rust: '#a85638', plum: '#6b3f5c', slate: '#3e5266'
+};
+const FONTS = {
+  literata: "'Literata', Georgia, serif",
+  fraunces: "'Fraunces', Georgia, serif",
+  garamond: "'EB Garamond', Georgia, serif",
+  sourceserif: "'Source Serif 4', Georgia, serif"
+};
+
+/* ─── notes data (for Browse dialog) ─────────────── */
+const notes = [
+  { id:'n1', title:'Q2 Product Planning', preview:'Kick-off synthesis — themes, owners, and the first three bets…', date:'Today', tag:'#work', active:true },
+  { id:'n2', title:'Reading — Walden', preview:'"I went to the woods because I wished to live deliberately…"', date:'Yesterday', tag:'#reading' },
+  { id:'n3', title:'Trip to Lisbon', preview:'Flight: LIS arr. 14:20. Time pombal, Alfama walking, pastéis…', date:'Apr 14', tag:'#travel' },
+  { id:'n4', title:'Weekly review — week 15', preview:'What moved. What stalled. Three small bets for next week.', date:'Apr 12', tag:'#review' },
+  { id:'n5', title:'Slate — feature sketches', preview:'Floating toolbar, slash menu, focus mode. Keep it antinote-simple.', date:'Apr 10', tag:'#slate' },
+  { id:'n6', title:'Garden — things to plant', preview:'Tomatoes (heirloom), basil, rosemary. Check soil on the south bed.', date:'Apr 8', tag:'#home' },
+  { id:'n7', title:'Letter to F.', preview:'Drafting — rewrite the middle. Less defensive, more curious.', date:'Apr 4', tag:'#letters', locked:true },
+  { id:'n8', title:'Book ideas', preview:'A collection of half-formed ideas worth returning to — seeds, sketches.', date:'Mar 30', tag:'#ideas' },
+  { id:'n9', title:'Kitchen — sourdough log', preview:'Hydration 75%, bulk 5h at 24°C. Crumb photo next time.', date:'Mar 28', tag:'#kitchen', locked:true }
+];
+
+function renderSidebar() { /* no-op — sidebar removed */ }
+renderSidebar();
+
+/* ─── editor content ───────────────────────────────── */
+const editorInitial = `
+  <div class="doc-title-input" contenteditable="true" id="doc-title">Q2 Product Planning</div>
+  <div class="doc-meta" contenteditable="true">
+    <span>Apr 18, 2026</span><span class="dot"></span>
+    <span>Draft</span><span class="dot"></span>
+    <span class="tag">#work</span>
+    <span class="tag">#planning</span>
+  </div>
+
+  <p contenteditable="true">Kick-off with <strong>Maya</strong>, <strong>Arjun</strong>, and <strong>Dee</strong>. Forty minutes, no slides. The point of this note is to turn the conversation into something <em>we can actually do on Monday</em>.</p>
+
+  <h2 contenteditable="true">Themes that kept coming up</h2>
+
+  <p contenteditable="true">Three times in three different ways, the team circled back to the same idea: we've been <em>adding surface area</em> faster than we've been removing friction. See also the <span class="backlink">↗ Q1 retro</span> — same shape, just quieter.</p>
+
+  <div class="callout">
+    <div class="icon">§</div>
+    <div class="body" contenteditable="true"><p>If we only shipped one thing this quarter, it should be the onboarding rewrite. Everything downstream is blocked on a first five minutes that doesn't land.</p></div>
+  </div>
+
+  <h2 contenteditable="true">Action items</h2>
+
+  <div class="todo done"><div class="cb"></div><div class="tx" contenteditable="true">Send the PRD skeleton to Maya by EOD Friday</div></div>
+  <div class="todo"><div class="cb"></div><div class="tx" contenteditable="true">Draft three onboarding variants — hand to Arjun for review</div></div>
+  <div class="todo"><div class="cb"></div><div class="tx" contenteditable="true">Book user interviews (6 ×, mix of power + new)</div></div>
+  <div class="todo"><div class="cb"></div><div class="tx" contenteditable="true">Write the <span class="tag">#metrics</span> doc — pick two, not ten</div></div>
+
+  <h2 contenteditable="true">Bets, ranked</h2>
+
+  <div class="tbl-wrap">
+  <table class="tbl">
+    <thead><tr><th>Bet</th><th>Owner</th><th>Effort</th><th>Confidence</th></tr></thead>
+    <tbody>
+      <tr><td contenteditable="true">Onboarding rewrite</td><td contenteditable="true">Maya</td><td contenteditable="true">L</td><td contenteditable="true">High</td></tr>
+      <tr><td contenteditable="true">Editor performance pass</td><td contenteditable="true">Arjun</td><td contenteditable="true">M</td><td contenteditable="true">High</td></tr>
+      <tr><td contenteditable="true">Tags + backlinks v2</td><td contenteditable="true">Dee</td><td contenteditable="true">M</td><td contenteditable="true">Medium</td></tr>
+      <tr><td contenteditable="true">Export formats</td><td contenteditable="true">—</td><td contenteditable="true">S</td><td contenteditable="true">Low</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <blockquote contenteditable="true">The most valuable things we've ever shipped were the smallest ones we <em>finished</em>.</blockquote>
+
+  <h2 contenteditable="true">Technical notes</h2>
+
+  <p contenteditable="true">The editor work is mostly about reducing <code>contentEditable</code> foot-guns. Sample from our sketch:</p>
+
+  <pre class="codeblock" contenteditable="true"><span class="c">// reduce over the selection, not the DOM</span>
+<span class="k">function</span> <span class="f">formatSelection</span>(range, mark) {
+  <span class="k">const</span> nodes = <span class="f">collectTextNodes</span>(range);
+  <span class="k">return</span> nodes.<span class="f">map</span>(n =&gt; <span class="f">applyMark</span>(n, mark));
+}</pre>
+
+  <hr/>
+
+  <p contenteditable="true">Next review: <span class="backlink">↗ Weekly — week 17</span>. Until then, keep the scope small. <em>Finish things.</em></p>
+`;
+
+document.getElementById('editor').innerHTML = editorInitial;
+
+/* make all direct block children of editor editable */
+function makeEditable() {
+  const ed = document.getElementById('editor');
+  // direct block children that aren't already handled
+  ed.querySelectorAll('p, h1, h2, h3, blockquote, li').forEach(el => {
+    if (!el.hasAttribute('contenteditable')) el.setAttribute('contenteditable', 'true');
+  });
+  // doc-title + doc-meta
+  const title = ed.querySelector('.doc-title-input');
+  if (title && !title.hasAttribute('contenteditable')) title.setAttribute('contenteditable', 'true');
+  const meta = ed.querySelector('.doc-meta');
+  if (meta && !meta.hasAttribute('contenteditable')) meta.setAttribute('contenteditable', 'true');
+}
+makeEditable();
+
+/* re-run after any block insertion */
+const _origInsert = insertTemplate;
+function insertTemplate(kind) {
+  _origInsert(kind);
+  makeEditable();
+}
+const bubble = document.getElementById('bubble');
+const editor = document.getElementById('editor');
+
+function updateBubble() {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
+    bubble.classList.remove('show');
+    return;
+  }
+  const range = sel.getRangeAt(0);
+  if (!editor.contains(range.commonAncestorContainer)) {
+    bubble.classList.remove('show');
+    return;
+  }
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    bubble.classList.remove('show');
+    return;
+  }
+  bubble.style.left = (rect.left + rect.width/2) + 'px';
+  bubble.style.top = (rect.top - bubble.offsetHeight - 10) + 'px';
+  bubble.classList.add('show');
+
+  // reflect active states
+  ['bold','italic','underline','strikeThrough'].forEach(cmd => {
+    const btn = bubble.querySelector(`[data-cmd="${cmd}"]`);
+    if (btn) btn.classList.toggle('active', document.queryCommandState(cmd));
+  });
+}
+document.addEventListener('selectionchange', updateBubble);
+window.addEventListener('scroll', () => bubble.classList.remove('show'), true);
+
+bubble.querySelectorAll('.bb').forEach(btn => {
+  btn.addEventListener('mousedown', e => e.preventDefault());
+  btn.addEventListener('click', () => {
+    const cmd = btn.dataset.cmd;
+    if (cmd === 'h1' || cmd === 'h2') {
+      document.execCommand('formatBlock', false, cmd.toUpperCase());
+    } else if (cmd === 'quote') {
+      document.execCommand('formatBlock', false, 'blockquote');
+    } else if (cmd === 'code') {
+      const sel = window.getSelection();
+      if (!sel.isCollapsed) {
+        const range = sel.getRangeAt(0);
+        const text = range.toString();
+        const code = document.createElement('code');
+        code.textContent = text;
+        range.deleteContents();
+        range.insertNode(code);
+      }
+    } else if (cmd === 'link') {
+      const url = prompt('Link URL', 'https://');
+      if (url) document.execCommand('createLink', false, url);
+    } else if (cmd === 'highlight') {
+      document.execCommand('hiliteColor', false, 'rgba(255,210,120,0.35)');
+    } else {
+      document.execCommand(cmd, false, null);
+    }
+    updateBubble();
+    updateWordCount();
+  });
+});
+
+/* ─── checkbox toggle ──────────────────────────────── */
+editor.addEventListener('click', (e) => {
+  if (e.target.classList.contains('cb')) {
+    e.target.parentElement.classList.toggle('done');
+  }
+});
+
+/* ─── markdown shortcuts + slash menu ──────────────── */
+const slash = document.getElementById('slash');
+let slashAnchor = null;
+
+function getLineText(node) {
+  // crude: find the enclosing block
+  let el = node.nodeType === 3 ? node.parentElement : node;
+  while (el && el.parentElement !== editor && !['P','H1','H2','H3','LI','DIV'].includes(el.tagName)) {
+    el = el.parentElement;
+  }
+  return el;
+}
+
+function insertBlockAfter(existingBlock, html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const newEl = tmp.firstElementChild;
+  existingBlock.after(newEl);
+  // move cursor into newEl
+  const sel = window.getSelection();
+  const range = document.createRange();
+  const target = newEl.querySelector('[contenteditable]') || newEl;
+  range.selectNodeContents(target);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return newEl;
+}
+
+const BLOCK_TEMPLATES = {
+  todo: '<div class="todo"><div class="cb"></div><div class="tx" contenteditable="true"></div></div>',
+  h1: '<h1></h1>',
+  h2: '<h2></h2>',
+  quote: '<blockquote></blockquote>',
+  callout: '<div class="callout"><div class="icon">§</div><div class="body" contenteditable="true"><p></p></div></div>',
+  code: '<pre class="codeblock" contenteditable="true"></pre>',
+  divider: '<hr/><p></p>',
+  table: `<div class="tbl-wrap"><table class="tbl">
+    <thead><tr><th contenteditable="true">Column</th><th contenteditable="true">Column</th><th contenteditable="true">Column</th></tr></thead>
+    <tbody>
+      <tr><td contenteditable="true"></td><td contenteditable="true"></td><td contenteditable="true"></td></tr>
+      <tr><td contenteditable="true"></td><td contenteditable="true"></td><td contenteditable="true"></td></tr>
+    </tbody></table></div><p></p>`
+};
+
+function insertTemplate(kind) {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const block = getLineText(sel.anchorNode);
+  if (!block) return;
+  // clear current block if empty-ish
+  if (block.tagName === 'P' && block.textContent.replace(/^\//,'').trim() === '') {
+    block.remove();
+    editor.insertAdjacentHTML('beforeend', BLOCK_TEMPLATES[kind]);
+    const newEl = editor.lastElementChild;
+    const target = newEl.querySelector('[contenteditable]') || newEl;
+    const r = document.createRange();
+    r.selectNodeContents(target); r.collapse(true);
+    sel.removeAllRanges(); sel.addRange(r);
+  } else {
+    insertBlockAfter(block, BLOCK_TEMPLATES[kind]);
+  }
+  slash.classList.remove('show');
+  updateWordCount();
+}
+
+editor.addEventListener('input', (e) => {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const node = sel.anchorNode;
+  const block = getLineText(node);
+  if (!block) return;
+
+  // markdown: ## + space -> h2, # + space -> h1, > + space -> blockquote, [] + space -> todo, --- -> hr
+  if (block.tagName === 'P') {
+    const text = block.textContent;
+    const shortcuts = [
+      { re: /^#\s$/, kind: 'h1' },
+      { re: /^##\s$/, kind: 'h2' },
+      { re: /^###\s$/, kind: 'h3' },
+      { re: /^>\s$/, kind: 'quote' },
+      { re: /^\[\]\s$/, kind: 'todo' },
+      { re: /^!!\s$/, kind: 'callout' },
+      { re: /^```$/, kind: 'code' },
+      { re: /^---$/, kind: 'divider' }
+    ];
+    for (const s of shortcuts) {
+      if (s.re.test(text)) {
+        block.textContent = '';
+        insertTemplate(s.kind);
+        return;
+      }
+    }
+    // slash menu
+    if (text === '/') {
+      const rect = block.getBoundingClientRect();
+      slash.style.left = rect.left + 'px';
+      slash.style.top = (rect.bottom + 4) + 'px';
+      slash.classList.add('show');
+      slashAnchor = block;
+    } else if (slashAnchor && !text.startsWith('/')) {
+      slash.classList.remove('show');
+      slashAnchor = null;
+    }
+  }
+  updateWordCount();
+});
+
+slash.querySelectorAll('.mi').forEach(mi => {
+  mi.addEventListener('mousedown', e => e.preventDefault());
+  mi.addEventListener('click', () => {
+    if (slashAnchor) {
+      slashAnchor.textContent = '';
+      insertTemplate(mi.dataset.ins);
+      slashAnchor = null;
+    }
+  });
+});
+
+document.addEventListener('click', (e) => {
+  if (!slash.contains(e.target) && !editor.contains(e.target)) {
+    slash.classList.remove('show');
+  }
+});
+
+/* ─── keyboard: ⌘B / ⌘I / ⌘U, Enter in todos, etc. */
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && e.key === 'b') { e.preventDefault(); document.execCommand('bold'); updateBubble(); }
+  if (mod && e.key === 'i') { e.preventDefault(); document.execCommand('italic'); updateBubble(); }
+  if (mod && e.key === 'u') { e.preventDefault(); document.execCommand('underline'); updateBubble(); }
+  if (mod && e.key === 'e') { e.preventDefault(); exportMd(); }
+  if (mod && e.key === 'p') { e.preventDefault(); window.print(); }
+  if (mod && e.key === 'o') { e.preventDefault(); openBrowse(); }
+  if (mod && e.key === 'k') { e.preventDefault(); openCommands(); }
+  if (e.key === 'Escape') {
+    slash.classList.remove('show');
+    document.getElementById('export-menu').classList.remove('open');
+    closeBrowse(); closeCommands();
+    document.body.classList.remove('focus-mode');
+  }
+  if (e.key === 'Enter') {
+    const sel = window.getSelection();
+    if (!sel.rangeCount) return;
+    const node = sel.anchorNode;
+    // Enter inside todo .tx -> create new todo
+    const tx = node.nodeType === 3 ? node.parentElement : node;
+    const todoTx = tx.closest && tx.closest('.todo .tx');
+    if (todoTx) {
+      e.preventDefault();
+      const todo = todoTx.parentElement;
+      const tmp = document.createElement('div');
+      tmp.innerHTML = BLOCK_TEMPLATES.todo;
+      const newTodo = tmp.firstElementChild;
+      todo.after(newTodo);
+      const target = newTodo.querySelector('.tx');
+      const r = document.createRange();
+      r.selectNodeContents(target); r.collapse(true);
+      sel.removeAllRanges(); sel.addRange(r);
+    }
+  }
+});
+
+/* ─── word / read count ────────────────────────────── */
+function updateWordCount() {
+  const text = editor.innerText.trim();
+  const words = text ? text.split(/\s+/).length : 0;
+  document.getElementById('word-count').textContent = `${words.toLocaleString()} word${words===1?'':'s'}`;
+  const min = Math.max(1, Math.round(words / 220));
+  document.getElementById('read-time').textContent = `${min} min read`;
+
+  // collect tags
+  const tags = new Set();
+  editor.querySelectorAll('.tag').forEach(t => tags.add(t.textContent));
+  const tagList = document.getElementById('tag-list');
+  tagList.innerHTML = [...tags].slice(0,3).map(t => `<span style="color:var(--accent)">${t}</span>`).join(' ');
+}
+updateWordCount();
+
+/* ─── chrome menus ─────────────────────────────────── */
+const exportMenu = document.getElementById('export-menu');
+document.getElementById('btn-export').addEventListener('click', (e) => {
+  e.stopPropagation();
+  exportMenu.classList.toggle('open');
+});
+document.addEventListener('click', (e) => {
+  if (!exportMenu.contains(e.target) && e.target.id !== 'btn-export') {
+    exportMenu.classList.remove('open');
+  }
+});
+
+function exportMd() {
+  const title = document.getElementById('doc-title').textContent;
+  let md = `# ${title}\n\n`;
+  editor.childNodes.forEach(node => {
+    if (node.nodeType !== 1) return;
+    const el = node;
+    const tag = el.tagName;
+    if (tag === 'H1') md += `# ${el.textContent}\n\n`;
+    else if (tag === 'H2') md += `## ${el.textContent}\n\n`;
+    else if (tag === 'H3') md += `### ${el.textContent}\n\n`;
+    else if (tag === 'P') md += `${el.textContent}\n\n`;
+    else if (tag === 'BLOCKQUOTE') md += `> ${el.textContent}\n\n`;
+    else if (tag === 'HR') md += `---\n\n`;
+    else if (el.classList && el.classList.contains('todo')) {
+      md += `- [${el.classList.contains('done')?'x':' '}] ${el.querySelector('.tx').textContent}\n`;
+    }
+    else if (el.classList && el.classList.contains('callout')) {
+      md += `> **Note:** ${el.querySelector('.body').textContent.trim()}\n\n`;
+    }
+    else if (tag === 'PRE') md += '```\n' + el.textContent + '\n```\n\n';
+  });
+  const blob = new Blob([md], {type:'text/markdown'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (title || 'note') + '.md';
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 100);
+}
+
+exportMenu.addEventListener('click', (e) => {
+  const act = e.target.closest('.menu-item')?.dataset.act;
+  if (act === 'export-txt') {
+    const title = document.getElementById('doc-title').textContent;
+    const text = title + '\n\n' + document.getElementById('editor').innerText;
+    const blob = new Blob([text], {type:'text/plain'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = title + '.txt'; a.click();
+  }
+  if (act === 'export-md') exportMd();
+  if (act === 'export-pdf') window.print();
+  if (act === 'export-html') {
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>${document.getElementById('doc-title').textContent}</title></head><body>${editor.innerHTML}</body></html>`;
+    const blob = new Blob([html], {type:'text/html'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = document.getElementById('doc-title').textContent + '.html';
+    a.click();
+  }
+  exportMenu.classList.remove('open');
+});
+
+document.getElementById('btn-focus').addEventListener('click', () => {
+  document.body.classList.toggle('focus-mode');
+  if (document.body.classList.contains('focus-mode')) {
+    const hint = document.getElementById('focus-hint');
+    hint.classList.remove('fade');
+    clearTimeout(hint._timer);
+    hint._timer = setTimeout(() => hint.classList.add('fade'), 2800);
+  }
+});
+
+/* ─── Browse dialog ──────────────────────────── */
+const browseEl = document.getElementById('browse');
+const browseOverlay = document.getElementById('browse-overlay');
+const browseInput = document.getElementById('browse-input');
+const browseResults = document.getElementById('browse-results');
+const browseCount = document.getElementById('browse-count');
+let browseSel = 0;
+
+function openBrowse() {
+  closeCommands();
+  browseEl.classList.add('show');
+  browseOverlay.classList.add('show');
+  browseInput.value = '';
+  renderBrowse('');
+  setTimeout(() => browseInput.focus(), 50);
+}
+function closeBrowse() {
+  browseEl.classList.remove('show');
+  browseOverlay.classList.remove('show');
+}
+
+function renderBrowse(q) {
+  const query = q.trim().toLowerCase();
+  const filtered = !query ? notes : notes.filter(n =>
+    n.title.toLowerCase().includes(query) ||
+    n.preview.toLowerCase().includes(query) ||
+    (n.tag || '').toLowerCase().includes(query)
+  );
+  browseSel = 0;
+  browseCount.textContent = `${filtered.length} of ${notes.length}`;
+  if (!filtered.length) {
+    browseResults.innerHTML = `<div class="empty-state"><div class="empty-mark">¶</div><div class="empty-title">No notes match “${escapeHtml(q)}”</div><div class="empty-sub">Try a different title or phrase.</div></div>`;
+    return;
+  }
+  browseResults.innerHTML = filtered.map((n,i) => `
+    <div class="b-item ${i===0?'sel':''}" data-id="${n.id}">
+      <div class="b-head">
+        <div class="b-title">${highlight(n.title, query)}${n.locked ? ' <span class="lock-glyph" title="Encrypted">&#x1F512;</span>' : ''}</div>
+        <div class="b-date">${n.date}</div>
+      </div>
+      <div class="b-preview">${n.locked ? '<em style="color:var(--ink-faint)">Encrypted — password required</em>' : highlight(n.preview, query)} ${n.tag&&!n.locked?`<span class="b-tag">${n.tag}</span>`:''}</div>
+    </div>
+  `).join('');
+  browseResults.querySelectorAll('.b-item').forEach((el,i) => {
+    el.addEventListener('click', () => pickBrowse(el.dataset.id));
+    el.addEventListener('mouseenter', () => setBrowseSel(i));
+  });
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+function highlight(text, q) {
+  if (!q) return escapeHtml(text);
+  const i = text.toLowerCase().indexOf(q);
+  if (i < 0) return escapeHtml(text);
+  return escapeHtml(text.slice(0,i)) + '<mark style="background:var(--accent-soft);color:var(--accent);padding:0 1px;border-radius:2px">' + escapeHtml(text.slice(i,i+q.length)) + '</mark>' + escapeHtml(text.slice(i+q.length));
+}
+
+function setBrowseSel(i) {
+  const items = browseResults.querySelectorAll('.b-item');
+  if (!items.length) return;
+  browseSel = Math.max(0, Math.min(items.length-1, i));
+  items.forEach((el,idx) => el.classList.toggle('sel', idx===browseSel));
+  items[browseSel].scrollIntoView({block:'nearest'});
+}
+function pickBrowse(id) {
+  const n = notes.find(x=>x.id===id);
+  if (n) {
+    if (n.locked) {
+      const pw = prompt(`"${n.title}" is encrypted. Enter password:`);
+      if (!pw) return;
+      // placeholder: any non-empty password "unlocks" in demo
+      if (pw.length < 1) { alert('Incorrect password.'); return; }
+    }
+    notes.forEach(x => x.active = x.id === id);
+    document.getElementById('tb-title').textContent = 'Slate — ' + n.title;
+    document.getElementById('doc-title').textContent = n.title;
+  }
+  closeBrowse();
+}
+
+browseInput.addEventListener('input', e => renderBrowse(e.target.value));
+browseInput.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); setBrowseSel(browseSel+1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); setBrowseSel(browseSel-1); }
+  else if (e.key === 'Enter') {
+    const items = browseResults.querySelectorAll('.b-item');
+    if (items[browseSel]) pickBrowse(items[browseSel].dataset.id);
+  }
+});
+browseOverlay.addEventListener('click', closeBrowse);
+document.getElementById('btn-browse').addEventListener('click', openBrowse);
+document.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', () => {
+  if (el.dataset.close === 'browse') closeBrowse();
+  if (el.dataset.close === 'commands') closeCommands();
+}));
+
+/* ─── Commands dialog ──────────────────────── */
+// Fill this in later — each command: { id, label, hint, run: () => {} }
+const COMMANDS = [
+  {
+    id: 'fmt-bold', label: 'Format — Bold', hint: '⌘B',
+    run: () => { document.execCommand('bold'); }
+  },
+  {
+    id: 'fmt-italic', label: 'Format — Italic', hint: '⌘I',
+    run: () => { document.execCommand('italic'); }
+  },
+  {
+    id: 'fmt-heading1', label: 'Format — Heading 1', hint: '# ',
+    run: () => { document.execCommand('formatBlock', false, 'H1'); }
+  },
+  {
+    id: 'fmt-heading2', label: 'Format — Heading 2', hint: '## ',
+    run: () => { document.execCommand('formatBlock', false, 'H2'); }
+  },
+  {
+    id: 'fmt-quote', label: 'Format — Block quote', hint: '> ',
+    run: () => { document.execCommand('formatBlock', false, 'blockquote'); }
+  },
+  {
+    id: 'module-table-on', label: 'Module — Table on', hint: 'Insert table',
+    run: () => {
+      const tpl = document.createElement('div');
+      tpl.innerHTML = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th contenteditable="true">Column</th><th contenteditable="true">Column</th><th contenteditable="true">Column</th></tr></thead><tbody><tr><td contenteditable="true"></td><td contenteditable="true"></td><td contenteditable="true"></td></tr><tr><td contenteditable="true"></td><td contenteditable="true"></td><td contenteditable="true"></td></tr></tbody></table></div>`;
+      const sel = window.getSelection();
+      if (sel.rangeCount) {
+        const range = sel.getRangeAt(0);
+        let el = range.commonAncestorContainer;
+        if (el.nodeType === 3) el = el.parentElement;
+        while (el.parentElement !== document.getElementById('editor') && el.parentElement) el = el.parentElement;
+        el.after(tpl.firstElementChild);
+      } else {
+        document.getElementById('editor').appendChild(tpl.firstElementChild);
+      }
+    }
+  },
+  {
+    id: 'module-table-off', label: 'Module — Table off', hint: 'Remove nearest table',
+    run: () => {
+      const sel = window.getSelection();
+      if (sel.rangeCount) {
+        let el = sel.getRangeAt(0).commonAncestorContainer;
+        if (el.nodeType === 3) el = el.parentElement;
+        const tbl = el.closest && el.closest('.tbl-wrap');
+        if (tbl) tbl.remove();
+      }
+    }
+  },
+  {
+    id: 'module-callout', label: 'Module — Insert callout', hint: '!! ',
+    run: () => {
+      const tpl = document.createElement('div');
+      tpl.innerHTML = `<div class="callout"><div class="icon">§</div><div class="body" contenteditable="true"><p></p></div></div>`;
+      document.getElementById('editor').appendChild(tpl.firstElementChild);
+    }
+  },
+  {
+    id: 'module-todo', label: 'Module — Insert to-do', hint: '[] ',
+    run: () => {
+      const tpl = document.createElement('div');
+      tpl.innerHTML = `<div class="todo"><div class="cb"></div><div class="tx" contenteditable="true"></div></div>`;
+      document.getElementById('editor').appendChild(tpl.firstElementChild);
+    }
+  },
+  {
+    id: 'export-md', label: 'Export — Markdown', hint: '⌘E',
+    run: () => exportMd()
+  },
+  {
+    id: 'export-pdf', label: 'Export — PDF', hint: '⌘P',
+    run: () => window.print()
+  },
+  {
+    id: 'theme-light', label: 'Theme — Light', hint: '',
+    run: () => { state.theme = 'light'; applyState(); persist(); }
+  },
+  {
+    id: 'theme-paper', label: 'Theme — Paper', hint: '',
+    run: () => { state.theme = 'paper'; applyState(); persist(); }
+  },
+  {
+    id: 'theme-dark', label: 'Theme — Dark', hint: '',
+    run: () => { state.theme = 'dark'; applyState(); persist(); }
+  },
+  {
+    id: 'focus', label: 'Toggle focus mode', hint: '',
+    run: () => document.body.classList.toggle('focus-mode')
+  }
+];
+
+const commandsEl = document.getElementById('commands');
+const commandsOverlay = document.getElementById('commands-overlay');
+const commandsInput = document.getElementById('commands-input');
+const commandsResults = document.getElementById('commands-results');
+const commandsCount = document.getElementById('commands-count');
+let commandsSel = 0;
+
+function openCommands() {
+  closeBrowse();
+  commandsEl.classList.add('show');
+  commandsOverlay.classList.add('show');
+  commandsInput.value = '';
+  renderCommands('');
+  setTimeout(() => commandsInput.focus(), 50);
+}
+function closeCommands() {
+  commandsEl.classList.remove('show');
+  commandsOverlay.classList.remove('show');
+}
+function renderCommands(q) {
+  const query = q.trim().toLowerCase();
+  const filtered = !query ? COMMANDS : COMMANDS.filter(c =>
+    c.label.toLowerCase().includes(query) || (c.hint||'').toLowerCase().includes(query)
+  );
+  commandsSel = 0;
+  commandsCount.textContent = COMMANDS.length ? `${filtered.length} of ${COMMANDS.length}` : '';
+  if (!filtered.length) {
+    commandsResults.innerHTML = `<div class="empty-state">
+      <div class="empty-mark">¶</div>
+      <div class="empty-title">${COMMANDS.length ? 'No match' : 'No commands yet'}</div>
+      <div class="empty-sub">${COMMANDS.length ? 'Try a different keyword.' : 'You can fill these in later. Drop entries into the <code>COMMANDS</code> array in the source.'}</div>
+    </div>`;
+    return;
+  }
+  commandsResults.innerHTML = filtered.map((c,i) => `
+    <div class="b-item ${i===0?'sel':''}" data-id="${c.id}">
+      <div class="b-head">
+        <div class="b-title">${highlight(c.label, query)}</div>
+        <div class="b-date">${c.hint||''}</div>
+      </div>
+    </div>
+  `).join('');
+  commandsResults.querySelectorAll('.b-item').forEach((el,i) => {
+    el.addEventListener('click', () => runCommand(el.dataset.id));
+    el.addEventListener('mouseenter', () => setCommandsSel(i));
+  });
+}
+function setCommandsSel(i) {
+  const items = commandsResults.querySelectorAll('.b-item');
+  if (!items.length) return;
+  commandsSel = Math.max(0, Math.min(items.length-1, i));
+  items.forEach((el,idx) => el.classList.toggle('sel', idx===commandsSel));
+}
+function runCommand(id) {
+  const c = COMMANDS.find(x => x.id === id);
+  if (c && c.run) c.run();
+  closeCommands();
+}
+commandsInput.addEventListener('input', e => renderCommands(e.target.value));
+commandsInput.addEventListener('keydown', e => {
+  if (e.key === 'ArrowDown') { e.preventDefault(); setCommandsSel(commandsSel+1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); setCommandsSel(commandsSel-1); }
+  else if (e.key === 'Enter') {
+    const items = commandsResults.querySelectorAll('.b-item');
+    if (items[commandsSel]) runCommand(items[commandsSel].dataset.id);
+  }
+});
+commandsOverlay.addEventListener('click', closeCommands);
+document.getElementById('btn-commands').addEventListener('click', openCommands);
+
+/* ─── time ticker ──────────────────────────────────── */
+function updateTime() { /* no-op — clock removed with sidebar */ }
+
+/* ─── Tweaks ───────────────────────────────────────── */
+const state = { ...TWEAK_DEFAULTS };
+
+function applyState() {
+  document.body.classList.remove('t-light', 't-paper', 't-dark');
+  document.body.classList.add('t-' + state.theme);
+  document.documentElement.style.setProperty('--display-font', FONTS[state.font]);
+  document.documentElement.style.setProperty('--body-size', state.size + 'px');
+  document.documentElement.style.setProperty('--accent', ACCENTS[state.accent]);
+  const a = ACCENTS[state.accent];
+  document.documentElement.style.setProperty('--accent-soft', hexToSoftRgba(a, 0.12));
+  document.getElementById('size-val').textContent = state.size;
+  document.getElementById('size-slider').value = state.size;
+  document.querySelectorAll('[data-group]').forEach(group => {
+    const g = group.dataset.group;
+    group.querySelectorAll('[data-v]').forEach(el => {
+      el.classList.toggle('active', el.dataset.v === state[g]);
+    });
+  });
+}
+
+function hexToSoftRgba(hex, alpha) {
+  const h = hex.replace('#','');
+  const r = parseInt(h.slice(0,2),16);
+  const g = parseInt(h.slice(2,4),16);
+  const b = parseInt(h.slice(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+document.querySelectorAll('.tweaks [data-group] [data-v]').forEach(el => {
+  el.addEventListener('click', () => {
+    const group = el.closest('[data-group]').dataset.group;
+    state[group] = el.dataset.v;
+    applyState();
+    persist();
+  });
+});
+document.getElementById('size-slider').addEventListener('input', (e) => {
+  state.size = parseInt(e.target.value);
+  applyState();
+  persist();
+});
+
+function persist() {
+  try {
+    window.parent.postMessage({type:'__edit_mode_set_keys', edits: state}, '*');
+  } catch(e) {}
+}
+
+/* Edit-mode plumbing (listener first, then announce) */
+window.addEventListener('message', (e) => {
+  if (!e.data) return;
+  if (e.data.type === '__activate_edit_mode') {
+    document.getElementById('tweaks').classList.add('show');
+    document.getElementById('tweaks-fab').classList.remove('show');
+  }
+  if (e.data.type === '__deactivate_edit_mode') {
+    document.getElementById('tweaks').classList.remove('show');
+    document.getElementById('tweaks-fab').classList.remove('show');
+  }
+});
+try { window.parent.postMessage({type:'__edit_mode_available'}, '*'); } catch(e) {}
+
+document.getElementById('tweaks-close').addEventListener('click', () => {
+  document.getElementById('tweaks').classList.remove('show');
+});
+
+applyState();
+</script>
+
+
+
+</body></html>

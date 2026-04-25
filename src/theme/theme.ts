@@ -5,8 +5,11 @@ import {
   COLOR_SCHEMES,
   DEFAULT_BACKGROUND,
   DEFAULT_COLOR_SCHEME,
+  DEFAULT_DISPLAY_FONT,
   DEFAULT_FONT,
   DEFAULT_FONT_SIZE,
+  DISPLAY_FONT_IDS,
+  DISPLAY_FONT_PRESETS,
   FONT_IDS,
   FONT_PRESETS,
 } from "./presets";
@@ -15,6 +18,7 @@ export interface ThemeSelection {
   colorScheme: string;
   background: string;
   font: string;
+  displayFont: string;
   fontSize: number;
   animationMode: string;
   animationStyle: string;
@@ -32,7 +36,7 @@ const FALLBACK_BG: Rgb = { r: 30, g: 30, b: 46 };
 const FALLBACK_FG: Rgb = { r: 205, g: 214, b: 244 };
 const FALLBACK_ACCENT: Rgb = { r: 137, g: 180, b: 250 };
 const FALLBACK_FG_DIM: Rgb = { r: 127, g: 132, b: 156 };
-const BASE_LINE_HEIGHT_RATIO = 1.65;
+const BASE_LINE_HEIGHT_RATIO = 1.7;
 const DEFAULT_ANIMATION_MODE = "fast";
 const DEFAULT_ANIMATION_STYLE = "pop-up";
 
@@ -326,6 +330,7 @@ export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelecti
   const colorSchemeKey = normalizeName(input.color_scheme);
   const backgroundKey = normalizeName(input.background);
   const fontKey = normalizeName(input.font);
+  const displayFontKey = normalizeName(input.display_font);
   const fontSize =
     typeof input.font_size === "number" ? clampFontSize(input.font_size) : DEFAULT_FONT_SIZE;
   const animation = resolveAnimationPair(input.animation_mode, input.animation_style);
@@ -334,6 +339,7 @@ export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelecti
     colorScheme: COLOR_SCHEMES[colorSchemeKey] ? colorSchemeKey : DEFAULT_COLOR_SCHEME,
     background: BACKGROUND_PRESETS[backgroundKey] ? backgroundKey : DEFAULT_BACKGROUND,
     font: FONT_PRESETS[fontKey] ? fontKey : DEFAULT_FONT,
+    displayFont: DISPLAY_FONT_PRESETS[displayFontKey] ? displayFontKey : DEFAULT_DISPLAY_FONT,
     fontSize,
     animationMode: animation.mode,
     animationStyle: animation.style,
@@ -345,6 +351,8 @@ export function applyTheme(selection: ThemeSelection) {
   const background =
     BACKGROUND_PRESETS[selection.background] ?? BACKGROUND_PRESETS[DEFAULT_BACKGROUND];
   const font = FONT_PRESETS[selection.font] ?? FONT_PRESETS[DEFAULT_FONT];
+  const displayFont =
+    DISPLAY_FONT_PRESETS[selection.displayFont] ?? DISPLAY_FONT_PRESETS[DEFAULT_DISPLAY_FONT];
   const fontSize = clampFontSize(selection.fontSize);
   const animation = resolveAnimationPair(selection.animationMode, selection.animationStyle);
   const animationMode = animation.mode;
@@ -368,6 +376,7 @@ export function applyTheme(selection: ThemeSelection) {
   root.style.setProperty("--bg-pattern", background.pattern);
   root.style.setProperty("--bg-pattern-size", background.size);
   root.style.setProperty("--font-mono", font.stack);
+  root.style.setProperty("--display-font", displayFont.stack);
   root.style.setProperty("--font-size", `${fontSize}px`);
   root.style.setProperty("--line-height", `${lineHeightPx}px`);
   root.style.setProperty("--heading-1-size", `${heading.heading1Size}px`);
@@ -399,6 +408,7 @@ export function applyTheme(selection: ThemeSelection) {
     colorScheme: scheme.id,
     background: background.id,
     font: font.id,
+    displayFont: displayFont.id,
     fontSize,
     animationMode,
     animationStyle,
@@ -413,6 +423,7 @@ function sameSelection(a: ThemeSelection | null, b: ThemeSelection): boolean {
     a.colorScheme === b.colorScheme &&
     a.background === b.background &&
     a.font === b.font &&
+    a.displayFont === b.displayFont &&
     a.fontSize === b.fontSize &&
     a.animationMode === b.animationMode &&
     a.animationStyle === b.animationStyle

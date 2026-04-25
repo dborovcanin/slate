@@ -17,6 +17,12 @@ export interface FontPreset {
   stack: string;
 }
 
+export interface DisplayFontPreset {
+  id: string;
+  label: string;
+  stack: string;
+}
+
 export const COLOR_SCHEMES: Record<string, ColorScheme> = {
   "catppuccin-mocha": {
     id: "catppuccin-mocha",
@@ -222,6 +228,99 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       "--pattern-color": "rgba(171, 178, 191, 0.07)",
     },
   },
+  slate: {
+    id: "slate",
+    label: "Slate",
+    vars: {
+      "--bg": "#f3efe8",
+      "--bg-surface": "#fbf8f2",
+      "--bg-overlay": "#ede9e1",
+      "--fg": "#1e1c18",
+      "--fg-dim": "rgba(30,28,24,0.62)",
+      "--fg-muted": "rgba(30,28,24,0.38)",
+      "--accent": "#7a5a3a",
+      "--border": "rgba(30,28,24,0.08)",
+      "--selection-bg": "rgba(122,90,58,0.12)",
+      "--active-line-bg": "rgba(30,28,24,0.03)",
+      "--pattern-color": "rgba(30,28,24,0.06)",
+      "--ink": "#1e1c18",
+      "--paper": "#fbf8f2",
+      "--ink-soft": "rgba(30,28,24,0.62)",
+      "--ink-faint": "rgba(30,28,24,0.38)",
+      "--rule": "rgba(30,28,24,0.08)",
+      "--rule-strong": "rgba(30,28,24,0.14)",
+      "--accent-soft": "rgba(122,90,58,0.12)",
+      "--display-font": "'Literata', Georgia, 'Times New Roman', serif",
+      "--body-font": "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "--window-radius": "14px",
+      "--shadow-window": "0 0 0 0.5px rgba(0,0,0,0.20), 0 30px 80px rgba(40,30,15,0.28), 0 8px 24px rgba(40,30,15,0.12)",
+      "--shadow-dialog": "0 30px 80px rgba(40,30,15,0.35), 0 8px 24px rgba(40,30,15,0.18)",
+      "--shadow-popover": "0 12px 32px rgba(40,30,15,0.16)",
+      "--bg-backdrop": "radial-gradient(1200px 800px at 20% 10%, #e8e2d6 0%, transparent 60%), radial-gradient(1200px 900px at 90% 90%, #ded5c6 0%, transparent 55%), #f3efe8",
+    },
+  },
+  "slate-dark": {
+    id: "slate-dark",
+    label: "Slate Dark",
+    vars: {
+      "--bg": "#17161a",
+      "--bg-surface": "#1d1c20",
+      "--bg-overlay": "#252328",
+      "--fg": "#ece8e0",
+      "--fg-dim": "rgba(236,232,224,0.66)",
+      "--fg-muted": "rgba(236,232,224,0.40)",
+      "--accent": "#c8956a",
+      "--border": "rgba(236,232,224,0.08)",
+      "--selection-bg": "rgba(232,168,124,0.25)",
+      "--active-line-bg": "rgba(255,255,255,0.02)",
+      "--pattern-color": "rgba(236,232,224,0.07)",
+      "--ink": "#ece8e0",
+      "--paper": "#1d1c20",
+      "--ink-soft": "rgba(236,232,224,0.66)",
+      "--ink-faint": "rgba(236,232,224,0.40)",
+      "--rule": "rgba(236,232,224,0.08)",
+      "--rule-strong": "rgba(236,232,224,0.16)",
+      "--accent-soft": "rgba(200,149,106,0.15)",
+      "--display-font": "'Literata', Georgia, 'Times New Roman', serif",
+      "--body-font": "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "--window-radius": "14px",
+      "--shadow-window": "0 0 0 0.5px rgba(0,0,0,0.50), 0 30px 80px rgba(0,0,0,0.55), 0 8px 24px rgba(0,0,0,0.30)",
+      "--shadow-dialog": "0 30px 80px rgba(0,0,0,0.60), 0 8px 24px rgba(0,0,0,0.35)",
+      "--shadow-popover": "0 12px 32px rgba(0,0,0,0.35)",
+      "--bg-backdrop": "radial-gradient(900px 700px at 15% 10%, rgba(60,40,25,0.25) 0%, transparent 60%), radial-gradient(800px 700px at 88% 90%, rgba(30,20,40,0.30) 0%, transparent 55%), #17161a",
+    },
+  },
+  "slate-light": {
+    id: "slate-light",
+    label: "Slate Light",
+    vars: {
+      "--bg": "#ececec",
+      "--bg-surface": "#ffffff",
+      "--bg-overlay": "#f2f2f2",
+      "--fg": "#111111",
+      "--fg-dim": "rgba(0,0,0,0.60)",
+      "--fg-muted": "rgba(0,0,0,0.38)",
+      "--accent": "#2c5282",
+      "--border": "rgba(0,0,0,0.07)",
+      "--selection-bg": "rgba(44,82,130,0.14)",
+      "--active-line-bg": "rgba(0,0,0,0.02)",
+      "--pattern-color": "rgba(0,0,0,0.06)",
+      "--ink": "#111111",
+      "--paper": "#ffffff",
+      "--ink-soft": "rgba(0,0,0,0.60)",
+      "--ink-faint": "rgba(0,0,0,0.38)",
+      "--rule": "rgba(0,0,0,0.07)",
+      "--rule-strong": "rgba(0,0,0,0.14)",
+      "--accent-soft": "rgba(44,82,130,0.10)",
+      "--display-font": "'Literata', Georgia, 'Times New Roman', serif",
+      "--body-font": "'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      "--window-radius": "14px",
+      "--shadow-window": "0 0 0 0.5px rgba(0,0,0,0.12), 0 20px 60px rgba(0,0,0,0.16), 0 6px 20px rgba(0,0,0,0.08)",
+      "--shadow-dialog": "0 20px 60px rgba(0,0,0,0.20), 0 6px 20px rgba(0,0,0,0.12)",
+      "--shadow-popover": "0 10px 28px rgba(0,0,0,0.12)",
+      "--bg-backdrop": "radial-gradient(1200px 800px at 20% 10%, #dcdcdc 0%, transparent 60%), radial-gradient(1200px 900px at 90% 90%, #d4d4d4 0%, transparent 55%), #ececec",
+    },
+  },
 };
 
 export const BACKGROUND_PRESETS: Record<string, BackgroundPreset> = {
@@ -260,7 +359,7 @@ export const BACKGROUND_PRESETS: Record<string, BackgroundPreset> = {
   },
 };
 
-export const DEFAULT_COLOR_SCHEME = "gruvbox-light";
+export const DEFAULT_COLOR_SCHEME = "slate";
 export const DEFAULT_BACKGROUND = "plain";
 export const DEFAULT_FONT = "jetbrains-mono";
 export const DEFAULT_FONT_SIZE = 14;
@@ -307,6 +406,32 @@ export const FONT_PRESETS: Record<string, FontPreset> = {
 };
 
 export const FONT_IDS = Object.keys(FONT_PRESETS);
+
+export const DISPLAY_FONT_PRESETS: Record<string, DisplayFontPreset> = {
+  literata: {
+    id: "literata",
+    label: "Literata",
+    stack: "'Literata', Georgia, 'Times New Roman', serif",
+  },
+  fraunces: {
+    id: "fraunces",
+    label: "Fraunces",
+    stack: "'Fraunces', Georgia, 'Times New Roman', serif",
+  },
+  "source-serif-4": {
+    id: "source-serif-4",
+    label: "Source Serif 4",
+    stack: "'Source Serif 4', Georgia, 'Times New Roman', serif",
+  },
+  "eb-garamond": {
+    id: "eb-garamond",
+    label: "EB Garamond",
+    stack: "'EB Garamond', Georgia, 'Times New Roman', serif",
+  },
+};
+
+export const DEFAULT_DISPLAY_FONT = "literata";
+export const DISPLAY_FONT_IDS = Object.keys(DISPLAY_FONT_PRESETS);
 
 export function clampFontSize(size: number) {
   if (!Number.isFinite(size)) return DEFAULT_FONT_SIZE;

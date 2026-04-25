@@ -43,6 +43,7 @@ export interface ThemeConfig {
   color_scheme: string;
   background: string;
   font: string;
+  display_font: string;
   font_size: number;
   animation_mode: string;
   animation_style: string;
@@ -74,6 +75,7 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   color_scheme: "gruvbox-light",
   background: "plain",
   font: "jetbrains-mono",
+  display_font: "literata",
   font_size: 14,
   animation_mode: "fast",
   animation_style: "pop-up",

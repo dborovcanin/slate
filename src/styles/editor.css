@@ -10,11 +10,33 @@
 .cm-editor .cm-scroller {
   padding: 16px 20px;
   overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size);
+  line-height: var(--line-height);
+}
+
+:root[data-theme^="slate"] .cm-editor .cm-scroller {
+  padding: 20px 64px;
+}
+
+:root[data-theme^="slate"] .cm-editor .cm-content {
+  max-width: 860px;
+  margin: 8px auto 120px;
+  color: var(--ink, var(--fg));
+}
+
+/* Code spans and fenced code blocks always stay monospace */
+.cm-editor .md-inline-code-content,
+.cm-editor .md-line.md-code-fence {
+  font-family: var(--font-mono);
 }
 
 .cm-editor .cm-content {
   caret-color: var(--accent);
   color: var(--fg);
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .cm-editor .cm-cursor {
@@ -120,46 +142,74 @@
 }
 
 .cm-editor .cm-line.md-heading-1 {
+  font-family: var(--display-font, var(--font-mono));
   font-size: var(--heading-1-size);
   font-weight: 750;
   line-height: var(--heading-1-line-height);
 }
 
 .cm-editor .cm-line.md-heading-2 {
+  font-family: var(--display-font, var(--font-mono));
   font-size: var(--heading-2-size);
   font-weight: 700;
   line-height: var(--heading-2-line-height);
 }
 
 .cm-editor .cm-line.md-heading-3 {
+  font-family: var(--display-font, var(--font-mono));
   font-size: var(--heading-3-size);
   font-weight: 680;
   line-height: var(--heading-line-height);
 }
 
 .cm-editor .cm-line.md-heading-4 {
+  font-family: var(--display-font, var(--font-mono));
   font-size: var(--heading-4-size);
   font-weight: 650;
   line-height: var(--heading-line-height);
 }
 
 .cm-editor .cm-line.md-heading-5 {
+  font-family: var(--display-font, var(--font-mono));
   font-size: var(--heading-5-size);
   font-weight: 640;
   line-height: var(--heading-line-height);
 }
 
 .cm-editor .cm-line.md-heading-6 {
+  font-family: var(--display-font, var(--font-mono));
   font-size: var(--heading-6-size);
   font-weight: 620;
   line-height: var(--heading-line-height);
   letter-spacing: 0.03em;
 }
 
+:root[data-theme^="slate"] .cm-editor .cm-line.md-heading-1 {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+:root[data-theme^="slate"] .cm-editor .cm-line.md-heading-2 {
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+:root[data-theme^="slate"] .cm-editor .cm-line.md-heading-3 {
+  font-weight: 600;
+}
+
 .cm-editor .cm-line.md-quote {
   border-left: 2px solid var(--border);
   padding-left: 10px;
   color: var(--fg-dim);
+}
+
+:root[data-theme^="slate"] .cm-editor .cm-line.md-quote {
+  border-left-color: var(--accent);
+  padding-left: 18px;
+  color: var(--ink-soft, var(--fg-dim));
+  font-family: var(--display-font, var(--font-mono));
+  font-style: italic;
 }
 
 .cm-editor .cm-line.md-code-block-line {
@@ -274,6 +324,12 @@
   font-style: italic;
 }
 
+:root[data-theme^="slate"] .md-emphasis {
+  font-family: var(--display-font, var(--font-mono));
+  font-style: italic;
+  font-weight: 400;
+}
+
 .md-strike {
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
@@ -287,10 +343,22 @@
   padding: 0 4px;
 }
 
+:root[data-theme^="slate"] .md-inline-code-content {
+  font-size: 0.88em;
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  border-color: var(--rule, var(--border));
+  padding: 1px 6px;
+}
+
 .md-link-text {
   color: var(--accent);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+:root[data-theme^="slate"] .md-link-text {
+  text-decoration: none;
+  border-bottom: 1px solid var(--accent-soft);
 }
 
 .md-link-url {
@@ -356,9 +424,25 @@
   vertical-align: middle;
 }
 
+:root[data-theme^="slate"] .md-checklist-mark {
+  border-width: 1.5px;
+  border-color: var(--rule-strong, var(--border));
+  border-radius: 0.25em;
+  background: transparent;
+}
+
+:root[data-theme^="slate"] .md-checklist-mark:hover {
+  border-color: var(--accent);
+}
+
 .md-checklist-mark-checked {
   border-color: var(--accent);
   background: var(--bg-overlay);
+}
+
+:root[data-theme^="slate"] .md-checklist-mark-checked {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .md-checklist-mark-checked::after {
@@ -373,11 +457,21 @@
   line-height: 1;
 }
 
+:root[data-theme^="slate"] .md-checklist-mark-checked::after {
+  color: var(--paper, #fff);
+}
+
 .md-checklist-content-done {
   color: var(--fg-dim);
   text-decoration: line-through;
   text-decoration-thickness: 1.5px;
   text-decoration-color: var(--fg-dim);
+}
+
+:root[data-theme^="slate"] .md-checklist-content-done {
+  color: var(--ink-faint, var(--fg-dim));
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ink-faint, var(--fg-dim));
 }
 
 .cm-editor .cm-gutters {
