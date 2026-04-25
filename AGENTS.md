@@ -176,21 +176,19 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-25 3:34pm GMT+2
+# [slate] recent context, 2026-04-25 3:57pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 48 obs (16,771t read) | 337,886t work | 95% savings
+Stats: 50 obs (17,278t read) | 339,561t work | 95% savings
 
 ### Apr 25, 2026
-1 12:13a 🔵 Slate Project Architecture: TUI/UI Decoupled Hybrid
 S2 Assembly LOC estimate for a full-featured TUI editor (curiosity/hypothetical) (Apr 25, 12:13 AM)
 S1 Slate Project Architecture: TUI/UI Decoupled Hybrid (Apr 25, 12:13 AM)
 S5 ASM LOC estimate for TUI editor + render path SIMD optimization discussion (Apr 25, 12:15 AM)
 S6 Apply "Slate" visual theme to existing TUI/web editor project — warm paper aesthetic, semantic token system, floating window shell, configurable typography (Apr 25, 12:23 AM)
-2 12:35a 🔵 Slate TUI Editor project structure and existing theme system surveyed
 S18 Add Slate theme family (slate, slate-dark, slate-light) with floating window shell layout and semantic CSS token system (Apr 25, 12:37 AM)
 4 12:46a ⚖️ Default color scheme changed from gruvbox-light to slate
 5 " 🟣 Slate floating window shell layout added to app.css
@@ -243,6 +241,10 @@ S28 Font config setting has no effect — theme font not applied from config (Ap
 48 11:49a 🔵 apply_patch fails on second hunk after write_file already applied the first hunk
 49 " 🔄 Completed variables_enabled removal from TUI and TypeScript API layer
 50 " ✅ Updated module-commands tests to remove legacy variables_enabled config override
+51 3:51p 🟣 FTS search backend passes all 74 tests including new search tests
+52 3:53p 🟣 Full test suite green after FTS search + switcher content search integration
+53 3:55p ⚖️ Migration script cleanup — beta environment fully migrated
+55 3:56p 🟣 Note Search Pass 2 plan documented in docs/plan.md
 
-Access 338k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 340k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

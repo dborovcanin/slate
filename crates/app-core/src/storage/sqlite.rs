@@ -21,6 +21,8 @@ const ENCRYPTION_NONCE_LEN: usize = 12;
 const PASSWORD_HASH_LEN: usize = 32;
 const PBKDF2_ITERATIONS: u32 = 200_000;
 const NOTE_TITLE_MAX_CHARS: usize = 60;
+const SEARCH_QUERY_MAX_TERMS: usize = 8;
+const SEARCH_LIMIT_MAX: usize = 100;
 
 #[derive(Debug, Clone)]
 struct NoteSecurityRow {
@@ -68,6 +70,7 @@ impl SqlitePool {
         first
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
+        seed_note_search_index_if_empty(&first)?;
 
         let mut connections = Vec::with_capacity(pool_size.max(1));
         connections.push(first);
@@ -787,6 +790,49 @@ impl Db {
             .optional()
             .map_err(|e| e.to_string())?;
         Ok(updated_at)
+    }
+
+    pub fn search_notes_content(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<NoteSummary>, String> {
+        let fts_query = build_fts_query(query);
+        if fts_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let bounded_limit = limit.clamp(1, SEARCH_LIMIT_MAX) as i64;
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.id, n.note_title, substr(n.body, 1, 200), n.access_mode, n.updated_at
+                 FROM notes_fts f
+                 JOIN notes n ON n.rowid = f.rowid
+                 WHERE notes_fts MATCH ?1
+                   AND n.access_mode = 'none'
+                 ORDER BY bm25(notes_fts), n.updated_at DESC
+                 LIMIT ?2",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![fts_query, bounded_limit], |row| {
+                Ok(NoteSummaryRow {
+                    id: row.get(0)?,
+                    note_title: row.get(1)?,
+                    body_prefix: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(3)?),
+                    updated_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+
+        let mut notes = Vec::with_capacity(rows.len());
+        for row in &rows {
+            notes.push(self.note_summary_from_row(&conn, row)?);
+        }
+        Ok(notes)
     }
 
     pub fn delete_note(&self, id: &str, password: Option<&str>) -> Result<bool, String> {
@@ -1725,6 +1771,46 @@ fn escape_like_pattern(value: &str) -> String {
     out
 }
 
+fn seed_note_search_index_if_empty(conn: &Connection) -> Result<(), String> {
+    let indexed_rows = conn
+        .query_row("SELECT COUNT(1) FROM notes_fts", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|e| format!("Failed to inspect note search index: {e}"))?;
+    if indexed_rows > 0 {
+        return Ok(());
+    }
+
+    conn.execute(
+        "INSERT INTO notes_fts(rowid, note_id, body)
+         SELECT rowid, id, body
+         FROM notes
+         WHERE access_mode = 'none'",
+        [],
+    )
+    .map_err(|e| format!("Failed to seed note search index: {e}"))?;
+    Ok(())
+}
+
+fn build_fts_query(raw: &str) -> String {
+    let mut terms = Vec::new();
+    for token in raw.split_whitespace() {
+        if terms.len() >= SEARCH_QUERY_MAX_TERMS {
+            break;
+        }
+        let cleaned: String = token
+            .chars()
+            .filter(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '-')
+            .collect();
+        if cleaned.is_empty() {
+            continue;
+        }
+        let escaped = cleaned.replace('\"', "\"\"");
+        terms.push(format!("\"{escaped}\"*"));
+    }
+    terms.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2084,6 +2170,73 @@ mod tests {
             .expect("note exists");
         assert_eq!(most_recent.id, "a");
         assert_eq!(most_recent.body, "first updated");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_notes_content_matches_plain_notes_and_skips_protected_notes() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("plain-a", "alpha budget meeting notes")
+            .expect("save plain note a");
+        db.save_note("plain-b", "roadmap has alpha milestone")
+            .expect("save plain note b");
+        db.save_note("locked-a", "alpha locked secret")
+            .expect("save locked note");
+        db.lock_note("locked-a", "lock-pass").expect("lock note");
+        db.save_note("enc-a", "alpha encrypted secret")
+            .expect("save encrypted note");
+        db.encrypt_note("enc-a", "enc-pass").expect("encrypt note");
+
+        let hits = db
+            .search_notes_content("alpha", 20)
+            .expect("search succeeds");
+        let ids: Vec<&str> = hits.iter().map(|note| note.id.as_str()).collect();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"plain-a"));
+        assert!(ids.contains(&"plain-b"));
+        assert!(!ids.contains(&"locked-a"));
+        assert!(!ids.contains(&"enc-a"));
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_notes_content_seeds_index_for_pre_fts_databases() {
+        let path = temp_db_path();
+        let conn = Connection::open(path.clone()).expect("legacy db opens");
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                body TEXT NOT NULL DEFAULT '',
+                note_title TEXT NOT NULL DEFAULT '',
+                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
+                access_mode TEXT NOT NULL DEFAULT 'none',
+                password_salt BLOB,
+                password_hash BLOB,
+                encryption_salt BLOB,
+                encryption_nonce BLOB,
+                encrypted_body BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
+             VALUES ('legacy-note', 'alpha from legacy schema', 'legacy', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("legacy schema created");
+        drop(conn);
+
+        let db = Db::open(path.clone()).expect("db opens with search index bootstrap");
+        let hits = db
+            .search_notes_content("alpha", 20)
+            .expect("search succeeds");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, "legacy-note");
 
         drop(db);
         let _ = fs::remove_file(path);

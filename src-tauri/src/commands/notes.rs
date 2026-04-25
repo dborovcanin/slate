@@ -93,6 +93,15 @@ pub fn list_notes_meta(core: State<'_, AppCore>) -> Result<Vec<NoteSummary>, Str
 }
 
 #[tauri::command]
+pub fn search_notes_content(
+    core: State<'_, AppCore>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<NoteSummary>, String> {
+    core.db().search_notes_content(&query, limit.unwrap_or(40))
+}
+
+#[tauri::command]
 pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<NoteSummary>, String> {
     core.db().get_note_meta(&id)
 }

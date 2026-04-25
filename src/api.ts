@@ -150,6 +150,10 @@ export function listNotesMeta(): Promise<NoteSummary[]> {
   return invoke<NoteSummary[]>("list_notes_meta");
 }
 
+export function searchNotesContent(query: string, limit = 40): Promise<NoteSummary[]> {
+  return invoke<NoteSummary[]>("search_notes_content", { query, limit });
+}
+
 export function getNoteMeta(id: string): Promise<NoteSummary | null> {
   return invoke<NoteSummary | null>("get_note_meta", { id });
 }

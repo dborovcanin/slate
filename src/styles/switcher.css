@@ -125,6 +125,12 @@
   background: color-mix(in srgb, var(--accent-cool) 20%, transparent);
 }
 
+.switcher-item-badge--content {
+  color: color-mix(in srgb, var(--accent) 72%, var(--fg));
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
 .switcher-empty {
   padding: 18px;
   text-align: center;
