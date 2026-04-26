@@ -231,6 +231,9 @@ struct TerminalApp {
     content_search_query: String,
     content_search_results: Vec<NoteSearchResult>,
     content_search_selected: usize,
+    content_search_pending: bool,
+    content_search_rx:
+        Option<std::sync::mpsc::Receiver<(String, Result<Vec<NoteSearchResult>, String>)>>,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -502,6 +505,8 @@ impl TerminalApp {
             content_search_query: String::new(),
             content_search_results: Vec::new(),
             content_search_selected: 0,
+            content_search_pending: false,
+            content_search_rx: None,
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -610,6 +615,7 @@ impl TerminalApp {
             }
 
             self.maybe_clipboard_watch();
+            self.maybe_collect_search_results();
             self.sync_reminder_ghosts_if_dirty(db)?;
             self.maybe_dispatch_due_reminders(db);
         }
@@ -631,6 +637,19 @@ impl TerminalApp {
             self.recompute_folding();
         }
         self.maybe_recompute_calc_after_idle();
+        if self.content_search_pending {
+            self.content_search_pending = false;
+            let query = self.content_search_query.trim().to_string();
+            if !query.is_empty() {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let search_db = db.clone();
+                std::thread::spawn(move || {
+                    let result = search_db.search_notes_content(&query, 40);
+                    tx.send((query, result)).ok();
+                });
+                self.content_search_rx = Some(rx);
+            }
+        }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
             match self.save(db) {
                 Ok(()) => {
@@ -665,6 +684,30 @@ impl TerminalApp {
         }
         self.clipboard_watch_enabled = false;
         true
+    }
+
+    fn maybe_collect_search_results(&mut self) {
+        let Some(rx) = &self.content_search_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((query, Ok(results))) => {
+                if self.content_search_query.trim() == query {
+                    self.content_search_results = results;
+                    self.content_search_selected = 0;
+                }
+                self.content_search_rx = None;
+            }
+            Ok((_, Err(error))) => {
+                self.status = format!("content search failed: {error}");
+                self.content_search_results.clear();
+                self.content_search_rx = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.content_search_rx = None;
+            }
+        }
     }
 
     fn maybe_clipboard_watch(&mut self) {

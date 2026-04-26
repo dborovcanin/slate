@@ -6,7 +6,7 @@ use sha2::Sha256;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
@@ -137,8 +137,17 @@ impl Drop for SqlitePoolGuard<'_> {
 }
 
 pub struct Db {
-    conn: SqlitePool,
-    note_access: NoteAccessService,
+    conn: Arc<SqlitePool>,
+    note_access: Arc<NoteAccessService>,
+}
+
+impl Clone for Db {
+    fn clone(&self) -> Self {
+        Self {
+            conn: Arc::clone(&self.conn),
+            note_access: Arc::clone(&self.note_access),
+        }
+    }
 }
 
 impl Db {
@@ -146,8 +155,8 @@ impl Db {
         let conn = SqlitePool::new(&path, SQLITE_POOL_SIZE)?;
 
         Ok(Self {
-            conn,
-            note_access: NoteAccessService::new(),
+            conn: Arc::new(conn),
+            note_access: Arc::new(NoteAccessService::new()),
         })
     }
 

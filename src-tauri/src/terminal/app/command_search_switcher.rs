@@ -1129,6 +1129,8 @@ impl TerminalApp {
         self.content_search_query.clear();
         self.content_search_results.clear();
         self.content_search_selected = 0;
+        self.content_search_pending = false;
+        self.content_search_rx = None;
         self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
         self.status =
@@ -1146,6 +1148,8 @@ impl TerminalApp {
         self.content_search_query.clear();
         self.content_search_results.clear();
         self.content_search_selected = 0;
+        self.content_search_pending = false;
+        self.content_search_rx = None;
         self.status = format!("editing {}", self.active_note.id);
     }
 
@@ -1181,7 +1185,13 @@ impl TerminalApp {
             }
             Key::Ctrl('w') => {
                 trim_trailing_word(&mut self.content_search_query);
-                self.recompute_content_search(db);
+                if self.content_search_query.trim().is_empty() {
+                    self.content_search_results.clear();
+                    self.content_search_selected = 0;
+                    self.content_search_pending = false;
+                } else {
+                    self.content_search_pending = true;
+                }
             }
             Key::ArrowUp => {
                 if self.content_search_selected > 0 {
@@ -1195,7 +1205,13 @@ impl TerminalApp {
             }
             Key::Backspace => {
                 self.content_search_query.pop();
-                self.recompute_content_search(db);
+                if self.content_search_query.trim().is_empty() {
+                    self.content_search_results.clear();
+                    self.content_search_selected = 0;
+                    self.content_search_pending = false;
+                } else {
+                    self.content_search_pending = true;
+                }
             }
             Key::Enter => {
                 if let Some(result) = self
@@ -1231,13 +1247,13 @@ impl TerminalApp {
             }
             Key::Char(ch) => {
                 self.content_search_query.push(ch);
-                self.recompute_content_search(db);
+                self.content_search_pending = true;
             }
             Key::Paste(text) => {
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                     self.content_search_query.push(ch);
                 }
-                self.recompute_content_search(db);
+                self.content_search_pending = true;
             }
             _ => {}
         }
