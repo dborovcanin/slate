@@ -201,6 +201,9 @@ pub fn execute_command(
         | CommandId::NoteEncrypt
         | CommandId::NoteDecrypt
         | CommandId::NoteUnprotect => result_with_message("note security command handled by host"),
+        CommandId::Write | CommandId::WriteQuit => {
+            result_with_message("write command handled by host")
+        }
         CommandId::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
@@ -301,6 +304,8 @@ mod tests {
             .map(|entry| entry.value)
             .collect::<Vec<_>>();
         assert!(vim_values.contains(&"q".to_string()));
+        assert!(vim_values.contains(&"w".to_string()));
+        assert!(vim_values.contains(&"wq".to_string()));
     }
 
     #[test]

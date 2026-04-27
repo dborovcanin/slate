@@ -36,6 +36,54 @@ fn ctrl_q_quits_from_normal_mode() {
 }
 
 #[test]
+fn write_command_saves_active_note_without_quit() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.lines = vec!["one updated".to_string()];
+    app.dirty = true;
+
+    app.execute_terminal_command(&db, "w");
+
+    assert_eq!(app.status, "written");
+    assert!(!app.quit);
+    assert!(!app.dirty);
+    let persisted = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted.body, "one updated");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn write_quit_command_saves_then_exits() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.lines = vec!["one updated".to_string()];
+    app.dirty = true;
+
+    app.execute_terminal_command(&db, "wq");
+
+    assert_eq!(app.status, "written");
+    assert!(app.quit);
+    assert!(!app.dirty);
+    let persisted = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted.body, "one updated");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn clip_watch_commands_toggle_terminal_watcher() {
     let (db, mut app, path) = app_with_note("alpha");
     app.mode = UiMode::Normal;

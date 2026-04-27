@@ -38,6 +38,7 @@ export interface CommandExecutionOptions {
   mode: CommandMode;
   dateFormat?: string;
   dateTimeFormat?: string;
+  onWriteCommand?: () => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
@@ -268,6 +269,7 @@ export async function executeCommand(
       ? () => stopClipboardWatch()
       : undefined,
     runFoldCommand: (action: FoldCommandAction) => executeFoldCommand(view, action),
+    onWrite: options.onWriteCommand,
     onQuit: options.onExitCommand,
     formatMarkdown: formatMarkdownTextAsync,
     getNoteModules: options.getNoteModules,

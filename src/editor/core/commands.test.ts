@@ -247,6 +247,37 @@ test("core executeCommand handles date and mode-gated q", async () => {
   assert.equal(quitCalled, true);
 });
 
+test("core executeCommand handles vim write and write+quit", async () => {
+  let writeCalls = 0;
+  let quitCalls = 0;
+
+  const editorW = await executeCommand(snapshot("", 0), "w", { mode: "editor" });
+  assert.equal(editorW.message, "unknown command: w");
+
+  const vimW = await executeCommand(snapshot("alpha", 0), "w", {
+    mode: "vim",
+    onWrite: async () => {
+      writeCalls += 1;
+    },
+  });
+  assert.equal(vimW.message, "written");
+  assert.equal(writeCalls, 1);
+  assert.equal(quitCalls, 0);
+
+  const vimWq = await executeCommand(snapshot("alpha", 0), "wq", {
+    mode: "vim",
+    onWrite: async () => {
+      writeCalls += 1;
+    },
+    onQuit: async () => {
+      quitCalls += 1;
+    },
+  });
+  assert.equal(vimWq.message, "written and quit");
+  assert.equal(writeCalls, 2);
+  assert.equal(quitCalls, 1);
+});
+
 test("core executeCommand handles notify with one-line reminder payload", async () => {
   let payload:
     | {

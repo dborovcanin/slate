@@ -38,19 +38,21 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 
 **Optional Vim mode**
 - Enable with `[editor] vim_mode = true`
+- Starts in normal mode
 - Insert/normal modes (`Esc` to normal, `i` to insert)
 - Cursor changes by mode (insert: bar cursor, normal: block cursor + `NORMAL` badge)
 - Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Folding: `za` toggles fold at cursor (GUI headings/code fences)
-- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:q`
+- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:w`, `:wq`, `:q`
 - `:sum` and `:avg` compute from the selected scope, insert only `<value>` at cursor/selection, and copy the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 
 **Optional terminal mode**
 - Enable with `[editor] terminal_mode = true`
 - Or run explicitly with `slate --terminal`
+- Open markdown files in GUI mode with `slate path/to/file.md` (supports `.md`, `.markdown`, `.mdown`, `.mkd`; edits are saved back to that file)
 - Runs as a standalone full-screen terminal app (no Tauri window)
 - Built-in editor with note list/switcher and status bar
 - Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
@@ -132,6 +134,7 @@ sqrt(144) + 3^2         → 21
 | Ctrl++ / Ctrl+-         | Increase / decrease font size |
 | Ctrl+Alt++ / Ctrl+Alt+- | Next / previous font family   |
 | Ctrl+W                  | Hide window                   |
+| Ctrl+Q                  | Quit window                   |
 | Ctrl+Z / Ctrl+Y         | Undo / redo                   |
 | Escape                  | Close switcher                |
 

@@ -38,6 +38,7 @@ type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
 interface VimOptions {
   dateFormat?: string;
   dateTimeFormat?: string;
+  onWriteCommand?: () => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
@@ -1053,6 +1054,7 @@ export function vimModeExtension(options: VimOptions = {}) {
           mode: "vim",
           dateFormat: options.dateFormat,
           dateTimeFormat: options.dateTimeFormat,
+          onWriteCommand: options.onWriteCommand,
           onExitCommand: options.onExitCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,

@@ -165,7 +165,7 @@ Acceptance criteria:
 
 ### Global
 
-- [ ] Ability to open markdown files directly and save (export) to them
+- [x] Ability to open markdown files directly and save (export) to them (GUI launch via `slate <file.md>`)
 - [ ] Global quick-capture: `slate capture "thought"` appends to today's inbox note without opening UI.
 - [ ] Clipboard-watch into a named note/section.
 - [ ] Pipe-in mode: `cmd | slate append`.
@@ -373,7 +373,7 @@ Acceptance criteria:
 - [ ] Improve overflow handling
 - [ ] Improve theming and overall visual polish in UI and TUI
 - [ ] Memory consumption and micro-optimizations
-- [ ] Add `Ctrl+Q` UI exit
+- [x] Add `Ctrl+Q` UI exit
 - [ ] Improve exports
 - [ ] Do we need a hard stop on modules (note size) since we can manually control it?
 - [ ] Fix modules in TUI to apply actual changes

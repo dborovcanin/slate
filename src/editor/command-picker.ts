@@ -9,6 +9,7 @@ interface CommandPickerOptions {
   mode: CommandMode;
   dateFormat?: string;
   dateTimeFormat?: string;
+  onWriteCommand?: () => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
@@ -25,6 +26,7 @@ interface CommandModeExtensionOptions {
   vimMode?: boolean;
   dateFormat?: string;
   dateTimeFormat?: string;
+  onWriteCommand?: () => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
@@ -181,6 +183,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         mode: options.mode,
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
+        onWriteCommand: options.onWriteCommand,
         onExitCommand: options.onExitCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
@@ -294,6 +297,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         mode: "editor",
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
+        onWriteCommand: options.onWriteCommand,
         onExitCommand: options.onExitCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,

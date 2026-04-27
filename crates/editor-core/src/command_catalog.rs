@@ -42,6 +42,8 @@ pub enum CommandId {
     NoteEncrypt,
     NoteDecrypt,
     NoteUnprotect,
+    Write,
+    WriteQuit,
     Quit,
 }
 
@@ -145,7 +147,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 41] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 43] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -464,6 +466,20 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 41] = [
         description: "quit",
         modes: &MODES_VIM,
     },
+    CommandDefinition {
+        id: CommandId::Write,
+        value: "w",
+        aliases: &["write"],
+        description: "write (save)",
+        modes: &MODES_VIM,
+    },
+    CommandDefinition {
+        id: CommandId::WriteQuit,
+        value: "wq",
+        aliases: &["writequit"],
+        description: "write and quit",
+        modes: &MODES_VIM,
+    },
 ];
 
 pub fn normalize_command(input: &str) -> String {
@@ -568,6 +584,15 @@ mod tests {
 
         let vim_q = resolve_command(CommandMode::Vim, "q");
         assert_eq!(vim_q.map(|cmd| cmd.id), Some(CommandId::Quit));
+
+        let editor_w = resolve_command(CommandMode::Editor, "w");
+        assert!(editor_w.is_none());
+
+        let vim_w = resolve_command(CommandMode::Vim, "w");
+        assert_eq!(vim_w.map(|cmd| cmd.id), Some(CommandId::Write));
+
+        let vim_wq = resolve_command(CommandMode::Vim, "wq");
+        assert_eq!(vim_wq.map(|cmd| cmd.id), Some(CommandId::WriteQuit));
     }
 
     #[test]

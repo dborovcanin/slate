@@ -68,6 +68,7 @@ pub enum CommandDispatchKind {
     HostDate,
     HostNotify,
     HostNotifyDelete,
+    HostWrite,
     HostModule,
     HostFold,
     HostClipWatch,
@@ -108,6 +109,9 @@ pub enum HostCommandPlan {
         action: NoteSecurityAction,
         password: String,
     },
+    Write {
+        quit: bool,
+    },
     Quit {
         force: bool,
     },
@@ -142,6 +146,7 @@ impl EditorEngine {
                 HostCommandPlan::Date => CommandDispatchKind::HostDate,
                 HostCommandPlan::Notify => CommandDispatchKind::HostNotify,
                 HostCommandPlan::NotifyDelete => CommandDispatchKind::HostNotifyDelete,
+                HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
                 HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
                 HostCommandPlan::ClipWatch { .. } => CommandDispatchKind::HostClipWatch,
@@ -201,6 +206,8 @@ impl EditorEngine {
             CommandId::ClipWatchStop => Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             }),
+            CommandId::Write => Some(HostCommandPlan::Write { quit: false }),
+            CommandId::WriteQuit => Some(HostCommandPlan::Write { quit: true }),
             CommandId::Quit => Some(HostCommandPlan::Quit {
                 force: normalized == "q!",
             }),
@@ -419,6 +426,14 @@ mod tests {
             EditorEngine::classify_command_dispatch(CommandMode::Vim, "q"),
             Some(CommandDispatchKind::Quit)
         );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Vim, "w"),
+            Some(CommandDispatchKind::HostWrite)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Vim, "wq"),
+            Some(CommandDispatchKind::HostWrite)
+        );
     }
 
     #[test]
@@ -440,6 +455,13 @@ mod tests {
         let quit_normal =
             EditorEngine::plan_host_command(CommandMode::Vim, "q").expect("quit normal");
         assert_eq!(quit_normal, HostCommandPlan::Quit { force: false });
+
+        let write = EditorEngine::plan_host_command(CommandMode::Vim, "w").expect("write");
+        assert_eq!(write, HostCommandPlan::Write { quit: false });
+
+        let write_quit =
+            EditorEngine::plan_host_command(CommandMode::Vim, "wq").expect("write+quit");
+        assert_eq!(write_quit, HostCommandPlan::Write { quit: true });
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use app_core::storage::{Note, NoteModules, NoteSearchResult, NoteSummary};
 use app_core::AppCore;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const NOTE_CHANGED_EVENT: &str = "slate://note-changed";
 const DEFAULT_CONTENT_SEARCH_LIMIT: usize = 60;
@@ -40,6 +40,27 @@ fn note_defaults_from_config() -> Result<(NoteModules, Option<String>), String> 
 
 #[tauri::command]
 pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, String> {
+    let startup_markdown = app
+        .state::<crate::StartupMarkdownFileState>()
+        .take_startup_file();
+    if let Some(path) = startup_markdown {
+        let body = if path.exists() {
+            std::fs::read_to_string(&path)
+                .map_err(|e| format!("Failed to read markdown file '{}': {e}", path.display()))?
+        } else {
+            String::new()
+        };
+        let note_id = crate::note_id_for_markdown_file(&path);
+        if let Some(existing) = core.db().get_note(&note_id)? {
+            if existing.body == body {
+                return Ok(existing);
+            }
+        }
+        let note = core.db().save_note(&note_id, &body)?;
+        emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+        return Ok(note);
+    }
+
     let special = app_core::config::load_special_notes_config();
     if let Some(note) = core
         .db()
@@ -67,6 +88,18 @@ pub fn save_note(
     id: String,
     body: String,
 ) -> Result<Note, String> {
+    if let Some(path) = crate::markdown_file_path_from_note_id(&id) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                format!(
+                    "Failed to create parent directory for markdown file '{}': {e}",
+                    path.display()
+                )
+            })?;
+        }
+        std::fs::write(&path, &body)
+            .map_err(|e| format!("Failed to write markdown file '{}': {e}", path.display()))?;
+    }
     let note = core.db().save_note(&id, &body)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)

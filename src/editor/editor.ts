@@ -124,6 +124,7 @@ interface EditorMountOptions {
   vimMode?: boolean;
   dateFormat?: string;
   dateTimeFormat?: string;
+  onWriteCommand?: () => Promise<void> | void;
   variablesEnabled?: boolean;
   variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
@@ -352,6 +353,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
         vimMode: !!options.vimMode,
+        onWriteCommand: options.onWriteCommand,
         onExitCommand: options.onExitCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
@@ -395,6 +397,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         vimModeExtension({
           dateFormat: options.dateFormat,
           dateTimeFormat: options.dateTimeFormat,
+          onWriteCommand: options.onWriteCommand,
           onExitCommand: options.onExitCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,

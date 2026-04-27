@@ -850,6 +850,20 @@ impl TerminalApp {
             crate::editor_core::engine::EditorEngine::plan_host_command(self.command_mode(), cmd)
         {
             match plan {
+                crate::editor_core::engine::HostCommandPlan::Write { quit } => {
+                    match self.save(db) {
+                        Ok(()) => {
+                            self.status = "written".to_string();
+                            if quit {
+                                self.quit = true;
+                            }
+                        }
+                        Err(error) => {
+                            self.status = format!("write failed: {error}");
+                        }
+                    }
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Quit { force } => {
                     self.force_quit = force;
                     self.quit = true;

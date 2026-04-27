@@ -259,6 +259,7 @@ fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
         CommandDispatchKind::HostDate => "host_date",
         CommandDispatchKind::HostNotify => "host_notify",
         CommandDispatchKind::HostNotifyDelete => "host_notify_delete",
+        CommandDispatchKind::HostWrite => "host_write",
         CommandDispatchKind::HostModule => "host_module",
         CommandDispatchKind::HostFold => "host_fold",
         CommandDispatchKind::HostClipWatch => "host_clip_watch",
@@ -292,6 +293,7 @@ enum HostCommandPlanWire {
     Date,
     Notify,
     NotifyDelete,
+    Write { quit: bool },
     Module { command: String },
     Fold { action: String },
     ClipWatch { action: String },
@@ -304,6 +306,7 @@ fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {
         HostCommandPlan::Date => HostCommandPlanWire::Date,
         HostCommandPlan::Notify => HostCommandPlanWire::Notify,
         HostCommandPlan::NotifyDelete => HostCommandPlanWire::NotifyDelete,
+        HostCommandPlan::Write { quit } => HostCommandPlanWire::Write { quit },
         HostCommandPlan::Module { command_id } => HostCommandPlanWire::Module {
             command: module_command_value(command_id)?.to_string(),
         },

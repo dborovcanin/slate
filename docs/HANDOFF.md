@@ -23,6 +23,7 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - `Ctrl + Alt + +` / `Ctrl + Alt + -` cycles font family
 - Added optional Vim key mapping via config:
   - `[editor] vim_mode = true` in `config.toml`
+  - UI starts in normal mode when Vim mode is enabled
   - current subset: insert/normal modes, hjkl, w/b, 0/$, gg/G, x, dd, u, Ctrl+r, o/O, i/a/I/A
   - count prefixes supported for movement/actions (examples: `4k`, `2j`, `3w`, `5x`, `3dd`)
   - cursor style differs by mode (insert bar cursor vs normal/visual block cursor)
@@ -30,14 +31,15 @@ This document captures what was implemented after milestones M1-M4, plus what sh
   - yanking to system clipboard: `y` in visual modes, `yy` in normal mode (with counts like `3yy`)
 - Added optional terminal mode:
   - `[editor] terminal_mode = true` in `config.toml`
-  - `note --terminal` runs standalone terminal UI (no Tauri window)
+  - `slate --terminal` runs standalone terminal UI (no Tauri window)
   - default mode follows config when launched from a TTY
   - built-in full-screen editor with switcher and status bar
   - `vim_mode` remains independent/optional and applies to GUI mode only
+  - `slate path/to/file.md` opens a markdown file directly in GUI mode (`.md`, `.markdown`, `.mdown`, `.mkd`) and saves edits back to the same file
 - Added unified command system (single command engine + shared command panel UI):
   - command engine lives in `src/editor/command-engine.ts`
   - command panel UI lives in `src/editor/command-picker.ts`
-  - Vim mode opens panel with `:` and enables Vim-only commands such as `:q`
+  - Vim mode opens panel with `:` and enables Vim-only commands such as `:w`, `:wq`, `:q`
   - non-Vim mode opens panel with `Ctrl+Shift+;` and exposes edit-only commands
   - current shared commands: `sum`, `sum list`, `sum row`, `sum column`, `sum doc`, `avg`, `avg list`, `avg row`, `avg column`, `avg doc`, `date`, `format`
   - `:sum`/`:avg` results are inserted at cursor/selection as `<value>` (value-only), copied to clipboard, and shown in command status
@@ -67,6 +69,7 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 
 ## What was polished in this pass
 
+- Added `Ctrl+Q` keyboard shortcut in GUI to quit the current window
 - Added confirmation prompt before note deletion (`Ctrl+Shift+Backspace`)
 - Restored `Ctrl+Backspace` to word-delete behavior in the editor
 - Added safe async action wrapper for keyboard-triggered commands to avoid unhandled promise rejections

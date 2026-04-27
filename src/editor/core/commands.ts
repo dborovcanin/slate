@@ -56,6 +56,7 @@ export interface CommandRuntime {
   }) => Promise<boolean> | boolean;
   evaluateExpression?: SumExpressionEvaluator;
   copyText?: (text: string) => Promise<void> | void;
+  onWrite?: () => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
   formatMarkdown?: (input: string) => string | Promise<string>;
   startClipboardWatch?: () => Promise<boolean> | boolean;
@@ -285,6 +286,37 @@ async function runQuitCommand(
   return { message: "quit", operations: [] };
 }
 
+async function runWriteCommand(
+  _normalizedInput: string,
+  _ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  if (!runtime.onWrite) return { message: "write unavailable", operations: [] };
+  try {
+    await runtime.onWrite();
+  } catch (error) {
+    return {
+      message: `write failed: ${errorToMessage(error, "failed to save note")}`,
+      operations: [],
+    };
+  }
+  return { message: "written", operations: [] };
+}
+
+async function runWriteQuitCommand(
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  const writeResult = await runWriteCommand(normalizedInput, ctx, runtime);
+  if (writeResult.message !== "written") {
+    return writeResult;
+  }
+  if (!runtime.onQuit) return { message: "quit unavailable", operations: [] };
+  await runtime.onQuit();
+  return { message: "written and quit", operations: [] };
+}
+
 async function runClipWatchCommand(
   _normalizedInput: string,
   _ctx: ResolvedContext,
@@ -476,6 +508,8 @@ const EXECUTOR_MAP: Record<string, ExecuteFn> = {
   "clist": runChecklistCommand,
   "ulist": runUnorderedListCommand,
   "olist": runOrderedListCommand,
+  "w": runWriteCommand,
+  "wq": runWriteQuitCommand,
   "q": runQuitCommand,
 };
 

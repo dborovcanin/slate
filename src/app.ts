@@ -118,6 +118,7 @@ function editorOptionsForNote(note: Note | null) {
     vimMode: !!appConfig.vim_mode,
     dateFormat: appConfig.date_format,
     dateTimeFormat: appConfig.date_time_format,
+    onWriteCommand: performFormatAndSave,
     variablesEnabled: loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
@@ -1010,7 +1011,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   if (activeFlags.length > 0) {
     showToast(`Runtime flags: ${activeFlags.join(", ")}`);
   } else if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch, :clip-watch-stop, :q");
+    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch, :clip-watch-stop, :w, :wq, :q");
   }
 
   state.on(() => {

@@ -10,9 +10,12 @@ mod storage;
 mod terminal;
 
 use app_core::AppCore;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ipc::server;
 use std::io::IsTerminal as _;
 use std::io::Read as _;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 use ulid::Ulid;
@@ -29,6 +32,79 @@ enum Mode {
     Append,
 }
 
+const MARKDOWN_NOTE_ID_PREFIX: &str = "mdfile:";
+
+pub(crate) struct StartupMarkdownFileState {
+    startup_file: Mutex<Option<PathBuf>>,
+}
+
+impl StartupMarkdownFileState {
+    fn new(startup_file: Option<PathBuf>) -> Self {
+        Self {
+            startup_file: Mutex::new(startup_file),
+        }
+    }
+
+    pub(crate) fn take_startup_file(&self) -> Option<PathBuf> {
+        self.startup_file.lock().ok()?.take()
+    }
+}
+
+pub(crate) fn note_id_for_markdown_file(path: &Path) -> String {
+    let encoded = URL_SAFE_NO_PAD.encode(path.to_string_lossy().as_bytes());
+    format!("{MARKDOWN_NOTE_ID_PREFIX}{encoded}")
+}
+
+pub(crate) fn markdown_file_path_from_note_id(note_id: &str) -> Option<PathBuf> {
+    let encoded = note_id.strip_prefix(MARKDOWN_NOTE_ID_PREFIX)?;
+    let decoded = URL_SAFE_NO_PAD.decode(encoded).ok()?;
+    let decoded = String::from_utf8(decoded).ok()?;
+    let path = PathBuf::from(decoded);
+    if !path.is_absolute() || !is_supported_markdown_path(&path) {
+        return None;
+    }
+    Some(path)
+}
+
+fn is_supported_markdown_path(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|ext| ext.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "md" | "markdown" | "mdown" | "mkd"
+    )
+}
+
+fn resolve_markdown_file_path(raw: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(raw);
+    let absolute = if candidate.is_absolute() {
+        candidate
+    } else {
+        std::env::current_dir()
+            .map_err(|e| format!("Failed to resolve current directory: {e}"))?
+            .join(candidate)
+    };
+
+    if !is_supported_markdown_path(&absolute) {
+        return Err(format!(
+            "Unsupported file extension for '{}'; expected markdown (.md/.markdown/.mdown/.mkd)",
+            absolute.display()
+        ));
+    }
+
+    if absolute.exists() {
+        std::fs::canonicalize(&absolute).map_err(|e| {
+            format!(
+                "Failed to canonicalize markdown file '{}': {e}",
+                absolute.display()
+            )
+        })
+    } else {
+        Ok(absolute)
+    }
+}
+
 fn stdin_is_tty() -> bool {
     std::io::stdin().is_terminal()
 }
@@ -41,7 +117,7 @@ struct TerminalOptions {
     list_only: bool,
 }
 
-fn run_gui() -> Result<(), String> {
+fn run_gui(startup_markdown_file: Option<PathBuf>) -> Result<(), String> {
     let core = AppCore::open_default()?;
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
@@ -51,6 +127,7 @@ fn run_gui() -> Result<(), String> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(core)
+        .manage(StartupMarkdownFileState::new(startup_markdown_file))
         .invoke_handler(tauri::generate_handler![
             commands::notes::get_or_create_note,
             commands::notes::save_note,
@@ -98,12 +175,14 @@ fn print_help() {
     println!(
         "slate usage:
   slate [--gui|--terminal] [--new] [--id <note-id>] [--list]
+  slate <file.md>
   slate append [--id <note-id>]
   slate imap-sync
 
 Modes:
   --gui       Force Tauri GUI mode
   --terminal  Force terminal editor mode (no window UI, Unix only)
+  <file.md>   Open a markdown file in GUI mode and sync edits back to disk
   append      Append stdin to a note and exit
   imap-sync   Pull messages from configured IMAP inbox once
 
@@ -127,13 +206,14 @@ fn parse_args(
     args: &[String],
     config_terminal_mode: bool,
     stdin_tty: bool,
-) -> Result<(Mode, TerminalOptions), String> {
+) -> Result<(Mode, TerminalOptions, Option<PathBuf>), String> {
     let mut force_gui = false;
     let mut force_terminal = false;
     let mut force_imap = false;
     let mut force_append = false;
     let mut opts = TerminalOptions::default();
     let mut saw_id_flag = false;
+    let mut startup_markdown_file: Option<PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -163,7 +243,19 @@ fn parse_args(
                 saw_id_flag = true;
                 i += 1;
             }
-            unknown => {
+            candidate => {
+                if !candidate.starts_with('-') && startup_markdown_file.is_none() {
+                    match resolve_markdown_file_path(candidate) {
+                        Ok(path) => {
+                            startup_markdown_file = Some(path);
+                            force_gui = true;
+                            i += 1;
+                            continue;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                let unknown = candidate;
                 return Err(format!(
                     "Unknown argument: {unknown}. Use --help for usage."
                 ));
@@ -174,6 +266,19 @@ fn parse_args(
 
     if saw_id_flag && !force_append {
         force_terminal = true;
+    }
+    if startup_markdown_file.is_some() {
+        if force_append || force_imap || force_terminal {
+            return Err(
+                "Cannot combine markdown file open with append, imap-sync, or terminal flags"
+                    .to_string(),
+            );
+        }
+        if opts.create_new || opts.list_only || saw_id_flag {
+            return Err(
+                "Cannot combine markdown file open with terminal note selection flags".to_string(),
+            );
+        }
     }
 
     if force_append && (force_gui || force_imap || force_terminal) {
@@ -213,7 +318,7 @@ fn parse_args(
         );
     }
 
-    Ok((mode, opts))
+    Ok((mode, opts, startup_markdown_file))
 }
 
 #[cfg(not(unix))]
@@ -221,10 +326,11 @@ fn parse_args(
     args: &[String],
     _config_terminal_mode: bool,
     stdin_tty: bool,
-) -> Result<(Mode, TerminalOptions), String> {
+) -> Result<(Mode, TerminalOptions, Option<PathBuf>), String> {
     let mut imap = false;
     let mut append = false;
     let mut opts = TerminalOptions::default();
+    let mut startup_markdown_file: Option<PathBuf> = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -243,13 +349,29 @@ fn parse_args(
                 opts.note_id = Some(value);
                 i += 1;
             }
-            unknown => {
+            candidate => {
+                if !candidate.starts_with('-') && startup_markdown_file.is_none() {
+                    match resolve_markdown_file_path(candidate) {
+                        Ok(path) => {
+                            startup_markdown_file = Some(path);
+                            i += 1;
+                            continue;
+                        }
+                        Err(_) => {}
+                    }
+                }
+                let unknown = candidate;
                 return Err(format!(
                     "Unknown argument: {unknown}. Use --help for usage."
                 ));
             }
         }
         i += 1;
+    }
+    if startup_markdown_file.is_some() && (append || imap || opts.note_id.is_some()) {
+        return Err(
+            "Cannot combine markdown file open with append, imap-sync, or --id".to_string(),
+        );
     }
     if append && imap {
         return Err("Cannot combine append with imap-sync".to_string());
@@ -261,12 +383,12 @@ fn parse_args(
         );
     }
     if append {
-        return Ok((Mode::Append, opts));
+        return Ok((Mode::Append, opts, None));
     }
     if imap {
-        return Ok((Mode::ImapSync, opts));
+        return Ok((Mode::ImapSync, opts, None));
     }
-    Ok((Mode::Gui, opts))
+    Ok((Mode::Gui, opts, startup_markdown_file))
 }
 
 fn select_append_note_id(
@@ -388,26 +510,26 @@ pub fn run() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = config::load_theme_config();
     match parse_args(&args, cfg.terminal_mode, stdin_is_tty()) {
-        Ok((Mode::Gui, _)) => {
-            if let Err(err) = run_gui() {
+        Ok((Mode::Gui, _, startup_markdown_file)) => {
+            if let Err(err) = run_gui(startup_markdown_file) {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
         }
-        Ok((Mode::ImapSync, _)) => {
+        Ok((Mode::ImapSync, _, _)) => {
             if let Err(err) = run_imap_sync() {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
         }
-        Ok((Mode::Append, opts)) => {
+        Ok((Mode::Append, opts, _)) => {
             if let Err(err) = run_append(opts.note_id.as_deref()) {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
         }
         #[cfg(unix)]
-        Ok((Mode::Terminal, opts)) => {
+        Ok((Mode::Terminal, opts, _)) => {
             if let Err(err) = run_terminal(&opts, &cfg) {
                 eprintln!("{err}");
                 std::process::exit(1);
@@ -430,26 +552,27 @@ mod tests {
 
     #[test]
     fn parse_defaults_to_gui_when_terminal_not_enabled() {
-        let (mode, opts) = parse_args(&[], false, true).expect("parsed");
+        let (mode, opts, startup_file) = parse_args(&[], false, true).expect("parsed");
         assert_eq!(mode, Mode::Gui);
         assert_eq!(opts, TerminalOptions::default());
+        assert!(startup_file.is_none());
     }
 
     #[test]
     fn parse_uses_terminal_when_enabled_in_config_and_tty() {
-        let (mode, _) = parse_args(&[], true, true).expect("parsed");
+        let (mode, _, _) = parse_args(&[], true, true).expect("parsed");
         assert_eq!(mode, Mode::Terminal);
     }
 
     #[test]
     fn parse_forces_gui_over_config() {
-        let (mode, _) = parse_args(&["--gui".to_string()], true, true).expect("parsed");
+        let (mode, _, _) = parse_args(&["--gui".to_string()], true, true).expect("parsed");
         assert_eq!(mode, Mode::Gui);
     }
 
     #[test]
     fn parse_collects_terminal_options() {
-        let (mode, opts) = parse_args(
+        let (mode, opts, _) = parse_args(
             &[
                 "--terminal".to_string(),
                 "--new".to_string(),
@@ -467,20 +590,20 @@ mod tests {
 
     #[test]
     fn parse_allows_terminal_list_without_tty() {
-        let (mode, opts) = parse_args(&["--list".to_string()], false, false).expect("parsed");
+        let (mode, opts, _) = parse_args(&["--list".to_string()], false, false).expect("parsed");
         assert_eq!(mode, Mode::Terminal);
         assert!(opts.list_only);
     }
 
     #[test]
     fn parse_supports_imap_mode() {
-        let (mode, _) = parse_args(&["imap-sync".to_string()], false, true).expect("parsed");
+        let (mode, _, _) = parse_args(&["imap-sync".to_string()], false, true).expect("parsed");
         assert_eq!(mode, Mode::ImapSync);
     }
 
     #[test]
     fn parse_supports_append_mode_with_note_id() {
-        let (mode, opts) = parse_args(
+        let (mode, opts, _) = parse_args(
             &["--id".to_string(), "n1".to_string(), "append".to_string()],
             false,
             false,
@@ -524,5 +647,28 @@ mod tests {
     fn parse_rejects_append_without_piped_stdin() {
         let err = parse_args(&["append".to_string()], false, true).expect_err("expected err");
         assert!(err.contains("expects piped stdin"));
+    }
+
+    #[test]
+    fn parse_supports_opening_markdown_file_in_gui_mode() {
+        let (mode, opts, startup_file) =
+            parse_args(&["notes.md".to_string()], false, true).expect("parsed");
+        assert_eq!(mode, Mode::Gui);
+        assert_eq!(opts, TerminalOptions::default());
+        assert_eq!(
+            startup_file,
+            Some(std::env::current_dir().expect("cwd").join("notes.md"))
+        );
+    }
+
+    #[test]
+    fn parse_rejects_markdown_file_with_terminal_flag() {
+        let err = parse_args(
+            &["--terminal".to_string(), "notes.md".to_string()],
+            false,
+            true,
+        )
+        .expect_err("expected err");
+        assert!(err.contains("Cannot combine markdown file open"));
     }
 }

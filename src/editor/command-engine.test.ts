@@ -61,6 +61,8 @@ test("editor mode exposes only editing commands", async () => {
 test("vim mode exposes vim-specific commands", async () => {
   const values = listCommandSuggestions("vim", "").map((entry) => entry.value);
   assert.equal(values.includes("q"), true);
+  assert.equal(values.includes("w"), true);
+  assert.equal(values.includes("wq"), true);
 });
 
 test("command suggestions filter by query", async () => {
