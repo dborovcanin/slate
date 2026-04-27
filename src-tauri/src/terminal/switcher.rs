@@ -21,14 +21,7 @@ fn fill_box_interior(
         return;
     }
     for dy in 1..height.saturating_sub(1) {
-        draw_row_at_styled(
-            buf,
-            row + dy,
-            col + 1,
-            width.saturating_sub(2),
-            "",
-            style,
-        );
+        draw_row_at_styled(buf, row + dy, col + 1, width.saturating_sub(2), "", style);
     }
 }
 #[derive(Debug, Clone)]
@@ -142,7 +135,7 @@ pub fn draw_switcher(
         ..Default::default()
     };
     let prompt_style = AnsiStyle {
-        fg: Some(palette.code_keyword),
+        fg: Some(palette.primary()),
         bg: Some(OVERLAY_SURFACE_BG),
         bold: true,
         ..Default::default()
@@ -227,7 +220,10 @@ pub struct ContentSearchView<'a> {
     pub selected: usize,
 }
 
-pub(crate) fn content_search_box_geometry(rows: usize, cols: usize) -> (usize, usize, usize, usize) {
+pub(crate) fn content_search_box_geometry(
+    rows: usize,
+    cols: usize,
+) -> (usize, usize, usize, usize) {
     let box_w = min(cols.saturating_sub(4).max(30), 72);
     let box_h = min(
         rows.saturating_sub(4).max(CONTENT_SEARCH_MIN_H),
@@ -303,7 +299,7 @@ pub fn draw_content_search(
         ..Default::default()
     };
     let prompt_style = AnsiStyle {
-        fg: Some(palette.code_keyword),
+        fg: Some(palette.primary()),
         bg: Some(OVERLAY_SURFACE_BG),
         bold: true,
         ..Default::default()
@@ -337,8 +333,22 @@ pub fn draw_content_search(
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
     let prompt = format!(" content: {}", view.query);
-    draw_row_at_styled(buf, y + 1, x + 1, box_w.saturating_sub(2), &prompt, prompt_style);
-    draw_row_at_styled(buf, y + 2, x + 1, box_w.saturating_sub(2), " results:", label_style);
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        &prompt,
+        prompt_style,
+    );
+    draw_row_at_styled(
+        buf,
+        y + 2,
+        x + 1,
+        box_w.saturating_sub(2),
+        " results:",
+        label_style,
+    );
 
     // Reserve preview rows at the bottom; result rows fill the rest.
     let max_rows = box_h.saturating_sub(4 + CONTENT_SEARCH_PREVIEW_LINES); // prompt + label + preview + borders
@@ -353,7 +363,14 @@ pub fn draw_content_search(
             let marker = if start + i == view.selected { ">" } else { " " };
             let text = format!("{marker} L{}  {}", result.line_number.max(1), result.title);
             if start + i == view.selected {
-                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, selected_style);
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    x + 1,
+                    box_w.saturating_sub(2),
+                    &text,
+                    selected_style,
+                );
             } else {
                 draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
             }
@@ -385,7 +402,8 @@ pub fn draw_content_search(
         } else {
             format!("{prefix}{snippet}")
         };
-        let lines = wrap_preview_lines(&preview_text, snippet_inner_w, CONTENT_SEARCH_PREVIEW_LINES);
+        let lines =
+            wrap_preview_lines(&preview_text, snippet_inner_w, CONTENT_SEARCH_PREVIEW_LINES);
         for (idx, line) in lines.into_iter().enumerate() {
             draw_row_at_styled(
                 buf,
@@ -589,6 +607,7 @@ fn truncate_title_for_confirm(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::render::RenderPalette;
 
     #[test]
     fn sanitize_preview_text_removes_markers_and_controls() {
@@ -600,5 +619,50 @@ mod tests {
     fn wrap_preview_lines_truncates_with_ascii_ellipsis() {
         let lines = wrap_preview_lines("abcdefghijkl", 4, 2);
         assert_eq!(lines, vec!["abcd".to_string(), "e...".to_string()]);
+    }
+
+    #[test]
+    fn draw_switcher_prompt_uses_primary_color_instead_of_keyword_color() {
+        let palette = RenderPalette {
+            code_keyword: 33,
+            primary: 201,
+            ..RenderPalette::default()
+        };
+        let view = SwitcherView {
+            query: "abc",
+            items: &[],
+            matches: &[],
+            selected: 0,
+        };
+        let mut buf = String::new();
+        draw_switcher(&view, &mut buf, 24, 80, palette);
+
+        assert!(buf.contains("38;5;201"), "prompt should use accent primary");
+        assert!(
+            !buf.contains("38;5;33"),
+            "prompt should not use keyword color"
+        );
+    }
+
+    #[test]
+    fn draw_content_search_prompt_uses_primary_color_instead_of_keyword_color() {
+        let palette = RenderPalette {
+            code_keyword: 33,
+            primary: 201,
+            ..RenderPalette::default()
+        };
+        let view = ContentSearchView {
+            query: "abc",
+            results: &[],
+            selected: 0,
+        };
+        let mut buf = String::new();
+        draw_content_search(&view, &mut buf, 24, 80, palette);
+
+        assert!(buf.contains("38;5;201"), "prompt should use accent primary");
+        assert!(
+            !buf.contains("38;5;33"),
+            "prompt should not use keyword color"
+        );
     }
 }

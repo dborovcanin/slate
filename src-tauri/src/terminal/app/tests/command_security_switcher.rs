@@ -585,7 +585,15 @@ fn opening_note_from_content_search_clears_search_session_state() {
     assert!(app.content_search_results.is_empty());
     assert_eq!(app.content_search_selected, 0);
     assert!(!app.content_search_pending);
-    assert!(app.content_search_rx.is_none());
+    assert!(
+        app.content_search_rx.is_none(),
+        "active content-search receiver should be cleared when session closes"
+    );
+    assert_eq!(
+        app.content_search_detached_rxs.len(),
+        1,
+        "stale receiver should move into detached drain pool"
+    );
 
     drop(app);
     drop(db);
@@ -621,7 +629,61 @@ fn tab_from_content_search_clears_search_session_state() {
     assert!(app.content_search_results.is_empty());
     assert_eq!(app.content_search_selected, 0);
     assert!(!app.content_search_pending);
-    assert!(app.content_search_rx.is_none());
+    assert!(
+        app.content_search_rx.is_none(),
+        "active content-search receiver should be cleared when session closes"
+    );
+    assert_eq!(
+        app.content_search_detached_rxs.len(),
+        1,
+        "stale receiver should move into detached drain pool"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn reopening_content_search_detaches_stale_receiver_and_dispatches_new_query() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    db.save_note("n2", "needle in this note")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    app.open_content_search(&db).expect("content search opens");
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.content_search_rx = Some(rx);
+
+    // Close and reopen while a worker is still in-flight.
+    run_keys(&mut app, &db, &[Key::Esc]);
+    assert_eq!(app.mode, UiMode::Editor);
+    run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Tab]);
+    assert_eq!(app.mode, UiMode::ContentSearch);
+    assert!(
+        app.content_search_rx.is_none(),
+        "reopen should start with no active receiver"
+    );
+    assert_eq!(
+        app.content_search_detached_rxs.len(),
+        1,
+        "stale receiver should move to detached pool on session close"
+    );
+
+    // New query should dispatch in reopened session after debounce.
+    run_keys(&mut app, &db, &[Key::Paste("needle".to_string())]);
+    for _ in 0..60 {
+        app.maybe_collect_search_results(&db);
+        if app.content_search_rx.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        app.content_search_rx.is_some(),
+        "reopen should dispatch new search after debounce without waiting on stale session receiver"
+    );
 
     drop(app);
     drop(db);

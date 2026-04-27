@@ -205,7 +205,7 @@ pub fn draw_date_picker(
         ..Default::default()
     };
     let title_style = AnsiStyle {
-        fg: Some(palette.code_keyword),
+        fg: Some(palette.primary()),
         bold: true,
         ..Default::default()
     };

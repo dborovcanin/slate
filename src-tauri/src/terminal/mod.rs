@@ -8,9 +8,12 @@ mod folding;
 mod folding_state;
 mod history;
 mod input;
+mod markdown_view;
 mod notifications;
 pub mod render;
+mod render_styles;
 mod switcher;
 mod text_utils;
+pub mod theme;
 
 pub use app::{run_terminal_session, TerminalOptions};

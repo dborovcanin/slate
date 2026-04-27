@@ -41,9 +41,13 @@ const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
 const CALC_VIEWPORT_PREFETCH_MULTIPLIER: usize = 2;
 const VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS: usize = 3;
 const COMMAND_COMPLETION_MAX_OPTIONS: usize = 8;
+const CONTENT_SEARCH_DEBOUNCE_MS: u64 = 120;
+const CONTENT_SEARCH_MAX_DETACHED_WORKERS: usize = 2;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
+
+type ContentSearchResponse = (String, Result<Vec<NoteSearchResult>, String>);
 
 fn decimal_digit_count(mut value: usize) -> usize {
     let mut digits = 1usize;
@@ -233,8 +237,9 @@ struct TerminalApp {
     content_search_results: Vec<NoteSearchResult>,
     content_search_selected: usize,
     content_search_pending: bool,
-    content_search_rx:
-        Option<std::sync::mpsc::Receiver<(String, Result<Vec<NoteSearchResult>, String>)>>,
+    content_search_debounce_until: Option<Instant>,
+    content_search_rx: Option<std::sync::mpsc::Receiver<ContentSearchResponse>>,
+    content_search_detached_rxs: Vec<std::sync::mpsc::Receiver<ContentSearchResponse>>,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -509,7 +514,9 @@ impl TerminalApp {
             content_search_results: Vec::new(),
             content_search_selected: 0,
             content_search_pending: false,
+            content_search_debounce_until: None,
             content_search_rx: None,
+            content_search_detached_rxs: Vec::new(),
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -666,14 +673,29 @@ impl TerminalApp {
         if !self.content_search_pending || self.content_search_rx.is_some() {
             return;
         }
+        if let Some(until) = self.content_search_debounce_until {
+            if Instant::now() < until {
+                return;
+            }
+            self.content_search_debounce_until = None;
+        }
+        // Allow a fresh dialog session to continue even if previous detached
+        // workers are still draining, but keep a hard cap so we do not fan out
+        // unbounded DB workers during repeated reopen attempts.
+        if self.content_search_detached_rxs.len() >= CONTENT_SEARCH_MAX_DETACHED_WORKERS {
+            return;
+        }
         let query = self.content_search_query.trim().to_string();
-        self.content_search_pending = false;
         if query.is_empty() {
+            self.content_search_pending = false;
+            self.content_search_debounce_until = None;
             self.content_search_results.clear();
             self.content_search_selected = 0;
             return;
         }
 
+        self.content_search_pending = false;
+        self.content_search_debounce_until = None;
         let (tx, rx) = std::sync::mpsc::channel();
         let search_db = db.clone();
         std::thread::spawn(move || {
@@ -703,27 +725,30 @@ impl TerminalApp {
     }
 
     fn maybe_collect_search_results(&mut self, db: &Db) {
-        let Some(rx) = &self.content_search_rx else {
-            return;
-        };
-        match rx.try_recv() {
-            Ok((query, Ok(results))) => {
-                if self.content_search_query.trim() == query {
-                    self.content_search_results = results;
-                    self.content_search_selected = 0;
+        if let Some(rx) = &self.content_search_rx {
+            match rx.try_recv() {
+                Ok((query, Ok(results))) => {
+                    if self.content_search_query.trim() == query {
+                        self.content_search_results = results;
+                        self.content_search_selected = 0;
+                    }
+                    self.content_search_rx = None;
                 }
-                self.content_search_rx = None;
-            }
-            Ok((_, Err(error))) => {
-                self.status = format!("content search failed: {error}");
-                self.content_search_results.clear();
-                self.content_search_rx = None;
-            }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.content_search_rx = None;
+                Ok((_, Err(error))) => {
+                    self.status = format!("content search failed: {error}");
+                    self.content_search_results.clear();
+                    self.content_search_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.content_search_rx = None;
+                }
             }
         }
+
+        self.content_search_detached_rxs
+            .retain(|rx| matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
+
         self.maybe_dispatch_content_search(db);
     }
 
@@ -792,7 +817,7 @@ pub fn run_terminal_session(
         config.markdown_autoformat,
         config.checklist_auto_reorder,
         config.variables_autocomplete_min_chars,
-        render::RenderPalette::for_color_scheme(&config.color_scheme),
+        render::RenderPalette::for_theme(&config.color_scheme, &config.accent),
         config.date_format.clone(),
         config.date_time_format.clone(),
     )?;

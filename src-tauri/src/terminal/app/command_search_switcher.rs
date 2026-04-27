@@ -2,7 +2,8 @@ use super::{
     line_char_len, load_note_reminder_ghosts, new_note, trim_trailing_word,
     CommandCompletionMenuState, CommandCompletionOption, DatePickerAction, Db, Key, Note,
     NoteSearchResult, SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode,
-    CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS, MAX_COMMAND_HISTORY_ENTRIES,
+    CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
+    MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher};
@@ -71,21 +72,31 @@ impl TerminalApp {
     }
 
     fn clear_content_search_session(&mut self) {
+        // Move any in-flight receiver into the detached pool so the stale worker
+        // can drain without blocking the next dialog session.
+        if let Some(rx) = self.content_search_rx.take() {
+            self.content_search_detached_rxs.push(rx);
+        }
         self.content_search_query.clear();
         self.content_search_results.clear();
         self.content_search_selected = 0;
         self.content_search_pending = false;
-        self.content_search_rx = None;
+        self.content_search_debounce_until = None;
     }
 
     fn refresh_content_search_preview(&mut self) {
         let query = self.content_search_query.trim().to_string();
-        // Keep at most one in-flight worker; query changes are coalesced via
-        // `content_search_pending` and dispatched after the current worker
-        // resolves. This avoids unbounded worker churn and DB pool exhaustion.
+        // Keep at most one active worker per visible dialog. Query changes are
+        // coalesced via `content_search_pending` and dispatched once the active
+        // worker resolves.
         self.content_search_results = self.content_search_title_fallback_results(&query);
         self.content_search_selected = 0;
         self.content_search_pending = !query.is_empty();
+        self.content_search_debounce_until = if query.is_empty() {
+            None
+        } else {
+            Some(Instant::now() + Duration::from_millis(CONTENT_SEARCH_DEBOUNCE_MS))
+        };
     }
 
     pub(super) fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
