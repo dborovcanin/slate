@@ -80,9 +80,9 @@ impl TerminalApp {
 
     fn refresh_content_search_preview(&mut self) {
         let query = self.content_search_query.trim().to_string();
-        // Supersede stale in-flight result streams when query changes so a
-        // previous slow search does not block the latest query dispatch.
-        self.content_search_rx = None;
+        // Keep at most one in-flight worker; query changes are coalesced via
+        // `content_search_pending` and dispatched after the current worker
+        // resolves. This avoids unbounded worker churn and DB pool exhaustion.
         self.content_search_results = self.content_search_title_fallback_results(&query);
         self.content_search_selected = 0;
         self.content_search_pending = !query.is_empty();

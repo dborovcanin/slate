@@ -434,12 +434,12 @@ fn content_search_matches_ui_fallback_behavior_for_empty_and_pending_queries() {
         "fuzzy fallback should include current note title matches"
     );
     assert!(
-        !app.content_search_pending,
-        "query edits should supersede stale workers and dispatch the latest search immediately"
+        app.content_search_pending,
+        "query edits should stay pending while an in-flight worker is active"
     );
     assert!(
         app.content_search_rx.is_some(),
-        "latest query should have an active worker receiver after stale worker supersession"
+        "existing worker receiver should remain active until it resolves"
     );
     assert_eq!(app.content_search_query, "apb");
 
