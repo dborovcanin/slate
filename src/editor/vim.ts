@@ -361,8 +361,8 @@ function findPipeObjectRange(
 }
 
 export function vimModeExtension(options: VimOptions = {}) {
-  const session = new VimSession("insert");
-  let currentMode: VimUiMode = "insert";
+  const session = new VimSession("normal");
+  let currentMode: VimUiMode = "normal";
   let unnamedRegister: VimRegister | null = null;
   let pendingFoldPrefixUntilMs = 0;
 

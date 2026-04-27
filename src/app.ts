@@ -827,6 +827,13 @@ function setupKeyboardShortcuts() {
       return;
     }
 
+    // Ctrl+Q — quit app window
+    if (e.ctrlKey && !e.shiftKey && key === "q") {
+      e.preventDefault();
+      runAction(handleExitWindow);
+      return;
+    }
+
     // Ctrl+Shift+Backspace — delete note
     if (e.ctrlKey && e.shiftKey && e.key === "Backspace" && !isSwitcherOpen()) {
       e.preventDefault();
