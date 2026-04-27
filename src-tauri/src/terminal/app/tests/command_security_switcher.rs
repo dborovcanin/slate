@@ -409,6 +409,294 @@ fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
 }
 
 #[test]
+fn content_search_matches_ui_fallback_behavior_for_empty_and_pending_queries() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    db.save_note("n2", "second note")
+        .expect("second note saved");
+    db.save_note("n3", "misc title").expect("third note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    app.open_content_search(&db).expect("open content search");
+    assert_eq!(app.mode, UiMode::ContentSearch);
+    assert!(
+        !app.content_search_results.is_empty(),
+        "empty content search query should show title list fallback like UI"
+    );
+
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.content_search_rx = Some(rx);
+    run_keys(&mut app, &db, &[Key::Paste("apb".to_string())]);
+    let fuzzy_only = app.content_search_results.clone();
+    assert_eq!(
+        fuzzy_only.first().map(|entry| entry.id.as_str()),
+        Some("n1"),
+        "fuzzy fallback should include current note title matches"
+    );
+    assert!(
+        !app.content_search_pending,
+        "query edits should supersede stale workers and dispatch the latest search immediately"
+    );
+    assert!(
+        app.content_search_rx.is_some(),
+        "latest query should have an active worker receiver after stale worker supersession"
+    );
+    assert_eq!(app.content_search_query, "apb");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_ctrl_backspace_trims_query_word() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+    app.open_content_search(&db).expect("open content search");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Paste("alpha beta".to_string()), Key::CtrlBackspace],
+    );
+    assert_eq!(app.content_search_query, "alpha ");
+    assert!(
+        !app.content_search_results.is_empty(),
+        "word deletion should refresh fallback results instead of freezing the view"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_enter_opens_note_at_result_line() {
+    let (db, mut app, path) = app_with_note("first note");
+    db.save_note("n2", "line one\nline two\nneedle line\nline four")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+    app.open_content_search(&db).expect("content search opens");
+
+    app.content_search_results = vec![app_core::storage::NoteSearchResult {
+        id: "n2".to_string(),
+        title: "line one".to_string(),
+        snippet: "[[needle]] line".to_string(),
+        line_number: 3,
+        rank: 0.0,
+        updated_at: String::new(),
+    }];
+    app.content_search_selected = 0;
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.cursor_line, 2);
+    assert_eq!(app.mode, UiMode::Normal);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_can_reopen_and_find_results_after_opening_match() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    db.save_note("n2", "first line\nneedle appears here\ntail line")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    app.open_content_search(&db).expect("content search opens");
+    run_keys(&mut app, &db, &[Key::Paste("needle".to_string())]);
+    for _ in 0..40 {
+        app.maybe_collect_search_results(&db);
+        if !app.content_search_results.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        !app.content_search_results.is_empty(),
+        "first content search should produce results"
+    );
+    assert_eq!(
+        app.content_search_results
+            .iter()
+            .map(|entry| entry.id.as_str())
+            .next(),
+        Some("n2")
+    );
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.mode, UiMode::Normal);
+
+    run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Tab]);
+    assert_eq!(app.mode, UiMode::ContentSearch);
+    run_keys(&mut app, &db, &[Key::Paste("needle".to_string())]);
+    for _ in 0..40 {
+        app.maybe_collect_search_results(&db);
+        if !app.content_search_results.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(
+        app.content_search_results
+            .iter()
+            .any(|entry| entry.id == "n2"),
+        "second content search should still find the opened note"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn opening_note_from_content_search_clears_search_session_state() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    db.save_note("n2", "needle in this note")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    app.open_content_search(&db).expect("content search opens");
+    app.content_search_query = "needle".to_string();
+    app.content_search_results = vec![app_core::storage::NoteSearchResult {
+        id: "n2".to_string(),
+        title: "needle in this note".to_string(),
+        snippet: "[[needle]] in this note".to_string(),
+        line_number: 1,
+        rank: 0.0,
+        updated_at: String::new(),
+    }];
+    app.content_search_selected = 0;
+    app.content_search_pending = true;
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.content_search_rx = Some(rx);
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.mode, UiMode::Normal);
+    assert!(app.content_search_query.is_empty());
+    assert!(app.content_search_results.is_empty());
+    assert_eq!(app.content_search_selected, 0);
+    assert!(!app.content_search_pending);
+    assert!(app.content_search_rx.is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn tab_from_content_search_clears_search_session_state() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    db.save_note("n2", "needle in this note")
+        .expect("second note saved");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    app.open_content_search(&db).expect("content search opens");
+    app.content_search_query = "needle".to_string();
+    app.content_search_results = vec![app_core::storage::NoteSearchResult {
+        id: "n2".to_string(),
+        title: "needle in this note".to_string(),
+        snippet: "[[needle]] in this note".to_string(),
+        line_number: 1,
+        rank: 0.0,
+        updated_at: String::new(),
+    }];
+    app.content_search_selected = 0;
+    app.content_search_pending = true;
+    let (_tx, rx) = std::sync::mpsc::channel();
+    app.content_search_rx = Some(rx);
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.content_search_query.is_empty());
+    assert!(app.content_search_results.is_empty());
+    assert_eq!(app.content_search_selected, 0);
+    assert!(!app.content_search_pending);
+    assert!(app.content_search_rx.is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_cursor_stays_on_prompt_row_with_fixed_overlay_height() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    app.open_content_search(&db).expect("content search opens");
+    app.content_search_query = "franc".to_string();
+    app.content_search_results = vec![app_core::storage::NoteSearchResult {
+        id: "n1".to_string(),
+        title: "alpha body".to_string(),
+        snippet: "[[franc]]".to_string(),
+        line_number: 18,
+        rank: 0.0,
+        updated_at: String::new(),
+    }];
+
+    let rows = 24usize;
+    let cols = 80usize;
+    let (cursor_row, cursor_col) = app.cursor_position(rows, cols);
+    let box_w = std::cmp::min(cols.saturating_sub(4).max(30), 72);
+    let box_h = std::cmp::min(rows.saturating_sub(4).max(9), 14);
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let prompt = " content: ";
+    let expected_col = x + 1 + prompt.chars().count() + app.content_search_query.chars().count();
+
+    assert_eq!(cursor_row, y + 1);
+    assert_eq!(cursor_col, expected_col);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_cursor_row_stays_stable_when_result_count_changes() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    app.open_content_search(&db).expect("content search opens");
+    app.content_search_query = "franc".to_string();
+
+    app.content_search_results = vec![app_core::storage::NoteSearchResult {
+        id: "n1".to_string(),
+        title: "alpha body".to_string(),
+        snippet: "[[franc]]".to_string(),
+        line_number: 18,
+        rank: 0.0,
+        updated_at: String::new(),
+    }];
+    let (row_single, col_single) = app.cursor_position(24, 80);
+
+    app.content_search_results = (0..25)
+        .map(|idx| app_core::storage::NoteSearchResult {
+            id: format!("n{idx}"),
+            title: format!("title {idx}"),
+            snippet: format!("[[franc]] {idx}"),
+            line_number: idx + 1,
+            rank: 0.0,
+            updated_at: String::new(),
+        })
+        .collect();
+    let (row_many, col_many) = app.cursor_position(24, 80);
+
+    assert_eq!(row_single, row_many);
+    assert_eq!(col_single, col_many);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn startup_with_locked_recent_note_prompts_for_password() {
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");

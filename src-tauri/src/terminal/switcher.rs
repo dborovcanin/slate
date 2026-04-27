@@ -1,8 +1,36 @@
 use std::cmp::min;
 
-use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, goto, AnsiStyle};
-use super::render::{RenderPalette, RESET};
+use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, AnsiStyle};
+use super::render::RenderPalette;
 use app_core::storage::{NoteAccessMode, NoteSearchResult};
+
+const OVERLAY_SURFACE_BG: u8 = 236;
+const CONTENT_SEARCH_MIN_H: usize = 9;
+const CONTENT_SEARCH_MAX_H: usize = 14;
+const CONTENT_SEARCH_PREVIEW_LINES: usize = 3;
+
+fn fill_box_interior(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+    style: AnsiStyle,
+) {
+    if width < 2 || height < 2 {
+        return;
+    }
+    for dy in 1..height.saturating_sub(1) {
+        draw_row_at_styled(
+            buf,
+            row + dy,
+            col + 1,
+            width.saturating_sub(2),
+            "",
+            style,
+        );
+    }
+}
 #[derive(Debug, Clone)]
 pub struct NoteMeta {
     pub id: String,
@@ -110,20 +138,24 @@ pub fn draw_switcher(
 
     let border_style = AnsiStyle {
         fg: Some(palette.code_type),
+        bg: Some(OVERLAY_SURFACE_BG),
         ..Default::default()
     };
     let prompt_style = AnsiStyle {
         fg: Some(palette.code_keyword),
+        bg: Some(OVERLAY_SURFACE_BG),
         bold: true,
         ..Default::default()
     };
     let label_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(OVERLAY_SURFACE_BG),
         dim: true,
         ..Default::default()
     };
     let row_style = AnsiStyle {
         fg: Some(palette.variable),
+        bg: Some(OVERLAY_SURFACE_BG),
         ..Default::default()
     };
     let selected_bg = palette.primary();
@@ -135,6 +167,7 @@ pub fn draw_switcher(
     };
 
     draw_box_border(buf, y, x, box_w, box_h, border_style);
+    fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
     let prompt = format!(" search: {}", view.query);
     draw_row_at_styled(
@@ -194,65 +227,65 @@ pub struct ContentSearchView<'a> {
     pub selected: usize,
 }
 
-fn snippet_segments(snippet: &str) -> Vec<(String, bool)> {
-    let mut segments: Vec<(String, bool)> = Vec::new();
-    let mut current = String::new();
-    let mut in_match = false;
+pub(crate) fn content_search_box_geometry(rows: usize, cols: usize) -> (usize, usize, usize, usize) {
+    let box_w = min(cols.saturating_sub(4).max(30), 72);
+    let box_h = min(
+        rows.saturating_sub(4).max(CONTENT_SEARCH_MIN_H),
+        CONTENT_SEARCH_MAX_H,
+    );
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    (x, y, box_w, box_h)
+}
+
+fn sanitize_preview_text(snippet: &str) -> String {
+    let mut out = String::with_capacity(snippet.len());
     let mut chars = snippet.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '[' && chars.peek() == Some(&'[') {
             chars.next();
-            if !current.is_empty() {
-                segments.push((std::mem::take(&mut current), in_match));
-            }
-            in_match = true;
-        } else if ch == ']' && chars.peek() == Some(&']') {
-            chars.next();
-            if !current.is_empty() {
-                segments.push((std::mem::take(&mut current), in_match));
-            }
-            in_match = false;
-        } else {
-            current.push(ch);
+            continue;
         }
+        if ch == ']' && chars.peek() == Some(&']') {
+            chars.next();
+            continue;
+        }
+        let safe = if matches!(ch, '\n' | '\r' | '\t') || ch.is_control() {
+            ' '
+        } else {
+            ch
+        };
+        out.push(safe);
     }
-    if !current.is_empty() {
-        segments.push((current, in_match));
-    }
-    segments
+    out
 }
 
-fn draw_snippet_row(
-    buf: &mut String,
-    row: usize,
-    col: usize,
-    width: usize,
-    snippet: &str,
-    normal_style: AnsiStyle,
-    match_style: AnsiStyle,
-) {
-    buf.push_str(&goto(row, col));
-    let mut remaining = width;
-    for (text, is_match) in snippet_segments(snippet) {
-        if remaining == 0 {
-            break;
-        }
-        let style = if is_match { match_style } else { normal_style };
-        style.write_to(buf);
-        let chars: Vec<char> = text.chars().collect();
-        let take = chars.len().min(remaining);
-        for ch in &chars[..take] {
-            buf.push(*ch);
-        }
-        remaining -= take;
+fn wrap_preview_lines(text: &str, width: usize, max_lines: usize) -> Vec<String> {
+    if width == 0 || max_lines == 0 {
+        return Vec::new();
     }
-    if remaining > 0 {
-        normal_style.write_to(buf);
-        for _ in 0..remaining {
-            buf.push(' ');
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut idx = 0usize;
+
+    while idx < chars.len() && out.len() < max_lines {
+        let end = (idx + width).min(chars.len());
+        out.push(chars[idx..end].iter().collect::<String>());
+        idx = end;
+    }
+
+    if idx < chars.len() {
+        if let Some(last) = out.last_mut() {
+            if width <= 3 {
+                *last = ".".repeat(width);
+            } else {
+                let truncated: String = last.chars().take(width.saturating_sub(3)).collect();
+                *last = format!("{truncated}...");
+            }
         }
     }
-    buf.push_str(RESET);
+
+    out
 }
 
 pub fn draw_content_search(
@@ -262,28 +295,28 @@ pub fn draw_content_search(
     cols: usize,
     palette: RenderPalette,
 ) {
-    let box_w = min(cols.saturating_sub(4).max(30), 72);
-    // Extra height vs title switcher: +1 for snippet row
-    let box_h = min(rows.saturating_sub(4).max(9), 16);
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let (x, y, box_w, box_h) = content_search_box_geometry(rows, cols);
 
     let border_style = AnsiStyle {
         fg: Some(palette.code_type),
+        bg: Some(OVERLAY_SURFACE_BG),
         ..Default::default()
     };
     let prompt_style = AnsiStyle {
         fg: Some(palette.code_keyword),
+        bg: Some(OVERLAY_SURFACE_BG),
         bold: true,
         ..Default::default()
     };
     let label_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(OVERLAY_SURFACE_BG),
         dim: true,
         ..Default::default()
     };
     let row_style = AnsiStyle {
         fg: Some(palette.variable),
+        bg: Some(OVERLAY_SURFACE_BG),
         ..Default::default()
     };
     let selected_bg = palette.primary();
@@ -295,24 +328,20 @@ pub fn draw_content_search(
     };
     let snippet_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(OVERLAY_SURFACE_BG),
         dim: true,
-        ..Default::default()
-    };
-    let snippet_match_style = AnsiStyle {
-        fg: Some(palette.primary()),
-        bold: true,
         ..Default::default()
     };
 
     draw_box_border(buf, y, x, box_w, box_h, border_style);
+    fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
     let prompt = format!(" content: {}", view.query);
     draw_row_at_styled(buf, y + 1, x + 1, box_w.saturating_sub(2), &prompt, prompt_style);
     draw_row_at_styled(buf, y + 2, x + 1, box_w.saturating_sub(2), " results:", label_style);
 
-    // Reserve last inner row for snippet; result rows fill the rest
-    let inner_h = box_h.saturating_sub(2); // rows inside border
-    let max_rows = inner_h.saturating_sub(4); // prompt(1) + label(1) + snippet(1) + gap(1)
+    // Reserve preview rows at the bottom; result rows fill the rest.
+    let max_rows = box_h.saturating_sub(4 + CONTENT_SEARCH_PREVIEW_LINES); // prompt + label + preview + borders
     let mut start = 0usize;
     if view.selected >= max_rows {
         start = view.selected + 1 - max_rows;
@@ -322,7 +351,7 @@ pub fn draw_content_search(
         let row = y + 3 + i;
         if let Some(result) = view.results.get(start + i) {
             let marker = if start + i == view.selected { ">" } else { " " };
-            let text = format!("{marker} {}", result.title);
+            let text = format!("{marker} L{}  {}", result.line_number.max(1), result.title);
             if start + i == view.selected {
                 draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, selected_style);
             } else {
@@ -333,29 +362,40 @@ pub fn draw_content_search(
         }
     }
 
-    // Snippet row: show match context for selected result
-    let snippet_row = y + 3 + max_rows;
-    let snippet = view
-        .results
-        .get(view.selected)
-        .map(|r| r.snippet.as_str())
-        .unwrap_or("");
-    let snippet_prefix = " ";
+    // Preview area: fixed 3 lines at the bottom of the dialog.
+    let preview_start_row = y + box_h.saturating_sub(CONTENT_SEARCH_PREVIEW_LINES + 1);
     let snippet_inner_w = box_w.saturating_sub(2);
-    if snippet.is_empty() {
-        draw_row_at_styled(buf, snippet_row, x + 1, snippet_inner_w, "", snippet_style);
-    } else {
-        // prefix " " then rendered snippet
-        draw_row_at_styled(buf, snippet_row, x + 1, 1, snippet_prefix, snippet_style);
-        draw_snippet_row(
+    for i in 0..CONTENT_SEARCH_PREVIEW_LINES {
+        draw_row_at_styled(
             buf,
-            snippet_row,
-            x + 1 + snippet_prefix.len(),
-            snippet_inner_w.saturating_sub(snippet_prefix.len()),
-            snippet,
+            preview_start_row + i,
+            x + 1,
+            snippet_inner_w,
+            "",
             snippet_style,
-            snippet_match_style,
         );
+    }
+
+    let selected_result = view.results.get(view.selected);
+    if let Some(result) = selected_result {
+        let prefix = format!(" L{} ", result.line_number.max(1));
+        let snippet = sanitize_preview_text(result.snippet.trim());
+        let preview_text = if snippet.trim().is_empty() {
+            format!("{prefix}no snippet preview")
+        } else {
+            format!("{prefix}{snippet}")
+        };
+        let lines = wrap_preview_lines(&preview_text, snippet_inner_w, CONTENT_SEARCH_PREVIEW_LINES);
+        for (idx, line) in lines.into_iter().enumerate() {
+            draw_row_at_styled(
+                buf,
+                preview_start_row + idx,
+                x + 1,
+                snippet_inner_w,
+                &line,
+                snippet_style,
+            );
+        }
     }
 }
 
@@ -544,4 +584,21 @@ fn truncate_title_for_confirm(value: &str) -> String {
         out.push(ch);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_preview_text_removes_markers_and_controls() {
+        let input = "[[foo]]\nbar\tbaz\rqux";
+        assert_eq!(sanitize_preview_text(input), "foo bar baz qux");
+    }
+
+    #[test]
+    fn wrap_preview_lines_truncates_with_ascii_ellipsis() {
+        let lines = wrap_preview_lines("abcdefghijkl", 4, 2);
+        assert_eq!(lines, vec!["abcd".to_string(), "e...".to_string()]);
+    }
 }

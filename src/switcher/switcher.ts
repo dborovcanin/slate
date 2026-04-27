@@ -9,17 +9,22 @@ type SwitcherItem = {
   positions: number[];
   matchedByContent: boolean;
   snippet?: string;
+  lineNumber?: number;
 };
 type DeleteCallback = (id: string) => void;
 type SwitcherMode = "title" | "content";
+const CONTENT_SEARCH_DEBOUNCE_MS = 120;
 
 let overlay: ListOverlay | null = null;
-let onSelectCallback: ((id: string) => void) | null = null;
+let onSelectCallback: ((id: string, lineNumber?: number | null) => void) | null = null;
 let onDeleteCallback: DeleteCallback | null = null;
 let activeMode: SwitcherMode = "title";
 let activeSearchQuery = "";
 let activeSearchItems: NoteSearchResult[] | null = null;
 let activeSearchRequestId = 0;
+let activeSearchTimer: number | null = null;
+let activeSearchInFlight = false;
+let queuedSearchQuery: string | null = null;
 
 function renderSnippet(text: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
@@ -56,8 +61,33 @@ function allNotesForSwitcher(): NoteEntry[] {
     : notes;
 }
 
-function queueContentSearch(query: string) {
+function clearContentSearchTimer() {
+  if (activeSearchTimer !== null) {
+    window.clearTimeout(activeSearchTimer);
+    activeSearchTimer = null;
+  }
+}
+
+function resetContentSearchState() {
+  clearContentSearchTimer();
+  activeSearchRequestId += 1;
+  activeSearchInFlight = false;
+  queuedSearchQuery = null;
+  activeSearchQuery = "";
+  activeSearchItems = null;
+}
+
+function maybeDispatchQueuedContentSearch() {
+  if (activeSearchInFlight) return;
+  const query = queuedSearchQuery;
+  if (!query || query !== activeSearchQuery) {
+    queuedSearchQuery = null;
+    return;
+  }
+  queuedSearchQuery = null;
+
   const requestId = ++activeSearchRequestId;
+  activeSearchInFlight = true;
   void searchNotesContent(query, 60)
     .then((results) => {
       if (requestId !== activeSearchRequestId || query !== activeSearchQuery) return;
@@ -68,15 +98,31 @@ function queueContentSearch(query: string) {
       if (requestId !== activeSearchRequestId || query !== activeSearchQuery) return;
       activeSearchItems = [];
       refreshSwitcher();
+    })
+    .finally(() => {
+      if (requestId === activeSearchRequestId) {
+        activeSearchInFlight = false;
+      }
+      if (activeSearchTimer === null) {
+        maybeDispatchQueuedContentSearch();
+      }
     });
+}
+
+function queueContentSearch(query: string) {
+  queuedSearchQuery = query;
+  clearContentSearchTimer();
+  activeSearchTimer = window.setTimeout(() => {
+    activeSearchTimer = null;
+    maybeDispatchQueuedContentSearch();
+  }, CONTENT_SEARCH_DEBOUNCE_MS);
 }
 
 function buildItems(query: string): SwitcherItem[] {
   const allNotes = allNotesForSwitcher();
   const trimmed = query.trim();
   if (trimmed.length === 0) {
-    activeSearchQuery = "";
-    activeSearchItems = null;
+    resetContentSearchState();
     return fuzzyFilter("", allNotes, (n) => n.title).map(({ item, positions }) => ({
       item,
       positions,
@@ -121,6 +167,7 @@ function buildItems(query: string): SwitcherItem[] {
       positions: titleMatch?.positions ?? [],
       matchedByContent: titleMatch === null,
       snippet: result.snippet || undefined,
+      lineNumber: Number.isFinite(result.line_number) ? result.line_number : undefined,
     };
   });
 }
@@ -180,7 +227,7 @@ export function isSwitcherOpen(): boolean {
 }
 
 export function openSwitcher(
-  selectCallback: (id: string) => void,
+  selectCallback: (id: string, lineNumber?: number | null) => void,
   deleteCallback?: DeleteCallback,
   mode: SwitcherMode = "title",
 ) {
@@ -191,8 +238,7 @@ export function openSwitcher(
     overlay?.close();
     overlay = null;
     activeMode = mode;
-    activeSearchQuery = "";
-    activeSearchItems = null;
+    resetContentSearchState();
   }
 
   if (!overlay) {
@@ -203,7 +249,7 @@ export function openSwitcher(
       backdrop: true,
       getItems: buildItems,
       renderItem: renderSwitcherItem,
-      onSelect: ({ item }) => onSelectCallback?.(item.id),
+      onSelect: ({ item, lineNumber }) => onSelectCallback?.(item.id, lineNumber ?? null),
       onKeydown: (event, state) => {
         const wantsDelete =
           event.key === "Delete" || (event.ctrlKey && !event.shiftKey && event.key === "Backspace");
@@ -225,8 +271,7 @@ export function openSwitcher(
 export function closeSwitcher() {
   overlay?.close();
   onDeleteCallback = null;
-  activeSearchQuery = "";
-  activeSearchItems = null;
+  resetContentSearchState();
 }
 
 export function refreshSwitcher() {

@@ -59,6 +59,7 @@ pub struct NoteSearchResult {
     pub id: String,
     pub title: String,
     pub snippet: String,
+    pub line_number: usize,
     pub rank: f64,
     pub updated_at: String,
 }

@@ -10,7 +10,7 @@ use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines
 use crate::terminal::{date_picker, input, notifications, switcher};
 use crate::terminal::{
     date_picker::DatePickerView,
-    switcher::{ContentSearchView, SwitcherView},
+    switcher::{content_search_box_geometry, ContentSearchView, SwitcherView},
 };
 use std::io::Write;
 
@@ -949,9 +949,18 @@ impl TerminalApp {
         let row_chunks = Self::split_frame_rows(&buf, rows);
         let dims_changed = self.last_drawn_rows_dim != (rows, cols)
             || self.last_drawn_rows.len() != row_chunks.len();
+        let overlay_active = matches!(
+            self.mode,
+            UiMode::Switcher | UiMode::ContentSearch | UiMode::DatePicker
+        ) || self.switcher_open_confirm.is_some()
+            || self.switcher_delete_confirm.is_some();
+        // Full-screen repaint only on overlay transitions (open/close) so
+        // content search remains stable while typing.
+        let overlay_transition = overlay_active != self.last_draw_had_overlay;
+        let force_full_redraw = dims_changed || overlay_transition;
 
         let mut changed_rows = Vec::new();
-        if dims_changed {
+        if force_full_redraw {
             changed_rows.extend(0..row_chunks.len());
         } else {
             for (row_idx, row_text) in row_chunks.iter().enumerate() {
@@ -972,13 +981,14 @@ impl TerminalApp {
             || self.last_cursor_block != cursor_block;
 
         if changed_rows.is_empty() && !cursor_changed {
+            self.last_draw_had_overlay = overlay_active;
             self.draw_buf = buf;
             return Ok(());
         }
 
         let mut out_buf = String::new();
         out_buf.push_str("\x1b[?25l");
-        if dims_changed {
+        if force_full_redraw {
             out_buf.push_str("\x1b[2J\x1b[H");
         }
         for row_idx in changed_rows {
@@ -1000,6 +1010,7 @@ impl TerminalApp {
             self.last_cursor_row = cursor_row;
             self.last_cursor_col = cursor_col;
             self.last_cursor_block = cursor_block;
+            self.last_draw_had_overlay = overlay_active;
         }
         self.draw_buf = buf;
         result
@@ -1058,10 +1069,7 @@ impl TerminalApp {
                 (y + 1, col.max(1))
             }
             UiMode::ContentSearch => {
-                let box_w = min(cols.saturating_sub(4).max(30), 72);
-                let box_h = min(rows.saturating_sub(4).max(9), 16);
-                let x = (cols.saturating_sub(box_w)) / 2 + 1;
-                let y = (rows.saturating_sub(box_h)) / 2 + 1;
+                let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);
                 let prompt = " content: ";
                 let col = (x + 1 + prompt.chars().count()
                     + self.content_search_query.chars().count())

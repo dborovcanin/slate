@@ -510,6 +510,17 @@ export function focusEditor() {
   view?.focus();
 }
 
+export function jumpEditorToLine(lineNumber: number) {
+  if (!view) return;
+  const targetLine = Math.max(1, Math.min(view.state.doc.lines, Math.floor(lineNumber)));
+  const line = view.state.doc.line(targetLine);
+  view.dispatch({
+    selection: { anchor: line.from },
+    scrollIntoView: true,
+  });
+  view.focus();
+}
+
 export function getEditorView(): EditorView | null {
   return view;
 }

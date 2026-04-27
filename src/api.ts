@@ -32,6 +32,7 @@ export interface NoteSearchResult {
   id: string;
   title: string;
   snippet: string;
+  line_number: number;
   rank: number;
   updated_at: string;
 }
@@ -158,7 +159,7 @@ export function listNotesMeta(): Promise<NoteSummary[]> {
   return invoke<NoteSummary[]>("list_notes_meta");
 }
 
-export function searchNotesContent(query: string, limit = 40): Promise<NoteSearchResult[]> {
+export function searchNotesContent(query: string, limit = 60): Promise<NoteSearchResult[]> {
   return invoke<NoteSearchResult[]>("search_notes_content", { query, limit });
 }
 

@@ -4,6 +4,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 const NOTE_CHANGED_EVENT: &str = "slate://note-changed";
+const DEFAULT_CONTENT_SEARCH_LIMIT: usize = 60;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -93,17 +94,24 @@ pub fn list_notes_meta(core: State<'_, AppCore>) -> Result<Vec<NoteSummary>, Str
 }
 
 #[tauri::command]
-pub fn search_notes_content(
+pub async fn search_notes_content(
     core: State<'_, AppCore>,
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<NoteSearchResult>, String> {
-    core.db().search_notes_content(&query, limit.unwrap_or(40))
+    let db = core.db().clone();
+    let limit = limit.unwrap_or(DEFAULT_CONTENT_SEARCH_LIMIT);
+    tauri::async_runtime::spawn_blocking(move || db.search_notes_content(&query, limit))
+        .await
+        .map_err(|e| format!("content search worker failed: {e}"))?
 }
 
 #[tauri::command]
-pub fn rebuild_note_search_index(core: State<'_, AppCore>) -> Result<(), String> {
-    core.db().rebuild_note_search_index()
+pub async fn rebuild_note_search_index(core: State<'_, AppCore>) -> Result<(), String> {
+    let db = core.db().clone();
+    tauri::async_runtime::spawn_blocking(move || db.rebuild_note_search_index())
+        .await
+        .map_err(|e| format!("index rebuild worker failed: {e}"))?
 }
 
 #[tauri::command]

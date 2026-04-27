@@ -19,7 +19,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     note_id UNINDEXED,
     note_title,
     body,
-    tokenize = 'unicode61'
+    tokenize = 'unicode61',
+    prefix = '2 3'
 );
 
 CREATE TRIGGER IF NOT EXISTS notes_fts_ai

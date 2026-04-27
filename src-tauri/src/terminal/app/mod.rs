@@ -169,6 +169,7 @@ struct SwitcherOpenConfirm {
     note_id: String,
     note_title: String,
     password: String,
+    line_number: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -306,6 +307,7 @@ struct TerminalApp {
     last_cursor_row: usize,
     last_cursor_col: usize,
     last_cursor_block: bool,
+    last_draw_had_overlay: bool,
 }
 
 mod calc_helpers;
@@ -410,6 +412,7 @@ impl TerminalApp {
             note_id: self.active_note.id.clone(),
             note_title,
             password: String::new(),
+            line_number: None,
         });
         self.switcher_delete_confirm = None;
         self.status = "password required to open protected note".to_string();
@@ -578,6 +581,7 @@ impl TerminalApp {
             last_cursor_row: 0,
             last_cursor_col: 0,
             last_cursor_block: false,
+            last_draw_had_overlay: false,
         };
 
         app.bootstrap_folding_for_startup();
@@ -615,7 +619,7 @@ impl TerminalApp {
             }
 
             self.maybe_clipboard_watch();
-            self.maybe_collect_search_results();
+            self.maybe_collect_search_results(db);
             self.sync_reminder_ghosts_if_dirty(db)?;
             self.maybe_dispatch_due_reminders(db);
         }
@@ -637,19 +641,7 @@ impl TerminalApp {
             self.recompute_folding();
         }
         self.maybe_recompute_calc_after_idle();
-        if self.content_search_pending {
-            self.content_search_pending = false;
-            let query = self.content_search_query.trim().to_string();
-            if !query.is_empty() {
-                let (tx, rx) = std::sync::mpsc::channel();
-                let search_db = db.clone();
-                std::thread::spawn(move || {
-                    let result = search_db.search_notes_content(&query, 40);
-                    tx.send((query, result)).ok();
-                });
-                self.content_search_rx = Some(rx);
-            }
-        }
+        self.maybe_dispatch_content_search(db);
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
             match self.save(db) {
                 Ok(()) => {
@@ -665,6 +657,30 @@ impl TerminalApp {
             }
         }
         Ok(())
+    }
+
+    fn maybe_dispatch_content_search(&mut self, db: &Db) {
+        if self.mode != UiMode::ContentSearch {
+            return;
+        }
+        if !self.content_search_pending || self.content_search_rx.is_some() {
+            return;
+        }
+        let query = self.content_search_query.trim().to_string();
+        self.content_search_pending = false;
+        if query.is_empty() {
+            self.content_search_results.clear();
+            self.content_search_selected = 0;
+            return;
+        }
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let search_db = db.clone();
+        std::thread::spawn(move || {
+            let result = search_db.search_notes_content(&query, 60);
+            tx.send((query, result)).ok();
+        });
+        self.content_search_rx = Some(rx);
     }
 
     fn start_clipboard_watch(&mut self) -> bool {
@@ -686,7 +702,7 @@ impl TerminalApp {
         true
     }
 
-    fn maybe_collect_search_results(&mut self) {
+    fn maybe_collect_search_results(&mut self, db: &Db) {
         let Some(rx) = &self.content_search_rx else {
             return;
         };
@@ -708,6 +724,7 @@ impl TerminalApp {
                 self.content_search_rx = None;
             }
         }
+        self.maybe_dispatch_content_search(db);
     }
 
     fn maybe_clipboard_watch(&mut self) {

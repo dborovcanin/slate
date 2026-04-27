@@ -22,6 +22,7 @@ import {
   reconfigureEditor,
   setEditorContent,
   focusEditor,
+  jumpEditorToLine,
   flushSave,
   hasPendingLocalChanges,
   insertTextAtCursor,
@@ -241,7 +242,7 @@ async function startBackendNoteChangeListener() {
 }
 
 function openNoteSwitcher() {
-  openSwitcher(switchToNote, (noteId) => {
+  openSwitcher((noteId, lineNumber) => switchToNote(noteId, lineNumber), (noteId) => {
     void handleDeleteNoteById(noteId).catch((error) => {
       console.error("Action failed:", error);
       showToast("Action failed");
@@ -282,7 +283,7 @@ async function unlockProtectedNoteWithRetry(noteId: string, title: string): Prom
   }
 }
 
-async function switchToNote(id: string) {
+async function switchToNote(id: string, lineNumber?: number | null) {
   await flushSave();
   const summary = await getNoteMeta(id);
   if (!summary) {
@@ -308,7 +309,11 @@ async function switchToNote(id: string) {
   state.setActiveNote(note);
   reconfigureEditorForNote(note);
   setEditorContent(note.body, { forceStateReset: true });
-  focusEditor();
+  if (typeof lineNumber === "number" && Number.isFinite(lineNumber) && lineNumber > 0) {
+    jumpEditorToLine(lineNumber);
+  } else {
+    focusEditor();
+  }
 
   void listNotesMeta()
     .then((summaries) => {
@@ -782,7 +787,7 @@ function setupKeyboardShortcuts() {
         closeSwitcher();
         focusEditor();
       } else {
-        openSwitcher(switchToNote, undefined, "content");
+        openSwitcher((noteId, lineNumber) => switchToNote(noteId, lineNumber), undefined, "content");
       }
       return;
     }

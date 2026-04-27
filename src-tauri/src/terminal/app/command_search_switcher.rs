@@ -11,6 +11,83 @@ use std::time::{Duration, Instant};
 
 // Ownership: switcher, command bar execution, and search workflows.
 impl TerminalApp {
+    fn content_search_title_fallback_results(&self, query: &str) -> Vec<NoteSearchResult> {
+        const CONTENT_SEARCH_FALLBACK_LIMIT: usize = 60;
+
+        let mut ordered = Vec::with_capacity(self.switcher_items.len());
+        if let Some(active_idx) = self
+            .switcher_items
+            .iter()
+            .position(|note| note.id == self.active_note.id)
+        {
+            ordered.push((0usize, &self.switcher_items[active_idx]));
+        }
+        for (idx, note) in self.switcher_items.iter().enumerate() {
+            if note.id != self.active_note.id {
+                ordered.push((idx + 1, note));
+            }
+        }
+
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            return ordered
+                .into_iter()
+                .take(CONTENT_SEARCH_FALLBACK_LIMIT)
+                .map(|(_, note)| NoteSearchResult {
+                    id: note.id.clone(),
+                    title: note.title.clone(),
+                    snippet: String::new(),
+                    line_number: 1,
+                    rank: 0.0,
+                    updated_at: String::new(),
+                })
+                .collect();
+        }
+
+        let mut matches = ordered
+            .into_iter()
+            .filter_map(|(idx, note)| {
+                switcher::fuzzy_score(trimmed, &note.title).map(|score| (score, idx, note))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|(left_score, left_idx, _), (right_score, right_idx, _)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left_idx.cmp(right_idx))
+        });
+
+        matches
+            .into_iter()
+            .take(CONTENT_SEARCH_FALLBACK_LIMIT)
+            .map(|(score, _, note)| NoteSearchResult {
+                id: note.id.clone(),
+                title: note.title.clone(),
+                snippet: String::new(),
+                line_number: 1,
+                rank: -(score as f64),
+                updated_at: String::new(),
+            })
+            .collect()
+    }
+
+    fn clear_content_search_session(&mut self) {
+        self.content_search_query.clear();
+        self.content_search_results.clear();
+        self.content_search_selected = 0;
+        self.content_search_pending = false;
+        self.content_search_rx = None;
+    }
+
+    fn refresh_content_search_preview(&mut self) {
+        let query = self.content_search_query.trim().to_string();
+        // Supersede stale in-flight result streams when query changes so a
+        // previous slow search does not block the latest query dispatch.
+        self.content_search_rx = None;
+        self.content_search_results = self.content_search_title_fallback_results(&query);
+        self.content_search_selected = 0;
+        self.content_search_pending = !query.is_empty();
+    }
+
     pub(super) fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.switcher_open_confirm.is_some() {
             return self.handle_switcher_open_confirm_key(db, key);
@@ -59,9 +136,10 @@ impl TerminalApp {
                             note_id: item.id,
                             note_title: item.title,
                             password: String::new(),
+                            line_number: None,
                         });
                     } else {
-                        self.open_note_from_switcher(db, item.id.as_str(), None)?;
+                        self.open_note_from_switcher(db, item.id.as_str(), None, None)?;
                     }
                 }
             }
@@ -266,6 +344,7 @@ impl TerminalApp {
                         db,
                         &confirm.note_id,
                         Some(confirm.password.as_str()),
+                        confirm.line_number,
                     ) {
                         Ok(()) => {
                             self.switcher_open_confirm = None;
@@ -306,6 +385,7 @@ impl TerminalApp {
         db: &Db,
         note_id: &str,
         password: Option<&str>,
+        line_number: Option<usize>,
     ) -> Result<(), String> {
         self.save(db)?;
         let note = if let Some(password) = password {
@@ -318,6 +398,17 @@ impl TerminalApp {
             note
         };
         self.set_active_note(db, note)?;
+        if let Some(line_number) = line_number {
+            let max_line = self.lines.len().saturating_sub(1);
+            self.cursor_line = line_number.saturating_sub(1).min(max_line);
+            self.cursor_col = 0;
+            self.adjust_cursor();
+            self.adjust_scroll();
+        }
+        // Opening a note finalizes the previous content-search session.
+        // Drop any stale async receiver/results so the next content search
+        // always starts from a clean state.
+        self.clear_content_search_session();
         self.close_switcher();
         self.mode = UiMode::Normal;
         self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
@@ -980,6 +1071,9 @@ impl TerminalApp {
 
     pub(super) fn open_switcher(&mut self, db: &Db) -> Result<(), String> {
         self.dismiss_variable_autocomplete_popup();
+        if self.mode == UiMode::ContentSearch {
+            self.clear_content_search_session();
+        }
         self.refresh_switcher_items(db)?;
         self.mode = UiMode::Switcher;
         self.switcher_query.clear();
@@ -1125,51 +1219,25 @@ impl TerminalApp {
 
     pub(super) fn open_content_search(&mut self, db: &Db) -> Result<(), String> {
         self.dismiss_variable_autocomplete_popup();
+        // Pre-load switcher items so title fallback can mirror UI behavior.
+        if self.switcher_items.is_empty() {
+            self.refresh_switcher_items(db)?;
+        }
         self.mode = UiMode::ContentSearch;
-        self.content_search_query.clear();
-        self.content_search_results.clear();
-        self.content_search_selected = 0;
-        self.content_search_pending = false;
-        self.content_search_rx = None;
+        self.clear_content_search_session();
+        self.content_search_results = self.content_search_title_fallback_results("");
         self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
         self.status =
             "Content search: type to search, Enter open, Tab title search, Esc close".to_string();
-        // pre-load switcher items so we can fall back to meta lookup on open
-        if self.switcher_items.is_empty() {
-            self.refresh_switcher_items(db)?;
-        }
         Ok(())
     }
 
     pub(super) fn close_content_search(&mut self) {
         self.dismiss_variable_autocomplete_popup();
         self.mode = UiMode::Editor;
-        self.content_search_query.clear();
-        self.content_search_results.clear();
-        self.content_search_selected = 0;
-        self.content_search_pending = false;
-        self.content_search_rx = None;
+        self.clear_content_search_session();
         self.status = format!("editing {}", self.active_note.id);
-    }
-
-    pub(super) fn recompute_content_search(&mut self, db: &Db) {
-        let query = self.content_search_query.trim().to_string();
-        if query.is_empty() {
-            self.content_search_results.clear();
-            self.content_search_selected = 0;
-            return;
-        }
-        match db.search_notes_content(&query, 40) {
-            Ok(results) => {
-                self.content_search_results = results;
-                self.content_search_selected = 0;
-            }
-            Err(error) => {
-                self.status = format!("content search failed: {error}");
-                self.content_search_results.clear();
-            }
-        }
     }
 
     pub(super) fn handle_content_search_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -1183,15 +1251,9 @@ impl TerminalApp {
             Key::Tab => {
                 self.open_switcher(db)?;
             }
-            Key::Ctrl('w') => {
+            Key::Ctrl('w') | Key::CtrlBackspace => {
                 trim_trailing_word(&mut self.content_search_query);
-                if self.content_search_query.trim().is_empty() {
-                    self.content_search_results.clear();
-                    self.content_search_selected = 0;
-                    self.content_search_pending = false;
-                } else {
-                    self.content_search_pending = true;
-                }
+                self.refresh_content_search_preview();
             }
             Key::ArrowUp => {
                 if self.content_search_selected > 0 {
@@ -1205,13 +1267,7 @@ impl TerminalApp {
             }
             Key::Backspace => {
                 self.content_search_query.pop();
-                if self.content_search_query.trim().is_empty() {
-                    self.content_search_results.clear();
-                    self.content_search_selected = 0;
-                    self.content_search_pending = false;
-                } else {
-                    self.content_search_pending = true;
-                }
+                self.refresh_content_search_preview();
             }
             Key::Enter => {
                 if let Some(result) = self
@@ -1237,26 +1293,33 @@ impl TerminalApp {
                             note_id: result.id.clone(),
                             note_title: result.title.clone(),
                             password: String::new(),
+                            line_number: Some(result.line_number),
                         });
                         self.mode = UiMode::Switcher;
                         self.recompute_switcher_matches();
                     } else {
-                        self.open_note_from_switcher(db, &result.id.clone(), None)?;
+                        self.open_note_from_switcher(
+                            db,
+                            &result.id.clone(),
+                            None,
+                            Some(result.line_number),
+                        )?;
                     }
                 }
             }
             Key::Char(ch) => {
                 self.content_search_query.push(ch);
-                self.content_search_pending = true;
+                self.refresh_content_search_preview();
             }
             Key::Paste(text) => {
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                     self.content_search_query.push(ch);
                 }
-                self.content_search_pending = true;
+                self.refresh_content_search_preview();
             }
             _ => {}
         }
+        self.maybe_dispatch_content_search(db);
         Ok(())
     }
 
