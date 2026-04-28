@@ -13,6 +13,7 @@ pub struct CalcEngine;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoteEvaluationOptions {
     pub variables_enabled: bool,
+    pub table_enabled: bool,
     /// Optional half-open range `[from, to)` of line indices (0-based) to evaluate.
     /// When `None`, evaluates every line. Variable resolution always considers the
     /// full document so that a restricted evaluation still sees vars defined elsewhere.
@@ -24,6 +25,7 @@ impl Default for NoteEvaluationOptions {
     fn default() -> Self {
         Self {
             variables_enabled: true,
+            table_enabled: true,
             eval_range: None,
         }
     }
@@ -432,7 +434,7 @@ impl CalcEngine {
     ) -> NoteEvaluationResult {
         let mut ctx = new_context();
         let defs = if options.variables_enabled {
-            collect_variable_definitions(lines)
+            collect_variable_definitions(lines, options.table_enabled)
         } else {
             HashMap::new()
         };
@@ -480,7 +482,7 @@ impl CalcEngine {
 
         for idx in eval_from..eval_to {
             let line = read_line!(idx).to_string();
-            let table_segments = if is_table_line(&line) {
+            let table_segments = if options.table_enabled && is_table_line(&line) {
                 table_expression_segments(&line, true)
             } else {
                 Vec::new()
@@ -533,7 +535,7 @@ impl CalcEngine {
             }
 
             // Single-expression path (preserves original behavior).
-            let Some(line_expr) = extract_line_expression(&line) else {
+            let Some(line_expr) = extract_line_expression(&line, options.table_enabled) else {
                 continue;
             };
             let expression = line_expr.expression.as_str();
@@ -1409,8 +1411,8 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<(Stri
     candidates.pop()
 }
 
-fn extract_line_expression(line: &str) -> Option<LineExpression> {
-    if is_table_line(line) {
+fn extract_line_expression(line: &str, table_enabled: bool) -> Option<LineExpression> {
+    if table_enabled && is_table_line(line) {
         let (expression, table_cell_index) = table_expression_segment(line, true)?;
         return Some(LineExpression {
             expression,
@@ -1440,11 +1442,14 @@ fn extract_line_expression(line: &str) -> Option<LineExpression> {
     }
 }
 
-fn collect_variable_definitions(lines: &[String]) -> HashMap<String, VariableDefinition> {
+fn collect_variable_definitions(
+    lines: &[String],
+    table_enabled: bool,
+) -> HashMap<String, VariableDefinition> {
     let mut defs = HashMap::new();
 
     for (line_idx, line) in lines.iter().enumerate() {
-        let Some(line_expr) = extract_line_expression(line) else {
+        let Some(line_expr) = extract_line_expression(line, table_enabled) else {
             continue;
         };
         let expression = line_expr.expression;
@@ -1996,6 +2001,28 @@ mod tests {
     }
 
     #[test]
+    fn note_eval_table_formulas_are_ignored_when_table_module_is_off() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "var := 0.5".to_string(),
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 10 |".to_string(),
+            "| :=sum_col() * var |".to_string(),
+        ];
+        let result = engine.evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                variables_enabled: true,
+                table_enabled: false,
+                eval_range: None,
+            },
+        );
+        assert_eq!(result.line_results[4], None);
+        assert!(result.table_cell_results[4].is_empty());
+    }
+
+    #[test]
     fn note_eval_table_colon_eq_prefix_does_not_define_variable() {
         let engine = CalcEngine::new();
         let lines = vec!["| :=5+3 |".to_string()];
@@ -2138,6 +2165,7 @@ mod tests {
             &lines,
             NoteEvaluationOptions {
                 variables_enabled: false,
+                table_enabled: true,
                 eval_range: None,
             },
         );
@@ -2211,6 +2239,7 @@ mod tests {
             &lines,
             NoteEvaluationOptions {
                 variables_enabled: true,
+                table_enabled: true,
                 eval_range: Some((1, 3)),
             },
         );
@@ -2236,6 +2265,7 @@ mod tests {
             &lines,
             NoteEvaluationOptions {
                 variables_enabled: true,
+                table_enabled: true,
                 eval_range: Some((2, 3)),
             },
         );

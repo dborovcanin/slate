@@ -80,7 +80,10 @@ impl TerminalApp {
     }
 
     pub(super) fn rescan_calc_flags(&mut self) {
-        let flags = crate::editor_core::calc_plan::detect_calc_signal_flags(&self.lines);
+        let flags = crate::editor_core::calc_plan::detect_calc_signal_flags_with_mask(
+            &self.lines,
+            self.calc_feature_mask(),
+        );
         self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
         self.calc.cached_has_variable_assignment = flags.has_variable_assignment;
     }
@@ -97,16 +100,19 @@ impl TerminalApp {
                 let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
                 for i in cl.saturating_sub(1)..=cl {
                     if let Some(text) = self.lines.get(i) {
+                        let mask = self.calc_feature_mask();
                         if !self.calc.cached_has_variable_assignment
-                            && crate::editor_core::calc_plan::contains_variable_assignment(
+                            && crate::editor_core::calc_plan::contains_variable_assignment_with_mask(
                                 std::slice::from_ref(text),
+                                mask,
                             )
                         {
                             self.calc.cached_has_variable_assignment = true;
                         }
                         if !self.calc.cached_has_builtin_formula
-                            && crate::editor_core::calc_plan::contains_builtin_formula(
+                            && crate::editor_core::calc_plan::contains_builtin_formula_with_mask(
                                 std::slice::from_ref(text),
+                                mask,
                             )
                         {
                             self.calc.cached_has_builtin_formula = true;
@@ -122,8 +128,9 @@ impl TerminalApp {
         let line = self.cursor_line;
         if !self.calc.cached_has_variable_assignment {
             if let Some(text) = self.lines.get(line) {
-                if crate::editor_core::calc_plan::contains_variable_assignment(
+                if crate::editor_core::calc_plan::contains_variable_assignment_with_mask(
                     std::slice::from_ref(text),
+                    self.calc_feature_mask(),
                 ) {
                     self.calc.cached_has_variable_assignment = true;
                 }
@@ -131,9 +138,10 @@ impl TerminalApp {
         }
         if !self.calc.cached_has_builtin_formula {
             if let Some(text) = self.lines.get(line) {
-                if crate::editor_core::calc_plan::contains_builtin_formula(std::slice::from_ref(
-                    text,
-                )) {
+                if crate::editor_core::calc_plan::contains_builtin_formula_with_mask(
+                    std::slice::from_ref(text),
+                    self.calc_feature_mask(),
+                ) {
                     self.calc.cached_has_builtin_formula = true;
                 }
             }
@@ -141,8 +149,10 @@ impl TerminalApp {
     }
 
     fn rebuild_calc_line_metadata(&mut self) {
-        self.calc.line_metadata =
-            crate::editor_core::calc_plan::line_metadata_for_lines(&self.lines);
+        self.calc.line_metadata = crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(
+            &self.lines,
+            self.calc_feature_mask(),
+        );
     }
 
     fn ensure_calc_line_metadata(&mut self) {
@@ -159,8 +169,10 @@ impl TerminalApp {
         if line_idx >= self.lines.len() || line_idx >= self.calc.line_metadata.len() {
             return;
         }
-        self.calc.line_metadata[line_idx] =
-            crate::editor_core::calc_plan::line_metadata(&self.lines[line_idx]);
+        self.calc.line_metadata[line_idx] = crate::editor_core::calc_plan::line_metadata_with_mask(
+            &self.lines[line_idx],
+            self.calc_feature_mask(),
+        );
     }
 
     fn splice_calc_line_metadata(
@@ -194,7 +206,12 @@ impl TerminalApp {
             .get(start_line.min(self.lines.len())..new_end)
             .unwrap_or(&[])
             .iter()
-            .map(crate::editor_core::calc_plan::line_metadata)
+            .map(|line| {
+                crate::editor_core::calc_plan::line_metadata_with_mask(
+                    line,
+                    self.calc_feature_mask(),
+                )
+            })
             .collect::<Vec<_>>();
         self.calc.line_metadata.splice(start..old_end, replacement);
     }
@@ -222,6 +239,14 @@ impl TerminalApp {
 
     pub(super) fn note_style_module_enabled(&self) -> bool {
         self.active_note.modules.style
+    }
+
+    fn calc_feature_mask(&self) -> crate::editor_core::calc_plan::CalcFeatureMask {
+        crate::editor_core::calc_plan::CalcFeatureMask {
+            math_enabled: self.note_math_module_enabled(),
+            table_enabled: self.note_table_module_enabled(),
+            variables_enabled: self.note_variables_module_enabled(),
+        }
     }
 
     pub(super) fn markdown_autoformat_enabled(&self) -> bool {
@@ -883,9 +908,15 @@ impl TerminalApp {
             self.refresh_calc_line_metadata_at(cursor_line);
         }
         let calc_variables_enabled = self.calc_variables_enabled();
+        let calc_table_enabled = self.note_table_module_enabled();
         if self.calc.stale {
-            let calc_data =
-                compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
+            let calc_data = compute_calc_data(
+                &self.calc.engine,
+                &self.lines,
+                calc_variables_enabled,
+                calc_table_enabled,
+                None,
+            );
             self.calc.prev_line_metadata = self.calc.line_metadata.clone();
             self.calc.results = calc_data.line_results;
             self.calc.cell_results = calc_data.cell_results;
@@ -937,6 +968,7 @@ impl TerminalApp {
             prev_changed_had_builtin_formula,
             has_prev,
             calc_variables_enabled,
+            calc_table_enabled,
         );
         let can_use_partial = eval_window.can_use_partial;
         let eval_from = eval_window.eval_from;
@@ -965,6 +997,7 @@ impl TerminalApp {
                     &self.calc.engine,
                     &self.lines,
                     calc_variables_enabled,
+                    calc_table_enabled,
                     Some((eval_from, eval_to)),
                 );
                 for idx in eval_from..eval_to {
@@ -984,8 +1017,13 @@ impl TerminalApp {
                 )
             }
         } else {
-            let calc_data =
-                compute_calc_data(&self.calc.engine, &self.lines, calc_variables_enabled, None);
+            let calc_data = compute_calc_data(
+                &self.calc.engine,
+                &self.lines,
+                calc_variables_enabled,
+                calc_table_enabled,
+                None,
+            );
             (
                 calc_data.line_results,
                 calc_data.cell_results,
@@ -1063,7 +1101,10 @@ impl TerminalApp {
                     // Trailer rewrite changed the line bytes; rehash so the
                     // snapshot stays in sync for the next recompute.
                     self.calc.line_metadata[i] =
-                        crate::editor_core::calc_plan::line_metadata(&self.lines[i]);
+                        crate::editor_core::calc_plan::line_metadata_with_mask(
+                            &self.lines[i],
+                            self.calc_feature_mask(),
+                        );
                     trailer_rewritten_lines.push(i);
                 }
             }
@@ -2203,6 +2244,7 @@ impl TerminalApp {
             &self.calc.engine,
             &self.lines,
             self.calc_variables_enabled(),
+            self.note_table_module_enabled(),
             Some((eval_from, eval_to)),
         );
         if self.calc.results.len() != self.lines.len() {

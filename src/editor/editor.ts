@@ -392,6 +392,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         ? []
         : calcExtensions({
             variablesEnabled: options.variablesEnabled ?? true,
+            tableEnabled,
             getActiveNoteId: () => state.activeNote?.id ?? null,
           })),
       ...(disableNotify

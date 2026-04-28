@@ -33,7 +33,7 @@ This document defines the canonical shared-core contract for editor semantics.
   - input: existing fold ranges + line-edit deltas
   - output: mapped fold ranges plus rebuild-needed decision
 - Calc scope/trigger contract:
-  - input: changed-line slices + previous-change metadata + eval context flags
+  - input: changed-line slices + previous-change metadata + eval context flags + calc feature mask (`math_enabled`, `table_enabled`, `variables_enabled`)
   - output: deterministic eval-scope decision (`can_use_partial`, dependency flags) and shared trigger decision
 - Calc trailer-refresh eligibility contract:
   - input: previous/current line identity hash, previous result presence, selection guard

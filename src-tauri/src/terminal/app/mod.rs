@@ -455,11 +455,20 @@ impl TerminalApp {
         let loading_switcher = Duration::from_millis(0);
 
         let calc_engine = CalcEngine::new();
-        let initial_calc_signals = crate::editor_core::calc_plan::detect_calc_signal_flags(&lines);
+        let note_math_enabled = active_note.modules.math;
+        let note_table_enabled = active_note.modules.table;
+        let note_variables_enabled = active_note.modules.variables;
+        let initial_calc_signals =
+            crate::editor_core::calc_plan::detect_calc_signal_flags_with_mask(
+                &lines,
+                crate::editor_core::calc_plan::CalcFeatureMask {
+                    math_enabled: note_math_enabled,
+                    table_enabled: note_table_enabled,
+                    variables_enabled: note_variables_enabled,
+                },
+            );
         let initial_has_builtin_formula = initial_calc_signals.has_builtin_formula;
         let initial_has_variable_assignment = initial_calc_signals.has_variable_assignment;
-        let note_math_enabled = active_note.modules.math;
-        let note_variables_enabled = active_note.modules.variables;
         let active_has_builtin_formula = note_math_enabled && initial_has_builtin_formula;
         let active_has_variable_assignment =
             note_math_enabled && note_variables_enabled && initial_has_variable_assignment;
@@ -477,14 +486,27 @@ impl TerminalApp {
                 variable_names: Vec::new(),
             }
         } else {
-            compute_calc_data(&calc_engine, &lines, active_has_variable_assignment, None)
+            compute_calc_data(
+                &calc_engine,
+                &lines,
+                active_has_variable_assignment,
+                note_table_enabled,
+                None,
+            )
         };
         let loading_calc_engine = calc_begin.elapsed();
 
         let line_metadata = if skip_initial_calc {
             Vec::new()
         } else {
-            crate::editor_core::calc_plan::line_metadata_for_lines(&lines)
+            crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(
+                &lines,
+                crate::editor_core::calc_plan::CalcFeatureMask {
+                    math_enabled: note_math_enabled,
+                    table_enabled: note_table_enabled,
+                    variables_enabled: note_variables_enabled,
+                },
+            )
         };
         let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
         let initial_mode = if vim_mode {

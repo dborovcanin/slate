@@ -1442,6 +1442,7 @@ export function calcDecideEvalScope(
   prevChangedLines: readonly string[],
   hasPrev: boolean,
   variablesEnabled: boolean,
+  tableEnabled: boolean,
 ): CalcEvalScopeDecision {
   const fallback: CalcEvalScopeDecision = {
     touchesAnyAssignment: false,
@@ -1456,6 +1457,7 @@ export function calcDecideEvalScope(
     [...prevChangedLines],
     hasPrev,
     variablesEnabled,
+    tableEnabled,
   ) as CalcEvalScopeDecision | null | undefined;
   return raw ?? fallback;
 }
@@ -1467,6 +1469,7 @@ export function calcDecideEvalWindow(
   prevChangedLines: readonly string[],
   hasPrev: boolean,
   variablesEnabled: boolean,
+  tableEnabled: boolean,
 ): CalcEvalWindowDecision {
   const fallback: CalcEvalWindowDecision = {
     evalFrom: 0,
@@ -1485,6 +1488,7 @@ export function calcDecideEvalWindow(
     [...prevChangedLines],
     hasPrev,
     variablesEnabled,
+    tableEnabled,
   ) as CalcEvalWindowDecision | null | undefined;
   return raw ?? fallback;
 }

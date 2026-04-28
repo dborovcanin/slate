@@ -145,6 +145,15 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 - Builtin functions (`sum_col()`, `avg_col()`, `sum_row()`, `avg_row()`) can appear anywhere in the expression and are substituted with their computed values before evaluation.
 - Variable references are resolved from the full document context.
 
+**Module gating rules:**
+
+- `modules.math` is the master calc gate. If off, no expressions are evaluated.
+- `modules.table` gates table-formula parsing/evaluation (`:=...` inside table cells).
+- `modules.variables` gates variable assignment/reference behavior and autocomplete.
+- Mixed-mode expectations:
+  - `math=on`, `table=off`, `variables=on`: variable math works outside tables; table formulas are ignored.
+  - `math=on`, `table=on`, `variables=off`: builtin table formulas still work; variable references stay unresolved.
+
 ## Cross-Subsystem Architecture Action Plan (Ordered)
 
 1. Define explicit migration boundary policy for the remaining semantics:

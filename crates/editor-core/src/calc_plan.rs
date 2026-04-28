@@ -33,23 +33,65 @@ pub struct CalcSignalFlags {
     pub has_builtin_formula: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalcFeatureMask {
+    pub math_enabled: bool,
+    pub table_enabled: bool,
+    pub variables_enabled: bool,
+}
+
+impl Default for CalcFeatureMask {
+    fn default() -> Self {
+        Self {
+            math_enabled: true,
+            table_enabled: true,
+            variables_enabled: true,
+        }
+    }
+}
+
+impl CalcFeatureMask {
+    fn variables_active(self) -> bool {
+        self.math_enabled && self.variables_enabled
+    }
+
+    fn table_active(self) -> bool {
+        self.math_enabled && self.table_enabled
+    }
+}
+
 pub fn line_metadata(line: &String) -> LineMetadata {
+    line_metadata_with_mask(line, CalcFeatureMask::default())
+}
+
+pub fn line_metadata_with_mask(line: &String, mask: CalcFeatureMask) -> LineMetadata {
     LineMetadata {
         hash: hash_line(line),
-        assignment_name: assignment_name(line),
-        has_assignment: contains_assignment_operator(line),
-        has_builtin_formula: line_has_builtin_formula(line),
+        assignment_name: assignment_name_with_mask(line, mask),
+        has_assignment: contains_variable_assignment_with_mask(std::slice::from_ref(line), mask),
+        has_builtin_formula: line_has_builtin_formula_with_mask(line, mask),
     }
 }
 
 pub fn line_metadata_for_lines(lines: &[String]) -> Vec<LineMetadata> {
+    line_metadata_for_lines_with_mask(lines, CalcFeatureMask::default())
+}
+
+pub fn line_metadata_for_lines_with_mask(
+    lines: &[String],
+    mask: CalcFeatureMask,
+) -> Vec<LineMetadata> {
     lines
         .iter()
         .map(|line| LineMetadata {
             hash: hash_line(line),
-            assignment_name: assignment_name(line),
-            has_assignment: contains_assignment_operator(line),
-            has_builtin_formula: line_has_builtin_formula(line),
+            assignment_name: assignment_name_with_mask(line, mask),
+            has_assignment: contains_variable_assignment_with_mask(
+                std::slice::from_ref(line),
+                mask,
+            ),
+            has_builtin_formula: line_has_builtin_formula_with_mask(line, mask),
         })
         .collect()
 }
@@ -628,7 +670,15 @@ pub fn find_calc_segment(line: &str) -> Option<CalcSegment> {
     find_single_calc_table_cell(line).or_else(|| find_list_calc_segment(line))
 }
 
-fn line_for_calc_evaluation_slice(line: &str) -> Option<&str> {
+fn line_for_calc_evaluation_slice_with_mask(line: &str, mask: CalcFeatureMask) -> Option<&str> {
+    if !mask.math_enabled {
+        return None;
+    }
+
+    if is_table_line(line) && !mask.table_active() {
+        return None;
+    }
+
     if let Some((from_byte, to_byte)) = find_single_calc_table_cell_range(line) {
         return Some(line[from_byte..to_byte].trim());
     }
@@ -648,8 +698,8 @@ fn line_for_calc_evaluation_slice(line: &str) -> Option<&str> {
     Some(line)
 }
 
-fn line_has_builtin_formula(line: &str) -> bool {
-    let Some(eval_target) = line_for_calc_evaluation_slice(line) else {
+fn line_has_builtin_formula_with_mask(line: &str, mask: CalcFeatureMask) -> bool {
+    let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) else {
         return false;
     };
     let trimmed = eval_target.trim();
@@ -657,14 +707,20 @@ fn line_has_builtin_formula(line: &str) -> bool {
 }
 
 pub fn line_for_calc_evaluation(line: &str) -> String {
-    if let Some(eval_target) = line_for_calc_evaluation_slice(line) {
+    line_for_calc_evaluation_with_mask(line, CalcFeatureMask::default())
+}
+
+pub fn line_for_calc_evaluation_with_mask(line: &str, mask: CalcFeatureMask) -> String {
+    if let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) {
         return eval_target.to_string();
     }
     String::new()
 }
 
 pub fn line_uses_assignment_ghost_prefix(line: &str) -> bool {
-    if let Some(eval_target) = line_for_calc_evaluation_slice(line) {
+    if let Some(eval_target) =
+        line_for_calc_evaluation_slice_with_mask(line, CalcFeatureMask::default())
+    {
         let trimmed = eval_target.trim();
         if !trimmed.is_empty() {
             return contains_assignment_operator(trimmed);
@@ -674,20 +730,52 @@ pub fn line_uses_assignment_ghost_prefix(line: &str) -> bool {
 }
 
 pub fn contains_variable_assignment(lines: &[String]) -> bool {
-    lines.iter().any(|line| contains_assignment_operator(line))
+    contains_variable_assignment_with_mask(lines, CalcFeatureMask::default())
+}
+
+pub fn contains_variable_assignment_with_mask(lines: &[String], mask: CalcFeatureMask) -> bool {
+    if !mask.variables_active() {
+        return false;
+    }
+
+    lines.iter().any(|line| {
+        if is_table_line(line) && !mask.table_active() {
+            return false;
+        }
+        contains_assignment_operator(line)
+    })
 }
 
 pub fn contains_builtin_formula(lines: &[String]) -> bool {
-    lines.iter().any(|line| line_has_builtin_formula(line))
+    contains_builtin_formula_with_mask(lines, CalcFeatureMask::default())
+}
+
+pub fn contains_builtin_formula_with_mask(lines: &[String], mask: CalcFeatureMask) -> bool {
+    lines
+        .iter()
+        .any(|line| line_has_builtin_formula_with_mask(line, mask))
 }
 
 pub fn detect_calc_signal_flags(lines: &[String]) -> CalcSignalFlags {
+    detect_calc_signal_flags_with_mask(lines, CalcFeatureMask::default())
+}
+
+pub fn detect_calc_signal_flags_with_mask(
+    lines: &[String],
+    mask: CalcFeatureMask,
+) -> CalcSignalFlags {
+    if !mask.math_enabled {
+        return CalcSignalFlags::default();
+    }
+
     let mut flags = CalcSignalFlags::default();
     for line in lines {
-        if !flags.has_variable_assignment && contains_assignment_operator(line) {
+        if !flags.has_variable_assignment
+            && contains_variable_assignment_with_mask(std::slice::from_ref(line), mask)
+        {
             flags.has_variable_assignment = true;
         }
-        if !flags.has_builtin_formula && line_has_builtin_formula(line) {
+        if !flags.has_builtin_formula && line_has_builtin_formula_with_mask(line, mask) {
             flags.has_builtin_formula = true;
         }
         if flags.has_variable_assignment && flags.has_builtin_formula {
@@ -703,15 +791,39 @@ pub fn decide_eval_scope(
     has_prev: bool,
     variables_enabled: bool,
 ) -> CalcEvalScopeDecision {
-    let prev_changed_had_assignment = contains_variable_assignment(prev_changed_lines);
-    let prev_changed_had_builtin_formula = contains_builtin_formula(prev_changed_lines);
-    decide_eval_scope_with_flags(
+    decide_eval_scope_with_mask(
         eval_lines,
-        prev_changed_had_assignment,
-        prev_changed_had_builtin_formula,
+        prev_changed_lines,
         has_prev,
-        variables_enabled,
+        CalcFeatureMask {
+            math_enabled: true,
+            table_enabled: true,
+            variables_enabled,
+        },
     )
+}
+
+pub fn decide_eval_scope_with_mask(
+    eval_lines: &[String],
+    prev_changed_lines: &[String],
+    has_prev: bool,
+    mask: CalcFeatureMask,
+) -> CalcEvalScopeDecision {
+    let prev_changed_had_assignment =
+        contains_variable_assignment_with_mask(prev_changed_lines, mask);
+    let prev_changed_had_builtin_formula =
+        contains_builtin_formula_with_mask(prev_changed_lines, mask);
+    let touches_any_assignment = mask.variables_active()
+        && (contains_variable_assignment_with_mask(eval_lines, mask)
+            || prev_changed_had_assignment);
+    let touches_builtin_formula =
+        contains_builtin_formula_with_mask(eval_lines, mask) || prev_changed_had_builtin_formula;
+    let can_use_partial = has_prev && !touches_any_assignment && !touches_builtin_formula;
+    CalcEvalScopeDecision {
+        touches_any_assignment,
+        touches_builtin_formula,
+        can_use_partial,
+    }
 }
 
 pub fn decide_eval_scope_with_flags(
@@ -721,10 +833,16 @@ pub fn decide_eval_scope_with_flags(
     has_prev: bool,
     variables_enabled: bool,
 ) -> CalcEvalScopeDecision {
-    let touches_any_assignment = variables_enabled
-        && (contains_variable_assignment(eval_lines) || prev_changed_had_assignment);
+    let mask = CalcFeatureMask {
+        math_enabled: true,
+        table_enabled: true,
+        variables_enabled,
+    };
+    let touches_any_assignment = mask.variables_active()
+        && (contains_variable_assignment_with_mask(eval_lines, mask)
+            || prev_changed_had_assignment);
     let touches_builtin_formula =
-        contains_builtin_formula(eval_lines) || prev_changed_had_builtin_formula;
+        contains_builtin_formula_with_mask(eval_lines, mask) || prev_changed_had_builtin_formula;
     let can_use_partial = has_prev && !touches_any_assignment && !touches_builtin_formula;
     CalcEvalScopeDecision {
         touches_any_assignment,
@@ -782,13 +900,25 @@ fn parse_variable_assignment_name_rhs(input: &str) -> Option<(String, String)> {
 }
 
 pub fn assignment_name(line: &str) -> Option<String> {
-    if let Some(eval_target) = line_for_calc_evaluation_slice(line) {
+    assignment_name_with_mask(line, CalcFeatureMask::default())
+}
+
+pub fn assignment_name_with_mask(line: &str, mask: CalcFeatureMask) -> Option<String> {
+    if !mask.variables_active() {
+        return None;
+    }
+
+    if is_table_line(line) && !mask.table_active() {
+        return None;
+    }
+
+    if let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) {
         if let Some((name, _)) = parse_variable_assignment_name_rhs(eval_target.trim()) {
             return Some(name);
         }
     }
 
-    if is_table_line(line) {
+    if mask.table_active() && is_table_line(line) {
         let mut pipes = Vec::new();
         for (idx, b) in line.as_bytes().iter().enumerate() {
             if *b == b'|' {
@@ -819,10 +949,14 @@ pub fn assignment_name(line: &str) -> Option<String> {
 }
 
 pub fn collect_assignment_names(lines: &[String]) -> Vec<String> {
+    collect_assignment_names_with_mask(lines, CalcFeatureMask::default())
+}
+
+pub fn collect_assignment_names_with_mask(lines: &[String], mask: CalcFeatureMask) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     for line in lines {
-        let Some(name) = assignment_name(line) else {
+        let Some(name) = assignment_name_with_mask(line, mask) else {
             continue;
         };
         if seen.insert(name.clone()) {
@@ -838,10 +972,13 @@ struct VariableDependencyDef {
     rhs: String,
 }
 
-fn collect_variable_dependency_defs(lines: &[String]) -> HashMap<String, VariableDependencyDef> {
+fn collect_variable_dependency_defs(
+    lines: &[String],
+    mask: CalcFeatureMask,
+) -> HashMap<String, VariableDependencyDef> {
     let mut defs = HashMap::new();
     for (line_idx, line) in lines.iter().enumerate() {
-        let Some(eval_target) = line_for_calc_evaluation_slice(line) else {
+        let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) else {
             continue;
         };
         let Some((name, rhs)) = parse_variable_assignment_name_rhs(eval_target.trim()) else {
@@ -879,7 +1016,15 @@ fn expression_references_any(
         .any(|m| affected_variables.contains(&expression[m.start()..m.end()].to_ascii_lowercase()))
 }
 
-fn table_range_maybe_impacts_formulas(lines: &[String], from: usize, to: usize) -> bool {
+fn table_range_maybe_impacts_formulas(
+    lines: &[String],
+    from: usize,
+    to: usize,
+    mask: CalcFeatureMask,
+) -> bool {
+    if !mask.table_active() {
+        return false;
+    }
     if from >= to {
         return false;
     }
@@ -893,7 +1038,11 @@ fn formula_dependency_window(
     lines: &[String],
     changed_from: usize,
     changed_to: usize,
+    mask: CalcFeatureMask,
 ) -> Option<(usize, usize)> {
+    if !mask.table_active() {
+        return None;
+    }
     if changed_from >= changed_to {
         return None;
     }
@@ -984,11 +1133,12 @@ fn variable_dependency_window(
     changed_to: usize,
     prev_changed_assignment_names: &[String],
     prev_changed_had_assignment: bool,
+    mask: CalcFeatureMask,
 ) -> Option<(usize, usize)> {
     let mut changed_variables: HashSet<String> = HashSet::new();
 
     if let Some(slice) = lines.get(changed_from..changed_to) {
-        for name in collect_assignment_names(slice) {
+        for name in collect_assignment_names_with_mask(slice, mask) {
             changed_variables.insert(name);
         }
     }
@@ -1005,7 +1155,7 @@ fn variable_dependency_window(
         return None;
     }
 
-    let defs = collect_variable_dependency_defs(lines);
+    let defs = collect_variable_dependency_defs(lines, mask);
     if defs.is_empty() {
         return Some((0, lines.len()));
     }
@@ -1062,7 +1212,7 @@ fn variable_dependency_window(
         // Table rows may contain multiple formula cells. `line_for_calc_evaluation`
         // intentionally returns at most one cell expression, which is not enough
         // for dependency tracking. Scan every formula segment first.
-        if is_table_line(line) {
+        if mask.table_active() && is_table_line(line) {
             let formula_segments = find_table_formula_segments(line);
             if !formula_segments.is_empty() {
                 let mut line_hits_dependency = false;
@@ -1092,7 +1242,7 @@ fn variable_dependency_window(
             }
         }
 
-        let eval_target = line_for_calc_evaluation(line);
+        let eval_target = line_for_calc_evaluation_with_mask(line, mask);
         let trimmed = eval_target.trim();
         if trimmed.is_empty() {
             continue;
@@ -1121,20 +1271,93 @@ pub fn decide_eval_window(
     has_prev: bool,
     variables_enabled: bool,
 ) -> CalcEvalWindowDecision {
-    let prev_changed_assignment_names = collect_assignment_names(prev_changed_lines);
-    let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
-        || contains_variable_assignment(prev_changed_lines);
-    let prev_changed_had_builtin_formula = contains_builtin_formula(prev_changed_lines);
-    decide_eval_window_with_flags(
+    decide_eval_window_with_mask(
         lines,
         changed_from,
         changed_to,
-        &prev_changed_assignment_names,
-        prev_changed_had_assignment,
-        prev_changed_had_builtin_formula,
+        prev_changed_lines,
         has_prev,
-        variables_enabled,
+        CalcFeatureMask {
+            math_enabled: true,
+            table_enabled: true,
+            variables_enabled,
+        },
     )
+}
+
+pub fn decide_eval_window_with_mask(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_lines: &[String],
+    has_prev: bool,
+    mask: CalcFeatureMask,
+) -> CalcEvalWindowDecision {
+    let prev_changed_assignment_names =
+        collect_assignment_names_with_mask(prev_changed_lines, mask);
+    let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
+        || contains_variable_assignment_with_mask(prev_changed_lines, mask);
+    let prev_changed_had_builtin_formula =
+        contains_builtin_formula_with_mask(prev_changed_lines, mask);
+
+    let line_count = lines.len();
+    let mut eval_from = changed_from.min(line_count);
+    let mut eval_to = changed_to.min(line_count).max(eval_from);
+
+    let changed_lines: &[String] = lines.get(eval_from..eval_to).unwrap_or(&[]);
+    let touches_any_assignment = mask.variables_active()
+        && (contains_variable_assignment_with_mask(changed_lines, mask)
+            || prev_changed_had_assignment);
+    let touches_builtin_formula =
+        contains_builtin_formula_with_mask(changed_lines, mask) || prev_changed_had_builtin_formula;
+
+    if !has_prev {
+        return CalcEvalWindowDecision {
+            eval_from: 0,
+            eval_to: line_count,
+            touches_any_assignment,
+            touches_builtin_formula,
+            can_use_partial: false,
+        };
+    }
+
+    if touches_any_assignment {
+        if let Some((from, to)) = variable_dependency_window(
+            lines,
+            eval_from,
+            eval_to,
+            &prev_changed_assignment_names,
+            prev_changed_had_assignment,
+            mask,
+        ) {
+            eval_from = eval_from.min(from);
+            eval_to = eval_to.max(to);
+        } else if prev_changed_had_assignment {
+            eval_from = 0;
+            eval_to = line_count;
+        }
+    }
+
+    let maybe_formula_deps = touches_builtin_formula
+        || prev_changed_had_builtin_formula
+        || table_range_maybe_impacts_formulas(lines, eval_from, eval_to, mask);
+    if maybe_formula_deps {
+        if let Some((from, to)) = formula_dependency_window(lines, eval_from, eval_to, mask) {
+            eval_from = eval_from.min(from);
+            eval_to = eval_to.max(to);
+        } else if touches_builtin_formula || prev_changed_had_builtin_formula {
+            eval_from = 0;
+            eval_to = line_count;
+        }
+    }
+
+    CalcEvalWindowDecision {
+        eval_from,
+        eval_to,
+        touches_any_assignment,
+        touches_builtin_formula,
+        can_use_partial: true,
+    }
 }
 
 pub fn decide_eval_window_with_flags(
@@ -1146,16 +1369,23 @@ pub fn decide_eval_window_with_flags(
     prev_changed_had_builtin_formula: bool,
     has_prev: bool,
     variables_enabled: bool,
+    table_enabled: bool,
 ) -> CalcEvalWindowDecision {
     let line_count = lines.len();
     let mut eval_from = changed_from.min(line_count);
     let mut eval_to = changed_to.min(line_count).max(eval_from);
+    let mask = CalcFeatureMask {
+        math_enabled: true,
+        table_enabled,
+        variables_enabled,
+    };
 
     let changed_lines: &[String] = lines.get(eval_from..eval_to).unwrap_or(&[]);
-    let touches_any_assignment = variables_enabled
-        && (contains_variable_assignment(changed_lines) || prev_changed_had_assignment);
+    let touches_any_assignment = mask.variables_active()
+        && (contains_variable_assignment_with_mask(changed_lines, mask)
+            || prev_changed_had_assignment);
     let touches_builtin_formula =
-        contains_builtin_formula(changed_lines) || prev_changed_had_builtin_formula;
+        contains_builtin_formula_with_mask(changed_lines, mask) || prev_changed_had_builtin_formula;
 
     if !has_prev {
         return CalcEvalWindowDecision {
@@ -1174,6 +1404,7 @@ pub fn decide_eval_window_with_flags(
             eval_to,
             prev_changed_assignment_names,
             prev_changed_had_assignment,
+            mask,
         ) {
             eval_from = eval_from.min(from);
             eval_to = eval_to.max(to);
@@ -1185,9 +1416,9 @@ pub fn decide_eval_window_with_flags(
 
     let maybe_formula_deps = touches_builtin_formula
         || prev_changed_had_builtin_formula
-        || table_range_maybe_impacts_formulas(lines, eval_from, eval_to);
+        || table_range_maybe_impacts_formulas(lines, eval_from, eval_to, mask);
     if maybe_formula_deps {
-        if let Some((from, to)) = formula_dependency_window(lines, eval_from, eval_to) {
+        if let Some((from, to)) = formula_dependency_window(lines, eval_from, eval_to, mask) {
             eval_from = eval_from.min(from);
             eval_to = eval_to.max(to);
         } else if touches_builtin_formula || prev_changed_had_builtin_formula {
@@ -1841,6 +2072,32 @@ mod tests {
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 5);
+    }
+
+    #[test]
+    fn decide_eval_window_with_table_module_off_does_not_expand_for_table_formula_dependencies() {
+        let lines = vec![
+            "var := 0.5".to_string(),
+            "| item | value | total |".to_string(),
+            "| ---- | ----- | ----- |".to_string(),
+            "| a | 10 | :=sum_col() * var |".to_string(),
+        ];
+        let prev_changed = vec!["var := 0.4".to_string()];
+        let decision = decide_eval_window_with_mask(
+            &lines,
+            0,
+            1,
+            &prev_changed,
+            true,
+            CalcFeatureMask {
+                math_enabled: true,
+                table_enabled: false,
+                variables_enabled: true,
+            },
+        );
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 0);
+        assert_eq!(decision.eval_to, 1);
     }
 
     #[test]

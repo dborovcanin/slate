@@ -34,12 +34,14 @@ pub async fn evaluate_lines(lines: Vec<String>) -> Result<Vec<Option<String>>, S
 pub async fn evaluate_note_context(
     lines: Vec<String>,
     variables_enabled: Option<bool>,
+    table_enabled: Option<bool>,
     eval_from: Option<usize>,
     eval_to: Option<usize>,
 ) -> Result<NoteEvaluationResult, String> {
     let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let options = NoteEvaluationOptions {
         variables_enabled: variables_enabled.unwrap_or(true),
+        table_enabled: table_enabled.unwrap_or(true),
         eval_range,
     };
     let generation = start_eval_generation();
@@ -89,6 +91,7 @@ pub async fn evaluate_note_context_delta(
     core: State<'_, AppCore>,
     note_id: String,
     variables_enabled: Option<bool>,
+    table_enabled: Option<bool>,
     eval_from: Option<usize>,
     eval_to: Option<usize>,
 ) -> Result<NoteEvaluationResult, String> {
@@ -107,6 +110,7 @@ pub async fn evaluate_note_context_delta(
     let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let options = NoteEvaluationOptions {
         variables_enabled: variables_enabled.unwrap_or(true),
+        table_enabled: table_enabled.unwrap_or(true),
         eval_range,
     };
     let generation = start_eval_generation();

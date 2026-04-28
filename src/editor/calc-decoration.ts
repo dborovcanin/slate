@@ -51,6 +51,7 @@ import {
 
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
+  tableEnabled?: boolean;
   getActiveNoteId?: () => string | null;
 }
 
@@ -1132,6 +1133,7 @@ function variableIndexEqual(
 
 function buildCalcPlugin(options: CalcExtensionOptions) {
   const variablesEnabled = options.variablesEnabled ?? true;
+  const tableEnabled = options.tableEnabled ?? true;
   const getActiveNoteId = options.getActiveNoteId;
 
   return ViewPlugin.define((view) => {
@@ -1218,6 +1220,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             prevChangedLines,
             hasPrev,
             variablesEnabled,
+            tableEnabled,
           );
           const canUsePartial = evalWindow.canUsePartial;
           const noteId = getActiveNoteId?.() ?? null;
@@ -1248,18 +1251,38 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             if (noteId && serverCacheSeeded) {
               // Delta path: sync only the changed window, then eval.
               await syncNoteLines(noteId, plan.evalFrom, prevChangedTo, plan.evalLines);
-              evaluated = await evaluateNoteContextDelta(noteId, variablesEnabled, { evalFrom, evalTo });
+              evaluated = await evaluateNoteContextDelta(
+                noteId,
+                variablesEnabled,
+                { evalFrom, evalTo },
+                tableEnabled,
+              );
             } else {
-              evaluated = await evaluateNoteContext(nextLines, variablesEnabled, { evalFrom, evalTo });
+              evaluated = await evaluateNoteContext(
+                nextLines,
+                variablesEnabled,
+                { evalFrom, evalTo },
+                tableEnabled,
+              );
             }
           } else {
             if (noteId) {
               // Full sync — seeds the server cache for future delta calls.
               await syncNoteLines(noteId, 0, Number.MAX_SAFE_INTEGER, nextLines);
               serverCacheSeeded = true;
-              evaluated = await evaluateNoteContextDelta(noteId, variablesEnabled);
+              evaluated = await evaluateNoteContextDelta(
+                noteId,
+                variablesEnabled,
+                undefined,
+                tableEnabled,
+              );
             } else {
-              evaluated = await evaluateNoteContext(nextLines, variablesEnabled);
+              evaluated = await evaluateNoteContext(
+                nextLines,
+                variablesEnabled,
+                undefined,
+                tableEnabled,
+              );
             }
           }
 

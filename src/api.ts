@@ -279,10 +279,12 @@ export function evaluateNoteContext(
   lines: string[],
   variablesEnabled = true,
   range?: NoteEvaluationRange,
+  tableEnabled = true,
 ): Promise<NoteEvaluationResult> {
   return invoke<NoteEvaluationResult>("evaluate_note_context", {
     lines,
     variablesEnabled,
+    tableEnabled,
     evalFrom: range?.evalFrom,
     evalTo: range?.evalTo,
   });
@@ -301,10 +303,12 @@ export function evaluateNoteContextDelta(
   noteId: string,
   variablesEnabled = true,
   range?: NoteEvaluationRange,
+  tableEnabled = true,
 ): Promise<NoteEvaluationResult> {
   return invoke<NoteEvaluationResult>("evaluate_note_context_delta", {
     noteId,
     variablesEnabled,
+    tableEnabled,
     evalFrom: range?.evalFrom,
     evalTo: range?.evalTo,
   });

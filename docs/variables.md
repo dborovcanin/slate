@@ -6,6 +6,7 @@ This document defines the shared variable behavior used by the Tauri UI and Rust
 
 - Assignment form: `name := expression`
 - `:=` may be written with or without spaces (`name:=expression` also works)
+- Table formula form: cell-local `:=expression` (the `:=` must be the first non-space token in the cell)
 - Variable names:
   - case-insensitive
   - may contain ASCII letters, digits, underscore, and spaces
@@ -24,8 +25,19 @@ total := subtotal + subtotal * tax rate
 - Scope is note-local (single note/document).
 - Definitions are global inside the note (not limited to paragraph/list/table block).
 - If a variable is assigned multiple times, the last assignment in the note wins.
-- Runtime enablement is per-note: `modules.variables` on the active note controls variable eval/autocomplete in GUI and TUI.
+- Runtime enablement is per-note. Calc behavior is gated by note modules:
+  - `modules.math` is the master switch for calc evaluation.
+  - `modules.variables` controls variable definition/reference resolution and autocomplete.
+  - `modules.table` controls table formula parsing/evaluation.
 - `[editor.modules]` config values are defaults for newly created notes.
+
+Module behavior matrix:
+
+- `math=off` (any `variables/table` values): no calc evaluation.
+- `math=on`, `variables=off`, `table=off`: plain/list arithmetic only.
+- `math=on`, `variables=on`, `table=off`: plain/list arithmetic + variable assignments/references; table formulas ignored.
+- `math=on`, `variables=off`, `table=on`: table formulas and builtin table functions work; variable refs stay unresolved.
+- `math=on`, `variables=on`, `table=on`: full calc behavior.
 
 ## Evaluation
 
@@ -33,8 +45,9 @@ total := subtotal + subtotal * tax rate
 - Non-assignment lines are evaluated in line context:
   - plain line: whole line
   - list/checklist line: list body expression
-  - table line: a single calc-like cell (if exactly one eligible cell exists)
+  - table line: every `:=...` formula cell in the row (left-to-right)
 - Variables are resolved before expression evaluation.
+- Table formula cells are never treated as variable definitions (`:=expr` in a cell is always a formula, never `name := expr`).
 - Unit/currency conversion assignments are normalized to numeric-only values when stored.
 
 Example:

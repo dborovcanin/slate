@@ -842,14 +842,19 @@ pub fn wasm_calc_decide_eval_scope(
     prev_changed_lines: JsValue,
     has_prev: bool,
     variables_enabled: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let eval_lines = js_strings(eval_lines)?;
     let prev_changed_lines = js_strings(prev_changed_lines)?;
-    let decision = calc_plan::decide_eval_scope(
+    let decision = calc_plan::decide_eval_scope_with_mask(
         &eval_lines,
         &prev_changed_lines,
         has_prev,
-        variables_enabled,
+        calc_plan::CalcFeatureMask {
+            math_enabled: true,
+            table_enabled,
+            variables_enabled,
+        },
     );
     calc_eval_scope_decision_to_js(&decision)
 }
@@ -862,16 +867,21 @@ pub fn wasm_calc_decide_eval_window(
     prev_changed_lines: JsValue,
     has_prev: bool,
     variables_enabled: bool,
+    table_enabled: bool,
 ) -> Option<JsValue> {
     let lines = js_strings(lines)?;
     let prev_changed_lines = js_strings(prev_changed_lines)?;
-    let decision = calc_plan::decide_eval_window(
+    let decision = calc_plan::decide_eval_window_with_mask(
         &lines,
         changed_from,
         changed_to,
         &prev_changed_lines,
         has_prev,
-        variables_enabled,
+        calc_plan::CalcFeatureMask {
+            math_enabled: true,
+            table_enabled,
+            variables_enabled,
+        },
     );
     calc_eval_window_decision_to_js(&decision)
 }

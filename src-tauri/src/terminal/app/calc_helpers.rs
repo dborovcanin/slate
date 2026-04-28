@@ -37,12 +37,14 @@ pub(super) fn compute_calc_data(
     engine: &CalcEngine,
     lines: &[String],
     variables_enabled: bool,
+    table_enabled: bool,
     eval_range: Option<(usize, usize)>,
 ) -> CalcData {
     let result = engine.evaluate_note_context(
         lines,
         app_core::calc::NoteEvaluationOptions {
             variables_enabled,
+            table_enabled,
             eval_range,
         },
     );
@@ -77,7 +79,7 @@ pub(super) fn compute_calc_results(
     variables_enabled: bool,
 ) -> Vec<Option<String>> {
     let engine = CalcEngine::new();
-    compute_calc_data(&engine, lines, variables_enabled, None).line_results
+    compute_calc_data(&engine, lines, variables_enabled, true, None).line_results
 }
 
 /// Decide whether an already-eligible line's trailing ` = <literal>` should
