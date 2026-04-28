@@ -1150,6 +1150,9 @@ impl TerminalApp {
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
         let body = join_lines(&self.lines);
+        if let Some(path) = crate::markdown_file_path_from_note_id(&self.active_note.id) {
+            crate::write_markdown_file(&path, &body)?;
+        }
         let mut saved = db.save_note(&self.active_note.id, &body)?;
         // The returned body duplicates what we already hold in `self.lines`;
         // drop it to keep memory usage flat.

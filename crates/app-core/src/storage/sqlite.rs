@@ -2529,7 +2529,10 @@ mod tests {
             .search_notes_content("budget", 10)
             .expect("search succeeds");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].line_number, 1, "single-line match should resolve to line 1");
+        assert_eq!(
+            hits[0].line_number, 1,
+            "single-line match should resolve to line 1"
+        );
         assert!(
             hits[0].snippet.contains("[[") && hits[0].snippet.contains("]]"),
             "snippet should contain highlight markers, got: {:?}",

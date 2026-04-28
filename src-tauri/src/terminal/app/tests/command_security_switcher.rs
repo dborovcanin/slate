@@ -60,6 +60,59 @@ fn write_command_saves_active_note_without_quit() {
 }
 
 #[test]
+fn write_command_syncs_markdown_file_backed_note() {
+    let db_path = temp_db_path();
+    let db = Db::open(db_path.clone()).expect("db opens");
+    let markdown_path =
+        std::env::temp_dir().join(format!("note-terminal-mdfile-{}.md", Ulid::new()));
+    fs::write(&markdown_path, "file body").expect("markdown seed");
+    let note_id = crate::note_id_for_markdown_file(&markdown_path);
+    let opts = TerminalOptions {
+        create_new: false,
+        note_id: Some(note_id.clone()),
+        list_only: false,
+    };
+    let (mut app, _) = TerminalApp::new_with_startup_metrics(
+        &db,
+        &opts,
+        true,
+        false,
+        true,
+        true,
+        3,
+        crate::terminal::render::RenderPalette::default(),
+        "%Y-%m-%d".to_string(),
+        "%Y-%m-%d %H:%M".to_string(),
+    )
+    .expect("terminal app");
+    assert_eq!(app.lines, vec!["file body".to_string()]);
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.lines = vec!["updated body".to_string()];
+    app.dirty = true;
+
+    app.execute_terminal_command(&db, "w");
+
+    assert_eq!(app.status, "written");
+    assert!(!app.quit);
+    assert!(!app.dirty);
+    assert_eq!(
+        fs::read_to_string(&markdown_path).expect("markdown read"),
+        "updated body"
+    );
+    let persisted = db
+        .get_note(&note_id)
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted.body, "updated body");
+
+    drop(app);
+    drop(db);
+    let _ = fs::remove_file(&markdown_path);
+    cleanup_db_files(&db_path);
+}
+
+#[test]
 fn write_quit_command_saves_then_exits() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;

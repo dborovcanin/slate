@@ -52,7 +52,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 **Optional terminal mode**
 - Enable with `[editor] terminal_mode = true`
 - Or run explicitly with `slate --terminal`
-- Open markdown files in GUI mode with `slate path/to/file.md` (supports `.md`, `.markdown`, `.mdown`, `.mkd`; edits are saved back to that file)
+- Open markdown files with `slate path/to/file.md` (GUI) or `slate --terminal path/to/file.md` (TUI); supports `.md`, `.markdown`, `.mdown`, `.mkd` and saves edits back to that file
 - Runs as a standalone full-screen terminal app (no Tauri window)
 - Built-in editor with note list/switcher and status bar
 - Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`

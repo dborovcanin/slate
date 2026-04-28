@@ -44,12 +44,7 @@ pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<No
         .state::<crate::StartupMarkdownFileState>()
         .take_startup_file();
     if let Some(path) = startup_markdown {
-        let body = if path.exists() {
-            std::fs::read_to_string(&path)
-                .map_err(|e| format!("Failed to read markdown file '{}': {e}", path.display()))?
-        } else {
-            String::new()
-        };
+        let body = crate::read_markdown_file(&path)?;
         let note_id = crate::note_id_for_markdown_file(&path);
         if let Some(existing) = core.db().get_note(&note_id)? {
             if existing.body == body {
@@ -89,16 +84,7 @@ pub fn save_note(
     body: String,
 ) -> Result<Note, String> {
     if let Some(path) = crate::markdown_file_path_from_note_id(&id) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "Failed to create parent directory for markdown file '{}': {e}",
-                    path.display()
-                )
-            })?;
-        }
-        std::fs::write(&path, &body)
-            .map_err(|e| format!("Failed to write markdown file '{}': {e}", path.display()))?;
+        crate::write_markdown_file(&path, &body)?;
     }
     let note = core.db().save_note(&id, &body)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);

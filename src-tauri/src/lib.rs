@@ -105,6 +105,28 @@ fn resolve_markdown_file_path(raw: &str) -> Result<PathBuf, String> {
     }
 }
 
+pub(crate) fn read_markdown_file(path: &Path) -> Result<String, String> {
+    if path.exists() {
+        std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read markdown file '{}': {e}", path.display()))
+    } else {
+        Ok(String::new())
+    }
+}
+
+pub(crate) fn write_markdown_file(path: &Path, body: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create parent directory for markdown file '{}': {e}",
+                path.display()
+            )
+        })?;
+    }
+    std::fs::write(path, body)
+        .map_err(|e| format!("Failed to write markdown file '{}': {e}", path.display()))
+}
+
 fn stdin_is_tty() -> bool {
     std::io::stdin().is_terminal()
 }
@@ -182,7 +204,7 @@ fn print_help() {
 Modes:
   --gui       Force Tauri GUI mode
   --terminal  Force terminal editor mode (no window UI, Unix only)
-  <file.md>   Open a markdown file in GUI mode and sync edits back to disk
+  <file.md>   Open a markdown file (GUI by default; use --terminal for TUI)
   append      Append stdin to a note and exit
   imap-sync   Pull messages from configured IMAP inbox once
 
@@ -248,7 +270,6 @@ fn parse_args(
                     match resolve_markdown_file_path(candidate) {
                         Ok(path) => {
                             startup_markdown_file = Some(path);
-                            force_gui = true;
                             i += 1;
                             continue;
                         }
@@ -268,16 +289,18 @@ fn parse_args(
         force_terminal = true;
     }
     if startup_markdown_file.is_some() {
-        if force_append || force_imap || force_terminal {
+        if force_append || force_imap {
             return Err(
-                "Cannot combine markdown file open with append, imap-sync, or terminal flags"
-                    .to_string(),
+                "Cannot combine markdown file open with append or imap-sync flags".to_string(),
             );
         }
         if opts.create_new || opts.list_only || saw_id_flag {
             return Err(
                 "Cannot combine markdown file open with terminal note selection flags".to_string(),
             );
+        }
+        if !force_terminal {
+            force_gui = true;
         }
     }
 
@@ -316,6 +339,12 @@ fn parse_args(
             "Append mode expects piped stdin (example: cmd | slate append [--id <note-id>])."
                 .to_string(),
         );
+    }
+
+    if mode == Mode::Terminal {
+        if let Some(path) = startup_markdown_file.take() {
+            opts.note_id = Some(note_id_for_markdown_file(&path));
+        }
     }
 
     Ok((mode, opts, startup_markdown_file))
@@ -662,13 +691,17 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_markdown_file_with_terminal_flag() {
-        let err = parse_args(
+    fn parse_supports_opening_markdown_file_in_terminal_mode() {
+        let (mode, opts, startup_file) = parse_args(
             &["--terminal".to_string(), "notes.md".to_string()],
             false,
             true,
         )
-        .expect_err("expected err");
-        assert!(err.contains("Cannot combine markdown file open"));
+        .expect("parsed");
+        assert_eq!(mode, Mode::Terminal);
+        assert_eq!(startup_file, None);
+        let expected_path = std::env::current_dir().expect("cwd").join("notes.md");
+        let expected_note_id = note_id_for_markdown_file(&expected_path);
+        assert_eq!(opts.note_id.as_deref(), Some(expected_note_id.as_str()));
     }
 }

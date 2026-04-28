@@ -855,6 +855,15 @@ fn select_note(db: &Db, opts: &TerminalOptions, config: &ThemeConfig) -> Result<
     }
 
     if let Some(id) = &opts.note_id {
+        if let Some(path) = crate::markdown_file_path_from_note_id(id) {
+            let body = crate::read_markdown_file(&path)?;
+            if let Some(existing) = db.get_note(id)? {
+                if existing.body == body {
+                    return Ok(existing);
+                }
+            }
+            return db.save_note(id, &body);
+        }
         return db
             .get_note(id)?
             .ok_or_else(|| format!("Note not found: {id}"));
