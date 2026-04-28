@@ -487,10 +487,15 @@ impl CalcEngine {
             };
 
             // Multi-cell table evaluation: walk every formula cell L→R.
-            if table_segments
-                .iter()
-                .any(|(expr, _)| find_builtin_formula_calls(expr).first().is_some())
-            {
+            // Triggered by any builtin call OR an explicit := prefix.
+            if table_segments.iter().any(|(expr, _)| {
+                find_builtin_formula_calls(expr).first().is_some()
+                    || expr
+                        .trim()
+                        .strip_prefix(":=")
+                        .map(|rest| !rest.trim_start().is_empty())
+                        .unwrap_or(false)
+            }) {
                 let working = ensure_working!();
                 let mut first_value: Option<String> = None;
                 for (expression, cell_idx) in table_segments {
@@ -643,9 +648,14 @@ fn table_expression_segments(line: &str, allow_assignments: bool) -> Vec<(String
             continue;
         }
 
-        // A cell is a "formula cell" if it contains *any* builtin formula
-        // call — including compound expressions like `=sum_col() + 3 + a`.
-        if !find_builtin_formula_calls(trimmed).is_empty() {
+        // A cell is a "formula cell" if it contains any builtin formula call
+        // (e.g. `sum_col() + 3`) or starts with the explicit `:=` prefix
+        // (e.g. `:=5*sum_col()+var` or `:=var`).
+        let is_colon_eq = trimmed
+            .strip_prefix(":=")
+            .map(|rest| !rest.trim_start().is_empty())
+            .unwrap_or(false);
+        if !find_builtin_formula_calls(trimmed).is_empty() || is_colon_eq {
             formula_segments.push((trimmed.to_string(), cell_idx));
             continue;
         }
@@ -1182,9 +1192,35 @@ fn evaluate_table_formula(
     ctx: &mut fend_core::Context,
 ) -> Option<String> {
     let formula_col = table_cell_index?;
-    let calls = find_builtin_formula_calls(expression);
-    if calls.is_empty() {
+
+    // Strip the leading `:=` formula prefix if present.  This keeps fend
+    // from ever seeing the `:=` characters and lets callers write either
+    // `:=sum_col()` or `:=5*sum_col()+var` uniformly.
+    let trimmed = expression.trim();
+    let (expression, had_prefix) = if let Some(rest) = trimmed.strip_prefix(":=") {
+        (rest.trim_start(), true)
+    } else {
+        (trimmed, false)
+    };
+
+    if expression.is_empty() {
         return None;
+    }
+
+    let calls = find_builtin_formula_calls(expression);
+
+    // When no builtin calls exist but the cell had an explicit := prefix,
+    // evaluate the stripped expression as a plain arithmetic/variable expression.
+    if calls.is_empty() {
+        if !had_prefix {
+            return None;
+        }
+        return if variables_enabled {
+            let resolver = resolver?;
+            evaluate_expression_with_variables(expression, resolver, ctx)
+        } else {
+            evaluate_single(expression, ctx)
+        };
     }
 
     let mut rewritten = String::with_capacity(expression.len() + calls.len() * 4);
@@ -1893,6 +1929,77 @@ mod tests {
             .unwrap_or_default();
         let n = extract_first_number(&val).unwrap_or(f64::NAN);
         assert!((n - (3.0 + 3.0 + 3.4)).abs() < 1e-6, "got {}", val);
+    }
+
+    #[test]
+    fn note_eval_table_colon_eq_prefix_arithmetic_before_builtin_with_variable() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "var := 3.4".to_string(),
+            "| value |".to_string(),
+            "| --- |".to_string(),
+            "| 1 |".to_string(),
+            "| 2 |".to_string(),
+            "| :=5*sum_col()+var |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let val = res.table_cell_results[5]
+            .iter()
+            .find(|c| c.cell_index == 0)
+            .map(|c| c.value.clone())
+            .unwrap_or_default();
+        let n = extract_first_number(&val).unwrap_or(f64::NAN);
+        // sum_col() = 3, expression = 5*3 + 3.4 = 18.4
+        assert!((n - (5.0 * 3.0 + 3.4)).abs() < 1e-6, "got {val}");
+    }
+
+    #[test]
+    fn note_eval_table_colon_eq_prefix_expression_no_builtin() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "multiplier := 4".to_string(),
+            "| a | b | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| 3 | 7 | :=multiplier * 2 + 1 |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let val = res.table_cell_results[3]
+            .iter()
+            .find(|c| c.cell_index == 2)
+            .map(|c| c.value.clone())
+            .unwrap_or_default();
+        let n = extract_first_number(&val).unwrap_or(f64::NAN);
+        assert!((n - 9.0).abs() < 1e-6, "got {val}");
+    }
+
+    #[test]
+    fn note_eval_table_colon_eq_prefix_variable_only() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "rate := 7.5".to_string(),
+            "| label | value |".to_string(),
+            "| --- | --- |".to_string(),
+            "| fee | :=rate |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let val = res.table_cell_results[3]
+            .iter()
+            .find(|c| c.cell_index == 1)
+            .map(|c| c.value.clone())
+            .unwrap_or_default();
+        let n = extract_first_number(&val).unwrap_or(f64::NAN);
+        assert!((n - 7.5).abs() < 1e-6, "got {val}");
+    }
+
+    #[test]
+    fn note_eval_table_colon_eq_prefix_does_not_define_variable() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| :=5+3 |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        // The := prefix is a formula marker, not a variable assignment.
+        assert!(res.variables.is_empty());
     }
 
     #[test]

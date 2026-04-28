@@ -503,6 +503,16 @@ pub fn contains_assignment_operator(text: &str) -> bool {
         if i + 2 < bytes.len() && bytes[i + 2] == b'=' {
             continue;
         }
+        // Require a word character (alphanumeric or _) before := so that a
+        // leading `:=` table formula prefix is not mistaken for an assignment.
+        let has_name_before = (0..i)
+            .rev()
+            .find(|&j| !bytes[j].is_ascii_whitespace())
+            .map(|j| bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_')
+            .unwrap_or(false);
+        if !has_name_before {
+            continue;
+        }
         return true;
     }
 
@@ -568,9 +578,17 @@ fn find_single_calc_table_cell_range(line: &str) -> Option<(usize, usize)> {
             continue;
         }
 
-        if is_builtin_formula(trimmed) {
+        // A cell starting with := (with non-empty content after) is an
+        // explicit formula cell — treat it like a builtin formula for the
+        // purpose of detection priority.
+        let is_colon_eq_formula = trimmed
+            .strip_prefix(":=")
+            .map(|rest| !rest.trim_start().is_empty())
+            .unwrap_or(false);
+
+        if is_builtin_formula(trimmed) || is_colon_eq_formula {
             formula_candidates.push((from_byte, to_byte));
-        } else {
+        } else if has_calc_signal(trimmed) {
             candidates.push((from_byte, to_byte));
         }
     }
@@ -1220,7 +1238,11 @@ pub fn find_table_formula_segments(line: &str) -> Vec<TableFormulaSegment> {
         }
 
         let labels = builtin_formula_labels_in_text(trimmed);
-        if labels.is_empty() {
+        let is_colon_eq_formula = trimmed
+            .strip_prefix(":=")
+            .map(|rest| !rest.trim_start().is_empty())
+            .unwrap_or(false);
+        if labels.is_empty() && !is_colon_eq_formula {
             continue;
         }
 
@@ -1488,6 +1510,42 @@ pub fn compute_calc_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contains_assignment_operator_requires_word_char_before_colon_eq() {
+        // Variable assignments — must match.
+        assert!(contains_assignment_operator("x := 5"));
+        assert!(contains_assignment_operator("total cost := 12"));
+        assert!(contains_assignment_operator("| total := 12 |"));
+        // := formula prefix — must NOT match.
+        assert!(!contains_assignment_operator(":=sum_col()"));
+        assert!(!contains_assignment_operator(":=5+var"));
+        assert!(!contains_assignment_operator(":=var"));
+        assert!(!contains_assignment_operator("| :=sum_col() |"));
+        assert!(!contains_assignment_operator("  := 5"));
+    }
+
+    #[test]
+    fn find_table_formula_segments_detects_colon_eq_prefix_cells() {
+        let line = "| label | :=sum_col()+3 |";
+        let segs = find_table_formula_segments(line);
+        assert_eq!(segs.len(), 1);
+        let seg = &segs[0];
+        assert_eq!(&line[seg.from_byte..seg.to_byte], ":=sum_col()+3");
+        assert_eq!(seg.cell_index, 1);
+        // sum_col() label is still extracted from the expression text.
+        assert_eq!(seg.labels, vec!["sum_col()"]);
+    }
+
+    #[test]
+    fn find_table_formula_segments_detects_colon_eq_prefix_without_builtin() {
+        let line = "| a | :=5+var |";
+        let segs = find_table_formula_segments(line);
+        assert_eq!(segs.len(), 1);
+        let seg = &segs[0];
+        assert_eq!(&line[seg.from_byte..seg.to_byte], ":=5+var");
+        assert!(seg.labels.is_empty());
+    }
 
     #[test]
     fn table_formula_segment_detects_avg_col() {

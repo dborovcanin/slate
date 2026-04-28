@@ -128,6 +128,23 @@ Acceptance criteria:
 - Equivalent semantic outputs for shared calc scenarios.
 - Large-note responsiveness remains stable during incremental recalculation.
 
+### Table Formula Expressions
+
+Table cells support full arithmetic expressions using the `:=` prefix:
+
+- `:=sum_col() + var` — builtin aggregate plus a variable
+- `:=5 * sum_col() + var` — arithmetic before a function call
+- `:=avg_col() * 2 - offset` — compound expression with multiple terms
+- `:=var` — bare variable reference
+
+**Syntax rules:**
+
+- The `:=` prefix at the **start** of a cell (nothing before it) marks the cell as a formula expression. The content after `:=` is evaluated as an arithmetic expression.
+- `name :=` (with a name before `:=`) remains a variable assignment, unchanged.
+- Variable definitions (`name := expr`) cannot be created inside table cells; `:=expr` without a name is always a formula, never a definition.
+- Builtin functions (`sum_col()`, `avg_col()`, `sum_row()`, `avg_row()`) can appear anywhere in the expression and are substituted with their computed values before evaluation.
+- Variable references are resolved from the full document context.
+
 ## Cross-Subsystem Architecture Action Plan (Ordered)
 
 1. Define explicit migration boundary policy for the remaining semantics:
