@@ -375,6 +375,7 @@ Editor options:
 - `checklist_auto_reorder = true` automatically moves checked checklist items to the bottom and unchecked items to the top
 - `autosave = true` enables implicit saves in both GUI and terminal modes (idle flush + save-on-exit/switch flows)
 - when `autosave = false`, only explicit `:w` / `:wq` writes persist note body changes
+  - exception: `Ctrl+S` still performs a manual save in normal-mode/non-vim flows
 - `format_on_save = false` runs `:format` before save when enabled (Ctrl+S and autosave flush path)
 - `terminal_mode = true` makes `slate` default to terminal runtime (when launched from a TTY)
 - `vim_mode = true` enables modal Vim-style key mappings in GUI

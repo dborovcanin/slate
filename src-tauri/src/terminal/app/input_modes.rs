@@ -282,6 +282,12 @@ impl TerminalApp {
             return Ok(());
         }
 
+        if key == Key::Ctrl('s') {
+            self.save(db)?;
+            self.status = format!("saved {}", self.active_note.id);
+            return Ok(());
+        }
+
         if key == Key::Ctrl('p') {
             self.open_switcher(db)?;
             return Ok(());

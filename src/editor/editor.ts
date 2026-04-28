@@ -385,8 +385,10 @@ function buildEditorExtensions(options: EditorMountOptions): {
         { key: "Mod-ArrowRight", run: (view) => moveTableCellOrWord(view, false, false), preventDefault: true },
         {
           key: "Ctrl-s",
-          run: () => {
-            if (!currentAutosaveEnabled) return true;
+          run: (view) => {
+            const vimMode = view.dom.dataset.vimMode;
+            const allowManualSaveWithAutosaveOff = !vimMode || vimMode === "normal";
+            if (!currentAutosaveEnabled && !allowManualSaveWithAutosaveOff) return true;
             performFormatAndSave();
             return true;
           },

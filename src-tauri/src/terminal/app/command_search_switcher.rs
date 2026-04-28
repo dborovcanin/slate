@@ -10,6 +10,27 @@ use crate::terminal::{notifications, switcher};
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::time::{Duration, Instant};
 
+const SWITCHER_TITLE_MAX_CHARS: usize = 60;
+
+fn derive_switcher_title_from_lines(lines: &[String]) -> String {
+    for line in lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut out = String::new();
+        for (idx, ch) in trimmed.chars().enumerate() {
+            if idx >= SWITCHER_TITLE_MAX_CHARS {
+                out.push_str("...");
+                return out;
+            }
+            out.push(ch);
+        }
+        return out;
+    }
+    "Untitled".to_string()
+}
+
 // Ownership: switcher, command bar execution, and search workflows.
 impl TerminalApp {
     fn content_search_title_fallback_results(&self, query: &str) -> Vec<NoteSearchResult> {
@@ -404,7 +425,12 @@ impl TerminalApp {
         let note = if let Some(password) = password {
             db.unlock_note(note_id, password)?
         } else {
-            let Some(note) = db.get_note(note_id)? else {
+            let note = if crate::is_markdown_file_note_id(note_id) {
+                crate::markdown_file_note_from_note_id(note_id)?
+            } else {
+                db.get_note(note_id)?
+            };
+            let Some(note) = note else {
                 self.status = format!("note missing {}", note_id);
                 return Ok(());
             };
@@ -434,6 +460,11 @@ impl TerminalApp {
     pub(super) fn request_switcher_delete_confirmation(&mut self, db: &Db) {
         if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
             let item = &self.switcher_items[idx];
+            if crate::is_markdown_file_note_id(&item.id) {
+                self.status = "file-backed notes are not deleted via switcher".to_string();
+                self.switcher_delete_confirm = None;
+                return;
+            }
             let requires_password = match db.get_note_meta(&item.id) {
                 Ok(Some(note)) => matches!(
                     note.access_mode,
@@ -461,6 +492,11 @@ impl TerminalApp {
         note_title: &str,
         password: Option<&str>,
     ) -> Result<(), String> {
+        if crate::is_markdown_file_note_id(note_id) {
+            self.status = "file-backed notes are not deleted via switcher".to_string();
+            self.refresh_switcher_items(db)?;
+            return Ok(());
+        }
         let deleting_active = self.active_note.id == note_id;
         let deleted = db.delete_note(note_id, password)?;
         if !deleted {
@@ -1152,8 +1188,19 @@ impl TerminalApp {
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
         let body = join_lines(&self.lines);
-        if let Some(path) = crate::markdown_file_path_from_note_id(&self.active_note.id) {
+        if crate::is_markdown_file_note_id(&self.active_note.id) {
+            let path = crate::markdown_file_path_from_note_id(&self.active_note.id)
+                .ok_or_else(|| format!("Invalid markdown file note id: {}", self.active_note.id))?;
             crate::write_markdown_file(&path, &body)?;
+            let mut saved = crate::markdown_file_note_from_note_id(&self.active_note.id)?
+                .ok_or_else(|| format!("Invalid markdown file note id: {}", self.active_note.id))?;
+            saved.body = String::new();
+            self.active_note = saved;
+            self.dirty = false;
+            self.history
+                .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+            self.refresh_switcher_items(db)?;
+            return Ok(());
         }
         let mut saved = db.save_note(&self.active_note.id, &body)?;
         // The returned body duplicates what we already hold in `self.lines`;
@@ -1355,6 +1402,21 @@ impl TerminalApp {
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
         self.switcher_items = switcher::load_note_meta(db)?;
+        if !self
+            .switcher_items
+            .iter()
+            .any(|item| item.id == self.active_note.id)
+        {
+            self.switcher_items.insert(
+                0,
+                switcher::NoteMeta {
+                    id: self.active_note.id.clone(),
+                    title: derive_switcher_title_from_lines(&self.lines),
+                    access_mode: self.active_note.access_mode,
+                    is_unlocked: self.active_note.is_unlocked,
+                },
+            );
+        }
         if self.mode == UiMode::Switcher {
             self.recompute_switcher_matches();
         }

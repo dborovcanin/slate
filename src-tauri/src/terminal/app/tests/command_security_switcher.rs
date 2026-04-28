@@ -101,11 +101,8 @@ fn write_command_syncs_markdown_file_backed_note() {
         fs::read_to_string(&markdown_path).expect("markdown read"),
         "updated body"
     );
-    let persisted = db
-        .get_note(&note_id)
-        .expect("note lookup")
-        .expect("note exists");
-    assert_eq!(persisted.body, "updated body");
+    let persisted = db.get_note(&note_id).expect("note lookup");
+    assert!(persisted.is_none());
 
     drop(app);
     drop(db);
@@ -175,6 +172,30 @@ fn autosave_disabled_only_write_command_persists_changes() {
         .expect("note lookup")
         .expect("note exists");
     assert_eq!(persisted_after_write.body, "one updated");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn ctrl_s_in_normal_mode_still_saves_when_autosave_is_disabled() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+    app.lines = vec!["one updated".to_string()];
+    app.dirty = true;
+    app.autosave_enabled = false;
+
+    app.handle_normal_key(&db, Key::Ctrl('s'))
+        .expect("ctrl+s in normal mode should save");
+
+    assert_eq!(app.status, "saved n1");
+    assert!(!app.dirty);
+    let persisted = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted.body, "one updated");
 
     drop(app);
     drop(db);

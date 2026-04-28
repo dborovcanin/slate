@@ -32,10 +32,19 @@ pub struct NoteMeta {
     pub is_unlocked: bool,
 }
 
+fn note_identity_label(note_id: &str) -> String {
+    if let Some(path) = crate::markdown_file_path_from_note_id(note_id) {
+        path.display().to_string()
+    } else {
+        note_id.to_string()
+    }
+}
+
 pub fn load_note_meta(db: &crate::storage::Db) -> Result<Vec<NoteMeta>, String> {
     Ok(db
         .list_notes_meta()?
         .into_iter()
+        .filter(|n| !crate::is_markdown_file_note_id(&n.id))
         .map(|n| NoteMeta {
             title: n.title,
             id: n.id,
@@ -54,18 +63,23 @@ fn access_badge(note: &NoteMeta) -> Option<&'static str> {
 }
 
 pub fn print_note_list(db: &crate::storage::Db) -> Result<(), String> {
-    let notes = db.list_notes_meta()?;
+    let notes = db
+        .list_notes_meta()?
+        .into_iter()
+        .filter(|note| !crate::is_markdown_file_note_id(&note.id))
+        .collect::<Vec<_>>();
     if notes.is_empty() {
         println!("No notes");
         return Ok(());
     }
     for (idx, note) in notes.into_iter().enumerate() {
+        let note_label = note_identity_label(&note.id);
         let badge = match note.access_mode {
             NoteAccessMode::None => "",
             NoteAccessMode::Locked => "[lock 󰌾] ",
             NoteAccessMode::Encrypted => "[enc 󰕥] ",
         };
-        println!("{:>3}. {}  {}{}", idx + 1, note.id, badge, note.title);
+        println!("{:>3}. {}  {}{}", idx + 1, note_label, badge, note.title);
     }
     Ok(())
 }
@@ -190,11 +204,12 @@ pub fn draw_switcher(
         let row = y + 3 + i;
         if let Some(match_idx) = view.matches.get(start + i).copied() {
             let item = &view.items[match_idx];
+            let note_label = note_identity_label(&item.id);
             let marker = if start + i == view.selected { ">" } else { " " };
             let text = if let Some(badge) = access_badge(item) {
-                format!("{marker} {}  {} {}", item.id, badge, item.title)
+                format!("{marker} {}  {} {}", note_label, badge, item.title)
             } else {
-                format!("{marker} {}  {}", item.id, item.title)
+                format!("{marker} {}  {}", note_label, item.title)
             };
             if start + i == view.selected {
                 draw_row_at_styled(
@@ -642,6 +657,14 @@ mod tests {
             !buf.contains("38;5;33"),
             "prompt should not use keyword color"
         );
+    }
+
+    #[test]
+    fn note_identity_label_decodes_markdown_file_note_id_to_path() {
+        let path = std::env::temp_dir().join("switcher-mdfile-test.md");
+        let note_id = crate::note_id_for_markdown_file(&path);
+        assert_eq!(note_identity_label(&note_id), path.display().to_string());
+        assert_eq!(note_identity_label("n1"), "n1".to_string());
     }
 
     #[test]

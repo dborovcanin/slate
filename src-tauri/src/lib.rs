@@ -9,6 +9,7 @@ mod storage;
 #[cfg(unix)]
 mod terminal;
 
+use app_core::storage::{Note, NoteAccessMode, NoteModules, NoteSummary};
 use app_core::AppCore;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use ipc::server;
@@ -17,7 +18,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use ulid::Ulid;
 
 #[cfg(unix)]
@@ -33,6 +34,7 @@ enum Mode {
 }
 
 const MARKDOWN_NOTE_ID_PREFIX: &str = "mdfile:";
+const MARKDOWN_NOTE_TITLE_MAX_CHARS: usize = 60;
 
 pub(crate) struct StartupMarkdownFileState {
     startup_file: Mutex<Option<PathBuf>>,
@@ -125,6 +127,118 @@ pub(crate) fn write_markdown_file(path: &Path, body: &str) -> Result<(), String>
     }
     std::fs::write(path, body)
         .map_err(|e| format!("Failed to write markdown file '{}': {e}", path.display()))
+}
+
+pub(crate) fn is_markdown_file_note_id(note_id: &str) -> bool {
+    markdown_file_path_from_note_id(note_id).is_some()
+}
+
+fn now_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap()
+}
+
+fn iso_from_system_time(ts: SystemTime) -> Option<String> {
+    let ts: time::OffsetDateTime = ts.into();
+    ts.format(&time::format_description::well_known::Rfc3339)
+        .ok()
+}
+
+fn markdown_file_timestamps(path: &Path) -> Result<(String, String), String> {
+    let now = now_iso();
+    if !path.exists() {
+        return Ok((now.clone(), now));
+    }
+
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        format!(
+            "Failed to read metadata for markdown file '{}': {e}",
+            path.display()
+        )
+    })?;
+    let created = metadata.created().ok().and_then(iso_from_system_time);
+    let modified = metadata.modified().ok().and_then(iso_from_system_time);
+    let created_at = created
+        .clone()
+        .or_else(|| modified.clone())
+        .unwrap_or_else(|| now.clone());
+    let updated_at = modified.or(created).unwrap_or(now);
+    Ok((created_at, updated_at))
+}
+
+fn derive_note_title_from_body(body: &str) -> String {
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut out = String::new();
+        for (idx, ch) in trimmed.chars().enumerate() {
+            if idx >= MARKDOWN_NOTE_TITLE_MAX_CHARS {
+                out.push_str("...");
+                return out;
+            }
+            out.push(ch);
+        }
+        return out;
+    }
+    "Untitled".to_string()
+}
+
+pub(crate) fn markdown_file_note_from_note_id(note_id: &str) -> Result<Option<Note>, String> {
+    let Some(path) = markdown_file_path_from_note_id(note_id) else {
+        return Ok(None);
+    };
+    let body = read_markdown_file(&path)?;
+    let (created_at, updated_at) = markdown_file_timestamps(&path)?;
+    Ok(Some(Note {
+        id: note_id.to_string(),
+        body,
+        modules: NoteModules::default(),
+        access_mode: NoteAccessMode::None,
+        is_unlocked: true,
+        created_at,
+        updated_at,
+    }))
+}
+
+pub(crate) fn markdown_file_note_summary_from_note_id(
+    note_id: &str,
+) -> Result<Option<NoteSummary>, String> {
+    let Some(note) = markdown_file_note_from_note_id(note_id)? else {
+        return Ok(None);
+    };
+    let title = derive_note_title_from_body(&note.body);
+    let body_prefix = note.body.chars().take(200).collect();
+    Ok(Some(NoteSummary {
+        id: note.id,
+        title,
+        body_prefix,
+        access_mode: NoteAccessMode::None,
+        is_unlocked: true,
+        updated_at: note.updated_at,
+    }))
+}
+
+pub(crate) fn markdown_file_revision_from_note_id(note_id: &str) -> Result<Option<String>, String> {
+    let Some(path) = markdown_file_path_from_note_id(note_id) else {
+        return Ok(None);
+    };
+    if !path.exists() {
+        return Ok(None);
+    }
+    let metadata = std::fs::metadata(&path).map_err(|e| {
+        format!(
+            "Failed to read metadata for markdown file '{}': {e}",
+            path.display()
+        )
+    })?;
+    Ok(metadata
+        .modified()
+        .ok()
+        .and_then(iso_from_system_time)
+        .or_else(|| metadata.created().ok().and_then(iso_from_system_time)))
 }
 
 fn stdin_is_tty() -> bool {
@@ -578,6 +692,7 @@ pub fn run() {
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn parse_defaults_to_gui_when_terminal_not_enabled() {
@@ -703,5 +818,32 @@ mod tests {
         let expected_path = std::env::current_dir().expect("cwd").join("notes.md");
         let expected_note_id = note_id_for_markdown_file(&expected_path);
         assert_eq!(opts.note_id.as_deref(), Some(expected_note_id.as_str()));
+    }
+
+    #[test]
+    fn markdown_file_note_roundtrip_reads_file_contents() {
+        let path = std::env::temp_dir().join(format!("slate-mdfile-note-{}.md", Ulid::new()));
+        fs::write(&path, "hello\nworld").expect("seed markdown file");
+        let note_id = note_id_for_markdown_file(&path);
+
+        let note = markdown_file_note_from_note_id(&note_id)
+            .expect("load markdown note")
+            .expect("note exists");
+        assert_eq!(note.id, note_id);
+        assert_eq!(note.body, "hello\nworld");
+        assert_eq!(note.access_mode, NoteAccessMode::None);
+        assert!(note.is_unlocked);
+        assert!(!note.updated_at.is_empty());
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn markdown_file_revision_is_none_when_file_missing() {
+        let path = std::env::temp_dir().join(format!("slate-missing-mdfile-{}.md", Ulid::new()));
+        let note_id = note_id_for_markdown_file(&path);
+        let revision =
+            markdown_file_revision_from_note_id(&note_id).expect("revision lookup should succeed");
+        assert_eq!(revision, None);
     }
 }

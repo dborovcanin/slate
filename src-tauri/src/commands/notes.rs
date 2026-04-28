@@ -44,16 +44,9 @@ pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<No
         .state::<crate::StartupMarkdownFileState>()
         .take_startup_file();
     if let Some(path) = startup_markdown {
-        let body = crate::read_markdown_file(&path)?;
         let note_id = crate::note_id_for_markdown_file(&path);
-        if let Some(existing) = core.db().get_note(&note_id)? {
-            if existing.body == body {
-                return Ok(existing);
-            }
-        }
-        let note = core.db().save_note(&note_id, &body)?;
-        emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
-        return Ok(note);
+        return crate::markdown_file_note_from_note_id(&note_id)?
+            .ok_or_else(|| "Failed to load markdown file note".to_string());
     }
 
     let special = app_core::config::load_special_notes_config();
@@ -83,8 +76,14 @@ pub fn save_note(
     id: String,
     body: String,
 ) -> Result<Note, String> {
-    if let Some(path) = crate::markdown_file_path_from_note_id(&id) {
+    if crate::is_markdown_file_note_id(&id) {
+        let path = crate::markdown_file_path_from_note_id(&id)
+            .ok_or_else(|| format!("Invalid markdown file note id: {id}"))?;
         crate::write_markdown_file(&path, &body)?;
+        let note = crate::markdown_file_note_from_note_id(&id)?
+            .ok_or_else(|| format!("Invalid markdown file note id: {id}"))?;
+        emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+        return Ok(note);
     }
     let note = core.db().save_note(&id, &body)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
@@ -93,6 +92,9 @@ pub fn save_note(
 
 #[tauri::command]
 pub fn get_note(core: State<'_, AppCore>, id: String) -> Result<Option<Note>, String> {
+    if crate::is_markdown_file_note_id(&id) {
+        return crate::markdown_file_note_from_note_id(&id);
+    }
     core.db().get_note(&id)
 }
 
@@ -109,7 +111,9 @@ pub fn create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, Str
 
 #[tauri::command]
 pub fn list_notes_meta(core: State<'_, AppCore>) -> Result<Vec<NoteSummary>, String> {
-    core.db().list_notes_meta()
+    let mut notes = core.db().list_notes_meta()?;
+    notes.retain(|note| !crate::is_markdown_file_note_id(&note.id));
+    Ok(notes)
 }
 
 #[tauri::command]
@@ -135,11 +139,17 @@ pub async fn rebuild_note_search_index(core: State<'_, AppCore>) -> Result<(), S
 
 #[tauri::command]
 pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<NoteSummary>, String> {
+    if crate::is_markdown_file_note_id(&id) {
+        return crate::markdown_file_note_summary_from_note_id(&id);
+    }
     core.db().get_note_meta(&id)
 }
 
 #[tauri::command]
 pub fn get_note_revision(core: State<'_, AppCore>, id: String) -> Result<Option<String>, String> {
+    if crate::is_markdown_file_note_id(&id) {
+        return crate::markdown_file_revision_from_note_id(&id);
+    }
     core.db().get_note_updated_at(&id)
 }
 

@@ -22,6 +22,7 @@ import {
   reconfigureEditor,
   setEditorContent,
   focusEditor,
+  getEditorView,
   jumpEditorToLine,
   flushSave,
   hasPendingLocalChanges,
@@ -90,6 +91,12 @@ interface BackendNoteChangedEvent {
 
 function autosaveEnabled(): boolean {
   return appConfig?.autosave ?? true;
+}
+
+function allowCtrlSSaveShortcut(): boolean {
+  if (autosaveEnabled()) return true;
+  const vimMode = getEditorView()?.dom.dataset.vimMode;
+  return !vimMode || vimMode === "normal";
 }
 
 function applyNoteSummaries(summaries: NoteSummary[]) {
@@ -871,8 +878,11 @@ function setupKeyboardShortcuts() {
 
     // Ctrl+S - format & save
     if (e.ctrlKey && !e.shiftKey && key === "s") {
+      if (e.defaultPrevented) {
+        return;
+      }
       e.preventDefault();
-      if (!autosaveEnabled()) {
+      if (!allowCtrlSSaveShortcut()) {
         showToast("autosave off; use :w");
       } else {
         runAction(performFormatAndSave);
