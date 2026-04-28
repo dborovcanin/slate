@@ -293,7 +293,7 @@ enum HostCommandPlanWire {
     Date,
     Notify,
     NotifyDelete,
-    Write { quit: bool },
+    Write { quit: bool, force: bool },
     Module { command: String },
     Fold { action: String },
     ClipWatch { action: String },
@@ -306,7 +306,7 @@ fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {
         HostCommandPlan::Date => HostCommandPlanWire::Date,
         HostCommandPlan::Notify => HostCommandPlanWire::Notify,
         HostCommandPlan::NotifyDelete => HostCommandPlanWire::NotifyDelete,
-        HostCommandPlan::Write { quit } => HostCommandPlanWire::Write { quit },
+        HostCommandPlan::Write { quit, force } => HostCommandPlanWire::Write { quit, force },
         HostCommandPlan::Module { command_id } => HostCommandPlanWire::Module {
             command: module_command_value(command_id)?.to_string(),
         },

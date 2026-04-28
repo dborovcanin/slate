@@ -469,14 +469,14 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 43] = [
     CommandDefinition {
         id: CommandId::Write,
         value: "w",
-        aliases: &["write"],
+        aliases: &["write", "w!"],
         description: "write (save)",
         modes: &MODES_VIM,
     },
     CommandDefinition {
         id: CommandId::WriteQuit,
         value: "wq",
-        aliases: &["writequit"],
+        aliases: &["writequit", "wq!"],
         description: "write and quit",
         modes: &MODES_VIM,
     },
@@ -590,9 +590,13 @@ mod tests {
 
         let vim_w = resolve_command(CommandMode::Vim, "w");
         assert_eq!(vim_w.map(|cmd| cmd.id), Some(CommandId::Write));
+        let vim_w_force = resolve_command(CommandMode::Vim, "w!");
+        assert_eq!(vim_w_force.map(|cmd| cmd.id), Some(CommandId::Write));
 
         let vim_wq = resolve_command(CommandMode::Vim, "wq");
         assert_eq!(vim_wq.map(|cmd| cmd.id), Some(CommandId::WriteQuit));
+        let vim_wq_force = resolve_command(CommandMode::Vim, "wq!");
+        assert_eq!(vim_wq_force.map(|cmd| cmd.id), Some(CommandId::WriteQuit));
     }
 
     #[test]

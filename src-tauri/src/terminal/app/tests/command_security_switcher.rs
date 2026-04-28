@@ -111,6 +111,96 @@ fn write_command_syncs_markdown_file_backed_note() {
 }
 
 #[test]
+fn write_command_detects_conflict_and_w_bang_forces_db_save() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.lines = vec!["local body".to_string()];
+    app.dirty = true;
+
+    db.save_note("n1", "external body")
+        .expect("external save should succeed");
+
+    app.execute_terminal_command(&db, "w");
+    assert!(app.status.contains("use :w!"));
+    assert!(app.dirty);
+    let persisted = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted.body, "external body");
+
+    app.execute_terminal_command(&db, "w!");
+    assert_eq!(app.status, "written");
+    assert!(!app.dirty);
+    let persisted_forced = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted_forced.body, "local body");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn write_command_detects_conflict_and_w_bang_forces_file_save() {
+    let db_path = temp_db_path();
+    let db = Db::open(db_path.clone()).expect("db opens");
+    let markdown_path =
+        std::env::temp_dir().join(format!("note-terminal-mdfile-conflict-{}.md", Ulid::new()));
+    fs::write(&markdown_path, "initial").expect("markdown seed");
+    let note_id = crate::note_id_for_markdown_file(&markdown_path);
+    let opts = TerminalOptions {
+        create_new: false,
+        note_id: Some(note_id),
+        list_only: false,
+    };
+    let (mut app, _) = TerminalApp::new_with_startup_metrics(
+        &db,
+        &opts,
+        true,
+        true,
+        false,
+        true,
+        true,
+        3,
+        crate::terminal::render::RenderPalette::default(),
+        "%Y-%m-%d".to_string(),
+        "%Y-%m-%d %H:%M".to_string(),
+    )
+    .expect("terminal app");
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.lines = vec!["local body".to_string()];
+    app.dirty = true;
+
+    fs::write(&markdown_path, "external body").expect("external write");
+
+    app.execute_terminal_command(&db, "w");
+    assert!(app.status.contains("use :w!"));
+    assert!(app.dirty);
+    assert_eq!(
+        fs::read_to_string(&markdown_path).expect("markdown read"),
+        "external body"
+    );
+
+    app.execute_terminal_command(&db, "w!");
+    assert_eq!(app.status, "written");
+    assert!(!app.dirty);
+    assert_eq!(
+        fs::read_to_string(&markdown_path).expect("markdown read"),
+        "local body"
+    );
+
+    drop(app);
+    drop(db);
+    let _ = fs::remove_file(&markdown_path);
+    cleanup_db_files(&db_path);
+}
+
+#[test]
 fn write_quit_command_saves_then_exits() {
     let (db, mut app, path) = app_with_note("one");
     app.mode = UiMode::Normal;

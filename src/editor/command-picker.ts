@@ -9,7 +9,7 @@ interface CommandPickerOptions {
   mode: CommandMode;
   dateFormat?: string;
   dateTimeFormat?: string;
-  onWriteCommand?: () => Promise<void> | void;
+  onWriteCommand?: (options?: { force?: boolean }) => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
@@ -26,7 +26,7 @@ interface CommandModeExtensionOptions {
   vimMode?: boolean;
   dateFormat?: string;
   dateTimeFormat?: string;
-  onWriteCommand?: () => Promise<void> | void;
+  onWriteCommand?: (options?: { force?: boolean }) => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;

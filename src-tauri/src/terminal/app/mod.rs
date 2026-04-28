@@ -857,17 +857,14 @@ fn format_startup_duration(duration: Duration) -> String {
 }
 
 fn select_note(db: &Db, opts: &TerminalOptions, config: &ThemeConfig) -> Result<Note, String> {
+    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
     if opts.create_new {
         return new_note(db, config);
     }
 
     if let Some(id) = &opts.note_id {
-        if crate::is_markdown_file_note_id(id) {
-            return crate::markdown_file_note_from_note_id(id)?
-                .ok_or_else(|| format!("Invalid markdown file note id: {id}"));
-        }
-        return db
-            .get_note(id)?
+        return note_sources
+            .open_note_by_id(id)?
             .ok_or_else(|| format!("Note not found: {id}"));
     }
 

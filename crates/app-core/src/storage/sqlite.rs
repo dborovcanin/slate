@@ -23,6 +23,7 @@ const PBKDF2_ITERATIONS: u32 = 200_000;
 const NOTE_TITLE_MAX_CHARS: usize = 60;
 const SEARCH_QUERY_MAX_TERMS: usize = 8;
 const SEARCH_LIMIT_MAX: usize = 100;
+const LEGACY_MARKDOWN_FILE_NOTE_ID_SQL_PREFIX: &str = "mdfile:%";
 
 #[derive(Debug, Clone)]
 struct NoteSecurityRow {
@@ -1820,6 +1821,20 @@ fn apply_pending_migrations(conn: &Connection) -> Result<(), String> {
         conn.execute_batch(include_str!("../../migrations/0003_fts_prefix.sql"))
             .map_err(|e| format!("Migration 0003 (fts_prefix) failed: {e}"))?;
     }
+    cleanup_legacy_markdown_file_notes(conn)?;
+    Ok(())
+}
+
+fn cleanup_legacy_markdown_file_notes(conn: &Connection) -> Result<(), String> {
+    let deleted = conn
+        .execute(
+            "DELETE FROM notes WHERE id LIKE ?1",
+            [LEGACY_MARKDOWN_FILE_NOTE_ID_SQL_PREFIX],
+        )
+        .map_err(|e| format!("Migration 0004 (legacy_markdown_cleanup) failed: {e}"))?;
+    if deleted > 0 {
+        eprintln!("cleaned up {deleted} legacy markdown-file note row(s)");
+    }
     Ok(())
 }
 
@@ -2438,6 +2453,66 @@ mod tests {
         assert_eq!(hits[0].id, "legacy-note");
 
         drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn open_db_migration_cleans_legacy_markdown_file_notes() {
+        let path = temp_db_path();
+        let conn = Connection::open(path.clone()).expect("legacy db opens");
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                body TEXT NOT NULL DEFAULT '',
+                note_title TEXT NOT NULL DEFAULT '',
+                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
+                access_mode TEXT NOT NULL DEFAULT 'none',
+                password_salt BLOB,
+                password_hash BLOB,
+                encryption_salt BLOB,
+                encryption_nonce BLOB,
+                encrypted_body BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
+             VALUES
+               ('mdfile:legacy', 'legacy markdown row marker', 'legacy mdfile', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+               ('n1', 'survivor row marker', 'regular', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("legacy schema created");
+        drop(conn);
+
+        let db = Db::open(path.clone()).expect("db opens and runs cleanup migration");
+        let listed = db.list_notes_meta().expect("list meta succeeds");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "n1");
+
+        let legacy_hits = db
+            .search_notes_content("legacy markdown row marker", 20)
+            .expect("search succeeds");
+        assert!(
+            legacy_hits.is_empty(),
+            "legacy mdfile row should be removed"
+        );
+        let survivor_hits = db
+            .search_notes_content("survivor row marker", 20)
+            .expect("search succeeds");
+        assert_eq!(survivor_hits.len(), 1);
+        assert_eq!(survivor_hits[0].id, "n1");
+        drop(db);
+
+        let check = Connection::open(path.clone()).expect("db reopens for verification");
+        let mdfile_rows: i64 = check
+            .query_row(
+                "SELECT COUNT(1) FROM notes WHERE id LIKE 'mdfile:%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("mdfile row count query succeeds");
+        assert_eq!(mdfile_rows, 0);
+
         let _ = fs::remove_file(path);
     }
 

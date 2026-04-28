@@ -33,10 +33,31 @@ let suppressProgrammaticDocSync = false;
 let localDirty = false;
 let saveInFlight = false;
 let currentAutosaveEnabled = true;
+let onSaveError: ((message: string) => void) | null = null;
+let lastSaveErrorMessage = "";
+let lastSaveErrorAt = 0;
 const SAVE_DEBOUNCE_MS = 500;
+const SAVE_ERROR_THROTTLE_MS = 1500;
 const TITLE_PREVIEW_LIMIT = 60;
 const LARGE_DOC_STATE_RESET_THRESHOLD = 200_000;
 const suppressEditorSyncAnnotation = Annotation.define<boolean>();
+
+function errorMessageOf(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  return String(error);
+}
+
+function reportSaveError(message: string) {
+  if (!onSaveError) return;
+  const now = Date.now();
+  if (message === lastSaveErrorMessage && now - lastSaveErrorAt < SAVE_ERROR_THROTTLE_MS) {
+    return;
+  }
+  lastSaveErrorMessage = message;
+  lastSaveErrorAt = now;
+  onSaveError(message);
+}
 
 function deriveTitleFromDoc(doc: Text): string {
   for (let i = 1; i <= doc.lines; i++) {
@@ -55,23 +76,39 @@ function scheduleSave() {
   saveTimer = window.setTimeout(flushSave, SAVE_DEBOUNCE_MS);
 }
 
-export async function flushSave(force = false) {
+export async function flushSave(
+  force = false,
+  forceWrite = false,
+  options?: { throwOnError?: boolean; suppressErrorCallback?: boolean },
+): Promise<boolean> {
   if (saveTimer !== null) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
-  if (!force && !currentAutosaveEnabled) return;
-  if (backendDetached) return;
+  if (!force && !currentAutosaveEnabled) return true;
+  if (backendDetached) return true;
   const note = state.activeNote;
-  if (!note) return;
+  if (!note) return true;
   const body = view ? view.state.doc.toString() : note.body;
   saveInFlight = true;
   try {
-    const saved = await saveNote(note.id, body);
+    const saved = await saveNote(note.id, body, {
+      expectedRevision: note.updated_at,
+      force: forceWrite,
+    });
     state.updateBody(body, saved.updated_at);
     localDirty = false;
+    return true;
   } catch (e) {
+    const message = errorMessageOf(e);
     console.error("Failed to save note:", e);
+    if (!options?.suppressErrorCallback) {
+      reportSaveError(message);
+    }
+    if (options?.throwOnError) {
+      throw new Error(message);
+    }
+    return false;
   } finally {
     saveInFlight = false;
   }
@@ -128,7 +165,8 @@ interface EditorMountOptions {
   vimMode?: boolean;
   dateFormat?: string;
   dateTimeFormat?: string;
-  onWriteCommand?: () => Promise<void> | void;
+  onWriteCommand?: (options?: { force?: boolean }) => Promise<void> | void;
+  onSaveError?: (message: string) => void;
   variablesEnabled?: boolean;
   variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
@@ -280,13 +318,20 @@ function moveTableCellOrWord(
   return fallbackLeft ? cursorGroupLeft(view) : cursorGroupRight(view);
 }
 
-export async function performFormatAndSave() {
+export async function performFormatAndSave(options?: {
+  force?: boolean;
+  throwOnError?: boolean;
+  suppressErrorCallback?: boolean;
+}) {
   if (!view) return;
   if (currentFormatOnSave) {
     const { executeCommand } = await import("./command-engine");
     await executeCommand(view, "format", { mode: "editor" });
   }
-  await flushSave(true);
+  await flushSave(true, options?.force ?? false, {
+    throwOnError: options?.throwOnError ?? false,
+    suppressErrorCallback: options?.suppressErrorCallback ?? false,
+  });
 }
 
 function applyViewModeClasses(vimMode: boolean, plainTextMode: boolean) {
@@ -316,6 +361,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
   backendDetached = plainTextMode || !!options.detachBackend;
   currentFormatOnSave = !!options.formatOnSave;
   currentAutosaveEnabled = options.autosave ?? true;
+  onSaveError = options.onSaveError ?? null;
   tableModuleEnabled = tableEnabled;
 
   const extensions = [

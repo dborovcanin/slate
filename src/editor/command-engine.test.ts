@@ -1,6 +1,6 @@
 import test, { before } from "node:test";
 import assert from "node:assert/strict";
-import { listCommandSuggestions } from "./command-engine.ts";
+import { executeCommand, listCommandSuggestions } from "./command-engine.ts";
 import { ensureWasmReady } from "./wasm.ts";
 
 before(async () => { await ensureWasmReady(); });
@@ -68,4 +68,14 @@ test("vim mode exposes vim-specific commands", async () => {
 test("command suggestions filter by query", async () => {
   const values = listCommandSuggestions("editor", "fo").map((entry) => entry.value);
   assert.deepEqual(values, ["fold", "fold-toggle", "format", "unfold"]);
+});
+
+test("vim write surfaces host save errors", async () => {
+  const message = await executeCommand({} as any, "w", {
+    mode: "vim",
+    onWriteCommand: async () => {
+      throw new Error("note changed since last load; use :w! to force save");
+    },
+  });
+  assert.equal(message, "write failed: note changed since last load; use :w! to force save");
 });

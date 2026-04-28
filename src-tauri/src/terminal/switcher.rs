@@ -40,11 +40,14 @@ fn note_identity_label(note_id: &str) -> String {
     }
 }
 
-pub fn load_note_meta(db: &crate::storage::Db) -> Result<Vec<NoteMeta>, String> {
-    Ok(db
-        .list_notes_meta()?
+pub fn load_note_meta(
+    db: &crate::storage::Db,
+    active_note_id: Option<&str>,
+) -> Result<Vec<NoteMeta>, String> {
+    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+    Ok(note_sources
+        .list_notes_meta(active_note_id)?
         .into_iter()
-        .filter(|n| !crate::is_markdown_file_note_id(&n.id))
         .map(|n| NoteMeta {
             title: n.title,
             id: n.id,
@@ -63,11 +66,8 @@ fn access_badge(note: &NoteMeta) -> Option<&'static str> {
 }
 
 pub fn print_note_list(db: &crate::storage::Db) -> Result<(), String> {
-    let notes = db
-        .list_notes_meta()?
-        .into_iter()
-        .filter(|note| !crate::is_markdown_file_note_id(&note.id))
-        .collect::<Vec<_>>();
+    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+    let notes = note_sources.list_notes_meta(None)?;
     if notes.is_empty() {
         println!("No notes");
         return Ok(());

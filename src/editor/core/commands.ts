@@ -56,7 +56,7 @@ export interface CommandRuntime {
   }) => Promise<boolean> | boolean;
   evaluateExpression?: SumExpressionEvaluator;
   copyText?: (text: string) => Promise<void> | void;
-  onWrite?: () => Promise<void> | void;
+  onWrite?: (options?: { force?: boolean }) => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
   formatMarkdown?: (input: string) => string | Promise<string>;
   startClipboardWatch?: () => Promise<boolean> | boolean;

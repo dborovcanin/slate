@@ -457,7 +457,7 @@ export type HostCommandPlan =
   | { kind: "date" }
   | { kind: "notify" }
   | { kind: "notify_delete" }
-  | { kind: "write"; quit: boolean }
+  | { kind: "write"; quit: boolean; force: boolean }
   | { kind: "module"; command: string }
   | { kind: "fold"; action: HostFoldAction }
   | { kind: "clip_watch"; action: HostClipWatchAction }

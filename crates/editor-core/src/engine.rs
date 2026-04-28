@@ -111,6 +111,7 @@ pub enum HostCommandPlan {
     },
     Write {
         quit: bool,
+        force: bool,
     },
     Quit {
         force: bool,
@@ -206,8 +207,14 @@ impl EditorEngine {
             CommandId::ClipWatchStop => Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             }),
-            CommandId::Write => Some(HostCommandPlan::Write { quit: false }),
-            CommandId::WriteQuit => Some(HostCommandPlan::Write { quit: true }),
+            CommandId::Write => Some(HostCommandPlan::Write {
+                quit: false,
+                force: normalized == "w!",
+            }),
+            CommandId::WriteQuit => Some(HostCommandPlan::Write {
+                quit: true,
+                force: normalized == "wq!",
+            }),
             CommandId::Quit => Some(HostCommandPlan::Quit {
                 force: normalized == "q!",
             }),
@@ -457,11 +464,42 @@ mod tests {
         assert_eq!(quit_normal, HostCommandPlan::Quit { force: false });
 
         let write = EditorEngine::plan_host_command(CommandMode::Vim, "w").expect("write");
-        assert_eq!(write, HostCommandPlan::Write { quit: false });
+        assert_eq!(
+            write,
+            HostCommandPlan::Write {
+                quit: false,
+                force: false
+            }
+        );
+
+        let write_force = EditorEngine::plan_host_command(CommandMode::Vim, "w!").expect("force");
+        assert_eq!(
+            write_force,
+            HostCommandPlan::Write {
+                quit: false,
+                force: true
+            }
+        );
 
         let write_quit =
             EditorEngine::plan_host_command(CommandMode::Vim, "wq").expect("write+quit");
-        assert_eq!(write_quit, HostCommandPlan::Write { quit: true });
+        assert_eq!(
+            write_quit,
+            HostCommandPlan::Write {
+                quit: true,
+                force: false
+            }
+        );
+
+        let write_quit_force =
+            EditorEngine::plan_host_command(CommandMode::Vim, "wq!").expect("write+quit force");
+        assert_eq!(
+            write_quit_force,
+            HostCommandPlan::Write {
+                quit: true,
+                force: true
+            }
+        );
     }
 
     #[test]

@@ -45,7 +45,9 @@ pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<No
         .take_startup_file();
     if let Some(path) = startup_markdown {
         let note_id = crate::note_id_for_markdown_file(&path);
-        return crate::markdown_file_note_from_note_id(&note_id)?
+        return core
+            .note_sources()
+            .open_note_by_id(&note_id)?
             .ok_or_else(|| "Failed to load markdown file note".to_string());
     }
 
@@ -75,27 +77,24 @@ pub fn save_note(
     app: AppHandle,
     id: String,
     body: String,
+    expected_revision: Option<String>,
+    force: Option<bool>,
 ) -> Result<Note, String> {
-    if crate::is_markdown_file_note_id(&id) {
-        let path = crate::markdown_file_path_from_note_id(&id)
-            .ok_or_else(|| format!("Invalid markdown file note id: {id}"))?;
-        crate::write_markdown_file(&path, &body)?;
-        let note = crate::markdown_file_note_from_note_id(&id)?
-            .ok_or_else(|| format!("Invalid markdown file note id: {id}"))?;
-        emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
-        return Ok(note);
-    }
-    let note = core.db().save_note(&id, &body)?;
+    let note = core.note_sources().save_note_by_id(
+        &id,
+        &body,
+        app_core::note_sources::SaveOptions {
+            expected_revision,
+            force: force.unwrap_or(false),
+        },
+    )?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
 }
 
 #[tauri::command]
 pub fn get_note(core: State<'_, AppCore>, id: String) -> Result<Option<Note>, String> {
-    if crate::is_markdown_file_note_id(&id) {
-        return crate::markdown_file_note_from_note_id(&id);
-    }
-    core.db().get_note(&id)
+    core.note_sources().open_note_by_id(&id)
 }
 
 #[tauri::command]
@@ -110,10 +109,11 @@ pub fn create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, Str
 }
 
 #[tauri::command]
-pub fn list_notes_meta(core: State<'_, AppCore>) -> Result<Vec<NoteSummary>, String> {
-    let mut notes = core.db().list_notes_meta()?;
-    notes.retain(|note| !crate::is_markdown_file_note_id(&note.id));
-    Ok(notes)
+pub fn list_notes_meta(
+    core: State<'_, AppCore>,
+    active_id: Option<String>,
+) -> Result<Vec<NoteSummary>, String> {
+    core.note_sources().list_notes_meta(active_id.as_deref())
 }
 
 #[tauri::command]
@@ -139,18 +139,12 @@ pub async fn rebuild_note_search_index(core: State<'_, AppCore>) -> Result<(), S
 
 #[tauri::command]
 pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<NoteSummary>, String> {
-    if crate::is_markdown_file_note_id(&id) {
-        return crate::markdown_file_note_summary_from_note_id(&id);
-    }
-    core.db().get_note_meta(&id)
+    core.note_sources().get_note_meta_by_id(&id)
 }
 
 #[tauri::command]
 pub fn get_note_revision(core: State<'_, AppCore>, id: String) -> Result<Option<String>, String> {
-    if crate::is_markdown_file_note_id(&id) {
-        return crate::markdown_file_revision_from_note_id(&id);
-    }
-    core.db().get_note_updated_at(&id)
+    core.note_sources().get_note_revision_by_id(&id)
 }
 
 #[tauri::command]
@@ -160,6 +154,10 @@ pub fn delete_note(
     id: String,
     password: Option<String>,
 ) -> Result<bool, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&id);
+    if !capabilities.can_delete {
+        return Err("delete is not supported for file-backed notes".to_string());
+    }
     let deleted = core.db().delete_note(&id, password.as_deref())?;
     if deleted {
         emit_note_changed(&app, &id, None, true);
@@ -174,6 +172,10 @@ pub fn set_note_modules(
     id: String,
     modules: NoteModules,
 ) -> Result<Note, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&id);
+    if !capabilities.can_module_persist {
+        return Err("module updates are not supported for file-backed notes".to_string());
+    }
     let note = core.db().set_note_modules(&id, modules)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
@@ -186,6 +188,10 @@ pub fn lock_note_access(
     id: String,
     password: String,
 ) -> Result<Note, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&id);
+    if !capabilities.can_lock {
+        return Err("note locking is not supported for file-backed notes".to_string());
+    }
     let note = core.db().lock_note(&id, &password)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
@@ -198,6 +204,10 @@ pub fn unlock_note_access(
     id: String,
     password: String,
 ) -> Result<Note, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&id);
+    if !capabilities.can_lock {
+        return Err("note locking is not supported for file-backed notes".to_string());
+    }
     let note = core.db().unlock_note(&id, &password)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
@@ -210,6 +220,10 @@ pub fn encrypt_note(
     id: String,
     password: String,
 ) -> Result<Note, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&id);
+    if !capabilities.can_encrypt {
+        return Err("note encryption is not supported for file-backed notes".to_string());
+    }
     let note = core.db().encrypt_note(&id, &password)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
@@ -222,6 +236,10 @@ pub fn decrypt_note(
     id: String,
     password: String,
 ) -> Result<Note, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&id);
+    if !capabilities.can_encrypt {
+        return Err("note encryption is not supported for file-backed notes".to_string());
+    }
     let note = core.db().decrypt_note(&id, &password)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)

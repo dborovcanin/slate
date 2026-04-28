@@ -48,23 +48,6 @@ import {
   normalizeModules,
 } from "./editor/module-gating.ts";
 
-function ensureSummaryIncludesActive(noteId: string, body: string, summaries: NoteSummary[]): NoteSummary[] {
-  if (summaries.some((summary) => summary.id === noteId)) return summaries;
-  const active = state.activeNote;
-  const activeEntry = state.notes.find((entry) => entry.id === noteId);
-  return [
-    {
-      id: noteId,
-      title: activeEntry?.title ?? (active && active.is_unlocked ? body.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "Untitled" : "Untitled"),
-      body_prefix: body.slice(0, 200),
-      access_mode: active?.id === noteId ? active.access_mode : "none",
-      is_unlocked: active?.id === noteId ? active.is_unlocked : true,
-      updated_at: active?.id === noteId ? active.updated_at : "",
-    },
-    ...summaries,
-  ];
-}
-
 function moduleIndicatorText(modules: NoteModules): string {
   const labels: string[] = [];
   if (modules.math) labels.push("math");
@@ -100,12 +83,16 @@ function allowCtrlSSaveShortcut(): boolean {
 }
 
 function applyNoteSummaries(summaries: NoteSummary[]) {
-  const active = state.activeNote;
-  if (!active) {
-    state.setNoteSummaries(summaries);
+  state.setNoteSummaries(summaries);
+}
+
+function showSaveError(message: string) {
+  const trimmed = message.trim();
+  if (trimmed.length === 0) {
+    showToast("Save failed");
     return;
   }
-  state.setNoteSummaries(ensureSummaryIncludesActive(active.id, active.body, summaries));
+  showToast(trimmed);
 }
 
 function editorOptionsForNote(note: Note | null) {
@@ -130,7 +117,13 @@ function editorOptionsForNote(note: Note | null) {
     vimMode: !!appConfig.vim_mode,
     dateFormat: appConfig.date_format,
     dateTimeFormat: appConfig.date_time_format,
-    onWriteCommand: performFormatAndSave,
+    onWriteCommand: (options?: { force?: boolean }) =>
+      performFormatAndSave({
+        force: options?.force,
+        throwOnError: true,
+        suppressErrorCallback: true,
+      }),
+    onSaveError: showSaveError,
     variablesEnabled: loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
@@ -206,7 +199,7 @@ async function syncActiveNoteIfBackendChanged() {
       focusEditor();
     }
 
-    void listNotesMeta()
+    void listNotesMeta(state.activeNote?.id)
       .then((summaries) => {
         applyNoteSummaries(summaries);
       })
@@ -243,7 +236,7 @@ async function startBackendNoteChangeListener() {
       if (state.activeNote?.id === payload.id) {
         void syncActiveNoteIfBackendChanged();
       }
-      void listNotesMeta()
+      void listNotesMeta(state.activeNote?.id)
         .then((summaries) => {
           applyNoteSummaries(summaries);
         })
@@ -297,7 +290,10 @@ async function unlockProtectedNoteWithRetry(noteId: string, title: string): Prom
 }
 
 async function switchToNote(id: string, lineNumber?: number | null) {
-  await flushSave();
+  const saved = await flushSave();
+  if (!saved) {
+    return;
+  }
   const summary = await getNoteMeta(id);
   if (!summary) {
     showToast("Note not found");
@@ -328,7 +324,7 @@ async function switchToNote(id: string, lineNumber?: number | null) {
     focusEditor();
   }
 
-  void listNotesMeta()
+  void listNotesMeta(state.activeNote?.id)
     .then((summaries) => {
       applyNoteSummaries(summaries);
     })
@@ -368,12 +364,15 @@ async function unlockStartupActiveNoteAfterMount(note: Note, summaries: NoteSumm
   setEditorContent(unlocked.body, { forceStateReset: true });
   focusEditor();
 
-  const refreshed = await listNotesMeta().catch(() => summaries);
+  const refreshed = await listNotesMeta(state.activeNote?.id).catch(() => summaries);
   applyNoteSummaries(refreshed);
 }
 
 async function handleCreateNote() {
-  await flushSave();
+  const saved = await flushSave();
+  if (!saved) {
+    return;
+  }
   const note = await createNote();
   state.addNote(note);
   state.setActiveNote(note);
@@ -401,7 +400,10 @@ async function handleDeleteNoteById(noteId: string) {
     deletingActive ? state.getAdjacentNoteId(1) ?? state.getAdjacentNoteId(-1) : null;
 
   if (deletingActive) {
-    await flushSave();
+    const saved = await flushSave();
+    if (!saved) {
+      return;
+    }
   }
 
   let deletePassword: string | null = null;
@@ -1004,7 +1006,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
 
   let note = await getOrCreateNote();
   let [summaries, config, runtimeFlags] = await Promise.all([
-    listNotesMeta().catch(() => []),
+    listNotesMeta(note.id).catch(() => []),
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
     getRuntimeFlagsOrDefault(),
   ]);

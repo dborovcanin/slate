@@ -145,8 +145,17 @@ export function getOrCreateNote(): Promise<Note> {
   return invoke<Note>("get_or_create_note");
 }
 
-export function saveNote(id: string, body: string): Promise<Note> {
-  return invoke<Note>("save_note", { id, body });
+export function saveNote(
+  id: string,
+  body: string,
+  options?: { expectedRevision?: string | null; force?: boolean },
+): Promise<Note> {
+  return invoke<Note>("save_note", {
+    id,
+    body,
+    expectedRevision: options?.expectedRevision ?? null,
+    force: options?.force ?? false,
+  });
 }
 
 export function getNote(id: string): Promise<Note | null> {
@@ -157,8 +166,10 @@ export function createNote(): Promise<Note> {
   return invoke<Note>("create_note");
 }
 
-export function listNotesMeta(): Promise<NoteSummary[]> {
-  return invoke<NoteSummary[]>("list_notes_meta");
+export function listNotesMeta(activeId?: string | null): Promise<NoteSummary[]> {
+  return invoke<NoteSummary[]>("list_notes_meta", {
+    activeId: activeId ?? null,
+  });
 }
 
 export function searchNotesContent(query: string, limit = 60): Promise<NoteSearchResult[]> {

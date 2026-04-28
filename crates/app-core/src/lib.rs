@@ -1,9 +1,11 @@
 pub mod calc;
 pub mod config;
+pub mod note_sources;
 pub mod storage;
 
 use calc::CalcEngine;
 use directories::ProjectDirs;
+use note_sources::NoteSourceService;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -12,6 +14,7 @@ use storage::Db;
 
 pub struct AppCore {
     db: Db,
+    note_sources: NoteSourceService,
     calc_engine: CalcEngine,
     /// Server-side line cache for the delta calc IPC protocol.
     /// Key: note_id. Value: current lines of that note as known to the server.
@@ -22,8 +25,10 @@ impl AppCore {
     pub fn open_default() -> Result<Self, String> {
         let dir = data_dir()?;
         let db = Db::open(dir.join("notes.db"))?;
+        let note_sources = NoteSourceService::new(db.clone());
         Ok(Self {
             db,
+            note_sources,
             calc_engine: CalcEngine::new(),
             note_line_cache: Mutex::new(HashMap::new()),
         })
@@ -31,6 +36,10 @@ impl AppCore {
 
     pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    pub fn note_sources(&self) -> &NoteSourceService {
+        &self.note_sources
     }
 
     pub fn calc_engine(&self) -> &CalcEngine {

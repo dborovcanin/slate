@@ -38,7 +38,7 @@ export interface CommandExecutionOptions {
   mode: CommandMode;
   dateFormat?: string;
   dateTimeFormat?: string;
-  onWriteCommand?: () => Promise<void> | void;
+  onWriteCommand?: (options?: { force?: boolean }) => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
@@ -215,6 +215,26 @@ export async function executeCommand(
   if (profilerMessage !== null) return profilerMessage;
 
   const hostPlan = planHostCommandFromWasm(options.mode, rawInput);
+  if (hostPlan?.kind === "write") {
+    if (!options.onWriteCommand) return "write unavailable";
+    try {
+      await options.onWriteCommand({ force: hostPlan.force });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error);
+      return `write failed: ${message}`;
+    }
+    if (hostPlan.quit) {
+      if (!options.onExitCommand) return "quit unavailable";
+      await options.onExitCommand();
+      return "written and quit";
+    }
+    return "written";
+  }
   if (hostPlan?.kind === "note_security") {
     const noteSecurityMessage = await tryExecuteNoteSecurityCommand(view, hostPlan);
     if (noteSecurityMessage !== null) {
