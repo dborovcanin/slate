@@ -1,8 +1,9 @@
-use regex::RegexBuilder;
+use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 
 /// Compute a deterministic 64-bit hash for a line. `DefaultHasher` uses
 /// SipHash-1-3 with fixed keys, so the result is stable across calls within
@@ -1016,6 +1017,215 @@ fn expression_references_any(
         .any(|m| affected_variables.contains(&expression[m.start()..m.end()].to_ascii_lowercase()))
 }
 
+static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
+
+fn table_coord_ref_regex() -> &'static Regex {
+    TABLE_COORD_REF_RE.get_or_init(|| {
+        Regex::new(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)").expect("table coordinate regex is valid")
+    })
+}
+
+fn table_coordinate_refs(expression: &str) -> Vec<(usize, usize)> {
+    let regex = table_coord_ref_regex();
+    let mut refs = Vec::new();
+    for captures in regex.captures_iter(expression) {
+        let row = captures
+            .get(1)
+            .and_then(|m| m.as_str().parse::<usize>().ok());
+        let col = captures
+            .get(2)
+            .and_then(|m| m.as_str().parse::<usize>().ok());
+        if let (Some(row), Some(col)) = (row, col) {
+            refs.push((row, col));
+        }
+    }
+    refs
+}
+
+fn split_table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
+    inner
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+fn is_table_delimiter_cell(cell: &str) -> bool {
+    let trimmed = cell.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    let core = without_left.strip_suffix(':').unwrap_or(without_left);
+    core.len() >= 3 && core.bytes().all(|byte| byte == b'-')
+}
+
+fn is_table_delimiter_row(cells: &[String]) -> bool {
+    !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
+}
+
+fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Vec<usize> {
+    let mut delimiter_row: Option<usize> = None;
+    for row_idx in table_start..=table_end {
+        let Some(line) = lines.get(row_idx) else {
+            continue;
+        };
+        let cells = split_table_cells(line);
+        if is_table_delimiter_row(&cells) {
+            delimiter_row = Some(row_idx);
+            break;
+        }
+    }
+    let Some(data_start) = delimiter_row.map(|row| row.saturating_add(1)) else {
+        return Vec::new();
+    };
+    let mut rows = Vec::new();
+    for row_idx in data_start..=table_end {
+        let Some(line) = lines.get(row_idx) else {
+            continue;
+        };
+        let cells = split_table_cells(line);
+        if is_table_delimiter_row(&cells) {
+            continue;
+        }
+        rows.push(row_idx);
+    }
+    rows
+}
+
+fn table_row_index_1based(data_rows: &[usize], line_idx: usize) -> Option<usize> {
+    data_rows
+        .iter()
+        .position(|row| *row == line_idx)
+        .map(|pos| pos.saturating_add(1))
+}
+
+fn coordinate_formula_dependency_window(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    mask: CalcFeatureMask,
+) -> Option<(usize, usize)> {
+    if !mask.table_active() || changed_from >= changed_to {
+        return None;
+    }
+
+    let mut min_line = usize::MAX;
+    let mut max_line_exclusive = 0usize;
+    let mut line_idx = 0usize;
+
+    while line_idx < lines.len() {
+        if !is_table_line(&lines[line_idx]) {
+            line_idx = line_idx.saturating_add(1);
+            continue;
+        }
+        let Some((table_start, table_end)) = table_block_range(lines, line_idx) else {
+            line_idx = line_idx.saturating_add(1);
+            continue;
+        };
+        line_idx = table_end.saturating_add(1);
+
+        if table_end.saturating_add(1) <= changed_from || changed_to <= table_start {
+            continue;
+        }
+
+        let data_rows = table_data_rows(lines, table_start, table_end);
+        if data_rows.is_empty() {
+            continue;
+        }
+
+        let mut changed_cells: HashSet<(usize, usize)> = HashSet::new();
+        let mut structure_changed = false;
+        for idx in changed_from.max(table_start)..changed_to.min(table_end.saturating_add(1)) {
+            let Some(row_1based) = table_row_index_1based(&data_rows, idx) else {
+                structure_changed = true;
+                continue;
+            };
+            let Some(line) = lines.get(idx) else { continue };
+            let col_count = split_table_cells(line).len();
+            if col_count == 0 {
+                structure_changed = true;
+                continue;
+            }
+            for col_1based in 1..=col_count {
+                changed_cells.insert((row_1based, col_1based));
+            }
+        }
+
+        let mut formula_nodes: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut reverse_refs: HashMap<(usize, usize), HashSet<(usize, usize)>> = HashMap::new();
+        let mut nodes_with_coords: HashSet<(usize, usize)> = HashSet::new();
+
+        for row_line_idx in &data_rows {
+            let Some(row_1based) = table_row_index_1based(&data_rows, *row_line_idx) else {
+                continue;
+            };
+            let line = &lines[*row_line_idx];
+            for segment in find_table_formula_segments(line) {
+                let node = (row_1based, segment.cell_index.saturating_add(1));
+                formula_nodes.insert(node, *row_line_idx);
+                let expression = line[segment.from_byte..segment.to_byte].trim();
+                let refs = table_coordinate_refs(expression);
+                if !refs.is_empty() {
+                    nodes_with_coords.insert(node);
+                }
+                for reference in refs {
+                    reverse_refs.entry(reference).or_default().insert(node);
+                }
+            }
+        }
+
+        if formula_nodes.is_empty() {
+            continue;
+        }
+
+        let mut affected_nodes: HashSet<(usize, usize)> = HashSet::new();
+        let mut stack: Vec<(usize, usize)> = Vec::new();
+
+        if structure_changed {
+            for node in &nodes_with_coords {
+                if affected_nodes.insert(*node) {
+                    stack.push(*node);
+                }
+            }
+        } else {
+            for changed in &changed_cells {
+                if let Some(dependents) = reverse_refs.get(changed) {
+                    for dependent in dependents {
+                        if affected_nodes.insert(*dependent) {
+                            stack.push(*dependent);
+                        }
+                    }
+                }
+            }
+        }
+
+        while let Some(node) = stack.pop() {
+            if let Some(dependents) = reverse_refs.get(&node) {
+                for dependent in dependents {
+                    if affected_nodes.insert(*dependent) {
+                        stack.push(*dependent);
+                    }
+                }
+            }
+        }
+
+        for node in &affected_nodes {
+            if let Some(dep_line_idx) = formula_nodes.get(node) {
+                min_line = min_line.min(*dep_line_idx);
+                max_line_exclusive = max_line_exclusive.max(dep_line_idx.saturating_add(1));
+            }
+        }
+    }
+
+    if min_line == usize::MAX {
+        None
+    } else {
+        Some((min_line, max_line_exclusive))
+    }
+}
+
 fn table_range_maybe_impacts_formulas(
     lines: &[String],
     from: usize,
@@ -1091,10 +1301,17 @@ fn formula_dependency_window(
         }
     }
 
-    if min_line == usize::MAX {
+    let builtin_window = if min_line == usize::MAX {
         None
     } else {
         Some((min_line, max_line_exclusive))
+    };
+    let coord_window = coordinate_formula_dependency_window(lines, changed_from, changed_to, mask);
+
+    match (builtin_window, coord_window) {
+        (Some((from_a, to_a)), Some((from_b, to_b))) => Some((from_a.min(from_b), to_a.max(to_b))),
+        (Some(window), None) | (None, Some(window)) => Some(window),
+        (None, None) => None,
     }
 }
 
@@ -2098,6 +2315,39 @@ mod tests {
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 1);
+    }
+
+    #[test]
+    fn decide_eval_window_expands_for_table_coordinate_reference_dependents() {
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | |".to_string(),
+            "| c | 0 | :=(1,2) + (2,2) |".to_string(),
+        ];
+        // Edit first data row line; formula row should be included in eval window.
+        let decision =
+            decide_eval_window_with_mask(&lines, 2, 3, &[], true, CalcFeatureMask::default());
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 2);
+        assert_eq!(decision.eval_to, 5);
+    }
+
+    #[test]
+    fn decide_eval_window_expands_transitively_for_table_coordinate_reference_dependents() {
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 1 | :=(2,3) |".to_string(),
+            "| b | 2 | :=(1,3) + 1 |".to_string(),
+            "| c | 3 | :=(2,3) + 1 |".to_string(),
+        ];
+        // Change row 1; row 2 depends on row 1, and row 3 depends on row 2.
+        let decision =
+            decide_eval_window_with_mask(&lines, 2, 3, &[], true, CalcFeatureMask::default());
+        assert_eq!(decision.eval_from, 2);
+        assert_eq!(decision.eval_to, 5);
     }
 
     #[test]

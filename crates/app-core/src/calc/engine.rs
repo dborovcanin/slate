@@ -117,6 +117,81 @@ struct FormulaCallSpan {
     spec: FormulaSpec,
 }
 
+#[derive(Debug, Clone)]
+struct TableBlockInfo {
+    data_rows: Vec<usize>,
+}
+
+#[derive(Default)]
+struct TableEvalCache {
+    split_cells: HashMap<usize, Vec<String>>,
+    block_by_line: HashMap<usize, Option<TableBlockInfo>>,
+}
+
+impl TableEvalCache {
+    fn cells_for_line<'a>(
+        &'a mut self,
+        lines: &[String],
+        line_idx: usize,
+    ) -> Option<&'a Vec<String>> {
+        if !self.split_cells.contains_key(&line_idx) {
+            let line = lines.get(line_idx)?;
+            self.split_cells.insert(line_idx, split_table_cells(line));
+        }
+        self.split_cells.get(&line_idx)
+    }
+
+    fn block_for_line(&mut self, lines: &[String], line_idx: usize) -> Option<TableBlockInfo> {
+        if let Some(cached) = self.block_by_line.get(&line_idx) {
+            return cached.clone();
+        }
+        if lines
+            .get(line_idx)
+            .map(|line| !is_table_line(line))
+            .unwrap_or(true)
+        {
+            self.block_by_line.insert(line_idx, None);
+            return None;
+        }
+
+        let mut start = line_idx;
+        while start > 0 {
+            let prev = start - 1;
+            if !is_table_line(lines.get(prev)?) {
+                break;
+            }
+            start = prev;
+        }
+
+        let mut end = line_idx;
+        while end + 1 < lines.len() {
+            if !is_table_line(lines.get(end + 1)?) {
+                break;
+            }
+            end += 1;
+        }
+
+        let mut delimiter_row: Option<usize> = None;
+        let mut data_rows = Vec::new();
+        for row_idx in start..=end {
+            let row_cells = self.cells_for_line(lines, row_idx)?.clone();
+            if delimiter_row.is_none() && is_table_delimiter_row(&row_cells) {
+                delimiter_row = Some(row_idx);
+                continue;
+            }
+            if delimiter_row.is_some() {
+                data_rows.push(row_idx);
+            }
+        }
+
+        let info = TableBlockInfo { data_rows };
+        for row_idx in start..=end {
+            self.block_by_line.insert(row_idx, Some(info.clone()));
+        }
+        Some(info)
+    }
+}
+
 struct VariableResolver<'a> {
     defs: &'a HashMap<String, VariableDefinition>,
     variable_regex: Option<Regex>,
@@ -127,6 +202,7 @@ struct VariableResolver<'a> {
 }
 
 static VARIABLE_REGEX_CACHE: OnceLock<Mutex<HashMap<u64, Regex>>> = OnceLock::new();
+static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
 
 static EVAL_GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -162,6 +238,11 @@ impl fend_core::Interrupt for GenerationInterrupt {
 }
 
 static GENERATION_INTERRUPT: GenerationInterrupt = GenerationInterrupt;
+
+const TABLE_REF_ERROR_OUT_OF_BOUNDS: &str = "!ERROR#out_of_bounds";
+const TABLE_REF_ERROR_NON_NUMERIC: &str = "!ERROR#non_numeric";
+const TABLE_REF_ERROR_SELF_REFERENCE: &str = "!ERROR#self_reference";
+const TABLE_REF_ERROR_CYCLE: &str = "!ERROR#cycle";
 
 impl<'a> VariableResolver<'a> {
     fn new(defs: &'a HashMap<String, VariableDefinition>) -> Self {
@@ -461,6 +542,11 @@ impl CalcEngine {
         // Working copy of the document for formula substitution. Allocated lazily
         // — only when a table formula cell actually writes a value back.
         let mut working_lines: Option<Vec<String>> = None;
+        // Cache and recursion guard for table-cell formula evaluation by (line, cell).
+        let mut table_formula_cache: HashMap<(usize, usize), String> = HashMap::new();
+        let mut table_formula_stack: Vec<(usize, usize)> = Vec::new();
+        let mut table_eval_cache = TableEvalCache::default();
+        let mut table_diagnostics: Vec<NoteEvaluationDiagnostic> = Vec::new();
 
         // Helper: get a mutable reference to working_lines, cloning from `lines`
         // on first access. Call this only when a write is needed.
@@ -512,9 +598,23 @@ impl CalcEngine {
                         } else {
                             None
                         },
+                        &mut table_eval_cache,
+                        &mut table_formula_cache,
+                        &mut table_formula_stack,
                         &mut ctx,
                     );
                     let Some(value) = value else { continue };
+                    if value.starts_with("!ERROR#") {
+                        table_diagnostics.push(NoteEvaluationDiagnostic {
+                            kind: format!("table-ref-{}", value.trim_start_matches("!ERROR#")),
+                            line: idx + 1,
+                            message: format!(
+                                "table formula cell {} returned {}",
+                                cell_idx + 1,
+                                value
+                            ),
+                        });
+                    }
 
                     if first_value.is_none() {
                         first_value = Some(value.clone());
@@ -528,6 +628,7 @@ impl CalcEngine {
                         substitute_table_cell_value(&working[idx], cell_idx, &value)
                     {
                         working[idx] = updated;
+                        table_eval_cache.split_cells.remove(&idx);
                     }
                 }
                 line_results[idx] = first_value;
@@ -548,8 +649,18 @@ impl CalcEngine {
                     line_expr.table_cell_index,
                     true,
                     Some(&mut resolver),
+                    &mut table_eval_cache,
+                    &mut table_formula_cache,
+                    &mut table_formula_stack,
                     &mut ctx,
                 ) {
+                    if value.starts_with("!ERROR#") {
+                        table_diagnostics.push(NoteEvaluationDiagnostic {
+                            kind: format!("table-ref-{}", value.trim_start_matches("!ERROR#")),
+                            line: idx + 1,
+                            message: format!("table formula returned {}", value),
+                        });
+                    }
                     Some(value)
                 } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(expression)
                 {
@@ -570,8 +681,18 @@ impl CalcEngine {
                     line_expr.table_cell_index,
                     false,
                     None,
+                    &mut table_eval_cache,
+                    &mut table_formula_cache,
+                    &mut table_formula_stack,
                     &mut ctx,
                 ) {
+                    if value.starts_with("!ERROR#") {
+                        table_diagnostics.push(NoteEvaluationDiagnostic {
+                            kind: format!("table-ref-{}", value.trim_start_matches("!ERROR#")),
+                            line: idx + 1,
+                            message: format!("table formula returned {}", value),
+                        });
+                    }
                     Some(value)
                 } else {
                     evaluate_single(expression, &mut ctx)
@@ -581,10 +702,25 @@ impl CalcEngine {
             line_results[idx] = result;
         }
 
+        let mut diagnostics = resolver.diagnostics().unwrap_or_default();
+        for diag in table_diagnostics {
+            if !diagnostics.iter().any(|existing| {
+                existing.kind == diag.kind
+                    && existing.line == diag.line
+                    && existing.message == diag.message
+            }) {
+                diagnostics.push(diag);
+            }
+        }
+
         NoteEvaluationResult {
             line_results,
             variables,
-            diagnostics: resolver.diagnostics(),
+            diagnostics: if diagnostics.is_empty() {
+                None
+            } else {
+                Some(diagnostics)
+            },
             table_cell_results,
         }
     }
@@ -893,6 +1029,13 @@ fn split_table_cells(line: &str) -> Vec<String> {
         .collect()
 }
 
+fn table_coordinate_ref_regex() -> &'static Regex {
+    TABLE_COORD_REF_RE.get_or_init(|| {
+        Regex::new(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)")
+            .expect("table coordinate reference regex is valid")
+    })
+}
+
 fn is_table_delimiter_cell(cell: &str) -> bool {
     let trimmed = cell.trim();
     if trimmed.is_empty() {
@@ -908,33 +1051,151 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
-fn table_block_range(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
-    if lines
-        .get(line_idx)
-        .map(|line| !is_table_line(line))
-        .unwrap_or(true)
-    {
-        return None;
+fn resolve_table_coordinate_value(
+    lines: &[String],
+    line_idx: usize,
+    formula_col: usize,
+    row_1based: usize,
+    col_1based: usize,
+    variables_enabled: bool,
+    mut resolver: Option<&mut VariableResolver<'_>>,
+    table_eval_cache: &mut TableEvalCache,
+    table_formula_cache: &mut HashMap<(usize, usize), String>,
+    table_formula_stack: &mut Vec<(usize, usize)>,
+    ctx: &mut fend_core::Context,
+) -> Result<String, &'static str> {
+    if row_1based == 0 || col_1based == 0 {
+        return Err(TABLE_REF_ERROR_OUT_OF_BOUNDS);
     }
 
-    let mut start = line_idx;
-    while start > 0 {
-        let prev = start - 1;
-        if !is_table_line(lines.get(prev)?) {
-            break;
+    let table_block = table_eval_cache
+        .block_for_line(lines, line_idx)
+        .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
+    let data_rows = &table_block.data_rows;
+    let target_line = *data_rows
+        .get(row_1based.saturating_sub(1))
+        .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
+    let target_col = col_1based.saturating_sub(1);
+
+    if target_line == line_idx && target_col == formula_col {
+        return Err(TABLE_REF_ERROR_SELF_REFERENCE);
+    }
+
+    let target_cells = table_eval_cache
+        .cells_for_line(lines, target_line)
+        .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?
+        .clone();
+    let target_raw = target_cells
+        .get(target_col)
+        .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?
+        .trim();
+    if target_raw.is_empty() {
+        return Err(TABLE_REF_ERROR_NON_NUMERIC);
+    }
+
+    if let Some(value) = parse_plain_numeric_literal(target_raw) {
+        return Ok(format_number(value));
+    }
+
+    // If the target is itself a table formula cell, evaluate it recursively
+    // so references can chain across formulas.
+    if let Some(value) = evaluate_table_formula(
+        lines,
+        target_line,
+        target_raw,
+        Some(target_col),
+        variables_enabled,
+        resolver.as_deref_mut(),
+        table_eval_cache,
+        table_formula_cache,
+        table_formula_stack,
+        ctx,
+    ) {
+        if value == TABLE_REF_ERROR_OUT_OF_BOUNDS
+            || value == TABLE_REF_ERROR_NON_NUMERIC
+            || value == TABLE_REF_ERROR_SELF_REFERENCE
+            || value == TABLE_REF_ERROR_CYCLE
+        {
+            return Err(if value == TABLE_REF_ERROR_OUT_OF_BOUNDS {
+                TABLE_REF_ERROR_OUT_OF_BOUNDS
+            } else if value == TABLE_REF_ERROR_NON_NUMERIC {
+                TABLE_REF_ERROR_NON_NUMERIC
+            } else if value == TABLE_REF_ERROR_CYCLE {
+                TABLE_REF_ERROR_CYCLE
+            } else {
+                TABLE_REF_ERROR_SELF_REFERENCE
+            });
         }
-        start = prev;
+        let numeric = extract_first_number(&value).ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
+        return Ok(format_number(numeric));
     }
 
-    let mut end = line_idx;
-    while end + 1 < lines.len() {
-        if !is_table_line(lines.get(end + 1)?) {
-            break;
-        }
-        end += 1;
+    let evaluated = if variables_enabled {
+        let resolver = resolver.as_deref_mut().ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
+        evaluate_formula_term_with_variables(target_raw, resolver, ctx)
+    } else {
+        evaluate_formula_term(target_raw, ctx)
+    }
+    .ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
+
+    let numeric = extract_first_number(&evaluated).ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
+    Ok(format_number(numeric))
+}
+
+fn substitute_table_coordinate_references(
+    lines: &[String],
+    line_idx: usize,
+    formula_col: usize,
+    expression: &str,
+    variables_enabled: bool,
+    mut resolver: Option<&mut VariableResolver<'_>>,
+    table_eval_cache: &mut TableEvalCache,
+    table_formula_cache: &mut HashMap<(usize, usize), String>,
+    table_formula_stack: &mut Vec<(usize, usize)>,
+    ctx: &mut fend_core::Context,
+) -> Result<String, &'static str> {
+    let regex = table_coordinate_ref_regex();
+    let mut rewritten = String::with_capacity(expression.len());
+    let mut cursor = 0usize;
+    let mut replaced_any = false;
+
+    for captures in regex.captures_iter(expression) {
+        let Some(m) = captures.get(0) else { continue };
+        rewritten.push_str(&expression[cursor..m.start()]);
+
+        let row_1based = captures
+            .get(1)
+            .and_then(|m| m.as_str().parse::<usize>().ok())
+            .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
+        let col_1based = captures
+            .get(2)
+            .and_then(|m| m.as_str().parse::<usize>().ok())
+            .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
+
+        let value = resolve_table_coordinate_value(
+            lines,
+            line_idx,
+            formula_col,
+            row_1based,
+            col_1based,
+            variables_enabled,
+            resolver.as_deref_mut(),
+            table_eval_cache,
+            table_formula_cache,
+            table_formula_stack,
+            ctx,
+        )?;
+        rewritten.push_str(&value);
+        cursor = m.end();
+        replaced_any = true;
     }
 
-    Some((start, end))
+    if !replaced_any {
+        return Ok(expression.to_string());
+    }
+
+    rewritten.push_str(&expression[cursor..]);
+    Ok(rewritten)
 }
 
 fn collect_table_formula_terms(
@@ -942,13 +1203,9 @@ fn collect_table_formula_terms(
     line_idx: usize,
     formula_col: usize,
     spec: FormulaSpec,
+    table_eval_cache: &mut TableEvalCache,
 ) -> Option<Vec<String>> {
-    let current_line = lines.get(line_idx)?;
-    if !is_table_line(current_line) {
-        return None;
-    }
-
-    let current_cells = split_table_cells(current_line);
+    let current_cells = table_eval_cache.cells_for_line(lines, line_idx)?.clone();
     if is_table_delimiter_row(&current_cells) {
         return None;
     }
@@ -974,20 +1231,12 @@ fn collect_table_formula_terms(
             }
         }
         FormulaScope::Column => {
-            let (table_start, table_end) = table_block_range(lines, line_idx)?;
-            let mut data_start = table_start;
-            for row_idx in table_start..=table_end {
-                let row_line = lines.get(row_idx)?;
-                let row_cells = split_table_cells(row_line);
-                if is_table_delimiter_row(&row_cells) {
-                    data_start = row_idx.saturating_add(1);
+            let table_block = table_eval_cache.block_for_line(lines, line_idx)?;
+            for row_idx in table_block.data_rows {
+                if row_idx >= line_idx {
                     break;
                 }
-            }
-
-            for row_idx in data_start..line_idx {
-                let row_line = lines.get(row_idx)?;
-                let row_cells = split_table_cells(row_line);
+                let row_cells = table_eval_cache.cells_for_line(lines, row_idx)?.clone();
                 if is_table_delimiter_row(&row_cells) {
                     continue;
                 }
@@ -1165,9 +1414,10 @@ fn evaluate_table_formula_call(
     spec: FormulaSpec,
     variables_enabled: bool,
     resolver: Option<&mut VariableResolver<'_>>,
+    table_eval_cache: &mut TableEvalCache,
     ctx: &mut fend_core::Context,
 ) -> Option<String> {
-    let terms = collect_table_formula_terms(lines, line_idx, formula_col, spec)?;
+    let terms = collect_table_formula_terms(lines, line_idx, formula_col, spec, table_eval_cache)?;
 
     let mut values = Vec::new();
     if variables_enabled {
@@ -1195,66 +1445,102 @@ fn evaluate_table_formula(
     table_cell_index: Option<usize>,
     variables_enabled: bool,
     mut resolver: Option<&mut VariableResolver<'_>>,
+    table_eval_cache: &mut TableEvalCache,
+    table_formula_cache: &mut HashMap<(usize, usize), String>,
+    table_formula_stack: &mut Vec<(usize, usize)>,
     ctx: &mut fend_core::Context,
 ) -> Option<String> {
     let formula_col = table_cell_index?;
 
-    // Strip the leading `:=` formula prefix if present.  This keeps fend
-    // from ever seeing the `:=` characters and lets callers write either
-    // `:=sum_col()` or `:=5*sum_col()+var` uniformly.
-    let trimmed = expression.trim();
-    let (expression, had_prefix) = if let Some(rest) = trimmed.strip_prefix(":=") {
-        (rest.trim_start(), true)
-    } else {
-        (trimmed, false)
-    };
-
-    if expression.is_empty() {
-        return None;
+    let key = (line_idx, formula_col);
+    if let Some(cached) = table_formula_cache.get(&key) {
+        return Some(cached.clone());
     }
+    if table_formula_stack.contains(&key) {
+        return Some(TABLE_REF_ERROR_CYCLE.to_string());
+    }
+    table_formula_stack.push(key);
 
-    let calls = find_builtin_formula_calls(expression);
+    let result = (|| {
+        // Strip the leading `:=` formula prefix if present. This keeps fend
+        // from ever seeing the `:=` characters and lets callers write either
+        // `:=sum_col()` or `:=5*sum_col()+var` uniformly.
+        let trimmed = expression.trim();
+        let (expression, had_prefix) = if let Some(rest) = trimmed.strip_prefix(":=") {
+            (rest.trim_start(), true)
+        } else {
+            (trimmed, false)
+        };
 
-    // When no builtin calls exist but the cell had an explicit := prefix,
-    // evaluate the stripped expression as a plain arithmetic/variable expression.
-    if calls.is_empty() {
-        if !had_prefix {
+        if expression.is_empty() {
             return None;
         }
-        return if variables_enabled {
-            let resolver = resolver?;
-            evaluate_expression_with_variables(expression, resolver, ctx)
-        } else {
-            evaluate_single(expression, ctx)
-        };
-    }
 
-    let mut rewritten = String::with_capacity(expression.len() + calls.len() * 4);
-    let mut cursor = 0usize;
-    for call in calls {
-        rewritten.push_str(&expression[cursor..call.start]);
-        let value = evaluate_table_formula_call(
+        let expression = match substitute_table_coordinate_references(
             lines,
             line_idx,
             formula_col,
-            call.spec,
+            expression,
             variables_enabled,
             resolver.as_deref_mut(),
+            table_eval_cache,
+            table_formula_cache,
+            table_formula_stack,
             ctx,
-        )?;
-        rewritten.push('(');
-        rewritten.push_str(&value);
-        rewritten.push(')');
-        cursor = call.end;
-    }
-    rewritten.push_str(&expression[cursor..]);
+        ) {
+            Ok(value) => value,
+            Err(error) => return Some(error.to_string()),
+        };
 
-    if variables_enabled {
-        let resolver = resolver?;
-        evaluate_expression_with_variables(&rewritten, resolver, ctx)
-    } else {
-        evaluate_single(&rewritten, ctx)
+        let calls = find_builtin_formula_calls(&expression);
+
+        // When no builtin calls exist but the cell had an explicit := prefix,
+        // evaluate the stripped expression as a plain arithmetic/variable expression.
+        if calls.is_empty() {
+            return if !had_prefix {
+                None
+            } else if variables_enabled {
+                let resolver = resolver?;
+                evaluate_expression_with_variables(&expression, resolver, ctx)
+            } else {
+                evaluate_single(&expression, ctx)
+            };
+        }
+
+        let mut rewritten = String::with_capacity(expression.len() + calls.len() * 4);
+        let mut cursor = 0usize;
+        for call in calls {
+            rewritten.push_str(&expression[cursor..call.start]);
+            let value = evaluate_table_formula_call(
+                lines,
+                line_idx,
+                formula_col,
+                call.spec,
+                variables_enabled,
+                resolver.as_deref_mut(),
+                table_eval_cache,
+                ctx,
+            )?;
+            rewritten.push('(');
+            rewritten.push_str(&value);
+            rewritten.push(')');
+            cursor = call.end;
+        }
+        rewritten.push_str(&expression[cursor..]);
+
+        if variables_enabled {
+            let resolver = resolver?;
+            evaluate_expression_with_variables(&rewritten, resolver, ctx)
+        } else {
+            evaluate_single(&rewritten, ctx)
+        }
+    })();
+
+    table_formula_stack.pop();
+    if let Some(value) = result.clone() {
+        table_formula_cache.insert(key, value);
     }
+    result
 }
 
 fn is_table_line(line: &str) -> bool {
@@ -1998,6 +2284,183 @@ mod tests {
             .unwrap_or_default();
         let n = extract_first_number(&val).unwrap_or(f64::NAN);
         assert!((n - 7.5).abs() < 1e-6, "got {val}");
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_uses_1_based_data_rows() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | |".to_string(),
+            "| c | 0 | :=(1,2) + (2,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[4]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_reports_out_of_bounds() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | :=(3,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_OUT_OF_BOUNDS.to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_reports_non_numeric() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| abc | 10 | |".to_string(),
+            "| b | 20 | :=(1,1) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_NON_NUMERIC.to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_reports_self_reference() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | :=(1,3) + 1 |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[2]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_SELF_REFERENCE.to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_resolves_formula_target_cell() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | :=sum_row() |".to_string(),
+            "| b | 20 | :=(1,3) + 5 |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some("15".to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_reports_indirect_self_reference_cycle() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 1 | :=(2,3) |".to_string(),
+            "| b | 2 | :=(1,3) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[2]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_CYCLE.to_string())
+        );
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_CYCLE.to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_emits_structured_diagnostics() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | text | |".to_string(),
+            "| b | 2 | :=(1,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let diagnostics = res.diagnostics.unwrap_or_default();
+        assert!(diagnostics.iter().any(|d| {
+            d.kind == "table-ref-non_numeric"
+                && d.line == 4
+                && d.message.contains(TABLE_REF_ERROR_NON_NUMERIC)
+        }));
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_accepts_whitespace_variants() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | :=( 1 , 2 ) + (2, 2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_very_large_index_is_out_of_bounds() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | :=(999999999999999999999999, 2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some(TABLE_REF_ERROR_OUT_OF_BOUNDS.to_string())
+        );
     }
 
     #[test]

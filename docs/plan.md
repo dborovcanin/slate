@@ -136,6 +136,7 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 - `:=5 * sum_col() + var` — arithmetic before a function call
 - `:=avg_col() * 2 - offset` — compound expression with multiple terms
 - `:=var` — bare variable reference
+- `:=(1,2) + (2,2)` — 1-based table cell references (data rows only)
 
 **Syntax rules:**
 
@@ -144,6 +145,8 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 - Variable definitions (`name := expr`) cannot be created inside table cells; `:=expr` without a name is always a formula, never a definition.
 - Builtin functions (`sum_col()`, `avg_col()`, `sum_row()`, `avg_row()`) can appear anywhere in the expression and are substituted with their computed values before evaluation.
 - Variable references are resolved from the full document context.
+- Cell references use `(row,col)` with 1-based indexing over table **data rows** (rows after the delimiter) and 1-based columns within the same table block.
+- Reference errors return explicit markers: `!ERROR#out_of_bounds`, `!ERROR#non_numeric`, `!ERROR#self_reference`, `!ERROR#cycle`.
 
 **Module gating rules:**
 
@@ -395,7 +398,6 @@ Acceptance criteria:
 - [ ] Fix Markdown decoration around `**` before and after `,`, `(`, or `{...`, not only whitespace
 - [ ] Fix memory leak
 - [ ] 3-time password block
-- [ ] Enrich table with `(1,2)` access for better experience
 - [ ] Improve overflow handling
 - [ ] Improve theming and overall visual polish in UI and TUI
 - [ ] Memory consumption and micro-optimizations
@@ -406,3 +408,4 @@ Acceptance criteria:
 - [ ] Do not follow cursor for a checkbox that is moved to the bottom because it was checked
 - [ ] Improve encrypted notes (per-note passphrase, locked from search until unlock)
 - [ ] Vault mode for hidden tagged notes
+- [x] Enrich table with `(1,2)` access for better experience

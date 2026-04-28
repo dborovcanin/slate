@@ -7,6 +7,7 @@ This document defines the shared variable behavior used by the Tauri UI and Rust
 - Assignment form: `name := expression`
 - `:=` may be written with or without spaces (`name:=expression` also works)
 - Table formula form: cell-local `:=expression` (the `:=` must be the first non-space token in the cell)
+- Table cell reference form inside table formulas: `(row,col)` (1-based)
 - Variable names:
   - case-insensitive
   - may contain ASCII letters, digits, underscore, and spaces
@@ -48,6 +49,12 @@ Module behavior matrix:
   - table line: every `:=...` formula cell in the row (left-to-right)
 - Variables are resolved before expression evaluation.
 - Table formula cells are never treated as variable definitions (`:=expr` in a cell is always a formula, never `name := expr`).
+- Table cell references are table-local and use data rows only (exclude header + delimiter rows).
+- Table-reference errors are surfaced inline as:
+  - `!ERROR#out_of_bounds`
+  - `!ERROR#non_numeric`
+  - `!ERROR#self_reference`
+  - `!ERROR#cycle`
 - Unit/currency conversion assignments are normalized to numeric-only values when stored.
 
 Example:
@@ -64,6 +71,7 @@ len + 2
 - Unresolved variable references produce no ghost output.
 - Cyclic dependencies produce no ghost output.
 - Diagnostics are available from Rust command output for tests/debugging but are not shown in the editor UI.
+- Table reference failures also emit structured diagnostics with `kind=table-ref-*` alongside inline `!ERROR#...` cell values.
 
 ## Autocomplete
 
