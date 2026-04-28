@@ -105,7 +105,16 @@ jobs:
         run: npm ci
 
       - name: Build release binary (Tauri, no bundle)
+        if: runner.os == 'Linux'
         run: npm run tauri build -- --no-bundle --ci
+
+      - name: Build macOS DMG bundle
+        if: runner.os == 'macOS'
+        run: npm run tauri build -- --bundles dmg --ci
+
+      - name: Build Windows NSIS installer
+        if: runner.os == 'Windows'
+        run: npm run tauri build -- --bundles nsis --ci
 
       - name: Upload Linux binary
         if: runner.os == 'Linux'
@@ -123,10 +132,26 @@ jobs:
           path: target/release/slate
           if-no-files-found: error
 
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slate-macos-dmg
+          path: target/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
       - name: Upload Windows binary
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
           name: slate-windows
           path: target/release/slate.exe
+          if-no-files-found: error
+
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slate-windows-installer
+          path: target/release/bundle/nsis/*.exe
           if-no-files-found: error

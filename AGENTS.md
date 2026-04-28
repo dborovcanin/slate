@@ -176,24 +176,18 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-28 8:26pm GMT+2
+# [slate] recent context, 2026-04-28 8:41pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (18,412t read) | 677,919t work | 97% savings
+Stats: 50 obs (18,205t read) | 1,256,187t work | 99% savings
 
 ### Apr 25, 2026
 S28 Font config setting has no effect — theme font not applied from config (Apr 25, 1:17 AM)
 S48 Note Search Pass 2 implementation — baseline survey and design decisions before coding begins (Apr 25, 1:19 AM)
-44 11:46a 🔵 Slate HTML theming architecture — applyState() and CSS variable pipeline
-45 " 🟣 Added slate and slate-dark color schemes with custom accent picker to Slate (3).html
-46 11:47a 🔵 Slate config.toml has display_font field and slate/slate-dark schemes already active
-47 11:48a 🔄 Config refactor: removed variables_enabled field and flattened variable_autocomplete_min_chars into [editor]
-48 11:49a 🔵 apply_patch fails on second hunk after write_file already applied the first hunk
-49 " 🔄 Completed variables_enabled removal from TUI and TypeScript API layer
-50 " ✅ Updated module-commands tests to remove legacy variables_enabled config override
+50 11:49a ✅ Updated module-commands tests to remove legacy variables_enabled config override
 51 3:51p 🟣 FTS search backend passes all 74 tests including new search tests
 52 3:53p 🟣 Full test suite green after FTS search + switcher content search integration
 53 3:55p ⚖️ Migration script cleanup — beta environment fully migrated
@@ -247,29 +241,12 @@ S92 Table formula := prefix feature fully shipped — all tests green (Apr 28, 3
 97 3:52p ✅ docs/plan.md updated with Table Formula Expressions syntax documentation
 98 " 🟣 Table formula := prefix feature fully shipped — all tests green
 S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
-**Investigated**: - calc_plan.rs: contains_assignment_operator, find_single_calc_table_cell_range, find_table_formula_segments
-    - engine.rs: table_expression_segments, multi-cell eval trigger condition, evaluate_table_formula
-    - Existing tests in both files (still using old = prefix, still passing due to backward compat)
-    - src-tauri/Cargo.toml test suite for TUI calc_table tests
+99 8:27p 🔄 Welcome note seeding moved into 0001_init.sql, legacy migrations removed
+100 " 🔴 Test count assertions updated to account for welcome note in fresh databases
+101 " 🟣 Welcome note with demo content shipped as part of fresh database initialization
+102 8:40p 🔵 macOS CI skips DMG bundle due to --no-bundle flag
+103 8:41p 🔵 tauri.conf.json bundle targets only configures nsis, no dmg
+104 " 🔴 CI macOS now produces DMG artifact alongside raw binary
 
-**Learned**: - The key disambiguation: := as variable assignment always has a word char (alphanumeric/_) before it; := as table formula prefix has nothing (or only whitespace/pipe) before it. This is enforced in contains_assignment_operator.
-    - builtin_formula_label() still strips a leading bare = before normalizing, so old = prefix remains functional (backward compat preserved).
-    - evaluate_table_formula must strip := before passing to fend; when no builtin calls are present but had_prefix is true, the stripped expression evaluates as plain arithmetic/variable — enabling :=var and :=multiplier*2+1 style cells.
-    - `:=expr` in a table cell never registers as a variable definition — confirmed by test and by parse_variable_assignment requiring a non-empty valid name before :=.
-
-**Completed**: - calc_plan.rs: contains_assignment_operator requires word char before := (fixes false positive on formula prefix)
-    - calc_plan.rs: find_single_calc_table_cell_range treats := prefix cells as formula_candidates
-    - calc_plan.rs: find_table_formula_segments includes := prefix cells (labels may be empty)
-    - engine.rs: table_expression_segments pushes := prefix cells into formula_segments
-    - engine.rs: multi-cell eval trigger fires on := prefix cells, not just builtin calls
-    - engine.rs: evaluate_table_formula strips := prefix; evaluates plain expr when no builtins present
-    - New tests in engine.rs: colon_eq with builtin+arithmetic+variable, no-builtin expression, variable-only, does-not-define-variable
-    - New tests in calc_plan.rs: contains_assignment_operator disambiguation, find_table_formula_segments with := and builtin, find_table_formula_segments with := and no builtin
-    - docs/plan.md: new "Table Formula Expressions" section with examples and syntax rules
-    - Full test suite: 483 tests passing, 0 failures (app-core + editor-core + src-tauri)
-
-**Next Steps**: Feature is complete and verified. Potential follow-up: migrate old existing tests that still use bare = prefix (e.g. "| =avg_col() |") to := for consistency, though this is cosmetic since both syntaxes work.
-
-
-Access 678k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1256k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
