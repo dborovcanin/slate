@@ -176,29 +176,20 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-28 8:41pm GMT+2
+# [slate] recent context, 2026-04-28 10:16pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (18,205t read) | 1,256,187t work | 99% savings
+Stats: 50 obs (18,718t read) | 1,275,092t work | 99% savings
 
 ### Apr 25, 2026
 S28 Font config setting has no effect — theme font not applied from config (Apr 25, 1:17 AM)
 S48 Note Search Pass 2 implementation — baseline survey and design decisions before coding begins (Apr 25, 1:19 AM)
-50 11:49a ✅ Updated module-commands tests to remove legacy variables_enabled config override
-51 3:51p 🟣 FTS search backend passes all 74 tests including new search tests
-52 3:53p 🟣 Full test suite green after FTS search + switcher content search integration
-53 3:55p ⚖️ Migration script cleanup — beta environment fully migrated
-55 3:56p 🟣 Note Search Pass 2 plan documented in docs/plan.md
-56 4:01p 🔵 Note Search Pass 2 plan and last commit reviewed before implementation
-57 " 🔵 FTS5 search implementation baseline surveyed before Pass 2
 S50 FTS5 Note Search Pass 2 — five design decisions confirmed (Apr 25, 4:02 PM)
-58 4:06p ⚖️ FTS5 Note Search Pass 2 — five design decisions confirmed
 S73 Fix frozen search input and slow/blocking results when searching notes in the terminal app (Apr 25, 4:06 PM)
 59 4:17p 🟣 FTS5 index extended to include note_title column
-60 " 🟣 NoteSearchResult struct added to models.rs
 61 4:18p 🟣 DB startup sequence gains migration runner and search index health check
 62 4:19p 🟣 search_notes_content rewritten to return ranked NoteSearchResult with FTS5 snippets
 63 4:21p 🟣 Note Search Pass 2 — Full frontend integration with NoteSearchResult and snippet rendering
@@ -247,6 +238,15 @@ S94 Change table formula cell prefix from bare = to := to align with variable as
 102 8:40p 🔵 macOS CI skips DMG bundle due to --no-bundle flag
 103 8:41p 🔵 tauri.conf.json bundle targets only configures nsis, no dmg
 104 " 🔴 CI macOS now produces DMG artifact alongside raw binary
+105 " ✅ CI extended to also produce Windows NSIS installer artifact
+106 9:34p 🔵 macOS "cannot be opened" error — possible architecture mismatch for M-series Macs
+108 9:36p 🔵 CI DMG is unsigned, unnotarized, and Intel-only — blocked on M-series Macs
+109 9:37p 🟣 CI macOS build now imports Developer ID certificate and verifies notarized DMG
+110 " ⚖️ macOS signing identity restricted to "Developer ID Application" only
+111 9:40p ✅ CI macOS signing refactored to gracefully degrade to ad-hoc signing when secrets absent
+112 9:44p ⚖️ macOS CI signing simplified to ad-hoc only — full notarization pipeline reverted
+113 9:56p ✅ CI macOS artifact paths made flexible for both root and src-tauri build output locations
+114 " ✅ All CI binary and installer upload paths expanded to cover src-tauri/target output location
 
-Access 1256k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1275k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
