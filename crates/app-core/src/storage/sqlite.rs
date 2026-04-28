@@ -23,7 +23,6 @@ const PBKDF2_ITERATIONS: u32 = 200_000;
 const NOTE_TITLE_MAX_CHARS: usize = 60;
 const SEARCH_QUERY_MAX_TERMS: usize = 8;
 const SEARCH_LIMIT_MAX: usize = 100;
-const LEGACY_MARKDOWN_FILE_NOTE_ID_SQL_PREFIX: &str = "mdfile:%";
 
 #[derive(Debug, Clone)]
 struct NoteSecurityRow {
@@ -71,7 +70,6 @@ impl SqlitePool {
         first
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
-        apply_pending_migrations(&first)?;
         seed_note_search_index_if_empty(&first)?;
         check_and_heal_search_index(&first)?;
 
@@ -1790,54 +1788,6 @@ fn escape_like_pattern(value: &str) -> String {
     out
 }
 
-fn apply_pending_migrations(conn: &Connection) -> Result<(), String> {
-    let needs_fts_title: bool = conn
-        .query_row(
-            "SELECT COUNT(1) FROM sqlite_master \
-             WHERE type='table' AND name='notes_fts' AND sql NOT LIKE '%note_title%'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if needs_fts_title {
-        conn.execute_batch(include_str!("../../migrations/0002_fts_title.sql"))
-            .map_err(|e| format!("Migration 0002 (fts_title) failed: {e}"))?;
-    }
-
-    let needs_fts_prefix: bool = conn
-        .query_row(
-            "SELECT COUNT(1) FROM sqlite_master \
-             WHERE type='table' AND name='notes_fts' \
-               AND (sql IS NULL OR LOWER(sql) NOT LIKE '%prefix%')",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if needs_fts_prefix {
-        conn.execute_batch(include_str!("../../migrations/0003_fts_prefix.sql"))
-            .map_err(|e| format!("Migration 0003 (fts_prefix) failed: {e}"))?;
-    }
-    cleanup_legacy_markdown_file_notes(conn)?;
-    Ok(())
-}
-
-fn cleanup_legacy_markdown_file_notes(conn: &Connection) -> Result<(), String> {
-    let deleted = conn
-        .execute(
-            "DELETE FROM notes WHERE id LIKE ?1",
-            [LEGACY_MARKDOWN_FILE_NOTE_ID_SQL_PREFIX],
-        )
-        .map_err(|e| format!("Migration 0004 (legacy_markdown_cleanup) failed: {e}"))?;
-    if deleted > 0 {
-        eprintln!("cleaned up {deleted} legacy markdown-file note row(s)");
-    }
-    Ok(())
-}
-
 fn rebuild_note_search_index_inner(conn: &Connection) -> Result<(), String> {
     conn.execute("DELETE FROM notes_fts", [])
         .map_err(|e| format!("Failed to clear FTS index: {e}"))?;
@@ -2092,7 +2042,7 @@ mod tests {
         assert_eq!(locked.body, "");
 
         let listed_locked = db.list_notes_meta().expect("list meta");
-        assert_eq!(listed_locked.len(), 1);
+        assert_eq!(listed_locked.len(), 2);
         assert_eq!(listed_locked[0].title, "top secret");
         assert_eq!(listed_locked[0].body_prefix, "[locked]");
         assert_eq!(listed_locked[0].access_mode, NoteAccessMode::Locked);
@@ -2114,7 +2064,7 @@ mod tests {
         assert_eq!(unlocked.body, "top secret");
 
         let listed_unlocked = db.list_notes_meta().expect("list meta unlocked");
-        assert_eq!(listed_unlocked.len(), 1);
+        assert_eq!(listed_unlocked.len(), 2);
         assert_eq!(listed_unlocked[0].body_prefix, "top secret");
         assert_eq!(listed_unlocked[0].access_mode, NoteAccessMode::Locked);
         assert!(listed_unlocked[0].is_unlocked);
@@ -2141,7 +2091,7 @@ mod tests {
         assert_eq!(encrypted.body, "classified line");
 
         let listed_encrypted = db.list_notes_meta().expect("list meta encrypted");
-        assert_eq!(listed_encrypted.len(), 1);
+        assert_eq!(listed_encrypted.len(), 2);
         assert_eq!(listed_encrypted[0].title, "classified line");
         assert_eq!(listed_encrypted[0].body_prefix, "classified line");
         assert_eq!(listed_encrypted[0].access_mode, NoteAccessMode::Encrypted);
@@ -2170,7 +2120,7 @@ mod tests {
         assert_eq!(unlocked.body, "classified line");
 
         let listed_unlocked = db.list_notes_meta().expect("list meta unlocked");
-        assert_eq!(listed_unlocked.len(), 1);
+        assert_eq!(listed_unlocked.len(), 2);
         assert_eq!(listed_unlocked[0].body_prefix, "classified line");
         assert_eq!(listed_unlocked[0].access_mode, NoteAccessMode::Encrypted);
         assert!(listed_unlocked[0].is_unlocked);
@@ -2374,9 +2324,10 @@ mod tests {
         db.save_note("a", "first updated").expect("update first");
 
         let listed = db.list_notes().expect("list succeeds");
-        assert_eq!(listed.len(), 2);
+        assert_eq!(listed.len(), 3);
         assert_eq!(listed[0].id, "a");
         assert_eq!(listed[1].id, "b");
+        assert_eq!(listed[2].id, "welcome");
 
         let most_recent = db
             .get_most_recent_note()
@@ -2457,138 +2408,46 @@ mod tests {
     }
 
     #[test]
-    fn open_db_migration_cleans_legacy_markdown_file_notes() {
+    fn welcome_note_seed_migration_is_idempotent() {
         let path = temp_db_path();
-        let conn = Connection::open(path.clone()).expect("legacy db opens");
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE notes (
-                id TEXT PRIMARY KEY,
-                body TEXT NOT NULL DEFAULT '',
-                note_title TEXT NOT NULL DEFAULT '',
-                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
-                access_mode TEXT NOT NULL DEFAULT 'none',
-                password_salt BLOB,
-                password_hash BLOB,
-                encryption_salt BLOB,
-                encryption_nonce BLOB,
-                encrypted_body BLOB,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
-             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
-             VALUES
-               ('mdfile:legacy', 'legacy markdown row marker', 'legacy mdfile', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
-               ('n1', 'survivor row marker', 'regular', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
-        )
-        .expect("legacy schema created");
-        drop(conn);
+        let db = Db::open(path.clone()).expect("db opens");
 
-        let db = Db::open(path.clone()).expect("db opens and runs cleanup migration");
-        let listed = db.list_notes_meta().expect("list meta succeeds");
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, "n1");
-
-        let legacy_hits = db
-            .search_notes_content("legacy markdown row marker", 20)
-            .expect("search succeeds");
-        assert!(
-            legacy_hits.is_empty(),
-            "legacy mdfile row should be removed"
-        );
-        let survivor_hits = db
-            .search_notes_content("survivor row marker", 20)
-            .expect("search succeeds");
-        assert_eq!(survivor_hits.len(), 1);
-        assert_eq!(survivor_hits[0].id, "n1");
-        drop(db);
-
-        let check = Connection::open(path.clone()).expect("db reopens for verification");
-        let mdfile_rows: i64 = check
+        let welcome_rows: i64 = db
+            .conn
+            .lock()
+            .expect("pool lock")
             .query_row(
-                "SELECT COUNT(1) FROM notes WHERE id LIKE 'mdfile:%'",
+                "SELECT COUNT(1) FROM notes WHERE id = 'welcome'",
                 [],
                 |row| row.get(0),
             )
-            .expect("mdfile row count query succeeds");
-        assert_eq!(mdfile_rows, 0);
+            .expect("count welcome rows");
+        assert_eq!(welcome_rows, 1);
 
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn search_notes_content_migrates_fts_to_prefix_index() {
-        let path = temp_db_path();
-        let conn = Connection::open(path.clone()).expect("legacy db opens");
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE notes (
-                id TEXT PRIMARY KEY,
-                body TEXT NOT NULL DEFAULT '',
-                note_title TEXT NOT NULL DEFAULT '',
-                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
-                access_mode TEXT NOT NULL DEFAULT 'none',
-                password_salt BLOB,
-                password_hash BLOB,
-                encryption_salt BLOB,
-                encryption_nonce BLOB,
-                encrypted_body BLOB,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
-             CREATE VIRTUAL TABLE notes_fts USING fts5(
-                note_id UNINDEXED,
-                note_title,
-                body,
-                tokenize = 'unicode61'
-             );
-             CREATE TRIGGER notes_fts_ai
-             AFTER INSERT ON notes
-             BEGIN
-                 INSERT INTO notes_fts(rowid, note_id, note_title, body)
-                 SELECT new.rowid, new.id, new.note_title, new.body
-                 WHERE new.access_mode = 'none';
-             END;
-             CREATE TRIGGER notes_fts_ad
-             AFTER DELETE ON notes
-             BEGIN
-                 DELETE FROM notes_fts WHERE rowid = old.rowid;
-             END;
-             CREATE TRIGGER notes_fts_au
-             AFTER UPDATE ON notes
-             BEGIN
-                 DELETE FROM notes_fts WHERE rowid = old.rowid;
-                 INSERT INTO notes_fts(rowid, note_id, note_title, body)
-                 SELECT new.rowid, new.id, new.note_title, new.body
-                 WHERE new.access_mode = 'none';
-             END;
-             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
-             VALUES ('legacy-note', 'alpha from legacy fts', 'legacy', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
-        )
-        .expect("legacy schema with non-prefix fts created");
-        drop(conn);
-
-        let db = Db::open(path.clone()).expect("db opens and migrates fts");
-        let hits = db
-            .search_notes_content("alpha", 20)
-            .expect("search succeeds");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "legacy-note");
-        drop(db);
-
-        let check = Connection::open(path.clone()).expect("db reopens");
-        let sql: String = check
+        let welcome = db
+            .conn
+            .lock()
+            .expect("pool lock")
             .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='table' AND name='notes_fts'",
+                "SELECT body, modules_json, access_mode FROM notes WHERE id = 'welcome'",
                 [],
-                |row| row.get(0),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
             )
-            .expect("fts schema sql exists");
-        assert!(
-            sql.to_lowercase().contains("prefix"),
-            "notes_fts should include prefix index after migration, schema: {sql}"
+            .expect("welcome row exists");
+        assert!(welcome.0.contains("# Welcome to Slate"));
+        assert_eq!(
+            welcome.1,
+            "{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}"
         );
+        assert_eq!(welcome.2, "none");
 
+        drop(db);
         let _ = fs::remove_file(path);
     }
 

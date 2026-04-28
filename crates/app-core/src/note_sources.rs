@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(meta.title, "second body");
 
         let listed = service.list_notes_meta(None).expect("list meta");
-        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.len(), 2);
         assert_eq!(listed[0].id, "n1");
 
         let caps = service.capabilities_for_note_id("n1");
@@ -529,12 +529,13 @@ mod tests {
         assert_eq!(meta.title, "updated file body");
 
         let listed_without_active = service.list_notes_meta(None).expect("list without active");
-        assert!(listed_without_active.is_empty());
+        assert_eq!(listed_without_active.len(), 1);
+        assert_eq!(listed_without_active[0].id, "welcome");
 
         let listed_with_active = service
             .list_notes_meta(Some(&note_id))
             .expect("list with active");
-        assert_eq!(listed_with_active.len(), 1);
+        assert_eq!(listed_with_active.len(), 2);
         assert_eq!(listed_with_active[0].id, note_id);
 
         let caps = service.capabilities_for_note_id(&note_id);

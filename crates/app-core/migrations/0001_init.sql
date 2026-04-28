@@ -46,6 +46,67 @@ BEGIN
     WHERE new.access_mode = 'none';
 END;
 
+INSERT INTO notes (
+    id,
+    body,
+    note_title,
+    modules_json,
+    access_mode,
+    created_at,
+    updated_at
+)
+SELECT
+    'welcome',
+    '# Welcome to Slate
+
+This note demonstrates modules and editing features.
+
+## Headings
+
+### Heading 3
+#### Heading 4
+##### Heading 5
+###### Heading 6
+
+## List Types
+
+- Unordered item
+- Another unordered item
+
+1. Ordered item one
+2. Ordered item two
+
+- [ ] Checklist item
+- [x] Completed checklist item
+
+## Variables
+
+salary := 4200
+rent := 1300
+tax_rate := 0.2
+net := salary - rent
+tax_due := net * tax_rate
+
+## Table Formulas
+
+| Item   | Price | Qty | Total |
+| ------ | ----: | --: | ----: |
+| Coffee |  3.50 |   2 | :=(1,2) * (1,3) |
+| Snacks |  5.00 |   1 | :=(2,2) * (2,3) |
+| Fruit  |  2.25 |   4 | :=(3,2) * (3,3) |
+|        |       | Sum | :=sum_col() |',
+    'Welcome to Slate',
+    '{"math":true,"table":true,"variables":true,"style":true}',
+    'none',
+    strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+    strftime('%Y-%m-%dT%H:%M:%fZ','now')
+WHERE NOT EXISTS (
+    SELECT 1 FROM notes WHERE id = 'welcome'
+)
+AND NOT EXISTS (
+    SELECT 1 FROM notes
+);
+
 CREATE TABLE IF NOT EXISTS reminders (
     note_id TEXT NOT NULL,
     line_number INTEGER NOT NULL CHECK(line_number > 0),
