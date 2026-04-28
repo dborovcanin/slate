@@ -144,7 +144,7 @@ const calcResultsField = StateField.define<Map<number, string>>({
   },
 });
 
-// Per-cell results for table rows containing one or more `=…` formula cells.
+// Per-cell results for table rows containing one or more `:=...` formula cells.
 // Parallel to `calcResultsField`. `calcResultsField` continues to hold the
 // first formula's value for backward compatibility (committed-trailer refresh,
 // non-table calc ghost), while this field carries every formula cell in the

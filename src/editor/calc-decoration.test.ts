@@ -66,19 +66,19 @@ test("findSingleCalcTableCell ignores ambiguous rows with multiple expressions",
 });
 
 test("findSingleCalcTableCell extracts builtin formula cells", () => {
-  const line = "| name | =avg_col() | 1.91 |";
+  const line = "| name | :=avg_col() | 1.91 |";
   const cell = findSingleCalcTableCell(line);
   assert.ok(cell);
-  assert.equal(line.slice(cell!.fromCol, cell!.toCol), "=avg_col()");
-  assert.equal(cell!.expr, "=avg_col()");
+  assert.equal(line.slice(cell!.fromCol, cell!.toCol), ":=avg_col()");
+  assert.equal(cell!.expr, ":=avg_col()");
 });
 
 test("findSingleCalcTableCell prioritizes a single builtin formula cell", () => {
-  const line = "| =avg_col() | 2+2 |";
+  const line = "| :=avg_col() | 2+2 |";
   const cell = findSingleCalcTableCell(line);
   assert.ok(cell);
-  assert.equal(line.slice(cell!.fromCol, cell!.toCol), "=avg_col()");
-  assert.equal(cell!.expr, "=avg_col()");
+  assert.equal(line.slice(cell!.fromCol, cell!.toCol), ":=avg_col()");
+  assert.equal(cell!.expr, ":=avg_col()");
 });
 
 test("findListCalcSegment extracts calc body for unordered and ordered items", () => {
@@ -146,11 +146,11 @@ test("containsBuiltinFormula detects builtin formulas from calc segments", () =>
     containsBuiltinFormula([
       "| first | second |",
       "| --- | --- |",
-      "| name | =avg_col() |",
+      "| name | :=avg_col() |",
     ]),
     true,
   );
-  assert.equal(containsBuiltinFormula(["- [ ] =sum_row()"]), true);
+  assert.equal(containsBuiltinFormula(["- [ ] :=sum_row()"]), true);
   assert.equal(containsBuiltinFormula(["| total | sum_col() * a + 5 |"]), true);
 });
 
@@ -161,7 +161,7 @@ test("containsBuiltinFormula ignores non-formula lines", () => {
 });
 
 test("builtinFormulaExplanation normalizes formula labels", () => {
-  assert.equal(builtinFormulaExplanation("=avg_col()"), "avg_col()");
+  assert.equal(builtinFormulaExplanation(":=avg_col()"), "avg_col()");
   assert.equal(builtinFormulaExplanation(" sum_column ( ) "), "sum_col()");
   assert.equal(builtinFormulaExplanation("2+2"), null);
 });

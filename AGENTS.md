@@ -176,64 +176,17 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-25 3:57pm GMT+2
+# [slate] recent context, 2026-04-28 4:32pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (17,278t read) | 339,561t work | 95% savings
+Stats: 50 obs (18,412t read) | 677,919t work | 97% savings
 
 ### Apr 25, 2026
-S2 Assembly LOC estimate for a full-featured TUI editor (curiosity/hypothetical) (Apr 25, 12:13 AM)
-S1 Slate Project Architecture: TUI/UI Decoupled Hybrid (Apr 25, 12:13 AM)
-S5 ASM LOC estimate for TUI editor + render path SIMD optimization discussion (Apr 25, 12:15 AM)
-S6 Apply "Slate" visual theme to existing TUI/web editor project — warm paper aesthetic, semantic token system, floating window shell, configurable typography (Apr 25, 12:23 AM)
-S18 Add Slate theme family (slate, slate-dark, slate-light) with floating window shell layout and semantic CSS token system (Apr 25, 12:37 AM)
-4 12:46a ⚖️ Default color scheme changed from gruvbox-light to slate
-5 " 🟣 Slate floating window shell layout added to app.css
-6 " 🟣 Slate semantic CSS token fallbacks added to global theme.css
-7 12:47a 🔄 UI components migrated to Slate semantic token variables with fallbacks
-8 " 🔄 Slate semantic token migration extended to dialogs, date picker, and switcher
-9 12:49a 🔵 Slate project test and build script structure discovered
-S20 Add Slate theme family (slate, slate-dark, slate-light) with floating window shell layout and semantic CSS token system — implementation complete, tests passing (Apr 25, 12:49 AM)
-S21 Font token migration complete — switcher input updated, tests pass (Apr 25, 12:50 AM)
-10 12:50a 🔵 Presets test suite passes after Slate theme additions
-12 " 🔵 Vite build succeeds after Slate theme and CSS changes
-13 1:00a 🟣 Google Fonts integration added to Slate TUI editor
-14 " 🟣 Slate theme font tokens wired to Google Fonts with system fallbacks
-15 1:01a 🟣 Slate status bar typography split — display font for title, mono for meta
-16 " 🟣 Font token migration complete — switcher input updated, tests pass
-S25 Fix "I see no difference" — Slate theme fonts not rendering due to missing Literata and Geist (Apr 25, 1:01 AM)
-17 1:05a 🔵 Slate Tauri config has no CSP or font settings
-18 1:07a 🔵 Slate font availability: JetBrains Mono present, Literata and Geist absent
-19 1:08a 🔵 Chrome User-Agent required to get woff2 font URLs from Google Fonts
-20 1:09a 🔵 Geist woff2 files are shared across weights 400/500/600
-21 " 🔵 Literata latin woff2 files are also shared across weights 400/500/600
-22 1:11a 🟣 Geist and Literata woff2 fonts bundled into Slate project
-23 " 🟣 Self-hosted fonts.css created with local woff2 @font-face declarations
-S27 Font names used in slate (3).html reference design — identifying display, body, and mono font choices (Apr 25, 1:12 AM)
-24 1:19a 🔵 Font config setting has no effect — theme font not applied from config
-S28 Font config setting has no effect — theme font not applied from config (Apr 25, 1:19 AM)
-25 1:21a 🔵 Slate ThemeConfig defined in crates/app-core, not src-tauri
-26 10:50a 🔵 Woff2 URLs obtained for Fraunces, Source Serif 4, and EB Garamond fonts
-27 11:25a 🔵 Font not rendering — Fraunces woff2 files missing from public/fonts/
-28 " 🔵 Slate config module is a thin re-export of app_core::config
-29 11:26a 🔵 Slate theme loading pipeline traced from bootstrap to DOM application
-30 " 🔵 Editor has no inline font-family or CodeMirror theme — fonts applied purely via CSS
-31 " 🔵 Editor font driven by --display-font CSS variable, not data-font attribute directly
-32 11:27a 🔵 Slate theme CSS uses data-theme attribute, not data-font — font variable binding unclear
-33 " 🔵 Font override bug root cause — config uses "literata" key but fontMap expects "serif"
-34 11:28a 🔵 Self-hosted fonts confirmed present in public/fonts directory
-35 11:29a 🔴 Fix Slate theme font not rendering — editor.css font-family restructure
-36 " 🔵 editor.css diff reveals --display-font only applied to headings, not body text
-37 11:30a 🔵 editor.css font-family uses --font-mono, not --display-font, for body text
-38 11:34a 🔵 Root cause: editor body text hardcoded to --font-mono, not --display-font
-39 " 🔵 Backend DEFAULT_COLOR_SCHEME is "gruvbox-light", not "slate"
-40 11:35a 🟣 Slate theme floating window layout implemented in app.css
-41 11:36a 🟣 Slate theme editor typography overrides added to editor.css
-42 " ✅ Production build succeeds after Slate CSS layout and typography changes
-43 " ✅ All 157 TypeScript tests pass after Slate CSS changes
+S28 Font config setting has no effect — theme font not applied from config (Apr 25, 1:17 AM)
+S48 Note Search Pass 2 implementation — baseline survey and design decisions before coding begins (Apr 25, 1:19 AM)
 44 11:46a 🔵 Slate HTML theming architecture — applyState() and CSS variable pipeline
 45 " 🟣 Added slate and slate-dark color schemes with custom accent picker to Slate (3).html
 46 11:47a 🔵 Slate config.toml has display_font field and slate/slate-dark schemes already active
@@ -245,6 +198,78 @@ S28 Font config setting has no effect — theme font not applied from config (Ap
 52 3:53p 🟣 Full test suite green after FTS search + switcher content search integration
 53 3:55p ⚖️ Migration script cleanup — beta environment fully migrated
 55 3:56p 🟣 Note Search Pass 2 plan documented in docs/plan.md
+56 4:01p 🔵 Note Search Pass 2 plan and last commit reviewed before implementation
+57 " 🔵 FTS5 search implementation baseline surveyed before Pass 2
+S50 FTS5 Note Search Pass 2 — five design decisions confirmed (Apr 25, 4:02 PM)
+58 4:06p ⚖️ FTS5 Note Search Pass 2 — five design decisions confirmed
+S73 Fix frozen search input and slow/blocking results when searching notes in the terminal app (Apr 25, 4:06 PM)
+59 4:17p 🟣 FTS5 index extended to include note_title column
+60 " 🟣 NoteSearchResult struct added to models.rs
+61 4:18p 🟣 DB startup sequence gains migration runner and search index health check
+62 4:19p 🟣 search_notes_content rewritten to return ranked NoteSearchResult with FTS5 snippets
+63 4:21p 🟣 Note Search Pass 2 — Full frontend integration with NoteSearchResult and snippet rendering
+64 " 🔴 Rust E0597 lifetime error in search_notes_content — stmt dropped while borrowed
+65 " ✅ Switcher CSS updated for snippet row layout
+66 4:22p 🔴 Fixed E0597 lifetime error in search_notes_content by binding query_map result to local
+67 " 🔵 FTS index not re-populated on unlock — search_index_restores_note_after_unlock_and_decrypt test fails
+68 4:23p 🔵 unlock_note does not write to notes table — FTS trigger never fires on unlock
+69 " 🔵 decrypt_note uses SQL UPDATE so FTS trigger fires correctly; unlock_note is the only broken path
+70 4:24p ⚖️ Locked notes intentionally stay unsearchable after session unlock — test expectations corrected
+71 " 🟣 Note Search Pass 2 Phase 2.1 — full test suite green, 82/82 passing
+### Apr 26, 2026
+72 1:52p 🔵 Content search freezes input — synchronous FTS5 query on every keystroke in blocking event loop
+73 1:53p 🔴 Content search freeze fix — added content_search_pending flag to TerminalApp struct
+74 1:54p 🔴 Content search freeze fix — deferred FTS5 query execution via maybe_autosave idle tick
+75 " 🔴 Content search freeze fix — all key handlers migrated to set pending flag instead of blocking DB call
+76 1:57p 🟣 Slate accent color chooser — session intent logged
+S79 Fix UI/TUI blocking during content search — search must never block typing at any point (Apr 26, 2:01 PM)
+78 2:06p ✅ Add Arc import to sqlite.rs for concurrent access
+79 " ✅ Wrap Db fields in Arc for cloneable concurrent sharing
+80 2:07p ✅ Add async search result channel to TUI app state
+81 " 🔴 Implement async background search to prevent UI blocking during content search
+82 " ✅ Integrate result collection into main event loop for non-blocking search completion
+S84 Note search input frozen and results blocking in TUI/UI (Apr 26, 2:07 PM)
+### Apr 28, 2026
+84 3:22p 🔵 Note search input frozen and results blocking in TUI/UI
+S85 Fix frozen input and blocking search results in TUI note search (Apr 28, 3:22 PM)
+S86 Full expression support planned for table cells (Apr 28, 3:23 PM)
+85 3:23p 🟣 Full expression support planned for table cells
+86 3:24p 🟣 Full expression support planned for table formula cells
+87 3:29p ⚖️ Full expression support planned for table cells
+S92 Table formula := prefix feature fully shipped — all tests green (Apr 28, 3:29 PM)
+88 3:46p ⚖️ Table formula syntax changed from = to :=
+89 " 🔵 Table formula syntax parsing lives in editor-core calc_plan.rs
+91 " 🔵 Existing table formula tests use = prefix — all must be migrated to :=
+92 3:49p 🟣 contains_assignment_operator updated to distinguish := table prefix from variable assignment
+94 " 🟣 CalcEngine updated to evaluate := prefix table formula cells
+95 3:51p 🟣 New tests added for := table formula prefix in engine.rs and calc_plan.rs
+96 " 🔵 Old = prefix tests still pass alongside new := prefix tests
+97 3:52p ✅ docs/plan.md updated with Table Formula Expressions syntax documentation
+98 " 🟣 Table formula := prefix feature fully shipped — all tests green
+S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
+**Investigated**: - calc_plan.rs: contains_assignment_operator, find_single_calc_table_cell_range, find_table_formula_segments
+    - engine.rs: table_expression_segments, multi-cell eval trigger condition, evaluate_table_formula
+    - Existing tests in both files (still using old = prefix, still passing due to backward compat)
+    - src-tauri/Cargo.toml test suite for TUI calc_table tests
 
-Access 340k tokens of past work via get_observations([IDs]) or mem-search skill.
+**Learned**: - The key disambiguation: := as variable assignment always has a word char (alphanumeric/_) before it; := as table formula prefix has nothing (or only whitespace/pipe) before it. This is enforced in contains_assignment_operator.
+    - builtin_formula_label() still strips a leading bare = before normalizing, so old = prefix remains functional (backward compat preserved).
+    - evaluate_table_formula must strip := before passing to fend; when no builtin calls are present but had_prefix is true, the stripped expression evaluates as plain arithmetic/variable — enabling :=var and :=multiplier*2+1 style cells.
+    - `:=expr` in a table cell never registers as a variable definition — confirmed by test and by parse_variable_assignment requiring a non-empty valid name before :=.
+
+**Completed**: - calc_plan.rs: contains_assignment_operator requires word char before := (fixes false positive on formula prefix)
+    - calc_plan.rs: find_single_calc_table_cell_range treats := prefix cells as formula_candidates
+    - calc_plan.rs: find_table_formula_segments includes := prefix cells (labels may be empty)
+    - engine.rs: table_expression_segments pushes := prefix cells into formula_segments
+    - engine.rs: multi-cell eval trigger fires on := prefix cells, not just builtin calls
+    - engine.rs: evaluate_table_formula strips := prefix; evaluates plain expr when no builtins present
+    - New tests in engine.rs: colon_eq with builtin+arithmetic+variable, no-builtin expression, variable-only, does-not-define-variable
+    - New tests in calc_plan.rs: contains_assignment_operator disambiguation, find_table_formula_segments with := and builtin, find_table_formula_segments with := and no builtin
+    - docs/plan.md: new "Table Formula Expressions" section with examples and syntax rules
+    - Full test suite: 483 tests passing, 0 failures (app-core + editor-core + src-tauri)
+
+**Next Steps**: Feature is complete and verified. Potential follow-up: migrate old existing tests that still use bare = prefix (e.g. "| =avg_col() |") to := for consistency, though this is cosmetic since both syntaxes work.
+
+
+Access 678k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

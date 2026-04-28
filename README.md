@@ -77,6 +77,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Press Tab to apply the result inline
 - Uses note-context evaluation with line-aware extraction (normal lines, list bodies, single calc table cell)
 - In markdown tables, lists, and checklists, calc applies to the expression part and `Tab` replaces that expression in place
+- Table formula cells use a leading `:=` marker: `:=sum_col()`, `:=avg_row() * 2`, or `:=tax_rate * subtotal`
+- `name := expression` remains the variable assignment syntax; inside a table cell, `:=expression` without a name is a formula marker, not a variable definition
 - Supports arithmetic, unit conversions (`50 kg to lbs`), percentages, and everything [fend](https://github.com/printfn/fend) can evaluate
 - Non-math lines are ignored — no noise
 - Date-like lines (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`) are ignored to avoid false numeric ghost suggestions

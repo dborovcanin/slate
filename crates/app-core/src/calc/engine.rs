@@ -849,8 +849,12 @@ fn parse_builtin_formula(expression: &str) -> Option<FormulaSpec> {
         return None;
     }
 
-    let without_equals = trimmed.strip_prefix('=').unwrap_or(trimmed).trim();
-    let compact = without_equals
+    let without_prefix = trimmed
+        .strip_prefix(":=")
+        .or_else(|| trimmed.strip_prefix('='))
+        .unwrap_or(trimmed)
+        .trim();
+    let compact = without_prefix
         .chars()
         .filter(|ch| !ch.is_ascii_whitespace())
         .collect::<String>()
@@ -1871,7 +1875,7 @@ mod tests {
             "| --- |".to_string(),
             "| 10 |".to_string(),
             "| 20 |".to_string(),
-            "| =avg_col() |".to_string(),
+            "| :=avg_col() |".to_string(),
         ];
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
@@ -1884,7 +1888,7 @@ mod tests {
         let lines = vec![
             "| left | right | total |".to_string(),
             "| --- | --- | --- |".to_string(),
-            "| 2 | 3 | =sum_row() |".to_string(),
+            "| 2 | 3 | :=sum_row() |".to_string(),
         ];
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
@@ -1900,7 +1904,7 @@ mod tests {
             "| Dusan | Boro | 5 | 1.94 | 12h 30min |".to_string(),
             "| Dusan | Peric | 5 | 1.88 | 12h 30min |".to_string(),
             "| Dusan | Boro | 4 | 1.98 | 13h 15min |".to_string(),
-            "| dsad | dsdsd | =avg_col() | 1.91 | |".to_string(),
+            "| dsad | dsdsd | :=avg_col() | 1.91 | |".to_string(),
         ];
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
@@ -1918,7 +1922,7 @@ mod tests {
             "| --- |".to_string(),
             "| 1 |".to_string(),
             "| 2 |".to_string(),
-            "| =sum_col() + 3 + a |".to_string(),
+            "| :=sum_col() + 3 + a |".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[5];
@@ -1994,9 +1998,7 @@ mod tests {
     #[test]
     fn note_eval_table_colon_eq_prefix_does_not_define_variable() {
         let engine = CalcEngine::new();
-        let lines = vec![
-            "| :=5+3 |".to_string(),
-        ];
+        let lines = vec!["| :=5+3 |".to_string()];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         // The := prefix is a formula marker, not a variable assignment.
         assert!(res.variables.is_empty());
@@ -2009,7 +2011,7 @@ mod tests {
             "k := 10".to_string(),
             "| a | b | total |".to_string(),
             "| --- | --- | --- |".to_string(),
-            "| 2 | 3 | =sum_row() * 2 + k |".to_string(),
+            "| 2 | 3 | :=sum_row() * 2 + k |".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let val = res.table_cell_results[3]
@@ -2029,7 +2031,7 @@ mod tests {
             "| --- | --- | --- |".to_string(),
             "| 4 | 1.94 |  |".to_string(),
             "| 5 | 1.98 |  |".to_string(),
-            "| =avg_col() | =avg_col()*a+2 | =sum_row() |".to_string(),
+            "| :=avg_col() | :=avg_col()*a+2 | :=sum_row() |".to_string(),
             "a := 4".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
@@ -2065,7 +2067,7 @@ mod tests {
             "| ----- | ---- | ----- | ------ | ----- |".to_string(),
             "| Dusan | B    | 5     | 1.94   |       |".to_string(),
             "| Dusan | B    | 4     | 1.98   |       |".to_string(),
-            "| asds  | s    | =avg_col() | =avg_col() | =sum_row() |".to_string(),
+            "| asds  | s    | :=avg_col() | :=avg_col() | :=sum_row() |".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[4];
@@ -2097,7 +2099,7 @@ mod tests {
             "| --- |".to_string(),
             "| 4 |".to_string(),
             "| 6 |".to_string(),
-            "| =avg_col() |".to_string(),
+            "| :=avg_col() |".to_string(),
         ];
         let before = engine.evaluate_note_context(&lines_before, NoteEvaluationOptions::default());
         assert_eq!(before.line_results[4].as_deref(), Some("5"));
@@ -2108,7 +2110,7 @@ mod tests {
             "| 4 |".to_string(),
             "| 6 |".to_string(),
             "| 10 |".to_string(),
-            "| =avg_col() |".to_string(),
+            "| :=avg_col() |".to_string(),
         ];
         let after = engine.evaluate_note_context(&lines_after, NoteEvaluationOptions::default());
         let value = after.line_results[5].as_deref().unwrap_or("");

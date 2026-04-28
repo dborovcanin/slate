@@ -11,17 +11,17 @@ fn find_calc_segment_range_detects_single_table_expression_cell() {
 
 #[test]
 fn find_calc_segment_range_detects_builtin_formula_cell() {
-    let line = "| name | =avg_col() | 1.91 |";
+    let line = "| name | :=avg_col() | 1.91 |";
     let Some((from, to)) = find_calc_segment_range(line) else {
         panic!("expected formula segment");
     };
-    assert_eq!(&line[from..to], "=avg_col()");
+    assert_eq!(&line[from..to], ":=avg_col()");
 }
 
 #[test]
 fn builtin_formula_label_normalizes_aliases() {
     assert_eq!(
-        builtin_formula_label("=avg_col()").as_deref(),
+        builtin_formula_label(":=avg_col()").as_deref(),
         Some("avg_col()")
     );
     assert_eq!(
@@ -41,11 +41,11 @@ fn format_formula_display_value_rounds_and_strips_approximation_text() {
 
 #[test]
 fn find_table_formula_segment_extracts_cell_bounds_and_label() {
-    let line = "| a | =sum_column() | 9 |";
+    let line = "| a | :=sum_column() | 9 |";
     let Some(seg) = find_table_formula_segment(line) else {
         panic!("expected table formula segment");
     };
-    assert_eq!(&line[seg.from_byte..seg.to_byte], "=sum_column()");
+    assert_eq!(&line[seg.from_byte..seg.to_byte], ":=sum_column()");
     assert_eq!(seg.labels, vec!["sum_col()"]);
     assert!(seg.from_char < seg.to_char);
 }
@@ -65,7 +65,7 @@ fn find_table_formula_segment_extracts_chained_formula_labels_in_order() {
 
 #[test]
 fn find_table_formula_segment_tracks_full_cell_bounds() {
-    let line = "| a | =sum_col() | 9 |";
+    let line = "| a | :=sum_col() | 9 |";
     let Some(seg) = find_table_formula_segment(line) else {
         panic!("expected table formula segment");
     };
@@ -75,7 +75,7 @@ fn find_table_formula_segment_tracks_full_cell_bounds() {
 
 #[test]
 fn should_mask_formula_cell_reveals_when_cursor_is_anywhere_in_formula_cell() {
-    let line = "| a | =sum_col() |";
+    let line = "| a | :=sum_col() |";
     let seg = find_table_formula_segment(line).expect("formula segment");
     assert!(should_mask_formula_cell(false, seg.from_char, &seg));
     assert!(!should_mask_formula_cell(true, seg.cell_from_char, &seg));

@@ -315,12 +315,16 @@ pub fn builtin_formula_label(text: &str) -> Option<String> {
         return None;
     }
 
-    let without_equals = text.strip_prefix('=').unwrap_or(text).trim();
-    if without_equals.is_empty() {
+    let without_prefix = text
+        .strip_prefix(":=")
+        .or_else(|| text.strip_prefix('='))
+        .unwrap_or(text)
+        .trim();
+    if without_prefix.is_empty() {
         return None;
     }
 
-    let compact = without_equals
+    let compact = without_prefix
         .chars()
         .filter(|ch| !ch.is_ascii_whitespace())
         .collect::<String>()
@@ -1055,6 +1059,39 @@ fn variable_dependency_window(
     }
 
     for (line_idx, line) in lines.iter().enumerate() {
+        // Table rows may contain multiple formula cells. `line_for_calc_evaluation`
+        // intentionally returns at most one cell expression, which is not enough
+        // for dependency tracking. Scan every formula segment first.
+        if is_table_line(line) {
+            let formula_segments = find_table_formula_segments(line);
+            if !formula_segments.is_empty() {
+                let mut line_hits_dependency = false;
+                for segment in formula_segments {
+                    let segment_text = line[segment.from_byte..segment.to_byte].trim();
+                    if segment_text.is_empty() {
+                        continue;
+                    }
+                    let assignment_rhs =
+                        parse_variable_assignment_name_rhs(segment_text).map(|(_, rhs)| rhs);
+                    let expression_for_refs = assignment_rhs.as_deref().unwrap_or(segment_text);
+                    if expression_references_any(
+                        expression_for_refs,
+                        &variable_regex,
+                        &affected_variables,
+                    ) {
+                        line_hits_dependency = true;
+                        break;
+                    }
+                }
+                if line_hits_dependency {
+                    min_line = min_line.min(line_idx);
+                    max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
+                    found_any = true;
+                }
+                continue;
+            }
+        }
+
         let eval_target = line_for_calc_evaluation(line);
         let trimmed = eval_target.trim();
         if trimmed.is_empty() {
@@ -1549,16 +1586,16 @@ mod tests {
 
     #[test]
     fn table_formula_segment_detects_avg_col() {
-        let line = "| dsad | dsdsd | =avg_col() | 1.91 | |";
+        let line = "| dsad | dsdsd | :=avg_col() | 1.91 | |";
         let seg = find_table_formula_segment(line).expect("formula");
         assert_eq!(seg.labels, vec!["avg_col()".to_string()]);
-        assert_eq!(&line[seg.from_byte..seg.to_byte], "=avg_col()");
+        assert_eq!(&line[seg.from_byte..seg.to_byte], ":=avg_col()");
         assert_eq!(seg.cell_index, 2);
     }
 
     #[test]
     fn find_table_formula_segments_returns_each_formula_cell_left_to_right() {
-        let line = "| =sum_col() | x | =sum_row() |";
+        let line = "| :=sum_col() | x | :=sum_row() |";
         let segments = find_table_formula_segments(line);
         assert_eq!(segments.len(), 2);
         assert_eq!(segments[0].labels, vec!["sum_col()".to_string()]);
@@ -1644,8 +1681,8 @@ mod tests {
     #[test]
     fn line_eval_target_prefers_segment() {
         assert_eq!(
-            line_for_calc_evaluation("| name | =avg_col() |"),
-            "=avg_col()".to_string()
+            line_for_calc_evaluation("| name | :=avg_col() |"),
+            ":=avg_col()".to_string()
         );
         assert_eq!(line_for_calc_evaluation("| a | b |"), "".to_string());
     }
@@ -1766,13 +1803,44 @@ mod tests {
             "| ---- | ----- | ----- |".to_string(),
             "| a | 1 | 1 |".to_string(),
             "| b | 2 | 2 |".to_string(),
-            "| total |  | =sum_col() |".to_string(),
-            "| grand |  | =sum_col() |".to_string(),
+            "| total |  | :=sum_col() |".to_string(),
+            "| grand |  | :=sum_col() |".to_string(),
         ];
         let decision = decide_eval_window(&lines, 3, 4, &[], true, true);
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 3);
         assert_eq!(decision.eval_to, 6);
+    }
+
+    #[test]
+    fn decide_eval_window_expands_table_formula_with_variable_dependency() {
+        let lines = vec![
+            "var := 0.5".to_string(),
+            "| item | value | total |".to_string(),
+            "| ---- | ----- | ----- |".to_string(),
+            "| a | 10 | :=sum_col() * var |".to_string(),
+        ];
+        let prev_changed = vec!["var := 0.4".to_string()];
+        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 0);
+        assert_eq!(decision.eval_to, 4);
+    }
+
+    #[test]
+    fn decide_eval_window_expands_multi_formula_row_with_variable_dependency() {
+        let lines = vec![
+            "var := 0.5".to_string(),
+            "| item | a | b |".to_string(),
+            "| ---- | - | - |".to_string(),
+            "| row1 | 10 | 20 |".to_string(),
+            "| total | :=sum_col() | :=sum_col() * var |".to_string(),
+        ];
+        let prev_changed = vec!["var := 0.4".to_string()];
+        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        assert!(decision.can_use_partial);
+        assert_eq!(decision.eval_from, 0);
+        assert_eq!(decision.eval_to, 5);
     }
 
     #[test]
