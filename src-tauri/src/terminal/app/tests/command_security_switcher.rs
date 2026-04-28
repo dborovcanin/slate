@@ -76,6 +76,7 @@ fn write_command_syncs_markdown_file_backed_note() {
         &db,
         &opts,
         true,
+        true,
         false,
         true,
         true,
@@ -130,6 +131,50 @@ fn write_quit_command_saves_then_exits() {
         .expect("note lookup")
         .expect("note exists");
     assert_eq!(persisted.body, "one updated");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn autosave_disabled_only_write_command_persists_changes() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Editor;
+    app.lines = vec!["one updated".to_string()];
+    app.dirty = true;
+    app.autosave_enabled = false;
+    app.last_edit =
+        Instant::now() - Duration::from_millis(crate::terminal::app::AUTOSAVE_DEBOUNCE_MS + 5);
+
+    app.maybe_autosave(&db)
+        .expect("autosave-disabled idle tick should not fail");
+    assert!(app.dirty);
+    let persisted_before = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted_before.body, "one");
+
+    app.handle_editor_key(&db, Key::Ctrl('s'))
+        .expect("ctrl+s should not fail when autosave is disabled");
+    assert_eq!(app.status, "autosave off; use :w");
+    let persisted_after_ctrl_s = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted_after_ctrl_s.body, "one");
+
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.execute_terminal_command(&db, "w");
+    assert_eq!(app.status, "written");
+    assert!(!app.dirty);
+    let persisted_after_write = db
+        .get_note("n1")
+        .expect("note lookup")
+        .expect("note exists");
+    assert_eq!(persisted_after_write.body, "one updated");
 
     drop(app);
     drop(db);
@@ -876,6 +921,7 @@ fn startup_with_locked_recent_note_prompts_for_password() {
     let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        true,
         true,
         false,
         true,

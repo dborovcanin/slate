@@ -32,6 +32,7 @@ let mountedExtensions: Extension[] = [];
 let suppressProgrammaticDocSync = false;
 let localDirty = false;
 let saveInFlight = false;
+let currentAutosaveEnabled = true;
 const SAVE_DEBOUNCE_MS = 500;
 const TITLE_PREVIEW_LIMIT = 60;
 const LARGE_DOC_STATE_RESET_THRESHOLD = 200_000;
@@ -49,15 +50,17 @@ function deriveTitleFromDoc(doc: Text): string {
 }
 
 function scheduleSave() {
+  if (!currentAutosaveEnabled) return;
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = window.setTimeout(flushSave, SAVE_DEBOUNCE_MS);
 }
 
-export async function flushSave() {
+export async function flushSave(force = false) {
   if (saveTimer !== null) {
     clearTimeout(saveTimer);
     saveTimer = null;
   }
+  if (!force && !currentAutosaveEnabled) return;
   if (backendDetached) return;
   const note = state.activeNote;
   if (!note) return;
@@ -120,6 +123,7 @@ interface EditorMountOptions {
   tableEnabled?: boolean;
   markdownAutoformat?: boolean;
   checklistAutoReorder?: boolean;
+  autosave?: boolean;
   formatOnSave?: boolean;
   vimMode?: boolean;
   dateFormat?: string;
@@ -282,7 +286,7 @@ export async function performFormatAndSave() {
     const { executeCommand } = await import("./command-engine");
     await executeCommand(view, "format", { mode: "editor" });
   }
-  await flushSave();
+  await flushSave(true);
 }
 
 function applyViewModeClasses(vimMode: boolean, plainTextMode: boolean) {
@@ -311,6 +315,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
 
   backendDetached = plainTextMode || !!options.detachBackend;
   currentFormatOnSave = !!options.formatOnSave;
+  currentAutosaveEnabled = options.autosave ?? true;
   tableModuleEnabled = tableEnabled;
 
   const extensions = [
@@ -381,6 +386,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         {
           key: "Ctrl-s",
           run: () => {
+            if (!currentAutosaveEnabled) return true;
             performFormatAndSave();
             return true;
           },
@@ -452,7 +458,9 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
     );
   }
 
-  window.addEventListener("beforeunload", flushSave);
+  window.addEventListener("beforeunload", () => {
+    void flushSave();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") flushSave();
   });

@@ -51,12 +51,18 @@ impl TerminalApp {
                 }
             }
             Key::Ctrl('s') => {
-                self.save(db)?;
-                self.status = format!("saved {}", self.active_note.id);
+                if self.autosave_enabled {
+                    self.save(db)?;
+                    self.status = format!("saved {}", self.active_note.id);
+                } else {
+                    self.status = "autosave off; use :w".to_string();
+                }
                 return Ok(());
             }
             Key::Ctrl('n') => {
-                self.save(db)?;
+                if self.autosave_enabled {
+                    self.save(db)?;
+                }
                 let note = new_note(db, &crate::config::load_theme_config())?;
                 self.set_active_note(db, note)?;
                 self.refresh_switcher_items(db)?;

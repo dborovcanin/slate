@@ -57,7 +57,7 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 - Built-in editor with note list/switcher and status bar
 - Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
 - Pipe append mode: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
-- Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save, `Ctrl+Q`/`Ctrl+W` quit
+- Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save (when `autosave = true`), `Ctrl+Q`/`Ctrl+W` quit
 - Terminal folding keymap (normal mode): `za` toggle fold at cursor
 - Terminal folding commands: `:fold`, `:unfold`, `:fold-toggle` (aliases: `:zc`, `:zo`, `:za`)
 - `vim_mode` is optional and independent (GUI-only behavior)
@@ -294,6 +294,7 @@ font_size = 14
 [editor]
 markdown_autoformat = true
 checklist_auto_reorder = true
+autosave = true
 format_on_save = false
 terminal_mode = false
 vim_mode = false
@@ -372,6 +373,8 @@ Available `font` values:
 Editor options:
 - `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
 - `checklist_auto_reorder = true` automatically moves checked checklist items to the bottom and unchecked items to the top
+- `autosave = true` enables implicit saves in both GUI and terminal modes (idle flush + save-on-exit/switch flows)
+- when `autosave = false`, only explicit `:w` / `:wq` writes persist note body changes
 - `format_on_save = false` runs `:format` before save when enabled (Ctrl+S and autosave flush path)
 - `terminal_mode = true` makes `slate` default to terminal runtime (when launched from a TTY)
 - `vim_mode = true` enables modal Vim-style key mappings in GUI

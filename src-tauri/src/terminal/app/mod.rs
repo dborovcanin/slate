@@ -284,6 +284,7 @@ struct TerminalApp {
     search_orig_col: usize,
     search_orig_scroll: usize,
     // Auto format
+    autosave_enabled: bool,
     format_on_save: bool,
     markdown_autoformat: bool,
     checklist_auto_reorder: bool,
@@ -427,6 +428,7 @@ impl TerminalApp {
         db: &Db,
         opts: &TerminalOptions,
         vim_mode: bool,
+        autosave_enabled: bool,
         format_on_save: bool,
         markdown_autoformat: bool,
         checklist_auto_reorder: bool,
@@ -566,6 +568,7 @@ impl TerminalApp {
             search_orig_line: 0,
             search_orig_col: 0,
             search_orig_scroll: 0,
+            autosave_enabled,
             format_on_save,
             markdown_autoformat,
             checklist_auto_reorder,
@@ -631,7 +634,7 @@ impl TerminalApp {
             self.maybe_dispatch_due_reminders(db);
         }
 
-        if !self.force_quit {
+        if !self.force_quit && self.autosave_enabled {
             if let Err(error) = self.save(db) {
                 if !Self::is_locked_note_error(&error) {
                     return Err(error);
@@ -649,6 +652,9 @@ impl TerminalApp {
         }
         self.maybe_recompute_calc_after_idle();
         self.maybe_dispatch_content_search(db);
+        if !self.autosave_enabled {
+            return Ok(());
+        }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
             match self.save(db) {
                 Ok(()) => {
@@ -813,6 +819,7 @@ pub fn run_terminal_session(
         db,
         opts,
         config.vim_mode,
+        config.autosave,
         config.format_on_save,
         config.markdown_autoformat,
         config.checklist_auto_reorder,

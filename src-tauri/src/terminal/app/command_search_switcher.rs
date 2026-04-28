@@ -398,7 +398,9 @@ impl TerminalApp {
         password: Option<&str>,
         line_number: Option<usize>,
     ) -> Result<(), String> {
-        self.save(db)?;
+        if self.autosave_enabled {
+            self.save(db)?;
+        }
         let note = if let Some(password) = password {
             db.unlock_note(note_id, password)?
         } else {
@@ -875,7 +877,7 @@ impl TerminalApp {
                         self.status = format!("usage: note {action_label} <password>");
                         return;
                     }
-                    if self.dirty {
+                    if self.autosave_enabled && self.dirty {
                         if let Err(error) = self.save(db) {
                             self.status = format!("save failed: {error}");
                             return;

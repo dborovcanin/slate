@@ -58,6 +58,7 @@ export interface ThemeConfig {
   animation_style: string;
   markdown_autoformat: boolean;
   checklist_auto_reorder: boolean;
+  autosave: boolean;
   format_on_save?: boolean;
   terminal_mode: boolean;
   vim_mode: boolean;
@@ -89,6 +90,7 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   animation_style: "pop-up",
   markdown_autoformat: true,
   checklist_auto_reorder: true,
+  autosave: true,
   format_on_save: false,
   terminal_mode: false,
   vim_mode: false,

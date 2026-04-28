@@ -41,6 +41,7 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
         &db,
         &opts,
         true,
+        true,
         false,
         true,
         true,

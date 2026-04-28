@@ -17,6 +17,7 @@ const DEFAULT_VIM_MODE: bool = false;
 const DEFAULT_TERMINAL_MODE: bool = false;
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
+const DEFAULT_AUTOSAVE: bool = true;
 const DEFAULT_DATE_FORMAT: &str = "%Y-%m-%d";
 const DEFAULT_DATE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M";
 const DEFAULT_FORMAT_ON_SAVE: bool = false;
@@ -100,6 +101,8 @@ animation_style = "pop-up"
 markdown_autoformat = true
 # Move checked checklist items to bottom and unchecked to top.
 checklist_auto_reorder = true
+# Persist edits automatically in GUI and terminal modes.
+autosave = true
 # Run :format before every save.
 format_on_save = false
 # Default to terminal runtime when launched from a TTY.
@@ -190,6 +193,7 @@ pub struct ThemeConfig {
     pub animation_style: String,
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
+    pub autosave: bool,
     pub format_on_save: bool,
     pub terminal_mode: bool,
     pub vim_mode: bool,
@@ -327,6 +331,7 @@ impl Default for ThemeConfig {
             animation_style: DEFAULT_ANIMATION_STYLE.to_string(),
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
             checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
+            autosave: DEFAULT_AUTOSAVE,
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
             terminal_mode: DEFAULT_TERMINAL_MODE,
             vim_mode: DEFAULT_VIM_MODE,
@@ -367,6 +372,7 @@ struct ThemeSection {
 struct EditorSection {
     markdown_autoformat: Option<bool>,
     checklist_auto_reorder: Option<bool>,
+    autosave: Option<bool>,
     format_on_save: Option<bool>,
     terminal_mode: Option<bool>,
     vim_mode: Option<bool>,
@@ -559,6 +565,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             .editor
             .checklist_auto_reorder
             .unwrap_or(DEFAULT_CHECKLIST_AUTO_REORDER),
+        autosave: raw.editor.autosave.unwrap_or(DEFAULT_AUTOSAVE),
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         terminal_mode: raw.editor.terminal_mode.unwrap_or(DEFAULT_TERMINAL_MODE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
@@ -859,6 +866,7 @@ mod tests {
             [editor]
             markdown_autoformat = false
             checklist_auto_reorder = false
+            autosave = false
             format_on_save = true
             terminal_mode = true
             vim_mode = true
@@ -884,6 +892,7 @@ mod tests {
         assert_eq!(cfg.animation_style, "slide-up");
         assert!(!cfg.markdown_autoformat);
         assert!(!cfg.checklist_auto_reorder);
+        assert!(!cfg.autosave);
         assert!(cfg.format_on_save);
         assert!(cfg.terminal_mode);
         assert!(cfg.vim_mode);
@@ -981,6 +990,7 @@ mod tests {
         let cfg = parse_theme_config("[theme]\ncolor_scheme = 'dark'").expect("config parsed");
         assert!(cfg.markdown_autoformat);
         assert!(cfg.checklist_auto_reorder);
+        assert!(cfg.autosave);
         assert!(!cfg.format_on_save);
         assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
@@ -1008,6 +1018,12 @@ mod tests {
     fn parses_checklist_auto_reorder_override() {
         let cfg = parse_theme_config("[editor]\nchecklist_auto_reorder = false").expect("config");
         assert!(!cfg.checklist_auto_reorder);
+    }
+
+    #[test]
+    fn parses_autosave_override() {
+        let cfg = parse_theme_config("[editor]\nautosave = false").expect("config");
+        assert!(!cfg.autosave);
     }
 
     #[test]

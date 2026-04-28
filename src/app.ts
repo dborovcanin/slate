@@ -88,6 +88,10 @@ interface BackendNoteChangedEvent {
   deleted?: boolean;
 }
 
+function autosaveEnabled(): boolean {
+  return appConfig?.autosave ?? true;
+}
+
 function applyNoteSummaries(summaries: NoteSummary[]) {
   const active = state.activeNote;
   if (!active) {
@@ -114,6 +118,7 @@ function editorOptionsForNote(note: Note | null) {
     tableEnabled: loaded.table,
     markdownAutoformat: appConfig.markdown_autoformat && loaded.style,
     checklistAutoReorder: appConfig.checklist_auto_reorder && loaded.style,
+    autosave: appConfig.autosave,
     formatOnSave: appConfig.format_on_save,
     vimMode: !!appConfig.vim_mode,
     dateFormat: appConfig.date_format,
@@ -867,7 +872,11 @@ function setupKeyboardShortcuts() {
     // Ctrl+S - format & save
     if (e.ctrlKey && !e.shiftKey && key === "s") {
       e.preventDefault();
-      runAction(performFormatAndSave);
+      if (!autosaveEnabled()) {
+        showToast("autosave off; use :w");
+      } else {
+        runAction(performFormatAndSave);
+      }
       return;
     }
   });
