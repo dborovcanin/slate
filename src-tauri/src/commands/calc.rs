@@ -2,6 +2,7 @@ use app_core::calc::{
     start_eval_generation, CalcEngine, NoteEvaluationOptions, NoteEvaluationResult,
 };
 use app_core::AppCore;
+use std::sync::Arc;
 use tauri::State;
 
 fn resolve_eval_range(
@@ -77,10 +78,13 @@ pub fn sync_note_lines(
         .note_line_cache
         .lock()
         .map_err(|_| "line cache lock poisoned".to_string())?;
-    let entry = cache.entry(note_id).or_insert_with(Vec::new);
-    let clamped_to = to.min(entry.len());
+    let entry = cache
+        .entry(note_id)
+        .or_insert_with(|| Arc::new(Vec::new()));
+    let vec = Arc::make_mut(entry);
+    let clamped_to = to.min(vec.len());
     let clamped_from = from.min(clamped_to);
-    entry.splice(clamped_from..clamped_to, changed_lines);
+    vec.splice(clamped_from..clamped_to, changed_lines);
     Ok(())
 }
 
@@ -95,9 +99,10 @@ pub async fn evaluate_note_context_delta(
     eval_from: Option<usize>,
     eval_to: Option<usize>,
 ) -> Result<NoteEvaluationResult, String> {
-    // Snapshot lines under the mutex, then release it before evaluation so
-    // expensive calc work doesn't block other cache updates.
-    let lines = {
+    // Snapshot the Arc under the mutex, then release it before evaluation so
+    // expensive calc work doesn't block other cache updates. The Arc clone is
+    // O(1) — it does not copy the line data.
+    let lines: Arc<Vec<String>> = {
         let cache = core
             .note_line_cache
             .lock()
@@ -114,7 +119,7 @@ pub async fn evaluate_note_context_delta(
         eval_range,
     };
     let generation = start_eval_generation();
-    let fallback_lines = lines.clone();
+    let fallback_lines = Arc::clone(&lines);
     let fallback_options = options;
     match tauri::async_runtime::spawn_blocking(move || {
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)

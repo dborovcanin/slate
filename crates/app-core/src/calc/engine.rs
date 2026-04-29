@@ -6,7 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub struct CalcEngine;
 
@@ -124,7 +124,7 @@ struct TableBlockInfo {
 
 #[derive(Default)]
 struct TableEvalCache {
-    split_cells: HashMap<usize, Vec<String>>,
+    split_cells: HashMap<usize, Arc<Vec<String>>>,
     block_by_line: HashMap<usize, Option<TableBlockInfo>>,
 }
 
@@ -133,10 +133,11 @@ impl TableEvalCache {
         &'a mut self,
         lines: &[String],
         line_idx: usize,
-    ) -> Option<&'a Vec<String>> {
+    ) -> Option<&'a Arc<Vec<String>>> {
         if !self.split_cells.contains_key(&line_idx) {
             let line = lines.get(line_idx)?;
-            self.split_cells.insert(line_idx, split_table_cells(line));
+            self.split_cells
+                .insert(line_idx, Arc::new(split_table_cells(line)));
         }
         self.split_cells.get(&line_idx)
     }

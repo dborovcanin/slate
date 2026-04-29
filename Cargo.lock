@@ -871,6 +871,7 @@ dependencies = [
  "fend-core",
  "js-sys",
  "regex",
+ "rustc-hash",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",

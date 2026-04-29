@@ -1,15 +1,14 @@
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::hash_map::DefaultHasher;
+use rustc_hash::FxHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
-/// Compute a deterministic 64-bit hash for a line. `DefaultHasher` uses
-/// SipHash-1-3 with fixed keys, so the result is stable across calls within
-/// the same process and across builds.
+/// Compute a deterministic 64-bit hash for a line using FxHasher — a fast,
+/// non-cryptographic hasher that is stable within a process run.
 pub fn hash_line(line: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     line.hash(&mut hasher);
     hasher.finish()
 }

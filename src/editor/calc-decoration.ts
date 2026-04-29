@@ -347,14 +347,23 @@ function mergeCalcLineSpans(spans: readonly CalcVisibleLineSpan[]): CalcVisibleL
   return merged;
 }
 
+let _cachedVisibleRanges: EditorView["visibleRanges"] | null = null;
+let _cachedVisibleSpans: CalcVisibleLineSpan[] = [];
+
 function expandedCalcVisibleSpans(view: EditorView): CalcVisibleLineSpan[] {
-  if (view.visibleRanges.length === 0) return [];
+  if (view.visibleRanges === _cachedVisibleRanges) return _cachedVisibleSpans;
+  _cachedVisibleRanges = view.visibleRanges;
+  if (view.visibleRanges.length === 0) {
+    _cachedVisibleSpans = [];
+    return _cachedVisibleSpans;
+  }
   const doc = view.state.doc;
   const spans = view.visibleRanges.map(({ from, to }) => ({
     fromLine: Math.max(1, doc.lineAt(from).number - CALC_VIEWPORT_MARGIN_LINES),
     toLine: Math.min(doc.lines, doc.lineAt(to).number + CALC_VIEWPORT_MARGIN_LINES),
   }));
-  return mergeCalcLineSpans(spans);
+  _cachedVisibleSpans = mergeCalcLineSpans(spans);
+  return _cachedVisibleSpans;
 }
 
 function calcLineInSpans(lineNumber: number, spans: readonly CalcVisibleLineSpan[]): boolean {
@@ -878,6 +887,16 @@ function lineEvalKey(lineText: string): string | null {
   return key.length > 0 ? key : null;
 }
 
+function lineEvalKeyCached(
+  lineText: string,
+  cache: Map<string, string | null>,
+): string | null {
+  if (cache.has(lineText)) return cache.get(lineText)!;
+  const key = lineEvalKey(lineText);
+  cache.set(lineText, key);
+  return key;
+}
+
 function clampPos(pos: number, max: number): number {
   return Math.min(Math.max(0, pos), max);
 }
@@ -926,6 +945,7 @@ function findClosestLineByEvalKey(
   preferredLineIndex: number,
   range: ChangedRange | null,
   claimedLineIndexes: ReadonlySet<number>,
+  evalKeyCache: Map<string, string | null>,
 ): number | null {
   const window = rangeSearchLineWindow(nextDoc, range);
   let closest: number | null = null;
@@ -935,7 +955,7 @@ function findClosestLineByEvalKey(
     const lineIndex = lineNo - 1;
     if (claimedLineIndexes.has(lineIndex)) continue;
     const line = nextDoc.line(lineNo);
-    if (lineEvalKey(line.text) !== key) continue;
+    if (lineEvalKeyCached(line.text, evalKeyCache) !== key) continue;
 
     const distance = Math.abs(lineIndex - preferredLineIndex);
     if (distance < bestDistance) {
@@ -990,6 +1010,10 @@ export function remapCalcResultsForDocChange(
   const remapped = new Map<number, string>();
   const claimedLineIndexes = new Set<number>();
   const orderedEntries = [...results.entries()].sort((a, b) => a[0] - b[0]);
+  // Shared cache for lineEvalKey WASM calls within this remapping pass.
+  // Avoids re-crossing the WASM boundary for the same line text when
+  // findClosestLineByEvalKey scans the same window for multiple results.
+  const evalKeyCache = new Map<string, string | null>();
 
   for (const [lineIndex, result] of orderedEntries) {
     const oldLineNumber = lineIndex + 1;
@@ -1026,6 +1050,7 @@ export function remapCalcResultsForDocChange(
         preferredLineIndex,
         lineRange,
         claimedLineIndexes,
+        evalKeyCache,
       );
       if (rescuedLineIndex === null) continue;
       claimedLineIndexes.add(rescuedLineIndex);
@@ -1043,6 +1068,7 @@ export function remapCalcResultsForDocChange(
         newLineIndex,
         lineRange,
         claimedLineIndexes,
+        evalKeyCache,
       );
       if (rescuedLineIndex === null) continue;
       claimedLineIndexes.add(rescuedLineIndex);

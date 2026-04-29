@@ -9,7 +9,7 @@ use note_sources::NoteSourceService;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use storage::Db;
 
 pub struct AppCore {
@@ -18,7 +18,7 @@ pub struct AppCore {
     calc_engine: CalcEngine,
     /// Server-side line cache for the delta calc IPC protocol.
     /// Key: note_id. Value: current lines of that note as known to the server.
-    pub note_line_cache: Mutex<HashMap<String, Vec<String>>>,
+    pub note_line_cache: Mutex<HashMap<String, Arc<Vec<String>>>>,
 }
 
 impl AppCore {
