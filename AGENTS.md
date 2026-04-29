@@ -176,43 +176,20 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-28 10:16pm GMT+2
+# [slate] recent context, 2026-04-29 10:06am GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (18,718t read) | 1,275,092t work | 99% savings
+Stats: 50 obs (18,713t read) | 1,175,110t work | 98% savings
 
 ### Apr 25, 2026
-S28 Font config setting has no effect — theme font not applied from config (Apr 25, 1:17 AM)
-S48 Note Search Pass 2 implementation — baseline survey and design decisions before coding begins (Apr 25, 1:19 AM)
 S50 FTS5 Note Search Pass 2 — five design decisions confirmed (Apr 25, 4:02 PM)
 S73 Fix frozen search input and slow/blocking results when searching notes in the terminal app (Apr 25, 4:06 PM)
-59 4:17p 🟣 FTS5 index extended to include note_title column
-61 4:18p 🟣 DB startup sequence gains migration runner and search index health check
-62 4:19p 🟣 search_notes_content rewritten to return ranked NoteSearchResult with FTS5 snippets
-63 4:21p 🟣 Note Search Pass 2 — Full frontend integration with NoteSearchResult and snippet rendering
-64 " 🔴 Rust E0597 lifetime error in search_notes_content — stmt dropped while borrowed
-65 " ✅ Switcher CSS updated for snippet row layout
-66 4:22p 🔴 Fixed E0597 lifetime error in search_notes_content by binding query_map result to local
-67 " 🔵 FTS index not re-populated on unlock — search_index_restores_note_after_unlock_and_decrypt test fails
-68 4:23p 🔵 unlock_note does not write to notes table — FTS trigger never fires on unlock
-69 " 🔵 decrypt_note uses SQL UPDATE so FTS trigger fires correctly; unlock_note is the only broken path
-70 4:24p ⚖️ Locked notes intentionally stay unsearchable after session unlock — test expectations corrected
-71 " 🟣 Note Search Pass 2 Phase 2.1 — full test suite green, 82/82 passing
 ### Apr 26, 2026
-72 1:52p 🔵 Content search freezes input — synchronous FTS5 query on every keystroke in blocking event loop
-73 1:53p 🔴 Content search freeze fix — added content_search_pending flag to TerminalApp struct
-74 1:54p 🔴 Content search freeze fix — deferred FTS5 query execution via maybe_autosave idle tick
-75 " 🔴 Content search freeze fix — all key handlers migrated to set pending flag instead of blocking DB call
-76 1:57p 🟣 Slate accent color chooser — session intent logged
 S79 Fix UI/TUI blocking during content search — search must never block typing at any point (Apr 26, 2:01 PM)
-78 2:06p ✅ Add Arc import to sqlite.rs for concurrent access
-79 " ✅ Wrap Db fields in Arc for cloneable concurrent sharing
-80 2:07p ✅ Add async search result channel to TUI app state
-81 " 🔴 Implement async background search to prevent UI blocking during content search
-82 " ✅ Integrate result collection into main event loop for non-blocking search completion
+82 2:07p ✅ Integrate result collection into main event loop for non-blocking search completion
 S84 Note search input frozen and results blocking in TUI/UI (Apr 26, 2:07 PM)
 ### Apr 28, 2026
 84 3:22p 🔵 Note search input frozen and results blocking in TUI/UI
@@ -232,6 +209,7 @@ S92 Table formula := prefix feature fully shipped — all tests green (Apr 28, 3
 97 3:52p ✅ docs/plan.md updated with Table Formula Expressions syntax documentation
 98 " 🟣 Table formula := prefix feature fully shipped — all tests green
 S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
+S108 Create slate.desktop XDG desktop entry file for the Slate application (Apr 28, 3:52 PM)
 99 8:27p 🔄 Welcome note seeding moved into 0001_init.sql, legacy migrations removed
 100 " 🔴 Test count assertions updated to account for welcome note in fresh databases
 101 " 🟣 Welcome note with demo content shipped as part of fresh database initialization
@@ -247,6 +225,29 @@ S94 Change table formula cell prefix from bare = to := to align with variable as
 112 9:44p ⚖️ macOS CI signing simplified to ad-hoc only — full notarization pipeline reverted
 113 9:56p ✅ CI macOS artifact paths made flexible for both root and src-tauri build output locations
 114 " ✅ All CI binary and installer upload paths expanded to cover src-tauri/target output location
+115 10:17p 🔵 CI macOS verification step fails to find produced artifacts despite successful build
+117 10:43p 🟣 slate.desktop Linux desktop entry file created
+### Apr 29, 2026
+118 9:22a 🔵 Calc engine and markdown-table architecture audit — optimization opportunities identified
+119 9:25a 🔵 Calc engine and table handling architecture mapped in Slate editor
+S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 29, 9:29 AM)
+120 9:36a 🔵 Slate crate structure and dependencies mapped
+121 " 🔵 Slate calc engine architecture: AppCore, delta IPC, and viewport-based decorations
+122 " 🔵 Calc result remapping algorithm preserves displayed results across document edits
+123 9:37a 🔵 hash_line/hash_lines used only internally in calc_plan.rs, not exposed to WASM
+124 " 🔵 editor-core WASM bindings isolated to single file: crates/editor-core/src/wasm.rs
+125 " 🔵 Two-level calc caching: raw_eval_cache (per-resolver) and table_formula_cache (per-eval-call)
+126 9:38a 🟣 Tab key applies calc result to current line with smart insertion logic
+127 9:40a 🔵 Table formula evaluation produces per-cell results with error diagnostics and mutates working lines
+128 " 🔵 TableEvalCache implements lazy splitting and caching of table row cells
+129 " 🔵 Table formula scope (Row/Column) controls which cells are collected for sum operations
+130 " 🔵 Table cell references detect self-reference, bounds, and empty cells with specific error codes
+131 9:41a 🔵 NoteEvaluationOptions eval_range enables partial document evaluation while maintaining full variable scope
+132 9:42a 🔵 Calc decoration builder collects metrics on viewport spans for debugging and optimization
+133 " ✅ Added rustc-hash v2 dependency to editor-core crate
+134 9:43a 🔄 hash_line migrated from DefaultHasher to FxHasher in calc_plan.rs
+135 " ✅ Arc added to engine.rs sync imports in preparation for shared state
+136 " 🔄 note_line_cache and TableEvalCache migrated to Arc-wrapped Vec for cheap cloning
 
-Access 1275k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1175k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

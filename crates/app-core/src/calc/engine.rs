@@ -1501,10 +1501,17 @@ fn evaluate_table_formula(
             return if !had_prefix {
                 None
             } else if variables_enabled {
+                // Explicit `:=` cells should evaluate even when the substituted
+                // expression becomes a plain literal (e.g. `:=(1,2)` -> `10`).
                 let resolver = resolver?;
-                evaluate_expression_with_variables(&expression, resolver, ctx)
+                let substituted = if resolver.expression_references_variable(&expression) {
+                    resolver.substitute_runtime(&expression, None, ctx)?
+                } else {
+                    expression.clone()
+                };
+                evaluate_raw_expression(&substituted, ctx)
             } else {
-                evaluate_single(&expression, ctx)
+                evaluate_raw_expression(&expression, ctx)
             };
         }
 
@@ -2304,6 +2311,25 @@ mod tests {
                 .find(|c| c.cell_index == 2)
                 .map(|c| c.value.clone()),
             Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_without_arithmetic_evaluates() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | :=(1,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[3]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some("10".to_string())
         );
     }
 
