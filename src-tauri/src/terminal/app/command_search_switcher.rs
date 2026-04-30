@@ -1431,9 +1431,29 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
+        let previous_prefix_index = self.wiki_link_prefix_index.clone();
         self.switcher_items = switcher::load_note_meta(db, Some(&self.active_note.id))?;
         self.rebuild_wiki_link_prefix_index();
-        self.wiki_link_render_cache.clear();
+        let mut changed_short_ids: Vec<String> = Vec::new();
+        for (short_id, next) in self.wiki_link_prefix_index.iter() {
+            let changed = match previous_prefix_index.get(short_id) {
+                Some(prev) => prev.note_id != next.note_id || prev.updated_at != next.updated_at,
+                None => true,
+            };
+            if changed {
+                changed_short_ids.push(short_id.clone());
+            }
+        }
+        for short_id in previous_prefix_index.keys() {
+            if !self.wiki_link_prefix_index.contains_key(short_id) {
+                changed_short_ids.push(short_id.clone());
+            }
+        }
+        changed_short_ids.sort();
+        changed_short_ids.dedup();
+        for short_id in changed_short_ids {
+            self.invalidate_wiki_link_render_cache_for_short_id(&short_id);
+        }
         if self.mode == UiMode::Switcher {
             self.recompute_switcher_matches();
         }
@@ -1458,6 +1478,7 @@ impl TerminalApp {
         self.search_matches.clear();
         self.rebuild_wiki_link_prefix_index();
         self.wiki_link_render_cache.clear();
+        self.wiki_link_line_render_cache.clear();
         self.history
             .reset(&self.lines, self.cursor_line, self.cursor_col);
         self.fence_checkpoints.truncate(1);

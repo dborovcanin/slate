@@ -12,6 +12,7 @@ use crate::terminal::{
     date_picker::DatePickerView,
     switcher::{content_search_box_geometry, ContentSearchView, SwitcherView},
 };
+use std::borrow::Cow;
 use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
@@ -87,7 +88,101 @@ impl TerminalApp {
         (display, broken)
     }
 
+    fn wiki_link_line_cache_entry(
+        &mut self,
+        line_text: &str,
+    ) -> Option<(String, Vec<(usize, usize)>)> {
+        let Some(entry) = self.wiki_link_line_render_cache.get(line_text) else {
+            return None;
+        };
+        if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_LINE_RENDER_CACHE_TTL_MS {
+            return Some((entry.rendered_line.clone(), entry.underline_ranges.clone()));
+        }
+        self.wiki_link_line_render_cache.remove(line_text);
+        None
+    }
+
+    pub(super) fn invalidate_wiki_link_render_cache_for_short_id(&mut self, short_id: &str) {
+        if short_id.is_empty() {
+            return;
+        }
+        self.wiki_link_render_cache.remove(short_id);
+        let needle = format!("[[{short_id}");
+        self.wiki_link_line_render_cache
+            .retain(|line, _| !line.contains(&needle));
+    }
+
+    fn insert_wiki_link_line_cache(
+        &mut self,
+        line_text: &str,
+        rendered_line: &str,
+        underline_ranges: &[(usize, usize)],
+    ) {
+        self.wiki_link_line_render_cache.insert(
+            line_text.to_string(),
+            super::WikiLinkLineRenderCacheEntry {
+                rendered_line: rendered_line.to_string(),
+                underline_ranges: underline_ranges.to_vec(),
+                cached_at: std::time::Instant::now(),
+            },
+        );
+        while self.wiki_link_line_render_cache.len() > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES {
+            let Some(oldest_key) = self
+                .wiki_link_line_render_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.cached_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.wiki_link_line_render_cache.remove(oldest_key.as_str());
+        }
+    }
+
+    fn table_formula_segments_cache_entry(
+        &mut self,
+        line_text: &str,
+    ) -> Option<Vec<TableFormulaSegment>> {
+        let Some(entry) = self.table_formula_segment_cache.get(line_text) else {
+            return None;
+        };
+        if entry.cached_at.elapsed().as_millis() as u64 <= super::TABLE_FORMULA_SEGMENT_CACHE_TTL_MS {
+            return Some(entry.segments.clone());
+        }
+        self.table_formula_segment_cache.remove(line_text);
+        None
+    }
+
+    fn table_formula_segments_cached(&mut self, line_text: &str) -> Vec<TableFormulaSegment> {
+        if let Some(cached) = self.table_formula_segments_cache_entry(line_text) {
+            return cached;
+        }
+        let segments = find_table_formula_segments(line_text);
+        self.table_formula_segment_cache.insert(
+            line_text.to_string(),
+            super::TableFormulaSegmentCacheEntry {
+                segments: segments.clone(),
+                cached_at: std::time::Instant::now(),
+            },
+        );
+        while self.table_formula_segment_cache.len() > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES {
+            let Some(oldest_key) = self
+                .table_formula_segment_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.cached_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.table_formula_segment_cache.remove(oldest_key.as_str());
+        }
+        segments
+    }
+
     fn render_wiki_link_display_line(&mut self, line_text: &str) -> (String, Vec<(usize, usize)>) {
+        if let Some(cached) = self.wiki_link_line_cache_entry(line_text) {
+            return cached;
+        }
         let links = crate::editor_core::markdown_tokens::find_wiki_link_matches(line_text);
         if links.is_empty() {
             return (line_text.to_string(), Vec::new());
@@ -128,6 +223,7 @@ impl TerminalApp {
             return (line_text.to_string(), Vec::new());
         }
         Self::push_rendered_chars_segment(&mut out, &chars, cursor, chars.len(), &mut out_char_count);
+        self.insert_wiki_link_line_cache(line_text, &out, &underline_ranges);
         (out, underline_ranges)
     }
 
@@ -444,11 +540,7 @@ impl TerminalApp {
         if self.mode != UiMode::Editor || !popup.visible || cols == 0 || rows <= EDITOR_TOP_ROW {
             return;
         }
-        let suggestions: Vec<String> = self
-            .filtered_wiki_link_suggestions()
-            .into_iter()
-            .map(|s| s.title.clone())
-            .collect();
+        let suggestions = self.filtered_wiki_link_suggestions();
         if suggestions.is_empty() {
             return;
         }
@@ -462,7 +554,7 @@ impl TerminalApp {
         let inner_width = suggestions
             .iter()
             .take(visible_count)
-            .map(|t| t.chars().count() + 2)
+            .map(|item| item.title.chars().count() + 2)
             .max()
             .unwrap_or(1)
             .min(cols.saturating_sub(2).max(1));
@@ -488,9 +580,9 @@ impl TerminalApp {
             ..Default::default()
         };
         draw_box_border(buf, y, x, box_width, box_height, border_style);
-        for (idx, title) in suggestions.iter().take(visible_count).enumerate() {
+        for (idx, suggestion) in suggestions.iter().take(visible_count).enumerate() {
             let row = y + 1 + idx;
-            let text = format!(" {title}");
+            let text = format!(" {}", suggestion.title);
             let style = if idx == selected_index { selected_style } else { row_style };
             draw_row_at_styled(buf, row, x + 1, box_width.saturating_sub(2), &text, style);
         }
@@ -650,7 +742,7 @@ impl TerminalApp {
                 let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
                 let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
                 let line_text = self.lines[line_idx].clone();
-                let mut rendered_line = line_text.clone();
+                let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
                 let collapsed_hidden_count = self
                     .folds
                     .placeholder_hidden_lines
@@ -660,13 +752,13 @@ impl TerminalApp {
 
                 if let Some(hidden_count) = collapsed_hidden_count {
                     let suffix = if hidden_count == 1 { "" } else { "s" };
-                    rendered_line = "".to_string();
+                    rendered_line = Cow::Borrowed("");
                     calc_ghost = None;
                     reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
                 } else {
                     if !is_cursor_line {
                         let (rendered, underlines) = self.render_wiki_link_display_line(&line_text);
-                        rendered_line = rendered;
+                        rendered_line = Cow::Owned(rendered);
                         wiki_link_underline_ranges = underlines;
                     }
                     if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
@@ -674,7 +766,7 @@ impl TerminalApp {
                         reminder_strikethrough = reminder.remind_at_ms <= now_ms;
                     }
 
-                    formula_segments = find_table_formula_segments(&line_text);
+                    formula_segments = self.table_formula_segments_cached(&line_text);
                     if !formula_segments.is_empty() {
                         // Formula rows render a marker in-cell (`value*`,
                         // `value**`, …) and keep the detailed per-formula
@@ -762,7 +854,7 @@ impl TerminalApp {
                             last_byte = seg.to_byte;
                         }
                         out.push_str(&line_text[last_byte..]);
-                        rendered_line = out;
+                        rendered_line = Cow::Owned(out);
 
                         calc_ghost_override = Some(trailer_parts.join("  "));
 
@@ -789,7 +881,7 @@ impl TerminalApp {
                                 }
                                 ((self.cursor_col as isize) + delta).max(0) as usize
                             });
-                            cursor_line_override = Some((rendered_line.clone(), mapped_col));
+                            cursor_line_override = Some((rendered_line.as_ref().to_string(), mapped_col));
                         }
                     }
                 }
@@ -802,7 +894,7 @@ impl TerminalApp {
                 let mut visual_highlight_ranges = Vec::new();
                 if is_fold_placeholder {
                     if self.line_is_in_visual_selection(line_idx) {
-                        visual_highlight_ranges.push((0, rendered_line.chars().count().max(1)));
+                        visual_highlight_ranges.push((0, rendered_line.as_ref().chars().count().max(1)));
                     }
                 } else {
                     self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
@@ -810,8 +902,8 @@ impl TerminalApp {
 
                 if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
                     let (collapsed_line, mapped_col) =
-                        render::collapse_markdown_line_for_cursor(&rendered_line, self.cursor_col);
-                    if collapsed_line != rendered_line || mapped_col != self.cursor_col {
+                        render::collapse_markdown_line_for_cursor(rendered_line.as_ref(), self.cursor_col);
+                    if collapsed_line != rendered_line.as_ref() || mapped_col != self.cursor_col {
                         cursor_line_override = Some((collapsed_line, mapped_col));
                     }
                 }
@@ -831,7 +923,7 @@ impl TerminalApp {
                     None
                 };
                 let line_scroll_col = self.scroll_col;
-                let line_width = line_display_cols(&rendered_line);
+                let line_width = line_display_cols(rendered_line.as_ref());
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
                 // Highlight the focused table cell's pipe characters in red so
@@ -895,7 +987,7 @@ impl TerminalApp {
                     )
                 } else {
                     ctx.render_line_full(
-                        &rendered_line,
+                        rendered_line.as_ref(),
                         viewport.text_width,
                         viewport.text_window_col,
                         effective_calc_ghost,

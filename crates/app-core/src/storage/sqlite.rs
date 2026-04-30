@@ -801,6 +801,27 @@ impl Db {
         self.resolve_wiki_link_with_stmt(&mut stmt, short_id)
     }
 
+    pub fn resolve_wiki_link_note(&self, short_id: &str) -> Result<Option<Note>, String> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("{}%", short_id);
+        let note_id: Option<String> = conn
+            .query_row(
+                "SELECT id
+                 FROM notes
+                 WHERE id LIKE ?1
+                 ORDER BY updated_at DESC, id ASC
+                 LIMIT 1",
+                [&pattern],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some(note_id) = note_id else {
+            return Ok(None);
+        };
+        self.load_note_with_access(&conn, &note_id)
+    }
+
     pub fn resolve_wiki_links(
         &self,
         short_ids: &[String],

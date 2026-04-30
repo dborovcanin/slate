@@ -261,10 +261,7 @@ pub fn resolve_wiki_link_headings(
     core: State<'_, AppCore>,
     short_id: String,
 ) -> Result<Vec<String>, String> {
-    let Some(summary) = core.note_sources().resolve_wiki_link(&short_id)? else {
-        return Ok(Vec::new());
-    };
-    let Some(note) = core.note_sources().open_note_by_id(&summary.id)? else {
+    let Some(note) = core.note_sources().resolve_wiki_link_note(&short_id)? else {
         return Ok(Vec::new());
     };
     Ok(crate::editor_core::markdown_tokens::extract_markdown_headings(

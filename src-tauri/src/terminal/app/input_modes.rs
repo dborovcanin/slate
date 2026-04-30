@@ -254,6 +254,9 @@ impl TerminalApp {
                             self.open_wiki_link_autocomplete(db);
                         }
                     }
+                    if ch == '#' {
+                        self.maybe_open_wiki_link_autocomplete_at_cursor(db);
+                    }
                 }
                 refresh_variable_popup = true;
                 if ch == ' '

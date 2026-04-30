@@ -45,6 +45,10 @@ const CONTENT_SEARCH_DEBOUNCE_MS: u64 = 120;
 const CONTENT_SEARCH_MAX_DETACHED_WORKERS: usize = 2;
 const WIKI_LINK_RENDER_CACHE_MAX_ENTRIES: usize = 2048;
 const WIKI_LINK_RENDER_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
+const WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES: usize = 1024;
+const WIKI_LINK_LINE_RENDER_CACHE_TTL_MS: u64 = 60 * 1000;
+const TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES: usize = 2048;
+const TABLE_FORMULA_SEGMENT_CACHE_TTL_MS: u64 = 90 * 1000;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
@@ -211,6 +215,7 @@ struct VariableAutocompletePopupState {
 pub(super) struct WikiLinkSuggestion {
     pub short_id: String,
     pub title: String,
+    pub title_lower: String,
     pub heading: Option<String>,
 }
 
@@ -232,6 +237,19 @@ struct WikiLinkAutocompletePopupState {
 struct WikiLinkRenderCacheEntry {
     display: String,
     broken: bool,
+    cached_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct WikiLinkLineRenderCacheEntry {
+    rendered_line: String,
+    underline_ranges: Vec<(usize, usize)>,
+    cached_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct TableFormulaSegmentCacheEntry {
+    segments: Vec<TableFormulaSegment>,
     cached_at: Instant,
 }
 
@@ -331,6 +349,8 @@ struct TerminalApp {
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_prefix_index: HashMap<String, WikiLinkPrefixIndexEntry>,
     wiki_link_render_cache: HashMap<String, WikiLinkRenderCacheEntry>,
+    wiki_link_line_render_cache: HashMap<String, WikiLinkLineRenderCacheEntry>,
+    table_formula_segment_cache: HashMap<String, TableFormulaSegmentCacheEntry>,
     render_palette: render::RenderPalette,
     // Folding (real-line indexed, 0-based)
     folds: FoldingState,
@@ -641,6 +661,8 @@ impl TerminalApp {
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_prefix_index: HashMap::new(),
             wiki_link_render_cache: HashMap::new(),
+            wiki_link_line_render_cache: HashMap::new(),
+            table_formula_segment_cache: HashMap::new(),
             render_palette,
             folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,

@@ -2293,18 +2293,15 @@ impl TerminalApp {
         short_id: &str,
     ) -> Vec<WikiLinkSuggestion> {
         let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
-        let Ok(Some(summary)) = note_sources.resolve_wiki_link(short_id) else {
-            return Vec::new();
-        };
-        let Ok(Some(note)) = note_sources.open_note_by_id(&summary.id) else {
+        let Ok(Some(note)) = note_sources.resolve_wiki_link_note(short_id) else {
             return Vec::new();
         };
         crate::editor_core::markdown_tokens::extract_markdown_headings(&note.body)
             .into_iter()
-            .take(32)
             .map(|heading| WikiLinkSuggestion {
                 short_id: short_id.to_string(),
                 title: heading.clone(),
+                title_lower: heading.to_lowercase(),
                 heading: Some(heading),
             })
             .collect()
@@ -2318,10 +2315,19 @@ impl TerminalApp {
         notes
             .into_iter()
             .filter(|n| n.access_mode == app_core::storage::NoteAccessMode::None || n.is_unlocked)
-            .map(|n| WikiLinkSuggestion {
-                short_id: n.id[..8.min(n.id.len())].to_string(),
-                title: if n.title.is_empty() { "Untitled".to_string() } else { n.title },
-                heading: None,
+            .map(|n| {
+                let title = if n.title.is_empty() {
+                    "Untitled".to_string()
+                } else {
+                    n.title
+                };
+                let title_lower = title.to_lowercase();
+                WikiLinkSuggestion {
+                    short_id: n.id[..8.min(n.id.len())].to_string(),
+                    title,
+                    title_lower,
+                    heading: None,
+                }
             })
             .collect()
     }
@@ -2350,6 +2356,55 @@ impl TerminalApp {
             selected_index: 0,
             cursor_line: self.cursor_line,
         };
+    }
+
+    pub(super) fn maybe_open_wiki_link_autocomplete_at_cursor(
+        &mut self,
+        db: &crate::storage::Db,
+    ) -> bool {
+        if self.wiki_link_autocomplete_popup.visible {
+            return false;
+        }
+        let line = self.current_line().to_string();
+        let Some(link) = crate::editor_core::markdown_tokens::wiki_link_at_cursor(
+            &line,
+            self.cursor_col,
+        ) else {
+            return false;
+        };
+        if self.cursor_col < link.from + 2 {
+            return false;
+        }
+        let from_col = link.from;
+        let query: String = line
+            .chars()
+            .skip(from_col + 2)
+            .take(self.cursor_col.saturating_sub(from_col + 2))
+            .collect();
+        if Self::parse_wiki_link_query(&query).is_none() {
+            return false;
+        }
+
+        let note_suggestions = Self::load_wiki_link_note_suggestions(db);
+        let suggestions = note_suggestions.clone();
+        let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
+            self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW,
+            from_col.saturating_add(1),
+        ));
+        self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState {
+            visible: true,
+            anchor_row,
+            anchor_col,
+            from_col,
+            query,
+            note_suggestions,
+            heading_cache: std::collections::HashMap::new(),
+            suggestions,
+            selected_index: 0,
+            cursor_line: self.cursor_line,
+        };
+        self.refresh_wiki_link_autocomplete(db);
+        true
     }
 
     pub(super) fn refresh_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
@@ -2395,7 +2450,7 @@ impl TerminalApp {
                             let query = value.to_lowercase();
                             cached
                                 .iter()
-                                .filter(|suggestion| suggestion.title.to_lowercase().contains(&query))
+                                .filter(|suggestion| suggestion.title_lower.contains(&query))
                                 .cloned()
                                 .collect()
                         }
@@ -2403,31 +2458,28 @@ impl TerminalApp {
                         Vec::new()
                     }
                 }
-                None => self.wiki_link_autocomplete_popup.note_suggestions.clone(),
+                None => {
+                    if short_id.is_empty() {
+                        self.wiki_link_autocomplete_popup.note_suggestions.clone()
+                    } else {
+                        let query = short_id.to_lowercase();
+                        self.wiki_link_autocomplete_popup
+                            .note_suggestions
+                            .iter()
+                            .filter(|suggestion| suggestion.title_lower.contains(&query))
+                            .cloned()
+                            .collect()
+                    }
+                }
             };
             self.wiki_link_autocomplete_popup.selected_index = 0;
         }
     }
 
     pub(super) fn filtered_wiki_link_suggestions(&self) -> Vec<&WikiLinkSuggestion> {
-        if self
-            .wiki_link_autocomplete_popup
-            .suggestions
-            .iter()
-            .any(|s| s.heading.is_some())
-        {
-            return self
-                .wiki_link_autocomplete_popup
-                .suggestions
-                .iter()
-                .take(16)
-                .collect();
-        }
-        let query = self.wiki_link_autocomplete_popup.query.to_lowercase();
         self.wiki_link_autocomplete_popup
             .suggestions
             .iter()
-            .filter(|s| query.is_empty() || s.title.to_lowercase().contains(&query))
             .take(16)
             .collect()
     }

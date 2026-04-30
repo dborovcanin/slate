@@ -6,9 +6,58 @@ use crate::terminal::render_styles::{
     apply_variable_styles, CharStyle,
 };
 pub use crate::terminal::theme::RenderPalette;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub const RESET: &str = "\x1b[0m";
 pub const TAB_WIDTH: usize = 4;
+const INLINE_TOKEN_CACHE_MAX_ENTRIES: usize = 4096;
+
+struct InlineTokenCache {
+    entries: HashMap<String, (Arc<Vec<markdown_tokens::InlineToken>>, u64)>,
+    tick: u64,
+}
+
+impl InlineTokenCache {
+    fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            tick: 0,
+        }
+    }
+
+    fn get(&mut self, text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
+        self.tick = self.tick.wrapping_add(1);
+        if let Some((tokens, last_used)) = self.entries.get_mut(text) {
+            *last_used = self.tick;
+            return Arc::clone(tokens);
+        }
+        let tokens = Arc::new(markdown_tokens::tokenize_inline_markdown(text));
+        self.entries
+            .insert(text.to_string(), (Arc::clone(&tokens), self.tick));
+        while self.entries.len() > INLINE_TOKEN_CACHE_MAX_ENTRIES {
+            let Some(evict_key) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, (_, last_used))| *last_used)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.entries.remove(evict_key.as_str());
+        }
+        tokens
+    }
+}
+
+thread_local! {
+    static INLINE_TOKEN_CACHE: RefCell<InlineTokenCache> = RefCell::new(InlineTokenCache::new());
+}
+
+fn cached_inline_tokens(text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
+    INLINE_TOKEN_CACHE.with(|cache| cache.borrow_mut().get(text))
+}
 
 pub struct RenderContext {
     in_code_block: bool,
@@ -311,7 +360,7 @@ impl RenderContext {
                 len,
                 active_cursor_col.is_some(),
             ));
-            let inline_tokens = markdown_tokens::tokenize_inline_markdown(text);
+            let inline_tokens = cached_inline_tokens(text);
             // Markdown emphasis (`*x*`, `***x***`) inside table rows is
             // ambiguous with our formula markers (`value*`, `value***`) and
             // would otherwise leak italic/bold across cell boundaries.
@@ -333,7 +382,7 @@ impl RenderContext {
                     .collect();
                 &filtered_tokens
             } else {
-                &inline_tokens
+                inline_tokens.as_ref()
             };
             apply_inline_token_styles(
                 inline_tokens_to_apply,

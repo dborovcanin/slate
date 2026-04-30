@@ -1253,3 +1253,57 @@ fn command_bar_ctrl_w_deletes_word_and_stays_in_command_mode() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn wiki_link_heading_autocomplete_loads_headings_beyond_first_32() {
+    let (db, mut app, path) = app_with_note("[[01HX4VHR]]");
+    let note_id = "01HX4VHR9ABCDEFGHJKMNPQRS";
+    let mut body_lines = Vec::new();
+    for idx in 1..=500 {
+        body_lines.push(format!("## Section {idx}: ABCD"));
+    }
+    db.save_note(note_id, &body_lines.join("\n"))
+        .expect("target note saved");
+
+    app.cursor_line = 0;
+    app.cursor_col = 10; // [[ + 8-char short id
+    run_keys(&mut app, &db, &[Key::Char('#')]);
+
+    assert!(app.wiki_link_autocomplete_popup.visible);
+    assert_eq!(app.wiki_link_autocomplete_popup.query, "01HX4VHR#");
+    assert!(
+        app.wiki_link_autocomplete_popup
+            .suggestions
+            .iter()
+            .any(|entry| entry.title == "Section 456: ABCD"),
+        "heading autocomplete should include headings beyond the previous 32-item cap"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn wiki_link_heading_autocomplete_reopens_when_hash_is_typed_again() {
+    let (db, mut app, path) = app_with_note("[[01HX4VHR]]");
+    let note_id = "01HX4VHR9ABCDEFGHJKMNPQRS";
+    db.save_note(note_id, "# Intro\n## Deep Dive")
+        .expect("target note saved");
+
+    app.cursor_line = 0;
+    app.cursor_col = 10; // [[ + 8-char short id
+    run_keys(&mut app, &db, &[Key::Char('#')]);
+    assert!(app.wiki_link_autocomplete_popup.visible);
+
+    run_keys(&mut app, &db, &[Key::Esc, Key::Backspace, Key::Char('#')]);
+    assert!(
+        app.wiki_link_autocomplete_popup.visible,
+        "typing # inside an existing wiki-link should reopen heading suggestions"
+    );
+    assert_eq!(app.wiki_link_autocomplete_popup.query, "01HX4VHR#");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

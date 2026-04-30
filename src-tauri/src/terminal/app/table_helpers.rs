@@ -50,6 +50,7 @@ pub(super) fn table_cell_navigation_anchor(line: &str, cell: &TableCellInfo) -> 
     line[..anchor_byte].chars().count()
 }
 
+#[derive(Debug, Clone)]
 pub(super) struct TableFormulaSegment {
     pub(super) from_byte: usize,
     pub(super) to_byte: usize,
