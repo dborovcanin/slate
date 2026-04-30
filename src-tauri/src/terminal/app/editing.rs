@@ -15,7 +15,154 @@ use crate::terminal::text_utils::{
 };
 use crate::terminal::{folding, input};
 use std::cmp::min;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
+
+fn is_image_path(path: &Path) -> bool {
+    let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    IMAGE_EXTENSIONS
+        .iter()
+        .any(|allowed| ext.eq_ignore_ascii_case(allowed))
+}
+
+fn tokenize_path_candidates(raw: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut escaped = false;
+
+    for ch in raw.trim().chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' && !in_single {
+            escaped = true;
+            continue;
+        }
+        if ch == '"' && !in_single {
+            in_double = !in_double;
+            continue;
+        }
+        if ch == '\'' && !in_double {
+            in_single = !in_single;
+            continue;
+        }
+        if ch.is_whitespace() && !in_single && !in_double {
+            if !current.is_empty() {
+                tokens.push(current.clone());
+                current.clear();
+            }
+            continue;
+        }
+        current.push(ch);
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+fn normalize_pasted_path_token(token: &str) -> Option<PathBuf> {
+    let trimmed = token.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let raw = if let Some(rest) = trimmed.strip_prefix("file://") {
+        let without_host = rest.strip_prefix("localhost/").unwrap_or(rest);
+        let decoded = decode_percent_encoded(without_host);
+        #[cfg(windows)]
+        let decoded = if decoded.starts_with('/') && decoded.as_bytes().get(2) == Some(&b':') {
+            decoded[1..].to_string()
+        } else {
+            decoded
+        };
+        decoded
+    } else {
+        trimmed.to_string()
+    };
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    let resolved = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().ok()?.join(path)
+    };
+    if !resolved.exists() || !resolved.is_file() || !is_image_path(&resolved) {
+        return None;
+    }
+    Some(resolved)
+}
+
+fn decode_percent_encoded(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_value(bytes[i + 1]), hex_value(bytes[i + 2])) {
+                out.push((hi << 4) | lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(10 + (byte - b'a')),
+        b'A'..=b'F' => Some(10 + (byte - b'A')),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use ulid::Ulid;
+
+    #[test]
+    fn decode_percent_encoded_decodes_ascii_hex_sequences() {
+        assert_eq!(decode_percent_encoded("a%20b%2Fc.png"), "a b/c.png");
+        assert_eq!(decode_percent_encoded("plain.png"), "plain.png");
+    }
+
+    #[test]
+    fn normalize_pasted_path_token_accepts_file_url_with_percent_encoding() {
+        let dir = std::env::temp_dir().join(format!("slate-image-paste-{}", Ulid::new()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("my image.png");
+        fs::write(&path, b"img").expect("seed image");
+        let raw = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
+        let resolved = normalize_pasted_path_token(&raw).expect("resolved image path");
+        assert_eq!(resolved, path);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn normalize_pasted_path_token_rejects_non_image_paths() {
+        let dir = std::env::temp_dir().join(format!("slate-image-paste-{}", Ulid::new()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("note.txt");
+        fs::write(&path, b"txt").expect("seed file");
+        assert!(normalize_pasted_path_token(path.to_string_lossy().as_ref()).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
+}
 
 fn map_offset_through_changes(
     mut offset: usize,
@@ -1390,6 +1537,51 @@ impl TerminalApp {
         self.mark_edited_from_line(line_idx);
     }
 
+    pub(super) fn try_import_image_paste(
+        &mut self,
+        db: &crate::storage::Db,
+        pasted: &str,
+    ) -> Result<bool, String> {
+        let tokens = tokenize_path_candidates(pasted);
+        if tokens.is_empty() {
+            return Ok(false);
+        }
+        let mut paths = Vec::new();
+        for token in tokens {
+            if let Some(path) = normalize_pasted_path_token(&token) {
+                paths.push(path);
+            }
+        }
+        if paths.is_empty() {
+            return Ok(false);
+        }
+
+        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+        let mut snippets = Vec::new();
+        for path in paths {
+            let imported = note_sources.import_image_path_by_id(&self.active_note.id, &path)?;
+            let alt = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(|text| text.replace(['_', '-'], " "))
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty())
+                .unwrap_or_else(|| "Image".to_string())
+                .replace(']', "\\]");
+            snippets.push(format!("![{alt}]({})", imported.markdown_path));
+        }
+        if snippets.is_empty() {
+            return Ok(false);
+        }
+        self.insert_paste(&snippets.join("\n"));
+        self.status = if snippets.len() == 1 {
+            "image inserted".to_string()
+        } else {
+            format!("inserted {} images", snippets.len())
+        };
+        Ok(true)
+    }
+
     pub(super) fn insert_newline(&mut self) {
         let changed_from_line = self.cursor_line;
         let col = self.cursor_col;
@@ -2365,10 +2557,9 @@ impl TerminalApp {
             return false;
         }
         let line = self.current_line().to_string();
-        let Some(link) = crate::editor_core::markdown_tokens::wiki_link_at_cursor(
-            &line,
-            self.cursor_col,
-        ) else {
+        let Some(link) =
+            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.cursor_col)
+        else {
             return false;
         };
         if self.cursor_col < link.from + 2 {
@@ -2421,7 +2612,11 @@ impl TerminalApp {
             self.dismiss_wiki_link_autocomplete();
             return;
         }
-        let query: String = line.chars().skip(from_col + 2).take(self.cursor_col - from_col - 2).collect();
+        let query: String = line
+            .chars()
+            .skip(from_col + 2)
+            .take(self.cursor_col - from_col - 2)
+            .collect();
         let Some((_, _heading_query)) = Self::parse_wiki_link_query(&query) else {
             self.dismiss_wiki_link_autocomplete();
             return;
@@ -2436,13 +2631,21 @@ impl TerminalApp {
         {
             self.wiki_link_autocomplete_popup.suggestions = match heading_query {
                 Some(value) => {
-                    if !self.wiki_link_autocomplete_popup.heading_cache.contains_key(short_id) {
+                    if !self
+                        .wiki_link_autocomplete_popup
+                        .heading_cache
+                        .contains_key(short_id)
+                    {
                         let loaded = Self::load_wiki_link_heading_suggestions(db, short_id);
                         self.wiki_link_autocomplete_popup
                             .heading_cache
                             .insert(short_id.to_string(), loaded);
                     }
-                    if let Some(cached) = self.wiki_link_autocomplete_popup.heading_cache.get(short_id) {
+                    if let Some(cached) = self
+                        .wiki_link_autocomplete_popup
+                        .heading_cache
+                        .get(short_id)
+                    {
                         if value.is_empty() {
                             cached.clone()
                         } else {
@@ -2507,7 +2710,10 @@ impl TerminalApp {
         if count == 0 {
             return false;
         }
-        let current = self.wiki_link_autocomplete_popup.selected_index.min(count.saturating_sub(1));
+        let current = self
+            .wiki_link_autocomplete_popup
+            .selected_index
+            .min(count.saturating_sub(1));
         let next = if delta >= 0 {
             (current + delta as usize) % count
         } else {
@@ -2594,37 +2800,34 @@ impl TerminalApp {
 
     pub(super) fn navigate_wiki_link_at_cursor(&mut self, db: &crate::storage::Db) -> bool {
         let line = self.current_line().to_string();
-        let Some(link) = crate::editor_core::markdown_tokens::wiki_link_at_cursor(
-            &line,
-            self.cursor_col,
-        ) else {
+        let Some(link) =
+            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.cursor_col)
+        else {
             return false;
         };
         let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
         match note_sources.resolve_wiki_link(&link.short_id) {
-            Ok(Some(summary)) => {
-                match db.get_note(&summary.id) {
-                    Ok(Some(note)) => {
-                        let heading_text = link.heading.clone();
-                        if let Err(e) = self.set_active_note(db, note) {
-                            self.status = format!("wiki-link error: {e}");
-                        } else {
-                            if let Some(ref h) = heading_text {
-                                self.jump_to_heading(h);
-                            }
-                            let dest = match &heading_text {
-                                Some(h) => format!("→ {}#{}", summary.title, h),
-                                None => format!("→ {}", summary.title),
-                            };
-                            self.status = dest;
+            Ok(Some(summary)) => match db.get_note(&summary.id) {
+                Ok(Some(note)) => {
+                    let heading_text = link.heading.clone();
+                    if let Err(e) = self.set_active_note(db, note) {
+                        self.status = format!("wiki-link error: {e}");
+                    } else {
+                        if let Some(ref h) = heading_text {
+                            self.jump_to_heading(h);
                         }
-                        return true;
+                        let dest = match &heading_text {
+                            Some(h) => format!("→ {}#{}", summary.title, h),
+                            None => format!("→ {}", summary.title),
+                        };
+                        self.status = dest;
                     }
-                    _ => {
-                        self.status = "wiki-link: note not found".to_string();
-                    }
+                    return true;
                 }
-            }
+                _ => {
+                    self.status = "wiki-link: note not found".to_string();
+                }
+            },
             Ok(None) => {
                 self.status = "wiki-link: broken (note deleted)".to_string();
             }
@@ -2671,13 +2874,18 @@ impl TerminalApp {
         }
         let suggestions = self.filtered_wiki_link_suggestions();
         if suggestions.is_empty() {
-            return Some(format!("[[{}… (no matches)", self.wiki_link_autocomplete_popup.query));
+            return Some(format!(
+                "[[{}… (no matches)",
+                self.wiki_link_autocomplete_popup.query
+            ));
         }
         let (start, _) = self.wiki_link_visible_window(WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
-        let selected = self
-            .wiki_link_autocomplete_popup
-            .selected_index
-            .min(self.wiki_link_autocomplete_popup.suggestions.len().saturating_sub(1));
+        let selected = self.wiki_link_autocomplete_popup.selected_index.min(
+            self.wiki_link_autocomplete_popup
+                .suggestions
+                .len()
+                .saturating_sub(1),
+        );
         let picks: Vec<String> = suggestions
             .iter()
             .enumerate()
@@ -2689,7 +2897,11 @@ impl TerminalApp {
                 }
             })
             .collect();
-        Some(format!("[[{} → {} (Tab/Enter)", self.wiki_link_autocomplete_popup.query, picks.join("  ")))
+        Some(format!(
+            "[[{} → {} (Tab/Enter)",
+            self.wiki_link_autocomplete_popup.query,
+            picks.join("  ")
+        ))
     }
 
     pub(super) fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {

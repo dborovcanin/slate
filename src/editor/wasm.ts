@@ -33,6 +33,7 @@ import init, {
   wasm_markdown_fold_map_ranges_ui,
   wasm_markdown_classify_line,
   wasm_markdown_find_inline_tokens,
+  wasm_markdown_find_image_matches,
   wasm_markdown_wiki_link_at_cursor,
   wasm_markdown_inline_marker_component_ranges,
   wasm_markdown_is_code_fence,
@@ -372,6 +373,9 @@ export type MarkdownInlineTokenType =
   | "strikethrough"
   | "code"
   | "code-marker"
+  | "image-alt"
+  | "image-src"
+  | "image-marker"
   | "link-text"
   | "link-url"
   | "link-marker"
@@ -412,6 +416,15 @@ export interface MarkdownWikiLinkMatch {
   shortId: string;
   heading: string | null;
   title: string | null;
+}
+
+export interface MarkdownImageMatch {
+  from: number;
+  to: number;
+  alt: string;
+  src: string;
+  width: number | null;
+  height: number | null;
 }
 
 export interface MarkdownFoldRange {
@@ -1180,6 +1193,25 @@ function asMarkdownWikiLinkMatch(value: unknown): MarkdownWikiLinkMatch | null {
   return value as MarkdownWikiLinkMatch;
 }
 
+function asMarkdownImageMatch(value: unknown): MarkdownImageMatch | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const from = typeof raw.from === "number" ? raw.from : Number(raw.from);
+  const to = typeof raw.to === "number" ? raw.to : Number(raw.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
+  if (typeof raw.alt !== "string" || typeof raw.src !== "string") return null;
+  const width = raw.width == null ? null : Number(raw.width);
+  const height = raw.height == null ? null : Number(raw.height);
+  return {
+    from: Math.max(0, Math.floor(from)),
+    to: Math.max(0, Math.floor(to)),
+    alt: raw.alt,
+    src: raw.src,
+    width: width != null && Number.isFinite(width) && width > 0 ? Math.floor(width) : null,
+    height: height != null && Number.isFinite(height) && height > 0 ? Math.floor(height) : null,
+  };
+}
+
 function asMarkdownFoldRanges(value: unknown): MarkdownFoldRange[] {
   return Array.isArray(value) ? (value as MarkdownFoldRange[]) : [];
 }
@@ -1227,6 +1259,18 @@ export function markdownWikiLinkAtCursor(
   return asMarkdownWikiLinkMatch(
     wasm_markdown_wiki_link_at_cursor(lineText, Math.max(0, Math.floor(cursorCol))),
   );
+}
+
+export function markdownFindImageMatches(lineText: string): MarkdownImageMatch[] {
+  if (!ensureWasmReadyNonBlocking()) return [];
+  const raw = wasm_markdown_find_image_matches(lineText);
+  if (!Array.isArray(raw)) return [];
+  const out: MarkdownImageMatch[] = [];
+  for (const entry of raw) {
+    const parsed = asMarkdownImageMatch(entry);
+    if (parsed) out.push(parsed);
+  }
+  return out;
 }
 
 export function markdownInlineMarkerComponentRanges(

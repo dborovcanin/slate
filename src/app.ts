@@ -28,6 +28,7 @@ import {
   flushSave,
   hasPendingLocalChanges,
   insertTextAtCursor,
+  insertImagesFromPathsAtCursor,
   performFormatAndSave,
 } from "./editor/editor";
 import {
@@ -1054,6 +1055,17 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   createStatusBar(container);
   mountEditor(editorEl, editorOptionsForNote(note));
   startupMark("ui_editor_mounted");
+  const win = getCurrentWindow();
+  void win.onDragDropEvent((event) => {
+    if (event.payload.type !== "drop") return;
+    void insertImagesFromPathsAtCursor(event.payload.paths)
+      .then((inserted) => {
+        if (inserted) showToast("image inserted");
+      })
+      .catch((error) => {
+        console.error("Window drag-drop image import failed:", error);
+      });
+  });
   setupKeyboardShortcuts();
 
   const activeFlags: string[] = [];

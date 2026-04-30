@@ -102,7 +102,13 @@ test("findVariableNameRanges finds variable references with boundaries", () => {
 });
 
 function collectDecorations(decos: ReturnType<typeof buildMarkdownDecorationsForSpans>) {
-  const out: Array<{ from: number; to: number; cls: string; widget: string }> = [];
+  const out: Array<{
+    from: number;
+    to: number;
+    cls: string;
+    widget: string;
+    widgetRef: unknown;
+  }> = [];
   const cursor = decos.iter();
   while (cursor.value) {
     const spec = cursor.value.spec as {
@@ -112,7 +118,7 @@ function collectDecorations(decos: ReturnType<typeof buildMarkdownDecorationsFor
     };
     const cls = spec.class ?? spec.attributes?.class ?? "";
     const widget = spec.widget?.constructor?.name ?? "";
-    out.push({ from: cursor.from, to: cursor.to, cls, widget });
+    out.push({ from: cursor.from, to: cursor.to, cls, widget, widgetRef: spec.widget });
     cursor.next();
   }
   return out;
@@ -526,6 +532,96 @@ test("buildMarkdownDecorationsForSpans hides wiki-link source and shows only alt
         d.cls.includes("md-wiki-link-title"),
     ),
     "alt text should remain visible and styled as link title",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans hides image markdown source and shows image display widget when caret is outside", () => {
+  const doc = Text.of(["![Diagram](./assets/plan.png){width=320 height=180} tail"]);
+  const line = doc.line(1);
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.to, to: line.to, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  const hasHidden = (from: number, to: number) =>
+    flat.some(
+      (d) => d.from === line.from + from && d.to === line.from + to && d.widget === "HiddenMarkdownTokenWidget",
+    );
+
+  assert.ok(hasHidden(0, 2), "opening ![ should be hidden");
+  assert.ok(hasHidden(2, 9), "alt text source should be hidden");
+  assert.ok(hasHidden(9, 11), "]( marker should be hidden");
+  assert.ok(hasHidden(11, 28), "src should be hidden");
+  assert.ok(hasHidden(28, 29), "closing ) should be hidden");
+  assert.ok(hasHidden(29, 51), "resize attrs should be hidden");
+  assert.ok(
+    flat.some((d) => d.from === line.from && d.to === line.from && d.widget === "MarkdownImageDisplayWidget"),
+    "image display widget should render outside edit mode",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals raw image markdown when caret is inside image token", () => {
+  const doc = Text.of(["![Diagram](./assets/plan.png){width=320} tail"]);
+  const line = doc.line(1);
+  const cursor = line.from + 34; // inside attrs
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: cursor, to: cursor, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  assert.ok(
+    !flat.some((d) => d.widget === "MarkdownImageDisplayWidget"),
+    "image display widget should disappear while editing raw image markdown",
+  );
+  assert.ok(
+    !flat.some(
+      (d) => d.widget === "HiddenMarkdownTokenWidget" && d.from >= line.from && d.to <= line.to,
+    ),
+    "no image source segments should be hidden while cursor is inside",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans shows image widget at right boundary of image token", () => {
+  const doc = Text.of(["![Diagram](./assets/plan.png) tail"]);
+  const line = doc.line(1);
+  const rightBoundary = line.from + "![Diagram](./assets/plan.png)".length;
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: rightBoundary, to: rightBoundary, empty: true },
+  );
+  const flat = collectDecorations(decos);
+  assert.ok(
+    flat.some((d) => d.widget === "MarkdownImageDisplayWidget"),
+    "image display widget should render when cursor is at right boundary",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans image widget carries compact [Image #n] token label", () => {
+  const doc = Text.of(["![Diagram](./assets/plan.png) tail"]);
+  const line = doc.line(1);
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.to, to: line.to, empty: true },
+    {
+      imagePreviewResolver: () => ({ srcUrl: null, broken: true }),
+    },
+  );
+  const flat = collectDecorations(decos);
+  const widget = flat.find((entry) => entry.widget === "MarkdownImageDisplayWidget");
+  assert.ok(widget, "image display widget should render");
+  assert.equal(
+    (widget!.widgetRef as { tokenLabel?: string }).tokenLabel,
+    "[Image #1: Diagram]",
   );
 });
 

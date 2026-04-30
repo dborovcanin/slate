@@ -3,11 +3,14 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
 import type { VariableIndexEntry } from "../api.ts";
-import { resolveWikiLinks } from "../api.ts";
+import { resolveNoteImagePaths, resolveWikiLinks } from "../api.ts";
+import { state } from "../state.ts";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   ensureWasmReady,
   markdownAnalyzeLines,
   markdownClassifyLine,
+  markdownFindImageMatches,
   markdownFindInlineTokens,
   markdownInlineMarkerComponentRanges,
   markdownTokenizeCodeLine,
@@ -41,9 +44,19 @@ const VIEWPORT_MARGIN_LINES = 24;
 const HOTPATH_REBUILD_MARGIN_LINES = 8;
 const FENCE_CHECKPOINT_INTERVAL = 256;
 const INLINE_MARKER_RANGE_CACHE_LIMIT = 1024;
+const IMAGE_MATCH_CACHE_LIMIT = 1024;
 const WIKI_LINK_CACHE_MAX_ENTRIES = 2048;
 const WIKI_LINK_CACHE_TTL_MS = 5 * 60_000;
 const WIKI_LINK_BROKEN_CACHE_TTL_MS = 1_500;
+const IMAGE_PATH_CACHE_MAX_ENTRIES = 2048;
+const IMAGE_PATH_CACHE_TTL_MS = 5 * 60_000;
+const IMAGE_PATH_BROKEN_CACHE_TTL_MS = 30_000;
+const IMAGE_RESOLVE_MAX_CONCURRENCY = 2;
+const IMAGE_RESOLVE_BATCH_SIZE = 24;
+const IMAGE_PREVIEW_MAX_WIDTH = 900;
+const IMAGE_PREVIEW_MAX_HEIGHT = 700;
+const IMAGE_RESIZE_MIN = 24;
+const DATA_URL_PREFIX = "data:";
 
 const decHeadingToken = Decoration.mark({ class: "md-token md-token-heading" });
 const decQuoteToken = Decoration.mark({ class: "md-token md-token-quote" });
@@ -63,6 +76,9 @@ const decCodeNumber = Decoration.mark({ class: "md-code-token-number" });
 const decCodeComment = Decoration.mark({ class: "md-code-token-comment" });
 const decCodeFunction = Decoration.mark({ class: "md-code-token-function" });
 const decCodeType = Decoration.mark({ class: "md-code-token-type" });
+const decImageAlt = Decoration.mark({ class: "md-image-alt" });
+const decImageSrc = Decoration.mark({ class: "md-image-src" });
+const decImageMarker = Decoration.mark({ class: "md-token md-token-link" });
 const decLinkText = Decoration.mark({ class: "md-link-text" });
 const decLinkUrl = Decoration.mark({ class: "md-link-url" });
 const decLinkMarker = Decoration.mark({ class: "md-token md-token-link" });
@@ -92,6 +108,150 @@ class WikiLinkDisplayWidget extends WidgetType {
     return span;
   }
 }
+
+class MarkdownImageDisplayWidget extends WidgetType {
+  constructor(
+    private readonly srcUrl: string | null,
+    private readonly fallbackSrcUrl: string | null,
+    private readonly broken: boolean,
+    private readonly alt: string,
+    private readonly fallbackLabel: string,
+    private readonly tokenLabel: string,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
+    private readonly width: number | null,
+    private readonly height: number | null,
+  ) {
+    super();
+  }
+
+  eq(other: MarkdownImageDisplayWidget): boolean {
+    return (
+      other.srcUrl === this.srcUrl
+      && other.fallbackSrcUrl === this.fallbackSrcUrl
+      && other.broken === this.broken
+      && other.alt === this.alt
+      && other.fallbackLabel === this.fallbackLabel
+      && other.tokenLabel === this.tokenLabel
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo
+      && other.width === this.width
+      && other.height === this.height
+    );
+  }
+
+  private selectSourceRange(view: EditorView) {
+    const from = Math.max(0, Math.min(this.sourceFrom, this.sourceTo));
+    const to = Math.max(from, this.sourceTo);
+    view.dispatch({
+      selection: { anchor: from, head: to },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
+
+  private bindEditModeClick(target: HTMLElement, view: EditorView) {
+    target.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.selectSourceRange(view);
+    });
+  }
+
+  private imageTokenNode(href: string | null, broken = false): HTMLElement {
+    const token = href
+      ? document.createElement("a")
+      : document.createElement("span");
+    token.className = broken
+      ? "md-image-display-token md-image-display-token-broken"
+      : "md-image-display-token";
+    token.textContent = this.tokenLabel;
+    token.contentEditable = "false";
+    if (token instanceof HTMLAnchorElement && href) {
+      token.href = href;
+      token.target = "_blank";
+      token.rel = "noreferrer noopener";
+      token.title = "Open image";
+    }
+    return token;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const figure = document.createElement("figure");
+    figure.className = "md-image-display";
+    figure.contentEditable = "false";
+    figure.setAttribute("draggable", "false");
+
+    const label = this.alt.trim().length > 0 ? this.alt.trim() : this.fallbackLabel;
+    const maxWidth = Math.min(
+      IMAGE_PREVIEW_MAX_WIDTH,
+      Math.max(IMAGE_RESIZE_MIN, this.width ?? IMAGE_PREVIEW_MAX_WIDTH),
+    );
+    const maxHeight = Math.min(
+      IMAGE_PREVIEW_MAX_HEIGHT,
+      Math.max(IMAGE_RESIZE_MIN, this.height ?? IMAGE_PREVIEW_MAX_HEIGHT),
+    );
+    figure.style.setProperty("--img-max-width", `${maxWidth}px`);
+    figure.style.setProperty("--img-max-height", `${maxHeight}px`);
+
+    if (this.broken) {
+      const token = this.imageTokenNode(
+        this.srcUrl ?? this.fallbackSrcUrl ?? null,
+        true,
+      );
+      this.bindEditModeClick(token, view);
+      figure.appendChild(token);
+      return figure;
+    }
+
+    if (!this.srcUrl) {
+      const token = this.imageTokenNode(this.fallbackSrcUrl ?? null);
+      this.bindEditModeClick(token, view);
+      figure.appendChild(token);
+      return figure;
+    }
+
+    const anchor = document.createElement("a");
+    anchor.className = "md-image-display-link";
+    anchor.href = this.srcUrl;
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer noopener";
+    anchor.title = "Open image";
+    anchor.contentEditable = "false";
+    this.bindEditModeClick(anchor, view);
+
+    const img = document.createElement("img");
+    img.className = "md-image-display-img";
+    img.src = this.srcUrl;
+    img.alt = label;
+    img.loading = "lazy";
+    img.decoding = "async";
+    if (this.width && this.width > 0) img.width = this.width;
+    if (this.height && this.height > 0) img.height = this.height;
+    let fallbackTried = false;
+    img.addEventListener("error", () => {
+      if (!fallbackTried && this.fallbackSrcUrl) {
+        fallbackTried = true;
+        img.src = this.fallbackSrcUrl;
+        return;
+      }
+      const token = this.imageTokenNode(this.srcUrl ?? this.fallbackSrcUrl ?? null, true);
+      this.bindEditModeClick(token, view);
+      anchor.replaceWith(token);
+    });
+    anchor.appendChild(img);
+    figure.appendChild(anchor);
+
+    const caption = this.imageTokenNode(this.srcUrl, false);
+    caption.classList.add("md-image-display-caption");
+    this.bindEditModeClick(caption, view);
+    figure.appendChild(caption);
+    return figure;
+  }
+}
+
 const decVariable = Decoration.mark({ class: "md-variable" });
 
 const lineClass = (className: string) => Decoration.line({ class: className });
@@ -288,7 +448,13 @@ function markerRevealComponentRangeForToken(
   componentRanges: readonly InlineMarkerComponentRange[],
 ): TextRange | null {
   const marker = tokens[markerIndex];
-  if (!marker || (marker.type !== "code-marker" && marker.type !== "link-marker" && marker.type !== "wiki-link-marker")) {
+  if (
+    !marker
+    || (marker.type !== "code-marker"
+      && marker.type !== "image-marker"
+      && marker.type !== "link-marker"
+      && marker.type !== "wiki-link-marker")
+  ) {
     return null;
   }
   const range = componentRanges.find((entry) =>
@@ -337,6 +503,174 @@ interface WLAccum {
   titleFrom: number | null;
   titleTo: number | null;
   hasTitle: boolean;
+}
+
+interface ImageAccum {
+  cursorInside: boolean;
+  linkFrom: number;
+  firstMarkerFrom: number;
+  firstMarkerTo: number;
+  midMarkerFrom: number | null;
+  midMarkerTo: number | null;
+  sourceFrom: number;
+  sourceTo: number;
+  altText: string;
+  altFrom: number | null;
+  altTo: number | null;
+  srcText: string;
+  srcFrom: number | null;
+  srcTo: number | null;
+  width: number | null;
+  height: number | null;
+  attrsFrom: number | null;
+  attrsTo: number | null;
+}
+
+function imageDisplayLabel(srcText: string, altText: string): string {
+  const alt = altText.trim();
+  if (alt.length > 0) return `🖼 ${alt}`;
+  const parts = srcText.split(/[\\/]/g).filter((entry) => entry.length > 0);
+  const file = parts.length > 0 ? parts[parts.length - 1] : srcText.trim();
+  return file.length > 0 ? `🖼 ${file}` : "🖼 image";
+}
+
+function imageDisplayTokenLabel(
+  imageIndex: number,
+  srcText: string,
+  altText: string,
+): string {
+  const fallback = imageDisplayLabel(srcText, altText).replace(/^🖼\s*/, "").trim();
+  if (fallback.length === 0) return `[Image #${imageIndex}]`;
+  const clipped = fallback.length > 42 ? `${fallback.slice(0, 39)}...` : fallback;
+  return `[Image #${imageIndex}: ${clipped}]`;
+}
+
+const imageMatchCache = new Map<string, ReturnType<typeof markdownFindImageMatches>>();
+
+function cachedImageMatches(lineText: string): ReturnType<typeof markdownFindImageMatches> {
+  const cached = imageMatchCache.get(lineText);
+  if (cached) return cached;
+  const computed = markdownFindImageMatches(lineText);
+  imageMatchCache.set(lineText, computed);
+  if (imageMatchCache.size > IMAGE_MATCH_CACHE_LIMIT) {
+    const oldest = imageMatchCache.keys().next().value;
+    if (typeof oldest === "string") {
+      imageMatchCache.delete(oldest);
+    }
+  }
+  return computed;
+}
+
+interface ResolvedImagePreview {
+  srcUrl: string | null;
+  fallbackSrcUrl?: string | null;
+  broken?: boolean;
+}
+
+function absolutePathToFileUrl(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    return `file:///${encodeURI(normalized)}`;
+  }
+  return `file://${encodeURI(normalized)}`;
+}
+
+function dataUrlToObjectUrl(dataUrl: string): string | null {
+  if (!dataUrl.startsWith(DATA_URL_PREFIX)) return null;
+  const splitAt = dataUrl.indexOf(",");
+  if (splitAt <= 0 || splitAt >= dataUrl.length - 1) return null;
+  const header = dataUrl.slice(0, splitAt);
+  const payload = dataUrl.slice(splitAt + 1);
+  const mimeMatch = /^data:([^;,]+)(;base64)?$/i.exec(header);
+  const mimeType = mimeMatch?.[1] ?? "application/octet-stream";
+  const isBase64 = header.toLowerCase().endsWith(";base64");
+  try {
+    if (isBase64) {
+      const decoded = atob(payload);
+      const bytes = new Uint8Array(decoded.length);
+      for (let i = 0; i < decoded.length; i += 1) {
+        bytes[i] = decoded.charCodeAt(i);
+      }
+      return URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+    }
+    return URL.createObjectURL(
+      new Blob([decodeURIComponent(payload)], { type: mimeType }),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function emitImageDecorations(
+  image: ImageAccum,
+  closingMarkerFrom: number,
+  closingMarkerTo: number,
+  imageIndex: number,
+  imagePreviewResolver: ((src: string) => ResolvedImagePreview | null) | undefined,
+  pending: PendingDecoration[],
+): void {
+  if (image.cursorInside) {
+    pending.push({
+      from: image.firstMarkerFrom,
+      to: image.firstMarkerTo,
+      decoration: decImageMarker,
+    });
+    if (image.altFrom != null && image.altTo != null) {
+      pending.push({ from: image.altFrom, to: image.altTo, decoration: decImageAlt });
+    }
+    if (image.midMarkerFrom != null && image.midMarkerTo != null) {
+      pending.push({
+        from: image.midMarkerFrom,
+        to: image.midMarkerTo,
+        decoration: decImageMarker,
+      });
+    }
+    if (image.srcFrom != null && image.srcTo != null) {
+      pending.push({ from: image.srcFrom, to: image.srcTo, decoration: decImageSrc });
+    }
+    pending.push({ from: closingMarkerFrom, to: closingMarkerTo, decoration: decImageMarker });
+    if (image.attrsFrom != null && image.attrsTo != null) {
+      pending.push({ from: image.attrsFrom, to: image.attrsTo, decoration: decImageMarker });
+    }
+    return;
+  }
+
+  pending.push({ from: image.firstMarkerFrom, to: image.firstMarkerTo, decoration: decHiddenMarkdownToken });
+  if (image.altFrom != null && image.altTo != null) {
+    pending.push({ from: image.altFrom, to: image.altTo, decoration: decHiddenMarkdownToken });
+  }
+  if (image.midMarkerFrom != null && image.midMarkerTo != null) {
+    pending.push({ from: image.midMarkerFrom, to: image.midMarkerTo, decoration: decHiddenMarkdownToken });
+  }
+  if (image.srcFrom != null && image.srcTo != null) {
+    pending.push({ from: image.srcFrom, to: image.srcTo, decoration: decHiddenMarkdownToken });
+  }
+  pending.push({ from: closingMarkerFrom, to: closingMarkerTo, decoration: decHiddenMarkdownToken });
+  if (image.attrsFrom != null && image.attrsTo != null) {
+    pending.push({ from: image.attrsFrom, to: image.attrsTo, decoration: decHiddenMarkdownToken });
+  }
+  const resolved = imagePreviewResolver ? imagePreviewResolver(image.srcText.trim()) : null;
+  const tokenLabel = imageDisplayTokenLabel(imageIndex, image.srcText, image.altText);
+  const sourceTo = image.attrsTo ?? closingMarkerTo;
+  pending.push({
+    from: image.firstMarkerFrom,
+    to: image.firstMarkerFrom,
+    decoration: Decoration.widget({
+      widget: new MarkdownImageDisplayWidget(
+        resolved?.srcUrl ?? null,
+        resolved?.fallbackSrcUrl ?? null,
+        resolved?.broken === true,
+        image.altText,
+        imageDisplayLabel(image.srcText, image.altText),
+        tokenLabel,
+        image.firstMarkerFrom,
+        sourceTo,
+        image.width,
+        image.height,
+      ),
+      side: 1,
+    }),
+  });
 }
 
 function emitWikiLinkDecorations(
@@ -411,14 +745,19 @@ function emitWikiLinkDecorations(
 
 function collectInlineDecorations(
   lineFrom: number,
+  _lineNumber: number,
   lineText: string,
   tokens: readonly InlineToken[],
   componentRanges: readonly InlineMarkerComponentRange[],
   activeSelection?: ActiveSelection,
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
+  imagePreviewResolver?: (src: string) => ResolvedImagePreview | null,
 ): PendingDecoration[] {
   const pending: PendingDecoration[] = [];
+  const imageMatches = cachedImageMatches(lineText);
   let wlAccum: WLAccum | null = null;
+  let imageAccum: ImageAccum | null = null;
+  let imageIndex = 0;
 
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]!;
@@ -451,6 +790,66 @@ function collectInlineDecorations(
             ? decCodeMarker
             : decHiddenMarkdownToken,
         });
+        break;
+      case "image-marker":
+        if (imageAccum === null) {
+          imageAccum = {
+            cursorInside: false,
+            linkFrom: from,
+            firstMarkerFrom: from,
+            firstMarkerTo: to,
+            midMarkerFrom: null,
+            midMarkerTo: null,
+            sourceFrom: token.from,
+            sourceTo: token.to,
+            altText: "",
+            altFrom: null,
+            altTo: null,
+            srcText: "",
+            srcFrom: null,
+            srcTo: null,
+            width: null,
+            height: null,
+            attrsFrom: null,
+            attrsTo: null,
+          };
+        } else if (imageAccum.midMarkerFrom === null) {
+          imageAccum.midMarkerFrom = from;
+          imageAccum.midMarkerTo = to;
+        } else {
+          const currentImage = imageAccum;
+          currentImage.sourceTo = token.to;
+          imageIndex += 1;
+          const matched = imageMatches.find((entry) => entry.from === currentImage.sourceFrom);
+          if (matched) {
+            currentImage.sourceTo = matched.to;
+            currentImage.width = matched.width;
+            currentImage.height = matched.height;
+            if (matched.to > token.to) {
+              currentImage.attrsFrom = lineFrom + token.to;
+              currentImage.attrsTo = lineFrom + matched.to;
+            }
+          }
+          const fullFrom = lineFrom + currentImage.sourceFrom;
+          const fullTo = lineFrom + currentImage.sourceTo;
+          currentImage.cursorInside = selectionTouchesInlineRange(activeSelection, fullFrom, fullTo);
+          emitImageDecorations(currentImage, from, to, imageIndex, imagePreviewResolver, pending);
+          imageAccum = null;
+        }
+        break;
+      case "image-alt":
+        if (imageAccum) {
+          imageAccum.altText = lineText.slice(token.from, token.to);
+          imageAccum.altFrom = from;
+          imageAccum.altTo = to;
+        }
+        break;
+      case "image-src":
+        if (imageAccum) {
+          imageAccum.srcText = lineText.slice(token.from, token.to);
+          imageAccum.srcFrom = from;
+          imageAccum.srcTo = to;
+        }
         break;
       case "link-text":
         pending.push({ from, to, decoration: decLinkText });
@@ -640,6 +1039,8 @@ export interface MarkdownDecorationBuildOptions {
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null;
   // Only lines returning true can enqueue wiki-link resolution work.
   resolveWikiLinksForLine?: (lineNumber: number) => boolean;
+  imagePreviewResolver?: (lineNumber: number, src: string) => ResolvedImagePreview | null;
+  resolveImagesForLine?: (lineNumber: number) => boolean;
 }
 
 class VariableMatcherCache {
@@ -812,6 +1213,11 @@ export function buildMarkdownDecorationsForSpans(
         options.resolveWikiLinksForLine?.(lineNo) === false
           ? undefined
           : options.wikiLinkResolver,
+        options.resolveImagesForLine?.(lineNo) === false
+          ? undefined
+          : options.imagePreviewResolver
+            ? (src: string) => options.imagePreviewResolver!(lineNo, src)
+            : undefined,
       );
     }
   }
@@ -871,6 +1277,7 @@ function buildMarkdownDecorations(
   marginLines = VIEWPORT_MARGIN_LINES,
   profiling?: MarkdownBuildProfiling,
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
+  imagePreviewResolver?: (lineNumber: number, src: string) => ResolvedImagePreview | null,
 ): DecorationSet {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
@@ -889,6 +1296,9 @@ function buildMarkdownDecorations(
     profiling,
     wikiLinkResolver,
     resolveWikiLinksForLine: (lineNumber) =>
+      lineInVisibleSpans(lineNumber, strictVisibleSpans),
+    imagePreviewResolver,
+    resolveImagesForLine: (lineNumber) =>
       lineInVisibleSpans(lineNumber, strictVisibleSpans),
   });
 }
@@ -1040,13 +1450,14 @@ function emptySelectionRevealSignature(
 
 function decorateContentLine(
   builder: RangeSetBuilder<Decoration>,
-  line: { from: number; to: number; text: string },
+  line: { from: number; to: number; text: string; number: number },
   info: MarkdownLineInfo,
   matcher: VariableMatcher,
   inlineTokens: readonly InlineToken[],
   activeSelection?: ActiveSelection,
   profiling?: MarkdownBuildProfiling,
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
+  imagePreviewResolver?: (src: string) => ResolvedImagePreview | null,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
 
@@ -1170,11 +1581,13 @@ function decorateContentLine(
   const inlineMarkerComponentRanges = cachedInlineMarkerComponentRanges(line.text, profiling);
   for (const inline of collectInlineDecorations(
     line.from,
+    line.number,
     line.text,
     inlineTokens,
     inlineMarkerComponentRanges,
     activeSelection,
     wikiLinkResolver,
+    imagePreviewResolver,
   )) {
     pending.push(inline);
   }
@@ -1189,16 +1602,25 @@ const markdownDeferredRefreshAnnotation = Annotation.define<boolean>();
 const markdownManualRefreshAnnotation = Annotation.define<{
   invalidateWikiLinkCache?: boolean;
   invalidatedShortIds?: string[];
+  invalidatedImageSources?: string[];
+  noteId?: string | null;
 }>();
 
 export function requestMarkdownDecorationRefresh(
   view: EditorView,
-  options?: { invalidateWikiLinkCache?: boolean; invalidatedShortIds?: string[] },
+  options?: {
+    invalidateWikiLinkCache?: boolean;
+    invalidatedShortIds?: string[];
+    invalidatedImageSources?: string[];
+    noteId?: string | null;
+  },
 ) {
   view.dispatch({
     annotations: markdownManualRefreshAnnotation.of({
       invalidateWikiLinkCache: !!options?.invalidateWikiLinkCache,
       invalidatedShortIds: options?.invalidatedShortIds ?? [],
+      invalidatedImageSources: options?.invalidatedImageSources ?? [],
+      noteId: options?.noteId ?? null,
     }),
   });
 }
@@ -1259,6 +1681,14 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     private readonly resolvingIds = new Set<string>();
     private readonly pendingWikiLinkBatchIds = new Set<string>();
     private pendingWikiLinkBatchTimer: ReturnType<typeof setTimeout> | null = null;
+    private readonly imagePathCache = new Map<string, string | false>();
+    private readonly imagePathCacheResolvedAt = new Map<string, number>();
+    private readonly imageObjectUrlCache = new Map<string, string>();
+    private readonly resolvingImageKeys = new Set<string>();
+    private readonly pendingImageResolveSources = new Set<string>();
+    private pendingImageResolveTimer: ReturnType<typeof setTimeout> | null = null;
+    private imageResolveInFlight = 0;
+    private imageResolveNoteId: string | null = null;
 
     constructor(view: EditorView) {
       this.decorations = this.safeBuild(view, Decoration.none, VIEWPORT_MARGIN_LINES, "init");
@@ -1317,6 +1747,78 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       this.resolvingIds.delete(shortId);
     }
 
+    private clearImageCache() {
+      for (const objectUrl of this.imageObjectUrlCache.values()) {
+        URL.revokeObjectURL(objectUrl);
+      }
+      this.imagePathCache.clear();
+      this.imagePathCacheResolvedAt.clear();
+      this.imageObjectUrlCache.clear();
+      this.resolvingImageKeys.clear();
+      this.pendingImageResolveSources.clear();
+      this.imageResolveInFlight = 0;
+      this.imageResolveNoteId = null;
+    }
+
+    private imageCacheKey(noteId: string, source: string): string {
+      return `${noteId}::${source}`;
+    }
+
+    private getCachedImagePath(cacheKey: string): string | false | undefined {
+      const cached = this.imagePathCache.get(cacheKey);
+      if (cached === undefined) return undefined;
+      const resolvedAt = this.imagePathCacheResolvedAt.get(cacheKey) ?? 0;
+      const ttlMs = cached === false ? IMAGE_PATH_BROKEN_CACHE_TTL_MS : IMAGE_PATH_CACHE_TTL_MS;
+      if (Date.now() - resolvedAt > ttlMs) {
+        this.clearCachedImagePathByKey(cacheKey);
+        return undefined;
+      }
+      return cached;
+    }
+
+    private clearCachedImagePathByKey(cacheKey: string) {
+      this.imagePathCache.delete(cacheKey);
+      this.imagePathCacheResolvedAt.delete(cacheKey);
+      const objectUrl = this.imageObjectUrlCache.get(cacheKey);
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        this.imageObjectUrlCache.delete(cacheKey);
+      }
+      this.resolvingImageKeys.delete(cacheKey);
+    }
+
+    private clearCachedImageSource(noteId: string, source: string) {
+      const cacheKey = this.imageCacheKey(noteId, source);
+      this.clearCachedImagePathByKey(cacheKey);
+      this.pendingImageResolveSources.delete(source);
+    }
+
+    private setCachedImagePath(cacheKey: string, value: string | false) {
+      this.imagePathCache.delete(cacheKey);
+      this.imagePathCacheResolvedAt.delete(cacheKey);
+      const objectUrl = this.imageObjectUrlCache.get(cacheKey);
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+        this.imageObjectUrlCache.delete(cacheKey);
+      }
+      this.imagePathCache.set(cacheKey, value);
+      this.imagePathCacheResolvedAt.set(cacheKey, Date.now());
+      while (this.imagePathCache.size > IMAGE_PATH_CACHE_MAX_ENTRIES) {
+        const oldest = this.imagePathCache.keys().next().value;
+        if (typeof oldest !== "string") break;
+        this.clearCachedImagePathByKey(oldest);
+      }
+    }
+
+    private imageObjectUrlForCacheKey(cacheKey: string, dataUrl: string): string | null {
+      const cached = this.imageObjectUrlCache.get(cacheKey);
+      if (cached) return cached;
+      const objectUrl = dataUrlToObjectUrl(dataUrl);
+      if (!objectUrl) return null;
+      this.imageObjectUrlCache.set(cacheKey, objectUrl);
+      return objectUrl;
+    }
+
     private scheduleWikiLinkBatchResolve(view: EditorView) {
       if (this.pendingWikiLinkBatchTimer !== null) return;
       this.pendingWikiLinkBatchTimer = setTimeout(() => {
@@ -1353,28 +1855,99 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       }, 24);
     }
 
+    private scheduleImagePathBatchResolve(view: EditorView, noteId: string) {
+      if (this.pendingImageResolveTimer !== null) return;
+      this.pendingImageResolveTimer = setTimeout(() => {
+        this.pendingImageResolveTimer = null;
+        if (this.destroyed || this.pendingImageResolveSources.size === 0) return;
+        if (this.imageResolveInFlight >= IMAGE_RESOLVE_MAX_CONCURRENCY) {
+          this.scheduleImagePathBatchResolve(view, noteId);
+          return;
+        }
+        const activeNoteId = state.activeNote?.id ?? null;
+        if (!activeNoteId || activeNoteId !== noteId) {
+          this.pendingImageResolveSources.clear();
+          this.resolvingImageKeys.clear();
+          return;
+        }
+        const sources = [...this.pendingImageResolveSources].slice(0, IMAGE_RESOLVE_BATCH_SIZE);
+        for (const source of sources) {
+          this.pendingImageResolveSources.delete(source);
+        }
+        this.imageResolveInFlight += 1;
+        resolveNoteImagePaths(noteId, sources)
+          .then((results) => {
+            const activeNoteId = state.activeNote?.id ?? null;
+            if (this.destroyed || activeNoteId !== noteId) {
+              for (const source of sources) {
+                const cacheKey = this.imageCacheKey(noteId, source);
+                this.resolvingImageKeys.delete(cacheKey);
+              }
+              return;
+            }
+            const seen = new Set<string>();
+            for (const entry of results) {
+              const source = entry.source;
+              seen.add(source);
+              const cacheKey = this.imageCacheKey(noteId, source);
+              this.resolvingImageKeys.delete(cacheKey);
+              this.setCachedImagePath(cacheKey, entry.path ? entry.path : false);
+            }
+            for (const source of sources) {
+              if (seen.has(source)) continue;
+              const cacheKey = this.imageCacheKey(noteId, source);
+              this.resolvingImageKeys.delete(cacheKey);
+            }
+            if (!this.destroyed) this.scheduleDeferredRefresh(view);
+          })
+          .catch(() => {
+            for (const source of sources) {
+              const cacheKey = this.imageCacheKey(noteId, source);
+              this.resolvingImageKeys.delete(cacheKey);
+            }
+          })
+          .finally(() => {
+            this.imageResolveInFlight = Math.max(0, this.imageResolveInFlight - 1);
+            if (!this.destroyed && this.pendingImageResolveSources.size > 0) {
+              this.scheduleImagePathBatchResolve(view, noteId);
+            }
+          });
+      }, 24);
+    }
+
     update(update: ViewUpdate) {
       const manualRefresh = update.transactions
         .map((transaction) => transaction.annotation(markdownManualRefreshAnnotation))
         .find((annotation) => annotation !== undefined);
       if (manualRefresh) {
+        let manualReason = "manualRefresh";
         if (manualRefresh.invalidateWikiLinkCache) {
           this.wikiLinkCache.clear();
           this.wikiLinkCacheResolvedAt.clear();
           this.pendingWikiLinkBatchIds.clear();
           this.resolvingIds.clear();
+          this.clearImageCache();
+          manualReason = "manualRefresh_invalidateWikiLinks";
         } else if (manualRefresh.invalidatedShortIds?.length) {
           for (const shortId of manualRefresh.invalidatedShortIds) {
             this.clearCachedWikiLink(shortId);
+          }
+          manualReason = "manualRefresh_wikiSubset";
+        }
+        if (manualRefresh.invalidatedImageSources?.length) {
+          const imageNoteId = manualRefresh.noteId ?? state.activeNote?.id ?? null;
+          if (imageNoteId) {
+            for (const source of manualRefresh.invalidatedImageSources) {
+              this.clearCachedImageSource(imageNoteId, source);
+            }
+            manualReason = "manualRefresh_images";
           }
         }
         this.decorations = this.safeBuild(
           update.view,
           this.decorations,
           VIEWPORT_MARGIN_LINES,
-          manualRefresh.invalidateWikiLinkCache
-            ? "manualRefresh_invalidateWikiLinks"
-            : "manualRefresh",
+          manualReason,
         );
         return;
       }
@@ -1496,11 +2069,43 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       const profiling = profilingEnabled ? createMarkdownBuildProfiling() : undefined;
       try {
         const newIds = new Set<string>();
+        const newImageSources = new Set<string>();
+        const activeNoteId = state.activeNote?.id ?? null;
+        if (this.imageResolveNoteId !== activeNoteId) {
+          this.clearImageCache();
+          this.imageResolveNoteId = activeNoteId;
+        }
         const wikiLinkResolver = (shortId: string): WikiLinkResolution | null => {
           const cached = this.getCachedWikiLink(shortId);
           if (cached === false) return { exists: false, title: "" };
           if (cached !== undefined) return cached;
           newIds.add(shortId);
+          return null;
+        };
+        const imagePreviewResolver = (
+          _lineNumber: number,
+          src: string,
+        ): ResolvedImagePreview | null => {
+          const noteId = activeNoteId;
+          const source = src.trim();
+          if (!noteId || source.length === 0) return null;
+          const cacheKey = this.imageCacheKey(noteId, source);
+          const cached = this.getCachedImagePath(cacheKey);
+          if (cached === false) return { srcUrl: null, broken: true };
+          if (typeof cached === "string") {
+            if (cached.startsWith(DATA_URL_PREFIX)) {
+              const objectUrl = this.imageObjectUrlForCacheKey(cacheKey, cached);
+              return {
+                srcUrl: objectUrl ?? cached,
+                fallbackSrcUrl: null,
+              };
+            }
+            return {
+              srcUrl: convertFileSrc(cached),
+              fallbackSrcUrl: absolutePathToFileUrl(cached),
+            };
+          }
+          newImageSources.add(source);
           return null;
         };
         const next = buildMarkdownDecorations(
@@ -1510,6 +2115,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           marginLines,
           profiling,
           wikiLinkResolver,
+          imagePreviewResolver,
         );
         for (const shortId of newIds) {
           if (this.resolvingIds.has(shortId)) continue;
@@ -1518,6 +2124,17 @@ const markdownRichPlugin = ViewPlugin.fromClass(
         }
         if (this.pendingWikiLinkBatchIds.size > 0) {
           this.scheduleWikiLinkBatchResolve(view);
+        }
+        if (activeNoteId) {
+          for (const source of newImageSources) {
+            const cacheKey = this.imageCacheKey(activeNoteId, source);
+            if (this.resolvingImageKeys.has(cacheKey)) continue;
+            this.resolvingImageKeys.add(cacheKey);
+            this.pendingImageResolveSources.add(source);
+          }
+          if (this.pendingImageResolveSources.size > 0) {
+            this.scheduleImagePathBatchResolve(view, activeNoteId);
+          }
         }
         if (profilingEnabled) {
           const durationMs = editorProfilerNowMs() - startedAt;
@@ -1565,6 +2182,11 @@ const markdownRichPlugin = ViewPlugin.fromClass(
         clearTimeout(this.pendingWikiLinkBatchTimer);
         this.pendingWikiLinkBatchTimer = null;
       }
+      if (this.pendingImageResolveTimer !== null) {
+        clearTimeout(this.pendingImageResolveTimer);
+        this.pendingImageResolveTimer = null;
+      }
+      this.clearImageCache();
     }
   },
   {

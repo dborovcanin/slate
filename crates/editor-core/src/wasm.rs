@@ -701,6 +701,12 @@ pub fn wasm_markdown_find_inline_tokens(line_text: &str) -> JsValue {
 }
 
 #[wasm_bindgen]
+pub fn wasm_markdown_find_image_matches(line_text: &str) -> JsValue {
+    to_js_value(&markdown_tokens::find_markdown_image_matches(line_text))
+        .unwrap_or_else(|| Array::new().into())
+}
+
+#[wasm_bindgen]
 pub fn wasm_markdown_wiki_link_at_cursor(line_text: &str, cursor_col: usize) -> JsValue {
     markdown_tokens::wiki_link_at_cursor(line_text, cursor_col)
         .as_ref()

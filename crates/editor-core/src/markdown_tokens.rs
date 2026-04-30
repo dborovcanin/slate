@@ -24,6 +24,9 @@ pub enum InlineTokenType {
     Strikethrough,
     Code,
     CodeMarker,
+    ImageAlt,
+    ImageSrc,
+    ImageMarker,
     LinkText,
     LinkUrl,
     LinkMarker,
@@ -42,6 +45,9 @@ impl InlineTokenType {
             InlineTokenType::Strikethrough => "strikethrough",
             InlineTokenType::Code => "code",
             InlineTokenType::CodeMarker => "code-marker",
+            InlineTokenType::ImageAlt => "image-alt",
+            InlineTokenType::ImageSrc => "image-src",
+            InlineTokenType::ImageMarker => "image-marker",
             InlineTokenType::LinkText => "link-text",
             InlineTokenType::LinkUrl => "link-url",
             InlineTokenType::LinkMarker => "link-marker",
@@ -77,6 +83,17 @@ pub struct WikiLinkMatch {
     pub short_id: String,
     pub heading: Option<String>,
     pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarkdownImageMatch {
+    pub from: usize,
+    pub to: usize,
+    pub alt: String,
+    pub src: String,
+    pub width: Option<usize>,
+    pub height: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -515,7 +532,10 @@ fn is_run(chars: &[char], pos: usize, marker: char, count: usize) -> bool {
 pub fn is_inline_marker_token_kind(kind: InlineTokenType) -> bool {
     matches!(
         kind,
-        InlineTokenType::CodeMarker | InlineTokenType::LinkMarker | InlineTokenType::WikiLinkMarker
+        InlineTokenType::CodeMarker
+            | InlineTokenType::ImageMarker
+            | InlineTokenType::LinkMarker
+            | InlineTokenType::WikiLinkMarker
     )
 }
 
@@ -652,14 +672,19 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
 
         // Split on optional '|' to separate id_part from alt-text.
         let pipe_rel = inner.iter().position(|&c| c == '|');
-        let id_part = if let Some(p) = pipe_rel { &inner[..p] } else { &inner[..] };
+        let id_part = if let Some(p) = pipe_rel {
+            &inner[..p]
+        } else {
+            &inner[..]
+        };
 
         // Split id_part on optional '#' to separate short_id from heading anchor.
-        let (short_id_chars, has_anchor) = if let Some(hash_rel) = id_part.iter().position(|&c| c == '#') {
-            (&id_part[..hash_rel], true)
-        } else {
-            (id_part, false)
-        };
+        let (short_id_chars, has_anchor) =
+            if let Some(hash_rel) = id_part.iter().position(|&c| c == '#') {
+                (&id_part[..hash_rel], true)
+            } else {
+                (id_part, false)
+            };
 
         if short_id_chars.len() != 8 || !short_id_chars.iter().all(|c| c.is_ascii_alphanumeric()) {
             i += 1;
@@ -669,18 +694,98 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
         let id_end = i + 2 + short_id_chars.len();
         let anchor_end = i + 2 + id_part.len();
 
-        push_inline_token(&mut tokens, start, start + 2, InlineTokenType::WikiLinkMarker);
+        push_inline_token(
+            &mut tokens,
+            start,
+            start + 2,
+            InlineTokenType::WikiLinkMarker,
+        );
         push_inline_token(&mut tokens, start + 2, id_end, InlineTokenType::WikiLinkId);
         if has_anchor {
-            push_inline_token(&mut tokens, id_end, anchor_end, InlineTokenType::WikiLinkAnchor);
+            push_inline_token(
+                &mut tokens,
+                id_end,
+                anchor_end,
+                InlineTokenType::WikiLinkAnchor,
+            );
         }
         if let Some(pipe_rel) = pipe_rel {
             let pipe_abs = i + 2 + pipe_rel;
             let title_start = pipe_abs + 1;
-            push_inline_token(&mut tokens, pipe_abs, title_start, InlineTokenType::WikiLinkSep);
+            push_inline_token(
+                &mut tokens,
+                pipe_abs,
+                title_start,
+                InlineTokenType::WikiLinkSep,
+            );
             push_inline_token(&mut tokens, title_start, j, InlineTokenType::WikiLinkTitle);
         }
         push_inline_token(&mut tokens, j, end, InlineTokenType::WikiLinkMarker);
+        protect(&mut protected, start, end);
+        i = end;
+    }
+
+    // ![alt](src)
+    i = 0;
+    while i + 4 < len {
+        if chars[i] != '!' || chars[i + 1] != '[' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut close_bracket = i + 2;
+        while close_bracket < len && !matches!(chars[close_bracket], ']' | '\n') {
+            close_bracket += 1;
+        }
+        if close_bracket >= len
+            || chars[close_bracket] != ']'
+            || close_bracket + 1 >= len
+            || chars[close_bracket + 1] != '('
+        {
+            i += 1;
+            continue;
+        }
+
+        let mut close_paren = close_bracket + 2;
+        while close_paren < len && !matches!(chars[close_paren], ')' | '\n') {
+            close_paren += 1;
+        }
+        if close_paren >= len || chars[close_paren] != ')' || close_paren == close_bracket + 2 {
+            i += 1;
+            continue;
+        }
+
+        let end = close_paren + 1;
+        if overlaps(&protected, start, end) {
+            i += 1;
+            continue;
+        }
+
+        push_inline_token(&mut tokens, start, start + 2, InlineTokenType::ImageMarker);
+        push_inline_token(
+            &mut tokens,
+            start + 2,
+            close_bracket,
+            InlineTokenType::ImageAlt,
+        );
+        push_inline_token(
+            &mut tokens,
+            close_bracket,
+            close_bracket + 2,
+            InlineTokenType::ImageMarker,
+        );
+        push_inline_token(
+            &mut tokens,
+            close_bracket + 2,
+            close_paren,
+            InlineTokenType::ImageSrc,
+        );
+        push_inline_token(
+            &mut tokens,
+            close_paren,
+            close_paren + 1,
+            InlineTokenType::ImageMarker,
+        );
         protect(&mut protected, start, end);
         i = end;
     }
@@ -904,6 +1009,125 @@ pub fn wiki_link_at_cursor(text: &str, cursor_col: usize) -> Option<WikiLinkMatc
     links
         .into_iter()
         .find(|entry| cursor_col >= entry.from && cursor_col <= entry.to)
+}
+
+pub fn find_markdown_image_matches(text: &str) -> Vec<MarkdownImageMatch> {
+    let tokens = tokenize_inline_markdown(text);
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut open_idx: Option<usize> = None;
+    let mut marker_count = 0usize;
+    let mut alt = String::new();
+    let mut src = String::new();
+
+    for (idx, token) in tokens.iter().enumerate() {
+        match token.kind {
+            InlineTokenType::ImageMarker => {
+                if open_idx.is_none() {
+                    open_idx = Some(idx);
+                    marker_count = 1;
+                    alt.clear();
+                    src.clear();
+                    continue;
+                }
+                marker_count += 1;
+                if marker_count >= 3 {
+                    let Some(start_idx) = open_idx.take() else {
+                        continue;
+                    };
+                    let start = tokens[start_idx].from;
+                    let (end, width, height) = parse_image_attribute_suffix(&chars, token.to);
+                    if !src.is_empty() {
+                        out.push(MarkdownImageMatch {
+                            from: start,
+                            to: end,
+                            alt: alt.clone(),
+                            src: src.clone(),
+                            width,
+                            height,
+                        });
+                    }
+                    marker_count = 0;
+                }
+            }
+            InlineTokenType::ImageAlt => {
+                if open_idx.is_some() {
+                    alt = chars[token.from..token.to].iter().collect();
+                }
+            }
+            InlineTokenType::ImageSrc => {
+                if open_idx.is_some() {
+                    src = chars[token.from..token.to].iter().collect();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    out
+}
+
+fn parse_image_attribute_suffix(
+    chars: &[char],
+    image_end: usize,
+) -> (usize, Option<usize>, Option<usize>) {
+    let mut i = image_end;
+    while i < chars.len() && chars[i].is_whitespace() {
+        if chars[i] == '\n' || chars[i] == '\r' {
+            return (image_end, None, None);
+        }
+        i += 1;
+    }
+    if i >= chars.len() || chars[i] != '{' {
+        return (image_end, None, None);
+    }
+    let attr_start = i;
+    i += 1;
+    while i < chars.len() && chars[i] != '}' && chars[i] != '\n' && chars[i] != '\r' {
+        i += 1;
+    }
+    if i >= chars.len() || chars[i] != '}' {
+        return (image_end, None, None);
+    }
+    let attr_end = i + 1;
+    let body: String = chars[attr_start + 1..i].iter().collect();
+    let (width, height) = parse_image_dimensions(&body);
+    (attr_end, width, height)
+}
+
+fn parse_image_dimensions(attrs: &str) -> (Option<usize>, Option<usize>) {
+    let mut width = None;
+    let mut height = None;
+    for part in attrs.split_whitespace() {
+        let (key, value) = if let Some((k, v)) = part.split_once('=') {
+            (k.trim().to_ascii_lowercase(), v.trim())
+        } else if let Some((k, v)) = part.split_once(':') {
+            (k.trim().to_ascii_lowercase(), v.trim())
+        } else {
+            continue;
+        };
+        let parsed = value
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim_end_matches("px")
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0);
+        match key.as_str() {
+            "width" | "w" => {
+                if parsed.is_some() {
+                    width = parsed;
+                }
+            }
+            "height" | "h" => {
+                if parsed.is_some() {
+                    height = parsed;
+                }
+            }
+            _ => {}
+        }
+    }
+    (width, height)
 }
 
 fn marker_component_range_for_token_index(
@@ -1295,14 +1519,44 @@ mod tests {
 
     #[test]
     fn inline_tokenizer_finds_rich_tokens() {
-        let tokens = tokenize_inline_markdown("**bold** *em* ~~gone~~ `code` [txt](url)");
+        let tokens =
+            tokenize_inline_markdown("**bold** *em* ~~gone~~ `code` ![pic](img.png) [txt](url)");
         let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
         assert!(kinds.contains(&"strong"));
         assert!(kinds.contains(&"emphasis"));
         assert!(kinds.contains(&"strikethrough"));
         assert!(kinds.contains(&"code"));
+        assert!(kinds.contains(&"image-alt"));
+        assert!(kinds.contains(&"image-src"));
         assert!(kinds.contains(&"link-text"));
         assert!(kinds.contains(&"link-url"));
+    }
+
+    #[test]
+    fn image_tokens_do_not_interfere_with_markdown_links() {
+        let text = "![shot](./shot.png) and [site](https://example.com)";
+        let tokens = tokenize_inline_markdown(text);
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(kinds.contains(&"image-marker"));
+        assert!(kinds.contains(&"image-alt"));
+        assert!(kinds.contains(&"image-src"));
+        assert!(kinds.contains(&"link-text"));
+        assert!(kinds.contains(&"link-url"));
+    }
+
+    #[test]
+    fn find_markdown_image_matches_extracts_alt_and_src() {
+        let text = "x ![diagram](./assets/plan.png){width=320 height=180} y ![](./empty-alt.jpg)";
+        let matches = find_markdown_image_matches(text);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].alt, "diagram");
+        assert_eq!(matches[0].src, "./assets/plan.png");
+        assert_eq!(matches[0].width, Some(320));
+        assert_eq!(matches[0].height, Some(180));
+        assert_eq!(matches[1].alt, "");
+        assert_eq!(matches[1].src, "./empty-alt.jpg");
+        assert_eq!(matches[1].width, None);
+        assert_eq!(matches[1].height, None);
     }
 
     #[test]
@@ -1373,8 +1627,14 @@ mod tests {
         assert!(kinds.contains(&"wiki-link-id"));
         assert!(kinds.contains(&"wiki-link-sep"));
         assert!(kinds.contains(&"wiki-link-title"));
-        let id_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-id").unwrap();
-        let title_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-title").unwrap();
+        let id_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-id")
+            .unwrap();
+        let title_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-title")
+            .unwrap();
         assert_eq!(&text[id_tok.from..id_tok.to], "01HX4VHR");
         assert_eq!(&text[title_tok.from..title_tok.to], "My Note");
     }
@@ -1386,8 +1646,14 @@ mod tests {
         let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
         assert!(kinds.contains(&"wiki-link-title"));
         assert!(kinds.contains(&"wiki-link-anchor"));
-        let title_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-title").unwrap();
-        let anchor_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-anchor").unwrap();
+        let title_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-title")
+            .unwrap();
+        let anchor_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-anchor")
+            .unwrap();
         assert_eq!(&text[title_tok.from..title_tok.to], "Intro");
         assert_eq!(&text[anchor_tok.from..anchor_tok.to], "#The Beginning");
     }
@@ -1414,7 +1680,10 @@ mod tests {
         assert!(!kinds.contains(&"wiki-link-sep"));
         assert!(!kinds.contains(&"wiki-link-title"));
         assert!(!kinds.contains(&"wiki-link-anchor"));
-        let id_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-id").unwrap();
+        let id_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-id")
+            .unwrap();
         assert_eq!(&text[id_tok.from..id_tok.to], "01HX4VHR");
     }
 
@@ -1427,8 +1696,14 @@ mod tests {
         assert!(kinds.contains(&"wiki-link-anchor"));
         assert!(!kinds.contains(&"wiki-link-sep"));
         assert!(!kinds.contains(&"wiki-link-title"));
-        let id_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-id").unwrap();
-        let anchor_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-anchor").unwrap();
+        let id_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-id")
+            .unwrap();
+        let anchor_tok = tokens
+            .iter()
+            .find(|t| t.kind.as_str() == "wiki-link-anchor")
+            .unwrap();
         assert_eq!(&text[id_tok.from..id_tok.to], "01HX4VHR");
         assert_eq!(&text[anchor_tok.from..anchor_tok.to], "#My Section");
     }

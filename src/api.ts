@@ -33,6 +33,16 @@ export interface ResolvedWikiLink {
   summary: NoteSummary | null;
 }
 
+export interface ImportedNoteImage {
+  imageId: string;
+  markdownPath: string;
+}
+
+export interface ResolvedNoteImagePath {
+  source: string;
+  path: string | null;
+}
+
 export interface NoteSearchResult {
   id: string;
   title: string;
@@ -227,6 +237,95 @@ export function resolveWikiLinks(shortIds: string[]): Promise<ResolvedWikiLink[]
 
 export function resolveWikiLinkHeadings(shortId: string): Promise<string[]> {
   return invoke<string[]>("resolve_wiki_link_headings", { shortId });
+}
+
+export function importNoteImage(
+  noteId: string,
+  bytesBase64: string,
+  options?: { fileName?: string | null; mimeType?: string | null },
+): Promise<ImportedNoteImage> {
+  return invoke<ImportedNoteImage>("import_note_image", {
+    noteId,
+    bytesBase64,
+    fileName: options?.fileName ?? null,
+    mimeType: options?.mimeType ?? null,
+  });
+}
+
+export function reserveNoteImage(
+  noteId: string,
+  options?: { fileName?: string | null; mimeType?: string | null },
+): Promise<ImportedNoteImage> {
+  return invoke<ImportedNoteImage>("reserve_note_image", {
+    noteId,
+    fileName: options?.fileName ?? null,
+    mimeType: options?.mimeType ?? null,
+  });
+}
+
+export function writeNoteImage(
+  noteId: string,
+  imageId: string,
+  bytesBase64: string,
+  options?: { fileName?: string | null; mimeType?: string | null },
+): Promise<void> {
+  return invoke<void>("write_note_image", {
+    noteId,
+    imageId,
+    bytesBase64,
+    fileName: options?.fileName ?? null,
+    mimeType: options?.mimeType ?? null,
+  });
+}
+
+export function writeNoteImageFromPath(
+  noteId: string,
+  imageId: string,
+  filePath: string,
+): Promise<void> {
+  return invoke<void>("write_note_image_from_path", {
+    noteId,
+    imageId,
+    filePath,
+  });
+}
+
+export function deleteNoteImage(
+  noteId: string,
+  imageId: string,
+): Promise<boolean> {
+  return invoke<boolean>("delete_note_image", {
+    noteId,
+    imageId,
+  });
+}
+
+export function importNoteImageFromPath(
+  noteId: string,
+  filePath: string,
+): Promise<ImportedNoteImage> {
+  return invoke<ImportedNoteImage>("import_note_image_from_path", {
+    noteId,
+    filePath,
+  });
+}
+
+export function importNoteImageFromClipboard(
+  noteId: string,
+): Promise<ImportedNoteImage | null> {
+  return invoke<ImportedNoteImage | null>("import_note_image_from_clipboard", {
+    noteId,
+  });
+}
+
+export function resolveNoteImagePaths(
+  noteId: string,
+  sources: string[],
+): Promise<ResolvedNoteImagePath[]> {
+  return invoke<ResolvedNoteImagePath[]>("resolve_note_image_paths", {
+    noteId,
+    sources,
+  });
 }
 
 export function listNoteReminders(noteId: string): Promise<NoteReminder[]> {

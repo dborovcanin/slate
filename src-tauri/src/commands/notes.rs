@@ -1,10 +1,27 @@
 use app_core::storage::{Note, NoteModules, NoteSearchResult, NoteSummary};
 use app_core::AppCore;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use serde::Serialize;
+use std::path::Path;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 const NOTE_CHANGED_EVENT: &str = "slate://note-changed";
 const DEFAULT_CONTENT_SEARCH_LIMIT: usize = 60;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportedNoteImage {
+    pub image_id: String,
+    pub markdown_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedNoteImagePath {
+    pub source: String,
+    pub path: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -264,9 +281,7 @@ pub fn resolve_wiki_link_headings(
     let Some(note) = core.note_sources().resolve_wiki_link_note(&short_id)? else {
         return Ok(Vec::new());
     };
-    Ok(crate::editor_core::markdown_tokens::extract_markdown_headings(
-        &note.body,
-    ))
+    Ok(crate::editor_core::markdown_tokens::extract_markdown_headings(&note.body))
 }
 
 #[tauri::command]
@@ -283,4 +298,195 @@ pub fn decrypt_note(
     let note = core.db().decrypt_note(&id, &password)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
+}
+
+#[tauri::command]
+pub fn import_note_image(
+    core: State<'_, AppCore>,
+    note_id: String,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+    bytes_base64: String,
+) -> Result<ImportedNoteImage, String> {
+    let image_bytes = decode_image_bytes(&bytes_base64)?;
+    let imported = core.note_sources().import_image_bytes_by_id(
+        &note_id,
+        file_name.as_deref(),
+        mime_type.as_deref(),
+        &image_bytes,
+    )?;
+    Ok(ImportedNoteImage {
+        image_id: imported.image_id,
+        markdown_path: imported.markdown_path,
+    })
+}
+
+#[tauri::command]
+pub fn import_note_image_from_path(
+    core: State<'_, AppCore>,
+    note_id: String,
+    file_path: String,
+) -> Result<ImportedNoteImage, String> {
+    let imported = core
+        .note_sources()
+        .import_image_path_by_id(&note_id, Path::new(&file_path))?;
+    Ok(ImportedNoteImage {
+        image_id: imported.image_id,
+        markdown_path: imported.markdown_path,
+    })
+}
+
+#[tauri::command]
+pub fn import_note_image_from_clipboard(
+    core: State<'_, AppCore>,
+    note_id: String,
+) -> Result<Option<ImportedNoteImage>, String> {
+    if let Some(path) = crate::commands::clipboard::read_clipboard_image_file_path() {
+        let imported = core
+            .note_sources()
+            .import_image_path_by_id(&note_id, &path)?;
+        return Ok(Some(ImportedNoteImage {
+            image_id: imported.image_id,
+            markdown_path: imported.markdown_path,
+        }));
+    }
+
+    if let Some((image_bytes, mime_type)) = crate::commands::clipboard::read_clipboard_image_bytes()
+    {
+        let file_name = clipboard_image_file_name_for_mime(mime_type);
+        let imported = core.note_sources().import_image_bytes_by_id(
+            &note_id,
+            Some(file_name),
+            Some(mime_type),
+            &image_bytes,
+        )?;
+        return Ok(Some(ImportedNoteImage {
+            image_id: imported.image_id,
+            markdown_path: imported.markdown_path,
+        }));
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
+pub fn resolve_note_image_paths(
+    core: State<'_, AppCore>,
+    note_id: String,
+    sources: Vec<String>,
+) -> Result<Vec<ResolvedNoteImagePath>, String> {
+    let mut out = Vec::with_capacity(sources.len());
+    for source in sources {
+        let resolved = core
+            .note_sources()
+            .resolve_image_markdown_source_by_id(&note_id, &source)?;
+        out.push(ResolvedNoteImagePath {
+            source,
+            path: resolved,
+        });
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn reserve_note_image(
+    core: State<'_, AppCore>,
+    note_id: String,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+) -> Result<ImportedNoteImage, String> {
+    let reserved = core.note_sources().reserve_image_placeholder_by_id(
+        &note_id,
+        file_name.as_deref(),
+        mime_type.as_deref(),
+    )?;
+    Ok(ImportedNoteImage {
+        image_id: reserved.image_id,
+        markdown_path: reserved.markdown_path,
+    })
+}
+
+#[tauri::command]
+pub fn write_note_image(
+    core: State<'_, AppCore>,
+    note_id: String,
+    image_id: String,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+    bytes_base64: String,
+) -> Result<(), String> {
+    let image_bytes = decode_image_bytes(&bytes_base64)?;
+    core.note_sources().write_image_bytes_to_placeholder_by_id(
+        &note_id,
+        &image_id,
+        file_name.as_deref(),
+        mime_type.as_deref(),
+        &image_bytes,
+    )
+}
+
+#[tauri::command]
+pub fn write_note_image_from_path(
+    core: State<'_, AppCore>,
+    note_id: String,
+    image_id: String,
+    file_path: String,
+) -> Result<(), String> {
+    core.note_sources().write_image_path_to_placeholder_by_id(
+        &note_id,
+        &image_id,
+        Path::new(&file_path),
+    )
+}
+
+#[tauri::command]
+pub fn delete_note_image(
+    core: State<'_, AppCore>,
+    note_id: String,
+    image_id: String,
+) -> Result<bool, String> {
+    core.note_sources()
+        .delete_image_placeholder_by_id(&note_id, &image_id)
+}
+
+pub(crate) fn decode_image_bytes(encoded: &str) -> Result<Vec<u8>, String> {
+    let payload = encoded
+        .trim()
+        .split_once(',')
+        .map(|(_, data)| data)
+        .unwrap_or(encoded)
+        .trim();
+    if payload.is_empty() {
+        return Err("Image payload is empty".to_string());
+    }
+    let decoded = BASE64_STANDARD
+        .decode(payload)
+        .map_err(|e| format!("Invalid base64 image payload: {e}"))?;
+    if decoded.is_empty() {
+        return Err("Decoded image payload is empty".to_string());
+    }
+    Ok(decoded)
+}
+
+fn clipboard_image_file_name_for_mime(mime_type: &str) -> &'static str {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/jpeg" | "image/jpg" => "clipboard-image.jpg",
+        "image/webp" => "clipboard-image.webp",
+        "image/gif" => "clipboard-image.gif",
+        "image/bmp" => "clipboard-image.bmp",
+        "image/svg+xml" => "clipboard-image.svg",
+        "image/avif" => "clipboard-image.avif",
+        _ => "clipboard-image.png",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_image_bytes_accepts_data_url_prefix() {
+        let decoded = decode_image_bytes("data:image/png;base64,aGVsbG8=").expect("decode");
+        assert_eq!(decoded, b"hello");
+    }
 }

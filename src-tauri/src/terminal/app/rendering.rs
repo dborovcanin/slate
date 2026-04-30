@@ -96,7 +96,8 @@ impl TerminalApp {
         let Some(entry) = self.wiki_link_line_render_cache.get(line_text) else {
             return None;
         };
-        if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_LINE_RENDER_CACHE_TTL_MS {
+        if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_LINE_RENDER_CACHE_TTL_MS
+        {
             return Some((entry.rendered_line.clone(), entry.underline_ranges.clone()));
         }
         self.wiki_link_line_render_cache.remove(line_text);
@@ -127,7 +128,9 @@ impl TerminalApp {
                 cached_at: std::time::Instant::now(),
             },
         );
-        while self.wiki_link_line_render_cache.len() > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES {
+        while self.wiki_link_line_render_cache.len()
+            > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES
+        {
             let Some(oldest_key) = self
                 .wiki_link_line_render_cache
                 .iter()
@@ -147,7 +150,8 @@ impl TerminalApp {
         let Some(entry) = self.table_formula_segment_cache.get(line_text) else {
             return None;
         };
-        if entry.cached_at.elapsed().as_millis() as u64 <= super::TABLE_FORMULA_SEGMENT_CACHE_TTL_MS {
+        if entry.cached_at.elapsed().as_millis() as u64 <= super::TABLE_FORMULA_SEGMENT_CACHE_TTL_MS
+        {
             return Some(entry.segments.clone());
         }
         self.table_formula_segment_cache.remove(line_text);
@@ -166,7 +170,9 @@ impl TerminalApp {
                 cached_at: std::time::Instant::now(),
             },
         );
-        while self.table_formula_segment_cache.len() > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES {
+        while self.table_formula_segment_cache.len()
+            > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES
+        {
             let Some(oldest_key) = self
                 .table_formula_segment_cache
                 .iter()
@@ -214,7 +220,11 @@ impl TerminalApp {
             };
             if !display.is_empty() {
                 let start = out_char_count;
-                Self::push_rendered_segment_with_count(&mut out, display.as_str(), &mut out_char_count);
+                Self::push_rendered_segment_with_count(
+                    &mut out,
+                    display.as_str(),
+                    &mut out_char_count,
+                );
                 underline_ranges.push((start, out_char_count));
             }
             cursor = link.to;
@@ -223,7 +233,13 @@ impl TerminalApp {
         if cursor == 0 {
             return (line_text.to_string(), Vec::new());
         }
-        Self::push_rendered_chars_segment(&mut out, &chars, cursor, chars.len(), &mut out_char_count);
+        Self::push_rendered_chars_segment(
+            &mut out,
+            &chars,
+            cursor,
+            chars.len(),
+            &mut out_char_count,
+        );
         self.insert_wiki_link_line_cache(line_text, &out, &underline_ranges);
         (out, underline_ranges)
     }
@@ -577,11 +593,21 @@ impl TerminalApp {
         let preferred_top = popup.anchor_row.saturating_add(1);
         let mut y = preferred_top;
         if y + box_height > max_editor_row + 1 {
-            y = popup.anchor_row.saturating_sub(box_height.saturating_sub(1));
+            y = popup
+                .anchor_row
+                .saturating_sub(box_height.saturating_sub(1));
         }
-        y = y.max(EDITOR_TOP_ROW).min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
-        let border_style = AnsiStyle { fg: Some(self.render_palette.code_type), ..Default::default() };
-        let row_style = AnsiStyle { fg: Some(self.render_palette.variable), ..Default::default() };
+        y = y
+            .max(EDITOR_TOP_ROW)
+            .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
+        let border_style = AnsiStyle {
+            fg: Some(self.render_palette.code_type),
+            ..Default::default()
+        };
+        let row_style = AnsiStyle {
+            fg: Some(self.render_palette.variable),
+            ..Default::default()
+        };
         let selected_bg = self.render_palette.primary();
         let selected_style = AnsiStyle {
             fg: Some(contrast_fg_for_bg(selected_bg)),
@@ -895,7 +921,8 @@ impl TerminalApp {
                                 }
                                 ((self.cursor_col as isize) + delta).max(0) as usize
                             });
-                            cursor_line_override = Some((rendered_line.as_ref().to_string(), mapped_col));
+                            cursor_line_override =
+                                Some((rendered_line.as_ref().to_string(), mapped_col));
                         }
                     }
                 }
@@ -908,15 +935,18 @@ impl TerminalApp {
                 let mut visual_highlight_ranges = Vec::new();
                 if is_fold_placeholder {
                     if self.line_is_in_visual_selection(line_idx) {
-                        visual_highlight_ranges.push((0, rendered_line.as_ref().chars().count().max(1)));
+                        visual_highlight_ranges
+                            .push((0, rendered_line.as_ref().chars().count().max(1)));
                     }
                 } else {
                     self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
                 }
 
                 if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
-                    let (collapsed_line, mapped_col) =
-                        render::collapse_markdown_line_for_cursor(rendered_line.as_ref(), self.cursor_col);
+                    let (collapsed_line, mapped_col) = render::collapse_markdown_line_for_cursor(
+                        rendered_line.as_ref(),
+                        self.cursor_col,
+                    );
                     if collapsed_line != rendered_line.as_ref() || mapped_col != self.cursor_col {
                         cursor_line_override = Some((collapsed_line, mapped_col));
                     }

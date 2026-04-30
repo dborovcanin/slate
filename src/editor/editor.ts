@@ -9,7 +9,10 @@ import {
 } from "@codemirror/view";
 import { defaultKeymap, deleteGroupBackward, history, historyKeymap, cursorGroupLeft, cursorGroupRight } from "@codemirror/commands";
 import { state } from "../state";
-import { saveNote, type NoteModules } from "../api";
+import {
+  saveNote,
+  type NoteModules,
+} from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
 import {
@@ -33,6 +36,10 @@ import { autocompletion } from "@codemirror/autocomplete";
 import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
 import { editorContextMenuExtensions } from "./context-menu";
+import {
+  imageImportDomHandlers,
+  insertImagePathsAtCursor,
+} from "./image-import";
 import { startupMark } from "../perf/startup.ts";
 
 let view: EditorView | null = null;
@@ -443,6 +450,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
       }),
+      imageImportDomHandlers(),
       tableCellNavigationDomHandler(),
       snapEditorScrollToPixels(),
       Prec.highest(keymap.of([
@@ -642,4 +650,9 @@ export function insertTextAtCursor(text: string): boolean {
     scrollIntoView: true,
   });
   return true;
+}
+
+export async function insertImagesFromPathsAtCursor(paths: string[]): Promise<boolean> {
+  if (!view) return false;
+  return insertImagePathsAtCursor(view, paths);
 }

@@ -7,7 +7,11 @@ use std::time::SystemTime;
 use ulid::Ulid;
 
 pub const MARKDOWN_NOTE_ID_PREFIX: &str = "mdfile:";
+pub const DB_IMAGE_MARKDOWN_PREFIX: &str = "slate-image://";
 const NOTE_TITLE_MAX_CHARS: usize = 60;
+const DEFAULT_IMAGE_STEM: &str = "image";
+const DEFAULT_IMAGE_EXTENSION: &str = "png";
+const MAX_IMAGE_STEM_LEN: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NoteIdentity {
@@ -31,6 +35,12 @@ pub struct NoteSourceCapabilities {
     pub can_lock: bool,
     pub can_encrypt: bool,
     pub can_module_persist: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedImage {
+    pub image_id: String,
+    pub markdown_path: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -182,6 +192,195 @@ impl NoteSourceService {
         }
         Ok(notes)
     }
+
+    pub fn import_image_bytes_by_id(
+        &self,
+        note_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        image_bytes: &[u8],
+    ) -> Result<ImportedImage, String> {
+        if image_bytes.is_empty() {
+            return Err("Image payload is empty".to_string());
+        }
+        let identity = self.parse_identity(note_id);
+        if let NoteIdentity::DbNote(id) = &identity {
+            let image_id = self.db.reserve_note_image(id, file_name, mime_type)?;
+            self.db
+                .write_note_image_bytes(id, &image_id, file_name, mime_type, image_bytes)?;
+            return Ok(ImportedImage {
+                image_id: image_id.clone(),
+                markdown_path: markdown_path_for_db_image(&image_id),
+            });
+        }
+
+        let note = self
+            .open_note(&identity)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        if note.access_mode != NoteAccessMode::None && !note.is_unlocked {
+            return Err("note is locked; unlock first".to_string());
+        }
+
+        let extension = select_image_extension(file_name, mime_type);
+        let stem = select_image_stem(file_name);
+        let (asset_dir, markdown_prefix) = image_asset_directory(self.parse_identity(note_id))?;
+        fs::create_dir_all(&asset_dir).map_err(|e| {
+            format!(
+                "Failed to create image assets directory '{}': {e}",
+                asset_dir.display()
+            )
+        })?;
+
+        let target_path = unique_asset_file_path(&asset_dir, &stem, extension.as_str());
+        fs::write(&target_path, image_bytes).map_err(|e| {
+            format!(
+                "Failed to write image asset '{}': {e}",
+                target_path.display()
+            )
+        })?;
+
+        let saved_name = target_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| "Failed to determine saved image file name".to_string())?;
+        Ok(ImportedImage {
+            image_id: saved_name.to_string(),
+            markdown_path: format!("{markdown_prefix}/{saved_name}"),
+        })
+    }
+
+    pub fn import_image_path_by_id(
+        &self,
+        note_id: &str,
+        source_path: &Path,
+    ) -> Result<ImportedImage, String> {
+        if !source_path.exists() {
+            return Err(format!(
+                "Image source path does not exist: {}",
+                source_path.display()
+            ));
+        }
+        if !source_path.is_file() {
+            return Err(format!(
+                "Image source path is not a file: {}",
+                source_path.display()
+            ));
+        }
+        let bytes = fs::read(source_path).map_err(|e| {
+            format!(
+                "Failed to read image source file '{}': {e}",
+                source_path.display()
+            )
+        })?;
+        let file_name = source_path.file_name().and_then(|name| name.to_str());
+        self.import_image_bytes_by_id(note_id, file_name, None, &bytes)
+    }
+
+    pub fn reserve_image_placeholder_by_id(
+        &self,
+        note_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+    ) -> Result<ImportedImage, String> {
+        let identity = self.parse_identity(note_id);
+        let NoteIdentity::DbNote(id) = identity else {
+            return Err("image placeholders are only supported for database notes".to_string());
+        };
+        let image_id = self.db.reserve_note_image(&id, file_name, mime_type)?;
+        Ok(ImportedImage {
+            image_id: image_id.clone(),
+            markdown_path: markdown_path_for_db_image(&image_id),
+        })
+    }
+
+    pub fn write_image_bytes_to_placeholder_by_id(
+        &self,
+        note_id: &str,
+        image_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        image_bytes: &[u8],
+    ) -> Result<(), String> {
+        let identity = self.parse_identity(note_id);
+        let NoteIdentity::DbNote(id) = identity else {
+            return Err("image placeholders are only supported for database notes".to_string());
+        };
+        self.db
+            .write_note_image_bytes(&id, image_id, file_name, mime_type, image_bytes)
+    }
+
+    pub fn write_image_path_to_placeholder_by_id(
+        &self,
+        note_id: &str,
+        image_id: &str,
+        source_path: &Path,
+    ) -> Result<(), String> {
+        if !source_path.exists() {
+            return Err(format!(
+                "Image source path does not exist: {}",
+                source_path.display()
+            ));
+        }
+        if !source_path.is_file() {
+            return Err(format!(
+                "Image source path is not a file: {}",
+                source_path.display()
+            ));
+        }
+        let bytes = fs::read(source_path).map_err(|e| {
+            format!(
+                "Failed to read image source file '{}': {e}",
+                source_path.display()
+            )
+        })?;
+        let file_name = source_path.file_name().and_then(|name| name.to_str());
+        self.write_image_bytes_to_placeholder_by_id(note_id, image_id, file_name, None, &bytes)
+    }
+
+    pub fn delete_image_placeholder_by_id(
+        &self,
+        note_id: &str,
+        image_id: &str,
+    ) -> Result<bool, String> {
+        let identity = self.parse_identity(note_id);
+        let NoteIdentity::DbNote(id) = identity else {
+            return Ok(false);
+        };
+        self.db.delete_note_image(&id, image_id)
+    }
+
+    pub fn resolve_image_markdown_source_by_id(
+        &self,
+        note_id: &str,
+        src: &str,
+    ) -> Result<Option<String>, String> {
+        let identity = self.parse_identity(note_id);
+        if let NoteIdentity::DbNote(id) = &identity {
+            if let Some(image_id) = parse_db_image_markdown_source(src) {
+                return self.db.resolve_note_image_data_url(id, image_id);
+            }
+        }
+        Ok(resolve_image_markdown_path(identity, src)?
+            .map(|path| path.to_string_lossy().to_string()))
+    }
+}
+
+fn markdown_path_for_db_image(image_id: &str) -> String {
+    format!("{DB_IMAGE_MARKDOWN_PREFIX}{image_id}")
+}
+
+fn parse_db_image_markdown_source(src: &str) -> Option<&str> {
+    let trimmed = src.trim();
+    let value = trimmed.strip_prefix(DB_IMAGE_MARKDOWN_PREFIX)?;
+    if value.is_empty() {
+        return None;
+    }
+    let looks_like_ulid = value.len() == 26 && value.chars().all(|ch| ch.is_ascii_alphanumeric());
+    if looks_like_ulid {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 pub fn note_id_for_markdown_file(path: &Path) -> String {
@@ -268,6 +467,199 @@ fn now_iso() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap()
+}
+
+fn image_asset_directory(identity: NoteIdentity) -> Result<(PathBuf, String), String> {
+    match identity {
+        NoteIdentity::DbNote(id) => {
+            let safe_id = sanitize_note_id_for_path(&id);
+            let root = crate::data_dir()?.join("assets").join(&safe_id);
+            Ok((root, format!("./assets/{safe_id}")))
+        }
+        NoteIdentity::FileNote(path) => {
+            let parent = path.parent().ok_or_else(|| {
+                format!(
+                    "Failed to determine markdown parent directory for '{}'",
+                    path.display()
+                )
+            })?;
+            Ok((parent.join("assets"), "./assets".to_string()))
+        }
+    }
+}
+
+fn resolve_image_markdown_path(
+    identity: NoteIdentity,
+    src: &str,
+) -> Result<Option<PathBuf>, String> {
+    let raw = src.trim();
+    if raw.is_empty() {
+        return Ok(None);
+    }
+    let candidate = PathBuf::from(raw);
+    if candidate.is_absolute() {
+        if candidate.exists() && candidate.is_file() {
+            return Ok(Some(candidate));
+        }
+        return Ok(None);
+    }
+
+    match identity {
+        NoteIdentity::DbNote(_) => {
+            let root = crate::data_dir()?;
+            let relative = if let Some(rest) = raw.strip_prefix("./") {
+                rest
+            } else {
+                raw
+            };
+            let joined = root.join(relative);
+            if !joined.exists() || !joined.is_file() {
+                return Ok(None);
+            }
+            let canonical = joined.canonicalize().map_err(|e| {
+                format!(
+                    "Failed to canonicalize image path '{}': {e}",
+                    joined.display()
+                )
+            })?;
+            let canonical_root = root.canonicalize().unwrap_or(root);
+            if !canonical.starts_with(&canonical_root) {
+                return Ok(None);
+            }
+            Ok(Some(canonical))
+        }
+        NoteIdentity::FileNote(path) => {
+            let parent = path.parent().ok_or_else(|| {
+                format!(
+                    "Failed to determine markdown parent directory for '{}'",
+                    path.display()
+                )
+            })?;
+            let joined = parent.join(raw);
+            if !joined.exists() || !joined.is_file() {
+                return Ok(None);
+            }
+            let canonical = joined.canonicalize().map_err(|e| {
+                format!(
+                    "Failed to canonicalize image path '{}': {e}",
+                    joined.display()
+                )
+            })?;
+            Ok(Some(canonical))
+        }
+    }
+}
+
+fn sanitize_note_id_for_path(note_id: &str) -> String {
+    let mut out = String::with_capacity(note_id.len());
+    for ch in note_id.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "note".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn select_image_stem(file_name: Option<&str>) -> String {
+    let stem = file_name
+        .and_then(|raw| Path::new(raw).file_stem())
+        .and_then(|value| value.to_str())
+        .unwrap_or(DEFAULT_IMAGE_STEM);
+    sanitize_image_stem(stem)
+}
+
+fn sanitize_image_stem(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len().min(MAX_IMAGE_STEM_LEN));
+    let mut prev_dash = false;
+    for ch in raw.chars() {
+        if out.len() >= MAX_IMAGE_STEM_LEN {
+            break;
+        }
+        if ch.is_ascii_alphanumeric() || ch == '_' {
+            out.push(ch.to_ascii_lowercase());
+            prev_dash = false;
+            continue;
+        }
+        if ch == '-' || ch == ' ' || ch == '.' {
+            if !prev_dash && !out.is_empty() {
+                out.push('-');
+                prev_dash = true;
+            }
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        format!("{DEFAULT_IMAGE_STEM}-{}", Ulid::new())
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn select_image_extension(file_name: Option<&str>, mime_type: Option<&str>) -> String {
+    if let Some(name) = file_name {
+        if let Some(ext) = Path::new(name).extension().and_then(|value| value.to_str()) {
+            if let Some(allowed) = normalize_image_extension(ext) {
+                return allowed.to_string();
+            }
+        }
+    }
+    if let Some(mime) = mime_type {
+        if let Some(from_mime) = image_extension_from_mime(mime) {
+            return from_mime.to_string();
+        }
+    }
+    DEFAULT_IMAGE_EXTENSION.to_string()
+}
+
+fn normalize_image_extension(ext: &str) -> Option<&'static str> {
+    let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    match normalized.as_str() {
+        "png" => Some("png"),
+        "jpg" | "jpeg" => Some("jpg"),
+        "gif" => Some("gif"),
+        "webp" => Some("webp"),
+        "bmp" => Some("bmp"),
+        "svg" | "svgz" => Some("svg"),
+        "avif" => Some("avif"),
+        _ => None,
+    }
+}
+
+fn image_extension_from_mime(mime_type: &str) -> Option<&'static str> {
+    let normalized = mime_type.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/bmp" => Some("bmp"),
+        "image/svg+xml" => Some("svg"),
+        "image/avif" => Some("avif"),
+        _ => None,
+    }
+}
+
+fn unique_asset_file_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let mut suffix = 1usize;
+    loop {
+        let file_name = if suffix == 1 {
+            format!("{stem}.{ext}")
+        } else {
+            format!("{stem}-{suffix}.{ext}")
+        };
+        let candidate = dir.join(file_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+        suffix += 1;
+    }
 }
 
 fn iso_from_system_time(ts: SystemTime) -> Option<String> {
@@ -660,6 +1052,112 @@ mod tests {
         );
 
         let _ = fs::remove_file(markdown_path);
+        drop(db);
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn image_import_helpers_normalize_stem_and_extension() {
+        assert_eq!(
+            sanitize_image_stem(" Plan v1.0 @ Draft "),
+            "plan-v1-0-draft"
+        );
+        assert_eq!(
+            select_image_extension(Some("pic.JPEG"), Some("image/png")),
+            "jpg"
+        );
+        assert_eq!(
+            select_image_extension(Some("pic.bad"), Some("image/webp")),
+            "webp"
+        );
+        assert_eq!(select_image_extension(None, Some("image/unknown")), "png");
+    }
+
+    #[test]
+    fn unique_asset_file_path_adds_numeric_suffixes() {
+        let dir = std::env::temp_dir().join(format!("note-sources-image-path-{}", Ulid::new()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let first = unique_asset_file_path(&dir, "image", "png");
+        assert_eq!(
+            first.file_name().and_then(|v| v.to_str()),
+            Some("image.png")
+        );
+        fs::write(&first, b"x").expect("seed");
+        let second = unique_asset_file_path(&dir, "image", "png");
+        assert_eq!(
+            second.file_name().and_then(|v| v.to_str()),
+            Some("image-2.png")
+        );
+        let _ = fs::remove_file(first);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_image_path_by_id_writes_markdown_assets_for_file_notes() {
+        let db_path = temp_db_path();
+        let db = Db::open(db_path.clone()).expect("db opens");
+        let service = NoteSourceService::new(db.clone());
+
+        let note_path = std::env::temp_dir().join(format!("note-source-image-{}.md", Ulid::new()));
+        fs::write(&note_path, "hello").expect("seed markdown");
+        let source_path =
+            std::env::temp_dir().join(format!("note-source-image-src-{}.png", Ulid::new()));
+        fs::write(&source_path, b"png-bytes").expect("seed image file");
+        let note_id = note_id_for_markdown_file(&note_path);
+
+        let imported = service
+            .import_image_path_by_id(&note_id, &source_path)
+            .expect("import image");
+        assert!(imported.markdown_path.starts_with("./assets/"));
+        let asset_file_name = imported
+            .markdown_path
+            .rsplit('/')
+            .next()
+            .expect("asset file name");
+        let copied = note_path
+            .parent()
+            .expect("note parent")
+            .join("assets")
+            .join(asset_file_name);
+        assert!(copied.exists());
+        assert_eq!(fs::read(copied).expect("copied bytes"), b"png-bytes");
+
+        let _ = fs::remove_file(source_path);
+        let _ = fs::remove_file(note_path);
+        drop(db);
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn resolve_image_markdown_source_by_id_supports_relative_paths_for_file_notes() {
+        let db_path = temp_db_path();
+        let db = Db::open(db_path.clone()).expect("db opens");
+        let service = NoteSourceService::new(db.clone());
+
+        let note_dir = std::env::temp_dir().join(format!("note-source-resolve-{}", Ulid::new()));
+        fs::create_dir_all(&note_dir).expect("note dir");
+        let note_path = note_dir.join("note.md");
+        fs::write(&note_path, "note").expect("seed note");
+        let assets_dir = note_dir.join("assets");
+        fs::create_dir_all(&assets_dir).expect("assets");
+        let image_path = assets_dir.join("a.png");
+        fs::write(&image_path, b"img").expect("seed image");
+
+        let note_id = note_id_for_markdown_file(&note_path);
+        let resolved = service
+            .resolve_image_markdown_source_by_id(&note_id, "./assets/a.png")
+            .expect("resolve")
+            .expect("exists");
+        assert_eq!(
+            resolved,
+            image_path
+                .canonicalize()
+                .expect("canonical image path")
+                .to_string_lossy()
+                .to_string()
+        );
+
+        let _ = fs::remove_dir_all(note_dir);
         drop(db);
         cleanup_db_files(&db_path);
     }

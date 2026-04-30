@@ -78,9 +78,7 @@ pub fn sync_note_lines(
         .note_line_cache
         .lock()
         .map_err(|_| "line cache lock poisoned".to_string())?;
-    let entry = cache
-        .entry(note_id)
-        .or_insert_with(|| Arc::new(Vec::new()));
+    let entry = cache.entry(note_id).or_insert_with(|| Arc::new(Vec::new()));
     let vec = Arc::make_mut(entry);
     let clamped_to = to.min(vec.len());
     let clamped_from = from.min(clamped_to);

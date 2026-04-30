@@ -1,7 +1,9 @@
 use std::fmt::Write as _;
 
 use crate::editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType, MarkdownLineInfo};
-use crate::terminal::markdown_view::{should_reveal_inline_marker, wiki_link_hidden_token_ranges};
+use crate::terminal::markdown_view::{
+    image_hidden_token_ranges, should_reveal_inline_marker, wiki_link_hidden_token_ranges,
+};
 use crate::terminal::theme::RenderPalette;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
@@ -195,6 +197,7 @@ pub(super) fn apply_inline_token_styles(
 ) {
     let len = styles.len();
     let component_ranges = markdown_tokens::inline_marker_component_ranges_from_tokens(tokens);
+    hidden_ranges.extend(image_hidden_token_ranges(tokens, active_cursor_col));
     hidden_ranges.extend(wiki_link_hidden_token_ranges(tokens, active_cursor_col));
     for (index, token) in tokens.iter().enumerate() {
         let from = token.from.min(len);
@@ -216,6 +219,11 @@ pub(super) fn apply_inline_token_styles(
                 InlineTokenType::Emphasis => style.italic = true,
                 InlineTokenType::Strikethrough => style.strikethrough = true,
                 InlineTokenType::Code | InlineTokenType::CodeMarker => style.dim = true,
+                InlineTokenType::ImageAlt => {
+                    style.italic = true;
+                    style.bold = true;
+                }
+                InlineTokenType::ImageSrc | InlineTokenType::ImageMarker => style.dim = true,
                 InlineTokenType::LinkText => {
                     style.bold = true;
                     style.underline = true;

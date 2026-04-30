@@ -1,6 +1,6 @@
 use regex::{Regex, RegexBuilder};
-use serde::{Deserialize, Serialize};
 use rustc_hash::FxHasher;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;

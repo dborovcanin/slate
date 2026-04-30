@@ -190,6 +190,50 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 - Frontends stay adapter- and rendering-focused.
 - Architecture intent is documented and enforced by tests/checks.
 
+## Architecture and Performance Review Backlog (2026-04-30)
+
+Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, and UI adapters.
+
+1. Eliminate full-document snapshot churn in shared Vim action execution.
+
+- UI currently passes `view.state.doc.toString()` into shared action execution for each handled intent.
+- TUI currently builds full snapshot text via `join_lines(&self.lines)` for shared action execution.
+- Track: add line-window or line/column-native shared Vim action API, and keep local fast-paths where measurable.
+
+2. Remove full-document `join -> replace -> split` path from TUI edit operation application.
+
+- `apply_edit_operation` currently rebuilds full text for many localized edits.
+- Track: apply edit changes directly to line slices where possible, with full rebuild only as fallback.
+
+3. Harden calc delta cache mutation path to avoid accidental full `Vec<String>` clones under concurrency.
+
+- `sync_note_lines` uses `Arc::make_mut`; with concurrent eval readers this can clone the whole note line cache.
+- Track: move note line cache to mutable shared storage with non-copying patch application semantics.
+
+4. Make partial calc truly partial for variable-definition indexing.
+
+- `evaluate_note_context_inner` still scans all lines to collect variable definitions even when `eval_range` is narrow.
+- Track: maintain/update incremental variable-definition index from changed windows.
+
+5. Upgrade parity coverage to include real GUI runtime path (not only simulator parity).
+
+- Existing replay coverage is strong but simulator-heavy for GUI parity behavior.
+- Track: add live CodeMirror-backed parity runner for markdown/calc/folding flows.
+
+6. Decompose `TerminalApp` state into focused runtime components.
+
+- `TerminalApp` still owns too many responsibilities in one struct.
+- Track: extract focused state modules (`EditorModel`, `CalcRuntime`, `OverlayState`, `RenderState`, `FoldRuntime`) while keeping shared-core semantics canonical.
+
+Acceptance criteria:
+
+- No O(document size) conversions in hot edit/action paths unless explicitly required.
+- Large-note edit latency remains stable for localized edits.
+- Calc delta path avoids full-cache clones during normal typing/eval overlap.
+- Partial eval no longer performs full-document variable-definition scans.
+- Parity failures are reproducible against real GUI runtime behavior.
+- TUI runtime state changes are reviewable in subsystem-scoped diffs.
+
 ## Future Updates
 
 ### Global
@@ -243,6 +287,8 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 - [ ] Context menu for formatting conversions
 - [ ] Right-click conversion to checklist/ordered/unordered list
 - [ ] Support variable assignment from formula helpers like `a := sum_column()`
+- [ ] Trie search
+- [ ] Search coloring bug
 - [ ] UI settings page
 - [ ] Code folding UX improvements.
 - [ ] Search notes content
@@ -564,10 +610,11 @@ Add markdown image support with correct architecture boundaries:
 ### Implementation checklist
 
 - [ ] Add image token/match support in `editor-core` and wasm exports
-- [ ] Add tauri/runtime command for image import + markdown path return
+- [x] Add tauri/runtime command for image import + markdown path return
 - [ ] Add path sanitization and traversal protection tests
-- [ ] Add UI image decoration/widget rendering with cursor-inside raw edit mode
-- [ ] Add UI insert flows (paste/drop/file-picker) wired to import command
+- [x] Add UI image decoration/widget rendering with cursor-inside raw edit mode
+- [x] Add UI insert flows (paste/drop) wired to import command
+- [ ] Add optional UI file-picker image import flow
 - [ ] Add TUI image placeholder rendering (outside caret) and raw markdown editing (inside caret)
 - [ ] Add TUI open-image-at-cursor action
 - [ ] Add UI/TUI tests for image syntax parity and editing transitions

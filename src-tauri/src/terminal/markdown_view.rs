@@ -113,6 +113,12 @@ fn hidden_inline_marker_ranges(
         }
     }
     hidden_ranges.extend(
+        image_hidden_token_ranges(tokens, active_cursor_col)
+            .into_iter()
+            .map(|(from, to)| (from.min(len), to.min(len)))
+            .filter(|(from, to)| to > from),
+    );
+    hidden_ranges.extend(
         wiki_link_hidden_token_ranges(tokens, active_cursor_col)
             .into_iter()
             .map(|(from, to)| (from.min(len), to.min(len)))
@@ -157,6 +163,49 @@ pub fn wiki_link_hidden_token_ranges(
             InlineTokenType::WikiLinkTitle => {
                 if open_idx.is_some() {
                     has_title = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    hidden
+}
+
+pub fn image_hidden_token_ranges(
+    tokens: &[InlineToken],
+    active_cursor_col: Option<usize>,
+) -> Vec<(usize, usize)> {
+    let mut hidden = Vec::new();
+    let mut open_idx: Option<usize> = None;
+    let mut marker_count = 0usize;
+
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            InlineTokenType::ImageMarker => {
+                if open_idx.is_none() {
+                    open_idx = Some(index);
+                    marker_count = 1;
+                    continue;
+                }
+                marker_count += 1;
+                if marker_count >= 3 {
+                    let Some(start_idx) = open_idx.take() else {
+                        continue;
+                    };
+                    let start = tokens[start_idx].from;
+                    let end = token.to;
+                    let cursor_inside = active_cursor_col
+                        .map(|col| col >= start && col <= end)
+                        .unwrap_or(false);
+                    if !cursor_inside {
+                        for image_token in &tokens[start_idx..=index] {
+                            if !matches!(image_token.kind, InlineTokenType::ImageAlt) {
+                                hidden.push((image_token.from, image_token.to));
+                            }
+                        }
+                    }
+                    marker_count = 0;
                 }
             }
             _ => {}
@@ -294,10 +343,22 @@ mod tests {
         let hidden = wiki_link_hidden_token_ranges(&tokens, None);
 
         assert!(!hidden.is_empty());
-        assert!(
-            hidden
-                .iter()
-                .all(|(from, to)| *to <= title.from || *from >= title.to)
-        );
+        assert!(hidden
+            .iter()
+            .all(|(from, to)| *to <= title.from || *from >= title.to));
+    }
+
+    #[test]
+    fn image_hidden_token_ranges_hide_markers_and_src_when_cursor_outside_image() {
+        let line = "![diagram](./assets/plan.png) tail";
+        let hidden = hidden_ranges_for_markdown_line(line, None);
+        assert_eq!(hidden, vec![(0, 2), (9, 29)]);
+    }
+
+    #[test]
+    fn image_hidden_token_ranges_reveal_source_when_cursor_inside_image() {
+        let line = "![diagram](./assets/plan.png) tail";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(12));
+        assert!(hidden.is_empty());
     }
 }

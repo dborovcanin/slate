@@ -1,5 +1,7 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use base64::Engine as _;
 use pbkdf2::pbkdf2_hmac;
 use rusqlite::{Connection, OptionalExtension};
 use sha2::Sha256;
@@ -1206,6 +1208,133 @@ impl Db {
         Ok(())
     }
 
+    pub fn reserve_note_image(
+        &self,
+        note_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+    ) -> Result<String, String> {
+        let conn = self.conn.lock().unwrap();
+        self.ensure_note_allows_image_mutation(&conn, note_id)?;
+        let image_id = ulid::Ulid::new().to_string();
+        let now = now_iso();
+        let effective_mime = select_image_mime_type(file_name, mime_type);
+        conn.execute(
+            "INSERT INTO note_images (
+                id, note_id, file_name, mime_type, image_bytes, byte_len, status, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, NULL, 0, 'pending', ?5, ?6)",
+            rusqlite::params![image_id, note_id, file_name, effective_mime, now, now],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(image_id)
+    }
+
+    pub fn write_note_image_bytes(
+        &self,
+        note_id: &str,
+        image_id: &str,
+        file_name: Option<&str>,
+        mime_type: Option<&str>,
+        image_bytes: &[u8],
+    ) -> Result<(), String> {
+        if image_bytes.is_empty() {
+            return Err("Image payload is empty".to_string());
+        }
+        let conn = self.conn.lock().unwrap();
+        self.ensure_note_allows_image_mutation(&conn, note_id)?;
+        let effective_mime = select_image_mime_type(file_name, mime_type);
+        let now = now_iso();
+        let changed = conn
+            .execute(
+                "UPDATE note_images
+                 SET file_name = COALESCE(?3, file_name),
+                     mime_type = ?4,
+                     image_bytes = ?5,
+                     byte_len = ?6,
+                     status = 'ready',
+                     updated_at = ?7
+                 WHERE id = ?1 AND note_id = ?2",
+                rusqlite::params![
+                    image_id,
+                    note_id,
+                    file_name,
+                    effective_mime,
+                    image_bytes,
+                    image_bytes.len() as i64,
+                    now,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("image placeholder not found".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn delete_note_image(&self, note_id: &str, image_id: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap();
+        let deleted = conn
+            .execute(
+                "DELETE FROM note_images WHERE id = ?1 AND note_id = ?2",
+                rusqlite::params![image_id, note_id],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(deleted > 0)
+    }
+
+    pub fn resolve_note_image_data_url(
+        &self,
+        note_id: &str,
+        image_id: &str,
+    ) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let row = conn
+            .query_row(
+                "SELECT mime_type, image_bytes, status
+                 FROM note_images
+                 WHERE id = ?1 AND note_id = ?2",
+                rusqlite::params![image_id, note_id],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, Option<Vec<u8>>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((mime_type, image_bytes, status)) = row else {
+            return Ok(None);
+        };
+        if status.as_deref().unwrap_or("pending") != "ready" {
+            return Ok(None);
+        }
+        let Some(bytes) = image_bytes else {
+            return Ok(None);
+        };
+        if bytes.is_empty() {
+            return Ok(None);
+        }
+        let mime = normalize_mime_value(mime_type.unwrap_or_else(|| "image/png".to_string()));
+        let encoded = BASE64_STANDARD.encode(bytes);
+        Ok(Some(format!("data:{mime};base64,{encoded}")))
+    }
+
+    fn ensure_note_allows_image_mutation(
+        &self,
+        conn: &Connection,
+        note_id: &str,
+    ) -> Result<(), String> {
+        let security = self
+            .load_note_security(conn, note_id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        if security.access_mode != NoteAccessMode::None && !self.is_note_unlocked(note_id) {
+            return Err("note is locked; unlock first".to_string());
+        }
+        Ok(())
+    }
+
     fn is_note_unlocked(&self, id: &str) -> bool {
         self.note_access.is_unlocked(id)
     }
@@ -1712,6 +1841,46 @@ fn parse_note_access_mode(value: Option<String>) -> NoteAccessMode {
     }
 }
 
+fn normalize_mime_value(value: String) -> String {
+    let trimmed = value.trim().to_ascii_lowercase();
+    if trimmed.starts_with("image/") && trimmed.len() > "image/".len() {
+        trimmed
+    } else {
+        "image/png".to_string()
+    }
+}
+
+fn select_image_mime_type(file_name: Option<&str>, mime_type: Option<&str>) -> String {
+    if let Some(raw) = mime_type {
+        let normalized = normalize_mime_value(raw.to_string());
+        if normalized != "image/png" || raw.trim().eq_ignore_ascii_case("image/png") {
+            return normalized;
+        }
+    }
+    if let Some(name) = file_name {
+        let ext = Path::new(name)
+            .extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or("")
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        let from_ext = match ext.as_str() {
+            "jpg" | "jpeg" => Some("image/jpeg"),
+            "png" => Some("image/png"),
+            "gif" => Some("image/gif"),
+            "webp" => Some("image/webp"),
+            "bmp" => Some("image/bmp"),
+            "svg" | "svgz" => Some("image/svg+xml"),
+            "avif" => Some("image/avif"),
+            _ => None,
+        };
+        if let Some(value) = from_ext {
+            return value.to_string();
+        }
+    }
+    "image/png".to_string()
+}
+
 fn normalize_stored_title(value: Option<String>) -> Option<String> {
     value
         .as_deref()
@@ -2112,6 +2281,81 @@ mod tests {
         assert!(db.delete_note("n1", None).expect("delete succeeds"));
         assert!(!db.delete_note("n1", None).expect("second delete succeeds"));
         assert!(db.get_note("n1").expect("lookup succeeds").is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn note_image_round_trip_uses_data_url() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "image note").expect("seed note");
+
+        let image_id = db
+            .reserve_note_image("n1", Some("clip.png"), Some("image/png"))
+            .expect("reserve image");
+        db.write_note_image_bytes(
+            "n1",
+            &image_id,
+            Some("clip.png"),
+            Some("image/png"),
+            b"hello-image",
+        )
+        .expect("write image bytes");
+        let resolved = db
+            .resolve_note_image_data_url("n1", &image_id)
+            .expect("resolve")
+            .expect("exists");
+        assert!(resolved.starts_with("data:image/png;base64,"));
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn note_image_write_requires_reserved_placeholder() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "image note").expect("seed note");
+
+        let err = db
+            .write_note_image_bytes(
+                "n1",
+                "missing-image-id",
+                Some("clip.png"),
+                Some("image/png"),
+                b"hello-image",
+            )
+            .expect_err("missing placeholder should fail");
+        assert!(err.contains("placeholder"));
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn note_image_delete_clears_resolve() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "image note").expect("seed note");
+
+        let image_id = db
+            .reserve_note_image("n1", Some("clip.png"), Some("image/png"))
+            .expect("reserve image");
+        db.write_note_image_bytes("n1", &image_id, None, None, b"hello-image")
+            .expect("write image bytes");
+        assert!(db
+            .resolve_note_image_data_url("n1", &image_id)
+            .expect("resolve")
+            .is_some());
+        assert!(db
+            .delete_note_image("n1", &image_id)
+            .expect("delete image row"));
+        assert!(db
+            .resolve_note_image_data_url("n1", &image_id)
+            .expect("resolve after delete")
+            .is_none());
 
         drop(db);
         let _ = fs::remove_file(path);
@@ -3137,10 +3381,8 @@ mod tests {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
 
-        db.save_note("01HX4VHR_OLD", "old")
-            .expect("seed old note");
-        db.save_note("01HX4VHR_NEW", "new")
-            .expect("seed new note");
+        db.save_note("01HX4VHR_OLD", "old").expect("seed old note");
+        db.save_note("01HX4VHR_NEW", "new").expect("seed new note");
         db.save_note("01HX4VHR_OLD", "old again")
             .expect("bump old note to newest");
 
@@ -3174,11 +3416,17 @@ mod tests {
 
         assert_eq!(resolved.len(), 3);
         assert_eq!(resolved[0].0, "01HX4VHS");
-        assert_eq!(resolved[0].1.as_ref().map(|n| n.id.as_str()), Some("01HX4VHS_BBB"));
+        assert_eq!(
+            resolved[0].1.as_ref().map(|n| n.id.as_str()),
+            Some("01HX4VHS_BBB")
+        );
         assert_eq!(resolved[1].0, "MISSING00");
         assert!(resolved[1].1.is_none());
         assert_eq!(resolved[2].0, "01HX4VHR");
-        assert_eq!(resolved[2].1.as_ref().map(|n| n.id.as_str()), Some("01HX4VHR_AAA"));
+        assert_eq!(
+            resolved[2].1.as_ref().map(|n| n.id.as_str()),
+            Some("01HX4VHR_AAA")
+        );
 
         drop(db);
         let _ = fs::remove_file(path);

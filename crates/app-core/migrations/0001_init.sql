@@ -144,3 +144,19 @@ CREATE TABLE IF NOT EXISTS ingest_offsets (
     last_uid INTEGER NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS note_images (
+    id TEXT PRIMARY KEY,
+    note_id TEXT NOT NULL,
+    file_name TEXT,
+    mime_type TEXT NOT NULL,
+    image_bytes BLOB,
+    byte_len INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_images_note_updated
+    ON note_images(note_id, updated_at DESC);

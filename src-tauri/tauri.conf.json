@@ -10,6 +10,17 @@
   },
   "app": {
     "withGlobalTauri": false,
+    "security": {
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$HOME/**",
+          "$APPDATA/**",
+          "$APPLOCALDATA/**",
+          "$TEMP/**"
+        ]
+      }
+    },
     "windows": [
       {
         "label": "main",

@@ -73,7 +73,7 @@ fn write_command_syncs_markdown_file_backed_note() {
         note_id: Some(note_id.clone()),
         list_only: false,
     };
-    let (app, _) = TerminalApp::new_with_startup_metrics(
+    let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
         true,
@@ -1359,7 +1359,7 @@ fn startup_with_wiki_links_primes_resolution_for_first_render() {
         note_id: Some("n-active".to_string()),
         list_only: false,
     };
-    let (mut app, _) = TerminalApp::new_with_startup_metrics(
+    let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
         true,

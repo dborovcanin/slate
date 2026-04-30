@@ -229,11 +229,16 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::Paste(text) => {
-                self.insert_paste(&text);
-                // Pasted content should stay as-is; skip per-keystroke
-                // autoformat pass that would otherwise scan the full document.
-                should_autoformat = false;
-                refresh_variable_popup = true;
+                if self.try_import_image_paste(db, &text)? {
+                    should_autoformat = false;
+                    refresh_variable_popup = true;
+                } else {
+                    self.insert_paste(&text);
+                    // Pasted content should stay as-is; skip per-keystroke
+                    // autoformat pass that would otherwise scan the full document.
+                    should_autoformat = false;
+                    refresh_variable_popup = true;
+                }
             }
             Key::Char(ch) => {
                 if ch == '|' && self.try_table_pipe_insert_column_rule() {
@@ -244,7 +249,8 @@ impl TerminalApp {
                     should_autoformat = true;
                     // Auto-close [[ → [[]] and open wiki-link picker.
                     if ch == '[' && self.cursor_col >= 2 {
-                        let prev = self.current_line()
+                        let prev = self
+                            .current_line()
                             .chars()
                             .nth(self.cursor_col.saturating_sub(2));
                         if prev == Some('[') {

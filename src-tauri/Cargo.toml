@@ -14,7 +14,7 @@ path = "src/main.rs"
 [dependencies]
 app-core = { path = "../crates/app-core" }
 editor-core = { path = "../crates/editor-core" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["protocol-asset"] }
 ulid = "1"
 fend-core = "1"
 regex = "1"
