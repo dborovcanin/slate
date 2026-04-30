@@ -472,3 +472,103 @@ Parser scans for `[[...]]`, validates structure `shortid|title` or `shortid|titl
 - [x] TUI: `Ctrl+]` navigation keybind (insert + normal mode)
 - [x] TUI: wiki-link rendering (valid / broken visual styles)
 - [x] Tests: tokenizer round-trips, resolver query, broken-link path
+
+## Image Support Plan
+
+### Goal
+
+Add markdown image support with correct architecture boundaries:
+
+- UI renders inline images in-editor.
+- TUI preserves editability and shows stable, useful placeholders.
+- Shared core owns syntax/token semantics.
+- Storage/runtime owns asset path policy and import behavior.
+
+### Supported syntax (Phase 1)
+
+```
+![alt text](./assets/image.png)
+![alt text](../images/photo.jpg)
+```
+
+- No HTML `<img>` support in Phase 1.
+- No resizing/caption directives in Phase 1.
+- Remote URLs are optional and can be gated by config later.
+
+### Architecture ownership
+
+**editor-core (`markdown_tokens.rs`, wasm exports)**
+
+- Add image markdown token coverage (`![alt](src)`) as first-class inline syntax.
+- Expose structured image match/range helpers for both UI and TUI.
+- Keep it pure: no filesystem IO in core.
+
+**app-core/runtime (`crates/app-core`, tauri commands)**
+
+- Add image import command:
+  - copy selected file into note-scoped or vault-scoped assets directory,
+  - return normalized markdown path to insert.
+- Add path normalization and safety checks (no traversal outside allowed roots).
+- Keep note body markdown-only; store image refs as text links.
+
+**UI (`src/editor/`)**
+
+- Render image widget/decoration for valid local image paths when cursor is outside token.
+- Keep raw markdown visible/editable when cursor is inside image token.
+- Add insert flow (paste/drop/select file) that calls backend import command and inserts markdown.
+
+**TUI (`src-tauri/src/terminal/`)**
+
+- Keep markdown text editable as-is.
+- Outside-caret display mode: replace with compact placeholder, for example:
+  - `[img] alt text (image.png)`
+- Add open action for image at cursor (external viewer command).
+- Do not attempt true terminal inline bitmap rendering in Phase 1.
+
+### Performance constraints
+
+- Resolve/render images only in viewport lines.
+- Cache per-line parsed image ranges similarly to existing wiki-link line caches.
+- UI image decode/loading must be lazy and bounded (no full-document eager loads).
+- Keep large-note startup behavior stable; avoid scanning entire note for image metadata upfront.
+
+### Safety and path policy
+
+- Imported files are copied (not referenced in-place) by default.
+- Normalize and sanitize filenames.
+- Reject unsafe paths and traversal attempts.
+- Preserve relative markdown links so export/move workflows remain predictable.
+
+### Delivery phases
+
+1. **Shared-core syntax + tests**
+- Add image token/match parsing and wasm plumbing.
+- Add tokenizer/match tests (valid/invalid nesting/boundary cases).
+
+2. **Runtime import pipeline**
+- Add tauri command to import/copy image and return markdown path.
+- Add runtime tests for copy + path normalization + failure handling.
+
+3. **UI rendering and insert UX**
+- Add decoration/widget behavior + cursor-inside edit mode.
+- Add tests for render-vs-edit transitions and insertion behavior.
+
+4. **TUI placeholder + open action**
+- Add placeholder rendering and open-at-cursor action.
+- Add tests for placeholder behavior and cursor-inside raw markdown visibility.
+
+5. **Parity/perf hardening**
+- Add UI/TUI parity fixtures for shared token semantics.
+- Add targeted performance checks on notes with many image links.
+
+### Implementation checklist
+
+- [ ] Add image token/match support in `editor-core` and wasm exports
+- [ ] Add tauri/runtime command for image import + markdown path return
+- [ ] Add path sanitization and traversal protection tests
+- [ ] Add UI image decoration/widget rendering with cursor-inside raw edit mode
+- [ ] Add UI insert flows (paste/drop/file-picker) wired to import command
+- [ ] Add TUI image placeholder rendering (outside caret) and raw markdown editing (inside caret)
+- [ ] Add TUI open-image-at-cursor action
+- [ ] Add UI/TUI tests for image syntax parity and editing transitions
+- [ ] Add perf checks for notes containing many image references

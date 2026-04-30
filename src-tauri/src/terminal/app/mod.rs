@@ -40,7 +40,8 @@ const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
 const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
 const CALC_VIEWPORT_PREFETCH_MULTIPLIER: usize = 2;
 const VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS: usize = 3;
-const COMMAND_COMPLETION_MAX_OPTIONS: usize = 8;
+const WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE: usize = 16;
+const COMMAND_COMPLETION_MAX_OPTIONS: usize = 16;
 const CONTENT_SEARCH_DEBOUNCE_MS: u64 = 120;
 const CONTENT_SEARCH_MAX_DETACHED_WORKERS: usize = 2;
 const WIKI_LINK_RENDER_CACHE_MAX_ENTRIES: usize = 2048;
@@ -510,10 +511,16 @@ impl TerminalApp {
         active_note.body = String::new();
         let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
 
-        // Lazy-load switcher note metadata on demand (open/save) so startup
-        // does not scan all notes before first draw.
-        let switcher_items = Vec::new();
-        let loading_switcher = Duration::from_millis(0);
+        // Lazy-load switcher note metadata on demand, but prime it when the
+        // opened note already contains wiki-link syntax so first paint can
+        // resolve link titles instead of showing broken placeholders.
+        let switcher_begin = Instant::now();
+        let switcher_items = if lines.iter().any(|line| line.contains("[[")) {
+            switcher::load_note_meta(db, Some(&active_note.id))?
+        } else {
+            Vec::new()
+        };
+        let loading_switcher = switcher_begin.elapsed();
 
         let calc_engine = CalcEngine::new();
         let note_math_enabled = active_note.modules.math;

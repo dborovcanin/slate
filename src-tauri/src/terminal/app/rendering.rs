@@ -4,6 +4,7 @@ use super::{
     formula_marker_token, goto, line_display_cols, min, pad_right, table_cell_info_at_char,
     viewport_col_for_display_col, AnsiStyle, DatePickerAction, TableFormulaSegment, TerminalApp,
     UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER, OVERFLOW_RIGHT_MARKER, TITLE_ROW,
+    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::render;
 use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines};
@@ -548,7 +549,10 @@ impl TerminalApp {
         if available_rows < 3 {
             return;
         }
-        let visible_limit = available_rows.saturating_sub(2).max(1);
+        let visible_limit = available_rows
+            .saturating_sub(2)
+            .max(1)
+            .min(WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
         let (start, end) = self.wiki_link_visible_window(visible_limit);
         let visible_count = end.saturating_sub(start);
         if visible_count == 0 {

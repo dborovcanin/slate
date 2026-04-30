@@ -73,7 +73,7 @@ fn write_command_syncs_markdown_file_backed_note() {
         note_id: Some(note_id.clone()),
         list_only: false,
     };
-    let (mut app, _) = TerminalApp::new_with_startup_metrics(
+    let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
         true,
@@ -1335,10 +1335,50 @@ fn wiki_link_autocomplete_selection_can_move_and_apply_beyond_first_sixteen_resu
         run_keys(&mut app, &db, &[Key::ArrowDown]);
     }
     assert_eq!(app.wiki_link_autocomplete_popup.selected_index, 20);
+    assert_eq!(app.filtered_wiki_link_suggestions().len(), 8);
 
     run_keys(&mut app, &db, &[Key::Tab]);
     assert_eq!(app.current_line(), "[[A0000020]]");
     assert_eq!(app.status, "link: Note 20");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn startup_with_wiki_links_primes_resolution_for_first_render() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db opens");
+    db.save_note("n-active", "[[01HX4VHR]]")
+        .expect("active note saved");
+    db.save_note("01HX4VHR9ABCDEFGHJKMNPQRS", "Destination Title\nBody")
+        .expect("target note saved");
+    let opts = TerminalOptions {
+        create_new: false,
+        note_id: Some("n-active".to_string()),
+        list_only: false,
+    };
+    let (mut app, _) = TerminalApp::new_with_startup_metrics(
+        &db,
+        &opts,
+        true,
+        true,
+        false,
+        true,
+        true,
+        3,
+        crate::terminal::render::RenderPalette::default(),
+        "%Y-%m-%d".to_string(),
+        "%Y-%m-%d %H:%M".to_string(),
+    )
+    .expect("terminal app");
+
+    let entry = app
+        .wiki_link_prefix_index
+        .get("01HX4VHR")
+        .expect("short id should be resolved on startup");
+    assert_eq!(entry.title, "Destination Title");
 
     drop(app);
     drop(db);

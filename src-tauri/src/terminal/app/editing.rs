@@ -8,6 +8,7 @@ use super::{
     CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER,
     EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT,
     LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, join_lines, remove_char_at, viewport_col_for_display_col,
@@ -2475,7 +2476,7 @@ impl TerminalApp {
     }
 
     pub(super) fn filtered_wiki_link_suggestions(&self) -> Vec<&WikiLinkSuggestion> {
-        let (start, end) = self.wiki_link_visible_window(16);
+        let (start, end) = self.wiki_link_visible_window(WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
         self.wiki_link_autocomplete_popup
             .suggestions
             .iter()
@@ -2672,7 +2673,7 @@ impl TerminalApp {
         if suggestions.is_empty() {
             return Some(format!("[[{}… (no matches)", self.wiki_link_autocomplete_popup.query));
         }
-        let (start, _) = self.wiki_link_visible_window(16);
+        let (start, _) = self.wiki_link_visible_window(WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
         let selected = self
             .wiki_link_autocomplete_popup
             .selected_index
