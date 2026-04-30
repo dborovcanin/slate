@@ -118,18 +118,26 @@ function variableCompletionSource(
   };
 }
 
+export function makeVariableCompletionSource(
+  options: VariableAutocompleteOptions = {},
+): CompletionSource | null {
+  const enabled = options.enabled ?? true;
+  if (!enabled) return null;
+  const minChars = Math.max(1, Math.min(64, options.minChars ?? 3));
+  const maxSuggestions = Math.max(1, Math.min(32, options.maxSuggestions ?? 8));
+  return variableCompletionSource(minChars, maxSuggestions);
+}
+
 export function variableAutocompleteExtensions(
   options: VariableAutocompleteOptions = {},
 ) {
-  const enabled = options.enabled ?? true;
-  if (!enabled) return [];
+  const source = makeVariableCompletionSource(options);
+  if (!source) return [];
 
-  const minChars = Math.max(1, Math.min(64, options.minChars ?? 3));
   const maxSuggestions = Math.max(1, Math.min(32, options.maxSuggestions ?? 8));
-
   return [
     autocompletion({
-      override: [variableCompletionSource(minChars, maxSuggestions)],
+      override: [source],
       activateOnTyping: true,
       closeOnBlur: true,
       defaultKeymap: true,

@@ -26,6 +26,11 @@ pub enum InlineTokenType {
     LinkText,
     LinkUrl,
     LinkMarker,
+    WikiLinkMarker,
+    WikiLinkId,
+    WikiLinkSep,
+    WikiLinkTitle,
+    WikiLinkAnchor,
 }
 
 impl InlineTokenType {
@@ -39,6 +44,11 @@ impl InlineTokenType {
             InlineTokenType::LinkText => "link-text",
             InlineTokenType::LinkUrl => "link-url",
             InlineTokenType::LinkMarker => "link-marker",
+            InlineTokenType::WikiLinkMarker => "wiki-link-marker",
+            InlineTokenType::WikiLinkId => "wiki-link-id",
+            InlineTokenType::WikiLinkSep => "wiki-link-sep",
+            InlineTokenType::WikiLinkTitle => "wiki-link-title",
+            InlineTokenType::WikiLinkAnchor => "wiki-link-anchor",
         }
     }
 }
@@ -56,6 +66,16 @@ pub struct InlineToken {
 pub struct InlineMarkerComponentRange {
     pub from: usize,
     pub to: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WikiLinkMatch {
+    pub from: usize,
+    pub to: usize,
+    pub short_id: String,
+    pub heading: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,7 +485,7 @@ fn is_run(chars: &[char], pos: usize, marker: char, count: usize) -> bool {
 pub fn is_inline_marker_token_kind(kind: InlineTokenType) -> bool {
     matches!(
         kind,
-        InlineTokenType::CodeMarker | InlineTokenType::LinkMarker
+        InlineTokenType::CodeMarker | InlineTokenType::LinkMarker | InlineTokenType::WikiLinkMarker
     )
 }
 
@@ -577,6 +597,62 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
             protect(&mut protected, open, close + tick_count);
             i = close + tick_count;
         }
+    }
+
+    // [[shortid]] | [[shortid#heading]] | [[shortid|alt-text]] | [[shortid#heading|alt-text]]
+    // short ID must be exactly 8 alphanumeric chars (ULID prefix); inserted only via autocomplete picker.
+    // The #heading and |alt-text parts are both optional.
+    i = 0;
+    while i + 5 < len {
+        if chars[i] != '[' || chars[i + 1] != '[' || overlaps(&protected, i, i + 2) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i + 2;
+        while j + 1 < len && chars[j] != '\n' && !(chars[j] == ']' && chars[j + 1] == ']') {
+            j += 1;
+        }
+        if j + 1 >= len || chars[j] != ']' || chars[j + 1] != ']' {
+            i += 1;
+            continue;
+        }
+        let end = j + 2;
+        let inner = &chars[i + 2..j];
+
+        // Split on optional '|' to separate id_part from alt-text.
+        let pipe_rel = inner.iter().position(|&c| c == '|');
+        let id_part = if let Some(p) = pipe_rel { &inner[..p] } else { &inner[..] };
+
+        // Split id_part on optional '#' to separate short_id from heading anchor.
+        let (short_id_chars, has_anchor) = if let Some(hash_rel) = id_part.iter().position(|&c| c == '#') {
+            (&id_part[..hash_rel], true)
+        } else {
+            (id_part, false)
+        };
+
+        if short_id_chars.len() != 8 || !short_id_chars.iter().all(|c| c.is_ascii_alphanumeric()) {
+            i += 1;
+            continue;
+        }
+
+        let id_end = i + 2 + short_id_chars.len();
+        let anchor_end = i + 2 + id_part.len();
+
+        push_inline_token(&mut tokens, start, start + 2, InlineTokenType::WikiLinkMarker);
+        push_inline_token(&mut tokens, start + 2, id_end, InlineTokenType::WikiLinkId);
+        if has_anchor {
+            push_inline_token(&mut tokens, id_end, anchor_end, InlineTokenType::WikiLinkAnchor);
+        }
+        if let Some(pipe_rel) = pipe_rel {
+            let pipe_abs = i + 2 + pipe_rel;
+            let title_start = pipe_abs + 1;
+            push_inline_token(&mut tokens, pipe_abs, title_start, InlineTokenType::WikiLinkSep);
+            push_inline_token(&mut tokens, title_start, j, InlineTokenType::WikiLinkTitle);
+        }
+        push_inline_token(&mut tokens, j, end, InlineTokenType::WikiLinkMarker);
+        protect(&mut protected, start, end);
+        i = end;
     }
 
     // [text](url)
@@ -736,6 +812,68 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
 
     tokens.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
     tokens
+}
+
+pub fn wiki_link_matches_from_tokens(text: &str, tokens: &[InlineToken]) -> Vec<WikiLinkMatch> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut open_idx: Option<usize> = None;
+    let mut short_id: Option<String> = None;
+    let mut heading: Option<String> = None;
+    let mut title: Option<String> = None;
+
+    for (idx, token) in tokens.iter().enumerate() {
+        match token.kind {
+            InlineTokenType::WikiLinkMarker => {
+                if open_idx.is_none() {
+                    open_idx = Some(idx);
+                    short_id = None;
+                    heading = None;
+                    title = None;
+                    continue;
+                }
+                let Some(start_token_idx) = open_idx.take() else {
+                    continue;
+                };
+                let start_token = &tokens[start_token_idx];
+                let Some(id) = short_id.take() else {
+                    continue;
+                };
+                out.push(WikiLinkMatch {
+                    from: start_token.from,
+                    to: token.to,
+                    short_id: id,
+                    heading: heading.take(),
+                    title: title.take(),
+                });
+            }
+            InlineTokenType::WikiLinkId => {
+                short_id = Some(chars[token.from..token.to].iter().collect());
+            }
+            InlineTokenType::WikiLinkAnchor => {
+                let anchor: String = chars[token.from..token.to].iter().collect();
+                heading = anchor.strip_prefix('#').map(|value| value.to_string());
+            }
+            InlineTokenType::WikiLinkTitle => {
+                title = Some(chars[token.from..token.to].iter().collect());
+            }
+            _ => {}
+        }
+    }
+
+    out
+}
+
+pub fn find_wiki_link_matches(text: &str) -> Vec<WikiLinkMatch> {
+    let tokens = tokenize_inline_markdown(text);
+    wiki_link_matches_from_tokens(text, &tokens)
+}
+
+pub fn wiki_link_at_cursor(text: &str, cursor_col: usize) -> Option<WikiLinkMatch> {
+    let links = find_wiki_link_matches(text);
+    links
+        .into_iter()
+        .find(|entry| cursor_col >= entry.from && cursor_col <= entry.to)
 }
 
 fn marker_component_range_for_token_index(
@@ -1194,5 +1332,117 @@ mod tests {
         assert!(analyzed.lines[1].in_code_block);
         assert!(!analyzed.lines[3].in_code_block);
         assert!(!analyzed.final_in_code_block);
+    }
+
+    #[test]
+    fn wiki_link_basic() {
+        let text = "see [[01HX4VHR|My Note]] here";
+        let tokens = tokenize_inline_markdown(text);
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(kinds.contains(&"wiki-link-marker"));
+        assert!(kinds.contains(&"wiki-link-id"));
+        assert!(kinds.contains(&"wiki-link-sep"));
+        assert!(kinds.contains(&"wiki-link-title"));
+        let id_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-id").unwrap();
+        let title_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-title").unwrap();
+        assert_eq!(&text[id_tok.from..id_tok.to], "01HX4VHR");
+        assert_eq!(&text[title_tok.from..title_tok.to], "My Note");
+    }
+
+    #[test]
+    fn wiki_link_with_anchor() {
+        let text = "[[01HX4VHR#The Beginning|Intro]]";
+        let tokens = tokenize_inline_markdown(text);
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(kinds.contains(&"wiki-link-title"));
+        assert!(kinds.contains(&"wiki-link-anchor"));
+        let title_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-title").unwrap();
+        let anchor_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-anchor").unwrap();
+        assert_eq!(&text[title_tok.from..title_tok.to], "Intro");
+        assert_eq!(&text[anchor_tok.from..anchor_tok.to], "#The Beginning");
+    }
+
+    #[test]
+    fn wiki_link_invalid_id_not_parsed() {
+        // ID with spaces (not alphanumeric)
+        let tokens = tokenize_inline_markdown("[[not vali|Title]]");
+        assert!(!tokens.iter().any(|t| t.kind.as_str() == "wiki-link-id"));
+        // wrong length (too short)
+        let tokens = tokenize_inline_markdown("[[ABC|Title]]");
+        assert!(!tokens.iter().any(|t| t.kind.as_str() == "wiki-link-id"));
+        // wrong length (too long)
+        let tokens = tokenize_inline_markdown("[[01HX4VHRXX|Title]]");
+        assert!(!tokens.iter().any(|t| t.kind.as_str() == "wiki-link-id"));
+    }
+
+    #[test]
+    fn wiki_link_no_pipe() {
+        let text = "[[01HX4VHR]]";
+        let tokens = tokenize_inline_markdown(text);
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(kinds.contains(&"wiki-link-id"));
+        assert!(!kinds.contains(&"wiki-link-sep"));
+        assert!(!kinds.contains(&"wiki-link-title"));
+        assert!(!kinds.contains(&"wiki-link-anchor"));
+        let id_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-id").unwrap();
+        assert_eq!(&text[id_tok.from..id_tok.to], "01HX4VHR");
+    }
+
+    #[test]
+    fn wiki_link_heading_no_pipe() {
+        let text = "[[01HX4VHR#My Section]]";
+        let tokens = tokenize_inline_markdown(text);
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(kinds.contains(&"wiki-link-id"));
+        assert!(kinds.contains(&"wiki-link-anchor"));
+        assert!(!kinds.contains(&"wiki-link-sep"));
+        assert!(!kinds.contains(&"wiki-link-title"));
+        let id_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-id").unwrap();
+        let anchor_tok = tokens.iter().find(|t| t.kind.as_str() == "wiki-link-anchor").unwrap();
+        assert_eq!(&text[id_tok.from..id_tok.to], "01HX4VHR");
+        assert_eq!(&text[anchor_tok.from..anchor_tok.to], "#My Section");
+    }
+
+    #[test]
+    fn wiki_link_does_not_interfere_with_markdown_link() {
+        let text = "[normal](http://example.com) [[01HX4VHR|My Note]]";
+        let tokens = tokenize_inline_markdown(text);
+        let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+        assert!(kinds.contains(&"link-text"));
+        assert!(kinds.contains(&"link-url"));
+        assert!(kinds.contains(&"wiki-link-title"));
+    }
+
+    #[test]
+    fn wiki_link_protected_from_inner_formatting() {
+        // bold markers inside a wiki link should not produce strong tokens
+        let text = "[[01HX4VHR|**Note**]]";
+        let tokens = tokenize_inline_markdown(text);
+        assert!(!tokens.iter().any(|t| t.kind.as_str() == "strong"));
+        assert!(tokens.iter().any(|t| t.kind.as_str() == "wiki-link-title"));
+    }
+
+    #[test]
+    fn find_wiki_link_matches_extracts_parts() {
+        let text = "A [[01HX4VHR#Intro|Alt]] and [[01HX4VHS]]";
+        let links = find_wiki_link_matches(text);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].short_id, "01HX4VHR");
+        assert_eq!(links[0].heading.as_deref(), Some("Intro"));
+        assert_eq!(links[0].title.as_deref(), Some("Alt"));
+        assert_eq!(links[1].short_id, "01HX4VHS");
+        assert_eq!(links[1].heading, None);
+        assert_eq!(links[1].title, None);
+    }
+
+    #[test]
+    fn wiki_link_at_cursor_finds_link_at_boundaries() {
+        let text = "[[01HX4VHR#Intro]] tail";
+        let start = 0usize;
+        let end = "[[01HX4VHR#Intro]]".chars().count();
+        assert!(wiki_link_at_cursor(text, start).is_some());
+        assert!(wiki_link_at_cursor(text, 6).is_some());
+        assert!(wiki_link_at_cursor(text, end).is_some());
+        assert!(wiki_link_at_cursor(text, end + 1).is_none());
     }
 }

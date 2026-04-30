@@ -409,3 +409,66 @@ Acceptance criteria:
 - [ ] Improve encrypted notes (per-note passphrase, locked from search until unlock)
 - [ ] Vault mode for hidden tagged notes
 - [x] Enrich table with `(1,2)` access for better experience
+
+## Wiki Links
+
+### Goal
+
+Obsidian-style inter-note links: `[[shortid|Note Title]]` and `[[shortid|Note Title#Heading Text]]`.
+
+Navigation opens the target note; heading variant scrolls to the matched heading after load.
+
+### Stored format
+
+```
+[[a3f8b2c1|Note Title]]
+[[a3f8b2c1|Note Title#Heading Text]]
+```
+
+- Short ID = first 8 chars of the note UUID (first hex segment).
+- Display title and heading fragment are cosmetic — resolution always goes through the ID.
+- Broken links (deleted note) render visually distinct; no silent fallback.
+
+### Layers
+
+**editor-core (`markdown_tokens.rs`)**
+
+New token types: `WikiLinkMarker`, `WikiLinkId`, `WikiLinkSep`, `WikiLinkTitle`, `WikiLinkAnchor`.
+
+Parser scans for `[[...]]`, validates structure `shortid|title` or `shortid|title#anchor`, emits tokens. Purely syntactic — no DB access. Must not conflict with `[text](url)` parser (different opening character sequence).
+
+**app-core (`storage/sqlite.rs`)**
+
+- `resolve_wiki_link(short_id: &str) -> Option<NoteSummary>` — `WHERE id LIKE '{short_id}%'`
+- Autocomplete reuses existing note list/search query.
+
+**Tauri commands**
+
+- `resolve_wiki_link(short_id)` → note id + title, or not-found.
+- Navigation command opens note by full ID (already exists).
+
+**UI (`src/editor/`)**
+
+- On `[[` typed: auto-insert `]]`, position cursor inside, open inline note picker.
+- Picker filters by title as user types; on select inserts `[[shortid|Title]]` replacing the `[[]]` placeholder.
+- Decoration: dim `[[`, `shortid|`, `]]`; style title as internal link. Broken link gets distinct style.
+- Click handler: resolve short ID → open note; if anchor present, scroll to heading after load.
+
+**TUI (`src-tauri/terminal/`)**
+
+- On `[[` typed: auto-insert `]]`, open inline autocomplete (same pattern as variable autocomplete).
+- Navigation keybind on wiki-link token: `gf` (go to file, vim convention).
+- Broken links rendered with distinct style (e.g. strikethrough or dim-red).
+
+### Implementation checklist
+
+- [x] Add `WikiLink*` token types and parser to `markdown_tokens.rs`
+- [x] Add `resolve_wiki_link` query to `app-core/storage/sqlite.rs`
+- [x] Add `resolve_wiki_link` Tauri command
+- [x] UI: `[[` auto-close + inline note picker
+- [x] UI: wiki-link decoration (valid / broken)
+- [x] UI: click navigation (heading scroll is follow-up)
+- [x] TUI: `[[` auto-close + inline autocomplete (popup, Tab/Enter/Esc)
+- [x] TUI: `Ctrl+]` navigation keybind (insert + normal mode)
+- [x] TUI: wiki-link rendering (valid / broken visual styles)
+- [x] Tests: tokenizer round-trips, resolver query, broken-link path

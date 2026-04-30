@@ -16,6 +16,84 @@ use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
+    fn wiki_link_cache_entry(&mut self, short_id: &str) -> (String, bool) {
+        if let Some(entry) = self.wiki_link_render_cache.get(short_id) {
+            if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_RENDER_CACHE_TTL_MS
+            {
+                return (entry.display.clone(), entry.broken);
+            }
+            self.wiki_link_render_cache.remove(short_id);
+        }
+        let (display, broken) = if let Some(entry) = self.wiki_link_prefix_index.get(short_id) {
+            let title = if entry.title.trim().is_empty() {
+                "Untitled"
+            } else {
+                entry.title.as_str()
+            };
+            (title.to_string(), false)
+        } else {
+            ("?".to_string(), true)
+        };
+
+        self.wiki_link_render_cache.insert(
+            short_id.to_string(),
+            super::WikiLinkRenderCacheEntry {
+                display: display.clone(),
+                broken,
+                cached_at: std::time::Instant::now(),
+            },
+        );
+
+        while self.wiki_link_render_cache.len() > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES {
+            let Some(oldest_key) = self
+                .wiki_link_render_cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.cached_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            self.wiki_link_render_cache.remove(oldest_key.as_str());
+        }
+
+        (display, broken)
+    }
+
+    fn render_wiki_link_display_line(&mut self, line_text: &str) -> String {
+        let links = crate::editor_core::markdown_tokens::find_wiki_link_matches(line_text);
+        if links.is_empty() {
+            return line_text.to_string();
+        }
+
+        let chars: Vec<char> = line_text.chars().collect();
+        let mut out = String::with_capacity(line_text.len() + 16);
+        let mut cursor = 0usize;
+
+        for link in links {
+            if link.title.is_some() || link.from < cursor || link.to > chars.len() {
+                continue;
+            }
+            out.extend(chars[cursor..link.from].iter());
+            let (base, broken) = self.wiki_link_cache_entry(&link.short_id);
+            if broken {
+                out.push('?');
+            } else {
+                out.push_str(base.as_str());
+            }
+            if let Some(heading) = link.heading.as_deref().filter(|value| !value.is_empty()) {
+                out.push('#');
+                out.push_str(heading);
+            }
+            cursor = link.to;
+        }
+
+        if cursor == 0 {
+            return line_text.to_string();
+        }
+        out.extend(chars[cursor..].iter());
+        out
+    }
+
     pub(super) fn update_command_status(&mut self) {
         let hint = if self.command_completion.visible {
             self.command_completion
@@ -319,6 +397,68 @@ impl TerminalApp {
         }
     }
 
+    pub(super) fn draw_wiki_link_autocomplete_popup(
+        &self,
+        buf: &mut String,
+        rows: usize,
+        cols: usize,
+    ) {
+        let popup = &self.wiki_link_autocomplete_popup;
+        if self.mode != UiMode::Editor || !popup.visible || cols == 0 || rows <= EDITOR_TOP_ROW {
+            return;
+        }
+        let suggestions: Vec<String> = self
+            .filtered_wiki_link_suggestions()
+            .into_iter()
+            .map(|s| s.title.clone())
+            .collect();
+        if suggestions.is_empty() {
+            return;
+        }
+        let max_editor_row = rows.saturating_sub(1);
+        let available_rows = max_editor_row.saturating_sub(EDITOR_TOP_ROW) + 1;
+        if available_rows < 3 {
+            return;
+        }
+        let visible_count = suggestions.len().min(available_rows.saturating_sub(2).max(1));
+        let selected_index = popup.selected_index.min(visible_count.saturating_sub(1));
+        let inner_width = suggestions
+            .iter()
+            .take(visible_count)
+            .map(|t| t.chars().count() + 2)
+            .max()
+            .unwrap_or(1)
+            .min(cols.saturating_sub(2).max(1));
+        let box_width = (inner_width + 2).min(cols.max(1));
+        let box_height = visible_count + 2;
+        let mut x = popup.anchor_col.min(cols.max(1));
+        if x + box_width > cols + 1 {
+            x = cols.saturating_sub(box_width).saturating_add(1).max(1);
+        }
+        let preferred_top = popup.anchor_row.saturating_add(1);
+        let mut y = preferred_top;
+        if y + box_height > max_editor_row + 1 {
+            y = popup.anchor_row.saturating_sub(box_height.saturating_sub(1));
+        }
+        y = y.max(EDITOR_TOP_ROW).min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
+        let border_style = AnsiStyle { fg: Some(self.render_palette.code_type), ..Default::default() };
+        let row_style = AnsiStyle { fg: Some(self.render_palette.code_string), ..Default::default() };
+        let selected_bg = self.render_palette.primary();
+        let selected_style = AnsiStyle {
+            fg: Some(contrast_fg_for_bg(selected_bg)),
+            bg: Some(selected_bg),
+            bold: true,
+            ..Default::default()
+        };
+        draw_box_border(buf, y, x, box_width, box_height, border_style);
+        for (idx, title) in suggestions.iter().take(visible_count).enumerate() {
+            let row = y + 1 + idx;
+            let text = format!(" {title}");
+            let style = if idx == selected_index { selected_style } else { row_style };
+            draw_row_at_styled(buf, row, x + 1, box_width.saturating_sub(2), &text, style);
+        }
+    }
+
     fn parse_goto_sequence(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
         if bytes.get(start).copied()? != 0x1b || bytes.get(start + 1).copied()? != b'[' {
             return None;
@@ -461,14 +601,18 @@ impl TerminalApp {
                 let line_no = virtual_line + 1;
                 let available = cols.saturating_sub(gutter_width);
                 let is_cursor_line = line_idx == self.cursor_line;
-                let mut calc_ghost = self.calc.results.get(line_idx).and_then(|r| r.as_deref());
+                let mut calc_ghost = self
+                    .calc
+                    .results
+                    .get(line_idx)
+                    .and_then(|r| r.as_ref().map(|value| value.to_string()));
                 let mut calc_ghost_override: Option<String> = None;
                 let mut reminder_ghost_override: Option<String> = None;
                 let mut reminder_strikethrough = false;
                 let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
                 let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
-                let line_text = &self.lines[line_idx];
-                let mut rendered_line = line_text.to_string();
+                let line_text = self.lines[line_idx].clone();
+                let mut rendered_line = line_text.clone();
                 let collapsed_hidden_count = self
                     .folds
                     .placeholder_hidden_lines
@@ -482,12 +626,15 @@ impl TerminalApp {
                     calc_ghost = None;
                     reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
                 } else {
+                    if !is_cursor_line {
+                        rendered_line = self.render_wiki_link_display_line(&line_text);
+                    }
                     if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
                         reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
                         reminder_strikethrough = reminder.remind_at_ms <= now_ms;
                     }
 
-                    formula_segments = find_table_formula_segments(line_text);
+                    formula_segments = find_table_formula_segments(&line_text);
                     if !formula_segments.is_empty() {
                         // Formula rows render a marker in-cell (`value*`,
                         // `value**`, …) and keep the detailed per-formula
@@ -629,7 +776,7 @@ impl TerminalApp {
                     }
                 }
 
-                let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost);
+                let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost.as_deref());
                 let effective_reminder_ghost = reminder_ghost_override.as_deref();
                 let render_cursor_col = if is_cursor_line {
                     if !formula_segments.is_empty() {
@@ -653,7 +800,7 @@ impl TerminalApp {
                 // positions using the formula-mask delta accumulated above.
                 let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
                 if self.note_table_module_enabled() && is_cursor_line && !is_fold_placeholder {
-                    if let Some(info) = table_cell_info_at_char(line_text, self.cursor_col) {
+                    if let Some(info) = table_cell_info_at_char(&line_text, self.cursor_col) {
                         let left_pipe_char = line_text[..info.left_pipe].chars().count();
                         let right_pipe_char = line_text[..info.right_pipe].chars().count();
                         let translate = |src_col: usize| -> usize {
@@ -907,6 +1054,7 @@ impl TerminalApp {
             );
         }
         self.draw_variable_autocomplete_popup(&mut buf, rows, cols);
+        self.draw_wiki_link_autocomplete_popup(&mut buf, rows, cols);
 
         let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
         if let Some((line_text, mapped_col)) = cursor_line_override {

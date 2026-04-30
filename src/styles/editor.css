@@ -298,6 +298,19 @@
   font-size: 0.95em;
 }
 
+.md-wiki-link-title {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.md-wiki-link-title.md-wiki-link-broken {
+  color: var(--fg-dim);
+  text-decoration: underline;
+  text-decoration-style: dashed;
+}
+
 .md-variable {
   color: var(--code-token-type);
   font-weight: 700;

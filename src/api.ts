@@ -28,6 +28,11 @@ export interface NoteSummary {
   updated_at: string;
 }
 
+export interface ResolvedWikiLink {
+  shortId: string;
+  summary: NoteSummary | null;
+}
+
 export interface NoteSearchResult {
   id: string;
   title: string;
@@ -210,6 +215,14 @@ export function encryptNote(id: string, password: string): Promise<Note> {
 
 export function decryptNote(id: string, password: string): Promise<Note> {
   return invoke<Note>("decrypt_note", { id, password });
+}
+
+export function resolveWikiLink(shortId: string): Promise<NoteSummary | null> {
+  return invoke<NoteSummary | null>("resolve_wiki_link", { shortId });
+}
+
+export function resolveWikiLinks(shortIds: string[]): Promise<ResolvedWikiLink[]> {
+  return invoke<ResolvedWikiLink[]>("resolve_wiki_links", { shortIds });
 }
 
 export function listNoteReminders(noteId: string): Promise<NoteReminder[]> {

@@ -23,6 +23,7 @@ import {
   setEditorContent,
   focusEditor,
   getEditorView,
+  invalidateEditorWikiLinkForNoteId,
   jumpEditorToLine,
   flushSave,
   hasPendingLocalChanges,
@@ -138,6 +139,10 @@ function editorOptionsForNote(note: Note | null) {
     getNoteModules: () =>
       appConfig ? modulesForNote(state.activeNote, appConfig) : null,
     setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),
+    onNavigateToNote: (noteId: string, _heading?: string) => {
+      // heading-to-line resolution is a follow-up; navigate to the note for now.
+      void switchToNote(noteId);
+    },
   };
 }
 
@@ -243,6 +248,7 @@ async function startBackendNoteChangeListener() {
         .catch(() => {
           // Keep current list when event-driven metadata refresh fails.
         });
+      invalidateEditorWikiLinkForNoteId(payload.id);
     },
   );
 }

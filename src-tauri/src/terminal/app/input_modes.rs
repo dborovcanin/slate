@@ -75,13 +75,17 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::ArrowUp => {
-                if !self.move_variable_autocomplete_selection(-1) {
+                if self.wiki_link_autocomplete_popup.visible {
+                    self.move_wiki_link_selection(-1);
+                } else if !self.move_variable_autocomplete_selection(-1) {
                     self.move_cursor_up(1);
                     moved_cursor = true;
                 }
             }
             Key::ArrowDown => {
-                if !self.move_variable_autocomplete_selection(1) {
+                if self.wiki_link_autocomplete_popup.visible {
+                    self.move_wiki_link_selection(1);
+                } else if !self.move_variable_autocomplete_selection(1) {
                     self.move_cursor_down(1);
                     moved_cursor = true;
                 }
@@ -170,7 +174,9 @@ impl TerminalApp {
                 refresh_variable_popup = true;
             }
             Key::Enter => {
-                if self.apply_variable_autocomplete_popup_selection() {
+                if self.apply_wiki_link_selection() {
+                    should_autoformat = true;
+                } else if self.apply_variable_autocomplete_popup_selection() {
                     should_autoformat = true;
                 } else {
                     if !self.try_enter_rule() {
@@ -181,7 +187,9 @@ impl TerminalApp {
                 }
             }
             Key::Tab => {
-                if self.apply_variable_autocomplete_tab() {
+                if self.apply_wiki_link_selection() {
+                    should_autoformat = true;
+                } else if self.apply_variable_autocomplete_tab() {
                     should_autoformat = true;
                     // handled
                 } else if self.apply_calc_tab() {
@@ -197,6 +205,11 @@ impl TerminalApp {
                 if !self.try_table_navigation_rule(true) && self.try_tab_rule(true) {
                     should_autoformat = true;
                 }
+            }
+            Key::Ctrl(']') => {
+                self.dismiss_wiki_link_autocomplete();
+                self.navigate_wiki_link_at_cursor(db);
+                return Ok(());
             }
             Key::Ctrl('e') => {
                 self.command_input.clear();
@@ -229,6 +242,18 @@ impl TerminalApp {
                 } else {
                     self.insert_char(ch);
                     should_autoformat = true;
+                    // Auto-close [[ → [[]] and open wiki-link picker.
+                    if ch == '[' && self.cursor_col >= 2 {
+                        let prev = self.current_line()
+                            .chars()
+                            .nth(self.cursor_col.saturating_sub(2));
+                        if prev == Some('[') {
+                            self.insert_text("]]");
+                            self.cursor_col = self.cursor_col.saturating_sub(2);
+                            self.dismiss_variable_autocomplete_popup();
+                            self.open_wiki_link_autocomplete(db);
+                        }
+                    }
                 }
                 refresh_variable_popup = true;
                 if ch == ' '
@@ -244,7 +269,9 @@ impl TerminalApp {
                 }
             }
             Key::Esc => {
-                if self.variable_autocomplete_popup.visible {
+                if self.wiki_link_autocomplete_popup.visible {
+                    self.dismiss_wiki_link_autocomplete();
+                } else if self.variable_autocomplete_popup.visible {
                     self.dismiss_variable_autocomplete_popup();
                 } else {
                     self.mode = UiMode::Normal;
@@ -266,11 +293,14 @@ impl TerminalApp {
         if self.mode == UiMode::Editor {
             if moved_cursor {
                 self.dismiss_variable_autocomplete_popup();
+                self.dismiss_wiki_link_autocomplete();
             } else if refresh_variable_popup {
                 self.refresh_variable_autocomplete_popup();
+                self.refresh_wiki_link_autocomplete();
             }
         } else {
             self.dismiss_variable_autocomplete_popup();
+            self.dismiss_wiki_link_autocomplete();
         }
 
         Ok(())
@@ -293,6 +323,11 @@ impl TerminalApp {
             return Ok(());
         }
 
+        if key == Key::Ctrl(']') {
+            self.navigate_wiki_link_at_cursor(db);
+            return Ok(());
+        }
+
         let now = Instant::now();
         if self
             .folds
@@ -312,6 +347,19 @@ impl TerminalApp {
         if key == Key::Char('z') {
             self.folds.pending_prefix_until =
                 Some(now + Duration::from_millis(FOLD_PREFIX_TIMEOUT_MS));
+            return Ok(());
+        }
+
+        // gd: navigate wiki link. Check vim state's pending Go before running the pipeline
+        // so 'gg' still reaches the pipeline unimpeded.
+        if key == Key::Char('d')
+            && matches!(
+                self.vim_state.pending,
+                Some(crate::editor_core::vim::VimPending::Go)
+            )
+        {
+            self.vim_state.pending = None;
+            self.navigate_wiki_link_at_cursor(db);
             return Ok(());
         }
 

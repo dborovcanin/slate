@@ -176,61 +176,23 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-29 10:06am GMT+2
+# [slate] recent context, 2026-04-30 11:55am GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (18,713t read) | 1,175,110t work | 98% savings
+Stats: 50 obs (18,372t read) | 654,179t work | 97% savings
 
-### Apr 25, 2026
-S50 FTS5 Note Search Pass 2 — five design decisions confirmed (Apr 25, 4:02 PM)
-S73 Fix frozen search input and slow/blocking results when searching notes in the terminal app (Apr 25, 4:06 PM)
-### Apr 26, 2026
-S79 Fix UI/TUI blocking during content search — search must never block typing at any point (Apr 26, 2:01 PM)
-82 2:07p ✅ Integrate result collection into main event loop for non-blocking search completion
-S84 Note search input frozen and results blocking in TUI/UI (Apr 26, 2:07 PM)
 ### Apr 28, 2026
-84 3:22p 🔵 Note search input frozen and results blocking in TUI/UI
-S85 Fix frozen input and blocking search results in TUI note search (Apr 28, 3:22 PM)
-S86 Full expression support planned for table cells (Apr 28, 3:23 PM)
-85 3:23p 🟣 Full expression support planned for table cells
-86 3:24p 🟣 Full expression support planned for table formula cells
-87 3:29p ⚖️ Full expression support planned for table cells
 S92 Table formula := prefix feature fully shipped — all tests green (Apr 28, 3:29 PM)
-88 3:46p ⚖️ Table formula syntax changed from = to :=
-89 " 🔵 Table formula syntax parsing lives in editor-core calc_plan.rs
-91 " 🔵 Existing table formula tests use = prefix — all must be migrated to :=
-92 3:49p 🟣 contains_assignment_operator updated to distinguish := table prefix from variable assignment
-94 " 🟣 CalcEngine updated to evaluate := prefix table formula cells
-95 3:51p 🟣 New tests added for := table formula prefix in engine.rs and calc_plan.rs
-96 " 🔵 Old = prefix tests still pass alongside new := prefix tests
-97 3:52p ✅ docs/plan.md updated with Table Formula Expressions syntax documentation
-98 " 🟣 Table formula := prefix feature fully shipped — all tests green
 S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
 S108 Create slate.desktop XDG desktop entry file for the Slate application (Apr 28, 3:52 PM)
-99 8:27p 🔄 Welcome note seeding moved into 0001_init.sql, legacy migrations removed
-100 " 🔴 Test count assertions updated to account for welcome note in fresh databases
-101 " 🟣 Welcome note with demo content shipped as part of fresh database initialization
-102 8:40p 🔵 macOS CI skips DMG bundle due to --no-bundle flag
-103 8:41p 🔵 tauri.conf.json bundle targets only configures nsis, no dmg
-104 " 🔴 CI macOS now produces DMG artifact alongside raw binary
-105 " ✅ CI extended to also produce Windows NSIS installer artifact
-106 9:34p 🔵 macOS "cannot be opened" error — possible architecture mismatch for M-series Macs
-108 9:36p 🔵 CI DMG is unsigned, unnotarized, and Intel-only — blocked on M-series Macs
-109 9:37p 🟣 CI macOS build now imports Developer ID certificate and verifies notarized DMG
-110 " ⚖️ macOS signing identity restricted to "Developer ID Application" only
-111 9:40p ✅ CI macOS signing refactored to gracefully degrade to ad-hoc signing when secrets absent
-112 9:44p ⚖️ macOS CI signing simplified to ad-hoc only — full notarization pipeline reverted
-113 9:56p ✅ CI macOS artifact paths made flexible for both root and src-tauri build output locations
-114 " ✅ All CI binary and installer upload paths expanded to cover src-tauri/target output location
-115 10:17p 🔵 CI macOS verification step fails to find produced artifacts despite successful build
-117 10:43p 🟣 slate.desktop Linux desktop entry file created
+S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 28, 10:44 PM)
 ### Apr 29, 2026
 118 9:22a 🔵 Calc engine and markdown-table architecture audit — optimization opportunities identified
 119 9:25a 🔵 Calc engine and table handling architecture mapped in Slate editor
-S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 29, 9:29 AM)
+S160 Design discussion for Obsidian-style wiki links [[notename#heading]] and [[notename^block]] in notes editor (Apr 29, 9:29 AM)
 120 9:36a 🔵 Slate crate structure and dependencies mapped
 121 " 🔵 Slate calc engine architecture: AppCore, delta IPC, and viewport-based decorations
 122 " 🔵 Calc result remapping algorithm preserves displayed results across document edits
@@ -248,6 +210,43 @@ S109 Calc engine and tables architecture review — identifying optimizations fo
 134 9:43a 🔄 hash_line migrated from DefaultHasher to FxHasher in calc_plan.rs
 135 " ✅ Arc added to engine.rs sync imports in preparation for shared state
 136 " 🔄 note_line_cache and TableEvalCache migrated to Arc-wrapped Vec for cheap cloning
+137 10:06a 🔴 Table formula :=(1,2) cell reference without operator fails
+139 " 🔵 Root cause investigation: :=(1,2) bare cell reference filtering in table_expression_segments
+182 11:51p 🔵 Slate project architecture mapped for wiki-link feature investigation
+S161 Note title vs ID storage — how Slate handles title storage, uniqueness, and duplicate title resolution for wiki-style links (Apr 29, 11:52 PM)
+183 11:56p 🔵 Slate note title is derived from body and stored as denormalized column
+S163 Wiki-link syntax: short 8-char ID + mandatory autocomplete picker (Apr 29, 11:56 PM)
+### Apr 30, 2026
+184 12:01a ⚖️ Wiki-link syntax: short 8-char ID + mandatory autocomplete picker
+S171 Wiki-link tokenizer passes all 5 tests and full editor-core test suite (158 tests) passes (Apr 30, 12:01 AM)
+185 12:02a ⚖️ Wiki-link UX decisions: broken links, variable-style syntax, and autoclose behavior
+186 12:03a 🔵 Slate Pass 2 implementation checklist and project architecture confirmed
+188 12:04a 🟣 Wiki-link feature plan documented in docs/plan.md with full architecture spec
+189 " 🔵 markdown_tokens.rs InlineTokenType enum and tokenize_inline_markdown structure mapped
+190 12:05a 🔵 tokenize_inline_markdown uses sequential single-pass-per-type pattern with protect() guards
+192 12:08a 🟣 Added WikiLink token types to InlineTokenType enum in markdown_tokens.rs
+193 " 🟣 Extended is_inline_marker_token_kind() to recognize WikiLinkMarker tokens
+194 12:09a 🟣 Implemented wiki-link parser in tokenize_inline_markdown() with validation and token emission
+195 " 🟣 Added comprehensive test suite for wiki-link tokenizer with five test cases
+197 " 🟣 Wiki-link tokenizer passes all 5 tests and full editor-core test suite (158 tests) passes
+S174 Implement Obsidian-style wiki-links in Slate — broken link rendering, variable-like styling, and [[ autoclose before picker — starting with editor-core tokenizer (Apr 30, 12:09 AM)
+198 12:10a 🔵 app-core sqlite.rs public API mapped — get_note_meta and NoteSummary confirmed as insertion point for resolve_wiki_link
+200 12:11a 🟣 Implemented resolve_wiki_link() in app-core sqlite.rs using prefix LIKE query
+201 12:15a ⚖️ Wiki-link broken link, styling, and autoclose UX finalized
+202 " 🟣 Integration tests added for resolve_wiki_link() in sqlite.rs
+203 12:16a 🔴 Compile error in resolve_wiki_link test — create_note_with_defaults called with wrong arity
+204 " 🔴 resolve_wiki_link test fixed — create_note_with_defaults called with correct arguments
+205 " 🔵 Note IDs use ULID format — short_id slice of [..8] is valid for ULID strings
+206 12:17a 🔵 Note IDs generated as Ulid::new().to_string() without lowercasing in Tauri/TUI layer
+207 " 🔴 Wiki-link tokenizer ID validation changed from hex to alphanumeric to match ULID format
+209 " 🔴 Wiki-link tokenizer tests updated to use real ULID short IDs instead of hex short IDs
+211 12:20a 🔵 All tests pass after wiki-link fixes — 158 unit tests + 3 golden replay
+212 " 🔵 wasm_markdown_find_inline_tokens already exists — exposes inline tokenizer to UI
+213 " 🔵 inline_tokens_to_js defined at line 647 — must be read to check WikiLink* coverage
+214 12:21a 🟣 Obsidian-style extended wiki-link syntax requested — heading and block anchors
+215 12:23a 🔵 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case
+S192 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case (Apr 30, 12:23 AM)
+216 " 🔵 Tauri notes command surface mapped — no resolve_wiki_link command exists yet
 
-Access 1175k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 654k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

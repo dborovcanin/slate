@@ -18,7 +18,7 @@ use crate::folding;
 use crate::format::format_markdown;
 use crate::markdown_tokens::{
     self, CodeToken, InlineMarkerComponentRange, InlineToken, MarkdownAnalyzeResult,
-    MarkdownLineInfo,
+    MarkdownLineInfo, WikiLinkMatch,
 };
 use crate::math_commands;
 use crate::substitute;
@@ -672,6 +672,10 @@ fn markdown_analyze_result_to_js(result: &MarkdownAnalyzeResult) -> Option<JsVal
     to_js_value(result)
 }
 
+fn wiki_link_match_to_js(entry: &WikiLinkMatch) -> Option<JsValue> {
+    to_js_value(entry)
+}
+
 fn parse_vim_register_mode(value: &str) -> Option<VimRegisterMode> {
     match value {
         "charwise" => Some(VimRegisterMode::Charwise),
@@ -694,6 +698,14 @@ pub fn wasm_markdown_classify_line(line_text: &str) -> JsValue {
 pub fn wasm_markdown_find_inline_tokens(line_text: &str) -> JsValue {
     inline_tokens_to_js(&markdown_tokens::tokenize_inline_markdown(line_text))
         .unwrap_or_else(|| Array::new().into())
+}
+
+#[wasm_bindgen]
+pub fn wasm_markdown_wiki_link_at_cursor(line_text: &str, cursor_col: usize) -> JsValue {
+    markdown_tokens::wiki_link_at_cursor(line_text, cursor_col)
+        .as_ref()
+        .and_then(wiki_link_match_to_js)
+        .unwrap_or(JsValue::NULL)
 }
 
 #[wasm_bindgen]

@@ -3,6 +3,7 @@ use aes_gcm::{Aes256Gcm, Nonce};
 use pbkdf2::pbkdf2_hmac;
 use rusqlite::{Connection, OptionalExtension};
 use sha2::Sha256;
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::path::PathBuf;
@@ -784,6 +785,88 @@ impl Db {
             return Ok(None);
         };
         self.note_summary_from_row(&conn, &row).map(Some)
+    }
+
+    pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, note_title, access_mode, updated_at
+                 FROM notes
+                 WHERE id LIKE ?1
+                 ORDER BY updated_at DESC, id ASC
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+        self.resolve_wiki_link_with_stmt(&mut stmt, short_id)
+    }
+
+    pub fn resolve_wiki_links(
+        &self,
+        short_ids: &[String],
+    ) -> Result<Vec<(String, Option<NoteSummary>)>, String> {
+        if short_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, note_title, access_mode, updated_at
+                 FROM notes
+                 WHERE id LIKE ?1
+                 ORDER BY updated_at DESC, id ASC
+                 LIMIT 1",
+            )
+            .map_err(|e| e.to_string())?;
+
+        let mut memo: HashMap<String, Option<NoteSummary>> = HashMap::new();
+        let mut out = Vec::with_capacity(short_ids.len());
+        for short_id in short_ids {
+            if let Some(cached) = memo.get(short_id) {
+                out.push((short_id.clone(), cached.clone()));
+                continue;
+            }
+            let resolved = self.resolve_wiki_link_with_stmt(&mut stmt, short_id)?;
+            memo.insert(short_id.clone(), resolved.clone());
+            out.push((short_id.clone(), resolved));
+        }
+        Ok(out)
+    }
+
+    fn resolve_wiki_link_with_stmt(
+        &self,
+        stmt: &mut rusqlite::Statement<'_>,
+        short_id: &str,
+    ) -> Result<Option<NoteSummary>, String> {
+        let pattern = format!("{}%", short_id);
+        let row: Option<(String, Option<String>, NoteAccessMode, String)> = stmt
+            .query_row([&pattern], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    parse_note_access_mode(row.get::<_, Option<String>>(2)?),
+                    row.get(3)?,
+                ))
+            })
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((id, note_title, access_mode, updated_at)) = row else {
+            return Ok(None);
+        };
+        let is_unlocked = !is_note_protected(access_mode) || self.is_note_unlocked(id.as_str());
+        let title = normalize_stored_title(note_title).unwrap_or_else(|| "Untitled".to_string());
+        Ok(Some(NoteSummary {
+            id,
+            title,
+            body_prefix: if is_unlocked {
+                String::new()
+            } else {
+                "[locked]".to_string()
+            },
+            access_mode,
+            is_unlocked,
+            updated_at,
+        }))
     }
 
     pub fn get_note_updated_at(&self, id: &str) -> Result<Option<String>, String> {
@@ -2992,6 +3075,89 @@ mod tests {
                 .expect("lookup"),
             Some(77)
         );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_wiki_link_finds_note_by_short_id() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let id = ulid::Ulid::new().to_string();
+        let note = db
+            .create_note_with_defaults(&id, NoteModules::default(), None)
+            .expect("note created");
+        let short_id = &note.id[..8];
+
+        let resolved = db.resolve_wiki_link(short_id).expect("query succeeds");
+        assert!(resolved.is_some());
+        assert_eq!(resolved.unwrap().id, note.id);
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_wiki_link_returns_none_for_unknown_short_id() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let resolved = db.resolve_wiki_link("00000000").expect("query succeeds");
+        assert!(resolved.is_none());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_wiki_link_prefers_most_recent_when_prefix_collides() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("01HX4VHR_OLD", "old")
+            .expect("seed old note");
+        db.save_note("01HX4VHR_NEW", "new")
+            .expect("seed new note");
+        db.save_note("01HX4VHR_OLD", "old again")
+            .expect("bump old note to newest");
+
+        let resolved = db
+            .resolve_wiki_link("01HX4VHR")
+            .expect("query succeeds")
+            .expect("match expected");
+        assert_eq!(resolved.id, "01HX4VHR_OLD");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn resolve_wiki_links_returns_entries_in_input_order() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("01HX4VHR_AAA", "first")
+            .expect("seed first note");
+        db.save_note("01HX4VHS_BBB", "second")
+            .expect("seed second note");
+
+        let resolved = db
+            .resolve_wiki_links(&[
+                "01HX4VHS".to_string(),
+                "MISSING00".to_string(),
+                "01HX4VHR".to_string(),
+            ])
+            .expect("batch resolve succeeds");
+
+        assert_eq!(resolved.len(), 3);
+        assert_eq!(resolved[0].0, "01HX4VHS");
+        assert_eq!(resolved[0].1.as_ref().map(|n| n.id.as_str()), Some("01HX4VHS_BBB"));
+        assert_eq!(resolved[1].0, "MISSING00");
+        assert!(resolved[1].1.is_none());
+        assert_eq!(resolved[2].0, "01HX4VHR");
+        assert_eq!(resolved[2].1.as_ref().map(|n| n.id.as_str()), Some("01HX4VHR_AAA"));
 
         drop(db);
         let _ = fs::remove_file(path);

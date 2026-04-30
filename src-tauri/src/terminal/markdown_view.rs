@@ -112,7 +112,58 @@ fn hidden_inline_marker_ranges(
             hidden_ranges.push((from, to));
         }
     }
+    hidden_ranges.extend(
+        wiki_link_hidden_token_ranges(tokens, active_cursor_col)
+            .into_iter()
+            .map(|(from, to)| (from.min(len), to.min(len)))
+            .filter(|(from, to)| to > from),
+    );
     hidden_ranges
+}
+
+pub fn wiki_link_hidden_token_ranges(
+    tokens: &[InlineToken],
+    active_cursor_col: Option<usize>,
+) -> Vec<(usize, usize)> {
+    let mut hidden = Vec::new();
+    let mut open_idx: Option<usize> = None;
+    let mut has_title = false;
+
+    for (index, token) in tokens.iter().enumerate() {
+        match token.kind {
+            InlineTokenType::WikiLinkMarker => {
+                if open_idx.is_none() {
+                    open_idx = Some(index);
+                    has_title = false;
+                    continue;
+                }
+
+                let Some(start_idx) = open_idx.take() else {
+                    continue;
+                };
+                let start = tokens[start_idx].from;
+                let end = token.to;
+                let cursor_inside = active_cursor_col
+                    .map(|col| col >= start && col <= end)
+                    .unwrap_or(false);
+                if has_title && !cursor_inside {
+                    for wiki_token in &tokens[start_idx..=index] {
+                        if !matches!(wiki_token.kind, InlineTokenType::WikiLinkTitle) {
+                            hidden.push((wiki_token.from, wiki_token.to));
+                        }
+                    }
+                }
+            }
+            InlineTokenType::WikiLinkTitle => {
+                if open_idx.is_some() {
+                    has_title = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    hidden
 }
 
 pub fn hidden_ranges_for_markdown_line(
@@ -140,6 +191,13 @@ pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (Stri
     let len = chars.len();
     if len == 0 {
         return (String::new(), 0);
+    }
+    if !text
+        .chars()
+        .any(|ch| matches!(ch, '#' | '>' | '`' | '[' | '*' | '_' | '~'))
+    {
+        let clamped_cursor = cursor_col.min(len);
+        return (text.to_string(), clamped_cursor);
     }
     let clamped_cursor = cursor_col.min(len);
     let hidden_ranges = hidden_ranges_for_markdown_line(text, Some(clamped_cursor));
@@ -183,7 +241,12 @@ pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (Stri
 
 #[cfg(test)]
 mod tests {
-    use super::collapse_markdown_line_for_cursor;
+    use crate::editor_core::markdown_tokens::{self, InlineTokenType};
+
+    use super::{
+        collapse_markdown_line_for_cursor, hidden_ranges_for_markdown_line,
+        wiki_link_hidden_token_ranges,
+    };
 
     #[test]
     fn collapse_markdown_line_for_cursor_removes_hidden_marker_gaps_and_maps_cursor() {
@@ -197,5 +260,44 @@ mod tests {
         let (collapsed, mapped_col) = collapse_markdown_line_for_cursor("this_Is_my_Word", 7);
         assert_eq!(collapsed, "this_Is_my_Word");
         assert_eq!(mapped_col, 7);
+    }
+
+    #[test]
+    fn wiki_link_alt_hides_source_segments_when_cursor_outside_link() {
+        let line = "[[01HX4VHR#Intro|My Alt]]";
+        let hidden = hidden_ranges_for_markdown_line(line, None);
+        assert_eq!(hidden, vec![(0, 17), (23, 25)]);
+    }
+
+    #[test]
+    fn wiki_link_alt_reveals_source_segments_when_cursor_inside_link() {
+        let line = "[[01HX4VHR#Intro|My Alt]]";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(10));
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn wiki_link_alt_reveals_source_segments_at_right_boundary() {
+        let line = "[[01HX4VHR#Intro|My Alt]]";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(line.chars().count()));
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn wiki_link_hidden_token_ranges_only_hide_non_title_segments_for_alt_text() {
+        let line = "[[01HX4VHR#Intro|My Alt]] tail";
+        let tokens = markdown_tokens::tokenize_inline_markdown(line);
+        let title = tokens
+            .iter()
+            .find(|token| matches!(token.kind, InlineTokenType::WikiLinkTitle))
+            .expect("wiki-link title token");
+        let hidden = wiki_link_hidden_token_ranges(&tokens, None);
+
+        assert!(!hidden.is_empty());
+        assert!(
+            hidden
+                .iter()
+                .all(|(from, to)| *to <= title.from || *from >= title.to)
+        );
     }
 }

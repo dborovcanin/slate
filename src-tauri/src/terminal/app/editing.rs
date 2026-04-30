@@ -4,10 +4,10 @@ use super::{
     find_calc_segment_range, gutter_width_for_visible_lines, line_char_len, line_display_cols,
     split_lines, table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
     table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode, VariableAutocompletePopupState,
-    VariableAutocompleteState, CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS,
-    CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
-    HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
-    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
+    CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER,
+    EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT,
+    LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, join_lines, remove_char_at, viewport_col_for_display_col,
@@ -2270,6 +2270,205 @@ impl TerminalApp {
             }
         }
         self.calc.variable_names = calc_data.variable_names;
+    }
+
+    // --- Wiki-link autocomplete ---
+
+    pub(super) fn dismiss_wiki_link_autocomplete(&mut self) {
+        self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState::default();
+    }
+
+    pub(super) fn open_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
+        let from_col = self.cursor_col.saturating_sub(2);
+        let notes = match crate::terminal::switcher::load_note_meta(db, None) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        let suggestions: Vec<WikiLinkSuggestion> = notes
+            .into_iter()
+            .filter(|n| n.access_mode == app_core::storage::NoteAccessMode::None || n.is_unlocked)
+            .map(|n| WikiLinkSuggestion {
+                short_id: n.id[..8.min(n.id.len())].to_string(),
+                title: if n.title.is_empty() { "Untitled".to_string() } else { n.title },
+            })
+            .collect();
+        let anchor_col = from_col;
+        let anchor_row = self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW;
+        self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState {
+            visible: true,
+            anchor_row,
+            anchor_col,
+            from_col,
+            query: String::new(),
+            suggestions,
+            selected_index: 0,
+            cursor_line: self.cursor_line,
+        };
+    }
+
+    pub(super) fn refresh_wiki_link_autocomplete(&mut self) {
+        if !self.wiki_link_autocomplete_popup.visible {
+            return;
+        }
+        if self.wiki_link_autocomplete_popup.cursor_line != self.cursor_line {
+            self.dismiss_wiki_link_autocomplete();
+            return;
+        }
+        let line = self.current_line();
+        let from_col = self.wiki_link_autocomplete_popup.from_col;
+        // Cursor must stay to the right of [[ and line must still have ]] ahead.
+        if self.cursor_col < from_col + 2 {
+            self.dismiss_wiki_link_autocomplete();
+            return;
+        }
+        let query: String = line.chars().skip(from_col + 2).take(self.cursor_col - from_col - 2).collect();
+        if query.contains(']') || query.contains('|') {
+            self.dismiss_wiki_link_autocomplete();
+            return;
+        }
+        self.wiki_link_autocomplete_popup.query = query;
+    }
+
+    pub(super) fn filtered_wiki_link_suggestions(&self) -> Vec<&WikiLinkSuggestion> {
+        let query = self.wiki_link_autocomplete_popup.query.to_lowercase();
+        self.wiki_link_autocomplete_popup
+            .suggestions
+            .iter()
+            .filter(|s| query.is_empty() || s.title.to_lowercase().contains(&query))
+            .take(16)
+            .collect()
+    }
+
+    pub(super) fn move_wiki_link_selection(&mut self, delta: isize) -> bool {
+        if !self.wiki_link_autocomplete_popup.visible {
+            return false;
+        }
+        let count = self.filtered_wiki_link_suggestions().len();
+        if count == 0 {
+            return false;
+        }
+        let current = self.wiki_link_autocomplete_popup.selected_index.min(count.saturating_sub(1));
+        let next = if delta >= 0 {
+            (current + delta as usize) % count
+        } else {
+            (current + count - ((-delta) as usize % count)) % count
+        };
+        self.wiki_link_autocomplete_popup.selected_index = next;
+        true
+    }
+
+    pub(super) fn apply_wiki_link_selection(&mut self) -> bool {
+        if !self.wiki_link_autocomplete_popup.visible {
+            return false;
+        }
+        let suggestions = self.filtered_wiki_link_suggestions();
+        let idx = self.wiki_link_autocomplete_popup.selected_index.min(suggestions.len().saturating_sub(1));
+        let Some(pick) = suggestions.get(idx) else {
+            self.dismiss_wiki_link_autocomplete();
+            return false;
+        };
+        let short_id = pick.short_id.clone();
+        let title = pick.title.clone();
+        let from_col = self.wiki_link_autocomplete_popup.from_col;
+        let replacement = format!("[[{}]]", short_id);
+
+        // Find end of [[...]] span: scan forward from from_col for ]]
+        let line = self.current_line().to_string();
+        let chars: Vec<char> = line.chars().collect();
+        let mut end_col = self.cursor_col;
+        while end_col + 1 < chars.len() {
+            if chars[end_col] == ']' && chars[end_col + 1] == ']' {
+                end_col += 2;
+                break;
+            }
+            end_col += 1;
+        }
+
+        let from_byte = byte_index(&line, from_col);
+        let to_byte = byte_index(&line, end_col);
+        self.lines[self.cursor_line].replace_range(from_byte..to_byte, &replacement);
+        self.cursor_col = from_col + replacement.chars().count();
+        self.refresh_calc_line_metadata_at(self.cursor_line);
+        self.mark_edited();
+        self.dismiss_wiki_link_autocomplete();
+        self.status = format!("link: {title}");
+        true
+    }
+
+    pub(super) fn navigate_wiki_link_at_cursor(&mut self, db: &crate::storage::Db) -> bool {
+        let line = self.current_line().to_string();
+        let Some(link) = crate::editor_core::markdown_tokens::wiki_link_at_cursor(
+            &line,
+            self.cursor_col,
+        ) else {
+            return false;
+        };
+        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+        match note_sources.resolve_wiki_link(&link.short_id) {
+            Ok(Some(summary)) => {
+                match db.get_note(&summary.id) {
+                    Ok(Some(note)) => {
+                        let heading_text = link.heading.clone();
+                        if let Err(e) = self.set_active_note(db, note) {
+                            self.status = format!("wiki-link error: {e}");
+                        } else {
+                            if let Some(ref h) = heading_text {
+                                self.jump_to_heading(h);
+                            }
+                            let dest = match &heading_text {
+                                Some(h) => format!("→ {}#{}", summary.title, h),
+                                None => format!("→ {}", summary.title),
+                            };
+                            self.status = dest;
+                        }
+                        return true;
+                    }
+                    _ => {
+                        self.status = "wiki-link: note not found".to_string();
+                    }
+                }
+            }
+            Ok(None) => {
+                self.status = "wiki-link: broken (note deleted)".to_string();
+            }
+            Err(e) => {
+                self.status = format!("wiki-link error: {e}");
+            }
+        }
+        true
+    }
+
+    fn jump_to_heading(&mut self, heading: &str) {
+        let needle = heading.to_lowercase();
+        for (idx, line) in self.lines.iter().enumerate() {
+            if !line.starts_with('#') {
+                continue;
+            }
+            let content = line.trim_start_matches('#').trim();
+            if content.to_lowercase().contains(&needle) {
+                self.cursor_line = idx;
+                self.cursor_col = 0;
+                self.adjust_scroll();
+                return;
+            }
+        }
+    }
+
+    pub(super) fn wiki_link_autocomplete_status_hint(&self) -> Option<String> {
+        if !self.wiki_link_autocomplete_popup.visible {
+            return None;
+        }
+        let suggestions = self.filtered_wiki_link_suggestions();
+        if suggestions.is_empty() {
+            return Some(format!("[[{}… (no matches)", self.wiki_link_autocomplete_popup.query));
+        }
+        let idx = self.wiki_link_autocomplete_popup.selected_index.min(suggestions.len().saturating_sub(1));
+        let picks: Vec<String> = suggestions
+            .iter()
+            .enumerate()
+            .map(|(i, s)| if i == idx { format!(">{}<", s.title) } else { s.title.clone() })
+            .collect();
+        Some(format!("[[{} → {} (Tab/Enter)", self.wiki_link_autocomplete_popup.query, picks.join("  ")))
     }
 
     pub(super) fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {

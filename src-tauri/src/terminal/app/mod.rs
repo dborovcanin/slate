@@ -43,6 +43,8 @@ const VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS: usize = 3;
 const COMMAND_COMPLETION_MAX_OPTIONS: usize = 8;
 const CONTENT_SEARCH_DEBOUNCE_MS: u64 = 120;
 const CONTENT_SEARCH_MAX_DETACHED_WORKERS: usize = 2;
+const WIKI_LINK_RENDER_CACHE_MAX_ENTRIES: usize = 2048;
+const WIKI_LINK_RENDER_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
@@ -205,6 +207,38 @@ struct VariableAutocompletePopupState {
     cursor_col: usize,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct WikiLinkSuggestion {
+    pub short_id: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct WikiLinkAutocompletePopupState {
+    visible: bool,
+    anchor_row: usize,
+    anchor_col: usize,
+    from_col: usize,
+    query: String,
+    suggestions: Vec<WikiLinkSuggestion>,
+    selected_index: usize,
+    cursor_line: usize,
+}
+
+#[derive(Debug, Clone)]
+struct WikiLinkRenderCacheEntry {
+    display: String,
+    broken: bool,
+    cached_at: Instant,
+}
+
+#[derive(Debug, Clone)]
+struct WikiLinkPrefixIndexEntry {
+    title: String,
+    updated_at: String,
+    note_id: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct CommandCompletionOption {
     token: String,
@@ -291,6 +325,9 @@ struct TerminalApp {
     // Calc/variables behavior
     variable_autocomplete_min_chars: usize,
     variable_autocomplete_popup: VariableAutocompletePopupState,
+    wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
+    wiki_link_prefix_index: HashMap<String, WikiLinkPrefixIndexEntry>,
+    wiki_link_render_cache: HashMap<String, WikiLinkRenderCacheEntry>,
     render_palette: render::RenderPalette,
     // Folding (real-line indexed, 0-based)
     folds: FoldingState,
@@ -598,6 +635,9 @@ impl TerminalApp {
                 variable_autocomplete_min_chars.clamp(1, 64),
             ),
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
+            wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
+            wiki_link_prefix_index: HashMap::new(),
+            wiki_link_render_cache: HashMap::new(),
             render_palette,
             folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,
@@ -616,6 +656,7 @@ impl TerminalApp {
             last_draw_had_overlay: false,
         };
 
+        app.rebuild_wiki_link_prefix_index();
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();

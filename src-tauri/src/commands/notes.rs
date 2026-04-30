@@ -14,6 +14,13 @@ struct NoteChangedEvent {
     deleted: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedWikiLink {
+    pub short_id: String,
+    pub summary: Option<NoteSummary>,
+}
+
 fn emit_note_changed(app: &AppHandle, id: &str, updated_at: Option<String>, deleted: bool) {
     let payload = NoteChangedEvent {
         id: id.to_string(),
@@ -227,6 +234,26 @@ pub fn encrypt_note(
     let note = core.db().encrypt_note(&id, &password)?;
     emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
     Ok(note)
+}
+
+#[tauri::command]
+pub fn resolve_wiki_link(
+    core: State<'_, AppCore>,
+    short_id: String,
+) -> Result<Option<NoteSummary>, String> {
+    core.note_sources().resolve_wiki_link(&short_id)
+}
+
+#[tauri::command]
+pub fn resolve_wiki_links(
+    core: State<'_, AppCore>,
+    short_ids: Vec<String>,
+) -> Result<Vec<ResolvedWikiLink>, String> {
+    let resolved = core.note_sources().resolve_wiki_links(&short_ids)?;
+    Ok(resolved
+        .into_iter()
+        .map(|(short_id, summary)| ResolvedWikiLink { short_id, summary })
+        .collect())
 }
 
 #[tauri::command]

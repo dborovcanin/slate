@@ -12,7 +12,10 @@ import { state } from "../state";
 import { saveNote, type NoteModules } from "../api";
 import { calcExtensions } from "./calc-decoration";
 import { commandModeExtension } from "./command-picker";
-import { markdownRichTextExtensions } from "./markdown-decoration";
+import {
+  markdownRichTextExtensions,
+  requestMarkdownDecorationRefresh,
+} from "./markdown-decoration";
 import {
   markdownEditingExtensions,
   runTableCellNavigationCommand,
@@ -20,7 +23,9 @@ import {
 } from "./markdown-editing";
 import { foldingExtensions } from "./folding.ts";
 import { notifyExtensions } from "./notify-decoration";
-import { variableAutocompleteExtensions } from "./variable-autocomplete";
+import { makeVariableCompletionSource, variableAutocompleteExtensions } from "./variable-autocomplete";
+import { wikiLinkCompletionSource, wikiLinkExtensions } from "./wiki-link.ts";
+import { autocompletion } from "@codemirror/autocomplete";
 import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
 import { editorContextMenuExtensions } from "./context-menu";
@@ -174,6 +179,7 @@ interface EditorMountOptions {
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
+  onNavigateToNote?: (noteId: string, heading?: string) => void;
 }
 
 let currentFormatOnSave = false;
@@ -384,10 +390,27 @@ function buildEditorExtensions(options: EditorMountOptions): {
         checklistAutoReorder,
         tableEnabled,
       }),
-      ...variableAutocompleteExtensions({
-        enabled: !disableAutocomplete && (options.variablesEnabled ?? true),
-        minChars: options.variableAutocompleteMinChars ?? 3,
-      }),
+      ...(() => {
+        if (disableAutocomplete) return [];
+        const varSource = makeVariableCompletionSource({
+          enabled: options.variablesEnabled ?? true,
+          minChars: options.variableAutocompleteMinChars ?? 3,
+        });
+        const sources = [
+          ...(varSource ? [varSource] : []),
+          wikiLinkCompletionSource,
+        ];
+        return [
+          autocompletion({
+            override: sources,
+            activateOnTyping: true,
+            closeOnBlur: true,
+            defaultKeymap: true,
+            maxRenderedOptions: 20,
+          }),
+          ...wikiLinkExtensions(options.onNavigateToNote),
+        ];
+      })(),
       ...(disableCalc
         ? []
         : calcExtensions({
@@ -583,6 +606,18 @@ export function jumpEditorToLine(lineNumber: number) {
 
 export function getEditorView(): EditorView | null {
   return view;
+}
+
+export function invalidateEditorWikiLinkCache() {
+  if (!view) return;
+  requestMarkdownDecorationRefresh(view, { invalidateWikiLinkCache: true });
+}
+
+export function invalidateEditorWikiLinkForNoteId(noteId: string) {
+  if (!view) return;
+  const shortId = noteId.slice(0, 8);
+  if (!/^[0-9A-Za-z]{8}$/.test(shortId)) return;
+  requestMarkdownDecorationRefresh(view, { invalidatedShortIds: [shortId] });
 }
 
 export function hasPendingLocalChanges(): boolean {

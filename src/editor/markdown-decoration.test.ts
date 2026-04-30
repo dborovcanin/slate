@@ -496,6 +496,157 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
   );
 });
 
+test("buildMarkdownDecorationsForSpans hides wiki-link source and shows only alt text when caret is outside", () => {
+  const doc = Text.of(["[[01HX4VHR#Intro|My Alt]] tail"]);
+  const line = doc.line(1);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.to, to: line.to, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  const hasHidden = (from: number, to: number) =>
+    flat.some(
+      (d) => d.from === line.from + from && d.to === line.from + to && d.widget === "HiddenMarkdownTokenWidget",
+    );
+
+  assert.ok(hasHidden(0, 2), "opening [[ should be hidden");
+  assert.ok(hasHidden(2, 10), "short-id should be hidden");
+  assert.ok(hasHidden(10, 16), "anchor should be hidden");
+  assert.ok(hasHidden(16, 17), "separator should be hidden");
+  assert.ok(hasHidden(23, 25), "closing ]] should be hidden");
+  assert.ok(
+    flat.some(
+      (d) =>
+        d.from === line.from + 17 &&
+        d.to === line.from + 23 &&
+        d.cls.includes("md-wiki-link-title"),
+    ),
+    "alt text should remain visible and styled as link title",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals full wiki-link source inside [[...]] for editing", () => {
+  const doc = Text.of(["[[01HX4VHR#Intro|My Alt]] tail"]);
+  const line = doc.line(1);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 12, to: line.from + 12, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  const hasHidden = (from: number, to: number) =>
+    flat.some(
+      (d) => d.from === line.from + from && d.to === line.from + to && d.widget === "HiddenMarkdownTokenWidget",
+    );
+
+  assert.equal(hasHidden(2, 10), false, "short-id should be editable when caret is inside link");
+  assert.equal(hasHidden(10, 16), false, "anchor should be editable when caret is inside link");
+  assert.equal(hasHidden(16, 17), false, "separator should be editable when caret is inside link");
+  assert.equal(hasHidden(23, 25), false, "closing marker should be revealed while editing link");
+});
+
+test("buildMarkdownDecorationsForSpans shows display widget for wiki-link without alt text when caret is outside", () => {
+  const doc = Text.of(["[[01HX4VHR#Intro]] tail"]);
+  const line = doc.line(1);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.to, to: line.to, empty: true },
+    {
+      wikiLinkResolver: () => ({ exists: true, title: "Note Title" }),
+    },
+  );
+  const flat = collectDecorations(decos);
+
+  const hasHidden = (from: number, to: number) =>
+    flat.some(
+      (d) => d.from === line.from + from && d.to === line.from + to && d.widget === "HiddenMarkdownTokenWidget",
+    );
+
+  assert.ok(hasHidden(0, 2), "opening [[ should be hidden");
+  assert.ok(hasHidden(2, 10), "short-id should be hidden");
+  assert.ok(hasHidden(10, 16), "anchor should be hidden");
+  assert.ok(hasHidden(16, 18), "closing ]] should be hidden");
+  assert.ok(
+    flat.some((d) => d.from === line.from && d.to === line.from && d.widget === "WikiLinkDisplayWidget"),
+    "display widget should render resolved title",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans allows entering edit mode for wiki-link without alt text", () => {
+  const doc = Text.of(["[[01HX4VHR#Intro]] tail"]);
+  const line = doc.line(1);
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 11, to: line.from + 11, empty: true },
+    {
+      wikiLinkResolver: () => ({ exists: true, title: "Note Title" }),
+    },
+  );
+  const flat = collectDecorations(decos);
+
+  assert.equal(
+    flat.some((d) => d.from === line.from && d.to === line.from && d.widget === "WikiLinkDisplayWidget"),
+    false,
+    "display widget should disappear while editing raw link source",
+  );
+  assert.equal(
+    flat.some(
+      (d) =>
+        d.from === line.from + 2 &&
+        d.to === line.from + 10 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    false,
+    "short-id should be visible/editable when caret is inside link span",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals wiki-link source from right boundary cursor", () => {
+  const doc = Text.of(["[[01HX4VHR#Intro]] tail"]);
+  const line = doc.line(1);
+  const linkEnd = line.from + "[[01HX4VHR#Intro]]".length;
+
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: linkEnd, to: linkEnd, empty: true },
+    {
+      wikiLinkResolver: () => ({ exists: true, title: "Note Title" }),
+    },
+  );
+  const flat = collectDecorations(decos);
+
+  assert.equal(
+    flat.some((d) => d.from === line.from && d.to === line.from && d.widget === "WikiLinkDisplayWidget"),
+    false,
+    "display widget should hide when cursor is at the link right boundary",
+  );
+  assert.equal(
+    flat.some(
+      (d) =>
+        d.from === line.from + 2 &&
+        d.to === line.from + 10 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    false,
+    "source should be editable from the right boundary position",
+  );
+});
+
 test("buildMarkdownDecorationsForSpans hides heading and quote prefixes off-caret", () => {
   const doc = Text.of(["# heading", "> quote"]);
   const headingLine = doc.line(1);

@@ -16,6 +16,34 @@ fn note_sources(db: &Db) -> app_core::note_sources::NoteSourceService {
 
 // Ownership: switcher, command bar execution, and search workflows.
 impl TerminalApp {
+    pub(super) fn rebuild_wiki_link_prefix_index(&mut self) {
+        self.wiki_link_prefix_index.clear();
+        for note in &self.switcher_items {
+            let short_id: String = note.id.chars().take(8).collect();
+            if short_id.len() != 8 || !short_id.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+                continue;
+            }
+            let replace = self
+                .wiki_link_prefix_index
+                .get(&short_id)
+                .map(|existing| {
+                    note.updated_at > existing.updated_at
+                        || (note.updated_at == existing.updated_at && note.id < existing.note_id)
+                })
+                .unwrap_or(true);
+            if replace {
+                self.wiki_link_prefix_index.insert(
+                    short_id,
+                    super::WikiLinkPrefixIndexEntry {
+                        title: note.title.clone(),
+                        updated_at: note.updated_at.clone(),
+                        note_id: note.id.clone(),
+                    },
+                );
+            }
+        }
+    }
+
     fn content_search_title_fallback_results(&self, query: &str) -> Vec<NoteSearchResult> {
         const CONTENT_SEARCH_FALLBACK_LIMIT: usize = 60;
 
@@ -1404,6 +1432,8 @@ impl TerminalApp {
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
         self.switcher_items = switcher::load_note_meta(db, Some(&self.active_note.id))?;
+        self.rebuild_wiki_link_prefix_index();
+        self.wiki_link_render_cache.clear();
         if self.mode == UiMode::Switcher {
             self.recompute_switcher_matches();
         }
@@ -1426,6 +1456,8 @@ impl TerminalApp {
         self.last_edit = Instant::now();
         self.search_query.clear();
         self.search_matches.clear();
+        self.rebuild_wiki_link_prefix_index();
+        self.wiki_link_render_cache.clear();
         self.history
             .reset(&self.lines, self.cursor_line, self.cursor_col);
         self.fence_checkpoints.truncate(1);

@@ -33,6 +33,7 @@ import init, {
   wasm_markdown_fold_map_ranges_ui,
   wasm_markdown_classify_line,
   wasm_markdown_find_inline_tokens,
+  wasm_markdown_wiki_link_at_cursor,
   wasm_markdown_inline_marker_component_ranges,
   wasm_markdown_is_code_fence,
   wasm_markdown_parse_fence_language,
@@ -373,7 +374,12 @@ export type MarkdownInlineTokenType =
   | "code-marker"
   | "link-text"
   | "link-url"
-  | "link-marker";
+  | "link-marker"
+  | "wiki-link-marker"
+  | "wiki-link-id"
+  | "wiki-link-sep"
+  | "wiki-link-title"
+  | "wiki-link-anchor";
 
 export type MarkdownCodeTokenType =
   | "keyword"
@@ -398,6 +404,14 @@ export interface MarkdownCodeToken {
 export interface MarkdownInlineMarkerComponentRange {
   from: number;
   to: number;
+}
+
+export interface MarkdownWikiLinkMatch {
+  from: number;
+  to: number;
+  shortId: string;
+  heading: string | null;
+  title: string | null;
 }
 
 export interface MarkdownFoldRange {
@@ -1161,6 +1175,11 @@ function asMarkdownInlineMarkerComponentRanges(
   return Array.isArray(value) ? (value as MarkdownInlineMarkerComponentRange[]) : [];
 }
 
+function asMarkdownWikiLinkMatch(value: unknown): MarkdownWikiLinkMatch | null {
+  if (!value || typeof value !== "object") return null;
+  return value as MarkdownWikiLinkMatch;
+}
+
 function asMarkdownFoldRanges(value: unknown): MarkdownFoldRange[] {
   return Array.isArray(value) ? (value as MarkdownFoldRange[]) : [];
 }
@@ -1198,6 +1217,16 @@ export function markdownClassifyLine(lineText: string): MarkdownLineInfo {
 export function markdownFindInlineTokens(lineText: string): MarkdownInlineToken[] {
   if (!ensureWasmReadyNonBlocking()) return [];
   return asMarkdownInlineTokens(wasm_markdown_find_inline_tokens(lineText));
+}
+
+export function markdownWikiLinkAtCursor(
+  lineText: string,
+  cursorCol: number,
+): MarkdownWikiLinkMatch | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
+  return asMarkdownWikiLinkMatch(
+    wasm_markdown_wiki_link_at_cursor(lineText, Math.max(0, Math.floor(cursorCol))),
+  );
 }
 
 export function markdownInlineMarkerComponentRanges(

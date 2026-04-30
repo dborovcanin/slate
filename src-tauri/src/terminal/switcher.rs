@@ -30,6 +30,7 @@ pub struct NoteMeta {
     pub title: String,
     pub access_mode: NoteAccessMode,
     pub is_unlocked: bool,
+    pub updated_at: String,
 }
 
 fn note_identity_label(note_id: &str) -> String {
@@ -53,6 +54,7 @@ pub fn load_note_meta(
             id: n.id,
             access_mode: n.access_mode,
             is_unlocked: n.is_unlocked,
+            updated_at: n.updated_at,
         })
         .collect())
 }

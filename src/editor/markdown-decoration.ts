@@ -3,6 +3,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
 import type { VariableIndexEntry } from "../api.ts";
+import { resolveWikiLinks } from "../api.ts";
 import {
   ensureWasmReady,
   markdownAnalyzeLines,
@@ -40,6 +41,9 @@ const VIEWPORT_MARGIN_LINES = 24;
 const HOTPATH_REBUILD_MARGIN_LINES = 8;
 const FENCE_CHECKPOINT_INTERVAL = 256;
 const INLINE_MARKER_RANGE_CACHE_LIMIT = 1024;
+const WIKI_LINK_CACHE_MAX_ENTRIES = 2048;
+const WIKI_LINK_CACHE_TTL_MS = 5 * 60_000;
+const WIKI_LINK_BROKEN_CACHE_TTL_MS = 1_500;
 
 const decHeadingToken = Decoration.mark({ class: "md-token md-token-heading" });
 const decQuoteToken = Decoration.mark({ class: "md-token md-token-quote" });
@@ -62,6 +66,32 @@ const decCodeType = Decoration.mark({ class: "md-code-token-type" });
 const decLinkText = Decoration.mark({ class: "md-link-text" });
 const decLinkUrl = Decoration.mark({ class: "md-link-url" });
 const decLinkMarker = Decoration.mark({ class: "md-token md-token-link" });
+const decWikiLinkTitle = Decoration.mark({ class: "md-wiki-link-title" });
+const decWikiLinkBroken = Decoration.mark({ class: "md-wiki-link-title md-wiki-link-broken" });
+const decWikiLinkHidden = Decoration.mark({ class: "md-token md-token-wiki-link" });
+
+class WikiLinkDisplayWidget extends WidgetType {
+  constructor(
+    private readonly displayText: string,
+    private readonly broken: boolean,
+  ) {
+    super();
+  }
+
+  eq(other: WikiLinkDisplayWidget): boolean {
+    return other.displayText === this.displayText && other.broken === this.broken;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = this.broken
+      ? "md-wiki-link-title md-wiki-link-broken"
+      : "md-wiki-link-title";
+    span.textContent = this.displayText;
+    span.contentEditable = "false";
+    return span;
+  }
+}
 const decVariable = Decoration.mark({ class: "md-variable" });
 
 const lineClass = (className: string) => Decoration.line({ class: className });
@@ -258,7 +288,7 @@ function markerRevealComponentRangeForToken(
   componentRanges: readonly InlineMarkerComponentRange[],
 ): TextRange | null {
   const marker = tokens[markerIndex];
-  if (!marker || (marker.type !== "code-marker" && marker.type !== "link-marker")) {
+  if (!marker || (marker.type !== "code-marker" && marker.type !== "link-marker" && marker.type !== "wiki-link-marker")) {
     return null;
   }
   const range = componentRanges.find((entry) =>
@@ -279,13 +309,117 @@ function shouldRevealInlineMarker(
   return selectionTouchesInlineRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
 }
 
+function shouldRevealInlineMarkerAtBoundary(
+  tokens: readonly InlineToken[],
+  componentRanges: readonly InlineMarkerComponentRange[],
+  markerIndex: number,
+  lineFrom: number,
+  activeSelection?: ActiveSelection,
+): boolean {
+  const range = markerRevealComponentRangeForToken(tokens, markerIndex, componentRanges);
+  if (!range) return false;
+  return selectionTouchesRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
+}
+
+interface WLAccum {
+  cursorInside: boolean;
+  linkFrom: number;
+  firstMarkerFrom: number;
+  firstMarkerTo: number;
+  shortId: string;
+  idFrom: number;
+  idTo: number;
+  anchorText: string | null;
+  anchorFrom: number | null;
+  anchorTo: number | null;
+  sepFrom: number | null;
+  sepTo: number | null;
+  titleFrom: number | null;
+  titleTo: number | null;
+  hasTitle: boolean;
+}
+
+function emitWikiLinkDecorations(
+  wl: WLAccum,
+  closingMarkerFrom: number,
+  closingMarkerTo: number,
+  lineText: string,
+  lineFrom: number,
+  wikiLinkResolver: ((shortId: string) => WikiLinkResolution | null) | undefined,
+  pending: PendingDecoration[],
+): void {
+  if (wl.cursorInside) {
+    // Cursor inside wiki-link: keep full source visible/editable.
+    // Markers stay dimmed like other markdown syntax.
+    pending.push({ from: wl.firstMarkerFrom, to: wl.firstMarkerTo, decoration: decWikiLinkHidden });
+    if (wl.hasTitle) {
+      const resolved = wikiLinkResolver ? wikiLinkResolver(wl.shortId) : null;
+      pending.push({
+        from: wl.titleFrom!,
+        to: wl.titleTo!,
+        decoration: resolved?.exists === false ? decWikiLinkBroken : decWikiLinkTitle,
+      });
+    }
+    pending.push({ from: closingMarkerFrom, to: closingMarkerTo, decoration: decWikiLinkHidden });
+    return;
+  }
+
+  if (wl.hasTitle) {
+    // Cursor outside, explicit alt-text: hide everything, show styled title.
+    pending.push({ from: wl.firstMarkerFrom, to: wl.firstMarkerTo, decoration: decHiddenMarkdownToken });
+    pending.push({ from: wl.idFrom, to: wl.idTo, decoration: decHiddenMarkdownToken });
+    if (wl.anchorFrom != null) {
+      pending.push({ from: wl.anchorFrom, to: wl.anchorTo!, decoration: decHiddenMarkdownToken });
+    }
+    pending.push({ from: wl.sepFrom!, to: wl.sepTo!, decoration: decHiddenMarkdownToken });
+    const resolved = wikiLinkResolver ? wikiLinkResolver(wl.shortId) : null;
+    pending.push({
+      from: wl.titleFrom!,
+      to: wl.titleTo!,
+      decoration: resolved?.exists === false ? decWikiLinkBroken : decWikiLinkTitle,
+    });
+    pending.push({ from: closingMarkerFrom, to: closingMarkerTo, decoration: decHiddenMarkdownToken });
+    return;
+  }
+
+  // Cursor outside, no alt-text: hide source and show display widget.
+  // Keep source text in the document so caret can enter the span and switch to edit mode.
+  const resolved = wikiLinkResolver ? wikiLinkResolver(wl.shortId) : null;
+  if (resolved === null) {
+    // Pending — show raw text until resolved (no decorations).
+    return;
+  }
+  const heading = wl.anchorText ? wl.anchorText.slice(1) : null;
+  const displayText = resolved.exists
+    ? resolved.title + (heading ? "#" + heading : "")
+    : "?" + (heading ? "#" + heading : "");
+  pending.push({ from: wl.firstMarkerFrom, to: wl.firstMarkerTo, decoration: decHiddenMarkdownToken });
+  pending.push({ from: wl.idFrom, to: wl.idTo, decoration: decHiddenMarkdownToken });
+  if (wl.anchorFrom != null) {
+    pending.push({ from: wl.anchorFrom, to: wl.anchorTo!, decoration: decHiddenMarkdownToken });
+  }
+  pending.push({ from: closingMarkerFrom, to: closingMarkerTo, decoration: decHiddenMarkdownToken });
+  pending.push({
+    from: wl.firstMarkerFrom,
+    to: wl.firstMarkerFrom,
+    decoration: Decoration.widget({
+      widget: new WikiLinkDisplayWidget(displayText, !resolved.exists),
+      side: 1,
+    }),
+  });
+}
+
 function collectInlineDecorations(
   lineFrom: number,
+  lineText: string,
   tokens: readonly InlineToken[],
   componentRanges: readonly InlineMarkerComponentRange[],
   activeSelection?: ActiveSelection,
+  wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
 ): PendingDecoration[] {
   const pending: PendingDecoration[] = [];
+  let wlAccum: WLAccum | null = null;
+
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index]!;
     const from = lineFrom + token.from;
@@ -338,6 +472,70 @@ function collectInlineDecorations(
             ? decLinkMarker
             : decHiddenMarkdownToken,
         });
+        break;
+
+      // Wiki-link tokens: accumulate then emit on closing marker.
+      case "wiki-link-marker":
+        if (wlAccum === null) {
+          // Opening [[
+          // Wiki-links reveal raw source when caret is inside the span or on
+          // its right boundary, so keyboard navigation can enter edit mode.
+          const cursorInside = shouldRevealInlineMarkerAtBoundary(
+            tokens,
+            componentRanges,
+            index,
+            lineFrom,
+            activeSelection,
+          );
+          wlAccum = {
+            cursorInside,
+            linkFrom: from,
+            firstMarkerFrom: from,
+            firstMarkerTo: to,
+            shortId: "",
+            idFrom: 0,
+            idTo: 0,
+            anchorText: null,
+            anchorFrom: null,
+            anchorTo: null,
+            sepFrom: null,
+            sepTo: null,
+            titleFrom: null,
+            titleTo: null,
+            hasTitle: false,
+          };
+        } else {
+          // Closing ]]
+          emitWikiLinkDecorations(wlAccum, from, to, lineText, lineFrom, wikiLinkResolver, pending);
+          wlAccum = null;
+        }
+        break;
+      case "wiki-link-id":
+        if (wlAccum) {
+          wlAccum.shortId = lineText.slice(token.from, token.to);
+          wlAccum.idFrom = from;
+          wlAccum.idTo = to;
+        }
+        break;
+      case "wiki-link-anchor":
+        if (wlAccum) {
+          wlAccum.anchorText = lineText.slice(token.from, token.to);
+          wlAccum.anchorFrom = from;
+          wlAccum.anchorTo = to;
+        }
+        break;
+      case "wiki-link-sep":
+        if (wlAccum) {
+          wlAccum.sepFrom = from;
+          wlAccum.sepTo = to;
+        }
+        break;
+      case "wiki-link-title":
+        if (wlAccum) {
+          wlAccum.titleFrom = from;
+          wlAccum.titleTo = to;
+          wlAccum.hasTitle = true;
+        }
         break;
     }
   }
@@ -432,10 +630,16 @@ function createMarkdownBuildProfiling(): MarkdownBuildProfiling {
   };
 }
 
+export type WikiLinkResolution = { exists: boolean; title: string };
+
 export interface MarkdownDecorationBuildOptions {
   getFenceStateBeforeLine?: (lineNumber: number) => FenceState;
   variableMatcher?: VariableMatcher;
   profiling?: MarkdownBuildProfiling;
+  // null = unknown/pending; { exists: false } = broken; { exists: true, title } = resolved
+  wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null;
+  // Only lines returning true can enqueue wiki-link resolution work.
+  resolveWikiLinksForLine?: (lineNumber: number) => boolean;
 }
 
 class VariableMatcherCache {
@@ -605,6 +809,9 @@ export function buildMarkdownDecorationsForSpans(
         lineAnalysis.inlineTokens,
         activeSelection,
         profiling,
+        options.resolveWikiLinksForLine?.(lineNo) === false
+          ? undefined
+          : options.wikiLinkResolver,
       );
     }
   }
@@ -640,17 +847,36 @@ function expandedVisibleSpans(
   return mergeLineSpans(expanded);
 }
 
+function visibleSpans(view: EditorView): VisibleLineSpan[] {
+  const doc = view.state.doc;
+  if (view.visibleRanges.length === 0) return [];
+  const spans = view.visibleRanges.map(({ from, to }) => ({
+    fromLine: Math.max(1, doc.lineAt(from).number),
+    toLine: Math.min(doc.lines, doc.lineAt(to).number),
+  }));
+  return mergeLineSpans(spans);
+}
+
+function lineInVisibleSpans(lineNumber: number, spans: readonly VisibleLineSpan[]): boolean {
+  for (const span of spans) {
+    if (lineNumber >= span.fromLine && lineNumber <= span.toLine) return true;
+  }
+  return false;
+}
+
 function buildMarkdownDecorations(
   view: EditorView,
   fenceCache: FenceCheckpointCache,
   matcherCache: VariableMatcherCache,
   marginLines = VIEWPORT_MARGIN_LINES,
   profiling?: MarkdownBuildProfiling,
+  wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
 ): DecorationSet {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
   const selection = view.state.selection.main;
   const spans = expandedVisibleSpans(view, marginLines);
+  const strictVisibleSpans = visibleSpans(view);
   const matcher = matcherCache.get(variableIndex);
   return buildMarkdownDecorationsForSpans(doc, spans, variableIndex, {
     from: selection.from,
@@ -661,6 +887,9 @@ function buildMarkdownDecorations(
       fenceCache.getStateBeforeLine(doc, lineNumber),
     variableMatcher: matcher,
     profiling,
+    wikiLinkResolver,
+    resolveWikiLinksForLine: (lineNumber) =>
+      lineInVisibleSpans(lineNumber, strictVisibleSpans),
   });
 }
 
@@ -754,6 +983,7 @@ function lineHasTransparentMarkdownSyntax(text: string): boolean {
   if (text.includes("`")) return true;
   if (text.includes("~~")) return true;
   if (text.includes("**") || text.includes("__")) return true;
+  if (text.includes("[[") && text.includes("]]")) return true;
   if (text.includes("[") && text.includes("](") && text.includes(")")) return true;
   if (/\*[^*\s][^*]*\*/.test(text)) return true;
   return /_[^_\s][^_]*_/.test(text);
@@ -784,7 +1014,7 @@ function inlineRevealComponentSignatureForCursor(
   const ranges = cachedInlineMarkerComponentRanges(lineText);
   for (const range of ranges) {
     const signature = `${range.from}-${range.to}`;
-    if (cursorOffsetInLine >= range.from && cursorOffsetInLine < range.to) {
+    if (cursorOffsetInLine >= range.from && cursorOffsetInLine <= range.to) {
       return signature;
     }
   }
@@ -816,6 +1046,7 @@ function decorateContentLine(
   inlineTokens: readonly InlineToken[],
   activeSelection?: ActiveSelection,
   profiling?: MarkdownBuildProfiling,
+  wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
 
@@ -939,9 +1170,11 @@ function decorateContentLine(
   const inlineMarkerComponentRanges = cachedInlineMarkerComponentRanges(line.text, profiling);
   for (const inline of collectInlineDecorations(
     line.from,
+    line.text,
     inlineTokens,
     inlineMarkerComponentRanges,
     activeSelection,
+    wikiLinkResolver,
   )) {
     pending.push(inline);
   }
@@ -953,6 +1186,22 @@ function decorateContentLine(
 
 const markdownWasmReadyAnnotation = Annotation.define<boolean>();
 const markdownDeferredRefreshAnnotation = Annotation.define<boolean>();
+const markdownManualRefreshAnnotation = Annotation.define<{
+  invalidateWikiLinkCache?: boolean;
+  invalidatedShortIds?: string[];
+}>();
+
+export function requestMarkdownDecorationRefresh(
+  view: EditorView,
+  options?: { invalidateWikiLinkCache?: boolean; invalidatedShortIds?: string[] },
+) {
+  view.dispatch({
+    annotations: markdownManualRefreshAnnotation.of({
+      invalidateWikiLinkCache: !!options?.invalidateWikiLinkCache,
+      invalidatedShortIds: options?.invalidatedShortIds ?? [],
+    }),
+  });
+}
 
 function earliestChangedLine(update: ViewUpdate): number {
   let earliest = Number.POSITIVE_INFINITY;
@@ -1005,6 +1254,11 @@ const markdownRichPlugin = ViewPlugin.fromClass(
     private readonly fenceCache = new FenceCheckpointCache();
     private readonly matcherCache = new VariableMatcherCache();
     private pendingRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+    private readonly wikiLinkCache = new Map<string, WikiLinkResolution | false>();
+    private readonly wikiLinkCacheResolvedAt = new Map<string, number>();
+    private readonly resolvingIds = new Set<string>();
+    private readonly pendingWikiLinkBatchIds = new Set<string>();
+    private pendingWikiLinkBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(view: EditorView) {
       this.decorations = this.safeBuild(view, Decoration.none, VIEWPORT_MARGIN_LINES, "init");
@@ -1029,7 +1283,102 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       }, 90);
     }
 
+    private getCachedWikiLink(shortId: string): WikiLinkResolution | false | undefined {
+      const cached = this.wikiLinkCache.get(shortId);
+      if (cached === undefined) return undefined;
+      const resolvedAt = this.wikiLinkCacheResolvedAt.get(shortId) ?? 0;
+      const ttlMs = cached === false ? WIKI_LINK_BROKEN_CACHE_TTL_MS : WIKI_LINK_CACHE_TTL_MS;
+      if (Date.now() - resolvedAt > ttlMs) {
+        this.wikiLinkCache.delete(shortId);
+        this.wikiLinkCacheResolvedAt.delete(shortId);
+        return undefined;
+      }
+      return cached;
+    }
+
+    private setCachedWikiLink(shortId: string, value: WikiLinkResolution | false) {
+      // Refresh insertion order to keep simple LRU-ish trimming by oldest key.
+      this.wikiLinkCache.delete(shortId);
+      this.wikiLinkCacheResolvedAt.delete(shortId);
+      this.wikiLinkCache.set(shortId, value);
+      this.wikiLinkCacheResolvedAt.set(shortId, Date.now());
+      while (this.wikiLinkCache.size > WIKI_LINK_CACHE_MAX_ENTRIES) {
+        const oldest = this.wikiLinkCache.keys().next().value;
+        if (typeof oldest !== "string") break;
+        this.wikiLinkCache.delete(oldest);
+        this.wikiLinkCacheResolvedAt.delete(oldest);
+      }
+    }
+
+    private clearCachedWikiLink(shortId: string) {
+      this.wikiLinkCache.delete(shortId);
+      this.wikiLinkCacheResolvedAt.delete(shortId);
+      this.pendingWikiLinkBatchIds.delete(shortId);
+      this.resolvingIds.delete(shortId);
+    }
+
+    private scheduleWikiLinkBatchResolve(view: EditorView) {
+      if (this.pendingWikiLinkBatchTimer !== null) return;
+      this.pendingWikiLinkBatchTimer = setTimeout(() => {
+        this.pendingWikiLinkBatchTimer = null;
+        if (this.destroyed || this.pendingWikiLinkBatchIds.size === 0) return;
+        const shortIds = [...this.pendingWikiLinkBatchIds];
+        this.pendingWikiLinkBatchIds.clear();
+        resolveWikiLinks(shortIds)
+          .then((results) => {
+            const resolvedIds = new Set<string>();
+            for (const entry of results) {
+              const shortId = entry.shortId;
+              resolvedIds.add(shortId);
+              this.setCachedWikiLink(
+                shortId,
+                entry.summary !== null
+                  ? { exists: true, title: entry.summary.title }
+                  : false,
+              );
+              this.resolvingIds.delete(shortId);
+            }
+            for (const shortId of shortIds) {
+              if (!resolvedIds.has(shortId)) {
+                this.resolvingIds.delete(shortId);
+              }
+            }
+            if (!this.destroyed) this.scheduleDeferredRefresh(view);
+          })
+          .catch(() => {
+            for (const shortId of shortIds) {
+              this.resolvingIds.delete(shortId);
+            }
+          });
+      }, 24);
+    }
+
     update(update: ViewUpdate) {
+      const manualRefresh = update.transactions
+        .map((transaction) => transaction.annotation(markdownManualRefreshAnnotation))
+        .find((annotation) => annotation !== undefined);
+      if (manualRefresh) {
+        if (manualRefresh.invalidateWikiLinkCache) {
+          this.wikiLinkCache.clear();
+          this.wikiLinkCacheResolvedAt.clear();
+          this.pendingWikiLinkBatchIds.clear();
+          this.resolvingIds.clear();
+        } else if (manualRefresh.invalidatedShortIds?.length) {
+          for (const shortId of manualRefresh.invalidatedShortIds) {
+            this.clearCachedWikiLink(shortId);
+          }
+        }
+        this.decorations = this.safeBuild(
+          update.view,
+          this.decorations,
+          VIEWPORT_MARGIN_LINES,
+          manualRefresh.invalidateWikiLinkCache
+            ? "manualRefresh_invalidateWikiLinks"
+            : "manualRefresh",
+        );
+        return;
+      }
+
       if (
         update.transactions.some((transaction) =>
           transaction.annotation(markdownWasmReadyAnnotation),
@@ -1146,13 +1495,30 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
       const profiling = profilingEnabled ? createMarkdownBuildProfiling() : undefined;
       try {
+        const newIds = new Set<string>();
+        const wikiLinkResolver = (shortId: string): WikiLinkResolution | null => {
+          const cached = this.getCachedWikiLink(shortId);
+          if (cached === false) return { exists: false, title: "" };
+          if (cached !== undefined) return cached;
+          newIds.add(shortId);
+          return null;
+        };
         const next = buildMarkdownDecorations(
           view,
           this.fenceCache,
           this.matcherCache,
           marginLines,
           profiling,
+          wikiLinkResolver,
         );
+        for (const shortId of newIds) {
+          if (this.resolvingIds.has(shortId)) continue;
+          this.resolvingIds.add(shortId);
+          this.pendingWikiLinkBatchIds.add(shortId);
+        }
+        if (this.pendingWikiLinkBatchIds.size > 0) {
+          this.scheduleWikiLinkBatchResolve(view);
+        }
         if (profilingEnabled) {
           const durationMs = editorProfilerNowMs() - startedAt;
           const analyzeMs = profiling?.analyzeLinesMs ?? 0;
@@ -1194,6 +1560,10 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       if (this.pendingRefreshTimer !== null) {
         clearTimeout(this.pendingRefreshTimer);
         this.pendingRefreshTimer = null;
+      }
+      if (this.pendingWikiLinkBatchTimer !== null) {
+        clearTimeout(this.pendingWikiLinkBatchTimer);
+        this.pendingWikiLinkBatchTimer = null;
       }
     }
   },

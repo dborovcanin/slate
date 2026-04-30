@@ -67,6 +67,12 @@ pub fn read_key() -> Result<Option<Key>, String> {
         let c = (b'a' + (first - 1)) as char;
         return Ok(Some(Key::Ctrl(c)));
     }
+    // Map Ctrl+\ (28), Ctrl+] (29), Ctrl+^ (30), Ctrl+_ (31)
+    // Ctrl+[ (27) is already handled as ESC above.
+    if (28..=31).contains(&first) {
+        let c = (b'\\' + (first - 28)) as char;
+        return Ok(Some(Key::Ctrl(c)));
+    }
     if first.is_ascii() {
         return Ok(Some(Key::Char(first as char)));
     }
