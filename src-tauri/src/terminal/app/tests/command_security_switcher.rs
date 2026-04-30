@@ -1,4 +1,5 @@
 use super::*;
+use crate::terminal::app::WikiLinkSuggestion;
 
 #[test]
 fn editor_paste_multiline_inserts_as_single_bulk_edit() {
@@ -1302,6 +1303,42 @@ fn wiki_link_heading_autocomplete_reopens_when_hash_is_typed_again() {
         "typing # inside an existing wiki-link should reopen heading suggestions"
     );
     assert_eq!(app.wiki_link_autocomplete_popup.query, "01HX4VHR#");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn wiki_link_autocomplete_selection_can_move_and_apply_beyond_first_sixteen_results() {
+    let (db, mut app, path) = app_with_note("");
+    run_keys(&mut app, &db, &[Key::Char('['), Key::Char('[')]);
+    assert!(app.wiki_link_autocomplete_popup.visible);
+
+    let suggestions: Vec<WikiLinkSuggestion> = (0..25)
+        .map(|idx| {
+            let short_id = format!("A{idx:07}");
+            let title = format!("Note {idx:02}");
+            WikiLinkSuggestion {
+                short_id,
+                title: title.clone(),
+                title_lower: title.to_lowercase(),
+                heading: None,
+            }
+        })
+        .collect();
+    app.wiki_link_autocomplete_popup.suggestions = suggestions.clone();
+    app.wiki_link_autocomplete_popup.note_suggestions = suggestions;
+    app.wiki_link_autocomplete_popup.selected_index = 0;
+
+    for _ in 0..20 {
+        run_keys(&mut app, &db, &[Key::ArrowDown]);
+    }
+    assert_eq!(app.wiki_link_autocomplete_popup.selected_index, 20);
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert_eq!(app.current_line(), "[[A0000020]]");
+    assert_eq!(app.status, "link: Note 20");
 
     drop(app);
     drop(db);

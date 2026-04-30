@@ -2307,13 +2307,11 @@ impl TerminalApp {
             .collect()
     }
 
-    fn load_wiki_link_note_suggestions(db: &crate::storage::Db) -> Vec<WikiLinkSuggestion> {
-        let notes = match crate::terminal::switcher::load_note_meta(db, None) {
-            Ok(n) => n,
-            Err(_) => return Vec::new(),
-        };
-        notes
-            .into_iter()
+    pub(super) fn rebuild_wiki_link_note_suggestions_cache(&mut self) {
+        self.wiki_link_note_suggestions_cache = self
+            .switcher_items
+            .iter()
+            .cloned()
             .filter(|n| n.access_mode == app_core::storage::NoteAccessMode::None || n.is_unlocked)
             .map(|n| {
                 let title = if n.title.is_empty() {
@@ -2329,16 +2327,16 @@ impl TerminalApp {
                     heading: None,
                 }
             })
-            .collect()
+            .collect();
     }
 
     pub(super) fn dismiss_wiki_link_autocomplete(&mut self) {
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState::default();
     }
 
-    pub(super) fn open_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
+    pub(super) fn open_wiki_link_autocomplete(&mut self, _db: &crate::storage::Db) {
         let from_col = self.cursor_col.saturating_sub(2);
-        let note_suggestions = Self::load_wiki_link_note_suggestions(db);
+        let note_suggestions = self.wiki_link_note_suggestions_cache.clone();
         let suggestions = note_suggestions.clone();
         let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
             self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW,
@@ -2385,7 +2383,7 @@ impl TerminalApp {
             return false;
         }
 
-        let note_suggestions = Self::load_wiki_link_note_suggestions(db);
+        let note_suggestions = self.wiki_link_note_suggestions_cache.clone();
         let suggestions = note_suggestions.clone();
         let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
             self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW,
@@ -2477,18 +2475,34 @@ impl TerminalApp {
     }
 
     pub(super) fn filtered_wiki_link_suggestions(&self) -> Vec<&WikiLinkSuggestion> {
+        let (start, end) = self.wiki_link_visible_window(16);
         self.wiki_link_autocomplete_popup
             .suggestions
             .iter()
-            .take(16)
+            .skip(start)
+            .take(end.saturating_sub(start))
             .collect()
+    }
+
+    pub(super) fn wiki_link_visible_window(&self, max_items: usize) -> (usize, usize) {
+        let total = self.wiki_link_autocomplete_popup.suggestions.len();
+        if total == 0 || max_items == 0 {
+            return (0, 0);
+        }
+        let selected = self
+            .wiki_link_autocomplete_popup
+            .selected_index
+            .min(total.saturating_sub(1));
+        let visible = total.min(max_items);
+        let start = selected.saturating_add(1).saturating_sub(visible);
+        (start, start + visible)
     }
 
     pub(super) fn move_wiki_link_selection(&mut self, delta: isize) -> bool {
         if !self.wiki_link_autocomplete_popup.visible {
             return false;
         }
-        let count = self.filtered_wiki_link_suggestions().len();
+        let count = self.wiki_link_autocomplete_popup.suggestions.len();
         if count == 0 {
             return false;
         }
@@ -2506,15 +2520,27 @@ impl TerminalApp {
         if !self.wiki_link_autocomplete_popup.visible {
             return false;
         }
-        let suggestions = self.filtered_wiki_link_suggestions();
-        let idx = self.wiki_link_autocomplete_popup.selected_index.min(suggestions.len().saturating_sub(1));
-        let Some(pick) = suggestions.get(idx) else {
+        let len = self.wiki_link_autocomplete_popup.suggestions.len();
+        if len == 0 {
+            self.dismiss_wiki_link_autocomplete();
+            return false;
+        }
+        let idx = self
+            .wiki_link_autocomplete_popup
+            .selected_index
+            .min(len.saturating_sub(1));
+        let Some(pick) = self
+            .wiki_link_autocomplete_popup
+            .suggestions
+            .get(idx)
+            .cloned()
+        else {
             self.dismiss_wiki_link_autocomplete();
             return false;
         };
-        let short_id = pick.short_id.clone();
-        let title = pick.title.clone();
-        let heading = pick.heading.clone();
+        let short_id = pick.short_id;
+        let title = pick.title;
+        let heading = pick.heading;
         let from_col = self.wiki_link_autocomplete_popup.from_col;
         let replacement = if let Some(heading) = heading.as_deref() {
             format!("[[{}#{}]]", short_id, heading)
@@ -2646,11 +2672,21 @@ impl TerminalApp {
         if suggestions.is_empty() {
             return Some(format!("[[{}… (no matches)", self.wiki_link_autocomplete_popup.query));
         }
-        let idx = self.wiki_link_autocomplete_popup.selected_index.min(suggestions.len().saturating_sub(1));
+        let (start, _) = self.wiki_link_visible_window(16);
+        let selected = self
+            .wiki_link_autocomplete_popup
+            .selected_index
+            .min(self.wiki_link_autocomplete_popup.suggestions.len().saturating_sub(1));
         let picks: Vec<String> = suggestions
             .iter()
             .enumerate()
-            .map(|(i, s)| if i == idx { format!(">{}<", s.title) } else { s.title.clone() })
+            .map(|(i, s)| {
+                if start + i == selected {
+                    format!(">{}<", s.title)
+                } else {
+                    s.title.clone()
+                }
+            })
             .collect();
         Some(format!("[[{} → {} (Tab/Enter)", self.wiki_link_autocomplete_popup.query, picks.join("  ")))
     }

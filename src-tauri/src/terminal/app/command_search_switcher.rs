@@ -1434,6 +1434,7 @@ impl TerminalApp {
         let previous_prefix_index = self.wiki_link_prefix_index.clone();
         self.switcher_items = switcher::load_note_meta(db, Some(&self.active_note.id))?;
         self.rebuild_wiki_link_prefix_index();
+        self.rebuild_wiki_link_note_suggestions_cache();
         let mut changed_short_ids: Vec<String> = Vec::new();
         for (short_id, next) in self.wiki_link_prefix_index.iter() {
             let changed = match previous_prefix_index.get(short_id) {
@@ -1477,6 +1478,7 @@ impl TerminalApp {
         self.search_query.clear();
         self.search_matches.clear();
         self.rebuild_wiki_link_prefix_index();
+        self.rebuild_wiki_link_note_suggestions_cache();
         self.wiki_link_render_cache.clear();
         self.wiki_link_line_render_cache.clear();
         self.history

@@ -15,7 +15,19 @@ const headingCache = new Map<string, string[]>();
 let noteListCache: { expiresAt: number; notes: NoteSummary[] } | null = null;
 let noteListInFlight: Promise<NoteSummary[]> | null = null;
 
-async function loadWikiLinkNoteCandidates(): Promise<NoteSummary[]> {
+type WikiLinkApi = {
+  listNotesMeta(activeId?: string | null): Promise<NoteSummary[]>;
+  resolveWikiLink(shortId: string): Promise<NoteSummary | null>;
+  resolveWikiLinkHeadings(shortId: string): Promise<string[]>;
+};
+
+const defaultWikiLinkApi: WikiLinkApi = {
+  listNotesMeta,
+  resolveWikiLink,
+  resolveWikiLinkHeadings,
+};
+
+async function loadWikiLinkNoteCandidates(api: WikiLinkApi): Promise<NoteSummary[]> {
   const now = Date.now();
   if (noteListCache && noteListCache.expiresAt > now) {
     return noteListCache.notes;
@@ -23,7 +35,7 @@ async function loadWikiLinkNoteCandidates(): Promise<NoteSummary[]> {
   if (noteListInFlight) {
     return noteListInFlight;
   }
-  noteListInFlight = listNotesMeta()
+  noteListInFlight = api.listNotesMeta()
     .then((notes) => {
       noteListCache = {
         notes,
@@ -56,78 +68,84 @@ function parseWikiLinkCompletionContext(raw: string): WikiLinkCompletionContext 
   };
 }
 
-const wikiLinkCompletionSource: CompletionSource = async (context) => {
-  const match = context.matchBefore(WIKI_LINK_OPEN_RE);
-  if (!match) return null;
+export function createWikiLinkCompletionSource(
+  api: WikiLinkApi = defaultWikiLinkApi,
+): CompletionSource {
+  return async (context) => {
+    const match = context.matchBefore(WIKI_LINK_OPEN_RE);
+    if (!match) return null;
 
-  const raw = match.text.slice(2);
-  const parsed = parseWikiLinkCompletionContext(raw);
-  if (!parsed) return null;
+    const raw = match.text.slice(2);
+    const parsed = parseWikiLinkCompletionContext(raw);
+    if (!parsed) return null;
 
-  if (parsed.kind === "note") {
-    const notes = await loadWikiLinkNoteCandidates();
-    const filtered = notes
-      .filter((n) => {
-        const title = n.title.toLowerCase();
-        return parsed.noteQuery.length === 0 || title.includes(parsed.noteQuery);
-      })
+    if (parsed.kind === "note") {
+      const notes = await loadWikiLinkNoteCandidates(api);
+      const filtered = notes
+        .filter((n) => {
+          const title = n.title.toLowerCase();
+          return parsed.noteQuery.length === 0 || title.includes(parsed.noteQuery);
+        })
+        .slice(0, 30);
+      if (filtered.length === 0) return null;
+      return {
+        from: match.from,
+        options: filtered.map((note) => {
+          const shortId = note.id.slice(0, 8);
+          const title = note.title || "Untitled";
+          return {
+            label: title,
+            type: "wiki-link",
+            apply: (view: EditorView, _completion: object, from: number, to: number) => {
+              let actualTo = to;
+              if (view.state.doc.sliceString(to, to + 2) === "]]") {
+                actualTo = to + 2;
+              }
+              const insertText = `[[${shortId}]]`;
+              view.dispatch({
+                changes: { from, to: actualTo, insert: insertText },
+                // Keep caret before closing markers so heading/alt edits are immediate.
+                selection: { anchor: from + insertText.length - 2 },
+              });
+            },
+          };
+        }),
+        filter: false,
+      };
+    }
+
+    let headings = headingCache.get(parsed.shortId);
+    if (!headings) {
+      headings = await api.resolveWikiLinkHeadings(parsed.shortId);
+      headingCache.set(parsed.shortId, headings);
+    }
+    const filtered = headings
+      .filter((heading) =>
+        parsed.headingQuery.length === 0
+          || heading.toLowerCase().includes(parsed.headingQuery),
+      )
       .slice(0, 30);
     if (filtered.length === 0) return null;
+
+    const headingFrom = match.from + 2 + parsed.shortId.length + 1;
     return {
-      from: match.from,
-      options: filtered.map((note) => {
-        const shortId = note.id.slice(0, 8);
-        const title = note.title || "Untitled";
-        return {
-          label: title,
-          type: "wiki-link",
-          apply: (view: EditorView, _completion: object, from: number, to: number) => {
-            let actualTo = to;
-            if (view.state.doc.sliceString(to, to + 2) === "]]") {
-              actualTo = to + 2;
-            }
-            const insertText = `[[${shortId}]]`;
-            view.dispatch({
-              changes: { from, to: actualTo, insert: insertText },
-              // Keep caret before closing markers so heading/alt edits are immediate.
-              selection: { anchor: from + insertText.length - 2 },
-            });
-          },
-        };
-      }),
+      from: headingFrom,
+      options: filtered.map((heading) => ({
+        label: heading,
+        type: "wiki-link",
+        apply: (view: EditorView, _completion: object, from: number, to: number) => {
+          view.dispatch({
+            changes: { from, to, insert: heading },
+            selection: { anchor: from + heading.length },
+          });
+        },
+      })),
       filter: false,
     };
-  }
-
-  let headings = headingCache.get(parsed.shortId);
-  if (!headings) {
-    headings = await resolveWikiLinkHeadings(parsed.shortId);
-    headingCache.set(parsed.shortId, headings);
-  }
-  const filtered = headings
-    .filter((heading) =>
-      parsed.headingQuery.length === 0
-        || heading.toLowerCase().includes(parsed.headingQuery),
-    )
-    .slice(0, 30);
-  if (filtered.length === 0) return null;
-
-  const headingFrom = match.from + 2 + parsed.shortId.length + 1;
-  return {
-    from: headingFrom,
-    options: filtered.map((heading) => ({
-      label: heading,
-      type: "wiki-link",
-      apply: (view: EditorView, _completion: object, from: number, to: number) => {
-        view.dispatch({
-          changes: { from, to, insert: heading },
-          selection: { anchor: from + heading.length },
-        });
-      },
-    })),
-    filter: false,
   };
-};
+}
+
+const wikiLinkCompletionSource = createWikiLinkCompletionSource(defaultWikiLinkApi);
 
 // Input handler: when user types the second [, auto-insert ]] and open picker.
 const wikiLinkInputHandler = EditorView.inputHandler.of((view, from, to, text) => {
@@ -162,15 +180,16 @@ function wikiLinkAtMouseEvent(view: EditorView, event: MouseEvent) {
   return markdownWikiLinkAtCursor(line.text, pos - line.from);
 }
 
-function tryNavigateWikiLinkFromMouseEvent(
+export function tryNavigateWikiLinkFromMouseEvent(
   event: MouseEvent,
   view: EditorView,
   onNavigate: (noteId: string, heading?: string) => void,
+  api: WikiLinkApi = defaultWikiLinkApi,
 ): boolean {
   if (!event.ctrlKey && !event.metaKey) return false;
   const link = wikiLinkAtMouseEvent(view, event);
   if (!link) return false;
-  resolveWikiLink(link.shortId)
+  api.resolveWikiLink(link.shortId)
     .then((result) => {
       if (result) onNavigate(result.id, link.heading ?? undefined);
     })
@@ -182,14 +201,16 @@ function tryNavigateWikiLinkFromMouseEvent(
 
 function wikiLinkClickHandler(
   onNavigate: (noteId: string, heading?: string) => void,
+  api: WikiLinkApi,
 ): (event: MouseEvent, view: EditorView) => boolean {
-  return (event, view) => tryNavigateWikiLinkFromMouseEvent(event, view, onNavigate);
+  return (event, view) => tryNavigateWikiLinkFromMouseEvent(event, view, onNavigate, api);
 }
 
 function wikiLinkContextMenuHandler(
   onNavigate: (noteId: string, heading?: string) => void,
+  api: WikiLinkApi,
 ): (event: MouseEvent, view: EditorView) => boolean {
-  return (event, view) => tryNavigateWikiLinkFromMouseEvent(event, view, onNavigate);
+  return (event, view) => tryNavigateWikiLinkFromMouseEvent(event, view, onNavigate, api);
 }
 
 export { wikiLinkCompletionSource };
@@ -205,19 +226,20 @@ export function invalidateWikiLinkCompletionCaches(shortId?: string) {
 
 export function wikiLinkExtensions(
   onNavigate?: (noteId: string, heading?: string) => void,
+  api: WikiLinkApi = defaultWikiLinkApi,
 ) {
   const extensions: Extension[] = [wikiLinkInputHandler];
 
   if (onNavigate) {
     extensions.push(
       Prec.highest(EditorView.domEventHandlers({
-        click: wikiLinkClickHandler(onNavigate),
+        click: wikiLinkClickHandler(onNavigate, api),
         mousedown: (event, view) => {
           const mouseEvent = event as MouseEvent;
           if (mouseEvent.button !== 2) return false;
-          return tryNavigateWikiLinkFromMouseEvent(mouseEvent, view, onNavigate);
+          return tryNavigateWikiLinkFromMouseEvent(mouseEvent, view, onNavigate, api);
         },
-        contextmenu: wikiLinkContextMenuHandler(onNavigate),
+        contextmenu: wikiLinkContextMenuHandler(onNavigate, api),
       })),
     );
   }

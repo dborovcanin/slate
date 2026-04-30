@@ -347,6 +347,7 @@ struct TerminalApp {
     variable_autocomplete_min_chars: usize,
     variable_autocomplete_popup: VariableAutocompletePopupState,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
+    wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
     wiki_link_prefix_index: HashMap<String, WikiLinkPrefixIndexEntry>,
     wiki_link_render_cache: HashMap<String, WikiLinkRenderCacheEntry>,
     wiki_link_line_render_cache: HashMap<String, WikiLinkLineRenderCacheEntry>,
@@ -659,6 +660,7 @@ impl TerminalApp {
             ),
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
+            wiki_link_note_suggestions_cache: Vec::new(),
             wiki_link_prefix_index: HashMap::new(),
             wiki_link_render_cache: HashMap::new(),
             wiki_link_line_render_cache: HashMap::new(),
@@ -682,6 +684,7 @@ impl TerminalApp {
         };
 
         app.rebuild_wiki_link_prefix_index();
+        app.rebuild_wiki_link_note_suggestions_cache();
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();

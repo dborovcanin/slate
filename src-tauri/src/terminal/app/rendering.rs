@@ -540,8 +540,7 @@ impl TerminalApp {
         if self.mode != UiMode::Editor || !popup.visible || cols == 0 || rows <= EDITOR_TOP_ROW {
             return;
         }
-        let suggestions = self.filtered_wiki_link_suggestions();
-        if suggestions.is_empty() {
+        if popup.suggestions.is_empty() {
             return;
         }
         let max_editor_row = rows.saturating_sub(1);
@@ -549,11 +548,18 @@ impl TerminalApp {
         if available_rows < 3 {
             return;
         }
-        let visible_count = suggestions.len().min(available_rows.saturating_sub(2).max(1));
-        let selected_index = popup.selected_index.min(visible_count.saturating_sub(1));
-        let inner_width = suggestions
+        let visible_limit = available_rows.saturating_sub(2).max(1);
+        let (start, end) = self.wiki_link_visible_window(visible_limit);
+        let visible_count = end.saturating_sub(start);
+        if visible_count == 0 {
+            return;
+        }
+        let visible_suggestions = &popup.suggestions[start..end];
+        let selected_index = popup
+            .selected_index
+            .min(popup.suggestions.len().saturating_sub(1));
+        let inner_width = visible_suggestions
             .iter()
-            .take(visible_count)
             .map(|item| item.title.chars().count() + 2)
             .max()
             .unwrap_or(1)
@@ -580,10 +586,14 @@ impl TerminalApp {
             ..Default::default()
         };
         draw_box_border(buf, y, x, box_width, box_height, border_style);
-        for (idx, suggestion) in suggestions.iter().take(visible_count).enumerate() {
+        for (idx, suggestion) in visible_suggestions.iter().enumerate() {
             let row = y + 1 + idx;
             let text = format!(" {}", suggestion.title);
-            let style = if idx == selected_index { selected_style } else { row_style };
+            let style = if start + idx == selected_index {
+                selected_style
+            } else {
+                row_style
+            };
             draw_row_at_styled(buf, row, x + 1, box_width.saturating_sub(2), &text, style);
         }
     }
