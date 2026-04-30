@@ -139,9 +139,8 @@ function editorOptionsForNote(note: Note | null) {
     getNoteModules: () =>
       appConfig ? modulesForNote(state.activeNote, appConfig) : null,
     setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),
-    onNavigateToNote: (noteId: string, _heading?: string) => {
-      // heading-to-line resolution is a follow-up; navigate to the note for now.
-      void switchToNote(noteId);
+    onNavigateToNote: (noteId: string, heading?: string) => {
+      void switchToNote(noteId, null, heading ?? null);
     },
   };
 }
@@ -266,6 +265,33 @@ function errorMessageOf(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : String(error);
 }
 
+function normalizeHeadingText(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function headingSlug(value: string): string {
+  return normalizeHeadingText(value)
+    .replace(/[`~!@#$%^&*()+={}\[\]|\\:;"'<>,.?/]/g, "")
+    .replace(/\s+/g, "-");
+}
+
+function findHeadingLineNumber(body: string, heading: string): number | null {
+  const query = normalizeHeadingText(heading);
+  const querySlug = headingSlug(heading);
+  if (!query && !querySlug) return null;
+  const lines = body.split("\n");
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx] ?? "";
+    const match = /^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!match) continue;
+    const title = normalizeHeadingText(match[1] ?? "");
+    if (title === query || headingSlug(title) === querySlug) {
+      return idx + 1;
+    }
+  }
+  return null;
+}
+
 async function unlockProtectedNoteWithRetry(noteId: string, title: string): Promise<Note | null> {
   while (true) {
     const password = await promptPasswordInApp(
@@ -295,7 +321,7 @@ async function unlockProtectedNoteWithRetry(noteId: string, title: string): Prom
   }
 }
 
-async function switchToNote(id: string, lineNumber?: number | null) {
+async function switchToNote(id: string, lineNumber?: number | null, heading?: string | null) {
   const saved = await flushSave();
   if (!saved) {
     return;
@@ -324,8 +350,11 @@ async function switchToNote(id: string, lineNumber?: number | null) {
   state.setActiveNote(note);
   reconfigureEditorForNote(note);
   setEditorContent(note.body, { forceStateReset: true });
+  const headingLine = heading ? findHeadingLineNumber(note.body, heading) : null;
   if (typeof lineNumber === "number" && Number.isFinite(lineNumber) && lineNumber > 0) {
     jumpEditorToLine(lineNumber);
+  } else if (typeof headingLine === "number" && headingLine > 0) {
+    jumpEditorToLine(headingLine);
   } else {
     focusEditor();
   }

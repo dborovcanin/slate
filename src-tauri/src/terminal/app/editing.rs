@@ -2274,39 +2274,85 @@ impl TerminalApp {
 
     // --- Wiki-link autocomplete ---
 
+    fn parse_wiki_link_query(query: &str) -> Option<(&str, Option<&str>)> {
+        if query.contains(']') || query.contains('|') {
+            return None;
+        }
+        if let Some(hash_idx) = query.find('#') {
+            let short_id = &query[..hash_idx];
+            if short_id.len() != 8 || !short_id.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+                return None;
+            }
+            return Some((short_id, Some(&query[hash_idx + 1..])));
+        }
+        Some((query, None))
+    }
+
+    fn load_wiki_link_heading_suggestions(
+        db: &crate::storage::Db,
+        short_id: &str,
+    ) -> Vec<WikiLinkSuggestion> {
+        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+        let Ok(Some(summary)) = note_sources.resolve_wiki_link(short_id) else {
+            return Vec::new();
+        };
+        let Ok(Some(note)) = note_sources.open_note_by_id(&summary.id) else {
+            return Vec::new();
+        };
+        crate::editor_core::markdown_tokens::extract_markdown_headings(&note.body)
+            .into_iter()
+            .take(32)
+            .map(|heading| WikiLinkSuggestion {
+                short_id: short_id.to_string(),
+                title: heading.clone(),
+                heading: Some(heading),
+            })
+            .collect()
+    }
+
+    fn load_wiki_link_note_suggestions(db: &crate::storage::Db) -> Vec<WikiLinkSuggestion> {
+        let notes = match crate::terminal::switcher::load_note_meta(db, None) {
+            Ok(n) => n,
+            Err(_) => return Vec::new(),
+        };
+        notes
+            .into_iter()
+            .filter(|n| n.access_mode == app_core::storage::NoteAccessMode::None || n.is_unlocked)
+            .map(|n| WikiLinkSuggestion {
+                short_id: n.id[..8.min(n.id.len())].to_string(),
+                title: if n.title.is_empty() { "Untitled".to_string() } else { n.title },
+                heading: None,
+            })
+            .collect()
+    }
+
     pub(super) fn dismiss_wiki_link_autocomplete(&mut self) {
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState::default();
     }
 
     pub(super) fn open_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
         let from_col = self.cursor_col.saturating_sub(2);
-        let notes = match crate::terminal::switcher::load_note_meta(db, None) {
-            Ok(n) => n,
-            Err(_) => return,
-        };
-        let suggestions: Vec<WikiLinkSuggestion> = notes
-            .into_iter()
-            .filter(|n| n.access_mode == app_core::storage::NoteAccessMode::None || n.is_unlocked)
-            .map(|n| WikiLinkSuggestion {
-                short_id: n.id[..8.min(n.id.len())].to_string(),
-                title: if n.title.is_empty() { "Untitled".to_string() } else { n.title },
-            })
-            .collect();
-        let anchor_col = from_col;
-        let anchor_row = self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW;
+        let note_suggestions = Self::load_wiki_link_note_suggestions(db);
+        let suggestions = note_suggestions.clone();
+        let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
+            self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW,
+            from_col.saturating_add(1),
+        ));
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState {
             visible: true,
             anchor_row,
             anchor_col,
             from_col,
             query: String::new(),
+            note_suggestions,
+            heading_cache: std::collections::HashMap::new(),
             suggestions,
             selected_index: 0,
             cursor_line: self.cursor_line,
         };
     }
 
-    pub(super) fn refresh_wiki_link_autocomplete(&mut self) {
+    pub(super) fn refresh_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
         if !self.wiki_link_autocomplete_popup.visible {
             return;
         }
@@ -2322,14 +2368,61 @@ impl TerminalApp {
             return;
         }
         let query: String = line.chars().skip(from_col + 2).take(self.cursor_col - from_col - 2).collect();
-        if query.contains(']') || query.contains('|') {
+        let Some((_, _heading_query)) = Self::parse_wiki_link_query(&query) else {
             self.dismiss_wiki_link_autocomplete();
             return;
-        }
+        };
         self.wiki_link_autocomplete_popup.query = query;
+        if let Some((anchor_row, anchor_col)) = self.variable_popup_anchor(from_col) {
+            self.wiki_link_autocomplete_popup.anchor_row = anchor_row;
+            self.wiki_link_autocomplete_popup.anchor_col = anchor_col;
+        }
+        if let Some((short_id, heading_query)) =
+            Self::parse_wiki_link_query(self.wiki_link_autocomplete_popup.query.as_str())
+        {
+            self.wiki_link_autocomplete_popup.suggestions = match heading_query {
+                Some(value) => {
+                    if !self.wiki_link_autocomplete_popup.heading_cache.contains_key(short_id) {
+                        let loaded = Self::load_wiki_link_heading_suggestions(db, short_id);
+                        self.wiki_link_autocomplete_popup
+                            .heading_cache
+                            .insert(short_id.to_string(), loaded);
+                    }
+                    if let Some(cached) = self.wiki_link_autocomplete_popup.heading_cache.get(short_id) {
+                        if value.is_empty() {
+                            cached.clone()
+                        } else {
+                            let query = value.to_lowercase();
+                            cached
+                                .iter()
+                                .filter(|suggestion| suggestion.title.to_lowercase().contains(&query))
+                                .cloned()
+                                .collect()
+                        }
+                    } else {
+                        Vec::new()
+                    }
+                }
+                None => self.wiki_link_autocomplete_popup.note_suggestions.clone(),
+            };
+            self.wiki_link_autocomplete_popup.selected_index = 0;
+        }
     }
 
     pub(super) fn filtered_wiki_link_suggestions(&self) -> Vec<&WikiLinkSuggestion> {
+        if self
+            .wiki_link_autocomplete_popup
+            .suggestions
+            .iter()
+            .any(|s| s.heading.is_some())
+        {
+            return self
+                .wiki_link_autocomplete_popup
+                .suggestions
+                .iter()
+                .take(16)
+                .collect();
+        }
         let query = self.wiki_link_autocomplete_popup.query.to_lowercase();
         self.wiki_link_autocomplete_popup
             .suggestions
@@ -2369,8 +2462,13 @@ impl TerminalApp {
         };
         let short_id = pick.short_id.clone();
         let title = pick.title.clone();
+        let heading = pick.heading.clone();
         let from_col = self.wiki_link_autocomplete_popup.from_col;
-        let replacement = format!("[[{}]]", short_id);
+        let replacement = if let Some(heading) = heading.as_deref() {
+            format!("[[{}#{}]]", short_id, heading)
+        } else {
+            format!("[[{}]]", short_id)
+        };
 
         // Find end of [[...]] span: scan forward from from_col for ]]
         let line = self.current_line().to_string();
@@ -2387,11 +2485,31 @@ impl TerminalApp {
         let from_byte = byte_index(&line, from_col);
         let to_byte = byte_index(&line, end_col);
         self.lines[self.cursor_line].replace_range(from_byte..to_byte, &replacement);
-        self.cursor_col = from_col + replacement.chars().count();
+        if heading.is_some() {
+            self.cursor_col = from_col + replacement.chars().count();
+        } else {
+            // Keep caret before closing markers so users can continue with #heading or |alt.
+            self.cursor_col = from_col + 2 + short_id.chars().count();
+        }
         self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
-        self.dismiss_wiki_link_autocomplete();
-        self.status = format!("link: {title}");
+        if heading.is_some() {
+            self.dismiss_wiki_link_autocomplete();
+            self.status = format!("link heading: {title}");
+        } else {
+            self.wiki_link_autocomplete_popup.query = short_id;
+            self.wiki_link_autocomplete_popup.suggestions =
+                self.wiki_link_autocomplete_popup.note_suggestions.clone();
+            self.wiki_link_autocomplete_popup.selected_index = 0;
+            self.wiki_link_autocomplete_popup.cursor_line = self.cursor_line;
+            if let Some((anchor_row, anchor_col)) =
+                self.variable_popup_anchor(self.wiki_link_autocomplete_popup.from_col)
+            {
+                self.wiki_link_autocomplete_popup.anchor_row = anchor_row;
+                self.wiki_link_autocomplete_popup.anchor_col = anchor_col;
+            }
+            self.status = format!("link: {title}");
+        }
         true
     }
 
@@ -2439,13 +2557,27 @@ impl TerminalApp {
     }
 
     fn jump_to_heading(&mut self, heading: &str) {
-        let needle = heading.to_lowercase();
+        let normalize = |value: &str| {
+            value
+                .trim()
+                .trim_end_matches('#')
+                .trim()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        let needle = normalize(heading);
+        if needle.is_empty() {
+            return;
+        }
         for (idx, line) in self.lines.iter().enumerate() {
-            if !line.starts_with('#') {
+            let trimmed = line.trim_start();
+            if !trimmed.starts_with('#') {
                 continue;
             }
-            let content = line.trim_start_matches('#').trim();
-            if content.to_lowercase().contains(&needle) {
+            let content = trimmed.trim_start_matches('#').trim();
+            if normalize(content) == needle {
                 self.cursor_line = idx;
                 self.cursor_col = 0;
                 self.adjust_scroll();

@@ -105,6 +105,7 @@ fn run_gui(startup_markdown_file: Option<PathBuf>) -> Result<(), String> {
             commands::notes::decrypt_note,
             commands::notes::resolve_wiki_link,
             commands::notes::resolve_wiki_links,
+            commands::notes::resolve_wiki_link_headings,
             commands::reminders::list_note_reminders,
             commands::reminders::upsert_note_reminder,
             commands::reminders::delete_note_reminder,

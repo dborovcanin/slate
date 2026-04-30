@@ -24,7 +24,11 @@ import {
 import { foldingExtensions } from "./folding.ts";
 import { notifyExtensions } from "./notify-decoration";
 import { makeVariableCompletionSource, variableAutocompleteExtensions } from "./variable-autocomplete";
-import { wikiLinkCompletionSource, wikiLinkExtensions } from "./wiki-link.ts";
+import {
+  invalidateWikiLinkCompletionCaches,
+  wikiLinkCompletionSource,
+  wikiLinkExtensions,
+} from "./wiki-link.ts";
 import { autocompletion } from "@codemirror/autocomplete";
 import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
@@ -481,6 +485,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,
           setNoteModules: options.setNoteModules,
+          onNavigateToNote: options.onNavigateToNote,
         }),
       ),
     );
@@ -609,14 +614,16 @@ export function getEditorView(): EditorView | null {
 }
 
 export function invalidateEditorWikiLinkCache() {
+  invalidateWikiLinkCompletionCaches();
   if (!view) return;
   requestMarkdownDecorationRefresh(view, { invalidateWikiLinkCache: true });
 }
 
 export function invalidateEditorWikiLinkForNoteId(noteId: string) {
-  if (!view) return;
   const shortId = noteId.slice(0, 8);
   if (!/^[0-9A-Za-z]{8}$/.test(shortId)) return;
+  invalidateWikiLinkCompletionCaches(shortId);
+  if (!view) return;
   requestMarkdownDecorationRefresh(view, { invalidatedShortIds: [shortId] });
 }
 

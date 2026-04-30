@@ -225,6 +225,10 @@ export function resolveWikiLinks(shortIds: string[]): Promise<ResolvedWikiLink[]
   return invoke<ResolvedWikiLink[]>("resolve_wiki_links", { shortIds });
 }
 
+export function resolveWikiLinkHeadings(shortId: string): Promise<string[]> {
+  return invoke<string[]>("resolve_wiki_link_headings", { shortId });
+}
+
 export function listNoteReminders(noteId: string): Promise<NoteReminder[]> {
   return invoke<NoteReminder[]>("list_note_reminders", { noteId });
 }

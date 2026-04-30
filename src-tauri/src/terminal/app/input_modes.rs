@@ -296,7 +296,7 @@ impl TerminalApp {
                 self.dismiss_wiki_link_autocomplete();
             } else if refresh_variable_popup {
                 self.refresh_variable_autocomplete_popup();
-                self.refresh_wiki_link_autocomplete();
+                self.refresh_wiki_link_autocomplete(db);
             }
         } else {
             self.dismiss_variable_autocomplete_popup();

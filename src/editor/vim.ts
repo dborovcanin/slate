@@ -24,12 +24,14 @@ import {
 import {
   VIM_INTENT,
   VimSession,
+  markdownWikiLinkAtCursor,
   executeVimActionFromWasm,
   type VimAction,
   type VimIntent,
   type VimMode,
   type VimRegisterValue,
 } from "./wasm.ts";
+import { resolveWikiLink } from "../api.ts";
 import { runUiVimPipeline } from "./vim-adapter.ts";
 import { vimAppendInsertPos, vimNormalLineEndPos } from "./vim-utils.ts";
 
@@ -44,6 +46,7 @@ interface VimOptions {
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
+  onNavigateToNote?: (noteId: string, heading?: string) => void;
 }
 
 type VimRegisterMode = "charwise" | "linewise";
@@ -366,6 +369,7 @@ export function vimModeExtension(options: VimOptions = {}) {
   let currentMode: VimUiMode = "normal";
   let unnamedRegister: VimRegister | null = null;
   let pendingFoldPrefixUntilMs = 0;
+  let pendingGoToLinkUntilMs = 0;
 
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
@@ -623,6 +627,20 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
       updateVisualSelection(view);
     }
+    return true;
+  };
+
+  const navigateWikiLinkAtCursor = (view: EditorView): boolean => {
+    if (!options.onNavigateToNote) return false;
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    const link = markdownWikiLinkAtCursor(line.text, head - line.from);
+    if (!link) return false;
+    resolveWikiLink(link.shortId)
+      .then((result) => {
+        if (result) options.onNavigateToNote?.(result.id, link.heading ?? undefined);
+      })
+      .catch(() => {});
     return true;
   };
 
@@ -1144,9 +1162,13 @@ export function vimModeExtension(options: VimOptions = {}) {
       if (pendingFoldPrefixUntilMs > 0 && now > pendingFoldPrefixUntilMs) {
         pendingFoldPrefixUntilMs = 0;
       }
+      if (pendingGoToLinkUntilMs > 0 && now > pendingGoToLinkUntilMs) {
+        pendingGoToLinkUntilMs = 0;
+      }
 
       if (activeMode !== "normal") {
         pendingFoldPrefixUntilMs = 0;
+        pendingGoToLinkUntilMs = 0;
       }
 
       const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
@@ -1162,6 +1184,12 @@ export function vimModeExtension(options: VimOptions = {}) {
           event.preventDefault();
           pendingFoldPrefixUntilMs = now + 900;
           return true;
+        }
+
+        if (plainKey === "g") {
+          pendingGoToLinkUntilMs = now + 900;
+        } else if (plainKey !== "d") {
+          pendingGoToLinkUntilMs = 0;
         }
       }
 
@@ -1192,6 +1220,19 @@ export function vimModeExtension(options: VimOptions = {}) {
       const step = pipeline.step;
       currentMode = toUiMode(step.mode);
       syncModeClasses(view);
+
+      if (
+        activeMode === "normal"
+        && plain
+        && event.key.toLowerCase() === "d"
+        && pendingGoToLinkUntilMs > 0
+      ) {
+        pendingGoToLinkUntilMs = 0;
+        if (navigateWikiLinkAtCursor(view)) {
+          event.preventDefault();
+          return true;
+        }
+      }
 
       if (pipeline.kind === "unhandled") {
         if (mode() !== "insert" && shouldSwallowInNormalLikeMode(event)) {

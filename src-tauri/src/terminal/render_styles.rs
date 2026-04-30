@@ -10,6 +10,7 @@ pub(super) struct CharStyle {
     pub(super) italic: bool,
     pub(super) dim: bool,
     pub(super) strikethrough: bool,
+    pub(super) underline: bool,
     pub(super) reverse: bool,
     pub(super) fg: Option<u8>,
 }
@@ -26,6 +27,9 @@ impl CharStyle {
         }
         if self.italic {
             buf.push_str(";3");
+        }
+        if self.underline {
+            buf.push_str(";4");
         }
         if self.reverse {
             buf.push_str(";7");
@@ -44,6 +48,7 @@ impl CharStyle {
             && !self.italic
             && !self.dim
             && !self.strikethrough
+            && !self.underline
             && !self.reverse
             && self.fg.is_none()
     }
@@ -211,9 +216,15 @@ pub(super) fn apply_inline_token_styles(
                 InlineTokenType::Emphasis => style.italic = true,
                 InlineTokenType::Strikethrough => style.strikethrough = true,
                 InlineTokenType::Code | InlineTokenType::CodeMarker => style.dim = true,
-                InlineTokenType::LinkText => style.bold = true,
+                InlineTokenType::LinkText => {
+                    style.bold = true;
+                    style.underline = true;
+                }
                 InlineTokenType::LinkUrl | InlineTokenType::LinkMarker => style.dim = true,
-                InlineTokenType::WikiLinkTitle => style.bold = true,
+                InlineTokenType::WikiLinkTitle => {
+                    style.bold = true;
+                    style.underline = true;
+                }
                 InlineTokenType::WikiLinkMarker
                 | InlineTokenType::WikiLinkId
                 | InlineTokenType::WikiLinkSep

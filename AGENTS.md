@@ -176,13 +176,13 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-04-30 11:55am GMT+2
+# [slate] recent context, 2026-04-30 2:17pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (18,372t read) | 654,179t work | 97% savings
+Stats: 50 obs (17,984t read) | 915,135t work | 98% savings
 
 ### Apr 28, 2026
 S92 Table formula := prefix feature fully shipped — all tests green (Apr 28, 3:29 PM)
@@ -190,11 +190,8 @@ S94 Change table formula cell prefix from bare = to := to align with variable as
 S108 Create slate.desktop XDG desktop entry file for the Slate application (Apr 28, 3:52 PM)
 S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 28, 10:44 PM)
 ### Apr 29, 2026
-118 9:22a 🔵 Calc engine and markdown-table architecture audit — optimization opportunities identified
-119 9:25a 🔵 Calc engine and table handling architecture mapped in Slate editor
 S160 Design discussion for Obsidian-style wiki links [[notename#heading]] and [[notename^block]] in notes editor (Apr 29, 9:29 AM)
-120 9:36a 🔵 Slate crate structure and dependencies mapped
-121 " 🔵 Slate calc engine architecture: AppCore, delta IPC, and viewport-based decorations
+121 9:36a 🔵 Slate calc engine architecture: AppCore, delta IPC, and viewport-based decorations
 122 " 🔵 Calc result remapping algorithm preserves displayed results across document edits
 123 9:37a 🔵 hash_line/hash_lines used only internally in calc_plan.rs, not exposed to WASM
 124 " 🔵 editor-core WASM bindings isolated to single file: crates/editor-core/src/wasm.rs
@@ -247,6 +244,9 @@ S174 Implement Obsidian-style wiki-links in Slate — broken link rendering, var
 215 12:23a 🔵 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case
 S192 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case (Apr 30, 12:23 AM)
 216 " 🔵 Tauri notes command surface mapped — no resolve_wiki_link command exists yet
+217 1:39p 🟣 Wiki-link heading autocomplete in UI and TUI
+218 " 🔵 extract_markdown_headings lives in editor-core, not app-core
+219 1:43p 🔵 Wiki-link navigation and TUI autocomplete bugs identified
 
-Access 654k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 915k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>

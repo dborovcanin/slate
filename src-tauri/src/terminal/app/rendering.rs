@@ -16,6 +16,34 @@ use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
+    fn push_rendered_segment_with_count(out: &mut String, segment: &str, char_count: &mut usize) {
+        out.push_str(segment);
+        *char_count += segment.chars().count();
+    }
+
+    fn push_rendered_chars_segment(
+        out: &mut String,
+        chars: &[char],
+        from: usize,
+        to: usize,
+        char_count: &mut usize,
+    ) {
+        if from >= to {
+            return;
+        }
+        out.extend(chars[from..to].iter());
+        *char_count += to - from;
+    }
+
+    fn append_link_display_text(base: &str, heading: Option<&str>) -> String {
+        let mut text = String::from(base);
+        if let Some(h) = heading.filter(|value| !value.is_empty()) {
+            text.push('#');
+            text.push_str(h);
+        }
+        text
+    }
+
     fn wiki_link_cache_entry(&mut self, short_id: &str) -> (String, bool) {
         if let Some(entry) = self.wiki_link_render_cache.get(short_id) {
             if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_RENDER_CACHE_TTL_MS
@@ -59,39 +87,48 @@ impl TerminalApp {
         (display, broken)
     }
 
-    fn render_wiki_link_display_line(&mut self, line_text: &str) -> String {
+    fn render_wiki_link_display_line(&mut self, line_text: &str) -> (String, Vec<(usize, usize)>) {
         let links = crate::editor_core::markdown_tokens::find_wiki_link_matches(line_text);
         if links.is_empty() {
-            return line_text.to_string();
+            return (line_text.to_string(), Vec::new());
         }
 
         let chars: Vec<char> = line_text.chars().collect();
         let mut out = String::with_capacity(line_text.len() + 16);
+        let mut underline_ranges: Vec<(usize, usize)> = Vec::new();
         let mut cursor = 0usize;
+        let mut out_char_count = 0usize;
 
         for link in links {
             if link.title.is_some() || link.from < cursor || link.to > chars.len() {
                 continue;
             }
-            out.extend(chars[cursor..link.from].iter());
+            Self::push_rendered_chars_segment(
+                &mut out,
+                &chars,
+                cursor,
+                link.from,
+                &mut out_char_count,
+            );
             let (base, broken) = self.wiki_link_cache_entry(&link.short_id);
-            if broken {
-                out.push('?');
+            let display = if broken {
+                Self::append_link_display_text("?", link.heading.as_deref())
             } else {
-                out.push_str(base.as_str());
-            }
-            if let Some(heading) = link.heading.as_deref().filter(|value| !value.is_empty()) {
-                out.push('#');
-                out.push_str(heading);
+                Self::append_link_display_text(base.as_str(), link.heading.as_deref())
+            };
+            if !display.is_empty() {
+                let start = out_char_count;
+                Self::push_rendered_segment_with_count(&mut out, display.as_str(), &mut out_char_count);
+                underline_ranges.push((start, out_char_count));
             }
             cursor = link.to;
         }
 
         if cursor == 0 {
-            return line_text.to_string();
+            return (line_text.to_string(), Vec::new());
         }
-        out.extend(chars[cursor..].iter());
-        out
+        Self::push_rendered_chars_segment(&mut out, &chars, cursor, chars.len(), &mut out_char_count);
+        (out, underline_ranges)
     }
 
     pub(super) fn update_command_status(&mut self) {
@@ -442,7 +479,7 @@ impl TerminalApp {
         }
         y = y.max(EDITOR_TOP_ROW).min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
         let border_style = AnsiStyle { fg: Some(self.render_palette.code_type), ..Default::default() };
-        let row_style = AnsiStyle { fg: Some(self.render_palette.code_string), ..Default::default() };
+        let row_style = AnsiStyle { fg: Some(self.render_palette.variable), ..Default::default() };
         let selected_bg = self.render_palette.primary();
         let selected_style = AnsiStyle {
             fg: Some(contrast_fg_for_bg(selected_bg)),
@@ -610,6 +647,7 @@ impl TerminalApp {
                 let mut reminder_ghost_override: Option<String> = None;
                 let mut reminder_strikethrough = false;
                 let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
+                let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
                 let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
                 let line_text = self.lines[line_idx].clone();
                 let mut rendered_line = line_text.clone();
@@ -627,7 +665,9 @@ impl TerminalApp {
                     reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
                 } else {
                     if !is_cursor_line {
-                        rendered_line = self.render_wiki_link_display_line(&line_text);
+                        let (rendered, underlines) = self.render_wiki_link_display_line(&line_text);
+                        rendered_line = rendered;
+                        wiki_link_underline_ranges = underlines;
                     }
                     if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
                         reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
@@ -839,6 +879,7 @@ impl TerminalApp {
                 let rendered_text = if ghost_dim_ranges.is_empty()
                     && visual_highlight_ranges.is_empty()
                     && focused_pipe_ranges.is_empty()
+                    && wiki_link_underline_ranges.is_empty()
                 {
                     ctx.render_line_window_with_reminder_cursor(
                         &rendered_line,
@@ -866,6 +907,7 @@ impl TerminalApp {
                         &ghost_dim_ranges,
                         &visual_highlight_ranges,
                         &focused_pipe_ranges,
+                        &wiki_link_underline_ranges,
                         render_cursor_col,
                     )
                 };
@@ -921,7 +963,8 @@ impl TerminalApp {
         }
 
         let status_owned = if self.mode == UiMode::Editor {
-            self.variable_autocomplete_status_hint()
+            self.wiki_link_autocomplete_status_hint()
+                .or_else(|| self.variable_autocomplete_status_hint())
                 .map(|hint| format!("{}  [{}]", self.status, hint))
         } else {
             None

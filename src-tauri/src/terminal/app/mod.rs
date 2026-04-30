@@ -211,6 +211,7 @@ struct VariableAutocompletePopupState {
 pub(super) struct WikiLinkSuggestion {
     pub short_id: String,
     pub title: String,
+    pub heading: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -220,6 +221,8 @@ struct WikiLinkAutocompletePopupState {
     anchor_col: usize,
     from_col: usize,
     query: String,
+    note_suggestions: Vec<WikiLinkSuggestion>,
+    heading_cache: HashMap<String, Vec<WikiLinkSuggestion>>,
     suggestions: Vec<WikiLinkSuggestion>,
     selected_index: usize,
     cursor_line: usize,

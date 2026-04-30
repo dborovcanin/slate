@@ -2,51 +2,129 @@ import {
   startCompletion,
   type CompletionSource,
 } from "@codemirror/autocomplete";
+import { Prec, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
-import { listNotesMeta, resolveWikiLink } from "../api.ts";
+import { listNotesMeta, resolveWikiLink, resolveWikiLinkHeadings, type NoteSummary } from "../api.ts";
 import { markdownWikiLinkAtCursor } from "./wasm.ts";
 
 // Regex: match [[ followed by anything that isn't ] up to cursor position.
 const WIKI_LINK_OPEN_RE = /\[\[[^\]]*$/;
+const SHORT_ID_RE = /^[0-9A-Za-z]{8}$/;
+const NOTE_LIST_CACHE_TTL_MS = 15_000;
+const headingCache = new Map<string, string[]>();
+let noteListCache: { expiresAt: number; notes: NoteSummary[] } | null = null;
+let noteListInFlight: Promise<NoteSummary[]> | null = null;
+
+async function loadWikiLinkNoteCandidates(): Promise<NoteSummary[]> {
+  const now = Date.now();
+  if (noteListCache && noteListCache.expiresAt > now) {
+    return noteListCache.notes;
+  }
+  if (noteListInFlight) {
+    return noteListInFlight;
+  }
+  noteListInFlight = listNotesMeta()
+    .then((notes) => {
+      noteListCache = {
+        notes,
+        expiresAt: Date.now() + NOTE_LIST_CACHE_TTL_MS,
+      };
+      return notes;
+    })
+    .finally(() => {
+      noteListInFlight = null;
+    });
+  return noteListInFlight;
+}
+
+type WikiLinkCompletionContext =
+  | { kind: "note"; noteQuery: string }
+  | { kind: "heading"; shortId: string; headingQuery: string };
+
+function parseWikiLinkCompletionContext(raw: string): WikiLinkCompletionContext | null {
+  if (raw.includes("]") || raw.includes("|")) return null;
+  const hashIdx = raw.indexOf("#");
+  if (hashIdx < 0) {
+    return { kind: "note", noteQuery: raw.toLowerCase() };
+  }
+  const shortId = raw.slice(0, hashIdx);
+  if (!SHORT_ID_RE.test(shortId)) return null;
+  return {
+    kind: "heading",
+    shortId,
+    headingQuery: raw.slice(hashIdx + 1).toLowerCase(),
+  };
+}
 
 const wikiLinkCompletionSource: CompletionSource = async (context) => {
   const match = context.matchBefore(WIKI_LINK_OPEN_RE);
   if (!match) return null;
 
-  const query = match.text.slice(2).toLowerCase();
-  const notes = await listNotesMeta();
-  const filtered = notes
-    .filter((n) => {
-      const title = n.title.toLowerCase();
-      return query.length === 0 || title.includes(query);
-    })
-    .slice(0, 30);
+  const raw = match.text.slice(2);
+  const parsed = parseWikiLinkCompletionContext(raw);
+  if (!parsed) return null;
 
+  if (parsed.kind === "note") {
+    const notes = await loadWikiLinkNoteCandidates();
+    const filtered = notes
+      .filter((n) => {
+        const title = n.title.toLowerCase();
+        return parsed.noteQuery.length === 0 || title.includes(parsed.noteQuery);
+      })
+      .slice(0, 30);
+    if (filtered.length === 0) return null;
+    return {
+      from: match.from,
+      options: filtered.map((note) => {
+        const shortId = note.id.slice(0, 8);
+        const title = note.title || "Untitled";
+        return {
+          label: title,
+          type: "wiki-link",
+          apply: (view: EditorView, _completion: object, from: number, to: number) => {
+            let actualTo = to;
+            if (view.state.doc.sliceString(to, to + 2) === "]]") {
+              actualTo = to + 2;
+            }
+            const insertText = `[[${shortId}]]`;
+            view.dispatch({
+              changes: { from, to: actualTo, insert: insertText },
+              // Keep caret before closing markers so heading/alt edits are immediate.
+              selection: { anchor: from + insertText.length - 2 },
+            });
+          },
+        };
+      }),
+      filter: false,
+    };
+  }
+
+  let headings = headingCache.get(parsed.shortId);
+  if (!headings) {
+    headings = await resolveWikiLinkHeadings(parsed.shortId);
+    headingCache.set(parsed.shortId, headings);
+  }
+  const filtered = headings
+    .filter((heading) =>
+      parsed.headingQuery.length === 0
+        || heading.toLowerCase().includes(parsed.headingQuery),
+    )
+    .slice(0, 30);
   if (filtered.length === 0) return null;
 
+  const headingFrom = match.from + 2 + parsed.shortId.length + 1;
   return {
-    from: match.from,
-    options: filtered.map((note) => {
-      const shortId = note.id.slice(0, 8);
-      const title = note.title || "Untitled";
-      return {
-        label: title,
-        type: "wiki-link",
-        apply: (view: EditorView, _completion: object, from: number, to: number) => {
-          let actualTo = to;
-          if (view.state.doc.sliceString(to, to + 2) === "]]") {
-            actualTo = to + 2;
-          }
-          // Insert [[shortId]] — title is shown dynamically via async resolver.
-          // User can append #heading or |alt-text manually if needed.
-          const insertText = `[[${shortId}]]`;
-          view.dispatch({
-            changes: { from, to: actualTo, insert: insertText },
-            selection: { anchor: from + insertText.length },
-          });
-        },
-      };
-    }),
+    from: headingFrom,
+    options: filtered.map((heading) => ({
+      label: heading,
+      type: "wiki-link",
+      apply: (view: EditorView, _completion: object, from: number, to: number) => {
+        view.dispatch({
+          changes: { from, to, insert: heading },
+          selection: { anchor: from + heading.length },
+        });
+      },
+    })),
     filter: false,
   };
 };
@@ -64,44 +142,83 @@ const wikiLinkInputHandler = EditorView.inputHandler.of((view, from, to, text) =
   return true;
 });
 
-// Click handler: navigate to the linked note when clicking a wiki-link-title span.
+function targetElementFromEvent(event: MouseEvent): Element | null {
+  const target = event.target;
+  if (!target) return null;
+  if (target instanceof Element) return target;
+  return target instanceof Node ? target.parentElement : null;
+}
+
+function wikiLinkAtMouseEvent(view: EditorView, event: MouseEvent) {
+  const coordPos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+  if (coordPos != null) {
+    const line = view.state.doc.lineAt(coordPos);
+    return markdownWikiLinkAtCursor(line.text, coordPos - line.from);
+  }
+  const targetEl = targetElementFromEvent(event);
+  if (!targetEl) return null;
+  const pos = view.posAtDOM(targetEl, 0);
+  const line = view.state.doc.lineAt(pos);
+  return markdownWikiLinkAtCursor(line.text, pos - line.from);
+}
+
+function tryNavigateWikiLinkFromMouseEvent(
+  event: MouseEvent,
+  view: EditorView,
+  onNavigate: (noteId: string, heading?: string) => void,
+): boolean {
+  if (!event.ctrlKey && !event.metaKey) return false;
+  const link = wikiLinkAtMouseEvent(view, event);
+  if (!link) return false;
+  resolveWikiLink(link.shortId)
+    .then((result) => {
+      if (result) onNavigate(result.id, link.heading ?? undefined);
+    })
+    .catch(() => {});
+  event.preventDefault();
+  event.stopPropagation();
+  return true;
+}
+
 function wikiLinkClickHandler(
   onNavigate: (noteId: string, heading?: string) => void,
 ): (event: MouseEvent, view: EditorView) => boolean {
-  return (event, view) => {
-    const target = event.target as Element | null;
-    const titleEl = target?.closest(".md-wiki-link-title");
-    if (!titleEl || titleEl.classList.contains("md-wiki-link-broken")) return false;
+  return (event, view) => tryNavigateWikiLinkFromMouseEvent(event, view, onNavigate);
+}
 
-    if (!event.ctrlKey && !event.metaKey) return false;
-
-    const coordPos = view.posAtCoords({ x: event.clientX, y: event.clientY });
-    const pos = coordPos ?? view.posAtDOM(titleEl);
-    const line = view.state.doc.lineAt(pos);
-    const link = markdownWikiLinkAtCursor(line.text, pos - line.from);
-    if (!link) return false;
-    resolveWikiLink(link.shortId)
-      .then((result) => {
-        if (result) onNavigate(result.id, link.heading ?? undefined);
-      })
-      .catch(() => {});
-    event.preventDefault();
-    return true;
-  };
+function wikiLinkContextMenuHandler(
+  onNavigate: (noteId: string, heading?: string) => void,
+): (event: MouseEvent, view: EditorView) => boolean {
+  return (event, view) => tryNavigateWikiLinkFromMouseEvent(event, view, onNavigate);
 }
 
 export { wikiLinkCompletionSource };
 
+export function invalidateWikiLinkCompletionCaches(shortId?: string) {
+  noteListCache = null;
+  if (shortId && SHORT_ID_RE.test(shortId)) {
+    headingCache.delete(shortId);
+  } else {
+    headingCache.clear();
+  }
+}
+
 export function wikiLinkExtensions(
   onNavigate?: (noteId: string, heading?: string) => void,
 ) {
-  const extensions: ReturnType<typeof EditorView.domEventHandlers>[] = [wikiLinkInputHandler];
+  const extensions: Extension[] = [wikiLinkInputHandler];
 
   if (onNavigate) {
     extensions.push(
-      EditorView.domEventHandlers({
+      Prec.highest(EditorView.domEventHandlers({
         click: wikiLinkClickHandler(onNavigate),
-      }),
+        mousedown: (event, view) => {
+          const mouseEvent = event as MouseEvent;
+          if (mouseEvent.button !== 2) return false;
+          return tryNavigateWikiLinkFromMouseEvent(mouseEvent, view, onNavigate);
+        },
+        contextmenu: wikiLinkContextMenuHandler(onNavigate),
+      })),
     );
   }
 

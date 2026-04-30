@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -460,6 +461,35 @@ pub fn classify_markdown_line(text: &str) -> MarkdownLineInfo {
         is_horizontal_rule: is_horizontal_rule(text),
         is_code_fence: is_code_fence(text),
     }
+}
+
+pub fn extract_markdown_headings(text: &str) -> Vec<String> {
+    let mut headings = Vec::new();
+    let mut seen = HashSet::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let hash_count = trimmed.chars().take_while(|ch| *ch == '#').count();
+        if hash_count == 0 || hash_count > 6 {
+            continue;
+        }
+        let rest = &trimmed[hash_count..];
+        if !rest.chars().next().is_some_and(|ch| ch.is_whitespace()) {
+            continue;
+        }
+
+        let mut heading = rest.trim();
+        heading = heading.trim_end_matches('#').trim_end();
+        if heading.is_empty() {
+            continue;
+        }
+        let normalized = heading.to_lowercase();
+        if seen.insert(normalized) {
+            headings.push(heading.to_string());
+        }
+    }
+
+    headings
 }
 
 fn overlaps(ranges: &[(usize, usize)], from: usize, to: usize) -> bool {
@@ -1444,5 +1474,19 @@ mod tests {
         assert!(wiki_link_at_cursor(text, 6).is_some());
         assert!(wiki_link_at_cursor(text, end).is_some());
         assert!(wiki_link_at_cursor(text, end + 1).is_none());
+    }
+
+    #[test]
+    fn extract_markdown_headings_collects_unique_headings() {
+        let text = "# Intro\n## Setup ##\ntext\n### Intro\n#### Deep Dive";
+        let headings = extract_markdown_headings(text);
+        assert_eq!(
+            headings,
+            vec![
+                "Intro".to_string(),
+                "Setup".to_string(),
+                "Deep Dive".to_string()
+            ]
+        );
     }
 }

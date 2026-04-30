@@ -255,6 +255,7 @@ impl RenderContext {
             dim_ranges,
             reverse_ranges,
             &[],
+            &[],
             active_cursor_col,
         )
     }
@@ -274,6 +275,7 @@ impl RenderContext {
         dim_ranges: &[(usize, usize)],
         reverse_ranges: &[(usize, usize)],
         red_ranges: &[(usize, usize)],
+        underline_ranges: &[(usize, usize)],
         active_cursor_col: Option<usize>,
     ) -> String {
         let chars: Vec<char> = text.chars().collect();
@@ -372,6 +374,12 @@ impl RenderContext {
                 s.fg = Some(196);
                 s.bold = true;
                 s.dim = false;
+            }
+        }
+
+        for &(start, end) in underline_ranges {
+            for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
+                s.underline = true;
             }
         }
 
