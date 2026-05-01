@@ -23,7 +23,6 @@ type ContextMenuIcon =
   | "bold"
   | "italic"
   | "strikethrough"
-  | "underline"
   | "code"
   | "quote"
   | "bullet-list"
@@ -235,7 +234,6 @@ class EditorContextMenuController implements PluginValue {
       { label: "Bold", icon: "bold", action: () => this.toggleWrap("**") },
       { label: "Italic", icon: "italic", action: () => this.toggleWrap("*") },
       { label: "Strikethrough", icon: "strikethrough", action: () => this.toggleWrap("~~") },
-      { label: "Underline", icon: "underline", action: () => this.toggleWrap("<u>", "</u>") },
       { label: "Code", icon: "code", action: () => this.toggleWrap("`") },
       { label: "Quote", icon: "quote", action: () => this.toggleQuotePrefix() },
     ]));
@@ -331,10 +329,6 @@ class EditorContextMenuController implements PluginValue {
         addPath("M6 12h12");
         addPath("M9 7.5a3 3 0 0 1 3-2.5c1.8 0 3 1 3 2.8");
         addPath("M15 16.5a3 3 0 0 1-3 2.5c-1.8 0-3-1-3-2.8");
-        break;
-      case "underline":
-        addPath("M8 5v7a4 4 0 0 0 8 0V5");
-        addPath("M6 19h12");
         break;
       case "code":
         addPath("M9 8l-4 4 4 4");
