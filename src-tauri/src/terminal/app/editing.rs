@@ -2,7 +2,8 @@ use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
     contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
     find_calc_segment_range, gutter_width_for_visible_lines, line_char_len, line_display_cols,
-    split_lines, table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
+    is_markdown_table_line, split_lines, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_is_empty,
     table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode, VariableAutocompletePopupState,
     VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
     CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER,
@@ -430,6 +431,135 @@ impl TerminalApp {
         !self.calc.cached_has_builtin_formula
             && !self.active_has_variable_assignments()
             && !self.calc.stale
+    }
+
+    fn shared_prefix_len_hashes(prev_hashes: &[u64], next_hashes: &[u64]) -> usize {
+        let max = prev_hashes.len().min(next_hashes.len());
+        let mut idx = 0usize;
+        while idx < max && prev_hashes[idx] == next_hashes[idx] {
+            idx += 1;
+        }
+        idx
+    }
+
+    fn shared_suffix_len_hashes(
+        prev_hashes: &[u64],
+        next_hashes: &[u64],
+        prefix_len: usize,
+    ) -> usize {
+        let max = prev_hashes
+            .len()
+            .min(next_hashes.len())
+            .saturating_sub(prefix_len);
+        let mut idx = 0usize;
+        while idx < max
+            && prev_hashes[prev_hashes.len() - 1 - idx] == next_hashes[next_hashes.len() - 1 - idx]
+        {
+            idx += 1;
+        }
+        idx
+    }
+
+    fn try_remap_calc_results_after_structural_edit(&mut self) -> bool {
+        if !self.note_math_module_enabled() || self.calc.stale {
+            return false;
+        }
+        self.ensure_calc_line_metadata();
+
+        let prev_len = self.calc.results.len();
+        let next_len = self.lines.len();
+        if prev_len == 0
+            || self.calc.cell_results.len() != prev_len
+            || self.calc.prev_line_metadata.len() != prev_len
+            || self.calc.line_metadata.len() != next_len
+        {
+            return false;
+        }
+
+        let prev_hashes = self
+            .calc
+            .prev_line_metadata
+            .iter()
+            .map(|entry| entry.hash)
+            .collect::<Vec<_>>();
+        let next_hashes = self
+            .calc
+            .line_metadata
+            .iter()
+            .map(|entry| entry.hash)
+            .collect::<Vec<_>>();
+        let prefix = Self::shared_prefix_len_hashes(&prev_hashes, &next_hashes);
+        let suffix = Self::shared_suffix_len_hashes(&prev_hashes, &next_hashes, prefix);
+        let changed_from = prefix.min(next_len);
+        let changed_to_next = next_len.saturating_sub(suffix).max(changed_from);
+        let prev_changed_from = prefix.min(prev_len);
+        let prev_changed_to = prev_len.saturating_sub(suffix).max(prev_changed_from);
+        let prev_changed_slice = self
+            .calc
+            .prev_line_metadata
+            .get(prev_changed_from..prev_changed_to)
+            .unwrap_or(&[]);
+
+        let prev_changed_had_assignment = prev_changed_slice.iter().any(|entry| entry.has_assignment);
+        let prev_changed_had_builtin_formula = prev_changed_slice
+            .iter()
+            .any(|entry| entry.has_builtin_formula);
+        let mask = self.calc_feature_mask();
+        let changed_lines = self.lines.get(changed_from..changed_to_next).unwrap_or(&[]);
+        let changed_touches_table = mask.table_enabled
+            && changed_lines
+                .iter()
+                .any(|line| is_markdown_table_line(line));
+        let changed_has_assignment =
+            crate::editor_core::calc_plan::contains_variable_assignment_with_mask(
+                changed_lines,
+                mask,
+            );
+        let changed_has_builtin_formula =
+            crate::editor_core::calc_plan::contains_builtin_formula_with_mask(changed_lines, mask);
+        let changed_has_calc_expression = changed_lines.iter().any(|line| {
+            !crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask)
+                .trim()
+                .is_empty()
+        });
+
+        // Safe remap-only path: only line index shifting happened, and changed
+        // lines don't participate in calc semantics.
+        if changed_touches_table
+            || prev_changed_had_assignment
+            || changed_has_assignment
+            || prev_changed_had_builtin_formula
+            || changed_has_builtin_formula
+            || changed_has_calc_expression
+        {
+            return false;
+        }
+
+        let mut remapped_results = vec![None; next_len];
+        let mut remapped_cell_results = vec![Vec::new(); next_len];
+
+        let shared_prefix = prefix.min(prev_len).min(next_len);
+        for line_idx in 0..shared_prefix {
+            remapped_results[line_idx] = self.calc.results[line_idx].clone();
+            remapped_cell_results[line_idx] = self.calc.cell_results[line_idx].clone();
+        }
+
+        let shared_suffix = suffix
+            .min(prev_len.saturating_sub(shared_prefix))
+            .min(next_len.saturating_sub(shared_prefix));
+        for offset in 0..shared_suffix {
+            let prev_idx = prev_len - shared_suffix + offset;
+            let next_idx = next_len - shared_suffix + offset;
+            remapped_results[next_idx] = self.calc.results[prev_idx].clone();
+            remapped_cell_results[next_idx] = self.calc.cell_results[prev_idx].clone();
+        }
+
+        self.calc.results = remapped_results;
+        self.calc.cell_results = remapped_cell_results;
+        self.calc.prev_line_metadata = self.calc.line_metadata.clone();
+        self.calc.stale = false;
+        self.calc_recompute_pending = false;
+        true
     }
 
     pub(super) fn clear_calc_cache(&mut self) {
@@ -939,6 +1069,7 @@ impl TerminalApp {
 
     pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
+        let line_count_changed = self.lines.len() != self.calc.results.len();
         self.dirty = true;
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
@@ -963,16 +1094,26 @@ impl TerminalApp {
             self.calc_recompute_pending = false;
         } else {
             if self.lines.len() >= CALC_ASYNC_MIN_LINES {
-                // Keep large-note typing non-blocking: schedule calc for the
-                // next idle tick and clear only the edited line's cached
-                // result so we don't show stale ghosts while pending.
-                if let Some(slot) = self.calc.results.get_mut(self.cursor_line) {
-                    *slot = None;
+                if line_count_changed {
+                    // Structural edits (Enter/join/delete-at-boundary): try a
+                    // cheap remap-only path first, and recompute only when
+                    // changed lines may affect calc semantics.
+                    if !self.try_remap_calc_results_after_structural_edit() {
+                        self.run_calc_recompute();
+                    }
+                } else {
+                    // Keep large-note typing non-blocking: schedule calc for
+                    // the next idle tick and clear only the edited line's
+                    // cached result so we don't show stale ghosts while
+                    // pending.
+                    if let Some(slot) = self.calc.results.get_mut(self.cursor_line) {
+                        *slot = None;
+                    }
+                    if let Some(slot) = self.calc.cell_results.get_mut(self.cursor_line) {
+                        slot.clear();
+                    }
+                    self.calc_recompute_pending = true;
                 }
-                if let Some(slot) = self.calc.cell_results.get_mut(self.cursor_line) {
-                    slot.clear();
-                }
-                self.calc_recompute_pending = true;
             } else {
                 self.run_calc_recompute();
             }

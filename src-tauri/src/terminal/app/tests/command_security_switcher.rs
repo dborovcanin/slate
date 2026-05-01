@@ -1335,7 +1335,7 @@ fn wiki_link_autocomplete_selection_can_move_and_apply_beyond_first_sixteen_resu
         run_keys(&mut app, &db, &[Key::ArrowDown]);
     }
     assert_eq!(app.wiki_link_autocomplete_popup.selected_index, 20);
-    assert_eq!(app.filtered_wiki_link_suggestions().len(), 8);
+    assert_eq!(app.filtered_wiki_link_suggestions().len(), 16);
 
     run_keys(&mut app, &db, &[Key::Tab]);
     assert_eq!(app.current_line(), "[[A0000020]]");

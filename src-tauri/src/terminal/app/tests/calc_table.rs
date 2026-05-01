@@ -250,6 +250,72 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
 }
 
 #[test]
+fn large_note_structural_edit_recomputes_calc_without_idle_delay() {
+    let mut lines = Vec::new();
+    lines.push("title".to_string());
+    lines.push("base := 1".to_string());
+    lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+    let body = lines.join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+
+    assert!(app.lines.len() >= 2_000);
+    assert!(app.calc_viewport_only);
+    assert_eq!(
+        app.calc.results.get(2).and_then(|entry| entry.as_deref()),
+        Some("3")
+    );
+
+    app.cursor_line = 0;
+    app.cursor_col = line_char_len(&app.lines[0]);
+    app.insert_newline();
+
+    assert!(!app.calc_recompute_pending);
+    assert_eq!(app.calc.results.len(), app.lines.len());
+    assert_eq!(
+        app.calc.results.get(3).and_then(|entry| entry.as_deref()),
+        Some("3")
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn large_note_structural_edit_with_calc_change_recomputes_immediately() {
+    let mut lines = Vec::new();
+    lines.push("title".to_string());
+    lines.push("base := 1".to_string());
+    lines.push("4+2".to_string());
+    lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+    let body = lines.join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+
+    assert!(app.lines.len() >= 2_000);
+    assert!(app.calc_viewport_only);
+    assert_eq!(
+        app.calc.results.get(2).and_then(|entry| entry.as_deref()),
+        Some("6")
+    );
+
+    app.cursor_line = 2;
+    app.cursor_col = 1;
+    app.insert_newline();
+
+    assert!(!app.calc_recompute_pending);
+    let changed_left = app.calc.results.get(2).and_then(|entry| entry.as_deref());
+    let changed_right = app.calc.results.get(3).and_then(|entry| entry.as_deref());
+    assert!(
+        changed_left.is_some() || changed_right.is_some(),
+        "changed calc lines should be recomputed immediately"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn set_active_note_without_calc_syntax_skips_full_calc_recompute() {
     let (db, mut app, path) = app_with_note("x := 4\nx + 2");
     assert!(app.calc.cached_has_variable_assignment);
