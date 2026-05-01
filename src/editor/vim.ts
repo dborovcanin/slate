@@ -1143,6 +1143,12 @@ export function vimModeExtension(options: VimOptions = {}) {
           getNoteModules: options.getNoteModules,
           setNoteModules: options.setNoteModules,
           source: "vim-colon",
+          onCancel: () => {
+            currentMode = "normal";
+            resetVisualAnchors();
+            collapseSelection(view);
+            syncModeClasses(view);
+          },
           selectionOverride: preservedSelection,
         });
         return true;

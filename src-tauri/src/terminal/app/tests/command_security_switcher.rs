@@ -424,7 +424,7 @@ fn clip_watch_commands_toggle_terminal_watcher() {
     let (db, mut app, path) = app_with_note("alpha");
     app.mode = UiMode::Normal;
 
-    app.execute_terminal_command(&db, "clip-watch");
+    app.execute_terminal_command(&db, "clip-watch on");
     assert!(app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch started");
 
@@ -432,7 +432,7 @@ fn clip_watch_commands_toggle_terminal_watcher() {
     assert!(app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch already active");
 
-    app.execute_terminal_command(&db, "clip-watch-stop");
+    app.execute_terminal_command(&db, "clip-watch off");
     assert!(!app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch stopped");
 
@@ -1432,6 +1432,47 @@ fn command_bar_enter_accepts_picker_selection_before_execute() {
     assert_eq!(app.mode, UiMode::CommandBar);
     assert_eq!(app.command_input, "module math ");
     assert!(!app.command_completion.visible);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn command_bar_esc_closes_picker_and_returns_to_normal_mode() {
+    let (db, mut app, path) = app_with_note("alpha");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('e'), Key::Char('m'), Key::Char('o'), Key::Tab, Key::Tab],
+    );
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert!(app.command_completion.visible);
+
+    run_keys(&mut app, &db, &[Key::Esc]);
+    assert_eq!(app.mode, UiMode::Normal);
+    assert!(!app.command_completion.visible);
+    assert!(app.command_input.is_empty());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn command_bar_backtab_cycles_completion_backward() {
+    let (db, mut app, path) = app_with_note("alpha");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('e'), Key::Char('m'), Key::Char('o'), Key::Tab, Key::Tab],
+    );
+    assert_eq!(app.command_completion.selected_index, 0);
+
+    run_keys(&mut app, &db, &[Key::BackTab]);
+    assert_eq!(app.command_completion.selected_index, 4);
 
     drop(app);
     drop(db);

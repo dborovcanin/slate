@@ -767,12 +767,9 @@ impl TerminalApp {
     pub(super) fn handle_command_bar_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
-                if self.command_completion.visible {
-                    self.dismiss_command_completion_menu();
-                    self.update_command_status();
-                    return Ok(());
-                }
-                self.mode = if self.command_bar_from_normal {
+                self.mode = if self.vim_enabled {
+                    UiMode::Normal
+                } else if self.command_bar_from_normal {
                     UiMode::Normal
                 } else {
                     UiMode::Editor
@@ -782,7 +779,7 @@ impl TerminalApp {
                 self.command_history_index = None;
                 self.command_selection = None;
                 self.command_selection_linewise = false;
-                self.status = if self.command_bar_from_normal {
+                self.status = if self.mode == UiMode::Normal {
                     "-- NORMAL --".to_string()
                 } else {
                     format!("editing {}", self.active_note.id)
@@ -813,6 +810,14 @@ impl TerminalApp {
                 self.command_history_index = None;
                 if self.command_completion.visible {
                     self.move_command_completion_selection(1);
+                } else {
+                    self.open_command_completion_menu();
+                }
+            }
+            Key::BackTab => {
+                self.command_history_index = None;
+                if self.command_completion.visible {
+                    self.move_command_completion_selection(-1);
                 } else {
                     self.open_command_completion_menu();
                 }

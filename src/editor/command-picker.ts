@@ -16,6 +16,7 @@ interface CommandPickerOptions {
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
   source?: "vim-colon" | "shortcut";
+  onCancel?: () => void;
   selectionOverride?: {
     anchor: number;
     head: number;
@@ -171,9 +172,11 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   prefixEl.textContent = ":";
 
   let pickerOverlay: ListOverlay | null = null;
+  let didSubmit = false;
   const historyNavigator = new CommandHistoryNavigator();
 
   const submit = async (command: string) => {
+    didSubmit = true;
     pickerOverlay?.close();
     view.focus();
     if (!command) return;
@@ -225,6 +228,9 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
     onSelect: (suggestion) => { void submit(suggestion.value); },
     onClose: (query) => {
       view.focus();
+      if (!didSubmit) {
+        options.onCancel?.();
+      }
       if (options.source === "vim-colon" && shouldReinsertLiteralOnCancel(query)) {
         insertAtSelection(view, `:${query}`);
       }
@@ -236,13 +242,10 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
       }
 
       if (event.key === "ArrowUp") {
-        if (!historyNavigator.isActive() && state.query.trim().length > 0) {
-          return false;
-        }
-        const previous = historyNavigator.previous();
-        if (!previous) return false;
         event.preventDefault();
         event.stopPropagation();
+        const previous = historyNavigator.previous();
+        if (!previous) return true;
         state.inputEl.value = previous;
         state.selectedIndex = 0;
         state.refresh();
@@ -250,15 +253,27 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
       }
 
       if (event.key === "ArrowDown") {
-        if (!historyNavigator.isActive() && state.query.trim().length > 0) {
-          return false;
-        }
-        const next = historyNavigator.next();
-        if (!next) return false;
         event.preventDefault();
         event.stopPropagation();
+        const next = historyNavigator.next();
+        if (!next) return true;
         state.inputEl.value = next;
         state.selectedIndex = 0;
+        state.refresh();
+        return true;
+      }
+
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const menu = buildCommandCompletionMenu(state.query, state.items);
+        if (!menu || menu.options.length === 0) {
+          return false;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const len = state.items.length;
+        const current = Math.max(0, Math.min(state.selectedIndex, len - 1));
+        const delta = event.key === "ArrowLeft" ? -1 : 1;
+        state.selectedIndex = (current + delta + len) % len;
         state.refresh();
         return true;
       }

@@ -1079,7 +1079,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   if (activeFlags.length > 0) {
     showToast(`Runtime flags: ${activeFlags.join(", ")}`);
   } else if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch, :clip-watch-stop, :w, :wq, :q");
+    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch on, :clip-watch off, :w, :wq, :q");
   }
 
   state.on(() => {

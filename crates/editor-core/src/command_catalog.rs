@@ -363,15 +363,25 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 43] = [
     },
     CommandDefinition {
         id: CommandId::ClipWatch,
-        value: "clip-watch",
-        aliases: &["clip_watch"],
+        value: "clip-watch on",
+        aliases: &[
+            "clip-watch",
+            "clip_watch",
+            "clip-watch start",
+            "clip_watch_on",
+        ],
         description: "watch clipboard and paste text at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ClipWatchStop,
-        value: "clip-watch-stop",
-        aliases: &["clip_watch_stop"],
+        value: "clip-watch off",
+        aliases: &[
+            "clip-watch-stop",
+            "clip_watch_stop",
+            "clip-watch stop",
+            "clip_watch_off",
+        ],
         description: "stop clipboard watch",
         modes: &MODES_BOTH,
     },
@@ -623,6 +633,14 @@ mod tests {
         );
         assert_eq!(
             resolve_command(CommandMode::Editor, "clip_watch_stop").map(|cmd| cmd.id),
+            Some(CommandId::ClipWatchStop)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "clip-watch").map(|cmd| cmd.id),
+            Some(CommandId::ClipWatch)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "clip-watch off").map(|cmd| cmd.id),
             Some(CommandId::ClipWatchStop)
         );
         assert_eq!(

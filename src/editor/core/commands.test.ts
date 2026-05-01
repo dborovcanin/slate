@@ -123,8 +123,8 @@ test("core command suggestions are mode-aware", async () => {
     "module style off",
     "module style toggle",
     "format",
-    "clip-watch",
-    "clip-watch-stop",
+    "clip-watch on",
+    "clip-watch off",
     "fold",
     "unfold",
     "fold-toggle",
@@ -376,7 +376,7 @@ test("core executeCommand handles clip-watch start/stop", async () => {
   const starts: string[] = [];
   const stops: string[] = [];
 
-  const started = await executeCommand(snapshot("alpha", 0), "clip-watch", {
+  const started = await executeCommand(snapshot("alpha", 0), "clip-watch on", {
     mode: "editor",
     startClipboardWatch: async () => {
       starts.push("start");
@@ -393,7 +393,7 @@ test("core executeCommand handles clip-watch start/stop", async () => {
   });
   assert.equal(alreadyActive.message, "clip-watch already active");
 
-  const stopped = await executeCommand(snapshot("alpha", 0), "clip-watch-stop", {
+  const stopped = await executeCommand(snapshot("alpha", 0), "clip-watch off", {
     mode: "editor",
     stopClipboardWatch: async () => {
       stops.push("stop");

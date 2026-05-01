@@ -191,8 +191,8 @@ pub fn execute_command(
         | CommandId::ModuleOnStyle
         | CommandId::ModuleOffStyle
         | CommandId::ModuleToggleStyle => result_with_message("module command handled by host"),
-        CommandId::ClipWatch => result_with_message("clip-watch handled by host"),
-        CommandId::ClipWatchStop => result_with_message("clip-watch-stop handled by host"),
+        CommandId::ClipWatch => result_with_message("clip-watch on handled by host"),
+        CommandId::ClipWatchStop => result_with_message("clip-watch off handled by host"),
         CommandId::Fold => result_with_message("fold handled by host"),
         CommandId::Unfold => result_with_message("unfold handled by host"),
         CommandId::FoldToggle => result_with_message("fold-toggle handled by host"),
@@ -283,8 +283,8 @@ mod tests {
                 "module style off",
                 "module style toggle",
                 "format",
-                "clip-watch",
-                "clip-watch-stop",
+                "clip-watch on",
+                "clip-watch off",
                 "fold",
                 "unfold",
                 "fold-toggle",

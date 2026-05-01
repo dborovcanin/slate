@@ -318,12 +318,12 @@ async function runWriteQuitCommand(
 }
 
 async function runClipWatchCommand(
-  _normalizedInput: string,
+  normalizedInput: string,
   _ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
   if (!runtime.startClipboardWatch) {
-    return { message: "clip-watch unavailable", operations: [] };
+    return { message: `${normalizedInput} unavailable`, operations: [] };
   }
   const started = await runtime.startClipboardWatch();
   return {
@@ -333,12 +333,12 @@ async function runClipWatchCommand(
 }
 
 async function runClipWatchStopCommand(
-  _normalizedInput: string,
+  normalizedInput: string,
   _ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
   if (!runtime.stopClipboardWatch) {
-    return { message: "clip-watch-stop unavailable", operations: [] };
+    return { message: `${normalizedInput} unavailable`, operations: [] };
   }
   const stopped = await runtime.stopClipboardWatch();
   return {
@@ -503,8 +503,8 @@ const EXECUTOR_MAP: Record<string, ExecuteFn> = {
   "fold": runFoldCommand,
   "unfold": runFoldCommand,
   "fold-toggle": runFoldCommand,
-  "clip-watch": runClipWatchCommand,
-  "clip-watch-stop": runClipWatchStopCommand,
+  "clip-watch on": runClipWatchCommand,
+  "clip-watch off": runClipWatchStopCommand,
   "clist": runChecklistCommand,
   "ulist": runUnorderedListCommand,
   "olist": runOrderedListCommand,
