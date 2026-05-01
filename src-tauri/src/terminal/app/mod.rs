@@ -377,6 +377,7 @@ struct TerminalApp {
     wiki_link_render_cache: HashMap<String, WikiLinkRenderCacheEntry>,
     wiki_link_line_render_cache: HashMap<String, WikiLinkLineRenderCacheEntry>,
     table_formula_segment_cache: HashMap<String, TableFormulaSegmentCacheEntry>,
+    table_format_cache: crate::editor_core::table::TableFormatCache,
     render_palette: render::RenderPalette,
     // Folding (real-line indexed, 0-based)
     folds: FoldingState,
@@ -699,6 +700,7 @@ impl TerminalApp {
             wiki_link_render_cache: HashMap::new(),
             wiki_link_line_render_cache: HashMap::new(),
             table_formula_segment_cache: HashMap::new(),
+            table_format_cache: crate::editor_core::table::TableFormatCache::default(),
             render_palette,
             folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,

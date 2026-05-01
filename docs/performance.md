@@ -45,3 +45,4 @@ Use the in-editor profiler for interaction latency and payload metrics.
 Detailed naming/reason/metric conventions live in:
 
 - `docs/perf-tracing.md`
+- `docs/perf-multirow-table.md`

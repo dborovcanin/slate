@@ -18,6 +18,43 @@ use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
+    fn masked_formula_value<'a>(value: &'a str) -> Cow<'a, str> {
+        // Keep table columns aligned while avoiding long `!ERROR#...` payloads
+        // that get awkwardly cut inside narrow cells.
+        if value.starts_with("!ERROR#") {
+            Cow::Borrowed("!ERROR")
+        } else {
+            Cow::Borrowed(value)
+        }
+    }
+
+    fn fit_formula_marker_replacement(value: &str, marker: &str, target_chars: usize) -> String {
+        if target_chars == 0 {
+            return String::new();
+        }
+        let marker_chars = marker.chars().count();
+        if marker_chars >= target_chars {
+            return marker.chars().take(target_chars).collect();
+        }
+
+        let value_budget = target_chars - marker_chars;
+        let masked_value = Self::masked_formula_value(value);
+        let value_chars = masked_value.chars().count();
+        let mut out = String::with_capacity(target_chars);
+        if value_chars > value_budget && value_budget >= 2 {
+            out.extend(masked_value.chars().take(value_budget - 1));
+            out.push('…');
+        } else {
+            out.extend(masked_value.chars().take(value_budget));
+        }
+        out.push_str(marker);
+        let out_chars = out.chars().count();
+        if out_chars < target_chars {
+            out.push_str(&" ".repeat(target_chars - out_chars));
+        }
+        out
+    }
+
     fn push_rendered_segment_with_count(out: &mut String, segment: &str, char_count: &mut usize) {
         out.push_str(segment);
         *char_count += segment.chars().count();
@@ -882,15 +919,13 @@ impl TerminalApp {
                                     (self.cursor_col as isize + char_delta).max(0) as usize;
                                 focused_cursor_col = Some(mapped);
                             } else {
-                                let mut replacement = format!("{value}{marker}");
                                 let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                                let new_chars = replacement.chars().count();
-                                if new_chars < old_chars {
-                                    replacement.push_str(&" ".repeat(old_chars - new_chars));
-                                }
+                                let replacement = Self::fit_formula_marker_replacement(
+                                    &value, &marker, old_chars,
+                                );
                                 let rendered_chars = replacement.chars().count();
                                 let marker_char = ((seg.from_char as isize) + char_delta) as usize
-                                    + value.chars().count();
+                                    + rendered_chars.saturating_sub(marker.chars().count());
                                 let marker_end = marker_char + marker.chars().count();
                                 ghost_dim_ranges.push((marker_char, marker_end));
                                 char_delta += rendered_chars as isize - old_chars as isize;
@@ -1019,12 +1054,10 @@ impl TerminalApp {
                                         })
                                         .unwrap_or_else(|| String::from("…"));
                                     let marker = formula_marker_token(fi);
-                                    let mut rep = format!("{value}{marker}");
                                     let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                                    let new_chars = rep.chars().count();
-                                    if new_chars < old_chars {
-                                        rep.push_str(&" ".repeat(old_chars - new_chars));
-                                    }
+                                    let rep = Self::fit_formula_marker_replacement(
+                                        &value, &marker, old_chars,
+                                    );
                                     delta += rep.chars().count() as isize - old_chars as isize;
                                 }
                             }

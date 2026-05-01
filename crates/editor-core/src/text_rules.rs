@@ -612,7 +612,10 @@ fn collect_table_blocks_for_autoformat(ctx: &ResolvedContext<'_>) -> Vec<(usize,
     blocks
 }
 
-fn table_autoformat_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
+fn table_autoformat_rule(
+    ctx: &ResolvedContext<'_>,
+    table_format_cache: &mut table::TableFormatCache,
+) -> Option<EditOperation> {
     let blocks = collect_table_blocks_for_autoformat(ctx);
     if blocks.is_empty() {
         return None;
@@ -633,7 +636,8 @@ fn table_autoformat_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
         let original_lines = (start_line..=end_line)
             .map(|line_no| ctx.line_text(line_no).to_string())
             .collect::<Vec<_>>();
-        let formatted_lines = table::format_table_lines(&original_lines);
+        let formatted_lines =
+            table::format_table_lines_with_cache(&original_lines, table_format_cache);
         if formatted_lines == original_lines {
             continue;
         }
@@ -774,12 +778,21 @@ pub fn run_doc_change_rules(
     ctx: &ResolvedContext<'_>,
     options: TextRuleOptions,
 ) -> Option<EditOperation> {
+    let mut table_format_cache = table::TableFormatCache::default();
+    run_doc_change_rules_with_table_cache(ctx, options, &mut table_format_cache)
+}
+
+pub fn run_doc_change_rules_with_table_cache(
+    ctx: &ResolvedContext<'_>,
+    options: TextRuleOptions,
+    table_format_cache: &mut table::TableFormatCache,
+) -> Option<EditOperation> {
     if let Some(op) = checklist_toggle_rule(ctx, options) {
         return Some(op);
     }
 
     if options.table_enabled {
-        if let Some(op) = table_autoformat_rule(ctx) {
+        if let Some(op) = table_autoformat_rule(ctx, table_format_cache) {
             return Some(op);
         }
     }
@@ -1150,6 +1163,15 @@ pub fn run_table_multiline_break_rule(
     ctx: &ResolvedContext<'_>,
     table_enabled: bool,
 ) -> Option<EditOperation> {
+    let mut table_format_cache = table::TableFormatCache::default();
+    run_table_multiline_break_rule_with_table_cache(ctx, table_enabled, &mut table_format_cache)
+}
+
+pub fn run_table_multiline_break_rule_with_table_cache(
+    ctx: &ResolvedContext<'_>,
+    table_enabled: bool,
+    table_format_cache: &mut table::TableFormatCache,
+) -> Option<EditOperation> {
     if !table_enabled {
         return None;
     }
@@ -1219,7 +1241,7 @@ pub fn run_table_multiline_break_rule(
         .enumerate()
         .map(|(idx, cells)| table::serialize_table_row_with_kind(cells, row_continuations[idx]))
         .collect();
-    let formatted = table::format_table_lines(&raw_lines);
+    let formatted = table::format_table_lines_with_cache(&raw_lines, table_format_cache);
 
     let block_from = ctx.line(block.start_line).from;
     let block_to = ctx.line(block.end_line).to;
@@ -1266,6 +1288,14 @@ pub fn run_table_multiline_break_rule(
 /// - the table has no recognizable structure,
 /// - or the cursor sits on a pipe character itself.
 pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
+    let mut table_format_cache = table::TableFormatCache::default();
+    run_table_pipe_insert_column_rule_with_table_cache(ctx, &mut table_format_cache)
+}
+
+pub fn run_table_pipe_insert_column_rule_with_table_cache(
+    ctx: &ResolvedContext<'_>,
+    table_format_cache: &mut table::TableFormatCache,
+) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1320,7 +1350,7 @@ pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<Ed
         .enumerate()
         .map(|(idx, cells)| table::serialize_table_row_with_kind(cells, row_continuations[idx]))
         .collect();
-    let formatted = table::format_table_lines(&raw_lines);
+    let formatted = table::format_table_lines_with_cache(&raw_lines, table_format_cache);
 
     let block_from = ctx.line(block.start_line).from;
     let block_to = ctx.line(block.end_line).to;
@@ -1357,6 +1387,14 @@ pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<Ed
 /// - the current header cell is non-empty,
 /// - or the table only has a single column (deletion would destroy the table).
 pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
+    let mut table_format_cache = table::TableFormatCache::default();
+    run_table_header_delete_column_rule_with_table_cache(ctx, &mut table_format_cache)
+}
+
+pub fn run_table_header_delete_column_rule_with_table_cache(
+    ctx: &ResolvedContext<'_>,
+    table_format_cache: &mut table::TableFormatCache,
+) -> Option<EditOperation> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -1414,7 +1452,7 @@ pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext<'_>) -> Option<
         .enumerate()
         .map(|(idx, cells)| table::serialize_table_row_with_kind(cells, row_continuations[idx]))
         .collect();
-    let formatted = table::format_table_lines(&raw_lines);
+    let formatted = table::format_table_lines_with_cache(&raw_lines, table_format_cache);
 
     let block_from = ctx.line(block.start_line).from;
     let block_to = ctx.line(block.end_line).to;

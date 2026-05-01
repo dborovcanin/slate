@@ -408,7 +408,11 @@ impl TerminalApp {
                 checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
                 table_enabled: self.note_table_module_enabled(),
             };
-            if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
+            if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules_with_table_cache(
+                &ctx,
+                options,
+                &mut self.table_format_cache,
+            ) {
                 let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
                 self.apply_edit_operation(&mapped);
             }

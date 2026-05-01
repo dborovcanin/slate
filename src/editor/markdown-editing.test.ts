@@ -58,6 +58,22 @@ test("formatTableLines keeps escaped pipes inside cells", () => {
   assert.deepEqual(out, ["| left \\| right | v   |", "| ------------- | --- |", "| short         | 1   |"]);
 });
 
+test("formatTableLines keeps alignment with !ERROR literals", () => {
+  const input = [
+    "| expr | value |",
+    "| --- | --- |",
+    "| :=(1,2) | !ERROR#non_numeric |",
+    "| ok | 1 |",
+  ];
+  const out = formatTableLines(input);
+  assert.deepEqual(out, [
+    "| expr    | value              |",
+    "| ------- | ------------------ |",
+    "| :=(1,2) | !ERROR#non_numeric |",
+    "| ok      | 1                  |",
+  ]);
+});
+
 test("rewriteLineWithChecklistToggleSuffix toggles checklist checked state", () => {
   assert.equal(
     rewriteLineWithChecklistToggleSuffix("- [ ] ship docs /x"),

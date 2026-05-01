@@ -1023,6 +1023,28 @@ fn tab_applies_checklist_calc_with_variables_and_positions_cursor_at_insert_end(
 }
 
 #[test]
+fn tab_applies_table_error_result_and_reflows_table_alignment() {
+    let (db, mut app, path) =
+        app_with_note("| c1 | c2 |\n| --- | --- |\n| a | !ERROR#out_of_bounds |\n| b | 1 |");
+    app.cursor_line = 3;
+    app.cursor_col = app.lines[3].find('1').expect("value");
+
+    app.handle_editor_key(&db, Key::Char('2'))
+        .expect("typing triggers table reflow");
+
+    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.lines[0]);
+    for line in app.lines.iter().take(4) {
+        let pipes = crate::editor_core::table::table_pipe_positions(line);
+        assert_eq!(pipes, expected_pipes, "misaligned line: {line}");
+    }
+    assert!(app.lines[2].contains("!ERROR#out_of_bounds"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn variable_autocomplete_popup_appears_after_min_chars_and_supports_selection_keys() {
     let (db, mut app, path) = app_with_note("total cost := 10\ntotal revenue := 20\nto");
     app.cursor_line = 2;

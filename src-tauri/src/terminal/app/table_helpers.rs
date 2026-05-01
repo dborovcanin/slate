@@ -32,6 +32,9 @@ const TABLE_CELL_INFO_CACHE_CAP: usize = 256;
 
 thread_local! {
     static TABLE_CELL_INFO_CACHE: RefCell<VecDeque<TableCellInfoCacheEntry>> = const { RefCell::new(VecDeque::new()) };
+    static TABLE_LOGICAL_ROW_CACHE: RefCell<crate::editor_core::table::TableLogicalRowCache> = RefCell::new(
+        crate::editor_core::table::TableLogicalRowCache::default()
+    );
 }
 
 fn line_hash(text: &str) -> u64 {
@@ -84,8 +87,14 @@ pub(super) fn table_cell_info_at_char(
     }
 
     let col_byte = byte_index(line, col_char);
-    let info =
-        crate::editor_core::table::table_cell_cursor_info_in_document(lines, line_idx, col_byte)?;
+    let info = TABLE_LOGICAL_ROW_CACHE.with(|row_cache| {
+        crate::editor_core::table::table_cell_cursor_info_in_document_cached(
+            lines,
+            line_idx,
+            col_byte,
+            &mut row_cache.borrow_mut(),
+        )
+    })?;
     let resolved = Some(TableCellInfo {
         column_index: info.column_index,
         column_count: info.column_count,

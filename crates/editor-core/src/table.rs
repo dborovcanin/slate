@@ -1,3 +1,14 @@
+use std::hash::{Hash, Hasher};
+
+use rustc_hash::FxHasher;
+
+#[derive(Debug, Clone, Default)]
+pub struct TableFormatCache {
+    row_cells: Vec<Vec<String>>,
+    delimiter_flags: Vec<bool>,
+    widths: Vec<usize>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TableAlign {
     Left,
@@ -43,6 +54,31 @@ pub struct TableCursorCellInfo {
     pub logical_row_index: Option<usize>,
     pub logical_row_count: usize,
     pub is_continuation_row: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TableLogicalRowCache {
+    block_start: usize,
+    block_end: usize,
+    logical_row_count: usize,
+    delimiter_row: Option<usize>,
+    line_hashes: Vec<u64>,
+    logical_row_index_by_line: Vec<Option<usize>>,
+}
+
+impl TableLogicalRowCache {
+    pub fn invalidate(&mut self) {
+        self.block_start = 0;
+        self.block_end = 0;
+        self.logical_row_count = 0;
+        self.delimiter_row = None;
+        self.line_hashes.clear();
+        self.logical_row_index_by_line.clear();
+    }
+
+    fn block_contains_line(&self, line_idx: usize) -> bool {
+        !self.line_hashes.is_empty() && line_idx >= self.block_start && line_idx <= self.block_end
+    }
 }
 
 impl TableCursorCellInfo {
@@ -258,6 +294,17 @@ pub fn table_cell_cursor_info_in_document(
     line_idx: usize,
     col: usize,
 ) -> Option<TableCursorCellInfo> {
+    let mut cache = TableLogicalRowCache::default();
+    table_cell_cursor_info_in_document_cached(lines, line_idx, col, &mut cache)
+}
+
+fn text_hash(text: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn table_block_bounds(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
     let current = lines.get(line_idx)?;
     if !is_table_line(current) {
         return None;
@@ -271,33 +318,101 @@ pub fn table_cell_cursor_info_in_document(
     while block_end + 1 < lines.len() && is_table_line(lines.get(block_end + 1)?) {
         block_end += 1;
     }
+    Some((block_start, block_end))
+}
 
+fn build_logical_row_cache(
+    lines: &[String],
+    block_start: usize,
+    block_end: usize,
+) -> Option<TableLogicalRowCache> {
     let mut delimiter_row: Option<usize> = None;
+    let mut line_hashes = Vec::with_capacity(block_end.saturating_sub(block_start) + 1);
     for idx in block_start..=block_end {
-        let row_cells = split_table_cells(lines.get(idx)?);
-        if is_delimiter_row(&row_cells) {
-            delimiter_row = Some(idx);
-            break;
+        let line = lines.get(idx)?;
+        line_hashes.push(text_hash(line));
+        if delimiter_row.is_none() {
+            let row_cells = split_table_cells(line);
+            if is_delimiter_row(&row_cells) {
+                delimiter_row = Some(idx);
+            }
         }
     }
 
     let mut logical_row_count = 0usize;
-    let mut logical_row_index_for_line: Option<usize> = None;
+    let mut logical_row_index_by_line = vec![None; block_end.saturating_sub(block_start) + 1];
     if let Some(delim) = delimiter_row {
         for idx in (delim + 1)..=block_end {
             let is_cont = is_table_continuation_line(lines.get(idx)?);
             if is_cont && logical_row_count > 0 {
-                if idx == line_idx {
-                    logical_row_index_for_line = Some(logical_row_count - 1);
-                }
+                logical_row_index_by_line[idx - block_start] = Some(logical_row_count - 1);
                 continue;
             }
-            if idx == line_idx {
-                logical_row_index_for_line = Some(logical_row_count);
-            }
+            logical_row_index_by_line[idx - block_start] = Some(logical_row_count);
             logical_row_count += 1;
         }
     }
+    Some(TableLogicalRowCache {
+        block_start,
+        block_end,
+        logical_row_count,
+        delimiter_row,
+        line_hashes,
+        logical_row_index_by_line,
+    })
+}
+
+fn cache_matches_lines(cache: &TableLogicalRowCache, lines: &[String]) -> bool {
+    if cache.line_hashes.is_empty() {
+        return false;
+    }
+    if cache.block_end < cache.block_start {
+        return false;
+    }
+    let len = cache.block_end - cache.block_start + 1;
+    if len != cache.line_hashes.len() {
+        return false;
+    }
+    for idx in 0..len {
+        let line_no = cache.block_start + idx;
+        let Some(line) = lines.get(line_no) else {
+            return false;
+        };
+        if text_hash(line) != cache.line_hashes[idx] {
+            return false;
+        }
+    }
+    true
+}
+
+pub fn table_cell_cursor_info_in_document_cached(
+    lines: &[String],
+    line_idx: usize,
+    col: usize,
+    cache: &mut TableLogicalRowCache,
+) -> Option<TableCursorCellInfo> {
+    let current = lines.get(line_idx)?;
+    if !is_table_line(current) {
+        return None;
+    }
+    let (block_start, block_end) = table_block_bounds(lines, line_idx)?;
+    let cache_can_reuse = cache.block_contains_line(line_idx)
+        && cache.block_start == block_start
+        && cache.block_end == block_end
+        && cache_matches_lines(cache, lines);
+
+    if !cache_can_reuse {
+        *cache = build_logical_row_cache(lines, block_start, block_end)?;
+    }
+    let logical_row_index_for_line = if line_idx < cache.block_start || line_idx > cache.block_end {
+        None
+    } else {
+        cache
+            .logical_row_index_by_line
+            .get(line_idx - cache.block_start)
+            .copied()
+            .flatten()
+    };
 
     let pipes = table_pipe_positions(current);
     if pipes.len() < 2 {
@@ -318,7 +433,7 @@ pub fn table_cell_cursor_info_in_document(
         trim_start,
         trim_end,
         logical_row_index: logical_row_index_for_line,
-        logical_row_count,
+        logical_row_count: cache.logical_row_count,
         is_continuation_row: is_table_continuation_line(current),
     })
 }
@@ -500,6 +615,14 @@ pub fn normalize_table_row(line: &str) -> Option<String> {
 }
 
 pub fn format_table_lines(lines: &[String]) -> Vec<String> {
+    let mut cache = TableFormatCache::default();
+    format_table_lines_with_cache(lines, &mut cache)
+}
+
+pub fn format_table_lines_with_cache(
+    lines: &[String],
+    cache: &mut TableFormatCache,
+) -> Vec<String> {
     if lines.is_empty() {
         return Vec::new();
     }
@@ -534,10 +657,10 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     }
 
     let mut normalized_content: Vec<Vec<String>> = Vec::with_capacity(normalized_rows.len());
-    let mut widths = vec![0usize; column_count];
-
+    let mut delimiter_flags: Vec<bool> = Vec::with_capacity(normalized_rows.len());
     for row in &normalized_rows {
         let delimiter = is_delimiter_row(row);
+        delimiter_flags.push(delimiter);
         let mut out = Vec::with_capacity(column_count);
         for col in 0..column_count {
             let raw = row.get(col).map_or("", |cell| cell.as_str());
@@ -550,20 +673,63 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
             } else {
                 raw.trim().to_string()
             };
-            // Delimiter dashes auto-stretch to the column width — they must
-            // not themselves drive that width or the column can never shrink.
-            // Their alignment markers (`:`) still need to fit, so use the
-            // marker count (0, 1, or 2) as the minimum delimiter contribution.
-            if delimiter {
-                let marker_len = cell.chars().filter(|c| *c == ':').count();
-                widths[col] = widths[col].max(marker_len);
-            } else {
-                widths[col] = widths[col].max(table_cell_display_width(&cell));
-            }
             out.push(cell);
         }
         normalized_content.push(out);
     }
+
+    let compute_col_width = |col: usize| -> usize {
+        let mut width = 0usize;
+        for (row_idx, row) in normalized_content.iter().enumerate() {
+            let cell = row.get(col).map_or("", String::as_str);
+            if delimiter_flags.get(row_idx).copied().unwrap_or(false) {
+                let marker_len = cell.chars().filter(|c| *c == ':').count();
+                width = width.max(marker_len);
+            } else {
+                width = width.max(table_cell_display_width(cell));
+            }
+        }
+        width
+    };
+
+    let mut widths = {
+        let cache_reusable = cache.row_cells.len() == normalized_content.len()
+            && cache.delimiter_flags.len() == delimiter_flags.len()
+            && cache.widths.len() == column_count
+            && cache.row_cells.iter().all(|row| row.len() == column_count);
+
+        if !cache_reusable {
+            (0..column_count).map(compute_col_width).collect::<Vec<_>>()
+        } else {
+            let mut dirty_cols = vec![false; column_count];
+            let mut any_change = false;
+            for row_idx in 0..normalized_content.len() {
+                if cache.delimiter_flags[row_idx] != delimiter_flags[row_idx] {
+                    dirty_cols.fill(true);
+                    any_change = true;
+                    break;
+                }
+                for col in 0..column_count {
+                    if cache.row_cells[row_idx][col] != normalized_content[row_idx][col] {
+                        dirty_cols[col] = true;
+                        any_change = true;
+                    }
+                }
+            }
+
+            if !any_change {
+                cache.widths.clone()
+            } else {
+                let mut next_widths = cache.widths.clone();
+                for col in 0..column_count {
+                    if dirty_cols[col] {
+                        next_widths[col] = compute_col_width(col);
+                    }
+                }
+                next_widths
+            }
+        }
+    };
     // Delimiter cells must render at least `---` (3 dashes), so enforce a
     // floor on every column width — but only when the table actually has
     // (or is about to get) a delimiter row.
@@ -573,6 +739,10 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
             *w = (*w).max(3);
         }
     }
+
+    cache.row_cells = normalized_content.clone();
+    cache.delimiter_flags = delimiter_flags.clone();
+    cache.widths = widths.clone();
 
     normalized_rows
         .iter()
@@ -603,7 +773,12 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
                 } else {
                     cell.clone()
                 };
-                let pad_right = widths[col].saturating_sub(content.len()) + 1;
+                let content_width = if delimiter {
+                    content.chars().count()
+                } else {
+                    table_cell_display_width(&content)
+                };
+                let pad_right = widths[col].saturating_sub(content_width) + 1;
                 out.push(' ');
                 out.push_str(&content);
                 out.push_str(&" ".repeat(pad_right));
@@ -804,6 +979,40 @@ mod tests {
     }
 
     #[test]
+    fn table_cell_cursor_info_cached_reuses_and_invalidates_on_table_change() {
+        let mut lines = vec![
+            "before".to_string(),
+            "| name | value |".to_string(),
+            "| --- | --- |".to_string(),
+            "| alpha | one |".to_string(),
+            "|> beta | two |".to_string(),
+            "after".to_string(),
+        ];
+        let mut cache = TableLogicalRowCache::default();
+        let base =
+            table_cell_cursor_info_in_document_cached(&lines, 3, 4, &mut cache).expect("base");
+        let cont =
+            table_cell_cursor_info_in_document_cached(&lines, 4, 4, &mut cache).expect("cont");
+        assert_eq!(base.logical_row_index, Some(0));
+        assert_eq!(cont.logical_row_index, Some(0));
+        assert_eq!(cont.logical_row_count, 1);
+
+        // Outside-block edits should not affect the cached logical mapping.
+        lines[0].push('!');
+        let cont_after_outside_edit =
+            table_cell_cursor_info_in_document_cached(&lines, 4, 4, &mut cache).expect("cont");
+        assert_eq!(cont_after_outside_edit.logical_row_index, Some(0));
+
+        // In-block edits invalidate and recompute the mapping.
+        lines[4] = "| gamma | three |".to_string();
+        let next =
+            table_cell_cursor_info_in_document_cached(&lines, 4, 4, &mut cache).expect("next");
+        assert_eq!(next.logical_row_index, Some(1));
+        assert_eq!(next.logical_row_count, 2);
+        assert!(!next.is_continuation_row);
+    }
+
+    #[test]
     fn format_table_lines_preserves_continuation_prefix_and_alignment() {
         let lines = vec![
             "| name | value |".to_string(),
@@ -814,5 +1023,19 @@ mod tests {
         let out = format_table_lines(&lines);
         assert_eq!(out[3], "|> beta detail | two   |");
         assert_eq!(out[2], "| alpha       | one   |");
+    }
+
+    #[test]
+    fn format_table_lines_keeps_alignment_with_error_literals() {
+        let lines = vec![
+            "| expr | value |".to_string(),
+            "| --- | --- |".to_string(),
+            "| :=(1,2) | !ERROR#non_numeric |".to_string(),
+            "| ok | 1 |".to_string(),
+        ];
+        let out = format_table_lines(&lines);
+        assert_eq!(out[0], "| expr    | value              |");
+        assert_eq!(out[2], "| :=(1,2) | !ERROR#non_numeric |");
+        assert_eq!(out[3], "| ok      | 1                  |");
     }
 }

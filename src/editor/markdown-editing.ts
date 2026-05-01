@@ -311,6 +311,9 @@ const ENTER_WINDOW_LINES = 2;
 const TAB_WINDOW_LINES = 50;
 // Doc-change rules scan the checklist/list block outward from the changed region.
 const DOC_CHANGE_WINDOW_LINES = 200;
+// Defer very large table autoformat to keep typing responsive.
+const TABLE_AUTOFORMAT_DEFER_LINE_THRESHOLD = 120;
+const TABLE_AUTOFORMAT_DEFER_MS = 24;
 
 function continueListOnEnter(
   view: EditorView,
@@ -629,44 +632,64 @@ function textRulesPlugin(
 ) {
   return ViewPlugin.define(() => {
     let applying = false;
+    let deferredTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const runRules = (view: EditorView, changedRange?: { from: number; to: number }) => {
+      const inTable = isMarkdownTableLine(view.state.doc.lineAt(view.state.selection.main.head).text);
+      const tableScoped = inTable ? snapshotFromViewTableBlock(view) : null;
+      const scoped = tableScoped ?? snapshotFromViewLines(view, DOC_CHANGE_WINDOW_LINES, changedRange);
+      const result = runMarkdownTransactions(scoped.snapshot, [
+        {
+          kind: "doc_change",
+          markdownAutoformat: autoformat,
+          checklistAutoReorder,
+          tableEnabled,
+        },
+      ]);
+      if (!result) return;
+      applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
+    };
+
     return {
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
         if (shouldDeferTableAutoformatForSpace(update)) return;
         if (!updateMightTriggerDocChangeRules(update)) return;
-        applying = true;
-        try {
-          const changedRange = changedRangeFromChanges(update.changes);
-          const scoped = snapshotFromViewLines(update.view, DOC_CHANGE_WINDOW_LINES, changedRange);
-          const result = runMarkdownTransactions(scoped.snapshot, [
-            {
-              kind: "doc_change",
-              markdownAutoformat: autoformat,
-              checklistAutoReorder,
-              tableEnabled,
-            },
-          ]);
-          if (result) {
-            Promise.resolve().then(() => {
-              applying = true;
-              try {
-                applyEditOperation(
-                  update.view,
-                  offsetEditOperation(result.operation, scoped.offset),
-                );
-              } catch (error) {
-                console.error("Markdown text rule dispatch failed:", error);
-              } finally {
-                applying = false;
-              }
-            });
-            return;
-          }
-        } catch (error) {
-          console.error("Markdown text rule failed:", error);
-        } finally {
-          applying = false;
+        const changedRange = changedRangeFromChanges(update.changes);
+        const tableScoped = snapshotFromViewTableBlock(update.view);
+        const tableLineCount = tableScoped ? tableScoped.snapshot.text.split("\n").length : 0;
+        const shouldDeferLargeTable = tableLineCount >= TABLE_AUTOFORMAT_DEFER_LINE_THRESHOLD;
+
+        if (shouldDeferLargeTable) {
+          if (deferredTimer !== null) clearTimeout(deferredTimer);
+          deferredTimer = setTimeout(() => {
+            applying = true;
+            try {
+              runRules(update.view, changedRange);
+            } catch (error) {
+              console.error("Deferred markdown table rule dispatch failed:", error);
+            } finally {
+              applying = false;
+            }
+          }, TABLE_AUTOFORMAT_DEFER_MS);
+          return;
         }
+
+        applying = true;
+        Promise.resolve().then(() => {
+          applying = true;
+          try {
+            runRules(update.view, changedRange);
+          } catch (error) {
+            console.error("Markdown text rule dispatch failed:", error);
+          } finally {
+            applying = false;
+          }
+        });
+        applying = false;
+      },
+      destroy() {
+        if (deferredTimer !== null) clearTimeout(deferredTimer);
       },
     };
   });

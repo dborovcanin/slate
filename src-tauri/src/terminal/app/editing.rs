@@ -1,14 +1,14 @@
 use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
     contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
-    find_calc_segment_range, gutter_width_for_visible_lines, is_markdown_table_line, line_char_len,
-    line_display_cols, table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
-    table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode, VariableAutocompletePopupState,
-    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
-    CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER,
-    EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT,
-    LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
+    is_markdown_table_line, line_char_len, line_display_cols, table_cell_edit_start,
+    table_cell_info_at_char, table_cell_is_empty, table_cell_navigation_anchor, FoldKind,
+    TerminalApp, UiMode, VariableAutocompletePopupState, VariableAutocompleteState,
+    WikiLinkAutocompletePopupState, WikiLinkSuggestion, CALC_ASYNC_MIN_LINES,
+    CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
+    FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
+    UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
@@ -2061,9 +2061,10 @@ impl TerminalApp {
         else {
             return false;
         };
-        if contains_assignment_operator(&text) {
+        if contains_assignment_operator(&text) && !is_markdown_table_line(&text) {
             return false;
         }
+        let should_reflow_table = self.note_table_module_enabled() && is_markdown_table_line(&text);
 
         if let Some((from_byte, to_byte)) = find_calc_segment_range(&text) {
             self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
@@ -2071,9 +2072,31 @@ impl TerminalApp {
                 [..from_byte.saturating_add(result.len())]
                 .chars()
                 .count();
+            if should_reflow_table {
+                self.try_autoformat_rules();
+            }
             self.refresh_calc_line_metadata_at(self.cursor_line);
             self.mark_edited();
             return true;
+        }
+
+        if should_reflow_table {
+            let cursor_col = self.cursor_col;
+            let formula = find_table_formula_segments(&text)
+                .into_iter()
+                .find(|seg| cursor_col >= seg.cell_from_char && cursor_col <= seg.cell_to_char)
+                .or_else(|| find_table_formula_segments(&text).into_iter().next());
+            if let Some(seg) = formula {
+                self.lines[self.cursor_line].replace_range(seg.from_byte..seg.to_byte, &result);
+                self.cursor_col = self.lines[self.cursor_line]
+                    [..seg.from_byte.saturating_add(result.len())]
+                    .chars()
+                    .count();
+                self.try_autoformat_rules();
+                self.refresh_calc_line_metadata_at(self.cursor_line);
+                self.mark_edited();
+                return true;
+            }
         }
 
         self.insert_text(&format!(" = {result}"));
@@ -2140,7 +2163,11 @@ impl TerminalApp {
             table_enabled: self.note_table_module_enabled(),
         };
         let started = Instant::now();
-        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
+        if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules_with_table_cache(
+            &ctx,
+            options,
+            &mut self.table_format_cache,
+        ) {
             let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
             self.apply_edit_operation(&mapped);
             self.record_perf_duration("tui.doc_change_rules", "applied", started.elapsed());
@@ -2218,7 +2245,11 @@ impl TerminalApp {
         let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
-        let op = crate::editor_core::text_rules::run_table_multiline_break_rule(&ctx, true);
+        let op = crate::editor_core::text_rules::run_table_multiline_break_rule_with_table_cache(
+            &ctx,
+            true,
+            &mut self.table_format_cache,
+        );
         let Some(op) = op else {
             return false;
         };
@@ -2234,7 +2265,12 @@ impl TerminalApp {
         let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
-        if let Some(op) = crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx) {
+        if let Some(op) =
+            crate::editor_core::text_rules::run_table_pipe_insert_column_rule_with_table_cache(
+                &ctx,
+                &mut self.table_format_cache,
+            )
+        {
             let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
             self.apply_edit_operation(&mapped);
             return true;
@@ -2249,7 +2285,11 @@ impl TerminalApp {
         let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
-        if let Some(op) = crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
+        if let Some(op) =
+            crate::editor_core::text_rules::run_table_header_delete_column_rule_with_table_cache(
+                &ctx,
+                &mut self.table_format_cache,
+            )
         {
             let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
             self.apply_edit_operation(&mapped);
