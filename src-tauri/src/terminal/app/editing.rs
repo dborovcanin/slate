@@ -185,6 +185,31 @@ fn map_offset_through_changes(
     offset
 }
 
+fn document_text_len(lines: &[String]) -> usize {
+    if lines.len() == 1 && lines.first().is_some_and(String::is_empty) {
+        0
+    } else {
+        let line_bytes: usize = lines.iter().map(|line| line.len()).sum();
+        line_bytes.saturating_add(lines.len().saturating_sub(1))
+    }
+}
+
+fn line_and_byte_for_offset(lines: &[String], target: usize) -> (usize, usize) {
+    if lines.is_empty() {
+        return (0, 0);
+    }
+    let mut offset = 0usize;
+    for (idx, line) in lines.iter().enumerate() {
+        let line_end = offset + line.len();
+        if target <= line_end {
+            return (idx, target.saturating_sub(offset));
+        }
+        offset = line_end + 1;
+    }
+    let last = lines.len().saturating_sub(1);
+    (last, lines[last].len())
+}
+
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
@@ -1439,6 +1464,12 @@ impl TerminalApp {
         if self.last_edit.elapsed() < Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS) {
             return;
         }
+        if self.calc_viewport_only {
+            let editor_height = self.editor_height();
+            self.ensure_calc_for_viewport(editor_height, true);
+            self.calc_recompute_pending = false;
+            return;
+        }
         self.run_calc_recompute();
     }
 
@@ -1952,7 +1983,13 @@ impl TerminalApp {
             return false;
         }
         if self.calc_recompute_pending {
-            self.run_calc_recompute();
+            if self.calc_viewport_only {
+                let editor_height = self.editor_height();
+                self.ensure_calc_for_viewport(editor_height, true);
+                self.calc_recompute_pending = false;
+            } else {
+                self.run_calc_recompute();
+            }
         }
         let text = self.current_line().to_string();
         let Some(result) = self
@@ -2112,20 +2149,93 @@ impl TerminalApp {
         }
         if op.changes.is_empty() {
             if let Some(sel) = &op.selection {
-                let mut offset = 0usize;
-                let target = sel.anchor.min(join_lines(&self.lines).len());
-                for (i, line) in self.lines.iter().enumerate() {
-                    let line_end = offset + line.len();
-                    if target <= line_end {
-                        self.cursor_line = i;
-                        self.cursor_col = line[..target.saturating_sub(offset)].chars().count();
-                        break;
-                    }
-                    offset = line_end + 1;
+                let target = sel.anchor.min(document_text_len(&self.lines));
+                let (line_idx, line_byte) = line_and_byte_for_offset(&self.lines, target);
+                if let Some(line) = self.lines.get(line_idx) {
+                    self.cursor_line = line_idx;
+                    self.cursor_col = line[..line_byte.min(line.len())].chars().count();
                 }
                 self.adjust_cursor();
                 self.adjust_scroll();
             }
+            return;
+        }
+
+        if op.changes.len() == 1 {
+            let change = &op.changes[0];
+            let doc_len = document_text_len(&self.lines);
+            let from = change.from.min(doc_len);
+            let to = change.to.min(doc_len);
+            let (from_line, from_byte) = line_and_byte_for_offset(&self.lines, from);
+            let (to_line, to_byte) = line_and_byte_for_offset(&self.lines, to);
+
+            let mut mapped_anchor =
+                self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+            if from <= mapped_anchor {
+                if to <= mapped_anchor {
+                    let removed = to.saturating_sub(from);
+                    let added = change.insert.len();
+                    mapped_anchor = mapped_anchor.saturating_add(added).saturating_sub(removed);
+                } else {
+                    let inside = mapped_anchor.saturating_sub(from);
+                    mapped_anchor = from.saturating_add(inside.min(change.insert.len()));
+                }
+            }
+
+            let from_text = self.lines.get(from_line).cloned().unwrap_or_default();
+            let to_text = self.lines.get(to_line).cloned().unwrap_or_default();
+            let prefix = &from_text[..from_byte.min(from_text.len())];
+            let suffix = &to_text[to_byte.min(to_text.len())..];
+            let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
+            let mut replacement = Vec::with_capacity(insert_parts.len().max(1));
+
+            if insert_parts.len() <= 1 {
+                replacement.push(format!(
+                    "{prefix}{}{suffix}",
+                    insert_parts.first().copied().unwrap_or("")
+                ));
+            } else {
+                replacement.push(format!("{prefix}{}", insert_parts[0]));
+                for part in &insert_parts[1..insert_parts.len() - 1] {
+                    replacement.push((*part).to_string());
+                }
+                replacement.push(format!(
+                    "{}{suffix}",
+                    insert_parts.last().copied().unwrap_or("")
+                ));
+            }
+
+            let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
+            let new_line_span = replacement.len().max(1);
+            if from_line <= to_line && from_line < self.lines.len() {
+                let end = to_line.min(self.lines.len().saturating_sub(1));
+                self.lines.splice(from_line..=end, replacement);
+            } else {
+                self.lines = replacement;
+            }
+            if self.lines.is_empty() {
+                self.lines.push(String::new());
+            }
+
+            self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
+
+            let new_doc_len = doc_len
+                .saturating_add(change.insert.len())
+                .saturating_sub(to.saturating_sub(from));
+            let final_anchor = op
+                .selection
+                .as_ref()
+                .map_or(mapped_anchor, |selection| selection.anchor)
+                .min(new_doc_len);
+            let (line_idx, line_byte) = line_and_byte_for_offset(&self.lines, final_anchor);
+            if let Some(line) = self.lines.get(line_idx) {
+                self.cursor_line = line_idx;
+                self.cursor_col = line[..line_byte.min(line.len())].chars().count();
+            }
+            self.folds.rescan_pending = true;
+            self.mark_edited_from_line(from_line);
+            self.adjust_cursor();
+            self.adjust_scroll();
             return;
         }
 

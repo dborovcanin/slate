@@ -863,6 +863,50 @@ function collectChangedRanges(changes: ChangeDesc): ChangedRange[] {
   return ranges;
 }
 
+function lineTextsForRange(doc: Text, fromLine: number, toLine: number): string[] {
+  const start = Math.max(1, fromLine);
+  const end = Math.min(doc.lines, toLine);
+  if (start > end) return [];
+  const out: string[] = [];
+  for (let lineNo = start; lineNo <= end; lineNo++) {
+    out.push(doc.line(lineNo).text);
+  }
+  return out;
+}
+
+export function patchLineArrayForDocChange(
+  lines: readonly string[],
+  oldDoc: Text,
+  changes: ChangeDesc,
+  newDoc: Text,
+): string[] {
+  const ranges = collectChangedRanges(changes);
+  if (ranges.length === 0) return [...lines];
+
+  const next = [...lines];
+  for (const range of [...ranges].reverse()) {
+    const oldFrom = clampPos(range.fromA, oldDoc.length);
+    const oldTo = clampPos(range.toA, oldDoc.length);
+    const newFrom = clampPos(range.fromB, newDoc.length);
+    const newTo = clampPos(range.toB, newDoc.length);
+
+    const oldStartLine = oldDoc.lineAt(oldFrom).number;
+    const oldEndLine = oldDoc.lineAt(oldTo > oldFrom ? oldTo : oldFrom).number;
+    const newStartLine = newDoc.lineAt(newFrom).number;
+    const newEndLine = newDoc.lineAt(newTo > newFrom ? newTo : newFrom).number;
+
+    next.splice(
+      oldStartLine - 1,
+      oldEndLine - oldStartLine + 1,
+      ...lineTextsForRange(newDoc, newStartLine, newEndLine),
+    );
+  }
+
+  // Boundary-position ambiguity in complex ChangeDesc values should fail closed
+  // to the authoritative rope rather than poison the calc cache.
+  return next.length === newDoc.lines ? next : newDoc.toJSON();
+}
+
 function lineOverlapsChangedRanges(
   lineFrom: number,
   lineTo: number,
@@ -1171,10 +1215,35 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let prevLines: string[] = [];
     let prevResults: Map<number, string> = new Map();
     let prevVariables: VariableIndexEntry[] = [];
+    let cachedLines: string[] | null = null;
+    let cachedLinesDoc: Text | null = null;
     // Track whether we've seeded the server-side cache for the current note.
     let serverCacheSeeded = false;
     // null = needs (re)scan. Cached whenever scan runs.
     let cachedHasGlobalSyntax: boolean | null = null;
+
+    function linesForDoc(doc: Text): string[] {
+      if (cachedLines && cachedLinesDoc === doc) return cachedLines;
+      cachedLines = doc.toJSON();
+      cachedLinesDoc = doc;
+      return cachedLines;
+    }
+
+    function mapLineCacheThroughUpdate(update: ViewUpdate) {
+      if (!update.docChanged) return;
+      if (!cachedLines || cachedLinesDoc !== update.startState.doc) {
+        cachedLines = null;
+        cachedLinesDoc = null;
+        return;
+      }
+      cachedLines = patchLineArrayForDocChange(
+        cachedLines,
+        update.startState.doc,
+        update.changes,
+        update.state.doc,
+      );
+      cachedLinesDoc = update.state.doc;
+    }
 
     function hasGlobalSyntax(doc: Text): boolean {
       if (cachedHasGlobalSyntax !== null) return cachedHasGlobalSyntax;
@@ -1193,6 +1262,8 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
       prevLines = [];
       prevResults = new Map();
       prevVariables = [];
+      cachedLines = null;
+      cachedLinesDoc = null;
       serverCacheSeeded = false;
     }
 
@@ -1222,9 +1293,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           }
 
           const snapshotDoc = doc;
-          // Build lines directly from the rope representation to avoid
-          // allocating a full-document string on every eval pass.
-          const nextLines = doc.toJSON();
+          const nextLines = linesForDoc(doc);
           const lineStarts: number[] = new Array(nextLines.length);
           for (let i = 0, pos = 0; i < nextLines.length; i++) {
             lineStarts[i] = pos;
@@ -1441,6 +1510,8 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
               nextLines[change.lineIdx] =
                 lineText.slice(0, offsetInLine) + change.insert;
             }
+            cachedLines = nextLines;
+            cachedLinesDoc = view.state.doc;
           } else if (effects.length > 0) {
             view.dispatch({ effects });
           }
@@ -1492,6 +1563,8 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           t.annotation(calcRefreshAnnotation),
         );
         if (isRefresh) return;
+
+        mapLineCacheThroughUpdate(update);
 
         // Any change that could add or remove a global-syntax line
         // invalidates the cached presence flag, forcing a rescan next time.

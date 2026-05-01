@@ -2,6 +2,90 @@ use super::*;
 use crate::terminal::app::WikiLinkSuggestion;
 
 #[test]
+fn apply_edit_operation_single_line_change_updates_in_place() {
+    let (_db, mut app, path) = app_with_note("alpha\nbeta");
+    app.cursor_line = 0;
+    app.cursor_col = 2;
+
+    let op = crate::editor_core::types::EditOperation {
+        changes: vec![crate::editor_core::types::TextChange {
+            from: 1,
+            to: 4,
+            insert: "XYZ".to_string(),
+        }],
+        selection: Some(crate::editor_core::types::OperationSelection {
+            anchor: 3,
+            head: Some(3),
+        }),
+    };
+    app.apply_edit_operation(&op);
+
+    assert_eq!(app.lines, vec!["aXYZa".to_string(), "beta".to_string()]);
+    assert_eq!(app.cursor_line, 0);
+    assert_eq!(app.cursor_col, 3);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn apply_edit_operation_cross_line_change_still_merges_lines() {
+    let (_db, mut app, path) = app_with_note("alpha\nbeta");
+    app.cursor_line = 1;
+    app.cursor_col = 0;
+
+    let op = crate::editor_core::types::EditOperation {
+        changes: vec![crate::editor_core::types::TextChange {
+            from: 5,
+            to: 6,
+            insert: String::new(),
+        }],
+        selection: Some(crate::editor_core::types::OperationSelection {
+            anchor: 5,
+            head: Some(5),
+        }),
+    };
+    app.apply_edit_operation(&op);
+
+    assert_eq!(app.lines, vec!["alphabeta".to_string()]);
+    assert_eq!(app.cursor_line, 0);
+    assert_eq!(app.cursor_col, 5);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn apply_edit_operation_multiline_insert_updates_lines_directly() {
+    let (_db, mut app, path) = app_with_note("start end");
+    app.cursor_line = 0;
+    app.cursor_col = 6;
+
+    let op = crate::editor_core::types::EditOperation {
+        changes: vec![crate::editor_core::types::TextChange {
+            from: 6,
+            to: 6,
+            insert: "a\nb\n".to_string(),
+        }],
+        selection: Some(crate::editor_core::types::OperationSelection {
+            anchor: 10,
+            head: Some(10),
+        }),
+    };
+    app.apply_edit_operation(&op);
+
+    assert_eq!(
+        app.lines,
+        vec!["start a".to_string(), "b".to_string(), "end".to_string()]
+    );
+    assert_eq!(app.cursor_line, 2);
+    assert_eq!(app.cursor_col, 0);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn editor_paste_multiline_inserts_as_single_bulk_edit() {
     let (db, mut app, path) = app_with_note("start end");
     app.mode = UiMode::Editor;

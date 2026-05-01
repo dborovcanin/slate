@@ -13,7 +13,11 @@ import { EditorView } from "@codemirror/view";
 import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
 import type { NoteModules } from "../api.ts";
 import { toggleFoldAtCursor } from "./folding.ts";
-import { applyEditOperations } from "./core/codemirror-adapter.ts";
+import {
+  applyEditOperations,
+  offsetEditOperation,
+  snapshotFromViewLines,
+} from "./core/codemirror-adapter.ts";
 import {
   editorSearchHasMatches,
   editorSearchNext,
@@ -56,6 +60,8 @@ interface VimRegister {
   mode: VimRegisterMode;
 }
 
+const SHARED_VIM_FULL_DOC_MAX_BYTES = 200_000;
+
 function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
   switch (intent) {
     case VIM_INTENT.DELETE_LINE:
@@ -83,6 +89,70 @@ function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
     default:
       return false;
   }
+}
+
+function scopedSharedVimMarginLines(intent: VimIntent, count: number): number {
+  const repeats = Math.max(1, count);
+  switch (intent) {
+    case VIM_INTENT.DELETE_LINE:
+    case VIM_INTENT.YANK_LINE:
+      return repeats + 2;
+    case VIM_INTENT.DELETE_CHAR:
+      return repeats + 2;
+    case VIM_INTENT.PASTE_AFTER:
+      return 2;
+    case VIM_INTENT.DELETE_WORD_FORWARD:
+    case VIM_INTENT.DELETE_WORD_BACKWARD:
+    case VIM_INTENT.DELETE_WORD_END:
+    case VIM_INTENT.YANK_WORD_FORWARD:
+    case VIM_INTENT.YANK_WORD_BACKWARD:
+      return repeats + 8;
+    default:
+      return 2;
+  }
+}
+
+function executeSharedVimAction(
+  view: EditorView,
+  action: VimAction,
+  count: number,
+  register: VimRegisterValue | null,
+) {
+  // Keep the exact full-snapshot path for smaller docs. Large docs use the
+  // same shared WASM executor, but with a cursor-local window to avoid
+  // serializing the whole rope for common Vim edits.
+  if (view.state.doc.length <= SHARED_VIM_FULL_DOC_MAX_BYTES) {
+    return executeVimActionFromWasm(
+      {
+        text: view.state.doc.toString(),
+        selection: {
+          anchor: view.state.selection.main.anchor,
+          head: view.state.selection.main.head,
+        },
+      },
+      action.intent,
+      count,
+      register,
+    );
+  }
+
+  const scoped = snapshotFromViewLines(
+    view,
+    scopedSharedVimMarginLines(action.intent, count),
+  );
+  const result = executeVimActionFromWasm(
+    scoped.snapshot,
+    action.intent,
+    count,
+    register,
+  );
+  if (!result) return null;
+  return {
+    ...result,
+    operations: result.operations.map((operation) =>
+      offsetEditOperation(operation, scoped.offset),
+    ),
+  };
 }
 
 function isPrintableTextKey(event: KeyboardEvent): boolean {
@@ -957,15 +1027,9 @@ export function vimModeExtension(options: VimOptions = {}) {
       const sharedRegister: VimRegisterValue | null = unnamedRegister
         ? { text: unnamedRegister.text, mode: unnamedRegister.mode }
         : null;
-      const sharedResult = executeVimActionFromWasm(
-        {
-          text: view.state.doc.toString(),
-          selection: {
-            anchor: view.state.selection.main.anchor,
-            head: view.state.selection.main.head,
-          },
-        },
-        action.intent,
+      const sharedResult = executeSharedVimAction(
+        view,
+        action,
         count,
         sharedRegister,
       );

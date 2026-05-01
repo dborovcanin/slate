@@ -55,6 +55,39 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
     (db, app, path)
 }
 
+fn app_with_note_and_modules(
+    body: &str,
+    modules: app_core::storage::NoteModules,
+) -> (Db, TerminalApp, PathBuf) {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db opens");
+    let note_id = "n1";
+    db.create_note_with_defaults(note_id, modules, None)
+        .expect("create note with modules");
+    db.save_note(note_id, body).expect("note saved");
+    let opts = TerminalOptions {
+        create_new: false,
+        note_id: Some(note_id.to_string()),
+        list_only: false,
+    };
+    let (mut app, _) = TerminalApp::new_with_startup_metrics(
+        &db,
+        &opts,
+        true,
+        true,
+        false,
+        true,
+        true,
+        3,
+        super::render::RenderPalette::default(),
+        "%Y-%m-%d".to_string(),
+        "%Y-%m-%d %H:%M".to_string(),
+    )
+    .expect("terminal app");
+    app.mode = UiMode::Editor;
+    (db, app, path)
+}
+
 fn run_keys(app: &mut TerminalApp, db: &Db, keys: &[Key]) {
     for key in keys {
         app.handle_key(db, key.clone())

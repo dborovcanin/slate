@@ -15,6 +15,7 @@ import {
   formatFormulaDisplayValue,
   lineUsesAssignmentGhostPrefix,
   mergePartialCalcResults,
+  patchLineArrayForDocChange,
   remapCalcResultsForDocChange,
   remapVariableIndexForDocChange,
   type CommitMarkerLoc,
@@ -211,6 +212,56 @@ test("mergePartialCalcResults deletes entries when backend returns null in range
   assert.equal(merged.has(1), false);
   assert.equal(merged.get(0), "4");
   assert.equal(merged.get(2), "9");
+});
+
+test("patchLineArrayForDocChange applies single-line replacement", () => {
+  const start = EditorState.create({ doc: "alpha\nbeta\ngamma" });
+  const tr = start.update({ changes: { from: 1, to: 4, insert: "XYZ" } });
+  const patched = patchLineArrayForDocChange(
+    start.doc.toJSON(),
+    start.doc,
+    tr.changes,
+    tr.state.doc,
+  );
+  assert.deepEqual(patched, ["aXYZa", "beta", "gamma"]);
+});
+
+test("patchLineArrayForDocChange applies multiline insert and newline delete", () => {
+  const start = EditorState.create({ doc: "alpha\nbeta\ngamma" });
+  const inserted = start.update({ changes: { from: 10, to: 10, insert: "\nB2" } });
+  const afterInsert = patchLineArrayForDocChange(
+    start.doc.toJSON(),
+    start.doc,
+    inserted.changes,
+    inserted.state.doc,
+  );
+  assert.deepEqual(afterInsert, ["alpha", "beta", "B2", "gamma"]);
+
+  const deleted = inserted.state.update({ changes: { from: 5, to: 6, insert: "" } });
+  const afterDelete = patchLineArrayForDocChange(
+    afterInsert,
+    inserted.state.doc,
+    deleted.changes,
+    deleted.state.doc,
+  );
+  assert.deepEqual(afterDelete, ["alphabeta", "B2", "gamma"]);
+});
+
+test("patchLineArrayForDocChange applies independent multi-range changes", () => {
+  const start = EditorState.create({ doc: "one\ntwo\nthree\nfour" });
+  const tr = start.update({
+    changes: [
+      { from: 0, to: 3, insert: "ONE" },
+      { from: 14, to: 18, insert: "FOUR" },
+    ],
+  });
+  const patched = patchLineArrayForDocChange(
+    start.doc.toJSON(),
+    start.doc,
+    tr.changes,
+    tr.state.doc,
+  );
+  assert.deepEqual(patched, ["ONE", "two", "three", "FOUR"]);
 });
 
 test("computeCalcRefresh returns empty plan when there are no markers", () => {

@@ -28,6 +28,8 @@ pub struct LineHistory {
     coalesce_anchor: Option<HistorySnapshot>,
 }
 
+const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
+
 impl LineHistory {
     pub fn new(
         max_entries: usize,
@@ -84,17 +86,13 @@ impl LineHistory {
         if coalesce && self.pos == self.entries.len() {
             if let Some(anchor) = self.coalesce_anchor.as_ref() {
                 let merged = build_history_entry(anchor, lines, cursor_line, cursor_col);
+                let snapshot_delta =
+                    build_history_entry(&self.snapshot, lines, cursor_line, cursor_col);
                 match merged {
                     Some(entry) => {
                         if let Some(last) = self.entries.last_mut() {
                             *last = entry;
-                            self.snapshot = HistorySnapshot {
-                                lines: lines.to_vec(),
-                                cursor: HistoryCursor {
-                                    line: cursor_line,
-                                    col: cursor_col,
-                                },
-                            };
+                            self.apply_snapshot_delta(snapshot_delta, cursor_line, cursor_col);
                             return true;
                         }
                     }
@@ -104,13 +102,7 @@ impl LineHistory {
                             self.pos = self.entries.len();
                         }
                         self.coalesce_anchor = None;
-                        self.snapshot = HistorySnapshot {
-                            lines: lines.to_vec(),
-                            cursor: HistoryCursor {
-                                line: cursor_line,
-                                col: cursor_col,
-                            },
-                        };
+                        self.apply_snapshot_delta(snapshot_delta, cursor_line, cursor_col);
                         return false;
                     }
                 }
@@ -134,7 +126,12 @@ impl LineHistory {
             self.entries.truncate(self.pos);
         }
 
-        let anchor = self.snapshot.clone();
+        let anchor = if self.snapshot.lines.len() <= COALESCE_ANCHOR_MAX_LINES {
+            Some(self.snapshot.clone())
+        } else {
+            None
+        };
+        let snapshot_delta = entry.clone();
         self.entries.push(entry);
         self.pos = self.entries.len();
 
@@ -143,15 +140,29 @@ impl LineHistory {
             self.pos = self.pos.saturating_sub(1);
         }
 
-        self.snapshot = HistorySnapshot {
-            lines: lines.to_vec(),
-            cursor: HistoryCursor {
-                line: cursor_line,
-                col: cursor_col,
-            },
-        };
-        self.coalesce_anchor = Some(anchor);
+        self.apply_snapshot_delta(Some(snapshot_delta), cursor_line, cursor_col);
+        self.coalesce_anchor = anchor;
         true
+    }
+
+    fn apply_snapshot_delta(
+        &mut self,
+        delta: Option<HistoryEntry>,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) {
+        if let Some(entry) = delta {
+            apply_line_replace(
+                &mut self.snapshot.lines,
+                entry.start_line,
+                entry.removed_lines.len(),
+                &entry.inserted_lines,
+            );
+        }
+        self.snapshot.cursor = HistoryCursor {
+            line: cursor_line,
+            col: cursor_col,
+        };
     }
 
     pub fn undo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
@@ -325,6 +336,22 @@ mod tests {
         assert_eq!(redo_cursor.line, 0);
         assert_eq!(redo_cursor.col, 4);
         assert_eq!(lines, vec!["abcd".to_string()]);
+    }
+
+    #[test]
+    fn history_large_docs_avoid_coalesce_anchor_clone() {
+        let mut start = vec!["plain".to_string(); super::COALESCE_ANCHOR_MAX_LINES + 1];
+        let mut history = LineHistory::new(8, &start, 0, 0);
+
+        start[100] = "first".to_string();
+        assert!(history.record_edit(&start, 100, 5, false));
+        start[100] = "second".to_string();
+        assert!(history.record_edit(&start, 100, 6, true));
+
+        assert_eq!(history.undo_depth(), 2);
+        let cursor = history.undo(&mut start).expect("undo");
+        assert_eq!(cursor.line, 100);
+        assert_eq!(start[100], "first");
     }
 
     #[test]

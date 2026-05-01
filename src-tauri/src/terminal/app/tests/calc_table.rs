@@ -172,6 +172,237 @@ fn variable_suggestions_require_min_chars_and_exclude_exact_match() {
     assert!(build_variable_suggestions(&variables, "total cost", 3, 8).is_empty());
 }
 
+fn build_repeated_note(line: &str, line_count: usize) -> String {
+    if line_count == 0 {
+        return String::new();
+    }
+    let mut body = String::with_capacity((line.len() + 1).saturating_mul(line_count));
+    body.push_str(line);
+    for _ in 1..line_count {
+        body.push('\n');
+        body.push_str(line);
+    }
+    body
+}
+
+fn max_expected_viewport_eval_span(editor_height: usize) -> usize {
+    // viewport + prefetch above + prefetch below, with a tiny boundary buffer.
+    editor_height.saturating_mul(5).saturating_add(8)
+}
+
+#[test]
+fn huge_plain_text_note_100k_edits_skip_calc_recompute() {
+    let body = build_repeated_note("plain text", 100_000);
+    let (db, mut app, path) = app_with_note(&body);
+
+    assert!(!app.calc.cached_has_builtin_formula);
+    assert!(!app.calc.cached_has_variable_assignment);
+    assert!(!app.calc_viewport_only);
+    assert!(app.calc.prev_line_metadata.is_empty());
+
+    app.cursor_line = 50_000;
+    app.cursor_col = line_char_len(app.current_line());
+    app.insert_text(" updated");
+
+    assert!(!app.calc_recompute_pending);
+    assert!(!app.calc.stale);
+    assert_eq!(
+        app.calc
+            .results
+            .get(50_000)
+            .and_then(|value| value.as_deref()),
+        None
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
+    let mut lines = Vec::with_capacity(100_000);
+    lines.push("base := 1".to_string());
+    lines.extend((0..99_999).map(|_| "base + 2".to_string()));
+    let body = lines.join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+
+    assert!(app.calc_viewport_only);
+    let initial_range = app
+        .calc_last_view_eval_range
+        .expect("initial viewport eval range");
+    let span_budget = max_expected_viewport_eval_span(app.editor_height());
+    assert!(
+        initial_range.1.saturating_sub(initial_range.0) <= span_budget,
+        "initial viewport span {} exceeds budget {}",
+        initial_range.1.saturating_sub(initial_range.0),
+        span_budget
+    );
+
+    let last_idx = app.lines.len().saturating_sub(1);
+    assert_eq!(
+        app.calc
+            .results
+            .get(last_idx)
+            .and_then(|value| value.as_deref()),
+        None
+    );
+
+    app.cursor_line = last_idx;
+    app.cursor_col = line_char_len(app.current_line());
+    app.adjust_cursor();
+    app.adjust_scroll();
+    let mut out = Vec::new();
+    app.draw(&mut out).expect("draw after jump to end");
+
+    let end_range = app
+        .calc_last_view_eval_range
+        .expect("end viewport eval range");
+    assert!(
+        end_range.1.saturating_sub(end_range.0) <= span_budget,
+        "end viewport span {} exceeds budget {}",
+        end_range.1.saturating_sub(end_range.0),
+        span_budget
+    );
+    assert!(end_range.0 <= last_idx && last_idx < end_range.1);
+    assert_eq!(
+        app.calc
+            .results
+            .get(last_idx)
+            .and_then(|value| value.as_deref()),
+        Some("3")
+    );
+    assert_eq!(
+        app.calc
+            .results
+            .get(50_000)
+            .and_then(|value| value.as_deref()),
+        None
+    );
+
+    // Same-line change in a huge note should stay on viewport-only refresh.
+    let changed_idx = 60_000;
+    app.lines[changed_idx] = "base + 20".to_string();
+    app.cursor_line = changed_idx;
+    app.cursor_col = line_char_len(app.current_line());
+    app.adjust_scroll();
+    app.mark_edited_from_line(changed_idx);
+    assert!(app.calc_recompute_pending);
+    app.last_edit = std::time::Instant::now() - std::time::Duration::from_millis(200);
+    app.maybe_recompute_calc_after_idle();
+    assert!(!app.calc_recompute_pending);
+    let changed_range = app
+        .calc_last_view_eval_range
+        .expect("viewport range after edit");
+    assert!(
+        changed_range.1.saturating_sub(changed_range.0) <= span_budget,
+        "post-edit viewport span {} exceeds budget {}",
+        changed_range.1.saturating_sub(changed_range.0),
+        span_budget
+    );
+    assert!(changed_range.0 <= changed_idx && changed_idx < changed_range.1);
+    assert_eq!(
+        app.calc
+            .results
+            .get(changed_idx)
+            .and_then(|value| value.as_deref()),
+        Some("21")
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
+    let mut lines = vec!["plain".to_string(); 100_000];
+    let table_start = 50_000usize;
+    lines[table_start] = "| value |".to_string();
+    lines[table_start + 1] = "| --- |".to_string();
+    lines[table_start + 2] = "| 2 |".to_string();
+    lines[table_start + 3] = "| 3 |".to_string();
+    lines[table_start + 4] = "| :=sum_col() |".to_string();
+    let body = lines.join("\n");
+    let (db, mut app, path) =
+        app_with_note_and_modules(&body, note_modules(true, true, false, true));
+
+    assert!(!app.calc_viewport_only);
+    assert_eq!(
+        app.calc
+            .results
+            .get(table_start + 4)
+            .and_then(|value| value.as_deref()),
+        Some("5")
+    );
+
+    let changed_idx = table_start + 2;
+    let formula_idx = table_start + 4;
+    app.lines[changed_idx] = "| 20 |".to_string();
+    app.cursor_line = changed_idx;
+    app.cursor_col = line_char_len(app.current_line());
+    app.mark_edited_from_line(changed_idx);
+    assert!(app.calc_recompute_pending);
+
+    let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
+        &app.calc.prev_line_metadata,
+        &app.calc.results,
+        &app.lines,
+        &app.calc.line_metadata,
+    );
+    let suffix_len = app.lines.len().saturating_sub(plan.eval_to);
+    let prev_changed_from = plan.eval_from.min(app.calc.prev_line_metadata.len());
+    let prev_changed_to = app
+        .calc
+        .prev_line_metadata
+        .len()
+        .saturating_sub(suffix_len)
+        .max(prev_changed_from);
+    let prev_changed_slice = app
+        .calc
+        .prev_line_metadata
+        .get(prev_changed_from..prev_changed_to)
+        .unwrap_or(&[]);
+    let prev_changed_assignment_names = prev_changed_slice
+        .iter()
+        .filter_map(|meta| meta.assignment_name.clone())
+        .collect::<Vec<_>>();
+    let prev_changed_had_assignment = prev_changed_slice.iter().any(|meta| meta.has_assignment);
+    let prev_changed_had_builtin_formula = prev_changed_slice
+        .iter()
+        .any(|meta| meta.has_builtin_formula);
+    let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_flags(
+        &app.lines,
+        plan.eval_from,
+        plan.eval_to,
+        &prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        !app.calc.prev_line_metadata.is_empty(),
+        app.calc_variables_enabled(),
+        app.note_table_module_enabled(),
+    );
+    assert!(
+        eval_window.eval_to.saturating_sub(eval_window.eval_from) <= 12,
+        "unexpectedly wide table eval window: {:?}",
+        eval_window
+    );
+
+    app.run_calc_recompute();
+    assert!(!app.calc_recompute_pending);
+    assert_eq!(
+        app.calc
+            .results
+            .get(formula_idx)
+            .and_then(|value| value.as_deref()),
+        Some("23")
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
 #[test]
 fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
     let (db, app, path) = app_with_note("plain line\nanother plain line");
