@@ -1144,6 +1144,7 @@ impl TerminalApp {
     pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         let line_count_changed = self.lines.len() != self.calc.results.len();
+        self.invalidate_joined_text_cache();
         self.dirty = true;
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
@@ -1209,6 +1210,7 @@ impl TerminalApp {
         let keep_cursor_on_exhaust = self.history.undo_depth() == 1;
         let cursor_before_undo = (self.cursor_line, self.cursor_col);
         if let Some(cursor) = self.history.undo(&mut self.lines) {
+            self.invalidate_joined_text_cache();
             if keep_cursor_on_exhaust {
                 self.cursor_line = cursor_before_undo.0.min(self.lines.len().saturating_sub(1));
                 self.cursor_col = cursor_before_undo.1;
@@ -1238,6 +1240,7 @@ impl TerminalApp {
 
     pub(super) fn redo(&mut self) {
         if let Some(cursor) = self.history.redo(&mut self.lines) {
+            self.invalidate_joined_text_cache();
             self.cursor_line = cursor.line.min(self.lines.len().saturating_sub(1));
             self.cursor_col = cursor.col;
             self.dirty = true;
@@ -1260,9 +1263,11 @@ impl TerminalApp {
     }
 
     pub(super) fn run_calc_recompute(&mut self) {
+        let started = Instant::now();
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
             self.calc_recompute_pending = false;
+            self.record_perf_duration("tui.calc.recompute", "math_disabled", started.elapsed());
             return;
         }
         self.ensure_calc_line_metadata();
@@ -1286,6 +1291,7 @@ impl TerminalApp {
             self.calc.variable_names = calc_data.variable_names;
             self.calc.stale = false;
             self.calc_recompute_pending = false;
+            self.record_perf_duration("tui.calc.recompute", "stale_full", started.elapsed());
             return;
         }
 
@@ -1491,6 +1497,7 @@ impl TerminalApp {
         self.calc
             .prev_line_metadata
             .splice(changed_from..prev_changed_to, replacement);
+        let had_trailer_rewrites = !trailer_rewritten_lines.is_empty();
         for line_idx in trailer_rewritten_lines {
             if line_idx < self.calc.prev_line_metadata.len()
                 && line_idx < self.calc.line_metadata.len()
@@ -1498,11 +1505,15 @@ impl TerminalApp {
                 self.calc.prev_line_metadata[line_idx] = self.calc.line_metadata[line_idx].clone();
             }
         }
+        if had_trailer_rewrites {
+            self.invalidate_joined_text_cache();
+        }
         self.calc.results = new_results;
         self.calc.cell_results = new_cell_results;
         self.calc.variable_names = variable_names;
         self.calc.stale = false;
         self.calc_recompute_pending = false;
+        self.record_perf_duration("tui.calc.recompute", "incremental", started.elapsed());
     }
 
     pub(super) fn maybe_recompute_calc_after_idle(&mut self) {
@@ -2078,6 +2089,33 @@ impl TerminalApp {
         might_be_list || might_be_table
     }
 
+    pub(super) fn scoped_rule_line_span(&self, center_line: usize) -> (usize, usize) {
+        if self.lines.is_empty() {
+            return (0, 0);
+        }
+        let center = center_line.min(self.lines.len().saturating_sub(1));
+        let current = self.lines[center].as_str();
+        if self.note_table_module_enabled() && is_markdown_table_line(current) {
+            let mut start = center;
+            let mut end = center;
+            while start > 0 && is_markdown_table_line(self.lines[start - 1].as_str()) {
+                start -= 1;
+            }
+            while end + 1 < self.lines.len() && is_markdown_table_line(self.lines[end + 1].as_str())
+            {
+                end += 1;
+            }
+            return (start, end);
+        }
+        let window = 96usize;
+        (
+            center.saturating_sub(window),
+            center
+                .saturating_add(window)
+                .min(self.lines.len().saturating_sub(1)),
+        )
+    }
+
     pub(super) fn try_autoformat_rules(&mut self) {
         if !self.note_style_module_enabled() && !self.note_table_module_enabled() {
             return;
@@ -2086,42 +2124,66 @@ impl TerminalApp {
             return;
         }
 
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let cursor_offset = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let changed = crate::editor_core::types::TextRange {
+            from: cursor_offset.saturating_sub(1),
+            to: cursor_offset,
+        };
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, Some(changed));
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
             table_enabled: self.note_table_module_enabled(),
         };
+        let started = Instant::now();
         if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules(&ctx, options) {
-            self.apply_edit_operation(&op);
+            let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+            self.apply_edit_operation(&mapped);
+            self.record_perf_duration("tui.doc_change_rules", "applied", started.elapsed());
+        } else {
+            self.record_perf_duration("tui.doc_change_rules", "noop", started.elapsed());
         }
     }
 
     pub(super) fn try_enter_rule(&mut self) -> bool {
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TextRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
             table_enabled: self.note_table_module_enabled(),
         };
+        let started = Instant::now();
         if let Some(op) = crate::editor_core::text_rules::run_enter_rules(&ctx, options) {
-            self.apply_edit_operation(&op);
+            let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+            self.apply_edit_operation(&mapped);
+            self.record_perf_duration("tui.enter_rules", "applied", started.elapsed());
             return true;
         }
+        self.record_perf_duration("tui.enter_rules", "noop", started.elapsed());
         false
     }
 
     pub(super) fn try_tab_rule(&mut self, outdent: bool) -> bool {
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TabRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             outdent,
             table_enabled: self.note_table_module_enabled(),
         };
+        let started = Instant::now();
         if let Some(op) = crate::editor_core::text_rules::run_tab_rules(&ctx, options) {
-            self.apply_edit_operation(&op);
+            let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+            self.apply_edit_operation(&mapped);
+            self.record_perf_duration("tui.tab_rules", "applied", started.elapsed());
             return true;
         }
+        self.record_perf_duration("tui.tab_rules", "noop", started.elapsed());
         false
     }
 
@@ -2129,7 +2191,9 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TabRuleOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             outdent,
@@ -2138,7 +2202,8 @@ impl TerminalApp {
         if let Some(op) =
             crate::editor_core::text_rules::run_table_cell_navigation_rules(&ctx, options)
         {
-            self.apply_edit_operation(&op);
+            let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+            self.apply_edit_operation(&mapped);
             return true;
         }
         false
@@ -2148,9 +2213,12 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
         if let Some(op) = crate::editor_core::text_rules::run_table_pipe_insert_column_rule(&ctx) {
-            self.apply_edit_operation(&op);
+            let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+            self.apply_edit_operation(&mapped);
             return true;
         }
         false
@@ -2160,10 +2228,13 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
         if let Some(op) = crate::editor_core::text_rules::run_table_header_delete_column_rule(&ctx)
         {
-            self.apply_edit_operation(&op);
+            let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+            self.apply_edit_operation(&mapped);
             return true;
         }
         false
@@ -2177,7 +2248,9 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return None;
         }
-        let ctx = self.build_context();
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TableBoundaryEditOptions {
             markdown_autoformat: self.markdown_autoformat_enabled(),
             backward,
@@ -2186,7 +2259,8 @@ impl TerminalApp {
         };
         let op = crate::editor_core::text_rules::run_table_boundary_edit_rules(&ctx, options)?;
         let changed = !op.changes.is_empty();
-        self.apply_edit_operation(&op);
+        let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+        self.apply_edit_operation(&mapped);
         Some(changed)
     }
 
@@ -3178,6 +3252,7 @@ impl TerminalApp {
     }
 
     pub(super) fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {
+        let started = Instant::now();
         if !self.calc_viewport_only {
             return;
         }
@@ -3189,5 +3264,6 @@ impl TerminalApp {
         }
         self.recompute_calc_range(eval_range.0, eval_range.1);
         self.calc_last_view_eval_range = Some(eval_range);
+        self.record_perf_duration("tui.calc.viewport_eval", "eval", started.elapsed());
     }
 }

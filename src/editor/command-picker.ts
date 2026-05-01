@@ -267,7 +267,14 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         if (state.items.length === 0) return false;
         event.preventDefault();
         event.stopPropagation();
-        applySingleWordCompletion(state);
+        if (applySingleWordCompletion(state)) {
+          return true;
+        }
+        const len = state.items.length;
+        const current = Math.max(0, Math.min(state.selectedIndex, len - 1));
+        const delta = event.shiftKey ? -1 : 1;
+        state.selectedIndex = (current + delta + len) % len;
+        state.refresh();
         return true;
       }
       if (event.key === "Enter") {

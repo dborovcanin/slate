@@ -104,7 +104,7 @@ enum UiMode {
 enum VimPipelineResult {
     NoIntent,
     Unhandled,
-    Applied,
+    Applied { doc_mutated: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -275,9 +275,32 @@ struct CommandCompletionMenuState {
     selected_index: usize,
 }
 
+#[derive(Debug, Clone, Default)]
+struct PerfBucket {
+    samples_ms: Vec<f64>,
+}
+
+#[derive(Debug, Clone)]
+struct PerfTraceState {
+    enabled: bool,
+    capacity: usize,
+    buckets: HashMap<(String, String), PerfBucket>,
+}
+
+impl Default for PerfTraceState {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            capacity: 256,
+            buckets: HashMap::new(),
+        }
+    }
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
+    joined_text_cache: Option<String>,
     cursor_line: usize,
     cursor_col: usize, // char index
     scroll_line: usize,
@@ -376,6 +399,7 @@ struct TerminalApp {
     last_cursor_col: usize,
     last_cursor_block: bool,
     last_draw_had_overlay: bool,
+    perf_trace: PerfTraceState,
 }
 
 mod calc_helpers;
@@ -591,6 +615,7 @@ impl TerminalApp {
         let mut app = Self {
             active_note,
             lines,
+            joined_text_cache: None,
             cursor_line: 0,
             cursor_col: 0,
             scroll_line: 0,
@@ -688,6 +713,7 @@ impl TerminalApp {
             last_cursor_col: 0,
             last_cursor_block: false,
             last_draw_had_overlay: false,
+            perf_trace: PerfTraceState::default(),
         };
 
         app.rebuild_wiki_link_prefix_index();
@@ -716,14 +742,28 @@ impl TerminalApp {
         let mut stdout = io::stdout();
 
         loop {
+            let draw_start = Instant::now();
             self.draw(&mut stdout)?;
+            self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
             if self.quit {
                 break;
             }
 
             match input::read_key()? {
-                Some(key) => self.handle_key(db, key)?,
-                None => self.maybe_autosave(db)?,
+                Some(key) => {
+                    let handle_start = Instant::now();
+                    self.handle_key(db, key)?;
+                    self.record_perf_duration("tui.key.dispatch", "input", handle_start.elapsed());
+                }
+                None => {
+                    let idle_start = Instant::now();
+                    self.maybe_autosave(db)?;
+                    self.record_perf_duration(
+                        "tui.idle.dispatch",
+                        "autosave_tick",
+                        idle_start.elapsed(),
+                    );
+                }
             }
 
             self.maybe_clipboard_watch();
@@ -768,6 +808,94 @@ impl TerminalApp {
             }
         }
         Ok(())
+    }
+
+    pub(super) fn record_perf_duration(&mut self, name: &str, reason: &str, duration: Duration) {
+        if !self.perf_trace.enabled {
+            return;
+        }
+        let key = (name.to_string(), reason.to_string());
+        let bucket = self
+            .perf_trace
+            .buckets
+            .entry(key)
+            .or_insert_with(PerfBucket::default);
+        let ms = duration.as_secs_f64() * 1000.0;
+        bucket.samples_ms.push(ms);
+        if bucket.samples_ms.len() > self.perf_trace.capacity {
+            let drop = bucket.samples_ms.len() - self.perf_trace.capacity;
+            bucket.samples_ms.drain(0..drop);
+        }
+    }
+
+    fn perf_percentile(samples: &[f64], p: f64) -> f64 {
+        if samples.is_empty() {
+            return 0.0;
+        }
+        let mut sorted = samples.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let max_idx = sorted.len().saturating_sub(1) as f64;
+        let rank = (p.clamp(0.0, 100.0) / 100.0) * max_idx;
+        let lo = rank.floor() as usize;
+        let hi = rank.ceil() as usize;
+        if lo == hi {
+            return sorted[lo];
+        }
+        let frac = rank - lo as f64;
+        sorted[lo] + (sorted[hi] - sorted[lo]) * frac
+    }
+
+    pub(super) fn perf_status_summary(&self) -> String {
+        let sample_count: usize = self
+            .perf_trace
+            .buckets
+            .values()
+            .map(|bucket| bucket.samples_ms.len())
+            .sum();
+        format!(
+            "perf {} buckets={} samples={} cap={}",
+            if self.perf_trace.enabled { "on" } else { "off" },
+            self.perf_trace.buckets.len(),
+            sample_count,
+            self.perf_trace.capacity
+        )
+    }
+
+    pub(super) fn perf_dump_report(&self, top: usize) -> String {
+        let mut rows = self
+            .perf_trace
+            .buckets
+            .iter()
+            .filter_map(|((name, reason), bucket)| {
+                if bucket.samples_ms.is_empty() {
+                    return None;
+                }
+                let count = bucket.samples_ms.len();
+                let total: f64 = bucket.samples_ms.iter().sum();
+                let avg = total / count as f64;
+                let max = bucket.samples_ms.iter().copied().fold(0.0_f64, f64::max);
+                let p95 = Self::perf_percentile(&bucket.samples_ms, 95.0);
+                Some((name.clone(), reason.clone(), count, avg, p95, max))
+            })
+            .collect::<Vec<_>>();
+        rows.sort_by(|a, b| b.4.partial_cmp(&a.4).unwrap_or(std::cmp::Ordering::Equal));
+        let limit = top.max(1).min(rows.len());
+        let mut out = Vec::with_capacity(limit + 1);
+        out.push(format!("[tui-profiler] {}", self.perf_status_summary()));
+        for (idx, (name, reason, count, avg, p95, max)) in rows.into_iter().take(limit).enumerate()
+        {
+            out.push(format!(
+                "{}. {} reason={} count={} avg={:.2}ms p95={:.2}ms max={:.2}ms",
+                idx + 1,
+                name,
+                reason,
+                count,
+                avg,
+                p95,
+                max
+            ));
+        }
+        out.join("\n")
     }
 
     fn maybe_dispatch_content_search(&mut self, db: &Db) {

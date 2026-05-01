@@ -5,6 +5,23 @@ use super::{
 use super::{clipboard, ClipboardWriteBackend};
 use crate::terminal::text_utils::{is_word_char, join_lines};
 
+fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bool {
+    matches!(
+        intent,
+        crate::editor_core::vim::VimIntent::DeleteToLineStart
+            | crate::editor_core::vim::VimIntent::DeleteToLineEnd
+            | crate::editor_core::vim::VimIntent::DeleteChar
+            | crate::editor_core::vim::VimIntent::DeleteInsideWord
+            | crate::editor_core::vim::VimIntent::DeleteAroundWord
+            | crate::editor_core::vim::VimIntent::YankInsideWord
+            | crate::editor_core::vim::VimIntent::YankAroundWord
+            | crate::editor_core::vim::VimIntent::DeleteInsidePipe
+            | crate::editor_core::vim::VimIntent::DeleteAroundPipe
+            | crate::editor_core::vim::VimIntent::YankInsidePipe
+            | crate::editor_core::vim::VimIntent::YankAroundPipe
+    )
+}
+
 // Ownership: vim intent pipeline, text objects, and vim action application.
 impl TerminalApp {
     pub(super) fn build_vim_context(&self) -> crate::editor_core::vim::VimContext {
@@ -15,18 +32,30 @@ impl TerminalApp {
     }
 
     pub(super) fn run_vim_pipeline(&mut self, key: &Key) -> VimPipelineResult {
+        let perf_start = std::time::Instant::now();
         // Pipeline: terminal input -> vim intent translation -> shared-core
         // engine step -> terminal action rendering.
         let context = self.build_vim_context();
         let Some(step) = TerminalVimAdapter::step(&self.vim_state, key, &context) else {
+            self.record_perf_duration("tui.vim.step", "no_intent", perf_start.elapsed());
             return VimPipelineResult::NoIntent;
         };
         self.vim_state = step.state;
         if !step.handled {
+            self.record_perf_duration("tui.vim.step", "unhandled", perf_start.elapsed());
             return VimPipelineResult::Unhandled;
         }
+        let doc_mutated = step
+            .actions
+            .iter()
+            .any(|action| Self::vim_intent_mutates_document(action.intent));
         self.apply_vim_actions(&step.actions);
-        VimPipelineResult::Applied
+        self.record_perf_duration(
+            "tui.vim.step",
+            if doc_mutated { "mutating" } else { "movement" },
+            perf_start.elapsed(),
+        );
+        VimPipelineResult::Applied { doc_mutated }
     }
 
     pub(super) fn set_clipboard_register(
@@ -77,21 +106,35 @@ impl TerminalApp {
     }
 
     pub(super) fn try_execute_shared_vim_action(
-        &self,
+        &mut self,
         intent: crate::editor_core::vim::VimIntent,
         count: usize,
-    ) -> Option<crate::editor_core::vim_actions::VimActionExecutionResult> {
+    ) -> Option<(
+        crate::editor_core::vim_actions::VimActionExecutionResult,
+        usize,
+    )> {
         if !crate::editor_core::vim_actions::supports_intent(intent) {
             return None;
         }
-        let snapshot = self.build_snapshot();
+        let (snapshot, scope_start_offset) =
+            if self.lines.len() >= 2048 && can_scope_shared_vim_intent(intent) {
+                let center = self.cursor_line.min(self.lines.len().saturating_sub(1));
+                let start = center.saturating_sub(96);
+                let end = center
+                    .saturating_add(96)
+                    .min(self.lines.len().saturating_sub(1));
+                self.build_scoped_snapshot_for_line_span(start, end, None)
+            } else {
+                (self.build_snapshot(), 0)
+            };
         let register = self.shared_vim_register();
-        crate::editor_core::vim_actions::execute_vim_action(
+        let result = crate::editor_core::vim_actions::execute_vim_action(
             &snapshot,
             intent,
             count.max(1),
             register.as_ref(),
-        )
+        )?;
+        Some((result, scope_start_offset))
     }
 
     pub(super) fn apply_shared_vim_action_result(
@@ -555,9 +598,19 @@ impl TerminalApp {
                 self.set_locked_note_status();
                 continue;
             }
-            if let Some(shared) = self.try_execute_shared_vim_action(action.intent, count) {
+            if let Some((shared, scope_start_offset)) =
+                self.try_execute_shared_vim_action(action.intent, count)
+            {
                 let had_register = shared.register.is_some();
-                self.apply_shared_vim_action_result(shared);
+                let mapped = crate::editor_core::vim_actions::VimActionExecutionResult {
+                    operations: shared
+                        .operations
+                        .iter()
+                        .map(|op| Self::remap_operation_from_scope(op, scope_start_offset))
+                        .collect(),
+                    register: shared.register,
+                };
+                self.apply_shared_vim_action_result(mapped);
                 if had_register {
                     let status = match action.intent {
                         crate::editor_core::vim::VimIntent::DeleteLine => {

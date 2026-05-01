@@ -8,12 +8,6 @@ before(async () => { await ensureWasmReady(); });
 test("editor mode exposes only editing commands", async () => {
   const values = listCommandSuggestions("editor", "").map((entry) => entry.value);
   assert.deepEqual(values, [
-    "perf status",
-    "perf on",
-    "perf off",
-    "perf dump",
-    "perf where",
-    "perf clear",
     "sum",
     "sum list",
     "sum row",
@@ -56,6 +50,21 @@ test("editor mode exposes only editing commands", async () => {
     "note unprotect",
   ]);
   assert.equal(values.includes("q"), false);
+});
+
+test("perf suggestions appear only when perf prefix is typed", async () => {
+  const emptyValues = listCommandSuggestions("editor", "").map((entry) => entry.value);
+  assert.equal(emptyValues.includes("perf status"), false);
+
+  const perfValues = listCommandSuggestions("editor", "perf").map((entry) => entry.value);
+  assert.deepEqual(perfValues, [
+    "perf status",
+    "perf on",
+    "perf off",
+    "perf dump",
+    "perf where",
+    "perf clear",
+  ]);
 });
 
 test("vim mode exposes vim-specific commands", async () => {

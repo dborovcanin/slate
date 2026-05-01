@@ -1328,6 +1328,92 @@ fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_op
 }
 
 #[test]
+fn command_bar_perf_prefix_exposes_terminal_perf_completion_options() {
+    let (db, mut app, path) = app_with_note("alpha");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Ctrl('e'),
+            Key::Char('p'),
+            Key::Char('e'),
+            Key::Char('r'),
+            Key::Char('f'),
+            Key::Tab,
+        ],
+    );
+    assert_eq!(app.command_input, "perf ");
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert!(app.command_completion.visible);
+    assert_eq!(
+        app.command_completion
+            .options
+            .iter()
+            .map(|entry| entry.token.as_str())
+            .collect::<Vec<_>>(),
+        vec!["status", "where", "dump", "on", "off", "clear", "toggle", "cap"]
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn execute_terminal_perf_where_reports_tui_log_path() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.execute_terminal_command(&db, "perf where");
+    assert!(app.status.starts_with("perf logs: "));
+    assert!(app.status.contains("note-startup-tui_perf.log"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn execute_terminal_perf_on_and_status_toggle_runtime_trace_state() {
+    let (db, mut app, path) = app_with_note("alpha");
+    assert!(!app.perf_trace.enabled);
+
+    app.execute_terminal_command(&db, "perf on");
+    assert!(app.perf_trace.enabled);
+    assert!(app.status.starts_with("perf on"));
+
+    app.execute_terminal_command(&db, "perf status");
+    assert!(app.status.starts_with("perf on"));
+
+    app.execute_terminal_command(&db, "perf off");
+    assert!(!app.perf_trace.enabled);
+    assert!(app.status.starts_with("perf off"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn normal_mode_movement_does_not_trigger_table_autoformat() {
+    let (db, mut app, path) = app_with_note("|a|b|\n|---|---|\n|1|2|");
+    app.mode = UiMode::Normal;
+    app.vim_state = crate::editor_core::vim::VimState::default();
+    app.cursor_line = 0;
+    app.cursor_col = 0;
+
+    run_keys(&mut app, &db, &[Key::Char('l')]);
+
+    assert_eq!(app.lines[0], "|a|b|".to_string());
+    assert_eq!(app.lines[1], "|---|---|".to_string());
+    assert_eq!(app.lines[2], "|1|2|".to_string());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn command_bar_enter_accepts_picker_selection_before_execute() {
     let (db, mut app, path) = app_with_note("alpha");
 

@@ -14,6 +14,68 @@ fn note_sources(db: &Db) -> app_core::note_sources::NoteSourceService {
     app_core::note_sources::NoteSourceService::new(db.clone())
 }
 
+const TERMINAL_PERF_COMMAND_SUGGESTIONS: [(&str, &str); 8] = [
+    ("perf status", "show terminal perf tracing status"),
+    ("perf where", "show terminal perf log location"),
+    ("perf dump", "show terminal perf dump hint"),
+    (
+        "perf on",
+        "alias for perf status (runtime tracing always on-demand)",
+    ),
+    (
+        "perf off",
+        "alias for perf status (runtime tracing always on-demand)",
+    ),
+    ("perf clear", "alias for perf status"),
+    ("perf toggle", "toggle terminal perf tracing"),
+    ("perf cap", "set sample cap per bucket"),
+];
+
+fn list_terminal_perf_command_suggestions(
+    raw_input: &str,
+) -> Vec<crate::editor_core::types::CommandSuggestion> {
+    let normalized = crate::editor_core::command_catalog::normalize_command(raw_input);
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+    if !normalized.starts_with("perf")
+        && !normalized.starts_with("profile")
+        && !normalized.starts_with("profiler")
+    {
+        return Vec::new();
+    }
+    TERMINAL_PERF_COMMAND_SUGGESTIONS
+        .iter()
+        .filter(|(value, _)| value.starts_with(&normalized))
+        .map(
+            |(value, description)| crate::editor_core::types::CommandSuggestion {
+                value: (*value).to_string(),
+                description: (*description).to_string(),
+            },
+        )
+        .collect()
+}
+
+fn list_terminal_command_suggestions(
+    mode: crate::editor_core::types::CommandMode,
+    raw_input: &str,
+) -> Vec<crate::editor_core::types::CommandSuggestion> {
+    let mut core = crate::editor_core::commands::list_command_suggestions(mode, raw_input);
+    let perf = list_terminal_perf_command_suggestions(raw_input);
+    if perf.is_empty() {
+        return core;
+    }
+    let seen = core
+        .iter()
+        .map(|entry| entry.value.clone())
+        .collect::<std::collections::HashSet<_>>();
+    core.extend(
+        perf.into_iter()
+            .filter(|entry| !seen.contains(&entry.value)),
+    );
+    core
+}
+
 // Ownership: switcher, command bar execution, and search workflows.
 impl TerminalApp {
     pub(super) fn rebuild_wiki_link_prefix_index(&mut self) {
@@ -551,10 +613,8 @@ impl TerminalApp {
     }
 
     pub(super) fn build_command_completion_menu(&self) -> Option<CommandCompletionMenuState> {
-        let suggestions = crate::editor_core::commands::list_command_suggestions(
-            self.command_mode(),
-            &self.command_input,
-        );
+        let suggestions =
+            list_terminal_command_suggestions(self.command_mode(), &self.command_input);
         if suggestions.is_empty() {
             return None;
         }
@@ -898,6 +958,11 @@ impl TerminalApp {
     }
 
     pub(super) fn execute_terminal_command(&mut self, db: &Db, cmd: &str) {
+        if let Some(message) = self.try_execute_terminal_perf_command(cmd) {
+            self.status = message;
+            return;
+        }
+
         if let Some(plan) =
             crate::editor_core::engine::EditorEngine::plan_host_command(self.command_mode(), cmd)
         {
@@ -1093,6 +1158,74 @@ impl TerminalApp {
         self.adjust_scroll();
     }
 
+    fn try_execute_terminal_perf_command(&mut self, cmd: &str) -> Option<String> {
+        let normalized = crate::editor_core::command_catalog::normalize_command(cmd);
+        if normalized.is_empty() {
+            return None;
+        }
+        let tokens = normalized.split_whitespace().collect::<Vec<_>>();
+        let root = tokens.first().copied().unwrap_or_default();
+        if root != "perf" && root != "profile" && root != "profiler" {
+            return None;
+        }
+
+        let subcommand = tokens.get(1).copied().unwrap_or("status");
+        let path = crate::startup_log::startup_log_path("tui_perf");
+        let path_text = path.display().to_string();
+        match subcommand {
+            "where" => Some(format!("perf logs: {path_text}")),
+            "status" => Some(self.perf_status_summary()),
+            "on" | "enable" | "1" => {
+                self.perf_trace.enabled = true;
+                Some(self.perf_status_summary())
+            }
+            "off" | "disable" | "0" => {
+                self.perf_trace.enabled = false;
+                Some(self.perf_status_summary())
+            }
+            "toggle" => {
+                self.perf_trace.enabled = !self.perf_trace.enabled;
+                Some(self.perf_status_summary())
+            }
+            "clear" | "reset" => {
+                self.perf_trace.buckets.clear();
+                Some(self.perf_status_summary())
+            }
+            "capacity" | "cap" => {
+                let parsed = tokens
+                    .get(2)
+                    .and_then(|raw| raw.parse::<usize>().ok())
+                    .unwrap_or(0);
+                if parsed == 0 {
+                    return Some("perf usage: perf cap <positive-number>".to_string());
+                }
+                self.perf_trace.capacity = parsed;
+                for bucket in self.perf_trace.buckets.values_mut() {
+                    if bucket.samples_ms.len() > parsed {
+                        let drop = bucket.samples_ms.len() - parsed;
+                        bucket.samples_ms.drain(0..drop);
+                    }
+                }
+                Some(self.perf_status_summary())
+            }
+            "dump" => {
+                let top = tokens
+                    .get(2)
+                    .and_then(|raw| raw.parse::<usize>().ok())
+                    .unwrap_or(12);
+                let report = self.perf_dump_report(top);
+                for line in report.lines() {
+                    let _ = crate::startup_log::append_startup_log_line("tui_perf", line);
+                }
+                Some(format!("perf dump logged -> {path_text}"))
+            }
+            _ => Some(
+                "perf usage: perf [status|on|off|toggle|dump [top]|where|clear|cap <n>]"
+                    .to_string(),
+            ),
+        }
+    }
+
     pub(super) fn byte_offset_for_line_col(&self, line_idx: usize, col: usize) -> usize {
         let mut offset = 0;
         for (i, line) in self.lines.iter().enumerate() {
@@ -1145,8 +1278,21 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn build_snapshot(&self) -> crate::editor_core::types::EditorContextSnapshot {
-        let text = join_lines(&self.lines);
+    pub(super) fn invalidate_joined_text_cache(&mut self) {
+        self.joined_text_cache = None;
+    }
+
+    fn joined_text_cached(&mut self) -> String {
+        if let Some(cached) = &self.joined_text_cache {
+            return cached.clone();
+        }
+        let joined = join_lines(&self.lines);
+        self.joined_text_cache = Some(joined.clone());
+        joined
+    }
+
+    pub(super) fn build_snapshot(&mut self) -> crate::editor_core::types::EditorContextSnapshot {
+        let text = self.joined_text_cached();
         let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
         let selection =
             self.command_selection
@@ -1161,8 +1307,98 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn build_context(&self) -> crate::editor_core::context::ResolvedContext<'static> {
-        crate::editor_core::context::ResolvedContext::new(self.build_snapshot())
+    pub(super) fn remap_operation_from_scope(
+        op: &crate::editor_core::types::EditOperation,
+        scope_start_offset: usize,
+    ) -> crate::editor_core::types::EditOperation {
+        let mut mapped = op.clone();
+        for change in &mut mapped.changes {
+            change.from = change.from.saturating_add(scope_start_offset);
+            change.to = change.to.saturating_add(scope_start_offset);
+        }
+        if let Some(selection) = mapped.selection.as_mut() {
+            selection.anchor = selection.anchor.saturating_add(scope_start_offset);
+            if let Some(head) = selection.head.as_mut() {
+                *head = head.saturating_add(scope_start_offset);
+            }
+        }
+        mapped
+    }
+
+    pub(super) fn build_scoped_snapshot_for_line_span(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        changed_range_abs: Option<crate::editor_core::types::TextRange>,
+    ) -> (crate::editor_core::types::EditorContextSnapshot, usize) {
+        if self.lines.is_empty() {
+            let snapshot = crate::editor_core::types::EditorContextSnapshot {
+                text: String::new(),
+                selection: crate::editor_core::types::SelectionSnapshot { anchor: 0, head: 0 },
+                changed_range: None,
+            };
+            return (snapshot, 0);
+        }
+
+        let clamped_start = start_line.min(self.lines.len().saturating_sub(1));
+        let clamped_end = end_line
+            .min(self.lines.len().saturating_sub(1))
+            .max(clamped_start);
+        let scope_start_offset = self.byte_offset_for_line_col(clamped_start, 0);
+        let scope_text = join_lines(&self.lines[clamped_start..=clamped_end]);
+        let scope_len = scope_text.len();
+
+        let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let selection_abs =
+            self.command_selection
+                .unwrap_or(crate::editor_core::types::SelectionSnapshot {
+                    anchor: fallback_cursor,
+                    head: fallback_cursor,
+                });
+        let selection = crate::editor_core::types::SelectionSnapshot {
+            anchor: selection_abs
+                .anchor
+                .saturating_sub(scope_start_offset)
+                .min(scope_len),
+            head: selection_abs
+                .head
+                .saturating_sub(scope_start_offset)
+                .min(scope_len),
+        };
+
+        let changed_range = changed_range_abs.and_then(|changed| {
+            let scope_end = scope_start_offset.saturating_add(scope_len);
+            if changed.to < scope_start_offset || changed.from > scope_end {
+                return None;
+            }
+            let from_abs = changed.from.max(scope_start_offset).min(scope_end);
+            let to_abs = changed.to.max(scope_start_offset).min(scope_end);
+            Some(crate::editor_core::types::TextRange {
+                from: from_abs.saturating_sub(scope_start_offset),
+                to: to_abs.saturating_sub(scope_start_offset),
+            })
+        });
+
+        let snapshot = crate::editor_core::types::EditorContextSnapshot {
+            text: scope_text,
+            selection,
+            changed_range,
+        };
+        (snapshot, scope_start_offset)
+    }
+
+    pub(super) fn build_scoped_context_for_line_span(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        changed_range_abs: Option<crate::editor_core::types::TextRange>,
+    ) -> (crate::editor_core::context::ResolvedContext<'static>, usize) {
+        let (snapshot, scope_start_offset) =
+            self.build_scoped_snapshot_for_line_span(start_line, end_line, changed_range_abs);
+        (
+            crate::editor_core::context::ResolvedContext::new(snapshot),
+            scope_start_offset,
+        )
     }
 
     pub(super) fn open_switcher(&mut self, db: &Db) -> Result<(), String> {
@@ -1217,14 +1453,16 @@ impl TerminalApp {
     }
 
     pub(super) fn save_with_options(&mut self, db: &Db, force: bool) -> Result<(), String> {
+        let started = Instant::now();
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
         }
         if !self.dirty {
+            self.record_perf_duration("tui.save", "noop", started.elapsed());
             return Ok(());
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
-        let body = join_lines(&self.lines);
+        let body = self.joined_text_cached();
         let mut saved = note_sources(db).save_note_by_id(
             &self.active_note.id,
             &body,
@@ -1237,10 +1475,16 @@ impl TerminalApp {
         // drop it to keep memory usage flat.
         saved.body = String::new();
         self.active_note = saved;
+        self.joined_text_cache = Some(body);
         self.dirty = false;
         self.history
             .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
         self.refresh_switcher_items(db)?;
+        self.record_perf_duration(
+            "tui.save",
+            if force { "forced" } else { "normal" },
+            started.elapsed(),
+        );
         Ok(())
     }
 
@@ -1464,6 +1708,7 @@ impl TerminalApp {
     pub(super) fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
         self.active_note = note;
         self.lines = split_lines(&self.active_note.body);
+        self.joined_text_cache = Some(join_lines(&self.lines));
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
         self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;

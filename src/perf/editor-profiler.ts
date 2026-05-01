@@ -543,7 +543,7 @@ export function listEditorProfilerCommandSuggestions(
   rawInput: string,
 ): EditorProfilerCommandSuggestion[] {
   const normalized = normalizeCommand(rawInput);
-  if (!normalized) return [...PROFILER_COMMAND_SUGGESTIONS];
+  if (!normalized) return [];
   if (
     !normalized.startsWith("perf")
     && !normalized.startsWith("profile")

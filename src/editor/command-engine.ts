@@ -200,7 +200,7 @@ export function listCommandSuggestions(mode: CommandMode, rawInput: string): Com
   if (profiler.length === 0) return core;
   const seen = new Set(core.map((entry) => entry.value));
   const extra = profiler.filter((entry) => !seen.has(entry.value));
-  return [...extra, ...core];
+  return [...core, ...extra];
 }
 
 export async function executeCommand(

@@ -254,6 +254,11 @@ Acceptance criteria:
 - [ ] Backlinks (`[[note]]`) with mentions footer.
 - [ ] Pinned notes.
 - [ ] Archive mode.
+- [ ] Add option for comments and math like Obsidian.
+- [ ] Add highlight.
+- [ ] Improve search style.
+- [ ] Consolidate commands autocompletion.
+- [ ] Add dt{char}.
 
 ### Aggregation
 

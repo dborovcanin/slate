@@ -109,3 +109,28 @@ After targets:
 2. `editor.autosave.flush` p95: `<= 80ms` and `>= 25%` lower than before.
 3. `editor.autosave.saveNote` p95: `<= 60ms` and no worse than `+10%` vs before.
 4. `editor.autosave.snapshot` reason mix for 100k docs: `inline` should be `0` samples; use `background`/`cache`.
+
+## TUI Runtime Tracing
+
+TUI now has reusable runtime tracing buckets via command bar:
+
+- `:perf on` / `:perf off` / `:perf status`
+- `:perf dump [top]`
+- `:perf clear`
+- `:perf cap <n>`
+- `:perf where`
+
+Dump output is appended to `note-startup-tui_perf.log` in temp dir.
+
+Current core buckets:
+
+- `tui.render.frame` (`draw`)
+- `tui.key.dispatch` (`input`)
+- `tui.idle.dispatch` (`autosave_tick`)
+- `tui.vim.step` (`no_intent|unhandled|movement|mutating`)
+- `tui.doc_change_rules` (`noop|applied`)
+- `tui.enter_rules` (`noop|applied`)
+- `tui.tab_rules` (`noop|applied`)
+- `tui.calc.recompute` (`math_disabled|stale_full|incremental`)
+- `tui.calc.viewport_eval` (`eval`)
+- `tui.save` (`noop|normal|forced`)
