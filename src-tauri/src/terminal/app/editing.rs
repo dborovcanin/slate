@@ -518,9 +518,10 @@ impl TerminalApp {
         let changed_has_builtin_formula =
             crate::editor_core::calc_plan::contains_builtin_formula_with_mask(changed_lines, mask);
         let changed_has_calc_expression = changed_lines.iter().any(|line| {
-            !crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask)
-                .trim()
-                .is_empty()
+            let eval_target =
+                crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask);
+            let trimmed = eval_target.trim();
+            !trimmed.is_empty() && crate::editor_core::calc_plan::has_calc_signal(trimmed)
         });
 
         // Safe remap-only path: only line index shifting happened, and changed

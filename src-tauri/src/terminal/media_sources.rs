@@ -23,17 +23,27 @@ pub struct MediaLineTransform {
 }
 
 pub fn find_media_sources(text: &str) -> Vec<MediaSourceMatch> {
-    let mut matches = Vec::new();
-    for image in markdown_tokens::find_markdown_image_matches(text) {
-        matches.push(MediaSourceMatch {
-            kind: MediaSourceKind::Image,
-            from: image.from,
-            to: image.to,
-            label: normalize_media_label(&image.alt, &image.src, "Image"),
-            src: image.src,
-        });
+    let has_image_hint = text.contains("![") && text.contains("](");
+    let has_audio_hint = has_potential_audio_link(text);
+    if !has_image_hint && !has_audio_hint {
+        return Vec::new();
     }
-    matches.extend(find_markdown_audio_sources(text));
+
+    let mut matches = Vec::new();
+    if has_image_hint {
+        for image in markdown_tokens::find_markdown_image_matches(text) {
+            matches.push(MediaSourceMatch {
+                kind: MediaSourceKind::Image,
+                from: image.from,
+                to: image.to,
+                label: normalize_media_label(&image.alt, &image.src, "Image"),
+                src: image.src,
+            });
+        }
+    }
+    if has_audio_hint {
+        matches.extend(find_markdown_audio_sources(text));
+    }
     matches
 }
 
@@ -168,6 +178,24 @@ fn normalize_media_label(raw_label: &str, src: &str, fallback: &str) -> String {
         return from_src.to_string();
     }
     fallback.to_string()
+}
+
+fn has_potential_audio_link(text: &str) -> bool {
+    if !text.contains("](") {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    lower.contains("data:audio/")
+        || lower.contains(".mp3")
+        || lower.contains(".wav")
+        || lower.contains(".ogg")
+        || lower.contains(".m4a")
+        || lower.contains(".flac")
+        || lower.contains(".aac")
+        || lower.contains(".opus")
+        || lower.contains(".weba")
+        || lower.contains(".aiff")
+        || lower.contains(".oga")
 }
 
 fn find_markdown_audio_sources(text: &str) -> Vec<MediaSourceMatch> {
