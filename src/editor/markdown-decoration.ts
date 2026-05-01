@@ -252,6 +252,133 @@ class MarkdownImageDisplayWidget extends WidgetType {
   }
 }
 
+function parseTableCells(lineText: string): string[] {
+  const trimmed = lineText.trim();
+  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return [];
+  const inner = trimmed.slice(1, -1);
+  const cells: string[] = [];
+  let current = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch === "\\" && i + 1 < inner.length && inner[i + 1] === "|") {
+      current += "|";
+      i += 1;
+      continue;
+    }
+    if (ch === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function escapeTableCell(value: string): string {
+  return value.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
+}
+
+function ensureCols(row: string[], cols: number): string[] {
+  const out = row.slice(0, cols);
+  while (out.length < cols) out.push("");
+  return out;
+}
+
+function tableMarkdownRow(cells: readonly string[]): string {
+  return `| ${cells.map((cell) => escapeTableCell(cell)).join(" | ")} |`;
+}
+
+function tableLineIndent(lineText: string): string {
+  const match = lineText.match(/^(\s*)\|/);
+  return match?.[1] ?? "";
+}
+
+function tableMarkdownRowWithIndent(indent: string, cells: readonly string[]): string {
+  return `${indent}${tableMarkdownRow(cells)}`;
+}
+
+class TableCellInputWidget extends WidgetType {
+  constructor(
+    private readonly value: string,
+    private readonly lineFrom: number,
+    private readonly lineTo: number,
+    private readonly cellIndex: number,
+    private readonly header: boolean,
+    private readonly widthCh: number,
+  ) {
+    super();
+  }
+
+  eq(other: TableCellInputWidget): boolean {
+    return (
+      other.value === this.value &&
+      other.lineFrom === this.lineFrom &&
+      other.lineTo === this.lineTo &&
+      other.cellIndex === this.cellIndex &&
+      other.header === this.header &&
+      other.widthCh === this.widthCh
+    );
+  }
+
+  private writeBack(view: EditorView, nextValue: string) {
+    const currentLine = view.state.doc.sliceString(this.lineFrom, this.lineTo);
+    if (!tableRowRe.test(currentLine)) return;
+    const indent = tableLineIndent(currentLine);
+    const cells = parseTableCells(currentLine);
+    const colCount = Math.max(cells.length, this.cellIndex + 1, 1);
+    const nextCells = ensureCols(cells, colCount);
+    nextCells[this.cellIndex] = nextValue;
+    const insert = tableMarkdownRowWithIndent(indent, nextCells);
+    if (insert === currentLine) return;
+    view.dispatch({
+      changes: [{ from: this.lineFrom, to: this.lineTo, insert }],
+      scrollIntoView: false,
+    });
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const input = document.createElement("input");
+    input.className = this.header
+      ? "md-table-cell-input md-table-cell-input-header"
+      : "md-table-cell-input";
+    input.value = this.value;
+    input.style.width = `${Math.max(2, this.widthCh)}ch`;
+    input.addEventListener("mousedown", (event) => {
+      event.stopPropagation();
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        this.writeBack(view, input.value);
+        input.blur();
+      }
+    });
+    input.addEventListener("blur", () => {
+      this.writeBack(view, input.value);
+    });
+    return input;
+  }
+}
+
+class TableDividerWidget extends WidgetType {
+  constructor(private readonly widthCh: number) {
+    super();
+  }
+
+  eq(other: TableDividerWidget): boolean {
+    return other.widthCh === this.widthCh;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "md-table-cell-widget md-table-cell-widget-divider";
+    span.style.width = `${Math.max(2, this.widthCh)}ch`;
+    return span;
+  }
+}
+
 const decVariable = Decoration.mark({ class: "md-variable" });
 
 const lineClass = (className: string) => Decoration.line({ class: className });
@@ -270,6 +397,44 @@ const decChecklistLine = lineClass("md-line md-checklist-item");
 const decRuleLine = lineClass("md-line md-hr");
 const decCodeFenceLine = lineClass("md-line md-code-fence");
 const decCodeBlockLine = lineClass("md-line md-code-block-line");
+const decTableLine = lineClass("md-line md-table-row");
+const decTableHeaderLine = lineClass("md-line md-table-row md-table-header");
+const decTableDividerLine = lineClass("md-line md-table-row md-table-divider");
+const decTablePipe = Decoration.mark({ class: "md-table-pipe" });
+const decTableHeaderContent = Decoration.mark({ class: "md-table-header-content" });
+const decTableDividerContent = Decoration.mark({ class: "md-table-divider-content" });
+
+const tableRowRe = /^\s*\|.*\|\s*$/;
+const tableDelimiterRe = /^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/;
+
+type TableLineKind = "header" | "divider" | "body" | null;
+
+function classifyTableLineKind(lineText: string, nextLineText?: string): TableLineKind {
+  if (!tableRowRe.test(lineText)) return null;
+  if (tableDelimiterRe.test(lineText)) return "divider";
+  if (nextLineText && tableDelimiterRe.test(nextLineText)) return "header";
+  return "body";
+}
+
+function tablePipeOffsets(lineText: string): number[] {
+  const offsets: number[] = [];
+  for (let i = 0; i < lineText.length; i++) {
+    if (lineText[i] === "|") offsets.push(i);
+  }
+  return offsets;
+}
+
+function tableCellRanges(lineText: string): Array<{ from: number; to: number }> {
+  const pipes = tablePipeOffsets(lineText);
+  if (pipes.length < 2) return [];
+  const ranges: Array<{ from: number; to: number }> = [];
+  for (let i = 0; i < pipes.length - 1; i++) {
+    const from = pipes[i]! + 1;
+    const to = pipes[i + 1]!;
+    if (from < to) ranges.push({ from, to });
+  }
+  return ranges;
+}
 
 class ChecklistMarkWidget extends WidgetType {
   private readonly checked: boolean;
@@ -1206,6 +1371,7 @@ export function buildMarkdownDecorationsForSpans(
         builder,
         line,
         info,
+        chunkLines[idx + 1],
         matcher,
         lineAnalysis.inlineTokens,
         activeSelection,
@@ -1452,6 +1618,7 @@ function decorateContentLine(
   builder: RangeSetBuilder<Decoration>,
   line: { from: number; to: number; text: string; number: number },
   info: MarkdownLineInfo,
+  nextLineText: string | undefined,
   matcher: VariableMatcher,
   inlineTokens: readonly InlineToken[],
   activeSelection?: ActiveSelection,
@@ -1460,6 +1627,48 @@ function decorateContentLine(
   imagePreviewResolver?: (src: string) => ResolvedImagePreview | null,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
+  const tableKind = classifyTableLineKind(line.text, nextLineText);
+
+  if (tableKind === "divider") {
+    builder.add(line.from, line.from, decTableDividerLine);
+    builder.add(line.from, line.to, decTableDividerContent);
+  } else if (tableKind === "header") {
+    builder.add(line.from, line.from, decTableHeaderLine);
+    builder.add(line.from, line.to, decTableHeaderContent);
+  } else if (tableKind === "body") {
+    builder.add(line.from, line.from, decTableLine);
+  }
+
+  if (tableKind !== null) {
+    const ranges = tableCellRanges(line.text);
+    for (const offset of tablePipeOffsets(line.text)) {
+      builder.add(line.from + offset, line.from + offset + 1, decTablePipe);
+    }
+    for (let cellIndex = 0; cellIndex < ranges.length; cellIndex++) {
+      const cell = ranges[cellIndex]!;
+      const from = line.from + cell.from;
+      const to = line.from + cell.to;
+      const raw = line.text.slice(cell.from, cell.to);
+      const text = raw.trim();
+      builder.add(
+        from,
+        to,
+        Decoration.replace({
+          widget: tableKind === "divider"
+            ? new TableDividerWidget(raw.length)
+            : new TableCellInputWidget(
+              text,
+              line.from,
+              line.to,
+              cellIndex,
+              tableKind === "header",
+              Math.max(raw.length, 2),
+            ),
+          inclusive: false,
+        }),
+      );
+    }
+  }
 
   if (info.headingLevel) {
     builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);
