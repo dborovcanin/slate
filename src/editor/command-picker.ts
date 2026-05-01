@@ -241,43 +241,6 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         historyNavigator.reset();
       }
 
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        event.stopPropagation();
-        const previous = historyNavigator.previous();
-        if (!previous) return true;
-        state.inputEl.value = previous;
-        state.selectedIndex = 0;
-        state.refresh();
-        return true;
-      }
-
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        event.stopPropagation();
-        const next = historyNavigator.next();
-        if (!next) return true;
-        state.inputEl.value = next;
-        state.selectedIndex = 0;
-        state.refresh();
-        return true;
-      }
-
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        const menu = buildCommandCompletionMenu(state.query, state.items);
-        if (!menu || menu.options.length === 0) {
-          return false;
-        }
-        event.preventDefault();
-        event.stopPropagation();
-        const len = state.items.length;
-        const current = Math.max(0, Math.min(state.selectedIndex, len - 1));
-        const delta = event.key === "ArrowLeft" ? -1 : 1;
-        state.selectedIndex = (current + delta + len) % len;
-        state.refresh();
-        return true;
-      }
-
       if (event.key === "Tab") {
         if (state.items.length === 0) return false;
         event.preventDefault();
