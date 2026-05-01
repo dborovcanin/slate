@@ -32,3 +32,16 @@ Enable with either:
 When enabled, the app logs one line starting with:
 
 - `NOTE_UI_STARTUP_METRICS`
+
+## UI Runtime Tracing
+
+Use the in-editor profiler for interaction latency and payload metrics.
+
+- Enable with command: `:perf on`
+- Inspect summary: `:perf status`
+- Dump top buckets: `:perf dump`
+- Disable: `:perf off`
+
+Detailed naming/reason/metric conventions live in:
+
+- `docs/perf-tracing.md`

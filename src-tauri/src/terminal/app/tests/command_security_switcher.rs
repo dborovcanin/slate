@@ -86,6 +86,48 @@ fn apply_edit_operation_multiline_insert_updates_lines_directly() {
 }
 
 #[test]
+fn apply_edit_operation_multi_change_updates_lines_without_full_rebuild() {
+    let (_db, mut app, path) = app_with_note("alpha\nbeta\ngamma");
+    app.cursor_line = 1;
+    app.cursor_col = 2;
+
+    let op = crate::editor_core::types::EditOperation {
+        changes: vec![
+            crate::editor_core::types::TextChange {
+                from: 0,
+                to: 1,
+                insert: "A".to_string(),
+            },
+            crate::editor_core::types::TextChange {
+                from: 11,
+                to: 16,
+                insert: "G\nH".to_string(),
+            },
+        ],
+        selection: Some(crate::editor_core::types::OperationSelection {
+            anchor: 13,
+            head: Some(13),
+        }),
+    };
+    app.apply_edit_operation(&op);
+
+    assert_eq!(
+        app.lines,
+        vec![
+            "Alpha".to_string(),
+            "beta".to_string(),
+            "G".to_string(),
+            "H".to_string(),
+        ]
+    );
+    assert_eq!(app.cursor_line, 3);
+    assert_eq!(app.cursor_col, 0);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn editor_paste_multiline_inserts_as_single_bulk_edit() {
     let (db, mut app, path) = app_with_note("start end");
     app.mode = UiMode::Editor;

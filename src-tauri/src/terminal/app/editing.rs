@@ -2,16 +2,16 @@ use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
     contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
     find_calc_segment_range, gutter_width_for_visible_lines, is_markdown_table_line, line_char_len,
-    line_display_cols, split_lines, table_cell_edit_start, table_cell_info_at_char,
-    table_cell_is_empty, table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode,
-    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
-    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS,
-    CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
-    HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
-    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    line_display_cols, table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
+    table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode, VariableAutocompletePopupState,
+    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
+    CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER,
+    EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT,
+    LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::text_utils::{
-    byte_index, cursor_render_char_col, join_lines, remove_char_at, viewport_col_for_display_col,
+    byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
 };
 use crate::terminal::{folding, input};
 use std::cmp::min;
@@ -208,6 +208,54 @@ fn line_and_byte_for_offset(lines: &[String], target: usize) -> (usize, usize) {
     }
     let last = lines.len().saturating_sub(1);
     (last, lines[last].len())
+}
+
+fn apply_text_change_in_place(
+    lines: &mut Vec<String>,
+    change: &crate::editor_core::types::TextChange,
+    doc_len: usize,
+) -> (usize, usize, usize) {
+    let from = change.from.min(doc_len);
+    let to = change.to.min(doc_len);
+    let (from_line, from_byte) = line_and_byte_for_offset(lines, from);
+    let (to_line, to_byte) = line_and_byte_for_offset(lines, to);
+
+    let from_text = lines.get(from_line).cloned().unwrap_or_default();
+    let to_text = lines.get(to_line).cloned().unwrap_or_default();
+    let prefix = &from_text[..from_byte.min(from_text.len())];
+    let suffix = &to_text[to_byte.min(to_text.len())..];
+    let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
+    let mut replacement = Vec::with_capacity(insert_parts.len().max(1));
+
+    if insert_parts.len() <= 1 {
+        replacement.push(format!(
+            "{prefix}{}{suffix}",
+            insert_parts.first().copied().unwrap_or("")
+        ));
+    } else {
+        replacement.push(format!("{prefix}{}", insert_parts[0]));
+        for part in &insert_parts[1..insert_parts.len() - 1] {
+            replacement.push((*part).to_string());
+        }
+        replacement.push(format!(
+            "{}{suffix}",
+            insert_parts.last().copied().unwrap_or("")
+        ));
+    }
+
+    let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
+    let new_line_span = replacement.len().max(1);
+    if from_line <= to_line && from_line < lines.len() {
+        let end = to_line.min(lines.len().saturating_sub(1));
+        lines.splice(from_line..=end, replacement);
+    } else {
+        *lines = replacement;
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    (from_line, old_line_span, new_line_span)
 }
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
@@ -2239,69 +2287,48 @@ impl TerminalApp {
             return;
         }
 
-        let mut text = join_lines(&self.lines);
+        let old_doc_len = document_text_len(&self.lines);
         let changed_from_offset = op
             .changes
             .iter()
-            .map(|change| change.from.min(text.len()))
+            .map(|change| change.from.min(old_doc_len))
             .min()
             .unwrap_or(0);
         let changed_to_offset_old = op
             .changes
             .iter()
-            .map(|change| change.to.min(text.len()))
+            .map(|change| change.to.min(old_doc_len))
             .max()
             .unwrap_or(changed_from_offset);
-        let changed_from_line = text.as_bytes()[..changed_from_offset]
-            .iter()
-            .filter(|&&b| b == b'\n')
-            .count();
-        let old_changed_to_line_exclusive = text.as_bytes()[..changed_to_offset_old]
-            .iter()
-            .filter(|&&b| b == b'\n')
-            .count()
-            + 1;
+        let changed_from_line = line_and_byte_for_offset(&self.lines, changed_from_offset).0;
+        let old_changed_to_line_exclusive =
+            line_and_byte_for_offset(&self.lines, changed_to_offset_old).0 + 1;
 
-        // Track initial cursor byte offset
-        let mut mapped_anchor = 0;
-        for (i, line) in self.lines.iter().enumerate() {
-            if i == self.cursor_line {
-                mapped_anchor += byte_index(line, self.cursor_col);
-                break;
-            }
-            mapped_anchor += line.len() + 1;
-        }
-
+        let original_anchor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
         let mut changes = op.changes.clone();
         changes.sort_by(|a, b| b.from.cmp(&a.from));
-        for change in &changes {
-            let from = change.from.min(text.len());
-            let to = change.to.min(text.len());
-            text.replace_range(from..to, &change.insert);
+        let mapped_anchor = map_offset_through_changes(original_anchor, &changes);
 
-            // Map cursor through change
-            if from <= mapped_anchor {
-                if to <= mapped_anchor {
-                    let removed = to - from;
-                    let added = change.insert.len();
-                    mapped_anchor = mapped_anchor + added - removed;
-                } else {
-                    // Keep cursor stable relative to the replacement start
-                    // when it falls inside the replaced span.
-                    let inside = mapped_anchor.saturating_sub(from);
-                    mapped_anchor = from + inside.min(change.insert.len());
-                }
-            }
+        let mut current_doc_len = old_doc_len;
+        for change in &changes {
+            let from = change.from.min(current_doc_len);
+            let to = change.to.min(current_doc_len);
+            let removed = to.saturating_sub(from);
+            let (from_line, old_line_span, new_line_span) =
+                apply_text_change_in_place(&mut self.lines, change, current_doc_len);
+            self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
+            current_doc_len = current_doc_len
+                .saturating_add(change.insert.len())
+                .saturating_sub(removed);
         }
-        self.lines = split_lines(&text);
-        let mapped_from = map_offset_through_changes(changed_from_offset, &changes).min(text.len());
-        let mapped_to = map_offset_through_changes(changed_to_offset_old, &changes).min(text.len());
+
+        let mapped_from =
+            map_offset_through_changes(changed_from_offset, &changes).min(current_doc_len);
+        let mapped_to =
+            map_offset_through_changes(changed_to_offset_old, &changes).min(current_doc_len);
         let mapped_changed_to = mapped_from.max(mapped_to);
-        let new_changed_to_line_exclusive = text.as_bytes()[..mapped_changed_to]
-            .iter()
-            .filter(|&&b| b == b'\n')
-            .count()
-            + 1;
+        let new_changed_to_line_exclusive =
+            line_and_byte_for_offset(&self.lines, mapped_changed_to).0 + 1;
         let old_line_span = old_changed_to_line_exclusive
             .saturating_sub(changed_from_line)
             .max(1);
@@ -2315,17 +2342,11 @@ impl TerminalApp {
         } else {
             mapped_anchor
         }
-        .min(text.len());
-
-        let mut offset = 0;
-        for (i, line) in self.lines.iter().enumerate() {
-            let line_end = offset + line.len();
-            if final_anchor <= line_end {
-                self.cursor_line = i;
-                self.cursor_col = line[..final_anchor.saturating_sub(offset)].chars().count();
-                break;
-            }
-            offset = line_end + 1;
+        .min(current_doc_len);
+        let (line_idx, line_byte) = line_and_byte_for_offset(&self.lines, final_anchor);
+        if let Some(line) = self.lines.get(line_idx) {
+            self.cursor_line = line_idx;
+            self.cursor_col = line[..line_byte.min(line.len())].chars().count();
         }
         self.folds.rescan_pending = true;
         self.mark_edited_from_line(changed_from_line);

@@ -41,6 +41,14 @@ import {
   insertImagePathsAtCursor,
 } from "./image-import";
 import { startupMark } from "../perf/startup.ts";
+import {
+  editorProfilerNowMs,
+  recordEditorProfilerSample,
+} from "../perf/editor-profiler.ts";
+import {
+  AutosaveSnapshotTracker,
+  type AutosaveSnapshot,
+} from "./autosave-snapshot.ts";
 
 let view: EditorView | null = null;
 let saveTimer: number | null = null;
@@ -57,6 +65,14 @@ const SAVE_ERROR_THROTTLE_MS = 1500;
 const TITLE_PREVIEW_LIMIT = 60;
 const LARGE_DOC_STATE_RESET_THRESHOLD = 200_000;
 const suppressEditorSyncAnnotation = Annotation.define<boolean>();
+const autosaveSnapshots = new AutosaveSnapshotTracker({
+  onSample: (sample) => {
+    recordEditorProfilerSample(sample.name, sample.durationMs, {
+      reason: sample.reason,
+      metrics: sample.metrics,
+    });
+  },
+});
 
 function errorMessageOf(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -92,6 +108,33 @@ function scheduleSave() {
   saveTimer = window.setTimeout(flushSave, SAVE_DEBOUNCE_MS);
 }
 
+async function snapshotBodyForSave(doc: Text): Promise<AutosaveSnapshot> {
+  const startedAt = editorProfilerNowMs();
+  const snapshot = await autosaveSnapshots.bodyForDoc(doc);
+  recordEditorProfilerSample(
+    "editor.autosave.snapshotWait",
+    editorProfilerNowMs() - startedAt,
+    {
+      reason: snapshot.source,
+      metrics: {
+        docLength: snapshot.docLength,
+        lineCount: snapshot.lineCount,
+        bodyLength: snapshot.body.length,
+      },
+    },
+  );
+  return snapshot;
+}
+
+async function currentStableSnapshotForSave(): Promise<AutosaveSnapshot | null> {
+  if (!view) return null;
+  for (;;) {
+    const doc = view.state.doc;
+    const snapshot = await snapshotBodyForSave(doc);
+    if (!view || view.state.doc === doc) return snapshot;
+  }
+}
+
 export async function flushSave(
   force = false,
   forceWrite = false,
@@ -105,17 +148,64 @@ export async function flushSave(
   if (backendDetached) return true;
   const note = state.activeNote;
   if (!note) return true;
-  const body = view ? view.state.doc.toString() : note.body;
+  const flushStartedAt = editorProfilerNowMs();
+  const snapshot = view ? await currentStableSnapshotForSave() : null;
+  const body = snapshot?.body ?? note.body;
+  const snapshotVersion = snapshot?.version ?? autosaveSnapshots.version;
+  const bodyLineCount = snapshot?.lineCount ?? body.split("\n").length;
   saveInFlight = true;
   try {
+    const saveStartedAt = editorProfilerNowMs();
     const saved = await saveNote(note.id, body, {
       expectedRevision: note.updated_at,
       force: forceWrite,
     });
-    state.updateBody(body, saved.updated_at);
-    localDirty = false;
+    recordEditorProfilerSample(
+      "editor.autosave.saveNote",
+      editorProfilerNowMs() - saveStartedAt,
+      {
+        reason: force ? "manual" : "autosave",
+        metrics: {
+          bodyLength: body.length,
+          lineCount: bodyLineCount,
+          forceWrite: forceWrite ? 1 : 0,
+        },
+      },
+    );
+    if (state.activeNote?.id === note.id) {
+      state.updateBody(body, saved.updated_at);
+    }
+    if (snapshotVersion === autosaveSnapshots.version && state.activeNote?.id === note.id) {
+      localDirty = false;
+    } else {
+      localDirty = true;
+      scheduleSave();
+    }
+    recordEditorProfilerSample(
+      "editor.autosave.flush",
+      editorProfilerNowMs() - flushStartedAt,
+      {
+        reason: force ? "manual_success" : "autosave_success",
+        metrics: {
+          bodyLength: body.length,
+          lineCount: bodyLineCount,
+          staleDuringSave: snapshotVersion === autosaveSnapshots.version ? 0 : 1,
+        },
+      },
+    );
     return true;
   } catch (e) {
+    recordEditorProfilerSample(
+      "editor.autosave.flush",
+      editorProfilerNowMs() - flushStartedAt,
+      {
+        reason: force ? "manual_error" : "autosave_error",
+        metrics: {
+          bodyLength: body.length,
+          lineCount: bodyLineCount,
+        },
+      },
+    );
     const message = errorMessageOf(e);
     console.error("Failed to save note:", e);
     if (!options?.suppressErrorCallback) {
@@ -158,6 +248,7 @@ const onUpdate = EditorView.updateListener.of((update) => {
       return;
     }
     localDirty = true;
+    autosaveSnapshots.markDirty(update.state.doc);
     if (editTouchesTitleRegion(update)) {
       state.updateDraftTitle(deriveTitleFromDoc(update.state.doc));
     }
@@ -513,6 +604,7 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   saveInFlight = false;
 
   view = new EditorView({ state: startState, parent });
+  autosaveSnapshots.reset(view.state.doc, doc);
   startupMark("ui_codemirror_ready");
   applyViewModeClasses(setup.vimMode, setup.plainTextMode);
   view.focus();
@@ -556,7 +648,7 @@ export function reconfigureEditor(options: EditorMountOptions = {}) {
   const setup = buildEditorExtensions(options);
   const main = view.state.selection.main;
   const nextState = EditorState.create({
-    doc: view.state.doc.toString(),
+    doc: view.state.doc,
     extensions: setup.extensions,
     selection: { anchor: main.anchor, head: main.head },
   });
@@ -588,6 +680,7 @@ export function setEditorContent(body: string, options: SetEditorContentOptions 
     try {
       view.setState(nextState);
       localDirty = false;
+      autosaveSnapshots.reset(view.state.doc, body);
     } finally {
       suppressProgrammaticDocSync = false;
     }
@@ -600,6 +693,7 @@ export function setEditorContent(body: string, options: SetEditorContentOptions 
     annotations: suppressEditorSyncAnnotation.of(true),
   });
   localDirty = false;
+  autosaveSnapshots.reset(view.state.doc, body);
 }
 
 export function focusEditor() {
