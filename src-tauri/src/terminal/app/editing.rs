@@ -1352,7 +1352,8 @@ impl TerminalApp {
             }
             // Carry forward cached cell results for unchanged lines (same
             // alignment as base_results, which the planner already validated).
-            let mut merged_cells: Vec<Vec<(usize, String)>> = vec![Vec::new(); self.lines.len()];
+            let mut merged_cells: Vec<Vec<app_core::calc::TableCellEvaluation>> =
+                vec![Vec::new(); self.lines.len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
                     if let Some(cached) = self.calc.cell_results.get(entry.line_idx) {

@@ -1,7 +1,7 @@
 use super::VariableCompletionPrefix;
 #[cfg(test)]
 use crate::terminal::text_utils::line_display_cols;
-use app_core::calc::CalcEngine;
+use app_core::calc::{CalcEngine, TableCellEvaluation};
 
 #[cfg(test)]
 pub(super) fn calc_ghost_prefix(text: &str, calc_ghost: Option<&str>) -> &'static str {
@@ -29,7 +29,7 @@ pub(super) fn rendered_line_display_cols(text: &str, calc_ghost: Option<&str>) -
 
 pub(super) struct CalcData {
     pub(super) line_results: Vec<Option<String>>,
-    pub(super) cell_results: Vec<Vec<(usize, String)>>,
+    pub(super) cell_results: Vec<Vec<TableCellEvaluation>>,
     pub(super) variable_names: Vec<String>,
 }
 
@@ -56,15 +56,7 @@ pub(super) fn compute_calc_data(
     variable_names.sort();
     variable_names.dedup();
 
-    let cell_results = result
-        .table_cell_results
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|entry| (entry.cell_index, entry.value))
-                .collect()
-        })
-        .collect();
+    let cell_results = result.table_cell_results;
 
     CalcData {
         line_results: result.line_results,

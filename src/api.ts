@@ -147,13 +147,21 @@ export interface NoteEvaluationDiagnostic {
 export interface TableCellEvaluation {
   cell_index: number;
   value: string;
+  error_kind: TableCellErrorKind | null;
 }
+
+export type TableCellErrorKind =
+  | "out_of_bounds"
+  | "non_numeric"
+  | "self_reference"
+  | "cycle"
+  | "unknown";
 
 export interface NoteEvaluationResult {
   line_results: (string | null)[];
   variables: VariableIndexEntry[];
   diagnostics?: NoteEvaluationDiagnostic[] | null;
-  table_cell_results?: TableCellEvaluation[][];
+  table_cell_results: TableCellEvaluation[][];
 }
 
 export function getOrCreateNote(): Promise<Note> {

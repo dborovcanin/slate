@@ -4,7 +4,7 @@ use app_core::calc::CalcEngine;
 pub struct CalcCache {
     pub engine: CalcEngine,
     pub results: Vec<Option<String>>,
-    pub cell_results: Vec<Vec<(usize, String)>>,
+    pub cell_results: Vec<Vec<app_core::calc::TableCellEvaluation>>,
     pub variable_names: Vec<String>,
     /// Metadata for current `lines`, incrementally patched on edits.
     pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,

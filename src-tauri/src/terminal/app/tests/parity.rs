@@ -49,7 +49,7 @@ struct CalcParityModules {
 #[derive(Debug, PartialEq, Eq)]
 struct CalcParitySnapshot {
     line_results: Vec<Option<String>>,
-    table_cell_results: Vec<Vec<(usize, String)>>,
+    table_cell_results: Vec<Vec<app_core::calc::TableCellEvaluation>>,
 }
 
 fn calc_snapshot_for_modules(lines: &[String], modules: &CalcParityModules) -> CalcParitySnapshot {
@@ -69,18 +69,9 @@ fn calc_snapshot_for_modules(lines: &[String], modules: &CalcParityModules) -> C
             eval_range: None,
         },
     );
-    let table_cell_results = result
-        .table_cell_results
-        .into_iter()
-        .map(|row| {
-            row.into_iter()
-                .map(|entry| (entry.cell_index, entry.value))
-                .collect()
-        })
-        .collect();
     CalcParitySnapshot {
         line_results: result.line_results,
-        table_cell_results,
+        table_cell_results: result.table_cell_results,
     }
 }
 

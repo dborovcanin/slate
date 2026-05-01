@@ -62,6 +62,17 @@ pub struct NoteEvaluationResult {
 pub struct TableCellEvaluation {
     pub cell_index: usize,
     pub value: String,
+    pub error_kind: Option<TableCellErrorKind>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TableCellErrorKind {
+    OutOfBounds,
+    NonNumeric,
+    SelfReference,
+    Cycle,
+    Unknown,
 }
 
 #[derive(Debug, Clone)]
@@ -265,6 +276,22 @@ const TABLE_REF_ERROR_OUT_OF_BOUNDS: &str = "!ERROR#out_of_bounds";
 const TABLE_REF_ERROR_NON_NUMERIC: &str = "!ERROR#non_numeric";
 const TABLE_REF_ERROR_SELF_REFERENCE: &str = "!ERROR#self_reference";
 const TABLE_REF_ERROR_CYCLE: &str = "!ERROR#cycle";
+
+fn table_cell_error_kind(value: &str) -> Option<TableCellErrorKind> {
+    match value {
+        TABLE_REF_ERROR_OUT_OF_BOUNDS => Some(TableCellErrorKind::OutOfBounds),
+        TABLE_REF_ERROR_NON_NUMERIC => Some(TableCellErrorKind::NonNumeric),
+        TABLE_REF_ERROR_SELF_REFERENCE => Some(TableCellErrorKind::SelfReference),
+        TABLE_REF_ERROR_CYCLE => Some(TableCellErrorKind::Cycle),
+        _ => value
+            .strip_prefix("!ERROR#")
+            .map(|_| TableCellErrorKind::Unknown),
+    }
+}
+
+fn table_ref_error_code(value: &str) -> Option<String> {
+    value.strip_prefix("!ERROR#").map(ToOwned::to_owned)
+}
 
 impl<'a> VariableResolver<'a> {
     fn new(defs: &'a HashMap<String, VariableDefinition>) -> Self {
@@ -626,9 +653,9 @@ impl CalcEngine {
                         &mut ctx,
                     );
                     let Some(value) = value else { continue };
-                    if value.starts_with("!ERROR#") {
+                    if let Some(code) = table_ref_error_code(&value) {
                         table_diagnostics.push(NoteEvaluationDiagnostic {
-                            kind: format!("table-ref-{}", value.trim_start_matches("!ERROR#")),
+                            kind: format!("table-ref-{code}"),
                             line: idx + 1,
                             message: format!(
                                 "table formula cell {} returned {}",
@@ -644,6 +671,7 @@ impl CalcEngine {
                     table_cell_results[idx].push(TableCellEvaluation {
                         cell_index: cell_idx,
                         value: value.clone(),
+                        error_kind: table_cell_error_kind(&value),
                     });
 
                     if let Some(updated) =
@@ -676,9 +704,9 @@ impl CalcEngine {
                     &mut table_formula_stack,
                     &mut ctx,
                 ) {
-                    if value.starts_with("!ERROR#") {
+                    if let Some(code) = table_ref_error_code(&value) {
                         table_diagnostics.push(NoteEvaluationDiagnostic {
-                            kind: format!("table-ref-{}", value.trim_start_matches("!ERROR#")),
+                            kind: format!("table-ref-{code}"),
                             line: idx + 1,
                             message: format!("table formula returned {}", value),
                         });
@@ -708,9 +736,9 @@ impl CalcEngine {
                     &mut table_formula_stack,
                     &mut ctx,
                 ) {
-                    if value.starts_with("!ERROR#") {
+                    if let Some(code) = table_ref_error_code(&value) {
                         table_diagnostics.push(NoteEvaluationDiagnostic {
-                            kind: format!("table-ref-{}", value.trim_start_matches("!ERROR#")),
+                            kind: format!("table-ref-{code}"),
                             line: idx + 1,
                             message: format!("table formula returned {}", value),
                         });

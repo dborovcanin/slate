@@ -399,15 +399,15 @@ function buildCalcDecorationsForSpans(
       const segments = cachedCalcFindTableFormulaSegments(line.text);
       if (segments.length > 0) {
         const cells = cellsForLine ?? [];
-        const valueForCell = (cellIndex: number): string | null => {
+        const valueForCell = (
+          cellIndex: number,
+        ): { value: string; hasError: boolean } | null => {
           const hit = cells.find((c) => c.cell_index === cellIndex);
-          if (hit) return formatFormulaDisplayValue(hit.value);
-          // Backward-compat fallback: when only the legacy single result is
-          // available, attribute it to the first formula cell.
-          if (result != null && cellIndex === segments[0]?.cellIndex) {
-            return formatFormulaDisplayValue(result);
-          }
-          return null;
+          if (!hit) return null;
+          return {
+            value: formatFormulaDisplayValue(hit.value),
+            hasError: hit.error_kind != null,
+          };
         };
 
         const trailerParts: string[] = [];
@@ -430,14 +430,15 @@ function buildCalcDecorationsForSpans(
           // the cell). When the cell is at rest the trailer shows the
           // formula source (the user can see what formula produced the
           // displayed value).
-          const trailerText = editingCell ? computed : sourceText;
+          const trailerText =
+            editingCell && computed && !computed.hasError ? computed.value : sourceText;
           if (trailerText) {
             trailerParts.push(`${marker} \u279c ${trailerText}`);
           }
 
           if (editingCell) return;
           if (computed == null) return;
-          const value = computed;
+          const value = computed.value;
           const minWidthCh = Math.max(
             1,
             seg.toChar - seg.fromChar,
@@ -1172,7 +1173,8 @@ function perLineMapsEqual(
     for (let i = 0; i < left.length; i++) {
       if (
         left[i]!.cell_index !== right[i]!.cell_index ||
-        left[i]!.value !== right[i]!.value
+        left[i]!.value !== right[i]!.value ||
+        left[i]!.error_kind !== right[i]!.error_kind
       ) {
         return false;
       }
@@ -1403,7 +1405,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           // when partial, otherwise replace the whole map. Lines outside the
           // eval range carry their previous per-cell values (kept in the
           // state field and remapped through doc changes).
-          const evalCellResults = evaluated.table_cell_results ?? [];
+          const evalCellResults = evaluated.table_cell_results;
           const prevCellResults = view.state.field(cellCalcResultsField);
           const nextCellMap = canUsePartial ? new Map(prevCellResults) : new Map();
           if (canUsePartial) {

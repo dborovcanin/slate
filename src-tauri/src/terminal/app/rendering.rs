@@ -18,17 +18,22 @@ use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
-    fn masked_formula_value<'a>(value: &'a str) -> Cow<'a, str> {
+    fn masked_formula_value<'a>(value: &'a str, is_error: bool) -> Cow<'a, str> {
         // Keep table columns aligned while avoiding long `!ERROR#...` payloads
         // that get awkwardly cut inside narrow cells.
-        if value.starts_with("!ERROR#") {
+        if is_error {
             Cow::Borrowed("!ERROR")
         } else {
             Cow::Borrowed(value)
         }
     }
 
-    fn fit_formula_marker_replacement(value: &str, marker: &str, target_chars: usize) -> String {
+    fn fit_formula_marker_replacement(
+        value: &str,
+        marker: &str,
+        target_chars: usize,
+        is_error: bool,
+    ) -> String {
         if target_chars == 0 {
             return String::new();
         }
@@ -38,7 +43,7 @@ impl TerminalApp {
         }
 
         let value_budget = target_chars - marker_chars;
-        let masked_value = Self::masked_formula_value(value);
+        let masked_value = Self::masked_formula_value(value, is_error);
         let value_chars = masked_value.chars().count();
         let mut out = String::with_capacity(target_chars);
         if value_chars > value_budget && value_budget >= 2 {
@@ -852,10 +857,8 @@ impl TerminalApp {
                     if !formula_segments.is_empty() {
                         // Formula rows render a marker in-cell (`value*`,
                         // `value**`, …) and keep the detailed per-formula
-                        // explanation as a line-end ghost. The first formula
-                        // value in the row is also stored in `calc_results`
-                        // for backward compatibility; per-cell values come
-                        // from `cell_calc_results`.
+                        // explanation as a line-end ghost. Per-cell values
+                        // come from `cell_results`.
                         calc_ghost = None;
 
                         let cell_results = self
@@ -864,19 +867,11 @@ impl TerminalApp {
                             .get(line_idx)
                             .cloned()
                             .unwrap_or_default();
-                        let value_for_cell = |cell_index: usize| -> Option<String> {
+                        let value_for_cell = |cell_index: usize| {
                             cell_results
                                 .iter()
-                                .find(|(idx, _)| *idx == cell_index)
-                                .map(|(_, v)| format_formula_display_value(v))
-                                .or_else(|| {
-                                    // Fallback: legacy single-result path.
-                                    self.calc
-                                        .results
-                                        .get(line_idx)
-                                        .and_then(|r| r.as_deref())
-                                        .map(format_formula_display_value)
-                                })
+                                .find(|entry| entry.cell_index == cell_index)
+                                .cloned()
                         };
 
                         let mut out = String::with_capacity(line_text.len() + 16);
@@ -890,8 +885,15 @@ impl TerminalApp {
 
                         for (fi, seg) in formula_segments.iter().enumerate() {
                             let marker = formula_marker_token(fi);
-                            let value =
-                                value_for_cell(seg.cell_index).unwrap_or_else(|| String::from("…"));
+                            let eval = value_for_cell(seg.cell_index);
+                            let value = eval
+                                .as_ref()
+                                .map(|entry| format_formula_display_value(&entry.value))
+                                .unwrap_or_else(|| String::from("…"));
+                            let has_error = eval
+                                .as_ref()
+                                .and_then(|entry| entry.error_kind.as_ref())
+                                .is_some();
                             let source_text =
                                 line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
@@ -902,7 +904,7 @@ impl TerminalApp {
                             // Ghost trailer: focused cell shows the value
                             // (so the user can see the result while editing),
                             // resting cells show the formula source.
-                            let trailer_text = if is_focused {
+                            let trailer_text = if is_focused && !has_error {
                                 value.clone()
                             } else {
                                 source_text
@@ -921,7 +923,10 @@ impl TerminalApp {
                             } else {
                                 let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                 let replacement = Self::fit_formula_marker_replacement(
-                                    &value, &marker, old_chars,
+                                    &value,
+                                    &marker,
+                                    old_chars,
+                                    has_error,
                                 );
                                 let rendered_chars = replacement.chars().count();
                                 let marker_char = ((seg.from_char as isize) + char_delta) as usize
@@ -947,15 +952,23 @@ impl TerminalApp {
                                 let mut delta: isize = 0;
                                 for (fi, seg) in formula_segments.iter().enumerate() {
                                     if seg.cell_to_char <= self.cursor_col {
-                                        let value = value_for_cell(seg.cell_index)
+                                        let eval = value_for_cell(seg.cell_index);
+                                        let value = eval
+                                            .as_ref()
+                                            .map(|entry| format_formula_display_value(&entry.value))
                                             .unwrap_or_else(|| String::from("…"));
+                                        let has_error = eval
+                                            .as_ref()
+                                            .and_then(|entry| entry.error_kind.as_ref())
+                                            .is_some();
                                         let marker = formula_marker_token(fi);
-                                        let mut rep = format!("{value}{marker}");
                                         let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                                        let new_chars = rep.chars().count();
-                                        if new_chars < old_chars {
-                                            rep.push_str(&" ".repeat(old_chars - new_chars));
-                                        }
+                                        let rep = Self::fit_formula_marker_replacement(
+                                            &value,
+                                            &marker,
+                                            old_chars,
+                                            has_error,
+                                        );
                                         delta += rep.chars().count() as isize - old_chars as isize;
                                     }
                                 }
@@ -1043,20 +1056,26 @@ impl TerminalApp {
                             let mut delta: isize = 0;
                             for (fi, seg) in formula_segments.iter().enumerate() {
                                 if seg.cell_to_char <= src_col {
-                                    let value = self
-                                        .calc
-                                        .cell_results
-                                        .get(line_idx)
-                                        .and_then(|row| {
-                                            row.iter()
-                                                .find(|(idx, _)| *idx == seg.cell_index)
-                                                .map(|(_, v)| format_formula_display_value(v))
-                                        })
+                                    let eval = self.calc.cell_results.get(line_idx).and_then(|row| {
+                                        row.iter()
+                                            .find(|entry| entry.cell_index == seg.cell_index)
+                                            .cloned()
+                                    });
+                                    let value = eval
+                                        .as_ref()
+                                        .map(|entry| format_formula_display_value(&entry.value))
                                         .unwrap_or_else(|| String::from("…"));
+                                    let has_error = eval
+                                        .as_ref()
+                                        .and_then(|entry| entry.error_kind.as_ref())
+                                        .is_some();
                                     let marker = formula_marker_token(fi);
                                     let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                     let rep = Self::fit_formula_marker_replacement(
-                                        &value, &marker, old_chars,
+                                        &value,
+                                        &marker,
+                                        old_chars,
+                                        has_error,
                                     );
                                     delta += rep.chars().count() as isize - old_chars as isize;
                                 }
