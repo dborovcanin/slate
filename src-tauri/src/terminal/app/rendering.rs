@@ -8,7 +8,7 @@ use super::{
 };
 use crate::terminal::render;
 use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines};
-use crate::terminal::{date_picker, input, notifications, switcher};
+use crate::terminal::{date_picker, input, media_sources, notifications, switcher};
 use crate::terminal::{
     date_picker::DatePickerView,
     switcher::{content_search_box_geometry, ContentSearchView, SwitcherView},
@@ -770,6 +770,11 @@ impl TerminalApp {
                 let line_no = virtual_line + 1;
                 let available = cols.saturating_sub(gutter_width);
                 let is_cursor_line = line_idx == self.cursor_line;
+                let mut line_cursor_col = if is_cursor_line {
+                    Some(self.cursor_col)
+                } else {
+                    None
+                };
                 let mut calc_ghost = self
                     .calc
                     .results
@@ -921,9 +926,21 @@ impl TerminalApp {
                                 }
                                 ((self.cursor_col as isize) + delta).max(0) as usize
                             });
+                            line_cursor_col = Some(mapped_col);
                             cursor_line_override =
                                 Some((rendered_line.as_ref().to_string(), mapped_col));
                         }
+                    }
+                }
+
+                if !is_fold_placeholder && cursor_line_override.is_none() {
+                    let media_transform = media_sources::collapse_media_sources_for_display(
+                        rendered_line.as_ref(),
+                        line_cursor_col,
+                    );
+                    if media_transform.changed {
+                        rendered_line = Cow::Owned(media_transform.rendered_line);
+                        line_cursor_col = media_transform.mapped_cursor_col;
                     }
                 }
 
@@ -943,26 +960,32 @@ impl TerminalApp {
                 }
 
                 if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
+                    let source_cursor_col = line_cursor_col.unwrap_or(self.cursor_col);
                     let (collapsed_line, mapped_col) = render::collapse_markdown_line_for_cursor(
                         rendered_line.as_ref(),
-                        self.cursor_col,
+                        source_cursor_col,
                     );
-                    if collapsed_line != rendered_line.as_ref() || mapped_col != self.cursor_col {
+                    if collapsed_line != rendered_line.as_ref() || mapped_col != source_cursor_col {
+                        line_cursor_col = Some(mapped_col);
                         cursor_line_override = Some((collapsed_line, mapped_col));
                     }
+                }
+
+                if is_cursor_line
+                    && cursor_line_override.is_none()
+                    && (rendered_line.as_ref() != line_text.as_str()
+                        || line_cursor_col.unwrap_or(self.cursor_col) != self.cursor_col)
+                {
+                    cursor_line_override = Some((
+                        rendered_line.as_ref().to_string(),
+                        line_cursor_col.unwrap_or(self.cursor_col),
+                    ));
                 }
 
                 let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost.as_deref());
                 let effective_reminder_ghost = reminder_ghost_override.as_deref();
                 let render_cursor_col = if is_cursor_line {
-                    if !formula_segments.is_empty() {
-                        cursor_line_override
-                            .as_ref()
-                            .map(|(_, mapped_col)| *mapped_col)
-                            .or(Some(self.cursor_col))
-                    } else {
-                        Some(self.cursor_col)
-                    }
+                    line_cursor_col
                 } else {
                     None
                 };

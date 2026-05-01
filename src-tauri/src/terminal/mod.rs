@@ -9,6 +9,7 @@ mod folding_state;
 mod history;
 mod input;
 mod markdown_view;
+mod media_sources;
 mod notifications;
 pub mod render;
 mod render_styles;

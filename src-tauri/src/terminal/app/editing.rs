@@ -1,15 +1,14 @@
 use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
     contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
-    find_calc_segment_range, gutter_width_for_visible_lines, line_char_len, line_display_cols,
-    is_markdown_table_line, split_lines, table_cell_edit_start, table_cell_info_at_char,
-    table_cell_is_empty,
-    table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode, VariableAutocompletePopupState,
-    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
-    CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER,
-    EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT,
-    LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    find_calc_segment_range, gutter_width_for_visible_lines, is_markdown_table_line, line_char_len,
+    line_display_cols, split_lines, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_is_empty, table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode,
+    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
+    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_RECOMPUTE_DEBOUNCE_MS,
+    CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
+    HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
+    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, join_lines, remove_char_at, viewport_col_for_display_col,
@@ -500,7 +499,8 @@ impl TerminalApp {
             .get(prev_changed_from..prev_changed_to)
             .unwrap_or(&[]);
 
-        let prev_changed_had_assignment = prev_changed_slice.iter().any(|entry| entry.has_assignment);
+        let prev_changed_had_assignment =
+            prev_changed_slice.iter().any(|entry| entry.has_assignment);
         let prev_changed_had_builtin_formula = prev_changed_slice
             .iter()
             .any(|entry| entry.has_builtin_formula);
