@@ -5,6 +5,7 @@ use crate::sum::{
     format_sum_result as format_numeric_result, parse_numbers as parse_numeric_values,
     resolve_scope_range, SumScope,
 };
+use crate::table;
 use crate::types::{
     BlockLineRange, CommandExecutionResult, EditOperation, EditorContextSnapshot,
     OperationSelection,
@@ -74,15 +75,6 @@ fn normalize_evaluated_value(raw: &str) -> Option<String> {
     } else {
         Some(format!("{formatted} {suffix}"))
     }
-}
-
-fn split_table_cells(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
 }
 
 fn is_table_delimiter_cell(cell: &str) -> bool {
@@ -233,7 +225,7 @@ fn collect_table_terms(
     };
 
     if scope == SumScope::Row {
-        let cells = split_table_cells(ctx.current_line().text.as_str());
+        let cells = table::split_table_cells(ctx.current_line().text.as_str());
         cells[..cursor_col.min(cells.len())]
             .iter()
             .filter_map(|cell| evaluate_cell_term(cell))
@@ -242,7 +234,7 @@ fn collect_table_terms(
         let cursor_line = ctx.current_line().number;
         let mut terms = Vec::new();
         for line_no in range.start_line..cursor_line {
-            let cells = split_table_cells(ctx.line_text(line_no));
+            let cells = table::split_table_cells(ctx.line_text(line_no));
             if is_table_delimiter_row(&cells) {
                 continue;
             }

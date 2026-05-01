@@ -860,15 +860,11 @@ fn table_continuation_rule(
         return None;
     }
 
-    // Check if the row is empty (only pipes and whitespace)
-    let inner: String = line
-        .text
-        .split('|')
-        .skip(1)
-        .take(line.text.matches('|').count().saturating_sub(1).max(1))
-        .collect::<Vec<_>>()
-        .join("");
-    if inner.trim().is_empty() {
+    // Check if the row is empty (only pipes and whitespace).
+    if table::split_table_cells(&line.text)
+        .iter()
+        .all(|cell| cell.trim().is_empty())
+    {
         return Some(replace_range(
             line.from,
             line.to,
@@ -1150,6 +1146,113 @@ pub fn run_table_cell_navigation_rules(
     table_tab_rule(ctx, &options)
 }
 
+pub fn run_table_multiline_break_rule(
+    ctx: &ResolvedContext<'_>,
+    table_enabled: bool,
+) -> Option<EditOperation> {
+    if !table_enabled {
+        return None;
+    }
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+    let line = ctx.current_line();
+    if !is_table_line(&line.text) {
+        return None;
+    }
+    if is_table_separator(&line.text) {
+        return None;
+    }
+    let block = ctx.table_range_at_line(line.number, 1)?;
+    let pipes = table::table_pipe_positions(&line.text);
+    if pipes.len() < 2 {
+        return None;
+    }
+    let head_col = selection
+        .head
+        .saturating_sub(line.from)
+        .min(line.text.len());
+    let cell_index = table::table_cell_index_for_column(&pipes, head_col)?;
+    let span = table::table_cell_span(&line.text, &pipes, cell_index)?;
+    if head_col <= span.left_pipe || head_col >= span.right_pipe {
+        return None;
+    }
+    let split_col = head_col.clamp(span.edit_start(), span.navigation_anchor());
+    let split_byte = split_col.min(line.text.len());
+
+    let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
+        .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
+        .collect();
+    let mut row_continuations: Vec<bool> = (block.start_line..=block.end_line)
+        .map(|line_no| table::is_table_continuation_line(ctx.line_text(line_no)))
+        .collect();
+    let relative_row = line.number.saturating_sub(block.start_line);
+    let current_cells = row_cells.get_mut(relative_row)?;
+    let column_count = current_cells.len().max(1);
+    while current_cells.len() < column_count {
+        current_cells.push(String::new());
+    }
+
+    let content_start = (span.left_pipe + 1 + span.trim_start).min(line.text.len());
+    let content_end = (span.left_pipe + 1 + span.trim_end).min(line.text.len());
+    let local_split = split_byte.clamp(content_start, content_end);
+    let left_text = line.text[content_start..local_split].trim().to_string();
+    let right_text = line.text[local_split..content_end].trim().to_string();
+    if let Some(cell) = current_cells.get_mut(cell_index) {
+        *cell = left_text;
+    }
+
+    let mut next_row_cells = vec![String::new(); column_count];
+    if let Some(cell) = next_row_cells.get_mut(cell_index) {
+        *cell = right_text;
+    }
+    row_cells.insert(relative_row + 1, next_row_cells);
+    row_continuations.insert(relative_row + 1, false);
+
+    let had_delimiter_row = row_cells
+        .iter()
+        .any(|cells| table::is_delimiter_row(cells.as_slice()));
+
+    let raw_lines: Vec<String> = row_cells
+        .iter()
+        .enumerate()
+        .map(|(idx, cells)| table::serialize_table_row_with_kind(cells, row_continuations[idx]))
+        .collect();
+    let formatted = table::format_table_lines(&raw_lines);
+
+    let block_from = ctx.line(block.start_line).from;
+    let block_to = ctx.line(block.end_line).to;
+    let insert_text = formatted.join("\n");
+
+    let inserted_row_offset = relative_row + 1;
+    let delimiter_injected = !had_delimiter_row && row_cells.len() >= 2;
+    let formatted_target_offset = if delimiter_injected && inserted_row_offset >= 1 {
+        inserted_row_offset + 1
+    } else {
+        inserted_row_offset
+    };
+    let target_line = formatted.get(formatted_target_offset)?;
+    let target_pipes = table::table_pipe_positions(target_line);
+    let anchor_col = table::table_cell_span(target_line, &target_pipes, cell_index)
+        .map(|span| span.edit_start())
+        .unwrap_or_else(|| {
+            table::table_cell_navigation_anchor(target_line, &target_pipes, cell_index)
+        });
+    let target_line_from = block_from
+        + insert_text[..byte_offset_of_line(&insert_text, formatted_target_offset)].len();
+    let anchor = target_line_from + anchor_col;
+
+    Some(EditOperation {
+        changes: vec![TextChange {
+            from: block_from,
+            to: block_to,
+            insert: insert_text,
+        }],
+        selection: Some(OperationSelection { anchor, head: None }),
+    })
+}
+
 /// When the user types `|` in a table header row, insert a new empty
 /// column at the cursor position across every row of the table (rather
 /// than just inserting a literal pipe in the current row, which would
@@ -1193,6 +1296,9 @@ pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<Ed
     let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
         .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
         .collect();
+    let row_continuations: Vec<bool> = (block.start_line..=block.end_line)
+        .map(|line_no| table::is_table_continuation_line(ctx.line_text(line_no)))
+        .collect();
     let column_count = row_cells.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
     for cells in row_cells.iter_mut() {
         while cells.len() < column_count {
@@ -1211,7 +1317,8 @@ pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<Ed
 
     let raw_lines: Vec<String> = row_cells
         .iter()
-        .map(|cells| table::serialize_table_row(cells))
+        .enumerate()
+        .map(|(idx, cells)| table::serialize_table_row_with_kind(cells, row_continuations[idx]))
         .collect();
     let formatted = table::format_table_lines(&raw_lines);
 
@@ -1283,6 +1390,9 @@ pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext<'_>) -> Option<
     let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
         .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
         .collect();
+    let row_continuations: Vec<bool> = (block.start_line..=block.end_line)
+        .map(|line_no| table::is_table_continuation_line(ctx.line_text(line_no)))
+        .collect();
     let column_count = row_cells.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
     if column_count <= 1 {
         return None;
@@ -1301,7 +1411,8 @@ pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext<'_>) -> Option<
 
     let raw_lines: Vec<String> = row_cells
         .iter()
-        .map(|cells| table::serialize_table_row(cells))
+        .enumerate()
+        .map(|(idx, cells)| table::serialize_table_row_with_kind(cells, row_continuations[idx]))
         .collect();
     let formatted = table::format_table_lines(&raw_lines);
 
@@ -1399,7 +1510,10 @@ fn merge_cells_on_line(
         let merged = table::merge_cell_content(&cells[current_cell - 1], &cells[current_cell]);
         cells[current_cell - 1] = merged;
         cells.remove(current_cell);
-        let new_line = table::serialize_table_row(&cells);
+        let new_line = table::serialize_table_row_with_kind(
+            &cells,
+            table::is_table_continuation_line(&line.text),
+        );
         let pipes = table::table_pipe_positions(&new_line);
         let anchor_col =
             table::table_cell_navigation_anchor(&new_line, &pipes, current_cell.saturating_sub(1));
@@ -1420,7 +1534,8 @@ fn merge_cells_on_line(
     let merged = table::merge_cell_content(&cells[current_cell], &cells[current_cell + 1]);
     cells[current_cell] = merged;
     cells.remove(current_cell + 1);
-    let new_line = table::serialize_table_row(&cells);
+    let new_line =
+        table::serialize_table_row_with_kind(&cells, table::is_table_continuation_line(&line.text));
     let pipes = table::table_pipe_positions(&new_line);
     let anchor_col = table::table_cell_navigation_anchor(&new_line, &pipes, current_cell);
     Some(replace_range(
@@ -2140,6 +2255,45 @@ mod tests {
         let head = 2;
         let snap = snapshot(text, head, head);
         assert!(run_table_header_delete_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn run_table_multiline_break_rule_splits_cell_into_next_row() {
+        let text = "| left | value |";
+        let head = text.find("value").expect("value") + 2;
+        let snap = snapshot(text, head, head);
+        let op = run_table_multiline_break_rule(&snap, true).expect("rule fires");
+        assert_eq!(
+            apply_operation(text, &op),
+            "| left | va  |\n| ---- | --- |\n|      | lue |"
+        );
+        let result = apply_operation(text, &op);
+        let anchor = op.selection.expect("selection").anchor;
+        let expected_line = result.lines().nth(2).expect("target line");
+        let expected_anchor_in_line = expected_line.find("| lue").expect("second cell") + 2; // edit start inside split cell
+        let third_line_start = result.match_indices('\n').nth(1).expect("third line").0 + 1;
+        assert_eq!(anchor, third_line_start + expected_anchor_in_line);
+    }
+
+    #[test]
+    fn run_table_multiline_break_rule_clamps_padding_to_cell_anchor() {
+        let text = "| left | value   |";
+        let head = text.find("   |").expect("padding");
+        let snap = snapshot(text, head, head);
+        let op = run_table_multiline_break_rule(&snap, true).expect("rule fires");
+        assert_eq!(
+            apply_operation(text, &op),
+            "| left | value |\n| ---- | ----- |\n|      |       |"
+        );
+    }
+
+    #[test]
+    fn run_table_multiline_break_rule_returns_none_outside_table_or_when_disabled() {
+        let plain = snapshot("hello", 3, 3);
+        assert!(run_table_multiline_break_rule(&plain, true).is_none());
+
+        let table = snapshot("| a | b |", 4, 4);
+        assert!(run_table_multiline_break_rule(&table, false).is_none());
     }
 
     #[test]

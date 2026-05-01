@@ -147,6 +147,10 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 - Variable references are resolved from the full document context.
 - Cell references use `(row,col)` with 1-based indexing over table **data rows** (rows after the delimiter) and 1-based columns within the same table block.
 - Reference errors return explicit markers: `!ERROR#out_of_bounds`, `!ERROR#non_numeric`, `!ERROR#self_reference`, `!ERROR#cycle`.
+- Multiline table cell continuation uses canonical `|>` rows:
+  - base row: `| alpha | one |`
+  - continuation row: `|> beta | two |`
+  - continuation rows append to the previous logical data row cell-by-cell (logical row index does not advance).
 
 **Module gating rules:**
 
@@ -314,6 +318,7 @@ Acceptance criteria:
 ## Bugs and Fixes Backlog
 
 - [ ] Stability and performance hardening
+- [x] Support multiline table cell content via `<br>` insertion (`Shift+Enter`) with escaped-pipe-safe table parsing (`\|`) across UI/TUI/calc paths
 - [ ] Allow multiple rows in table cell
 - [ ] Dedup cleanup: unify text-object methods, undo/redo semantics, and vim line-range behavior
 - [ ] Calc engine enhancements and extensive testing

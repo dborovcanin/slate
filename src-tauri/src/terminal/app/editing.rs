@@ -1649,7 +1649,9 @@ impl TerminalApp {
             return false;
         }
         if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            if let Some(cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
                 if self.cursor_col <= edit_start {
@@ -2209,6 +2211,22 @@ impl TerminalApp {
         false
     }
 
+    pub(super) fn try_table_multiline_break_rule(&mut self) -> bool {
+        if !self.note_table_module_enabled() {
+            return false;
+        }
+        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
+        let op = crate::editor_core::text_rules::run_table_multiline_break_rule(&ctx, true);
+        let Some(op) = op else {
+            return false;
+        };
+        let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+        self.apply_edit_operation(&mapped);
+        true
+    }
+
     pub(super) fn try_table_pipe_insert_column_rule(&mut self) -> bool {
         if !self.note_table_module_enabled() {
             return false;
@@ -2430,7 +2448,9 @@ impl TerminalApp {
 
     pub(super) fn backspace(&mut self) {
         if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            if let Some(cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
                 if self.cursor_col <= edit_start {
@@ -2476,7 +2496,9 @@ impl TerminalApp {
 
     pub(super) fn delete_forward(&mut self) {
         if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            if let Some(cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
                 if self.cursor_col < edit_start {
@@ -2516,7 +2538,9 @@ impl TerminalApp {
     pub(super) fn move_cursor_left(&mut self) {
         let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
-            if let Some(current_cell) = table_cell_info_at_char(line_text, self.cursor_col) {
+            if let Some(current_cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 let anchor = table_cell_navigation_anchor(line_text, &current_cell);
                 let edit_start = table_cell_edit_start(&current_cell);
                 if table_cell_is_empty(&current_cell) {
@@ -2557,7 +2581,9 @@ impl TerminalApp {
     pub(super) fn move_cursor_right(&mut self) {
         let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
-            if let Some(current_cell) = table_cell_info_at_char(line_text, self.cursor_col) {
+            if let Some(current_cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 let anchor = table_cell_navigation_anchor(line_text, &current_cell);
                 let edit_start = table_cell_edit_start(&current_cell);
                 if table_cell_is_empty(&current_cell) {
@@ -2606,7 +2632,9 @@ impl TerminalApp {
         let target_virtual = current_virtual.saturating_sub(count);
         self.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
         if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            if let Some(cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
             }
         }
@@ -2625,7 +2653,9 @@ impl TerminalApp {
             .real_line_for_virtual(target_virtual)
             .unwrap_or_else(|| self.lines.len().saturating_sub(1));
         if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(self.current_line(), self.cursor_col) {
+            if let Some(cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
             }
         }
@@ -2647,7 +2677,9 @@ impl TerminalApp {
         }
         let table_anchor = if self.note_table_module_enabled() {
             let line_text = self.current_line();
-            if let Some(cell) = table_cell_info_at_char(line_text, self.cursor_col) {
+            if let Some(cell) =
+                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+            {
                 let anchor = table_cell_navigation_anchor(line_text, &cell);
                 let edit_start = table_cell_edit_start(&cell);
                 if table_cell_is_empty(&cell) {

@@ -262,6 +262,7 @@ impl TerminalApp {
                 self.open_content_search(db)?;
             }
             Key::CtrlDelete
+            | Key::ShiftEnter
             | Key::BackTab
             | Key::ArrowLeft
             | Key::ArrowRight

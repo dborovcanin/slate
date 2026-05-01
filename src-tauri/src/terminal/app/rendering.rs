@@ -999,7 +999,9 @@ impl TerminalApp {
                 // positions using the formula-mask delta accumulated above.
                 let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
                 if self.note_table_module_enabled() && is_cursor_line && !is_fold_placeholder {
-                    if let Some(info) = table_cell_info_at_char(&line_text, self.cursor_col) {
+                    if let Some(info) =
+                        table_cell_info_at_char(&self.lines, line_idx, self.cursor_col)
+                    {
                         let left_pipe_char = line_text[..info.left_pipe].chars().count();
                         let right_pipe_char = line_text[..info.right_pipe].chars().count();
                         let translate = |src_col: usize| -> usize {

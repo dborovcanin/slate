@@ -1445,7 +1445,13 @@ fn command_bar_esc_closes_picker_and_returns_to_normal_mode() {
     run_keys(
         &mut app,
         &db,
-        &[Key::Ctrl('e'), Key::Char('m'), Key::Char('o'), Key::Tab, Key::Tab],
+        &[
+            Key::Ctrl('e'),
+            Key::Char('m'),
+            Key::Char('o'),
+            Key::Tab,
+            Key::Tab,
+        ],
     );
     assert_eq!(app.mode, UiMode::CommandBar);
     assert!(app.command_completion.visible);
@@ -1467,7 +1473,13 @@ fn command_bar_backtab_cycles_completion_backward() {
     run_keys(
         &mut app,
         &db,
-        &[Key::Ctrl('e'), Key::Char('m'), Key::Char('o'), Key::Tab, Key::Tab],
+        &[
+            Key::Ctrl('e'),
+            Key::Char('m'),
+            Key::Char('o'),
+            Key::Tab,
+            Key::Tab,
+        ],
     );
     assert_eq!(app.command_completion.selected_index, 0);
 

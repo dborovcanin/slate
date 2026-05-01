@@ -10,7 +10,9 @@ import {
   snapshotFromViewTableBlock,
 } from "./core/codemirror-adapter.ts";
 import {
+  getTableCursorCellInfo,
   markdownClassifyLine,
+  runTableMultilineBreakRule,
   runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
@@ -25,6 +27,9 @@ interface TableCellInfo {
   rightPipe: number;
   trimStart: number;
   trimEnd: number;
+  logicalRowIndex?: number;
+  logicalRowCount?: number;
+  isContinuationRow?: boolean;
 }
 
 function isMarkdownTableLine(text: string): boolean {
@@ -79,6 +84,45 @@ function tableCellAtColumn(lineText: string, col: number): TableCellInfo | null 
   if (!picked) return null;
   picked.cellCount = cellIndex;
   return picked;
+}
+
+function tableCellAtStatePosition(
+  state: EditorView["state"],
+  pos: number,
+): TableCellInfo | null {
+  const line = state.doc.lineAt(pos);
+  if (!isMarkdownTableLine(line.text)) return null;
+  const colInLine = Math.max(0, Math.min(pos - line.from, line.text.length));
+
+  let startLine = line.number;
+  while (startLine > 1 && isMarkdownTableLine(state.doc.line(startLine - 1).text)) {
+    startLine -= 1;
+  }
+  let endLine = line.number;
+  while (endLine < state.doc.lines && isMarkdownTableLine(state.doc.line(endLine + 1).text)) {
+    endLine += 1;
+  }
+
+  const blockLines: string[] = [];
+  for (let lineNo = startLine; lineNo <= endLine; lineNo += 1) {
+    blockLines.push(state.doc.line(lineNo).text);
+  }
+
+  const info = getTableCursorCellInfo(blockLines, line.number - startLine, colInLine);
+  if (!info) {
+    return tableCellAtColumn(line.text, colInLine);
+  }
+  return {
+    index: info.columnIndex,
+    cellCount: info.columnCount,
+    leftPipe: info.leftPipe,
+    rightPipe: info.rightPipe,
+    trimStart: info.trimStart,
+    trimEnd: info.trimEnd,
+    logicalRowIndex: info.logicalRowIndex ?? undefined,
+    logicalRowCount: info.logicalRowCount,
+    isContinuationRow: info.isContinuationRow,
+  };
 }
 
 function tableCellNavigationAnchorInLine(cell: TableCellInfo): number {
@@ -178,7 +222,7 @@ function updateMightTriggerDocChangeRules(update: ViewUpdate): boolean {
 function clampTableCursorToContent(state: EditorView["state"], pos: number): number | null {
   const line = state.doc.lineAt(pos);
   if (!isMarkdownTableLine(line.text)) return null;
-  const cell = tableCellAtColumn(line.text, pos - line.from);
+  const cell = tableCellAtStatePosition(state, pos);
   if (!cell) return null;
 
   const cellStart = cell.leftPipe + 1;
@@ -315,7 +359,7 @@ function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
   const main = view.state.selection.main;
   if (!main.empty) return false;
   const line = view.state.doc.lineAt(main.head);
-  const cell = tableCellAtColumn(line.text, main.head - line.from);
+  const cell = tableCellAtStatePosition(view.state, main.head);
   if (!cell) return false;
 
   const cellStart = cell.leftPipe + 1;
@@ -485,6 +529,19 @@ function tableCellJump(
   });
 }
 
+function tableMultilineBreak(view: EditorView, tableEnabled: boolean): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const line = view.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const scoped = snapshotFromViewTableBlock(view);
+  if (!scoped) return false;
+  const op = runTableMultilineBreakRule(scoped.snapshot, tableEnabled);
+  if (!op) return false;
+  applyEditOperation(view, offsetEditOperation(op, scoped.offset));
+  return true;
+}
+
 function markdownShortcutKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   const keys: KeyBinding[] = [
     { key: "Mod-b", preventDefault: true, run: (view) => toggleWrap(view, "**") },
@@ -557,6 +614,11 @@ function tableCursorKeymap(autoformat: boolean, tableEnabled: boolean): KeyBindi
       preventDefault: true,
       run: (view) => tableCellJump(view, autoformat, tableEnabled, false),
     },
+    {
+      key: "Shift-Enter",
+      preventDefault: true,
+      run: (view) => tableMultilineBreak(view, tableEnabled),
+    },
   ];
 }
 
@@ -623,7 +685,7 @@ function tableCursorGuards() {
           return;
         }
         const line = update.state.doc.lineAt(main.head);
-        const cell = tableCellAtColumn(line.text, main.head - line.from);
+        const cell = tableCellAtStatePosition(update.state, main.head);
         if (!cell) {
           lastCellKey = null;
           return;

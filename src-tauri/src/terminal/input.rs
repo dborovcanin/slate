@@ -6,6 +6,7 @@ pub enum Key {
     Char(char),
     Paste(String),
     Enter,
+    ShiftEnter,
     Backspace,
     Delete,
     CtrlDelete,
@@ -278,6 +279,7 @@ fn classify_backspace_byte(byte: u8, erase: u8) -> Key {
 
 fn parse_csi_key(s: &str) -> Option<Key> {
     match s {
+        "13;2u" | "27;2;13~" => return Some(Key::ShiftEnter),
         "1;5C" | "5C" => return Some(Key::CtrlArrowRight),
         "1;5D" | "5D" => return Some(Key::CtrlArrowLeft),
         "1~" | "7~" => return Some(Key::Home),
@@ -334,5 +336,11 @@ mod tests {
         assert_eq!(parse_csi_key("8;5~"), Some(Key::CtrlBackspace));
         assert_eq!(parse_csi_key("27;5;8~"), Some(Key::CtrlBackspace));
         assert_eq!(parse_csi_key("27;5;127~"), Some(Key::CtrlBackspace));
+    }
+
+    #[test]
+    fn parse_csi_key_maps_shift_enter_variants() {
+        assert_eq!(parse_csi_key("13;2u"), Some(Key::ShiftEnter));
+        assert_eq!(parse_csi_key("27;2;13~"), Some(Key::ShiftEnter));
     }
 }

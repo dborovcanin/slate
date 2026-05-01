@@ -26,6 +26,7 @@ import init, {
   wasm_command_history_sanitize,
   wasm_format_markdown,
   wasm_format_table_lines,
+  wasm_table_cursor_cell_info,
   wasm_list_command_suggestions,
   wasm_markdown_analyze_lines,
   wasm_markdown_build_fold_ranges_ui,
@@ -146,7 +147,8 @@ export type MarkdownTransactionKind =
   | "table_cell_navigation"
   | "table_pipe_insert_column"
   | "table_header_delete_column"
-  | "table_boundary_edit";
+  | "table_boundary_edit"
+  | "table_multiline_break";
 
 export interface MarkdownTransactionRequest {
   kind: MarkdownTransactionKind;
@@ -289,6 +291,20 @@ export interface TableFormulaSegment {
   cellRightPipeChar: number;
   cellIndex: number;
   labels: string[];
+}
+
+export interface TableCursorCellInfo {
+  columnIndex: number;
+  columnCount: number;
+  leftPipe: number;
+  rightPipe: number;
+  trimStart: number;
+  trimEnd: number;
+  editStart: number;
+  navigationAnchor: number;
+  logicalRowIndex: number | null;
+  logicalRowCount: number;
+  isContinuationRow: boolean;
 }
 
 export interface CommitMarkerLoc {
@@ -728,7 +744,8 @@ function asMarkdownTransactionKind(value: unknown): MarkdownTransactionKind | nu
     value === "table_cell_navigation" ||
     value === "table_pipe_insert_column" ||
     value === "table_header_delete_column" ||
-    value === "table_boundary_edit"
+    value === "table_boundary_edit" ||
+    value === "table_multiline_break"
   ) {
     return value;
   }
@@ -863,6 +880,19 @@ export function runTableBoundaryEditRules(
   return result?.operation ?? null;
 }
 
+export function runTableMultilineBreakRule(
+  snapshot: EditorContextSnapshot,
+  tableEnabled = true,
+): EditOperation | null {
+  const result = runMarkdownTransactions(snapshot, [
+    {
+      kind: "table_multiline_break",
+      tableEnabled,
+    },
+  ]);
+  return result?.operation ?? null;
+}
+
 export function rewriteLineWithChecklistToggleSuffix(lineText: string): string | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   return wasm_rewrite_line_with_checklist_toggle_suffix(lineText) ?? null;
@@ -892,6 +922,33 @@ export function formatTableLines(lines: readonly string[]): string[] {
   const raw = wasm_format_table_lines([...lines]) as unknown;
   if (!Array.isArray(raw)) return [...lines];
   return raw.map((line) => (typeof line === "string" ? line : String(line)));
+}
+
+export function getTableCursorCellInfo(
+  blockLines: readonly string[],
+  lineIndex: number,
+  col: number,
+): TableCursorCellInfo | null {
+  if (blockLines.length === 0) return null;
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const raw = wasm_table_cursor_cell_info(
+    [...blockLines],
+    Math.max(0, Math.trunc(lineIndex)),
+    Math.max(0, Math.trunc(col)),
+  ) as unknown;
+  if (typeof raw !== "object" || raw === null) return null;
+  const info = raw as TableCursorCellInfo;
+  if (
+    typeof info.columnIndex !== "number" ||
+    typeof info.columnCount !== "number" ||
+    typeof info.leftPipe !== "number" ||
+    typeof info.rightPipe !== "number" ||
+    typeof info.editStart !== "number" ||
+    typeof info.navigationAnchor !== "number"
+  ) {
+    return null;
+  }
+  return info;
 }
 
 export function normalizeCommand(rawInput: string): string {

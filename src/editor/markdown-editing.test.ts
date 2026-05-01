@@ -8,7 +8,13 @@ import {
   runTableHeaderDeleteColumnCommand,
   rewriteLineWithChecklistToggleSuffix,
 } from "./markdown-editing.ts";
-import { ensureWasmReady, runDocChangeRules, runTableBoundaryEditRules } from "./wasm.ts";
+import {
+  ensureWasmReady,
+  getTableCursorCellInfo,
+  runDocChangeRules,
+  runTableBoundaryEditRules,
+  runTableMultilineBreakRule,
+} from "./wasm.ts";
 import type { EditorView } from "@codemirror/view";
 
 before(async () => {
@@ -44,6 +50,12 @@ test("formatTableLines mirrors rust formatter when delimiter was previously wide
   const input = ["| a | hi         |", "| --- | ---------- |", "| 1 | 22         |"];
   const out = formatTableLines(input);
   assert.deepEqual(out, ["| a   | hi  |", "| --- | --- |", "| 1   | 22  |"]);
+});
+
+test("formatTableLines keeps escaped pipes inside cells", () => {
+  const input = ["| left \\| right | v |", "| --- | --- |", "| short | 1 |"];
+  const out = formatTableLines(input);
+  assert.deepEqual(out, ["| left \\| right | v   |", "| ------------- | --- |", "| short         | 1   |"]);
 });
 
 test("rewriteLineWithChecklistToggleSuffix toggles checklist checked state", () => {
@@ -140,6 +152,46 @@ test("runTableBoundaryEditRules supports explicit structural merges", () => {
     to: text.length,
     insert: "| aaa bb |",
   });
+});
+
+test("runTableMultilineBreakRule splits table cell into next row", () => {
+  const text = "| left | value |";
+  const head = text.indexOf("value") + 2;
+  const op = runTableMultilineBreakRule({
+    text,
+    selection: { anchor: head, head },
+  });
+  assert.ok(op);
+  assert.deepEqual(op?.changes, [
+    {
+      from: 0,
+      to: text.length,
+      insert: "| left | va  |\n| ---- | --- |\n|      | lue |",
+    },
+  ]);
+  const result = op?.changes?.[0]?.insert ?? "";
+  const lines = result.split("\n");
+  const thirdLineStart = lines[0].length + 1 + lines[1].length + 1;
+  const expectedAnchor = thirdLineStart + lines[2].indexOf("| lue") + 2;
+  assert.equal(op?.selection?.anchor, expectedAnchor);
+});
+
+test("getTableCursorCellInfo maps continuation line to previous logical row", () => {
+  const info = getTableCursorCellInfo(
+    [
+      "| name | value |",
+      "| --- | --- |",
+      "| alpha | one |",
+      "|> beta | two |",
+      "| gamma | three |",
+    ],
+    3,
+    4,
+  );
+  assert.ok(info);
+  assert.equal(info?.logicalRowIndex, 0);
+  assert.equal(info?.logicalRowCount, 2);
+  assert.equal(info?.isContinuationRow, true);
 });
 
 function createTestEditorView(doc: string, cursor: number): {

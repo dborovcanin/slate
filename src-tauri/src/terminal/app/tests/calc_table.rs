@@ -90,17 +90,33 @@ fn should_mask_formula_cell_reveals_when_cursor_is_anywhere_in_formula_cell() {
 #[test]
 fn table_cell_navigation_anchor_uses_padding_for_empty_and_word_end_for_non_empty() {
     let line = "| aaa |     | bb  |";
-    let first_cell = table_cell_info_at_char(line, 2).expect("first cell");
+    let lines = vec![line.to_string()];
+    let first_cell = table_cell_info_at_char(&lines, 0, 2).expect("first cell");
     assert!(!table_cell_is_empty(&first_cell));
     assert_eq!(table_cell_navigation_anchor(line, &first_cell), 5);
 
-    let empty_cell = table_cell_info_at_char(line, 8).expect("empty cell");
+    let empty_cell = table_cell_info_at_char(&lines, 0, 8).expect("empty cell");
     assert!(table_cell_is_empty(&empty_cell));
     assert_eq!(table_cell_navigation_anchor(line, &empty_cell), 8);
 
-    let third_cell = table_cell_info_at_char(line, 14).expect("third cell");
+    let third_cell = table_cell_info_at_char(&lines, 0, 14).expect("third cell");
     assert!(!table_cell_is_empty(&third_cell));
     assert_eq!(table_cell_navigation_anchor(line, &third_cell), 16);
+}
+
+#[test]
+fn table_cell_info_tracks_logical_row_index_for_continuation_lines() {
+    let lines = vec![
+        "| name | value |".to_string(),
+        "| --- | --- |".to_string(),
+        "| alpha | one |".to_string(),
+        "|> beta | two |".to_string(),
+    ];
+    let base = table_cell_info_at_char(&lines, 2, 3).expect("base row");
+    let cont = table_cell_info_at_char(&lines, 3, 3).expect("continuation row");
+    assert_eq!(base.logical_row_index, Some(0));
+    assert_eq!(cont.logical_row_index, Some(0));
+    assert!(cont.is_continuation_row);
 }
 
 #[test]
@@ -840,6 +856,26 @@ fn typing_in_table_cell_reflows_column_when_cell_becomes_widest() {
     assert_eq!(app.lines[0], "| a     | b   |");
     assert_eq!(app.lines[1], "| ----- | --- |");
     assert_eq!(app.lines[2], "| 12345 | 2   |");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn shift_enter_in_table_cell_splits_into_next_row() {
+    let (db, mut app, path) = app_with_note("| left | value |\n| --- | --- |\n| ok | data |");
+    app.cursor_line = 2;
+    app.cursor_col = app.lines[2].find("data").expect("data") + 2;
+    app.handle_editor_key(&db, Key::ShiftEnter)
+        .expect("shift-enter splits row");
+    assert_eq!(app.lines.len(), 4);
+    assert!(app.lines.iter().all(|line| !line.contains("<br>")));
+    assert!(app.lines[2].contains("| ok"));
+    assert!(app.lines[2].contains("| da"));
+    assert!(app.lines[3].starts_with('|'));
+    assert!(!app.lines[3].starts_with("|>"));
+    assert!(app.lines[3].contains("| ta"));
 
     drop(app);
     drop(db);

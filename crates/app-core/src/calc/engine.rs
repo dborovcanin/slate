@@ -119,7 +119,8 @@ struct FormulaCallSpan {
 
 #[derive(Debug, Clone)]
 struct TableBlockInfo {
-    data_rows: Vec<usize>,
+    data_rows: Vec<Vec<usize>>,
+    row_lookup: HashMap<usize, usize>,
 }
 
 #[derive(Default)]
@@ -173,7 +174,8 @@ impl TableEvalCache {
         }
 
         let mut delimiter_row: Option<usize> = None;
-        let mut data_rows = Vec::new();
+        let mut data_rows: Vec<Vec<usize>> = Vec::new();
+        let mut row_lookup: HashMap<usize, usize> = HashMap::new();
         for row_idx in start..=end {
             let row_cells = self.cells_for_line(lines, row_idx)?.clone();
             if delimiter_row.is_none() && is_table_delimiter_row(&row_cells) {
@@ -181,11 +183,30 @@ impl TableEvalCache {
                 continue;
             }
             if delimiter_row.is_some() {
-                data_rows.push(row_idx);
+                let is_cont = lines
+                    .get(row_idx)
+                    .map(|line| line.trim_start().starts_with("|>"))
+                    .unwrap_or(false);
+                if is_cont {
+                    if let Some(last) = data_rows.last_mut() {
+                        last.push(row_idx);
+                        row_lookup.insert(row_idx, data_rows.len().saturating_sub(1));
+                    } else {
+                        data_rows.push(vec![row_idx]);
+                        row_lookup.insert(row_idx, 0);
+                    }
+                } else {
+                    let logical_idx = data_rows.len();
+                    data_rows.push(vec![row_idx]);
+                    row_lookup.insert(row_idx, logical_idx);
+                }
             }
         }
 
-        let info = TableBlockInfo { data_rows };
+        let info = TableBlockInfo {
+            data_rows,
+            row_lookup,
+        };
         for row_idx in start..=end {
             self.block_by_line.insert(row_idx, Some(info.clone()));
         }
@@ -732,13 +753,7 @@ impl CalcEngine {
 /// Returns the updated line, or None if the line does not contain enough
 /// pipes to address the cell.
 fn substitute_table_cell_value(line: &str, cell_index: usize, value: &str) -> Option<String> {
-    let bytes = line.as_bytes();
-    let mut pipes = Vec::new();
-    for (idx, b) in bytes.iter().enumerate() {
-        if *b == b'|' {
-            pipes.push(idx);
-        }
-    }
+    let pipes = table_pipe_positions(line);
     let left_pipe = *pipes.get(cell_index)?;
     let right_pipe = *pipes.get(cell_index + 1)?;
     if right_pipe <= left_pipe + 1 {
@@ -761,28 +776,15 @@ fn table_expression_segments(line: &str, allow_assignments: bool) -> Vec<(String
         return Vec::new();
     }
 
-    let bytes = line.as_bytes();
-    let mut pipes = Vec::new();
-    for (idx, b) in bytes.iter().enumerate() {
-        if *b == b'|' {
-            pipes.push(idx);
-        }
-    }
-    if pipes.len() < 2 {
+    let cells = split_table_cells(line);
+    if cells.is_empty() {
         return Vec::new();
     }
 
     let mut formula_segments: Vec<(String, usize)> = Vec::new();
     let mut other_candidates: Vec<(String, usize)> = Vec::new();
-    for (cell_idx, pair) in pipes.windows(2).enumerate() {
-        let start = pair[0] + 1;
-        let end = pair[1];
-        if start >= end {
-            continue;
-        }
-
-        let raw = &line[start..end];
-        let trimmed = raw.trim();
+    for (cell_idx, cell) in cells.iter().enumerate() {
+        let trimmed = cell.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -1023,11 +1025,41 @@ fn parse_builtin_formula(expression: &str) -> Option<FormulaSpec> {
 
 fn split_table_cells(line: &str) -> Vec<String> {
     let trimmed = line.trim();
-    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
+    if !is_table_line(trimmed) {
+        return Vec::new();
+    }
+    let pipes = table_pipe_positions(trimmed);
+    if pipes.len() < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::with_capacity(pipes.len().saturating_sub(1));
+    for pair in pipes.windows(2) {
+        out.push(trimmed[pair[0] + 1..pair[1]].trim().to_string());
+    }
+    out
+}
+
+fn table_pipe_positions(line: &str) -> Vec<usize> {
+    let bytes = line.as_bytes();
+    let mut pipes = Vec::new();
+    for (idx, byte) in bytes.iter().enumerate() {
+        if *byte != b'|' {
+            continue;
+        }
+        let mut slash_count = 0usize;
+        let mut pos = idx;
+        while pos > 0 {
+            pos -= 1;
+            if bytes[pos] != b'\\' {
+                break;
+            }
+            slash_count += 1;
+        }
+        if slash_count % 2 == 0 {
+            pipes.push(idx);
+        }
+    }
+    pipes
 }
 
 fn table_coordinate_ref_regex() -> &'static Regex {
@@ -1052,6 +1084,50 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
+fn logical_row_cell_text(
+    lines: &[String],
+    logical_row: &[usize],
+    col: usize,
+    table_eval_cache: &mut TableEvalCache,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for line_idx in logical_row {
+        let row_cells = table_eval_cache.cells_for_line(lines, *line_idx)?.clone();
+        let Some(cell) = row_cells.get(col) else {
+            continue;
+        };
+        let trimmed = cell.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        parts.push(trimmed.to_string());
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join(" "))
+}
+
+fn logical_row_primary_cell(
+    lines: &[String],
+    logical_row: &[usize],
+    col: usize,
+    table_eval_cache: &mut TableEvalCache,
+) -> Option<(usize, String)> {
+    for line_idx in logical_row {
+        let row_cells = table_eval_cache.cells_for_line(lines, *line_idx)?.clone();
+        let Some(cell) = row_cells.get(col) else {
+            continue;
+        };
+        let trimmed = cell.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        return Some((*line_idx, trimmed.to_string()));
+    }
+    None
+}
+
 fn resolve_table_coordinate_value(
     lines: &[String],
     line_idx: usize,
@@ -1073,28 +1149,28 @@ fn resolve_table_coordinate_value(
         .block_for_line(lines, line_idx)
         .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
     let data_rows = &table_block.data_rows;
-    let target_line = *data_rows
+    let target_logical_row = data_rows
         .get(row_1based.saturating_sub(1))
         .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?;
     let target_col = col_1based.saturating_sub(1);
 
-    if target_line == line_idx && target_col == formula_col {
+    let current_logical_row = table_block.row_lookup.get(&line_idx).copied();
+    let target_logical_idx = row_1based.saturating_sub(1);
+    if current_logical_row == Some(target_logical_idx) && target_col == formula_col {
         return Err(TABLE_REF_ERROR_SELF_REFERENCE);
     }
 
-    let target_cells = table_eval_cache
-        .cells_for_line(lines, target_line)
-        .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?
-        .clone();
-    let target_raw = target_cells
-        .get(target_col)
-        .ok_or(TABLE_REF_ERROR_OUT_OF_BOUNDS)?
-        .trim();
+    let target_text =
+        logical_row_cell_text(lines, target_logical_row, target_col, table_eval_cache)
+            .ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
+    let (target_line, target_raw) =
+        logical_row_primary_cell(lines, target_logical_row, target_col, table_eval_cache)
+            .ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
     if target_raw.is_empty() {
         return Err(TABLE_REF_ERROR_NON_NUMERIC);
     }
 
-    if let Some(value) = parse_plain_numeric_literal(target_raw) {
+    if let Some(value) = parse_plain_numeric_literal(&target_text) {
         return Ok(format_number(value));
     }
 
@@ -1103,7 +1179,7 @@ fn resolve_table_coordinate_value(
     if let Some(value) = evaluate_table_formula(
         lines,
         target_line,
-        target_raw,
+        &target_raw,
         Some(target_col),
         variables_enabled,
         resolver.as_deref_mut(),
@@ -1133,9 +1209,9 @@ fn resolve_table_coordinate_value(
 
     let evaluated = if variables_enabled {
         let resolver = resolver.as_deref_mut().ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
-        evaluate_formula_term_with_variables(target_raw, resolver, ctx)
+        evaluate_formula_term_with_variables(&target_raw, resolver, ctx)
     } else {
-        evaluate_formula_term(target_raw, ctx)
+        evaluate_formula_term(&target_raw, ctx)
     }
     .ok_or(TABLE_REF_ERROR_NON_NUMERIC)?;
 
@@ -1213,42 +1289,55 @@ fn collect_table_formula_terms(
     if formula_col >= current_cells.len() {
         return None;
     }
+    let table_block = table_eval_cache.block_for_line(lines, line_idx)?;
+    let current_logical_row = table_block.row_lookup.get(&line_idx).copied();
     let mut terms = Vec::new();
 
     match spec.scope {
         FormulaScope::Row => {
-            for cell in current_cells.iter().take(formula_col) {
-                let trimmed = cell.trim();
-                if trimmed.is_empty() || is_table_delimiter_cell(cell) {
-                    continue;
+            if let Some(row_idx) = current_logical_row {
+                let row_lines = table_block.data_rows.get(row_idx)?;
+                for col in 0..formula_col {
+                    let Some(cell) = logical_row_cell_text(lines, row_lines, col, table_eval_cache)
+                    else {
+                        continue;
+                    };
+                    let trimmed = cell.trim();
+                    if trimmed.is_empty() || is_table_delimiter_cell(&cell) {
+                        continue;
+                    }
+                    if !trimmed.chars().any(|c| c.is_ascii_digit()) {
+                        continue;
+                    }
+                    terms.push(cell);
                 }
-                // Skip cells that contain no digits — otherwise fend may
-                // interpret bare identifiers like `s` (seconds) or `m`
-                // (meters) as units and poison the row sum.
-                if !trimmed.chars().any(|c| c.is_ascii_digit()) {
-                    continue;
+            } else {
+                for cell in current_cells.iter().take(formula_col) {
+                    let trimmed = cell.trim();
+                    if trimmed.is_empty() || is_table_delimiter_cell(cell) {
+                        continue;
+                    }
+                    if !trimmed.chars().any(|c| c.is_ascii_digit()) {
+                        continue;
+                    }
+                    terms.push(cell.clone());
                 }
-                terms.push(cell.clone());
             }
         }
         FormulaScope::Column => {
-            let table_block = table_eval_cache.block_for_line(lines, line_idx)?;
-            for row_idx in table_block.data_rows {
-                if row_idx >= line_idx {
+            for (logical_idx, row_lines) in table_block.data_rows.iter().enumerate() {
+                if Some(logical_idx) >= current_logical_row {
                     break;
                 }
-                let row_cells = table_eval_cache.cells_for_line(lines, row_idx)?.clone();
-                if is_table_delimiter_row(&row_cells) {
-                    continue;
-                }
-
-                let Some(cell) = row_cells.get(formula_col) else {
+                let Some(cell) =
+                    logical_row_cell_text(lines, row_lines, formula_col, table_eval_cache)
+                else {
                     continue;
                 };
-                if cell.trim().is_empty() || parse_builtin_formula(cell).is_some() {
+                if cell.trim().is_empty() || parse_builtin_formula(&cell).is_some() {
                     continue;
                 }
-                terms.push(cell.clone());
+                terms.push(cell);
             }
         }
     }
@@ -1651,28 +1740,15 @@ fn table_expression_segment(line: &str, allow_assignments: bool) -> Option<(Stri
         return None;
     }
 
-    let bytes = line.as_bytes();
-    let mut pipes = Vec::new();
-    for (idx, b) in bytes.iter().enumerate() {
-        if *b == b'|' {
-            pipes.push(idx);
-        }
-    }
-    if pipes.len() < 2 {
+    let cells = split_table_cells(line);
+    if cells.is_empty() {
         return None;
     }
 
     let mut formula_candidates: Vec<(String, usize)> = Vec::new();
     let mut candidates: Vec<(String, usize)> = Vec::new();
-    for (cell_idx, pair) in pipes.windows(2).enumerate() {
-        let start = pair[0] + 1;
-        let end = pair[1];
-        if start >= end {
-            continue;
-        }
-
-        let raw = &line[start..end];
-        let trimmed = raw.trim();
+    for (cell_idx, cell) in cells.iter().enumerate() {
+        let trimmed = cell.trim();
         if trimmed.is_empty() {
             continue;
         }
@@ -2154,6 +2230,21 @@ mod tests {
     }
 
     #[test]
+    fn note_eval_table_formula_works_when_other_cell_contains_escaped_pipe() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| note | value |".to_string(),
+            "| --- | --- |".to_string(),
+            "| left \\| right | 2 |".to_string(),
+            "| ok | 3 |".to_string(),
+            "| total | :=sum_col() |".to_string(),
+        ];
+
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[4], Some("5".to_string()));
+    }
+
+    #[test]
     fn note_eval_table_allows_multiple_row_formula_calls_in_same_cell() {
         let engine = CalcEngine::new();
         let lines = vec![
@@ -2303,6 +2394,26 @@ mod tests {
             "| a | 10 | |".to_string(),
             "| b | 20 | |".to_string(),
             "| c | 0 | :=(1,2) + (2,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[4]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_counts_logical_rows_with_continuations() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "|> details | | |".to_string(),
+            "| b | 20 | :=(1,2) + (2,2) |".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(

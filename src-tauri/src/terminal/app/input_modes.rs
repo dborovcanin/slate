@@ -186,6 +186,20 @@ impl TerminalApp {
                     should_autoformat = true;
                 }
             }
+            Key::ShiftEnter => {
+                if self.try_table_multiline_break_rule() {
+                    should_autoformat = true;
+                    refresh_variable_popup = true;
+                    clamp_table_padding = false;
+                } else if !self.try_enter_rule() {
+                    self.insert_newline();
+                    refresh_variable_popup = true;
+                    should_autoformat = true;
+                } else {
+                    refresh_variable_popup = true;
+                    should_autoformat = true;
+                }
+            }
             Key::Tab => {
                 if self.apply_wiki_link_selection() {
                     should_autoformat = true;

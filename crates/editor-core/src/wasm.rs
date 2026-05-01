@@ -26,8 +26,9 @@ use crate::table;
 use crate::text_rules::{
     convert_line_to_list, rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules,
     run_enter_rules, run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules,
-    run_table_header_delete_column_rule, run_table_pipe_insert_column_rule, ListKind,
-    TabRuleOptions, TableBoundaryEditOptions, TextRuleOptions,
+    run_table_header_delete_column_rule, run_table_multiline_break_rule,
+    run_table_pipe_insert_column_rule, ListKind, TabRuleOptions, TableBoundaryEditOptions,
+    TextRuleOptions,
 };
 use crate::types::{
     CommandExecutionResult, CommandMode, EditorContextSnapshot, SelectionSnapshot, TextRange,
@@ -75,6 +76,7 @@ enum MarkdownTransactionKind {
     TablePipeInsertColumn,
     TableHeaderDeleteColumn,
     TableBoundaryEdit,
+    TableMultilineBreak,
 }
 
 const fn default_true() -> bool {
@@ -168,6 +170,9 @@ fn run_markdown_transaction(
                 table_enabled: request.table_enabled,
             },
         ),
+        MarkdownTransactionKind::TableMultilineBreak => {
+            run_table_multiline_break_rule(ctx, request.table_enabled)
+        }
     }
 }
 
@@ -243,6 +248,44 @@ pub fn wasm_format_markdown(text: &str) -> String {
 pub fn wasm_format_table_lines(lines: Vec<String>) -> JsValue {
     let formatted = table::format_table_lines(&lines);
     to_js_value(&formatted).unwrap_or_else(|| Array::new().into())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TableCursorCellInfoWire {
+    column_index: usize,
+    column_count: usize,
+    left_pipe: usize,
+    right_pipe: usize,
+    trim_start: usize,
+    trim_end: usize,
+    edit_start: usize,
+    navigation_anchor: usize,
+    logical_row_index: Option<usize>,
+    logical_row_count: usize,
+    is_continuation_row: bool,
+}
+
+#[wasm_bindgen]
+pub fn wasm_table_cursor_cell_info(
+    block_lines: Vec<String>,
+    line_index: usize,
+    col: usize,
+) -> Option<JsValue> {
+    let info = table::table_cell_cursor_info_in_document(&block_lines, line_index, col)?;
+    to_js_value(&TableCursorCellInfoWire {
+        column_index: info.column_index,
+        column_count: info.column_count,
+        left_pipe: info.left_pipe,
+        right_pipe: info.right_pipe,
+        trim_start: info.trim_start,
+        trim_end: info.trim_end,
+        edit_start: info.edit_start(),
+        navigation_anchor: info.navigation_anchor(),
+        logical_row_index: info.logical_row_index,
+        logical_row_count: info.logical_row_count,
+        is_continuation_row: info.is_continuation_row,
+    })
 }
 
 fn parse_mode(mode: &str) -> Option<CommandMode> {

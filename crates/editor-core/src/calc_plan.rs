@@ -1,3 +1,4 @@
+use crate::table;
 use regex::{Regex, RegexBuilder};
 use rustc_hash::FxHasher;
 use serde::{Deserialize, Serialize};
@@ -581,8 +582,7 @@ fn segment_from_byte_range(
 }
 
 fn is_table_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
+    table::is_table_line(line)
 }
 
 fn find_single_calc_table_cell_range(line: &str) -> Option<(usize, usize)> {
@@ -590,12 +590,7 @@ fn find_single_calc_table_cell_range(line: &str) -> Option<(usize, usize)> {
         return None;
     }
 
-    let mut pipes = Vec::new();
-    for (idx, b) in line.as_bytes().iter().enumerate() {
-        if *b == b'|' {
-            pipes.push(idx);
-        }
-    }
+    let pipes = table::table_pipe_positions(line);
     if pipes.len() < 2 {
         return None;
     }
@@ -1042,12 +1037,7 @@ fn table_coordinate_refs(expression: &str) -> Vec<(usize, usize)> {
 }
 
 fn split_table_cells(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    let inner = trimmed.trim_start_matches('|').trim_end_matches('|');
-    inner
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
+    table::split_table_cells(line)
 }
 
 fn is_table_delimiter_cell(cell: &str) -> bool {
@@ -1064,7 +1054,7 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
-fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Vec<usize> {
+fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Vec<Vec<usize>> {
     let mut delimiter_row: Option<usize> = None;
     for row_idx in table_start..=table_end {
         let Some(line) = lines.get(row_idx) else {
@@ -1079,7 +1069,7 @@ fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Ve
     let Some(data_start) = delimiter_row.map(|row| row.saturating_add(1)) else {
         return Vec::new();
     };
-    let mut rows = Vec::new();
+    let mut rows: Vec<Vec<usize>> = Vec::new();
     for row_idx in data_start..=table_end {
         let Some(line) = lines.get(row_idx) else {
             continue;
@@ -1088,15 +1078,23 @@ fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Ve
         if is_table_delimiter_row(&cells) {
             continue;
         }
-        rows.push(row_idx);
+        if table::is_table_continuation_line(line) {
+            if let Some(last) = rows.last_mut() {
+                last.push(row_idx);
+            } else {
+                rows.push(vec![row_idx]);
+            }
+        } else {
+            rows.push(vec![row_idx]);
+        }
     }
     rows
 }
 
-fn table_row_index_1based(data_rows: &[usize], line_idx: usize) -> Option<usize> {
+fn table_row_index_1based(data_rows: &[Vec<usize>], line_idx: usize) -> Option<usize> {
     data_rows
         .iter()
-        .position(|row| *row == line_idx)
+        .position(|row| row.contains(&line_idx))
         .map(|pos| pos.saturating_add(1))
 }
 
@@ -1156,21 +1154,21 @@ fn coordinate_formula_dependency_window(
         let mut reverse_refs: HashMap<(usize, usize), HashSet<(usize, usize)>> = HashMap::new();
         let mut nodes_with_coords: HashSet<(usize, usize)> = HashSet::new();
 
-        for row_line_idx in &data_rows {
-            let Some(row_1based) = table_row_index_1based(&data_rows, *row_line_idx) else {
-                continue;
-            };
-            let line = &lines[*row_line_idx];
-            for segment in find_table_formula_segments(line) {
-                let node = (row_1based, segment.cell_index.saturating_add(1));
-                formula_nodes.insert(node, *row_line_idx);
-                let expression = line[segment.from_byte..segment.to_byte].trim();
-                let refs = table_coordinate_refs(expression);
-                if !refs.is_empty() {
-                    nodes_with_coords.insert(node);
-                }
-                for reference in refs {
-                    reverse_refs.entry(reference).or_default().insert(node);
+        for (logical_idx, row_line_idxs) in data_rows.iter().enumerate() {
+            let row_1based = logical_idx.saturating_add(1);
+            for row_line_idx in row_line_idxs {
+                let line = &lines[*row_line_idx];
+                for segment in find_table_formula_segments(line) {
+                    let node = (row_1based, segment.cell_index.saturating_add(1));
+                    formula_nodes.insert(node, *row_line_idx);
+                    let expression = line[segment.from_byte..segment.to_byte].trim();
+                    let refs = table_coordinate_refs(expression);
+                    if !refs.is_empty() {
+                        nodes_with_coords.insert(node);
+                    }
+                    for reference in refs {
+                        reverse_refs.entry(reference).or_default().insert(node);
+                    }
                 }
             }
         }
@@ -1696,12 +1694,7 @@ pub fn find_table_formula_segments(line: &str) -> Vec<TableFormulaSegment> {
         return Vec::new();
     }
 
-    let mut pipes = Vec::new();
-    for (idx, b) in line.as_bytes().iter().enumerate() {
-        if *b == b'|' {
-            pipes.push(idx);
-        }
-    }
+    let pipes = table::table_pipe_positions(line);
     if pipes.len() < 2 {
         return Vec::new();
     }
@@ -2049,6 +2042,25 @@ mod tests {
         assert_eq!(segments[0].cell_index, 0);
         assert_eq!(segments[1].labels, vec!["sum_row()".to_string()]);
         assert_eq!(segments[1].cell_index, 2);
+    }
+
+    #[test]
+    fn find_single_calc_table_cell_ignores_escaped_pipe_in_cell_content() {
+        let line = "| left \\| right | 2+2 |";
+        let seg = find_single_calc_table_cell(line).expect("calc segment");
+        assert_eq!(seg.expr, "2+2");
+    }
+
+    #[test]
+    fn find_table_formula_segments_ignores_escaped_pipe_in_non_formula_cell() {
+        let line = "| note with \\| pipe | :=sum_col() |";
+        let segments = find_table_formula_segments(line);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].cell_index, 1);
+        assert_eq!(
+            &line[segments[0].from_byte..segments[0].to_byte],
+            ":=sum_col()"
+        );
     }
 
     #[test]
