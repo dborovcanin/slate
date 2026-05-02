@@ -4,6 +4,21 @@ A minimal, fast, keyboard-first scratchpad for Linux. Inspired by [Antinote](htt
 
 Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no bloat.
 
+## Documentation
+
+Detailed project documentation is organized in [`docs/`](docs/README.md):
+
+- [How Slate Works](docs/how-slate-works.md)
+- [Feature Guide](docs/features.md)
+- [Keymaps](docs/keymaps.md)
+- [Command Reference](docs/command-reference.md)
+- [Configuration](docs/configuration.md)
+- [Architecture](docs/architecture.md)
+- [Variables Specification](docs/variables.md)
+- [Export Reference](docs/export.md)
+
+Roadmap and planning docs are in [`roadmap/`](roadmap/).
+
 ## Features
 
 **Editor**

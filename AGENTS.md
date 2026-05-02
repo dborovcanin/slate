@@ -1,6 +1,6 @@
 # Slate / Notes App Agent Instructions
 
-Read this file before making changes. For non-trivial work, also read `docs/plan.md`.
+Read this file before making changes. For non-trivial work, also read `roadmap/plan.md`.
 
 ## Product overview
 
@@ -90,6 +90,7 @@ Do not trade architecture and responsiveness for feature speed unless explicitly
 This is a vim-like editor, not just a text box with shortcuts.
 
 Protect the following ideas:
+
 - motions, objects, and actions should compose cleanly
 - undo/redo should remain coherent across structured edits
 - structured text operations should not corrupt formatting
@@ -116,7 +117,7 @@ Implement the smallest complete change that satisfies the current task.
 
 ## Workflow for non-trivial tasks
 
-1. Read `docs/plan.md`
+1. Read `roadmap/plan.md`
 2. Summarize the task in terms of:
    - goal
    - affected layers
@@ -133,6 +134,7 @@ Implement the smallest complete change that satisfies the current task.
 ## Refactoring rules
 
 Refactor only when it improves one of:
+
 - shared-core separation
 - performance
 - correctness of editing semantics
@@ -157,6 +159,7 @@ State that choice explicitly in your summary.
 ## Guardrails
 
 Do not:
+
 - duplicate editor logic across UI and TUI unless necessary
 - move core logic into Tauri-only code
 - add heavy dependencies casually
@@ -167,6 +170,7 @@ Do not:
 ## Definition of done
 
 A task is not done unless:
+
 - the ownership of logic is in the right layer
 - behavior remains coherent across front ends where expected
 - performance is not worsened
@@ -185,11 +189,14 @@ Fetch details: get_observations([IDs]) | Search: mem-search skill
 Stats: 50 obs (17,984t read) | 915,135t work | 98% savings
 
 ### Apr 28, 2026
+
 S92 Table formula := prefix feature fully shipped — all tests green (Apr 28, 3:29 PM)
 S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
 S108 Create slate.desktop XDG desktop entry file for the Slate application (Apr 28, 3:52 PM)
 S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 28, 10:44 PM)
+
 ### Apr 29, 2026
+
 S160 Design discussion for Obsidian-style wiki links [[notename#heading]] and [[notename^block]] in notes editor (Apr 29, 9:29 AM)
 121 9:36a 🔵 Slate calc engine architecture: AppCore, delta IPC, and viewport-based decorations
 122 " 🔵 Calc result remapping algorithm preserves displayed results across document edits
@@ -213,12 +220,14 @@ S160 Design discussion for Obsidian-style wiki links [[notename#heading]] and [[
 S161 Note title vs ID storage — how Slate handles title storage, uniqueness, and duplicate title resolution for wiki-style links (Apr 29, 11:52 PM)
 183 11:56p 🔵 Slate note title is derived from body and stored as denormalized column
 S163 Wiki-link syntax: short 8-char ID + mandatory autocomplete picker (Apr 29, 11:56 PM)
+
 ### Apr 30, 2026
+
 184 12:01a ⚖️ Wiki-link syntax: short 8-char ID + mandatory autocomplete picker
 S171 Wiki-link tokenizer passes all 5 tests and full editor-core test suite (158 tests) passes (Apr 30, 12:01 AM)
 185 12:02a ⚖️ Wiki-link UX decisions: broken links, variable-style syntax, and autoclose behavior
 186 12:03a 🔵 Slate Pass 2 implementation checklist and project architecture confirmed
-188 12:04a 🟣 Wiki-link feature plan documented in docs/plan.md with full architecture spec
+188 12:04a 🟣 Wiki-link feature plan documented in roadmap/plan.md with full architecture spec
 189 " 🔵 markdown_tokens.rs InlineTokenType enum and tokenize_inline_markdown structure mapped
 190 12:05a 🔵 tokenize_inline_markdown uses sequential single-pass-per-type pattern with protect() guards
 192 12:08a 🟣 Added WikiLink token types to InlineTokenType enum in markdown_tokens.rs
@@ -239,7 +248,7 @@ S174 Implement Obsidian-style wiki-links in Slate — broken link rendering, var
 209 " 🔴 Wiki-link tokenizer tests updated to use real ULID short IDs instead of hex short IDs
 211 12:20a 🔵 All tests pass after wiki-link fixes — 158 unit tests + 3 golden replay
 212 " 🔵 wasm_markdown_find_inline_tokens already exists — exposes inline tokenizer to UI
-213 " 🔵 inline_tokens_to_js defined at line 647 — must be read to check WikiLink* coverage
+213 " 🔵 inline_tokens_to_js defined at line 647 — must be read to check WikiLink*coverage
 214 12:21a 🟣 Obsidian-style extended wiki-link syntax requested — heading and block anchors
 215 12:23a 🔵 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case
 S192 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case (Apr 30, 12:23 AM)
@@ -250,3 +259,4 @@ S192 inline_tokens_to_js() uses generic serde serialization — WikiLink* varian
 
 Access 915k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
+
