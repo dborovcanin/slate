@@ -887,14 +887,14 @@ function selectionEnd(input: HTMLInputElement | HTMLTextAreaElement): number {
   return input.selectionEnd ?? input.value.length;
 }
 
-function syncInputSize(input: HTMLTextAreaElement, minCh: number) {
+function syncInputSize(input: HTMLTextAreaElement, minCh: number, minRows = 1) {
   const lines = input.value.split("\n");
   let max = 1;
   for (const line of lines) {
     max = Math.max(max, line.length);
   }
   input.cols = Math.max(3, minCh, max + 1);
-  input.rows = Math.max(1, lines.length);
+  input.rows = Math.max(1, minRows, lines.length);
 }
 
 class TableBlockWidget extends WidgetType {
@@ -1054,17 +1054,18 @@ class TableBlockWidget extends WidgetType {
     input.dataset.tableLogicalRow = `${logicalRowIndex}`;
     input.dataset.tableLogicalFirstOffset = `${logicalFirstOffset}`;
     input.dataset.tablePhysicalRowOffset = `${physicalRowOffset}`;
-    syncInputSize(input, widthCh + 1);
+    syncInputSize(input, widthCh + 1, logicalLineCount);
     let dirty = false;
+    let lastDisplayValue = displayValue;
     input.addEventListener("mousedown", (event) => event.stopPropagation());
     input.addEventListener("focus", () => {
       if (!showFormulaStar) return;
       input.value = sourceValue;
-      syncInputSize(input, widthCh + 1);
+      syncInputSize(input, widthCh + 1, logicalLineCount);
     });
     input.addEventListener("input", () => {
       dirty = true;
-      syncInputSize(input, widthCh + 1);
+      syncInputSize(input, widthCh + 1, logicalLineCount);
     });
     const commitValue = (force = false) => {
       if (!force && !dirty) return;
@@ -1172,8 +1173,24 @@ class TableBlockWidget extends WidgetType {
         event.preventDefault();
       }
     });
+    const restoreFormulaDisplayOnBlur = () => {
+      if (!showFormulaStar || header) return;
+      const source = trimTrailingEmptyLogicalLines(input.value);
+      if (!source.trimStart().startsWith(":=")) return;
+      const formulaValue = this.tableFormulaDisplayValue(
+        getTableCellEvaluationMap(view),
+        logicalFirstOffset,
+        columnIndex,
+        source,
+      );
+      const nextDisplay = (formulaValue && formulaValue !== source) ? formulaValue : lastDisplayValue;
+      input.value = nextDisplay;
+      lastDisplayValue = nextDisplay;
+      syncInputSize(input, widthCh + 1, logicalLineCount);
+    };
     input.addEventListener("blur", () => {
       commitValue(false);
+      restoreFormulaDisplayOnBlur();
     });
     return input;
   }

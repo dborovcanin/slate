@@ -363,7 +363,7 @@
 
 .md-table-ui-cell-shell {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 4px;
   padding: 0;
   box-sizing: border-box;
@@ -388,6 +388,7 @@
 .md-table-ui-row-controls {
   display: inline-flex;
   align-items: center;
+  align-self: center;
   justify-content: flex-end;
   gap: 6px;
   padding: 0.08em 0.22em 0.08em 0.1em;
@@ -643,6 +644,7 @@
   min-width: 3ch;
   max-width: none;
   flex: 1 1 auto;
+  align-self: stretch;
   box-sizing: border-box;
   border: 0;
   margin: 0;
