@@ -4,6 +4,7 @@ import { CommandHistoryNavigator, rememberCommand } from "./command-history.ts";
 import { insertAtSelection } from "./editor-utils";
 import { createListOverlay, type ListOverlay, type ListOverlayState } from "../overlays/overlay.ts";
 import type { NoteModules } from "../api.ts";
+import type { ExportCommandFormat } from "./command-engine";
 
 interface CommandPickerOptions {
   mode: CommandMode;
@@ -15,6 +16,10 @@ interface CommandPickerOptions {
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
+  onExportCommand?: (options: {
+    format: ExportCommandFormat;
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   source?: "vim-colon" | "shortcut";
   onCancel?: () => void;
   selectionOverride?: {
@@ -33,6 +38,10 @@ interface CommandModeExtensionOptions {
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
+  onExportCommand?: (options: {
+    format: ExportCommandFormat;
+    path: string | null;
+  }) => Promise<string | void> | string | void;
 }
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
@@ -192,6 +201,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         onClipWatchPaste: options.onClipWatchPaste,
         getNoteModules: options.getNoteModules,
         setNoteModules: options.setNoteModules,
+        onExportCommand: options.onExportCommand,
         selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
@@ -288,6 +298,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         onClipWatchPaste: options.onClipWatchPaste,
         getNoteModules: options.getNoteModules,
         setNoteModules: options.setNoteModules,
+        onExportCommand: options.onExportCommand,
         source: "shortcut",
       });
       return true;

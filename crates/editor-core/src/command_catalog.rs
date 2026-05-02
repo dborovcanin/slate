@@ -1,4 +1,5 @@
 use crate::types::{CommandMode, CommandSuggestion};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandId {
@@ -42,6 +43,9 @@ pub enum CommandId {
     NoteEncrypt,
     NoteDecrypt,
     NoteUnprotect,
+    ExportPdf,
+    ExportMd,
+    ExportTxt,
     Write,
     WriteQuit,
     Quit,
@@ -83,6 +87,38 @@ pub struct ParsedNoteSecurityCommand {
     pub action: NoteSecurityAction,
     pub password: String,
     pub used_note_prefix: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExportFormat {
+    Pdf,
+    Md,
+    Txt,
+}
+
+impl ExportFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pdf => "pdf",
+            Self::Md => "md",
+            Self::Txt => "txt",
+        }
+    }
+
+    pub fn command_id(self) -> CommandId {
+        match self {
+            Self::Pdf => CommandId::ExportPdf,
+            Self::Md => CommandId::ExportMd,
+            Self::Txt => CommandId::ExportTxt,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedExportCommand {
+    pub format: ExportFormat,
+    pub path: Option<String>,
 }
 
 pub fn note_security_action_from_token(token: &str) -> Option<NoteSecurityAction> {
@@ -135,6 +171,32 @@ pub fn parse_note_security_command(input: &str) -> Option<ParsedNoteSecurityComm
     })
 }
 
+pub fn parse_export_command(input: &str) -> Option<ParsedExportCommand> {
+    let normalized = input.trim_start().trim_start_matches(':').trim_start();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let mut parts = normalized.splitn(3, char::is_whitespace);
+    let head = parts.next()?.trim();
+    if !head.eq_ignore_ascii_case("export") {
+        return None;
+    }
+    let raw_format = parts.next()?.trim().to_ascii_lowercase();
+    let format = match raw_format.as_str() {
+        "pdf" => ExportFormat::Pdf,
+        "md" => ExportFormat::Md,
+        "txt" => ExportFormat::Txt,
+        _ => return None,
+    };
+    let path = parts
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    Some(ParsedExportCommand { format, path })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CommandDefinition {
     pub id: CommandId,
@@ -147,7 +209,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 43] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 46] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -470,6 +532,27 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 43] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::ExportPdf,
+        value: "export pdf",
+        aliases: &[],
+        description: "export note as pdf to path",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ExportMd,
+        value: "export md",
+        aliases: &["export markdown"],
+        description: "export markdown to path, or clipboard when path is omitted",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ExportTxt,
+        value: "export txt",
+        aliases: &["export text"],
+        description: "export plain text to path, or clipboard when path is omitted",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::Quit,
         value: "q",
         aliases: &["q!"],
@@ -507,6 +590,9 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
 
     if let Some(parsed) = parse_note_security_command(normalized_input) {
         return parsed.action.command_id() == def.id;
+    }
+    if let Some(parsed) = parse_export_command(normalized_input) {
+        return parsed.format.command_id() == def.id;
     }
     false
 }
@@ -695,6 +781,18 @@ mod tests {
             resolve_command(CommandMode::Editor, "lock pass123").map(|cmd| cmd.id),
             Some(CommandId::NoteLock)
         );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "export pdf /tmp/out.pdf").map(|cmd| cmd.id),
+            Some(CommandId::ExportPdf)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "export md").map(|cmd| cmd.id),
+            Some(CommandId::ExportMd)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "export txt notes.txt").map(|cmd| cmd.id),
+            Some(CommandId::ExportTxt)
+        );
     }
 
     #[test]
@@ -714,6 +812,21 @@ mod tests {
         assert_eq!(no_password.action, NoteSecurityAction::Lock);
         assert_eq!(no_password.password, "");
         assert!(no_password.used_note_prefix);
+    }
+
+    #[test]
+    fn parse_export_command_supports_optional_path() {
+        let with_path = parse_export_command("export pdf /tmp/out.pdf").expect("parse export path");
+        assert_eq!(with_path.format, ExportFormat::Pdf);
+        assert_eq!(with_path.path.as_deref(), Some("/tmp/out.pdf"));
+
+        let no_path = parse_export_command(":export md").expect("parse export no path");
+        assert_eq!(no_path.format, ExportFormat::Md);
+        assert_eq!(no_path.path, None);
+
+        let txt = parse_export_command("export txt notes.txt").expect("parse txt path");
+        assert_eq!(txt.format, ExportFormat::Txt);
+        assert_eq!(txt.path.as_deref(), Some("notes.txt"));
     }
 
     #[test]

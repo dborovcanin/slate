@@ -33,6 +33,7 @@ import {
 } from "./wasm.ts";
 
 export type { CommandMode, CommandSuggestion };
+export type ExportCommandFormat = "pdf" | "md" | "txt";
 
 export interface CommandExecutionOptions {
   mode: CommandMode;
@@ -44,6 +45,10 @@ export interface CommandExecutionOptions {
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
+  onExportCommand?: (options: {
+    format: ExportCommandFormat;
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   selectionOverride?: {
     anchor: number;
     head: number;
@@ -239,6 +244,34 @@ export async function executeCommand(
     const noteSecurityMessage = await tryExecuteNoteSecurityCommand(view, hostPlan);
     if (noteSecurityMessage !== null) {
       return noteSecurityMessage;
+    }
+  }
+  if (hostPlan?.kind === "export") {
+    const format = hostPlan.format;
+    const path = hostPlan.path && hostPlan.path.trim().length > 0
+      ? hostPlan.path.trim()
+      : null;
+    if (format === "pdf" && !path) {
+      return "usage: export pdf <path>";
+    }
+    if (!options.onExportCommand) {
+      return "export unavailable";
+    }
+    try {
+      const message = await options.onExportCommand({ format, path });
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message;
+      }
+      if (path) return `exported ${format} to ${path}`;
+      return `exported ${format} to clipboard`;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error);
+      return `export failed: ${message}`;
     }
   }
 

@@ -201,6 +201,9 @@ pub fn execute_command(
         | CommandId::NoteEncrypt
         | CommandId::NoteDecrypt
         | CommandId::NoteUnprotect => result_with_message("note security command handled by host"),
+        CommandId::ExportPdf | CommandId::ExportMd | CommandId::ExportTxt => {
+            result_with_message("export command handled by host")
+        }
         CommandId::Write | CommandId::WriteQuit => {
             result_with_message("write command handled by host")
         }
@@ -296,6 +299,9 @@ mod tests {
                 "note encrypt",
                 "note decrypt",
                 "note unprotect",
+                "export pdf",
+                "export md",
+                "export txt",
             ]
         );
 

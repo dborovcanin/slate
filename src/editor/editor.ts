@@ -277,6 +277,10 @@ interface EditorMountOptions {
   variablesEnabled?: boolean;
   variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
+  onExportCommand?: (options: {
+    format: "pdf" | "md" | "txt";
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
@@ -532,6 +536,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         vimMode: !!options.vimMode,
         onWriteCommand: options.onWriteCommand,
         onExitCommand: options.onExitCommand,
+        onExportCommand: options.onExportCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
         getNoteModules: options.getNoteModules,
@@ -580,6 +585,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
           dateTimeFormat: options.dateTimeFormat,
           onWriteCommand: options.onWriteCommand,
           onExitCommand: options.onExitCommand,
+          onExportCommand: options.onExportCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,

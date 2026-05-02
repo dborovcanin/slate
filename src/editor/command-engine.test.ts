@@ -48,6 +48,9 @@ test("editor mode exposes only editing commands", async () => {
     "note encrypt",
     "note decrypt",
     "note unprotect",
+    "export pdf",
+    "export md",
+    "export txt",
   ]);
   assert.equal(values.includes("q"), false);
 });
@@ -87,4 +90,39 @@ test("vim write surfaces host save errors", async () => {
     },
   });
   assert.equal(message, "write failed: note changed since last load; use :w! to force save");
+});
+
+test("export host command routes format/path and clipboard fallback", async () => {
+  let called:
+    | {
+      format: "pdf" | "md" | "txt";
+      path: string | null;
+    }
+    | null = null;
+
+  const mdClipboard = await executeCommand({} as any, "export md", {
+    mode: "editor",
+    onExportCommand: async (options) => {
+      called = options;
+      return "ok-md";
+    },
+  });
+  assert.equal(mdClipboard, "ok-md");
+  assert.deepEqual(called, { format: "md", path: null });
+
+  const pdfPath = await executeCommand({} as any, "export pdf /tmp/note.pdf", {
+    mode: "editor",
+    onExportCommand: async (options) => {
+      called = options;
+      return "ok-pdf";
+    },
+  });
+  assert.equal(pdfPath, "ok-pdf");
+  assert.deepEqual(called, { format: "pdf", path: "/tmp/note.pdf" });
+
+  const pdfMissingPath = await executeCommand({} as any, "export pdf", {
+    mode: "editor",
+    onExportCommand: async () => "should-not-run",
+  });
+  assert.equal(pdfMissingPath, "usage: export pdf <path>");
 });

@@ -1102,6 +1102,27 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::Export { format, path } => {
+                    self.status = match (format, path) {
+                        (crate::editor_core::command_catalog::ExportFormat::Pdf, None) => {
+                            "usage: export pdf <path>".to_string()
+                        }
+                        (
+                            crate::editor_core::command_catalog::ExportFormat::Md
+                            | crate::editor_core::command_catalog::ExportFormat::Txt,
+                            None,
+                        ) => {
+                            "export clipboard fallback is currently GUI-only".to_string()
+                        }
+                        (
+                            crate::editor_core::command_catalog::ExportFormat::Pdf
+                            | crate::editor_core::command_catalog::ExportFormat::Md
+                            | crate::editor_core::command_catalog::ExportFormat::Txt,
+                            Some(_),
+                        ) => "export command is currently GUI-only".to_string(),
+                    };
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::ClipWatch { action } => {
                     match action {
                         crate::editor_core::engine::HostClipWatchAction::Start => {

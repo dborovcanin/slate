@@ -46,6 +46,10 @@ interface VimOptions {
   dateTimeFormat?: string;
   onWriteCommand?: (options?: { force?: boolean }) => Promise<void> | void;
   onExitCommand?: () => Promise<void> | void;
+  onExportCommand?: (options: {
+    format: "pdf" | "md" | "txt";
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
@@ -1138,6 +1142,7 @@ export function vimModeExtension(options: VimOptions = {}) {
           dateTimeFormat: options.dateTimeFormat,
           onWriteCommand: options.onWriteCommand,
           onExitCommand: options.onExitCommand,
+          onExportCommand: options.onExportCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,

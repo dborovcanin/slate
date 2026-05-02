@@ -128,6 +128,7 @@ function editorOptionsForNote(note: Note | null) {
         suppressErrorCallback: true,
       }),
     onSaveError: showSaveError,
+    onExportCommand: runExportCommand,
     variablesEnabled: loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
@@ -559,6 +560,43 @@ function buildPdfExportPalette(): PdfExportPalette {
     code_function: read("--code-token-function", { r: 52, g: 122, b: 165 }),
     code_type: read("--code-token-type", { r: 134, g: 99, b: 202 }),
   };
+}
+
+async function runExportCommand(options: {
+  format: "pdf" | "md" | "txt";
+  path: string | null;
+}): Promise<string> {
+  const note = state.activeNote;
+  if (!note) return "no active note";
+  await flushSave();
+  const latest = state.activeNote;
+  if (!latest) return "no active note";
+
+  const path = options.path?.trim() ?? "";
+  if (path.length === 0) {
+    if (options.format === "pdf") {
+      return "usage: export pdf <path>";
+    }
+    try {
+      await navigator.clipboard.writeText(latest.body);
+      return `exported ${options.format} to clipboard`;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error);
+      throw new Error(`clipboard export failed: ${message}`);
+    }
+  }
+
+  if (options.format === "pdf") {
+    await exportToPdf(latest.id, path, latest.body, buildPdfExportPalette());
+  } else {
+    await exportToFile(path, latest.body);
+  }
+  return `exported ${options.format} to ${path}`;
 }
 
 async function handleExportClipboard() {

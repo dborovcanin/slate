@@ -1,5 +1,5 @@
 use crate::command_catalog::{
-    self, CommandDefinition, CommandId, NoteSecurityAction, ParsedNoteSecurityCommand,
+    self, CommandDefinition, CommandId, ExportFormat, NoteSecurityAction, ParsedNoteSecurityCommand,
 };
 use crate::types::{CommandMode, CommandSuggestion};
 use crate::vim::{self, VimContext, VimKey, VimState, VimStep};
@@ -69,6 +69,7 @@ pub enum CommandDispatchKind {
     HostNotify,
     HostNotifyDelete,
     HostWrite,
+    HostExport,
     HostModule,
     HostFold,
     HostClipWatch,
@@ -96,6 +97,10 @@ pub enum HostCommandPlan {
     Date,
     Notify,
     NotifyDelete,
+    Export {
+        format: ExportFormat,
+        path: Option<String>,
+    },
     Module {
         command_id: CommandId,
     },
@@ -148,6 +153,7 @@ impl EditorEngine {
                 HostCommandPlan::Notify => CommandDispatchKind::HostNotify,
                 HostCommandPlan::NotifyDelete => CommandDispatchKind::HostNotifyDelete,
                 HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
+                HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
                 HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
                 HostCommandPlan::ClipWatch { .. } => CommandDispatchKind::HostClipWatch,
@@ -168,6 +174,12 @@ impl EditorEngine {
             return Some(HostCommandPlan::NoteSecurity {
                 action: parsed.action,
                 password: parsed.password,
+            });
+        }
+        if let Some(parsed) = command_catalog::parse_export_command(raw_input) {
+            return Some(HostCommandPlan::Export {
+                format: parsed.format,
+                path: parsed.path,
             });
         }
 
@@ -414,6 +426,13 @@ mod tests {
             Some(CommandDispatchKind::HostNotify)
         );
         assert_eq!(
+            EditorEngine::classify_command_dispatch(
+                CommandMode::Editor,
+                "export txt /tmp/note.txt"
+            ),
+            Some(CommandDispatchKind::HostExport)
+        );
+        assert_eq!(
             EditorEngine::classify_command_dispatch(CommandMode::Editor, "module math on"),
             Some(CommandDispatchKind::HostModule)
         );
@@ -498,6 +517,27 @@ mod tests {
             HostCommandPlan::Write {
                 quit: true,
                 force: true
+            }
+        );
+
+        let export_pdf =
+            EditorEngine::plan_host_command(CommandMode::Editor, "export pdf /tmp/a.pdf")
+                .expect("export plan");
+        assert_eq!(
+            export_pdf,
+            HostCommandPlan::Export {
+                format: ExportFormat::Pdf,
+                path: Some("/tmp/a.pdf".to_string()),
+            }
+        );
+
+        let export_md =
+            EditorEngine::plan_host_command(CommandMode::Editor, "export md").expect("export md");
+        assert_eq!(
+            export_md,
+            HostCommandPlan::Export {
+                format: ExportFormat::Md,
+                path: None,
             }
         );
     }

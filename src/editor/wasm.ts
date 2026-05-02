@@ -487,6 +487,7 @@ export type CommandDispatchKind =
   | "host_notify"
   | "host_notify_delete"
   | "host_write"
+  | "host_export"
   | "host_module"
   | "host_fold"
   | "host_clip_watch"
@@ -501,6 +502,7 @@ export type HostCommandPlan =
   | { kind: "notify" }
   | { kind: "notify_delete" }
   | { kind: "write"; quit: boolean; force: boolean }
+  | { kind: "export"; format: "pdf" | "md" | "txt"; path?: string | null }
   | { kind: "module"; command: string }
   | { kind: "fold"; action: HostFoldAction }
   | { kind: "clip_watch"; action: HostClipWatchAction }
@@ -985,6 +987,7 @@ export function classifyCommandDispatchFromWasm(
     raw === "host_notify" ||
     raw === "host_notify_delete" ||
     raw === "host_write" ||
+    raw === "host_export" ||
     raw === "host_module" ||
     raw === "host_fold" ||
     raw === "host_clip_watch" ||
