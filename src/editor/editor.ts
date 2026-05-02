@@ -37,6 +37,7 @@ import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
 import { editorContextMenuExtensions } from "./context-menu";
 import {
+  handleImagePasteAtPosition,
   imageImportDomHandlers,
   insertImagePathsAtCursor,
 } from "./image-import";
@@ -489,12 +490,13 @@ function buildEditorExtensions(options: EditorMountOptions): {
 
   if (!plainTextMode) {
     extensions.push(
-      ...(disableMarkdownDecorations ? [] : markdownRichTextExtensions()),
+      ...(disableMarkdownDecorations ? [] : markdownRichTextExtensions({ tableWidgets: tableEnabled })),
       ...(disableFolding ? [] : foldingExtensions()),
       markdownEditingExtensions({
         autoformat: markdownAutoformat,
         checklistAutoReorder,
         tableEnabled,
+        richTableUi: !disableMarkdownDecorations,
       }),
       ...(() => {
         if (disableAutocomplete) return [];
@@ -522,6 +524,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         : calcExtensions({
             variablesEnabled: options.variablesEnabled ?? true,
             tableEnabled,
+            richTableUi: !disableMarkdownDecorations && tableEnabled,
             getActiveNoteId: () => state.activeNote?.id ?? null,
           })),
       ...(disableNotify
@@ -755,4 +758,12 @@ export function insertTextAtCursor(text: string): boolean {
 export async function insertImagesFromPathsAtCursor(paths: string[]): Promise<boolean> {
   if (!view) return false;
   return insertImagePathsAtCursor(view, paths);
+}
+
+export function handleImagePasteAtDocPosition(
+  event: ClipboardEvent,
+  position: number,
+): boolean {
+  if (!view) return false;
+  return handleImagePasteAtPosition(event, view, position);
 }

@@ -422,25 +422,19 @@ function tableBoundaryEdit(
   return true;
 }
 
-function tablePipeInsertColumn(view: EditorView): boolean {
-  const main = view.state.selection.main;
-  if (!main.empty) return false;
-  const line = view.state.doc.lineAt(main.head);
-  if (!isMarkdownTableLine(line.text)) return false;
-  const scoped = snapshotFromViewTableBlock(view);
-  if (!scoped) return false;
-  const result = runMarkdownTransactions(scoped.snapshot, [
-    { kind: "table_pipe_insert_column" },
-  ]);
-  if (!result) return false;
-  applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
-  return true;
-}
-
 function tablePipeInputHandler() {
-  return EditorView.inputHandler.of((view, _from, _to, insert) => {
+  return EditorView.inputHandler.of((view, from, to, insert) => {
     if (insert !== "|") return false;
-    return tablePipeInsertColumn(view);
+    const main = view.state.selection.main;
+    if (!main.empty || main.from !== from || main.to !== to) return false;
+    const line = view.state.doc.lineAt(from);
+    if (!isMarkdownTableLine(line.text)) return false;
+    view.dispatch({
+      changes: { from, to, insert: "\\|" },
+      selection: { anchor: from + 2 },
+      scrollIntoView: false,
+    });
+    return true;
   });
 }
 
@@ -800,15 +794,17 @@ interface MarkdownEditingOptions {
   autoformat?: boolean;
   checklistAutoReorder?: boolean;
   tableEnabled?: boolean;
+  richTableUi?: boolean;
 }
 
 export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) {
   const autoformat = options.autoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
   const tableEnabled = options.tableEnabled ?? true;
+  const richTableUi = options.richTableUi ?? false;
   const tableExtensions = tableEnabled
     ? [
-      Prec.high(tablePipeInputHandler()),
+      ...(richTableUi ? [Prec.high(tablePipeInputHandler())] : []),
       Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled))),
       tableCursorGuards(),
     ]

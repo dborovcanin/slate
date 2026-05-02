@@ -383,57 +383,63 @@ async function importClipboardImageAndInsert(
   }
 }
 
+export function handleImagePasteAtPosition(
+  event: ClipboardEvent,
+  view: EditorView,
+  position: number,
+): boolean {
+  const imageFiles = gatherClipboardImageFiles(event);
+  if (imageFiles.length > 0) {
+    event.preventDefault();
+    void importImagesAndInsert(view, imageFiles, {
+      mode: "position",
+      position,
+      selectionAfterInsert: "end",
+    });
+    return true;
+  }
+  const text = event.clipboardData?.getData("text/plain") ?? "";
+  const imagePaths = parsePastedPathCandidates(text);
+  if (imagePaths.length > 0) {
+    event.preventDefault();
+    void importImagePathsAndInsert(view, imagePaths, {
+      mode: "position",
+      position,
+      selectionAfterInsert: "end",
+    });
+    return true;
+  }
+  if ((event.clipboardData?.items?.length ?? 0) > 0 || text.trim().length > 0) {
+    return false;
+  }
+  event.preventDefault();
+  void (async () => {
+    const asyncFiles = await gatherAsyncClipboardImageFiles();
+    if (asyncFiles.length > 0) {
+      await importImagesAndInsert(view, asyncFiles, {
+        mode: "position",
+        position,
+        selectionAfterInsert: "end",
+      });
+      return;
+    }
+    await importClipboardImageAndInsert(view, {
+      mode: "position",
+      position,
+      selectionAfterInsert: "end",
+    });
+  })();
+  return true;
+}
+
 export function imageImportDomHandlers(): Extension {
   let dragCursorPos = -1;
   return Prec.highest(
     EditorView.domEventHandlers({
       paste: (event, view) => {
         const main = view.state.selection.main;
-        const imageFiles = gatherClipboardImageFiles(event);
-        if (imageFiles.length > 0) {
-          event.preventDefault();
-          const lineStart = placeCursorAtLineStart(view, main.from);
-          void importImagesAndInsert(view, imageFiles, {
-            mode: "position",
-            position: lineStart,
-            selectionAfterInsert: "end",
-          });
-          return true;
-        }
-        const text = event.clipboardData?.getData("text/plain") ?? "";
-        const imagePaths = parsePastedPathCandidates(text);
-        if (imagePaths.length > 0) {
-          event.preventDefault();
-          const lineStart = placeCursorAtLineStart(view, main.from);
-          void importImagePathsAndInsert(view, imagePaths, {
-            mode: "position",
-            position: lineStart,
-            selectionAfterInsert: "end",
-          });
-          return true;
-        }
-        if ((event.clipboardData?.items?.length ?? 0) > 0 || text.trim().length > 0) {
-          return false;
-        }
-        event.preventDefault();
         const lineStart = placeCursorAtLineStart(view, main.from);
-        void (async () => {
-          const asyncFiles = await gatherAsyncClipboardImageFiles();
-          if (asyncFiles.length > 0) {
-            await importImagesAndInsert(view, asyncFiles, {
-              mode: "position",
-              position: lineStart,
-              selectionAfterInsert: "end",
-            });
-            return;
-          }
-          await importClipboardImageAndInsert(view, {
-            mode: "position",
-            position: lineStart,
-            selectionAfterInsert: "end",
-          });
-        })();
-        return true;
+        return handleImagePasteAtPosition(event, view, lineStart);
       },
       dragover: (event, view) => {
         const imageFiles = gatherDropImageFiles(event);

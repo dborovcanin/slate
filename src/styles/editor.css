@@ -278,26 +278,18 @@
 .cm-editor .cm-line.md-table-row {
   position: relative;
   margin: 0;
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
   background: transparent;
-  box-shadow: inset 0 -1px 0 var(--border);
   font-variant-numeric: tabular-nums;
 }
 
 .cm-editor .cm-line.md-table-row.md-table-header {
   font-weight: 650;
   color: var(--fg);
-  background: var(--active-line-bg);
-  border-top: 1px solid var(--accent);
+  background: transparent;
 }
 
 .cm-editor .cm-line.md-table-row.md-table-divider {
-  background: var(--bg-overlay);
-}
-
-.cm-editor .cm-line.md-table-row + .cm-line.md-table-row {
-  border-top: 1px solid var(--border);
+  background: transparent;
 }
 
 .cm-editor .cm-line.md-table-row .md-table-pipe {
@@ -315,44 +307,190 @@
   letter-spacing: 0.02em;
 }
 
-.cm-editor .cm-line.md-table-row .md-table-cell {
+.md-table-ui-wrap {
   display: inline-block;
-  box-sizing: border-box;
-  min-height: 1.52em;
-  padding: 0.08em 0.58em;
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border);
+  width: fit-content;
+  margin: 2px 0 6px;
 }
 
-.cm-editor .cm-line.md-table-row .md-table-header-cell {
+.md-table-ui-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+}
+
+.md-table-ui-source-toggle {
+  border: 1px solid var(--border);
   background: var(--bg-overlay);
-  font-weight: 700;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 0.78em;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
 }
 
-.md-table-cell-widget {
+.md-table-ui-source-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.md-table-ui-surface {
+  display: block;
+}
+
+.md-table-ui {
+  border-collapse: collapse;
+  border-spacing: 0;
+  display: inline-table;
+  width: max-content;
+  max-width: max-content;
+  background: var(--bg-surface);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, var(--fg-dim) 30%);
+}
+
+.md-table-ui th,
+.md-table-ui td {
+  border: 1px solid color-mix(in srgb, var(--border) 62%, var(--fg-dim) 38%);
+  vertical-align: top;
+  padding: 0;
+}
+
+.md-table-ui thead th {
+  background: color-mix(in srgb, var(--bg-overlay) 88%, var(--fg) 12%);
+  border-bottom-color: color-mix(in srgb, var(--fg-dim) 52%, var(--border) 48%);
+}
+
+.md-table-ui-cell-shell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.md-table-ui-cell-shell.md-table-ui-cell-selected {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: -1px;
+}
+
+.md-table-ui-cell-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.md-table-ui-cell-stack > .md-table-ui-cell-shell + .md-table-ui-cell-shell {
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.md-table-ui-row-controls {
   display: inline-flex;
   align-items: center;
-  box-sizing: border-box;
-  min-height: 1.6em;
-  padding: 0.08em 0.58em;
-  background: var(--bg-surface);
-  border-right: 1px solid var(--border);
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0.08em 0.22em 0.08em 0.1em;
+}
+
+.md-table-col-grip {
+  opacity: 0;
+  color: var(--fg-dim);
+  cursor: grab;
+  user-select: none;
+  font-size: 0.75em;
+  letter-spacing: -0.08em;
+}
+
+.md-table-ui thead th:hover .md-table-col-grip,
+.md-table-ui thead th:focus-within .md-table-col-grip {
+  opacity: 0.85;
+}
+
+.md-table-col-add {
+  opacity: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--fg);
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 14px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.md-table-ui thead th:hover .md-table-col-add,
+.md-table-ui thead th:focus-within .md-table-col-add {
+  opacity: 1;
+}
+
+.md-table-col-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.md-table-ui-row-continuation td {
+  background: var(--bg-overlay);
+}
+
+.md-table-row-grip {
+  opacity: 0;
+  color: var(--fg-dim);
+  cursor: grab;
+  user-select: none;
+  font-size: 0.72em;
+  letter-spacing: -0.06em;
+}
+
+.md-table-ui tbody tr:hover .md-table-row-grip,
+.md-table-ui tbody tr:focus-within .md-table-row-grip {
+  opacity: 0.9;
+}
+
+.md-table-row-add {
+  opacity: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-overlay);
+  color: var(--fg);
+  border-radius: 4px;
+  width: 18px;
+  height: 18px;
+  line-height: 14px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.md-table-ui tbody tr:hover .md-table-row-add,
+.md-table-ui tbody tr:focus-within .md-table-row-add {
+  opacity: 1;
+}
+
+.md-table-row-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.md-table-ui-source {
+  display: block;
+}
+
+.md-table-ui-source-textarea {
+  min-height: 120px;
+  resize: vertical;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  padding: 0;
+  width: 100%;
+  outline: none;
   white-space: pre;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.md-table-cell-widget-header {
-  background: var(--bg-overlay);
-  font-weight: 700;
-}
-
-.md-table-cell-widget-divider {
-  min-height: 0.35em;
-  padding-top: 0;
-  padding-bottom: 0;
-  background: var(--bg-overlay);
-  color: transparent;
+  overflow-wrap: normal;
+  font-family: var(--font-mono);
 }
 
 .md-heading-content {
@@ -480,11 +618,11 @@
 }
 
 .md-table-cell-input {
-  width: 100%;
+  width: auto;
   box-sizing: border-box;
   border: 0;
   margin: 0;
-  padding: 6px 10px;
+  padding: 5px 8px;
   background: transparent;
   color: var(--fg);
   font: inherit;
@@ -498,6 +636,40 @@
 
 .md-table-cell-input-header {
   font-weight: 700;
+}
+
+.md-table-ui-input {
+  width: 100%;
+  min-width: 3ch;
+  max-width: none;
+  flex: 1 1 auto;
+  box-sizing: border-box;
+  border: 0;
+  margin: 0;
+  padding: 5px 5px 5px 4px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  line-height: inherit;
+  outline: none;
+  resize: none;
+  overflow: auto;
+  white-space: pre;
+  height: auto;
+}
+
+.md-table-ui-input:focus {
+  background: color-mix(in srgb, var(--active-line-bg) 65%, transparent);
+}
+
+.md-table-ui-input-header {
+  font-weight: 700;
+}
+
+.md-table-formula-star {
+  color: var(--fg-dim);
+  font-size: 0.86em;
+  user-select: none;
 }
 
 .md-table-display-table tbody tr:nth-child(even) td {

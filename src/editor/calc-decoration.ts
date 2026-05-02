@@ -52,6 +52,7 @@ import {
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
   tableEnabled?: boolean;
+  richTableUi?: boolean;
   getActiveNoteId?: () => string | null;
 }
 
@@ -63,6 +64,7 @@ const MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE = 2_000;
 // no invalidation is needed — a changed line produces a different key.
 const FORMULA_SEGMENT_CACHE = new Map<string, TableFormulaSegment[]>();
 const FORMULA_SEGMENT_CACHE_MAX = 512;
+const tableRowRe = /^\s*\|.*\|\s*$/;
 
 function cachedCalcFindTableFormulaSegments(lineText: string): TableFormulaSegment[] {
   const hit = FORMULA_SEGMENT_CACHE.get(lineText);
@@ -377,8 +379,10 @@ function calcLineInSpans(lineNumber: number, spans: readonly CalcVisibleLineSpan
 function buildCalcDecorationsForSpans(
   state: EditorState,
   spans: readonly CalcVisibleLineSpan[],
+  options?: { suppressTableGhosts?: boolean },
 ): DecorationSet {
   if (spans.length === 0) return Decoration.none;
+  const suppressTableGhosts = options?.suppressTableGhosts ?? false;
   const results = state.field(calcResultsField);
   const cellResults = state.field(cellCalcResultsField);
   // Range additions must be sorted by from-position. Collect them in a
@@ -392,6 +396,7 @@ function buildCalcDecorationsForSpans(
     for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber++) {
       const lineIndex = lineNumber - 1;
       const line = state.doc.line(lineNumber); // 1-based
+      if (suppressTableGhosts && tableRowRe.test(line.text)) continue;
       const result = results.get(lineIndex);
       const cellsForLine = cellResults.get(lineIndex);
       if (result == null && (!cellsForLine || cellsForLine.length === 0)) continue;
@@ -556,8 +561,15 @@ function buildCalcDecorationsForSpans(
   return builder.finish();
 }
 
-function buildCalcDecorations(view: EditorView): DecorationSet {
-  return buildCalcDecorationsForSpans(view.state, expandedCalcVisibleSpans(view));
+function buildCalcDecorations(
+  view: EditorView,
+  options?: { suppressTableGhosts?: boolean },
+): DecorationSet {
+  return buildCalcDecorationsForSpans(
+    view.state,
+    expandedCalcVisibleSpans(view),
+    options,
+  );
 }
 
 interface CalcDecorationBuildMetrics extends Record<string, number> {
@@ -608,75 +620,78 @@ function calcDecorationRebuildReason(
   return reasons.length > 0 ? reasons.join("+") : "unspecified";
 }
 
-const calcDecorationsPlugin = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
+function calcDecorationsPlugin(options?: { suppressTableGhosts?: boolean }) {
+  const suppressTableGhosts = options?.suppressTableGhosts ?? false;
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
 
-    constructor(view: EditorView) {
-      this.decorations = this.safeBuild(view, Decoration.none, "init");
-    }
-
-    update(update: ViewUpdate) {
-      const resultsChanged =
-        update.startState.field(calcResultsField) !== update.state.field(calcResultsField);
-      const cellsChanged =
-        update.startState.field(cellCalcResultsField) !== update.state.field(cellCalcResultsField);
-
-      if (
-        !resultsChanged &&
-        !cellsChanged &&
-        !update.docChanged &&
-        !update.selectionSet &&
-        !update.viewportChanged
-      ) {
-        return;
+      constructor(view: EditorView) {
+        this.decorations = this.safeBuild(view, Decoration.none, "init");
       }
 
-      this.decorations = this.safeBuild(
-        update.view,
-        this.decorations,
-        calcDecorationRebuildReason(update, resultsChanged, cellsChanged),
-      );
-    }
+      update(update: ViewUpdate) {
+        const resultsChanged =
+          update.startState.field(calcResultsField) !== update.state.field(calcResultsField);
+        const cellsChanged =
+          update.startState.field(cellCalcResultsField) !== update.state.field(cellCalcResultsField);
 
-    private safeBuild(
-      view: EditorView,
-      fallback: DecorationSet,
-      reason: string,
-    ): DecorationSet {
-      const profilingEnabled = isEditorProfilerEnabled();
-      const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
-      const metrics = profilingEnabled ? calcDecorationBuildMetrics(view) : null;
-      try {
-        const next = buildCalcDecorations(view);
-        if (profilingEnabled) {
-          recordEditorProfilerSample(
-            "calc.decorations.safeBuild",
-            editorProfilerNowMs() - startedAt,
-            {
-              reason,
-              metrics,
-            },
-          );
+        if (
+          !resultsChanged &&
+          !cellsChanged &&
+          !update.docChanged &&
+          !update.selectionSet &&
+          !update.viewportChanged
+        ) {
+          return;
         }
-        return next;
-      } catch (error) {
-        console.error("Calc decoration build failed:", error);
-        if (profilingEnabled) {
-          recordEditorProfilerSample(
-            "calc.decorations.safeBuild",
-            editorProfilerNowMs() - startedAt,
-            { reason: `${reason}_error` },
-          );
-        }
-        return fallback;
+
+        this.decorations = this.safeBuild(
+          update.view,
+          this.decorations,
+          calcDecorationRebuildReason(update, resultsChanged, cellsChanged),
+        );
       }
-    }
-  },
-  {
-    decorations: (plugin) => plugin.decorations,
-  },
-);
+
+      private safeBuild(
+        view: EditorView,
+        fallback: DecorationSet,
+        reason: string,
+      ): DecorationSet {
+        const profilingEnabled = isEditorProfilerEnabled();
+        const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
+        const metrics = profilingEnabled ? calcDecorationBuildMetrics(view) : null;
+        try {
+          const next = buildCalcDecorations(view, { suppressTableGhosts });
+          if (profilingEnabled) {
+            recordEditorProfilerSample(
+              "calc.decorations.safeBuild",
+              editorProfilerNowMs() - startedAt,
+              {
+                reason,
+                metrics,
+              },
+            );
+          }
+          return next;
+        } catch (error) {
+          console.error("Calc decoration build failed:", error);
+          if (profilingEnabled) {
+            recordEditorProfilerSample(
+              "calc.decorations.safeBuild",
+              editorProfilerNowMs() - startedAt,
+              { reason: `${reason}_error` },
+            );
+          }
+          return fallback;
+        }
+      }
+    },
+    {
+      decorations: (plugin) => plugin.decorations,
+    },
+  );
+}
 
 export function lineUsesAssignmentGhostPrefix(lineText: string): boolean {
   return calcLineUsesAssignmentPrefix(lineText);
@@ -1660,13 +1675,24 @@ const calcTabKeymap = keymap.of([
   },
 ]);
 
+export function getTableCellEvaluationMap(view: EditorView): Map<number, TableCellEvaluation[]> {
+  return view.state.field(cellCalcResultsField, false) ?? new Map();
+}
+
+export function getTableCellEvaluationMapFromState(
+  state: EditorState,
+): Map<number, TableCellEvaluation[]> {
+  return state.field(cellCalcResultsField, false) ?? new Map();
+}
+
 export function calcExtensions(options: CalcExtensionOptions = {}) {
+  const suppressTableGhosts = !!options.richTableUi && (options.tableEnabled ?? true);
   return [
     calcResultsField,
     cellCalcResultsField,
     variableIndexField,
     commitMarksField,
-    calcDecorationsPlugin,
+    calcDecorationsPlugin({ suppressTableGhosts }),
     buildCalcPlugin(options),
     calcTabKeymap,
   ];

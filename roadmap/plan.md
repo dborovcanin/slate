@@ -251,6 +251,7 @@ Acceptance criteria:
 - [ ] Daily note auto-create with configurable template.
 - [ ] "On this day" recall view.
 - [ ] Random note resurfacing.
+- [ ] Add workspaces and workspace encryption.
 - [ ] Recurring reminders (cron-like).
 - [ ] Reminder snooze.
 - [ ] Agenda digest of active reminders and open tasks.

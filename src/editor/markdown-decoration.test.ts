@@ -625,14 +625,13 @@ test("buildMarkdownDecorationsForSpans image widget carries compact [Image #n] t
   );
 });
 
-test("buildMarkdownDecorationsForSpans keeps image preview widget inside markdown tables", () => {
+test("buildMarkdownDecorationsForSpans uses block table widget for markdown tables", () => {
   const doc = Text.of([
     "| Item | Preview |",
     "| --- | --- |",
     "| Plan | ![Diagram](./assets/plan.png) |",
   ]);
   const line = doc.line(3);
-  const imageFrom = line.from + line.text.indexOf("![");
   const decos = buildMarkdownDecorationsForSpans(
     doc,
     [{ fromLine: 1, toLine: 3 }],
@@ -642,17 +641,37 @@ test("buildMarkdownDecorationsForSpans keeps image preview widget inside markdow
   const flat = collectDecorations(decos);
 
   assert.ok(
-    flat.some((d) => d.widget === "MarkdownImageDisplayWidget"),
-    "image display widget should render for table image cells",
+    flat.some((d) => d.widget === "TableBlockWidget"),
+    "table block widget should render for markdown tables",
   );
-  assert.equal(
-    flat.some(
-      (d) =>
-        d.widget === "TableCellInputWidget" && d.from <= imageFrom && imageFrom <= d.to,
-    ),
-    false,
-    "table cell input replacement must not override the image token span",
+  assert.equal(flat.some((d) => d.widget === "MarkdownImageDisplayWidget"), false);
+  assert.ok(line.text.includes("![Diagram]"), "fixture sanity");
+});
+
+test("buildMarkdownDecorationsForSpans keeps escaped pipes inside the same header cell", () => {
+  const doc = Text.of([
+    "| left \\| right | value |",
+    "| --- | --- |",
+    "| short | 1 |",
+  ]);
+  const header = doc.line(1);
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 3 }],
+    [],
+    { from: header.to, to: header.to, empty: true },
   );
+  const flat = collectDecorations(decos);
+  const tableWidget = flat.find(
+    (entry) =>
+      entry.widget === "TableBlockWidget"
+      && entry.from === header.from
+      && entry.to === header.from,
+  );
+  assert.ok(tableWidget, "table block widget should be anchored at table start");
+  const model = (tableWidget!.widgetRef as { model?: { rows?: Array<{ cells: string[] }> } }).model;
+  assert.equal(model?.rows?.[0]?.cells?.[0], "left \\| right");
+  assert.equal(model?.rows?.[0]?.cells?.[1], "value");
 });
 
 test("buildMarkdownDecorationsForSpans reveals full wiki-link source inside [[...]] for editing", () => {
