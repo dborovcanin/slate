@@ -30,6 +30,7 @@ rustls-native-certs = { version = "0.8", optional = true }
 mailparse = { version = "0.15", optional = true }
 serde = { version = "1", features = ["derive"] }
 unicode-width = "0.2"
+url = "2"
 
 [features]
 default = ["imap"]

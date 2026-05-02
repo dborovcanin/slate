@@ -4165,6 +4165,7 @@ dependencies = [
  "time",
  "ulid",
  "unicode-width",
+ "url",
 ]
 
 [[package]]

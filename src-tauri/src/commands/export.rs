@@ -1,5 +1,5 @@
-use app_core::AppCore;
 use app_core::note_sources::NoteSourceService;
+use app_core::AppCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use editor_core::calc_plan;
@@ -15,6 +15,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::State;
+use url::Url;
 
 const PDF_PAGE_WIDTH_PT: f32 = 595.0;
 const PDF_PAGE_HEIGHT_PT: f32 = 842.0;
@@ -262,21 +263,27 @@ struct Page {
 }
 
 fn resolve_export_path(path: &str) -> Result<PathBuf, String> {
-    let raw = path.trim();
+    let raw = path.trim().trim_matches(|c| c == '"' || c == '\'');
     if raw.is_empty() {
         return Err("export path is empty".to_string());
     }
 
-    let resolved = if raw == "~" || raw.starts_with("~/") {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .ok_or_else(|| "HOME is not set; cannot expand '~' in export path".to_string())?;
+    let resolved = if raw == "~" || raw.starts_with("~/") || raw.starts_with("~\\") {
+        let home = resolve_home_dir().ok_or_else(|| {
+            "home directory is not set; cannot expand '~' in export path".to_string()
+        })?;
         if raw == "~" {
             home
         } else {
-            let rest = raw.trim_start_matches("~/");
+            let rest = &raw[2..];
             home.join(rest)
         }
+    } else if raw.len() >= "file://".len() && raw[.."file://".len()].eq_ignore_ascii_case("file://")
+    {
+        let uri =
+            Url::parse(raw).map_err(|e| format!("invalid file URL export path '{raw}': {e}"))?;
+        uri.to_file_path()
+            .map_err(|_| format!("invalid file URL export path '{raw}'"))?
     } else {
         PathBuf::from(raw)
     };
@@ -308,6 +315,27 @@ fn resolve_export_path(path: &str) -> Result<PathBuf, String> {
     Ok(resolved)
 }
 
+fn resolve_home_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").filter(|v| !v.is_empty());
+    if home.is_some() {
+        return home.map(PathBuf::from);
+    }
+    let profile = std::env::var_os("USERPROFILE").filter(|v| !v.is_empty());
+    if profile.is_some() {
+        return profile.map(PathBuf::from);
+    }
+    let drive = std::env::var_os("HOMEDRIVE").filter(|v| !v.is_empty());
+    let path = std::env::var_os("HOMEPATH").filter(|v| !v.is_empty());
+    match (drive, path) {
+        (Some(drive), Some(path)) => {
+            let mut full = PathBuf::from(drive);
+            full.push(path);
+            Some(full)
+        }
+        _ => None,
+    }
+}
+
 #[tauri::command]
 pub fn export_to_file(path: String, content: String) -> Result<(), String> {
     let resolved = resolve_export_path(&path)?;
@@ -323,13 +351,7 @@ pub fn export_to_pdf(
     content: String,
     palette: PdfExportPalette,
 ) -> Result<(), String> {
-    export_markdown_to_pdf_file(
-        &core.note_sources(),
-        &note_id,
-        &path,
-        &content,
-        &palette,
-    )
+    export_markdown_to_pdf_file(&core.note_sources(), &note_id, &path, &content, &palette)
 }
 
 pub fn export_markdown_to_pdf_file(
@@ -1798,7 +1820,6 @@ mod tests {
     use super::*;
     use image::codecs::png::PngEncoder;
     use image::{ColorType, ImageEncoder, Rgb, RgbImage};
-    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn unique_suffix() -> u128 {
@@ -1867,7 +1888,7 @@ mod tests {
     fn resolve_export_path_expands_tilde_prefix() {
         let raw = format!("~/slate-export-{}.txt", unique_suffix());
         let resolved = resolve_export_path(&raw).expect("tilde path should resolve");
-        let home = std::env::var_os("HOME").expect("HOME should be set");
+        let home = resolve_home_dir().expect("home should be set");
         assert!(resolved.starts_with(home));
         assert!(resolved.to_string_lossy().contains("slate-export-"));
     }
@@ -1876,8 +1897,8 @@ mod tests {
     fn export_to_file_supports_tilde_paths() {
         let relative = format!("slate-export-{}.txt", unique_suffix());
         let raw = format!("~/{}", relative);
-        let home = std::env::var_os("HOME").expect("HOME should be set");
-        let full_path = PathBuf::from(home).join(relative);
+        let home = resolve_home_dir().expect("home should be set");
+        let full_path = home.join(relative);
         match export_to_file(raw, "hello".to_string()) {
             Ok(()) => {
                 let read_back =
@@ -1895,6 +1916,24 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn resolve_export_path_accepts_file_uri_paths() {
+        let target = std::env::temp_dir().join(format!("slate export {}.pdf", unique_suffix()));
+        let uri = Url::from_file_path(&target)
+            .expect("temp path should convert to file URI")
+            .to_string();
+        let resolved = resolve_export_path(&uri).expect("file URI should resolve");
+        assert_eq!(resolved, target);
+    }
+
+    #[test]
+    fn resolve_export_path_strips_wrapping_quotes() {
+        let target = std::env::temp_dir().join(format!("slate-export-{}.pdf", unique_suffix()));
+        let raw = format!("\"{}\"", target.display());
+        let resolved = resolve_export_path(&raw).expect("quoted path should resolve");
+        assert_eq!(resolved, target);
     }
 
     #[test]
