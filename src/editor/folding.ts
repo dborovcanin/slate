@@ -647,9 +647,21 @@ const foldPlaceholderMouseHandlers = EditorView.domEventHandlers({
 });
 
 function foldMarkerDOM(open: boolean): HTMLElement {
+  const svgNs = "http://www.w3.org/2000/svg";
   const span = document.createElement("span");
   span.className = `cm-fold-toggle${open ? "" : " cm-fold-toggle-collapsed"}`;
-  span.textContent = open ? "" : "";
+  const svg = document.createElementNS(svgNs, "svg");
+  svg.classList.add("cm-fold-toggle-icon");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "10");
+  svg.setAttribute("height", "10");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+
+  const path = document.createElementNS(svgNs, "path");
+  path.setAttribute("d", open ? "M4 6l4 4 4-4" : "M6 4l4 4-4 4");
+  svg.append(path);
+  span.append(svg);
   span.title = open ? "Click to fold" : "Click to unfold";
   span.setAttribute(
     "aria-label",
