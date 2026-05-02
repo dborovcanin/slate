@@ -45,7 +45,11 @@ impl TerminalApp {
                     should_autoformat = false;
                     clamp_table_padding = false;
                 } else if let Some(changed) = self.try_table_boundary_edit_rule(true, true) {
-                    should_autoformat = changed;
+                    if changed {
+                        should_autoformat = true;
+                    } else {
+                        should_autoformat = self.delete_word_backward();
+                    }
                 } else {
                     should_autoformat = self.delete_word_backward();
                 }
@@ -255,12 +259,13 @@ impl TerminalApp {
                 }
             }
             Key::Char(ch) => {
+                let defer_table_space_autoformat = ch == ' ' && self.should_defer_table_space_autoformat();
                 if ch == '|' && self.try_table_pipe_insert_column_rule() {
                     should_autoformat = false;
                     clamp_table_padding = false;
                 } else {
                     self.insert_char(ch);
-                    should_autoformat = true;
+                    should_autoformat = !defer_table_space_autoformat;
                     // Auto-close [[ → [[]] and open wiki-link picker.
                     if ch == '[' && self.cursor_col >= 2 {
                         let prev = self
@@ -279,15 +284,13 @@ impl TerminalApp {
                     }
                 }
                 refresh_variable_popup = true;
-                if ch == ' '
-                    && self.note_table_module_enabled()
-                    && is_markdown_table_line(self.current_line())
-                {
-                    // Let users type multi-word table cell content without
-                    // instant trim/realign fighting the cursor.
+                if defer_table_space_autoformat {
+                    // Keep space typing in table cells literal while the user
+                    // is still composing content; shared table reflow applies
+                    // on the next non-space edit.
                     should_autoformat = false;
-                    // Keep right-padding clamp relaxed for this keystroke so
-                    // the next word can continue after the inserted space.
+                    // Relax right-padding clamp for this keystroke so cursor
+                    // does not snap back into trimmed content.
                     clamp_table_padding = false;
                 }
             }

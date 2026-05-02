@@ -749,6 +749,24 @@ fn ctrl_w_deletes_word_outside_table() {
 }
 
 #[test]
+fn ctrl_w_deletes_word_inside_table_cell_when_no_structural_merge_applies() {
+    let text = "| h |\n| --- |\n| alpha beta |";
+    let (db, mut app, path) = app_with_note(text);
+    app.cursor_line = 2;
+    app.cursor_col = app.lines[2].find("beta").expect("beta") + "beta".chars().count();
+
+    app.handle_editor_key(&db, Key::Ctrl('w'))
+        .expect("ctrl-w deletes previous word inside cell");
+
+    let cells = crate::editor_core::table::split_table_cells(&app.lines[2]);
+    assert_eq!(cells[0], "alpha");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn ctrl_backspace_and_ctrl_delete_merge_adjacent_table_cells() {
     let (db, mut app, path) = app_with_note("| aaa | bb |");
 
@@ -827,9 +845,90 @@ fn typing_space_in_table_cell_allows_followup_word_input() {
     app.cursor_col = 5; // end of content
     app.handle_editor_key(&db, Key::Char(' '))
         .expect("insert space");
+    app.handle_editor_key(&db, Key::Char(' '))
+        .expect("insert second space");
     app.handle_editor_key(&db, Key::Char('b'))
         .expect("insert next word char");
-    assert_eq!(app.lines[0], "| aaa b |");
+    assert_eq!(app.lines[0], "| aaa  b |");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn typing_space_in_longest_cell_middle_preserves_text_and_keeps_table_aligned() {
+    let (db, mut app, path) = app_with_note(
+        "| h | v |\n| --- | --- |\n| abcd efgh | ok |\n| aa | bb |",
+    );
+    app.cursor_line = 2;
+    app.cursor_col = app.lines[2].find("efgh").expect("efgh");
+
+    app.handle_editor_key(&db, Key::Char(' '))
+        .expect("space should insert in longest cell");
+
+    app.handle_editor_key(&db, Key::Char('z'))
+        .expect("follow-up typing should keep inserted space");
+
+    let cells = crate::editor_core::table::split_table_cells(&app.lines[2]);
+    assert_eq!(cells[0], "abcd  zefgh");
+    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.lines[0]);
+    for line in app
+        .lines
+        .iter()
+        .filter(|line| crate::editor_core::table::is_table_line(line))
+    {
+        assert_eq!(
+            crate::editor_core::table::table_pipe_positions(line),
+            expected_pipes
+        );
+    }
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn typing_spaces_at_right_edge_of_widest_cell_preserves_text_and_padding() {
+    let (db, mut app, path) = app_with_note(
+        "| h | v |\n| --- | --- |\n| alpha beta gamma | ok |\n| aa | bb |",
+    );
+    app.cursor_line = 2;
+    app.cursor_col = app.lines[2]
+        .find("alpha beta gamma")
+        .expect("widest cell")
+        + "alpha beta gamma".chars().count();
+
+    app.handle_editor_key(&db, Key::Char(' '))
+        .expect("first space");
+    app.handle_editor_key(&db, Key::Char(' '))
+        .expect("second space");
+    app.handle_editor_key(&db, Key::Char(' '))
+        .expect("third space");
+    app.handle_editor_key(&db, Key::Char('x'))
+        .expect("follow-up char");
+
+    let row_cells = crate::editor_core::table::split_table_cells(&app.lines[2]);
+    assert_eq!(row_cells[0], "alpha beta gamma   x");
+
+    let expected_pipes = crate::editor_core::table::table_pipe_positions(&app.lines[0]);
+    for line in app
+        .lines
+        .iter()
+        .filter(|line| crate::editor_core::table::is_table_line(line))
+    {
+        assert_eq!(
+            crate::editor_core::table::table_pipe_positions(line),
+            expected_pipes
+        );
+    }
+
+    let pipes = crate::editor_core::table::table_pipe_positions(&app.lines[2]);
+    assert!(pipes.len() >= 2);
+    let right_pipe = pipes[1];
+    assert_eq!(app.lines[2].chars().nth(right_pipe.saturating_sub(1)), Some(' '));
+    assert_eq!(app.lines[2].chars().nth(right_pipe.saturating_sub(2)), Some('x'));
 
     drop(app);
     drop(db);

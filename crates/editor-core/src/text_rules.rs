@@ -2319,7 +2319,7 @@ mod tests {
         let op = run_table_multiline_break_rule(&snap, true).expect("rule fires");
         assert_eq!(
             apply_operation(text, &op),
-            "| left | va  |\n| ---- | --- |\n|>      | lue |"
+            "| left | va  |\n| ---- | --- |\n|>     | lue |"
         );
         let result = apply_operation(text, &op);
         let anchor = op.selection.expect("selection").anchor;
@@ -2337,7 +2337,7 @@ mod tests {
         let op = run_table_multiline_break_rule(&snap, true).expect("rule fires");
         assert_eq!(
             apply_operation(text, &op),
-            "| left | value |\n| ---- | ----- |\n|      |       |"
+            "| left | value |\n| ---- | ----- |\n|>     |       |"
         );
     }
 

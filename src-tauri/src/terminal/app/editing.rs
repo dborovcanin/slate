@@ -1715,6 +1715,24 @@ impl TerminalApp {
         self.mark_edited();
     }
 
+    pub(super) fn should_defer_table_space_autoformat(&self) -> bool {
+        if !self.note_table_module_enabled() || self.lines.is_empty() {
+            return false;
+        }
+        let line_idx = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let Some(cell) = table_cell_info_at_char(&self.lines, line_idx, self.cursor_col) else {
+            return false;
+        };
+        let line = self.current_line();
+        let anchor = table_cell_navigation_anchor(line, &cell);
+        let right_pipe = line[..cell.right_pipe.min(line.len())].chars().count();
+        // Defer table autoformat only when typing at/after the content anchor
+        // (inside right padding). This preserves intended intra-word spaces at
+        // the end of a cell while keeping canonical reflow active for regular
+        // in-cell edits, including middle-of-cell typing.
+        self.cursor_col >= anchor && self.cursor_col < right_pipe
+    }
+
     pub(super) fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;

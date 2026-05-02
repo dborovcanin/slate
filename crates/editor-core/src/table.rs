@@ -794,7 +794,9 @@ pub fn format_table_lines_with_cache(
                     table_cell_display_width(&content)
                 };
                 let pad_right = widths[col].saturating_sub(content_width) + 1;
-                out.push(' ');
+                if !(continuation && col == 0) {
+                    out.push(' ');
+                }
                 out.push_str(&content);
                 out.push_str(&" ".repeat(pad_right));
                 out.push('|');
@@ -1056,8 +1058,13 @@ mod tests {
             "|> beta detail | two |".to_string(),
         ];
         let out = format_table_lines(&lines);
-        assert_eq!(out[3], "|> beta detail | two   |");
+        assert_eq!(out[3], "|>beta detail | two   |");
         assert_eq!(out[2], "| alpha       | one   |");
+        assert_eq!(
+            table_pipe_positions(&out[2]),
+            table_pipe_positions(&out[3]),
+            "continuation row borders should align with base rows"
+        );
     }
 
     #[test]
@@ -1069,7 +1076,7 @@ mod tests {
             "|> > detail |".to_string(),
         ];
         let out = format_table_lines(&lines);
-        assert_eq!(out[3], "|> detail |");
+        assert_eq!(out[3], "|>detail |");
     }
 
     #[test]

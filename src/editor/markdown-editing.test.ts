@@ -182,7 +182,7 @@ test("runTableMultilineBreakRule splits table cell into next row", () => {
     {
       from: 0,
       to: text.length,
-      insert: "| left | va  |\n| ---- | --- |\n|      | lue |",
+      insert: "| left | va  |\n| ---- | --- |\n|>     | lue |",
     },
   ]);
   const result = op?.changes?.[0]?.insert ?? "";

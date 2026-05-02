@@ -1279,6 +1279,10 @@ class TableBlockWidget extends WidgetType {
       }
       if (event.shiftKey && selectionAnchor) {
         setCellSelection(selectionAnchor, { row, col });
+      } else if (selectionAnchor && selectionHead) {
+        // Single click on a selected table cell should cancel the table-cell
+        // selection so editing can continue with a plain caret.
+        clearCellSelection();
       } else {
         setCellSelection({ row, col }, { row, col });
       }
