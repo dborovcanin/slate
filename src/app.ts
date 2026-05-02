@@ -8,6 +8,7 @@ import {
   createNote,
   deleteNote,
   exportToFile,
+  exportToPdf,
   getThemeConfigOrDefault,
   getRuntimeFlagsOrDefault,
   setNoteModules,
@@ -523,7 +524,11 @@ async function handleExportFileResult(path: string | null) {
   const note = state.activeNote;
   if (!path || !note) return;
   try {
-    await exportToFile(path, note.body);
+    if (path.toLowerCase().endsWith(".pdf")) {
+      await exportToPdf(note.id, path, note.body);
+    } else {
+      await exportToFile(path, note.body);
+    }
     showToast("Exported to " + path.split("/").pop());
   } catch (e) {
     console.error("File export failed:", e);
@@ -542,6 +547,7 @@ async function handleExportFile() {
   const path = await save({
     defaultPath: `${filename}.md`,
     filters: [
+      { name: "PDF Document", extensions: ["pdf"] },
       { name: "Markdown", extensions: ["md"] },
       { name: "Plain Text", extensions: ["txt"] },
     ],

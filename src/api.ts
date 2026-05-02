@@ -442,6 +442,10 @@ export function exportToFile(path: string, content: string): Promise<void> {
   return invoke<void>("export_to_file", { path, content });
 }
 
+export function exportToPdf(noteId: string, path: string, content: string): Promise<void> {
+  return invoke<void>("export_to_pdf", { noteId, path, content });
+}
+
 export async function readSystemClipboardText(): Promise<string | null> {
   try {
     return await invoke<string | null>("read_clipboard_text");

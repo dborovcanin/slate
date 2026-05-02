@@ -70,6 +70,7 @@ This document captures what was implemented after milestones M1-M4, plus what sh
 ## What was polished in this pass
 
 - Added `Ctrl+Q` keyboard shortcut in GUI to quit the current window
+- Extended file export to include PDF rendering with markdown/table/image support (`Ctrl+Shift+E`)
 - Added confirmation prompt before note deletion (`Ctrl+Shift+Backspace`)
 - Restored `Ctrl+Backspace` to word-delete behavior in the editor
 - Added safe async action wrapper for keyboard-triggered commands to avoid unhandled promise rejections

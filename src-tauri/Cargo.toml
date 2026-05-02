@@ -22,6 +22,8 @@ tauri-plugin-dialog = "2"
 libc = "0.2"
 arboard = "3.6.1"
 base64 = "0.22"
+flate2 = "1"
+image = { version = "0.25", default-features = true }
 time = { version = "0.3", features = ["formatting"] }
 rustls = { version = "0.23", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }

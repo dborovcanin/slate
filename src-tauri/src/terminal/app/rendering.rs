@@ -934,7 +934,9 @@ impl TerminalApp {
                             // resting cells show the formula source.
                             let trailer_text = if let Some(err) = Self::table_error_text(
                                 eval.as_ref().and_then(|entry| entry.error_kind.as_ref()),
-                                eval.as_ref().map(|entry| entry.value.as_str()).unwrap_or(""),
+                                eval.as_ref()
+                                    .map(|entry| entry.value.as_str())
+                                    .unwrap_or(""),
                             ) {
                                 err
                             } else if is_focused && !has_error {
@@ -956,10 +958,7 @@ impl TerminalApp {
                             } else {
                                 let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                 let replacement = Self::fit_formula_marker_replacement(
-                                    &value,
-                                    &marker,
-                                    old_chars,
-                                    has_error,
+                                    &value, &marker, old_chars, has_error,
                                 );
                                 let rendered_chars = replacement.chars().count();
                                 let marker_char = ((seg.from_char as isize) + char_delta) as usize
@@ -997,10 +996,7 @@ impl TerminalApp {
                                         let marker = formula_marker_token(fi);
                                         let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                         let rep = Self::fit_formula_marker_replacement(
-                                            &value,
-                                            &marker,
-                                            old_chars,
-                                            has_error,
+                                            &value, &marker, old_chars, has_error,
                                         );
                                         delta += rep.chars().count() as isize - old_chars as isize;
                                     }
@@ -1089,11 +1085,12 @@ impl TerminalApp {
                             let mut delta: isize = 0;
                             for (fi, seg) in formula_segments.iter().enumerate() {
                                 if seg.cell_to_char <= src_col {
-                                    let eval = self.calc.cell_results.get(line_idx).and_then(|row| {
-                                        row.iter()
-                                            .find(|entry| entry.cell_index == seg.cell_index)
-                                            .cloned()
-                                    });
+                                    let eval =
+                                        self.calc.cell_results.get(line_idx).and_then(|row| {
+                                            row.iter()
+                                                .find(|entry| entry.cell_index == seg.cell_index)
+                                                .cloned()
+                                        });
                                     let value = eval
                                         .as_ref()
                                         .map(|entry| format_formula_display_value(&entry.value))
@@ -1105,10 +1102,7 @@ impl TerminalApp {
                                     let marker = formula_marker_token(fi);
                                     let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                     let rep = Self::fit_formula_marker_replacement(
-                                        &value,
-                                        &marker,
-                                        old_chars,
-                                        has_error,
+                                        &value, &marker, old_chars, has_error,
                                     );
                                     delta += rep.chars().count() as isize - old_chars as isize;
                                 }

@@ -275,6 +275,7 @@ Acceptance criteria:
 ### External
 
 - Per-note export (markdown/html/pdf).
+- [x] PDF export renders markdown notes with support for headings/lists/code blocks, markdown tables, and markdown images.
 - URL unfurl on paste.
 - One-way calendar sync (ICS/Google/iCal).
 - Web clipper endpoint.
@@ -459,6 +460,7 @@ Acceptance criteria:
 - [ ] Memory consumption and micro-optimizations
 - [x] Add `Ctrl+Q` UI exit
 - [ ] Improve exports
+- [x] Add markdown-aware PDF export with table and image support
 - [ ] Do we need a hard stop on modules (note size) since we can manually control it?
 - [ ] Fix modules in TUI to apply actual changes
 - [ ] Do not follow cursor for a checkbox that is moved to the bottom because it was checked

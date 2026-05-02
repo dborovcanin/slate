@@ -128,6 +128,7 @@ fn run_gui(startup_markdown_file: Option<PathBuf>) -> Result<(), String> {
             commands::config::get_theme_config,
             commands::config::get_runtime_flags,
             commands::export::export_to_file,
+            commands::export::export_to_pdf,
             commands::clipboard::read_clipboard_text,
         ])
         .setup(|app| {
