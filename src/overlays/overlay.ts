@@ -33,6 +33,7 @@ export interface ListOverlayState<T> {
   items: T[];
   selectedIndex: number;
   inputEl: HTMLInputElement;
+  render: () => void;
   refresh: () => void;
 }
 
@@ -160,6 +161,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
       items,
       selectedIndex,
       inputEl: inputEl!,
+      render: renderList,
       refresh,
     };
 

@@ -119,6 +119,28 @@ function applySingleWordCompletion(state: ListOverlayState<CommandSuggestion>): 
   return true;
 }
 
+function applySelectedCommandCompletion(state: ListOverlayState<CommandSuggestion>): boolean {
+  if (state.items.length === 0) return false;
+  const index = Math.max(0, Math.min(state.selectedIndex, state.items.length - 1));
+  const selected = state.items[index];
+  if (!selected) return false;
+  state.inputEl.value = selected.value;
+  return true;
+}
+
+function cycleSuggestionSelection(
+  state: ListOverlayState<CommandSuggestion>,
+  backwards: boolean,
+): boolean {
+  const len = state.items.length;
+  if (len === 0) return false;
+  const current = Math.max(0, Math.min(state.selectedIndex, len - 1));
+  const delta = backwards ? -1 : 1;
+  state.selectedIndex = (current + delta + len) % len;
+  state.render();
+  return true;
+}
+
 function isInsideCommandPicker(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(COMMAND_PICKER_SELECTOR) !== null;
 }
@@ -255,15 +277,8 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         if (state.items.length === 0) return false;
         event.preventDefault();
         event.stopPropagation();
-        if (applySingleWordCompletion(state)) {
-          return true;
-        }
-        const len = state.items.length;
-        const current = Math.max(0, Math.min(state.selectedIndex, len - 1));
-        const delta = event.shiftKey ? -1 : 1;
-        state.selectedIndex = (current + delta + len) % len;
-        state.refresh();
-        return true;
+        if (!applySelectedCommandCompletion(state)) return true;
+        return cycleSuggestionSelection(state, event.shiftKey);
       }
       if (event.key === "Enter") {
         event.preventDefault();
@@ -305,3 +320,9 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
     },
   });
 }
+
+export const __commandPickerInternals = {
+  applySingleWordCompletion,
+  applySelectedCommandCompletion,
+  cycleSuggestionSelection,
+};
