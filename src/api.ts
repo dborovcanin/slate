@@ -95,6 +95,25 @@ export interface RuntimeFlags {
   autocomplete_disable: boolean;
 }
 
+export interface PdfRgbColor {
+  r: number;
+  g: number;
+  b: number;
+}
+
+export interface PdfExportPalette {
+  fg: PdfRgbColor;
+  fg_dim: PdfRgbColor;
+  accent: PdfRgbColor;
+  variable: PdfRgbColor;
+  code_keyword: PdfRgbColor;
+  code_string: PdfRgbColor;
+  code_number: PdfRgbColor;
+  code_comment: PdfRgbColor;
+  code_function: PdfRgbColor;
+  code_type: PdfRgbColor;
+}
+
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   color_scheme: "gruvbox-light",
   accent: "auto",
@@ -442,8 +461,13 @@ export function exportToFile(path: string, content: string): Promise<void> {
   return invoke<void>("export_to_file", { path, content });
 }
 
-export function exportToPdf(noteId: string, path: string, content: string): Promise<void> {
-  return invoke<void>("export_to_pdf", { noteId, path, content });
+export function exportToPdf(
+  noteId: string,
+  path: string,
+  content: string,
+  palette: PdfExportPalette,
+): Promise<void> {
+  return invoke<void>("export_to_pdf", { noteId, path, content, palette });
 }
 
 export async function readSystemClipboardText(): Promise<string | null> {

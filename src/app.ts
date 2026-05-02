@@ -17,6 +17,7 @@ import {
   type RuntimeFlags,
   type ThemeConfig,
   type NoteSummary,
+  type PdfExportPalette,
 } from "./api";
 import {
   mountEditor,
@@ -505,6 +506,61 @@ function deriveFilename(body: string): string {
     .slice(0, 40) || "note";
 }
 
+function clampChannel(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function parseCssColorToRgb(input: string): { r: number; g: number; b: number } | null {
+  const raw = input.trim();
+  if (raw.length === 0) return null;
+  const hex = raw.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    const value = hex[1]!;
+    if (value.length === 3) {
+      return {
+        r: parseInt(value[0]! + value[0]!, 16),
+        g: parseInt(value[1]! + value[1]!, 16),
+        b: parseInt(value[2]! + value[2]!, 16),
+      };
+    }
+    return {
+      r: parseInt(value.slice(0, 2), 16),
+      g: parseInt(value.slice(2, 4), 16),
+      b: parseInt(value.slice(4, 6), 16),
+    };
+  }
+  const rgb = raw.match(
+    /^rgba?\(\s*([+\-]?\d*\.?\d+)\s*,\s*([+\-]?\d*\.?\d+)\s*,\s*([+\-]?\d*\.?\d+)/i,
+  );
+  if (rgb) {
+    return {
+      r: clampChannel(Number(rgb[1])),
+      g: clampChannel(Number(rgb[2])),
+      b: clampChannel(Number(rgb[3])),
+    };
+  }
+  return null;
+}
+
+function buildPdfExportPalette(): PdfExportPalette {
+  const styles = getComputedStyle(document.documentElement);
+  const read = (name: string, fallback: { r: number; g: number; b: number }) =>
+    parseCssColorToRgb(styles.getPropertyValue(name)) ?? fallback;
+  return {
+    fg: read("--fg", { r: 30, g: 32, b: 36 }),
+    fg_dim: read("--fg-dim", { r: 109, g: 102, b: 91 }),
+    accent: read("--accent", { r: 122, g: 90, b: 58 }),
+    variable: read("--code-token-type", { r: 134, g: 99, b: 202 }),
+    code_keyword: read("--code-token-keyword", { r: 96, g: 112, b: 181 }),
+    code_string: read("--code-token-string", { r: 91, g: 158, b: 111 }),
+    code_number: read("--code-token-number", { r: 214, g: 120, b: 67 }),
+    code_comment: read("--code-token-comment", { r: 126, g: 138, b: 149 }),
+    code_function: read("--code-token-function", { r: 52, g: 122, b: 165 }),
+    code_type: read("--code-token-type", { r: 134, g: 99, b: 202 }),
+  };
+}
+
 async function handleExportClipboard() {
   const note = state.activeNote;
   if (!note) return;
@@ -525,7 +581,7 @@ async function handleExportFileResult(path: string | null) {
   if (!path || !note) return;
   try {
     if (path.toLowerCase().endsWith(".pdf")) {
-      await exportToPdf(note.id, path, note.body);
+      await exportToPdf(note.id, path, note.body, buildPdfExportPalette());
     } else {
       await exportToFile(path, note.body);
     }

@@ -112,7 +112,7 @@ sqrt(144) + 3^2         → 21
 **Export**
 - Ctrl+E copies the current note to clipboard
 - Ctrl+Shift+E opens a native file dialog to save as `.md`, `.txt`, or `.pdf`
-- PDF export renders markdown-aware output with support for headings/lists/code blocks, markdown tables, and markdown images (`![alt](src)`)
+- PDF export renders markdown-aware output with support for headings/lists/code blocks, markdown tables, markdown images (`![alt](src)`), themed inline styling (bold/italic/variables/code tokens), and rendered checklist boxes
 - Toast feedback on export
 
 **Keyboard shortcuts**

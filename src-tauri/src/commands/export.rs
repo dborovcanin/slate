@@ -1,10 +1,13 @@
 use app_core::AppCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use editor_core::calc_plan;
+use editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType};
 use editor_core::table::{is_table_line, split_table_cells_for_logical_row};
 use flate2::{write::ZlibEncoder, Compression};
 use image::GenericImageView as _;
 use regex::Regex;
+use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
@@ -30,11 +33,14 @@ const TABLE_CELL_PAD_Y_PT: f32 = 4.0;
 const TABLE_BORDER_WIDTH_PT: f32 = 0.7;
 
 const IMAGE_MAX_HEIGHT_PT: f32 = 280.0;
+const CHECKBOX_SIZE_PT: f32 = 9.0;
 
 #[derive(Clone, Copy, Debug)]
 enum FontFace {
     Body,
     Bold,
+    Italic,
+    BoldItalic,
     Mono,
 }
 
@@ -44,6 +50,8 @@ impl FontFace {
             Self::Body => "F1",
             Self::Bold => "F2",
             Self::Mono => "F3",
+            Self::Italic => "F4",
+            Self::BoldItalic => "F5",
         }
     }
 
@@ -51,9 +59,164 @@ impl FontFace {
         match self {
             Self::Body => 0.53,
             Self::Bold => 0.56,
+            Self::Italic => 0.53,
+            Self::BoldItalic => 0.56,
             Self::Mono => 0.60,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct PdfRgbColor {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+}
+
+impl PdfRgbColor {
+    fn as_pdf_rgb(self) -> (f32, f32, f32) {
+        (
+            (self.r as f32) / 255.0,
+            (self.g as f32) / 255.0,
+            (self.b as f32) / 255.0,
+        )
+    }
+}
+
+fn pdf_black() -> PdfRgbColor {
+    PdfRgbColor { r: 0, g: 0, b: 0 }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PdfExportPalette {
+    #[allow(dead_code)]
+    pub fg: PdfRgbColor,
+    #[allow(dead_code)]
+    pub fg_dim: PdfRgbColor,
+    pub accent: PdfRgbColor,
+    pub variable: PdfRgbColor,
+    pub code_keyword: PdfRgbColor,
+    pub code_string: PdfRgbColor,
+    pub code_number: PdfRgbColor,
+    pub code_comment: PdfRgbColor,
+    pub code_function: PdfRgbColor,
+    pub code_type: PdfRgbColor,
+}
+
+impl Default for PdfExportPalette {
+    fn default() -> Self {
+        Self {
+            fg: PdfRgbColor {
+                r: 30,
+                g: 32,
+                b: 36,
+            },
+            fg_dim: PdfRgbColor {
+                r: 109,
+                g: 102,
+                b: 91,
+            },
+            accent: PdfRgbColor {
+                r: 122,
+                g: 90,
+                b: 58,
+            },
+            variable: PdfRgbColor {
+                r: 134,
+                g: 99,
+                b: 202,
+            },
+            code_keyword: PdfRgbColor {
+                r: 96,
+                g: 112,
+                b: 181,
+            },
+            code_string: PdfRgbColor {
+                r: 91,
+                g: 158,
+                b: 111,
+            },
+            code_number: PdfRgbColor {
+                r: 214,
+                g: 120,
+                b: 67,
+            },
+            code_comment: PdfRgbColor {
+                r: 126,
+                g: 138,
+                b: 149,
+            },
+            code_function: PdfRgbColor {
+                r: 52,
+                g: 122,
+                b: 165,
+            },
+            code_type: PdfRgbColor {
+                r: 134,
+                g: 99,
+                b: 202,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TextStyle {
+    mono: bool,
+    bold: bool,
+    italic: bool,
+    strikethrough: bool,
+    color: PdfRgbColor,
+}
+
+impl TextStyle {
+    fn body(color: PdfRgbColor) -> Self {
+        Self {
+            mono: false,
+            bold: false,
+            italic: false,
+            strikethrough: false,
+            color,
+        }
+    }
+
+    fn heading(color: PdfRgbColor) -> Self {
+        Self {
+            mono: false,
+            bold: true,
+            italic: false,
+            strikethrough: false,
+            color,
+        }
+    }
+
+    fn mono(color: PdfRgbColor) -> Self {
+        Self {
+            mono: true,
+            bold: false,
+            italic: false,
+            strikethrough: false,
+            color,
+        }
+    }
+
+    fn font_face(self) -> FontFace {
+        if self.mono {
+            return FontFace::Mono;
+        }
+        match (self.bold, self.italic) {
+            (true, true) => FontFace::BoldItalic,
+            (true, false) => FontFace::Bold,
+            (false, true) => FontFace::Italic,
+            (false, false) => FontFace::Body,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StyledChar {
+    ch: char,
+    style: TextStyle,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +233,7 @@ enum DrawOp {
         size: f32,
         x: f32,
         y: f32,
+        color: PdfRgbColor,
         text: String,
     },
     Line {
@@ -78,6 +242,7 @@ enum DrawOp {
         y1: f32,
         x2: f32,
         y2: f32,
+        color: PdfRgbColor,
     },
     Image {
         name: String,
@@ -105,8 +270,9 @@ pub fn export_to_pdf(
     note_id: String,
     path: String,
     content: String,
+    palette: PdfExportPalette,
 ) -> Result<(), String> {
-    let pdf_bytes = build_markdown_pdf(&content, |src| {
+    let pdf_bytes = build_markdown_pdf(&content, &palette, |src| {
         resolve_markdown_image_bytes(&core, &note_id, src)
             .ok()
             .flatten()
@@ -152,6 +318,7 @@ fn decode_data_url_image_bytes(data_url: &str) -> Result<Vec<u8>, String> {
 
 fn build_markdown_pdf(
     content: &str,
+    palette: &PdfExportPalette,
     mut resolve_image: impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
     let image_sources = collect_image_sources(content);
@@ -170,7 +337,7 @@ fn build_markdown_pdf(
         image_assets.push((name, image_obj));
     }
 
-    let pages = render_markdown_to_pages(content, &image_name_by_src, &image_assets);
+    let pages = render_markdown_to_pages(content, palette, &image_name_by_src, &image_assets);
     serialize_pdf(pages, image_assets)
 }
 
@@ -199,6 +366,7 @@ fn decode_pdf_image(bytes: &[u8]) -> Result<PdfImageObject, String> {
 
 fn render_markdown_to_pages(
     content: &str,
+    palette: &PdfExportPalette,
     image_name_by_src: &HashMap<String, String>,
     image_assets: &[(String, PdfImageObject)],
 ) -> Vec<Page> {
@@ -207,7 +375,12 @@ fn render_markdown_to_pages(
     let max_top = PDF_PAGE_HEIGHT_PT - PDF_MARGIN_BOTTOM_PT;
 
     let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
+    let owned_lines = normalized
+        .split('\n')
+        .map(|line| line.to_string())
+        .collect::<Vec<_>>();
+    let lines: Vec<&str> = owned_lines.iter().map(String::as_str).collect();
+    let variable_names = calc_plan::collect_assignment_names(&owned_lines);
     let mut i = 0usize;
 
     while i < lines.len() {
@@ -232,12 +405,12 @@ fn render_markdown_to_pages(
                 }
             }
             if !rendered {
-                render_wrapped_text(
+                render_plain_wrapped_text(
                     &mut pages,
                     &mut y_top,
                     max_top,
-                    &[format!("[image unavailable: {}]", alt_if_empty(&alt))],
-                    FontFace::Mono,
+                    format!("[image unavailable: {}]", alt_if_empty(&alt)).as_str(),
+                    TextStyle::mono(pdf_black()),
                     BODY_FONT_SIZE_PT,
                     BODY_LINE_HEIGHT_PT,
                     PDF_MARGIN_LEFT_PT,
@@ -250,19 +423,19 @@ fn render_markdown_to_pages(
         }
 
         if let Some((level, heading_text)) = parse_heading(line) {
-            let (size, font) = heading_style(level);
-            let wrapped = wrap_text(
-                &strip_inline_markdown(heading_text.as_str()),
-                content_width(),
-                size,
-                font,
+            let size = heading_font_size(level);
+            let heading_style = TextStyle::heading(pdf_black());
+            let chars = styled_chars_from_inline(
+                heading_text.as_str(),
+                &variable_names,
+                palette,
+                heading_style,
             );
-            render_wrapped_text(
+            render_styled_block(
                 &mut pages,
                 &mut y_top,
                 max_top,
-                &wrapped,
-                font,
+                &chars,
                 size,
                 size + 4.0,
                 PDF_MARGIN_LEFT_PT,
@@ -274,35 +447,71 @@ fn render_markdown_to_pages(
         }
 
         if is_fence_start(trimmed) {
-            let (block_lines, next) = collect_code_fence(&lines, i);
-            render_code_block(&mut pages, &mut y_top, max_top, &block_lines);
+            let (block_lines, code_lang, next) = collect_code_fence(&lines, i);
+            render_code_block(
+                &mut pages,
+                &mut y_top,
+                max_top,
+                &block_lines,
+                code_lang.as_deref(),
+                palette,
+            );
             i = next;
             continue;
         }
 
         if is_markdown_table_start(&lines, i) {
             let (table_lines, next) = collect_table_block(&lines, i);
-            render_table_block(&mut pages, &mut y_top, max_top, &table_lines);
+            render_table_block(
+                &mut pages,
+                &mut y_top,
+                max_top,
+                &table_lines,
+                palette,
+                &variable_names,
+            );
             i = next;
             continue;
         }
 
         if is_unordered_list_item(line) || is_ordered_list_item(line) {
             let (items, ordered, next) = collect_list_block(&lines, i);
-            render_list_block(&mut pages, &mut y_top, max_top, &items, ordered);
+            render_list_block(
+                &mut pages,
+                &mut y_top,
+                max_top,
+                &items,
+                ordered,
+                palette,
+                &variable_names,
+            );
             i = next;
             continue;
         }
 
         if trimmed.starts_with('>') {
             let (quote_lines, next) = collect_blockquote(&lines, i);
-            render_blockquote_block(&mut pages, &mut y_top, max_top, &quote_lines);
+            render_blockquote_block(
+                &mut pages,
+                &mut y_top,
+                max_top,
+                &quote_lines,
+                palette,
+                &variable_names,
+            );
             i = next;
             continue;
         }
 
         let (paragraph, next) = collect_paragraph(&lines, i);
-        render_paragraph_block(&mut pages, &mut y_top, max_top, paragraph.as_str());
+        render_paragraph_block(
+            &mut pages,
+            &mut y_top,
+            max_top,
+            paragraph.as_str(),
+            palette,
+            &variable_names,
+        );
         i = next;
     }
 
@@ -327,48 +536,447 @@ fn current_page_mut(pages: &mut Vec<Page>) -> &mut Page {
         .expect("renderer must keep at least one page")
 }
 
-fn render_wrapped_text(
+fn push_text_op(page: &mut Page, style: TextStyle, size: f32, x: f32, y: f32, text: String) {
+    if text.is_empty() {
+        return;
+    }
+    page.ops.push(DrawOp::Text {
+        font: style.font_face(),
+        size,
+        x,
+        y,
+        color: style.color,
+        text,
+    });
+}
+
+fn push_line_op(
+    page: &mut Page,
+    width: f32,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    color: PdfRgbColor,
+) {
+    page.ops.push(DrawOp::Line {
+        width,
+        x1,
+        y1,
+        x2,
+        y2,
+        color,
+    });
+}
+
+fn normalize_styled_whitespace(input: &[StyledChar]) -> Vec<StyledChar> {
+    let mut out = Vec::with_capacity(input.len());
+    let mut pending_space: Option<TextStyle> = None;
+    for item in input {
+        if item.ch.is_whitespace() {
+            if !out.is_empty() && pending_space.is_none() {
+                pending_space = Some(item.style);
+            }
+            continue;
+        }
+        if let Some(space_style) = pending_space.take() {
+            out.push(StyledChar {
+                ch: ' ',
+                style: space_style,
+            });
+        }
+        out.push(item.clone());
+    }
+    while out.last().is_some_and(|item| item.ch.is_whitespace()) {
+        out.pop();
+    }
+    out
+}
+
+fn is_variable_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
+}
+
+fn has_variable_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool {
+    let left_ok = start == 0 || !is_variable_word_byte(bytes[start - 1]);
+    let right_ok = end == bytes.len() || !is_variable_word_byte(bytes[end]);
+    left_ok && right_ok
+}
+
+fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, usize)> {
+    if text.is_empty() || variable_names.is_empty() {
+        return Vec::new();
+    }
+
+    let bytes = text.as_bytes();
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+
+    for raw in variable_names {
+        let needle_text = raw.trim();
+        if needle_text.is_empty() {
+            continue;
+        }
+        let needle = needle_text.as_bytes();
+        if needle.len() > bytes.len() {
+            continue;
+        }
+        let mut idx = 0usize;
+        while idx + needle.len() <= bytes.len() {
+            let end = idx + needle.len();
+            if &bytes[idx..end] == needle && has_variable_word_boundaries(bytes, idx, end) {
+                matches.push((idx, end));
+            }
+            idx += 1;
+        }
+    }
+
+    if matches.len() <= 1 {
+        return matches;
+    }
+
+    matches.sort_by(|a, b| a.0.cmp(&b.0).then((b.1 - b.0).cmp(&(a.1 - a.0))));
+    let mut deduped: Vec<(usize, usize)> = Vec::new();
+    for candidate in matches {
+        let Some(last) = deduped.last() else {
+            deduped.push(candidate);
+            continue;
+        };
+        if candidate.0 < last.1 {
+            continue;
+        }
+        deduped.push(candidate);
+    }
+    deduped
+}
+
+fn byte_to_char_idx(text: &str, byte_idx: usize) -> usize {
+    text[..byte_idx.min(text.len())].chars().count()
+}
+
+fn styled_chars_from_inline(
+    text: &str,
+    variable_names: &[String],
+    palette: &PdfExportPalette,
+    base: TextStyle,
+) -> Vec<StyledChar> {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+
+    let mut styles = vec![base; chars.len()];
+    let mut hidden = vec![false; chars.len()];
+
+    let tokens = markdown_tokens::tokenize_inline_markdown(text);
+    for token in &tokens {
+        let from = token.from.min(chars.len());
+        let to = token.to.min(chars.len());
+        if to <= from {
+            continue;
+        }
+        match token.kind {
+            InlineTokenType::Strong => {
+                for style in styles.iter_mut().take(to).skip(from) {
+                    style.bold = true;
+                }
+            }
+            InlineTokenType::Emphasis => {
+                for style in styles.iter_mut().take(to).skip(from) {
+                    style.italic = true;
+                }
+            }
+            InlineTokenType::Strikethrough => {
+                for style in styles.iter_mut().take(to).skip(from) {
+                    style.strikethrough = true;
+                }
+            }
+            InlineTokenType::Code => {
+                for style in styles.iter_mut().take(to).skip(from) {
+                    style.mono = true;
+                    style.color = palette.code_type;
+                }
+            }
+            InlineTokenType::CodeMarker => {
+                for mark in hidden.iter_mut().take(to).skip(from) {
+                    *mark = true;
+                }
+            }
+            InlineTokenType::ImageAlt => {
+                for style in styles.iter_mut().take(to).skip(from) {
+                    style.italic = true;
+                    style.bold = true;
+                }
+            }
+            InlineTokenType::ImageSrc
+            | InlineTokenType::ImageMarker
+            | InlineTokenType::LinkUrl
+            | InlineTokenType::LinkMarker
+            | InlineTokenType::WikiLinkMarker
+            | InlineTokenType::WikiLinkId
+            | InlineTokenType::WikiLinkSep
+            | InlineTokenType::WikiLinkAnchor => {
+                for mark in hidden.iter_mut().take(to).skip(from) {
+                    *mark = true;
+                }
+            }
+            InlineTokenType::LinkText | InlineTokenType::WikiLinkTitle => {
+                for style in styles.iter_mut().take(to).skip(from) {
+                    style.bold = true;
+                }
+            }
+        }
+    }
+
+    for (start, end) in find_variable_ranges(text, variable_names) {
+        let from = byte_to_char_idx(text, start).min(chars.len());
+        let to = byte_to_char_idx(text, end).min(chars.len());
+        if to <= from {
+            continue;
+        }
+        for idx in from..to {
+            if hidden[idx] || styles[idx].mono {
+                continue;
+            }
+            styles[idx].bold = true;
+            styles[idx].color = palette.variable;
+        }
+    }
+
+    let mut out = Vec::with_capacity(chars.len());
+    for (idx, ch) in chars.into_iter().enumerate() {
+        if hidden[idx] {
+            continue;
+        }
+        out.push(StyledChar {
+            ch,
+            style: styles[idx],
+        });
+    }
+    normalize_styled_whitespace(&out)
+}
+
+fn styled_chars_for_code_line(
+    text: &str,
+    lang: Option<&str>,
+    palette: &PdfExportPalette,
+) -> Vec<StyledChar> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut styles = vec![TextStyle::mono(pdf_black()); chars.len()];
+    let tokens = markdown_tokens::tokenize_code_line(text, lang);
+
+    for token in tokens {
+        let from = token.from.min(chars.len());
+        let to = token.to.min(chars.len());
+        if to <= from {
+            continue;
+        }
+        for style in styles.iter_mut().take(to).skip(from) {
+            style.color = match token.kind {
+                CodeTokenType::Keyword => palette.code_keyword,
+                CodeTokenType::String => palette.code_string,
+                CodeTokenType::Number => palette.code_number,
+                CodeTokenType::Comment => palette.code_comment,
+                CodeTokenType::Function => palette.code_function,
+                CodeTokenType::Type => palette.code_type,
+            };
+            if matches!(token.kind, CodeTokenType::Comment) {
+                style.italic = true;
+            }
+        }
+    }
+
+    chars
+        .into_iter()
+        .enumerate()
+        .map(|(idx, ch)| StyledChar {
+            ch,
+            style: styles[idx],
+        })
+        .collect()
+}
+
+fn char_draw_width(ch: char, size: f32, style: TextStyle) -> f32 {
+    let font = style.font_face();
+    if ch == ' ' {
+        size * font.width_factor() * 0.8
+    } else {
+        size * font.width_factor()
+    }
+}
+
+fn text_draw_width(text: &str, size: f32, style: TextStyle) -> f32 {
+    text.chars()
+        .map(|ch| char_draw_width(ch, size, style))
+        .sum::<f32>()
+}
+
+fn recalc_line_metrics(line: &[StyledChar], size: f32) -> (f32, Option<usize>) {
+    let mut width = 0.0f32;
+    let mut last_space = None;
+    for (idx, item) in line.iter().enumerate() {
+        width += char_draw_width(item.ch, size, item.style);
+        if item.ch == ' ' {
+            last_space = Some(idx);
+        }
+    }
+    (width, last_space)
+}
+
+fn trim_styled_line(mut line: Vec<StyledChar>) -> Vec<StyledChar> {
+    while line.last().is_some_and(|item| item.ch == ' ') {
+        line.pop();
+    }
+    line
+}
+
+fn wrap_styled_chars(chars: &[StyledChar], max_width: f32, size: f32) -> Vec<Vec<StyledChar>> {
+    if chars.is_empty() {
+        return vec![Vec::new()];
+    }
+    let mut out = Vec::new();
+    let mut current: Vec<StyledChar> = Vec::new();
+    let mut current_width = 0.0f32;
+    let mut last_space = None;
+
+    for item in chars {
+        let item_w = char_draw_width(item.ch, size, item.style);
+        if !current.is_empty() && current_width + item_w > max_width {
+            if let Some(space_idx) = last_space {
+                let line = trim_styled_line(current[..space_idx].to_vec());
+                out.push(line);
+                current = current[space_idx + 1..].to_vec();
+            } else {
+                out.push(trim_styled_line(current.clone()));
+                current.clear();
+            }
+            let (next_width, next_space) = recalc_line_metrics(&current, size);
+            current_width = next_width;
+            last_space = next_space;
+        }
+        if current.is_empty() && item.ch == ' ' {
+            continue;
+        }
+        current.push(item.clone());
+        current_width += item_w;
+        if item.ch == ' ' {
+            last_space = Some(current.len() - 1);
+        }
+    }
+
+    if !current.is_empty() {
+        out.push(trim_styled_line(current));
+    }
+    if out.is_empty() {
+        out.push(Vec::new());
+    }
+    out
+}
+
+fn render_styled_line(pages: &mut Vec<Page>, x: f32, y: f32, size: f32, line: &[StyledChar]) {
+    if line.is_empty() {
+        return;
+    }
+    let mut run_style = line[0].style;
+    let mut run_text = String::new();
+    let mut cursor_x = x;
+
+    let flush =
+        |page: &mut Page, run_style: TextStyle, run_text: &mut String, cursor_x: &mut f32| {
+            if run_text.is_empty() {
+                return;
+            }
+            let text = std::mem::take(run_text);
+            push_text_op(page, run_style, size, *cursor_x, y, text.clone());
+            let run_width = text_draw_width(text.as_str(), size, run_style);
+            if run_style.strikethrough {
+                let strike_y = y + (size * 0.35);
+                push_line_op(
+                    page,
+                    0.7,
+                    *cursor_x,
+                    strike_y,
+                    *cursor_x + run_width,
+                    strike_y,
+                    run_style.color,
+                );
+            }
+            *cursor_x += run_width;
+        };
+
+    for item in line {
+        if item.style != run_style {
+            let page = current_page_mut(pages);
+            flush(page, run_style, &mut run_text, &mut cursor_x);
+            run_style = item.style;
+        }
+        run_text.push(item.ch);
+    }
+    let page = current_page_mut(pages);
+    flush(page, run_style, &mut run_text, &mut cursor_x);
+}
+
+fn render_styled_block(
     pages: &mut Vec<Page>,
     y_top: &mut f32,
     max_top: f32,
-    lines: &[String],
-    font: FontFace,
+    chars: &[StyledChar],
     size: f32,
     line_height: f32,
     x: f32,
     max_width: f32,
 ) {
-    for source in lines {
-        let wrapped = wrap_text(source, max_width, size, font);
-        for line in wrapped {
-            ensure_space(pages, y_top, line_height, max_top);
-            let y_pdf = PDF_PAGE_HEIGHT_PT - *y_top - size;
-            current_page_mut(pages).ops.push(DrawOp::Text {
-                font,
-                size,
-                x,
-                y: y_pdf,
-                text: line,
-            });
-            *y_top += line_height;
-        }
+    let lines = wrap_styled_chars(chars, max_width, size);
+    for line in lines {
+        ensure_space(pages, y_top, line_height, max_top);
+        let y_pdf = PDF_PAGE_HEIGHT_PT - *y_top - size;
+        render_styled_line(pages, x, y_pdf, size, &line);
+        *y_top += line_height;
     }
 }
 
-fn render_paragraph_block(pages: &mut Vec<Page>, y_top: &mut f32, max_top: f32, text: &str) {
-    let normalized = strip_inline_markdown(text);
-    let wrapped = wrap_text(
-        normalized.as_str(),
-        content_width(),
-        BODY_FONT_SIZE_PT,
-        FontFace::Body,
-    );
-    render_wrapped_text(
+fn render_plain_wrapped_text(
+    pages: &mut Vec<Page>,
+    y_top: &mut f32,
+    max_top: f32,
+    text: &str,
+    style: TextStyle,
+    size: f32,
+    line_height: f32,
+    x: f32,
+    max_width: f32,
+) {
+    let chars = text
+        .chars()
+        .map(|ch| StyledChar { ch, style })
+        .collect::<Vec<_>>();
+    let chars = normalize_styled_whitespace(&chars);
+    render_styled_block(
         pages,
         y_top,
         max_top,
-        &wrapped,
-        FontFace::Body,
+        &chars,
+        size,
+        line_height,
+        x,
+        max_width,
+    );
+}
+
+fn render_paragraph_block(
+    pages: &mut Vec<Page>,
+    y_top: &mut f32,
+    max_top: f32,
+    text: &str,
+    palette: &PdfExportPalette,
+    variable_names: &[String],
+) {
+    let chars =
+        styled_chars_from_inline(text, variable_names, palette, TextStyle::body(pdf_black()));
+    render_styled_block(
+        pages,
+        y_top,
+        max_top,
+        &chars,
         BODY_FONT_SIZE_PT,
         BODY_LINE_HEIGHT_PT,
         PDF_MARGIN_LEFT_PT,
@@ -377,32 +985,79 @@ fn render_paragraph_block(pages: &mut Vec<Page>, y_top: &mut f32, max_top: f32, 
     *y_top += PARAGRAPH_GAP_PT;
 }
 
-fn render_code_block(pages: &mut Vec<Page>, y_top: &mut f32, max_top: f32, code_lines: &[String]) {
+fn render_code_block(
+    pages: &mut Vec<Page>,
+    y_top: &mut f32,
+    max_top: f32,
+    code_lines: &[String],
+    code_lang: Option<&str>,
+    palette: &PdfExportPalette,
+) {
     let block_padding = 6.0;
-    let code_width = content_width();
+    let code_width = content_width() - (block_padding * 2.0);
 
     for line in code_lines {
-        let wrapped = wrap_text(
-            line,
-            code_width - (block_padding * 2.0),
+        let chars = styled_chars_for_code_line(line, code_lang, palette);
+        render_styled_block(
+            pages,
+            y_top,
+            max_top,
+            &chars,
             BODY_FONT_SIZE_PT,
-            FontFace::Mono,
+            BODY_LINE_HEIGHT_PT,
+            PDF_MARGIN_LEFT_PT + block_padding,
+            code_width,
         );
-        for wrapped_line in wrapped {
-            ensure_space(pages, y_top, BODY_LINE_HEIGHT_PT, max_top);
-            let y_pdf = PDF_PAGE_HEIGHT_PT - *y_top - BODY_FONT_SIZE_PT;
-            current_page_mut(pages).ops.push(DrawOp::Text {
-                font: FontFace::Mono,
-                size: BODY_FONT_SIZE_PT,
-                x: PDF_MARGIN_LEFT_PT + block_padding,
-                y: y_pdf,
-                text: wrapped_line,
-            });
-            *y_top += BODY_LINE_HEIGHT_PT;
-        }
     }
 
     *y_top += PARAGRAPH_GAP_PT;
+}
+
+fn parse_checklist_item(item: &str) -> Option<(bool, String)> {
+    static CHECKLIST_RE: OnceLock<Regex> = OnceLock::new();
+    let re = CHECKLIST_RE
+        .get_or_init(|| Regex::new(r"^\[(x|X| )\]\s+(.*)$").expect("checklist regex must compile"));
+    let caps = re.captures(item.trim())?;
+    let checked = caps
+        .get(1)
+        .is_some_and(|entry| matches!(entry.as_str(), "x" | "X"));
+    let content = caps
+        .get(2)
+        .map(|entry| entry.as_str().trim().to_string())
+        .unwrap_or_default();
+    Some((checked, content))
+}
+
+fn render_checklist_box(
+    pages: &mut Vec<Page>,
+    x: f32,
+    y_top: f32,
+    size: f32,
+    checked: bool,
+    palette: &PdfExportPalette,
+) {
+    let top = PDF_PAGE_HEIGHT_PT - y_top - ((BODY_LINE_HEIGHT_PT - size) * 0.5);
+    let bottom = top - size;
+    let left = x;
+    let right = x + size;
+    let color = if checked { palette.accent } else { pdf_black() };
+
+    let page = current_page_mut(pages);
+    push_line_op(page, 0.9, left, top, right, top, color);
+    push_line_op(page, 0.9, right, top, right, bottom, color);
+    push_line_op(page, 0.9, right, bottom, left, bottom, color);
+    push_line_op(page, 0.9, left, bottom, left, top, color);
+
+    if checked {
+        let mid_x = left + (size * 0.42);
+        let mid_y = bottom + (size * 0.30);
+        let end_x = right - (size * 0.20);
+        let end_y = top - (size * 0.28);
+        let start_x = left + (size * 0.20);
+        let start_y = bottom + (size * 0.52);
+        push_line_op(page, 1.1, start_x, start_y, mid_x, mid_y, color);
+        push_line_op(page, 1.1, mid_x, mid_y, end_x, end_y, color);
+    }
 }
 
 fn render_list_block(
@@ -411,94 +1066,113 @@ fn render_list_block(
     max_top: f32,
     items: &[String],
     ordered: bool,
+    palette: &PdfExportPalette,
+    variable_names: &[String],
 ) {
     for (idx, item) in items.iter().enumerate() {
-        let bullet = if ordered {
-            format!("{}. ", idx + 1)
+        let (is_checklist, checked, content) =
+            if let Some((checked, content)) = parse_checklist_item(item) {
+                (true, checked, content)
+            } else {
+                (false, false, item.clone())
+            };
+
+        let mut base = TextStyle::body(pdf_black());
+        if checked {
+            base.strikethrough = true;
+        }
+        let chars = styled_chars_from_inline(content.as_str(), variable_names, palette, base);
+        let body_x = if is_checklist {
+            PDF_MARGIN_LEFT_PT + 16.0
         } else {
-            "• ".to_string()
+            PDF_MARGIN_LEFT_PT + 18.0
         };
-        let clean = strip_inline_markdown(item);
-        let body_width = content_width() - 18.0;
-        let wrapped = wrap_text(
-            clean.as_str(),
-            body_width,
-            BODY_FONT_SIZE_PT,
-            FontFace::Body,
-        );
+        let body_width = content_width() - (body_x - PDF_MARGIN_LEFT_PT);
+        let wrapped = wrap_styled_chars(&chars, body_width, BODY_FONT_SIZE_PT);
         if wrapped.is_empty() {
             continue;
         }
 
-        ensure_space(pages, y_top, BODY_LINE_HEIGHT_PT, max_top);
-        let first_y = PDF_PAGE_HEIGHT_PT - *y_top - BODY_FONT_SIZE_PT;
-        current_page_mut(pages).ops.push(DrawOp::Text {
-            font: FontFace::Body,
-            size: BODY_FONT_SIZE_PT,
-            x: PDF_MARGIN_LEFT_PT,
-            y: first_y,
-            text: bullet,
-        });
-
-        for (line_idx, wrapped_line) in wrapped.iter().enumerate() {
-            if line_idx > 0 {
-                ensure_space(pages, y_top, BODY_LINE_HEIGHT_PT, max_top);
-            }
+        for (line_idx, line_chars) in wrapped.iter().enumerate() {
+            ensure_space(pages, y_top, BODY_LINE_HEIGHT_PT, max_top);
             let y_pdf = PDF_PAGE_HEIGHT_PT - *y_top - BODY_FONT_SIZE_PT;
-            current_page_mut(pages).ops.push(DrawOp::Text {
-                font: FontFace::Body,
-                size: BODY_FONT_SIZE_PT,
-                x: PDF_MARGIN_LEFT_PT + 18.0,
-                y: y_pdf,
-                text: wrapped_line.clone(),
-            });
+            if line_idx == 0 {
+                if is_checklist {
+                    render_checklist_box(
+                        pages,
+                        PDF_MARGIN_LEFT_PT + 2.0,
+                        *y_top,
+                        CHECKBOX_SIZE_PT,
+                        checked,
+                        palette,
+                    );
+                } else {
+                    let bullet = if ordered {
+                        format!("{}. ", idx + 1)
+                    } else {
+                        "• ".to_string()
+                    };
+                    push_text_op(
+                        current_page_mut(pages),
+                        TextStyle::body(pdf_black()),
+                        BODY_FONT_SIZE_PT,
+                        PDF_MARGIN_LEFT_PT,
+                        y_pdf,
+                        bullet,
+                    );
+                }
+            }
+            render_styled_line(pages, body_x, y_pdf, BODY_FONT_SIZE_PT, line_chars);
             *y_top += BODY_LINE_HEIGHT_PT;
         }
     }
     *y_top += PARAGRAPH_GAP_PT;
 }
 
-fn render_blockquote_block(pages: &mut Vec<Page>, y_top: &mut f32, max_top: f32, lines: &[String]) {
+fn render_blockquote_block(
+    pages: &mut Vec<Page>,
+    y_top: &mut f32,
+    max_top: f32,
+    lines: &[String],
+    palette: &PdfExportPalette,
+    variable_names: &[String],
+) {
     let quote_x = PDF_MARGIN_LEFT_PT + 10.0;
     let text_x = PDF_MARGIN_LEFT_PT + 16.0;
-    let wrapped = lines
-        .iter()
-        .flat_map(|line| {
-            wrap_text(
-                strip_inline_markdown(line).as_str(),
-                content_width() - 16.0,
-                BODY_FONT_SIZE_PT,
-                FontFace::Body,
-            )
-        })
-        .collect::<Vec<_>>();
+    let mut wrapped_lines: Vec<Vec<StyledChar>> = Vec::new();
+    for line in lines {
+        let mut base = TextStyle::body(pdf_black());
+        base.italic = true;
+        let chars = styled_chars_from_inline(line, variable_names, palette, base);
+        wrapped_lines.extend(wrap_styled_chars(
+            &chars,
+            content_width() - 16.0,
+            BODY_FONT_SIZE_PT,
+        ));
+    }
 
-    if wrapped.is_empty() {
+    if wrapped_lines.is_empty() {
         return;
     }
 
-    let block_height = (wrapped.len() as f32) * BODY_LINE_HEIGHT_PT;
+    let block_height = (wrapped_lines.len() as f32) * BODY_LINE_HEIGHT_PT;
     ensure_space(pages, y_top, block_height + PARAGRAPH_GAP_PT, max_top);
 
     let y1 = PDF_PAGE_HEIGHT_PT - *y_top;
     let y2 = PDF_PAGE_HEIGHT_PT - (*y_top + block_height);
-    current_page_mut(pages).ops.push(DrawOp::Line {
-        width: 1.2,
-        x1: quote_x,
+    push_line_op(
+        current_page_mut(pages),
+        1.2,
+        quote_x,
         y1,
-        x2: quote_x,
+        quote_x,
         y2,
-    });
+        pdf_black(),
+    );
 
-    for line in wrapped {
+    for line in wrapped_lines {
         let y_pdf = PDF_PAGE_HEIGHT_PT - *y_top - BODY_FONT_SIZE_PT;
-        current_page_mut(pages).ops.push(DrawOp::Text {
-            font: FontFace::Body,
-            size: BODY_FONT_SIZE_PT,
-            x: text_x,
-            y: y_pdf,
-            text: line,
-        });
+        render_styled_line(pages, text_x, y_pdf, BODY_FONT_SIZE_PT, &line);
         *y_top += BODY_LINE_HEIGHT_PT;
     }
 
@@ -510,9 +1184,18 @@ fn render_table_block(
     y_top: &mut f32,
     max_top: f32,
     table_lines: &[String],
+    palette: &PdfExportPalette,
+    variable_names: &[String],
 ) {
     if table_lines.len() < 2 {
-        render_paragraph_block(pages, y_top, max_top, &table_lines.join(" "));
+        render_paragraph_block(
+            pages,
+            y_top,
+            max_top,
+            &table_lines.join(" "),
+            palette,
+            variable_names,
+        );
         return;
     }
 
@@ -523,7 +1206,7 @@ fn render_table_block(
         }
         let cells = split_table_cells_for_logical_row(line)
             .into_iter()
-            .map(|cell| strip_inline_markdown(cell.trim()))
+            .map(|cell| cell.trim().to_string())
             .collect::<Vec<_>>();
         rows.push(cells);
     }
@@ -538,23 +1221,23 @@ fn render_table_block(
     let table_left = PDF_MARGIN_LEFT_PT;
 
     for (row_idx, row) in rows.iter().enumerate() {
-        let mut cell_wrapped: Vec<Vec<String>> = Vec::with_capacity(col_count);
+        let mut cell_wrapped: Vec<Vec<Vec<StyledChar>>> = Vec::with_capacity(col_count);
         let mut max_line_count = 1usize;
         for col in 0..col_count {
             let text = row.get(col).cloned().unwrap_or_default();
-            let wrapped = wrap_text(
-                text.as_str(),
+            let mut base = TextStyle::body(pdf_black());
+            if row_idx == 0 {
+                base.bold = true;
+            }
+            let chars = styled_chars_from_inline(text.as_str(), variable_names, palette, base);
+            let wrapped = wrap_styled_chars(
+                &chars,
                 col_width - (TABLE_CELL_PAD_X_PT * 2.0),
                 TABLE_FONT_SIZE_PT,
-                if row_idx == 0 {
-                    FontFace::Bold
-                } else {
-                    FontFace::Body
-                },
             );
             max_line_count = max_line_count.max(wrapped.len().max(1));
             cell_wrapped.push(if wrapped.is_empty() {
-                vec![String::new()]
+                vec![Vec::new()]
             } else {
                 wrapped
             });
@@ -567,51 +1250,54 @@ fn render_table_block(
         let top_y_pdf = PDF_PAGE_HEIGHT_PT - *y_top;
         let bottom_y_pdf = PDF_PAGE_HEIGHT_PT - (*y_top + row_height);
 
-        current_page_mut(pages).ops.push(DrawOp::Line {
-            width: TABLE_BORDER_WIDTH_PT,
-            x1: table_left,
-            y1: top_y_pdf,
-            x2: table_left + table_width,
-            y2: top_y_pdf,
-        });
-        current_page_mut(pages).ops.push(DrawOp::Line {
-            width: TABLE_BORDER_WIDTH_PT,
-            x1: table_left,
-            y1: bottom_y_pdf,
-            x2: table_left + table_width,
-            y2: bottom_y_pdf,
-        });
+        let border = pdf_black();
+        push_line_op(
+            current_page_mut(pages),
+            TABLE_BORDER_WIDTH_PT,
+            table_left,
+            top_y_pdf,
+            table_left + table_width,
+            top_y_pdf,
+            border,
+        );
+        push_line_op(
+            current_page_mut(pages),
+            TABLE_BORDER_WIDTH_PT,
+            table_left,
+            bottom_y_pdf,
+            table_left + table_width,
+            bottom_y_pdf,
+            border,
+        );
 
         for col in 0..=col_count {
             let x = table_left + (col as f32) * col_width;
-            current_page_mut(pages).ops.push(DrawOp::Line {
-                width: TABLE_BORDER_WIDTH_PT,
-                x1: x,
-                y1: top_y_pdf,
-                x2: x,
-                y2: bottom_y_pdf,
-            });
+            push_line_op(
+                current_page_mut(pages),
+                TABLE_BORDER_WIDTH_PT,
+                x,
+                top_y_pdf,
+                x,
+                bottom_y_pdf,
+                border,
+            );
         }
 
         for col in 0..col_count {
             let text_lines = &cell_wrapped[col];
-            for (line_idx, text_line) in text_lines.iter().enumerate() {
+            for (line_idx, line_chars) in text_lines.iter().enumerate() {
                 let y_text = PDF_PAGE_HEIGHT_PT
                     - *y_top
                     - TABLE_CELL_PAD_Y_PT
                     - (line_idx as f32) * TABLE_LINE_HEIGHT_PT
                     - TABLE_FONT_SIZE_PT;
-                current_page_mut(pages).ops.push(DrawOp::Text {
-                    font: if row_idx == 0 {
-                        FontFace::Bold
-                    } else {
-                        FontFace::Body
-                    },
-                    size: TABLE_FONT_SIZE_PT,
-                    x: table_left + (col as f32) * col_width + TABLE_CELL_PAD_X_PT,
-                    y: y_text,
-                    text: text_line.clone(),
-                });
+                render_styled_line(
+                    pages,
+                    table_left + (col as f32) * col_width + TABLE_CELL_PAD_X_PT,
+                    y_text,
+                    TABLE_FONT_SIZE_PT,
+                    line_chars,
+                );
             }
         }
 
@@ -658,82 +1344,15 @@ fn render_image(
     *y_top += draw_h + PARAGRAPH_GAP_PT;
 }
 
-fn heading_style(level: usize) -> (f32, FontFace) {
+fn heading_font_size(level: usize) -> f32 {
     match level {
-        1 => (24.0, FontFace::Bold),
-        2 => (20.0, FontFace::Bold),
-        3 => (17.0, FontFace::Bold),
-        4 => (15.0, FontFace::Bold),
-        5 => (13.0, FontFace::Bold),
-        _ => (12.0, FontFace::Bold),
+        1 => 24.0,
+        2 => 20.0,
+        3 => 17.0,
+        4 => 15.0,
+        5 => 13.0,
+        _ => 12.0,
     }
-}
-
-fn wrap_text(text: &str, max_width: f32, font_size: f32, font: FontFace) -> Vec<String> {
-    let clean = text.trim();
-    if clean.is_empty() {
-        return vec![String::new()];
-    }
-
-    let char_width = font_size * font.width_factor();
-    if char_width <= 0.0 || max_width <= 0.0 {
-        return vec![clean.to_string()];
-    }
-    let max_chars = (max_width / char_width).floor().max(1.0) as usize;
-
-    let mut out: Vec<String> = Vec::new();
-    let mut line = String::new();
-
-    for word in clean.split_whitespace() {
-        if line.is_empty() {
-            if word.chars().count() > max_chars {
-                out.extend(split_long_token(word, max_chars));
-            } else {
-                line.push_str(word);
-            }
-            continue;
-        }
-
-        let projected = line.chars().count() + 1 + word.chars().count();
-        if projected <= max_chars {
-            line.push(' ');
-            line.push_str(word);
-            continue;
-        }
-
-        out.push(line);
-        line = String::new();
-        if word.chars().count() > max_chars {
-            out.extend(split_long_token(word, max_chars));
-        } else {
-            line.push_str(word);
-        }
-    }
-
-    if !line.is_empty() {
-        out.push(line);
-    }
-
-    if out.is_empty() {
-        out.push(String::new());
-    }
-
-    out
-}
-
-fn split_long_token(token: &str, chunk_len: usize) -> Vec<String> {
-    if chunk_len == 0 {
-        return vec![token.to_string()];
-    }
-    let chars = token.chars().collect::<Vec<_>>();
-    let mut out = Vec::new();
-    let mut start = 0usize;
-    while start < chars.len() {
-        let end = (start + chunk_len).min(chars.len());
-        out.push(chars[start..end].iter().collect());
-        start = end;
-    }
-    out
 }
 
 fn parse_heading(line: &str) -> Option<(usize, String)> {
@@ -760,18 +1379,19 @@ fn is_fence_start(trimmed: &str) -> bool {
     trimmed.starts_with("```")
 }
 
-fn collect_code_fence(lines: &[&str], start: usize) -> (Vec<String>, usize) {
+fn collect_code_fence(lines: &[&str], start: usize) -> (Vec<String>, Option<String>, usize) {
+    let code_lang = markdown_tokens::parse_fence_language(lines[start]);
     let mut out = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
         let line = lines[i];
         if line.trim_start().starts_with("```") {
-            return (out, i + 1);
+            return (out, code_lang, i + 1);
         }
         out.push(line.to_string());
         i += 1;
     }
-    (out, i)
+    (out, code_lang, i)
 }
 
 fn is_markdown_table_start(lines: &[&str], index: usize) -> bool {
@@ -909,28 +1529,6 @@ fn alt_if_empty(alt: &str) -> String {
     }
 }
 
-fn strip_inline_markdown(text: &str) -> String {
-    static IMAGE_RE: OnceLock<Regex> = OnceLock::new();
-    static LINK_RE: OnceLock<Regex> = OnceLock::new();
-
-    let image_re = IMAGE_RE
-        .get_or_init(|| Regex::new(r"!\[([^\]]*)\]\(([^)]+)\)").expect("inline image regex"));
-    let link_re =
-        LINK_RE.get_or_init(|| Regex::new(r"\[([^\]]+)\]\(([^)]+)\)").expect("inline link regex"));
-
-    let no_images = image_re.replace_all(text, "[image: $1]").to_string();
-    let linked = link_re.replace_all(&no_images, "$1 ($2)").to_string();
-    linked
-        .replace("**", "")
-        .replace("__", "")
-        .replace("~~", "")
-        .replace('`', "")
-        .replace('*', "")
-        .replace('_', "")
-        .trim()
-        .to_string()
-}
-
 fn collect_image_sources(content: &str) -> Vec<String> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"!\[[^\]]*\]\(([^)]+)\)").expect("image source regex"));
@@ -953,7 +1551,7 @@ fn serialize_pdf(
     let page_count = pages.len().max(1);
 
     let image_count = image_assets.len();
-    let image_first_id = 6usize;
+    let image_first_id = 8usize;
     let page_first_id = image_first_id + image_count;
 
     let mut image_obj_id_by_name: HashMap<String, usize> = HashMap::new();
@@ -981,6 +1579,8 @@ fn serialize_pdf(
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\n".to_vec());
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>\n".to_vec());
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>\n".to_vec());
+    objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>\n".to_vec());
+    objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >>\n".to_vec());
 
     for (_, image) in &image_assets {
         let mut body = format!(
@@ -1019,7 +1619,7 @@ fn serialize_pdf(
 
         objects.push(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PDF_PAGE_WIDTH_PT:.0} {PDF_PAGE_HEIGHT_PT:.0}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >>{xobject_section} >> /Contents {content_obj_id} 0 R >>\n"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PDF_PAGE_WIDTH_PT:.0} {PDF_PAGE_HEIGHT_PT:.0}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R /F5 7 0 R >>{xobject_section} >> /Contents {content_obj_id} 0 R >>\n"
             )
             .into_bytes(),
         );
@@ -1043,11 +1643,14 @@ fn page_stream(page: &Page) -> String {
                 size,
                 x,
                 y,
+                color,
                 text,
             } => {
+                let (r, g, b) = color.as_pdf_rgb();
                 let escaped = escape_pdf_text(text);
                 out.push_str("BT\n");
                 out.push_str(&format!("/{} {:.2} Tf\n", font.resource_name(), size));
+                out.push_str(&format!("{r:.4} {g:.4} {b:.4} rg\n"));
                 out.push_str(&format!("1 0 0 1 {:.2} {:.2} Tm ({escaped}) Tj\n", x, y));
                 out.push_str("ET\n");
             }
@@ -1057,9 +1660,11 @@ fn page_stream(page: &Page) -> String {
                 y1,
                 x2,
                 y2,
+                color,
             } => {
+                let (r, g, b) = color.as_pdf_rgb();
                 out.push_str(&format!(
-                    "{width:.2} w\n{x1:.2} {y1:.2} m\n{x2:.2} {y2:.2} l\nS\n"
+                    "{r:.4} {g:.4} {b:.4} RG\n{width:.2} w\n{x1:.2} {y1:.2} m\n{x2:.2} {y2:.2} l\nS\n"
                 ));
             }
             DrawOp::Image { name, x, y, w, h } => {
@@ -1140,7 +1745,8 @@ mod tests {
     fn markdown_pdf_contains_headings_table_and_text() {
         let source =
             "# Title\n\n| Name | Score |\n| --- | ---: |\n| Ana | 5 |\n\n- item one\n- item two";
-        let bytes = build_markdown_pdf(source, |_| None).expect("pdf generation should succeed");
+        let bytes = build_markdown_pdf(source, &PdfExportPalette::default(), |_| None)
+            .expect("pdf generation should succeed");
         let text = String::from_utf8_lossy(&bytes);
 
         assert!(text.contains("%PDF-1.4"));
@@ -1154,7 +1760,7 @@ mod tests {
     #[test]
     fn markdown_pdf_embeds_images_when_resolver_returns_bytes() {
         let source = "![tiny](./assets/tiny.png)";
-        let bytes = build_markdown_pdf(source, |src| {
+        let bytes = build_markdown_pdf(source, &PdfExportPalette::default(), |src| {
             if src == "./assets/tiny.png" {
                 Some(tiny_png_bytes())
             } else {
@@ -1169,12 +1775,6 @@ mod tests {
     }
 
     #[test]
-    fn strip_inline_markdown_keeps_link_text_and_removes_markers() {
-        let clean = strip_inline_markdown("**Bold** and [Link](https://example.com) and `code`");
-        assert_eq!(clean, "Bold and Link (https://example.com) and code");
-    }
-
-    #[test]
     fn parse_image_only_line_extracts_alt_and_source() {
         let parsed = parse_image_only_line("![Alt Text](./assets/a.png)").expect("image line");
         assert_eq!(parsed.0, "Alt Text");
@@ -1185,5 +1785,47 @@ mod tests {
     fn decode_data_url_image_bytes_rejects_non_base64() {
         let err = decode_data_url_image_bytes("data:image/png,abc").expect_err("expected error");
         assert!(err.contains("non-base64"));
+    }
+
+    #[test]
+    fn markdown_pdf_applies_inline_and_code_theme_styles_and_renders_checklist() {
+        let source = "- [x] **Done** *soon*\n\ncount := 1\ncount + 2\n\n```rust\nlet x = 1;\n```";
+        let palette = PdfExportPalette {
+            fg: PdfRgbColor { r: 1, g: 2, b: 3 },
+            fg_dim: PdfRgbColor { r: 4, g: 5, b: 6 },
+            accent: PdfRgbColor { r: 7, g: 8, b: 9 },
+            variable: PdfRgbColor { r: 255, g: 0, b: 0 },
+            code_keyword: PdfRgbColor { r: 0, g: 255, b: 0 },
+            code_string: PdfRgbColor { r: 0, g: 0, b: 255 },
+            code_number: PdfRgbColor {
+                r: 120,
+                g: 80,
+                b: 40,
+            },
+            code_comment: PdfRgbColor {
+                r: 20,
+                g: 30,
+                b: 40,
+            },
+            code_function: PdfRgbColor {
+                r: 80,
+                g: 90,
+                b: 100,
+            },
+            code_type: PdfRgbColor {
+                r: 110,
+                g: 120,
+                b: 130,
+            },
+        };
+        let bytes = build_markdown_pdf(source, &palette, |_| None).expect("pdf generation");
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert!(text.contains("(Done) Tj"));
+        assert!(text.contains("/F2"));
+        assert!(text.contains("/F4"));
+        assert!(text.contains("1.0000 0.0000 0.0000 rg"));
+        assert!(text.contains("0.0000 1.0000 0.0000 rg"));
+        assert!(!text.contains("([x]) Tj"));
     }
 }
