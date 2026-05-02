@@ -625,6 +625,36 @@ test("buildMarkdownDecorationsForSpans image widget carries compact [Image #n] t
   );
 });
 
+test("buildMarkdownDecorationsForSpans keeps image preview widget inside markdown tables", () => {
+  const doc = Text.of([
+    "| Item | Preview |",
+    "| --- | --- |",
+    "| Plan | ![Diagram](./assets/plan.png) |",
+  ]);
+  const line = doc.line(3);
+  const imageFrom = line.from + line.text.indexOf("![");
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 3 }],
+    [],
+    { from: line.to, to: line.to, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  assert.ok(
+    flat.some((d) => d.widget === "MarkdownImageDisplayWidget"),
+    "image display widget should render for table image cells",
+  );
+  assert.equal(
+    flat.some(
+      (d) =>
+        d.widget === "TableCellInputWidget" && d.from <= imageFrom && imageFrom <= d.to,
+    ),
+    false,
+    "table cell input replacement must not override the image token span",
+  );
+});
+
 test("buildMarkdownDecorationsForSpans reveals full wiki-link source inside [[...]] for editing", () => {
   const doc = Text.of(["[[01HX4VHR#Intro|My Alt]] tail"]);
   const line = doc.line(1);

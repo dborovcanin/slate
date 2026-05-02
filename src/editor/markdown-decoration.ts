@@ -406,14 +406,32 @@ const decTableDividerContent = Decoration.mark({ class: "md-table-divider-conten
 
 const tableRowRe = /^\s*\|.*\|\s*$/;
 const tableDelimiterRe = /^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$/;
+const inlineImageRe = /!\[[^\]]*\]\(([^)]+)\)/;
 
 type TableLineKind = "header" | "divider" | "body" | null;
 
-function classifyTableLineKind(lineText: string, nextLineText?: string): TableLineKind {
-  if (!tableRowRe.test(lineText)) return null;
-  if (tableDelimiterRe.test(lineText)) return "divider";
-  if (nextLineText && tableDelimiterRe.test(nextLineText)) return "header";
-  return "body";
+function isTableRowCandidate(lineText: string): boolean {
+  return tableRowRe.test(lineText) && parseTableCells(lineText).length >= 2;
+}
+
+function classifyTableLineKind(
+  lineText: string,
+  prevLineText?: string,
+  nextLineText?: string,
+): TableLineKind {
+  if (!isTableRowCandidate(lineText)) return null;
+  const prevIsRow = prevLineText ? isTableRowCandidate(prevLineText) : false;
+  const nextIsRow = nextLineText ? isTableRowCandidate(nextLineText) : false;
+  const prevIsDelimiter = prevLineText ? tableDelimiterRe.test(prevLineText) : false;
+  const nextIsDelimiter = nextLineText ? tableDelimiterRe.test(nextLineText) : false;
+
+  if (tableDelimiterRe.test(lineText)) {
+    return prevIsRow || nextIsRow ? "divider" : null;
+  }
+  if (nextIsDelimiter) return "header";
+  if (prevIsDelimiter) return "body";
+  if (prevIsRow && nextIsRow) return "body";
+  return null;
 }
 
 function tablePipeOffsets(lineText: string): number[] {
@@ -434,6 +452,10 @@ function tableCellRanges(lineText: string): Array<{ from: number; to: number }> 
     if (from < to) ranges.push({ from, to });
   }
   return ranges;
+}
+
+function tableCellContainsInlineImage(value: string): boolean {
+  return inlineImageRe.test(value);
 }
 
 class ChecklistMarkWidget extends WidgetType {
@@ -1371,6 +1393,7 @@ export function buildMarkdownDecorationsForSpans(
         builder,
         line,
         info,
+        chunkLines[idx - 1],
         chunkLines[idx + 1],
         matcher,
         lineAnalysis.inlineTokens,
@@ -1618,6 +1641,7 @@ function decorateContentLine(
   builder: RangeSetBuilder<Decoration>,
   line: { from: number; to: number; text: string; number: number },
   info: MarkdownLineInfo,
+  prevLineText: string | undefined,
   nextLineText: string | undefined,
   matcher: VariableMatcher,
   inlineTokens: readonly InlineToken[],
@@ -1627,7 +1651,8 @@ function decorateContentLine(
   imagePreviewResolver?: (src: string) => ResolvedImagePreview | null,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
-  const tableKind = classifyTableLineKind(line.text, nextLineText);
+  const tableKind = classifyTableLineKind(line.text, prevLineText, nextLineText);
+  const pending: PendingDecoration[] = [];
 
   if (tableKind === "divider") {
     builder.add(line.from, line.from, decTableDividerLine);
@@ -1641,8 +1666,13 @@ function decorateContentLine(
 
   if (tableKind !== null) {
     const ranges = tableCellRanges(line.text);
+    const tablePending: PendingDecoration[] = [];
     for (const offset of tablePipeOffsets(line.text)) {
-      builder.add(line.from + offset, line.from + offset + 1, decTablePipe);
+      tablePending.push({
+        from: line.from + offset,
+        to: line.from + offset + 1,
+        decoration: decTablePipe,
+      });
     }
     for (let cellIndex = 0; cellIndex < ranges.length; cellIndex++) {
       const cell = ranges[cellIndex]!;
@@ -1650,10 +1680,13 @@ function decorateContentLine(
       const to = line.from + cell.to;
       const raw = line.text.slice(cell.from, cell.to);
       const text = raw.trim();
-      builder.add(
+      if (tableCellContainsInlineImage(raw)) {
+        continue;
+      }
+      tablePending.push({
         from,
         to,
-        Decoration.replace({
+        decoration: Decoration.replace({
           widget: tableKind === "divider"
             ? new TableDividerWidget(raw.length)
             : new TableCellInputWidget(
@@ -1666,8 +1699,10 @@ function decorateContentLine(
             ),
           inclusive: false,
         }),
-      );
+      });
     }
+    tablePending.sort((a, b) => a.from - b.from || a.to - b.to);
+    pending.push(...tablePending);
   }
 
   if (info.headingLevel) {
@@ -1779,7 +1814,6 @@ function decorateContentLine(
     builder.add(line.from, line.to, decRuleToken);
   }
 
-  const pending: PendingDecoration[] = [];
   for (const range of matcher.findAll(line.text)) {
     pending.push({
       from: line.from + range.from,
