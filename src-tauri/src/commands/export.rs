@@ -12,6 +12,7 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tauri::State;
 
@@ -260,9 +261,58 @@ struct Page {
     used_images: BTreeSet<String>,
 }
 
+fn resolve_export_path(path: &str) -> Result<PathBuf, String> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Err("export path is empty".to_string());
+    }
+
+    let resolved = if raw == "~" || raw.starts_with("~/") {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .ok_or_else(|| "HOME is not set; cannot expand '~' in export path".to_string())?;
+        if raw == "~" {
+            home
+        } else {
+            let rest = raw.trim_start_matches("~/");
+            home.join(rest)
+        }
+    } else {
+        PathBuf::from(raw)
+    };
+
+    if resolved.is_dir() {
+        return Err(format!(
+            "export path points to a directory: {}",
+            resolved.display()
+        ));
+    }
+
+    let parent = resolved
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if !parent.exists() {
+        return Err(format!(
+            "export directory does not exist: {}",
+            parent.display()
+        ));
+    }
+    if !parent.is_dir() {
+        return Err(format!(
+            "export parent is not a directory: {}",
+            parent.display()
+        ));
+    }
+
+    Ok(resolved)
+}
+
 #[tauri::command]
 pub fn export_to_file(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, &content).map_err(|e| format!("Failed to write file: {e}"))
+    let resolved = resolve_export_path(&path)?;
+    fs::write(&resolved, &content)
+        .map_err(|e| format!("Failed to write file '{}': {e}", resolved.display()))
 }
 
 #[tauri::command]
@@ -289,12 +339,14 @@ pub fn export_markdown_to_pdf_file(
     content: &str,
     palette: &PdfExportPalette,
 ) -> Result<(), String> {
+    let resolved = resolve_export_path(path)?;
     let pdf_bytes = build_markdown_pdf(content, palette, |src| {
         resolve_markdown_image_bytes(note_sources, note_id, src)
             .ok()
             .flatten()
     })?;
-    fs::write(path, pdf_bytes).map_err(|e| format!("Failed to write PDF: {e}"))
+    fs::write(&resolved, pdf_bytes)
+        .map_err(|e| format!("Failed to write PDF '{}': {e}", resolved.display()))
 }
 
 fn resolve_markdown_image_bytes(
@@ -1746,6 +1798,15 @@ mod tests {
     use super::*;
     use image::codecs::png::PngEncoder;
     use image::{ColorType, ImageEncoder, Rgb, RgbImage};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_suffix() -> u128 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    }
 
     fn tiny_png_bytes() -> Vec<u8> {
         let image = RgbImage::from_pixel(1, 1, Rgb([255, 0, 0]));
@@ -1800,6 +1861,49 @@ mod tests {
     fn decode_data_url_image_bytes_rejects_non_base64() {
         let err = decode_data_url_image_bytes("data:image/png,abc").expect_err("expected error");
         assert!(err.contains("non-base64"));
+    }
+
+    #[test]
+    fn resolve_export_path_expands_tilde_prefix() {
+        let raw = format!("~/slate-export-{}.txt", unique_suffix());
+        let resolved = resolve_export_path(&raw).expect("tilde path should resolve");
+        let home = std::env::var_os("HOME").expect("HOME should be set");
+        assert!(resolved.starts_with(home));
+        assert!(resolved.to_string_lossy().contains("slate-export-"));
+    }
+
+    #[test]
+    fn export_to_file_supports_tilde_paths() {
+        let relative = format!("slate-export-{}.txt", unique_suffix());
+        let raw = format!("~/{}", relative);
+        let home = std::env::var_os("HOME").expect("HOME should be set");
+        let full_path = PathBuf::from(home).join(relative);
+        match export_to_file(raw, "hello".to_string()) {
+            Ok(()) => {
+                let read_back =
+                    fs::read_to_string(&full_path).expect("exported file should be readable");
+                assert_eq!(read_back, "hello");
+                let _ = fs::remove_file(full_path);
+            }
+            Err(error) => {
+                let lowered = error.to_ascii_lowercase();
+                assert!(error.contains(full_path.to_string_lossy().as_ref()));
+                assert!(
+                    lowered.contains("read-only file system")
+                        || lowered.contains("permission denied"),
+                    "unexpected export error: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn resolve_export_path_rejects_missing_parent_directory() {
+        let missing_dir = std::env::temp_dir().join(format!("slate-no-dir-{}", unique_suffix()));
+        let target = missing_dir.join("out.pdf");
+        let err = resolve_export_path(target.to_string_lossy().as_ref())
+            .expect_err("missing parent should fail");
+        assert!(err.contains("does not exist"));
     }
 
     #[test]

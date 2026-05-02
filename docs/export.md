@@ -19,6 +19,12 @@ If path is omitted:
 - `md` and `txt` export to clipboard
 - `pdf` returns usage error and requires a path
 
+Path behavior:
+
+- `~` / `~/...` is expanded to `$HOME` in command-path exports
+- relative paths are resolved from the current process working directory
+- parent directory must already exist and be writable
+
 ## GUI export entry points
 
 - `Ctrl+E`: export note body to clipboard
