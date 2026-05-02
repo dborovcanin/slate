@@ -534,11 +534,19 @@ fn reorder_checklist_toggle(
 
     let start = ctx.line(start_line);
     let end = ctx.line(end_line);
+    // When a checked line is auto-moved to the bottom, keep the caret in the
+    // original visual slot so repeated toggles don't yank focus to the end.
+    let selection_idx = if move_to_bottom && source_idx < updated_lines.len().saturating_sub(1) {
+        source_idx
+    } else {
+        target_idx
+    };
+
     let mut anchor = start.from;
-    for line_text in updated_lines.iter().take(target_idx) {
+    for line_text in updated_lines.iter().take(selection_idx) {
         anchor += line_text.len() + 1;
     }
-    anchor += updated_lines[target_idx].len();
+    anchor += updated_lines[selection_idx].len();
 
     Some(replace_range(
         start.from,
@@ -1766,9 +1774,17 @@ mod tests {
         let first_line_end = text.find('\n').expect("newline");
         let doc = snapshot(text, first_line_end, first_line_end);
         let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        let result = apply_operation(doc.text(), &op);
+        assert_eq!(result, "- [ ] second\n- [x] done\n- [x] first");
+        let expected_anchor = result
+            .find('\n')
+            .expect("first line should exist in reordered result");
         assert_eq!(
-            apply_operation(doc.text(), &op),
-            "- [ ] second\n- [x] done\n- [x] first"
+            op.selection,
+            Some(OperationSelection {
+                anchor: expected_anchor,
+                head: None
+            })
         );
     }
 
