@@ -446,6 +446,87 @@ fn clip_watch_commands_toggle_terminal_watcher() {
 }
 
 #[test]
+fn export_md_without_path_uses_terminal_clipboard_fallback() {
+    let (db, mut app, path) = app_with_note("alpha\nbeta");
+    app.mode = UiMode::Normal;
+
+    app.execute_terminal_command(&db, "export md");
+
+    assert!(
+        app.status.starts_with("exported md to clipboard"),
+        "status was: {}",
+        app.status
+    );
+    assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+    assert_eq!(app.clipboard.text, "alpha\nbeta");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn export_txt_with_path_writes_file() {
+    let (db, mut app, path) = app_with_note("plain text body");
+    app.mode = UiMode::Normal;
+    let export_path = std::env::temp_dir().join(format!("slate-export-{}.txt", ulid::Ulid::new()));
+    let export_path_str = export_path.to_string_lossy().to_string();
+
+    app.execute_terminal_command(&db, &format!("export txt {}", export_path_str));
+
+    assert_eq!(
+        app.status,
+        format!("exported txt to {}", export_path_str)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&export_path).expect("exported text file should be readable"),
+        "plain text body"
+    );
+
+    let _ = std::fs::remove_file(&export_path);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn export_pdf_with_path_writes_pdf_file() {
+    let (db, mut app, path) = app_with_note("# Export\n\n- [x] done");
+    app.mode = UiMode::Normal;
+    let export_path = std::env::temp_dir().join(format!("slate-export-{}.pdf", ulid::Ulid::new()));
+    let export_path_str = export_path.to_string_lossy().to_string();
+
+    app.execute_terminal_command(&db, &format!("export pdf {}", export_path_str));
+
+    assert_eq!(
+        app.status,
+        format!("exported pdf to {}", export_path_str)
+    );
+    let bytes = std::fs::read(&export_path).expect("exported pdf should be readable");
+    assert!(bytes.starts_with(b"%PDF-"), "missing PDF header");
+    assert!(bytes.len() > 100, "pdf output unexpectedly small");
+
+    let _ = std::fs::remove_file(&export_path);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn export_pdf_without_path_returns_usage_error() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.mode = UiMode::Normal;
+
+    app.execute_terminal_command(&db, "export pdf");
+
+    assert_eq!(app.status, "usage: export pdf <path>");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn module_commands_update_and_persist_note_modules() {
     let (db, mut app, path) = app_with_note("alpha := 10\nalp");
     app.mode = UiMode::Editor;

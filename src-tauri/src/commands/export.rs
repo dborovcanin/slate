@@ -1,4 +1,5 @@
 use app_core::AppCore;
+use app_core::note_sources::NoteSourceService;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use editor_core::calc_plan;
@@ -272,22 +273,36 @@ pub fn export_to_pdf(
     content: String,
     palette: PdfExportPalette,
 ) -> Result<(), String> {
-    let pdf_bytes = build_markdown_pdf(&content, &palette, |src| {
-        resolve_markdown_image_bytes(&core, &note_id, src)
+    export_markdown_to_pdf_file(
+        &core.note_sources(),
+        &note_id,
+        &path,
+        &content,
+        &palette,
+    )
+}
+
+pub fn export_markdown_to_pdf_file(
+    note_sources: &NoteSourceService,
+    note_id: &str,
+    path: &str,
+    content: &str,
+    palette: &PdfExportPalette,
+) -> Result<(), String> {
+    let pdf_bytes = build_markdown_pdf(content, palette, |src| {
+        resolve_markdown_image_bytes(note_sources, note_id, src)
             .ok()
             .flatten()
     })?;
-    fs::write(&path, pdf_bytes).map_err(|e| format!("Failed to write PDF: {e}"))
+    fs::write(path, pdf_bytes).map_err(|e| format!("Failed to write PDF: {e}"))
 }
 
 fn resolve_markdown_image_bytes(
-    core: &State<'_, AppCore>,
+    note_sources: &NoteSourceService,
     note_id: &str,
     src: &str,
 ) -> Result<Option<Vec<u8>>, String> {
-    let resolved = core
-        .note_sources()
-        .resolve_image_markdown_source_by_id(note_id, src)?;
+    let resolved = note_sources.resolve_image_markdown_source_by_id(note_id, src)?;
     let Some(value) = resolved else {
         return Ok(None);
     };

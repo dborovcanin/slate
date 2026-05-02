@@ -1103,6 +1103,7 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::Export { format, path } => {
+                    let content = join_lines(&self.lines);
                     self.status = match (format, path) {
                         (crate::editor_core::command_catalog::ExportFormat::Pdf, None) => {
                             "usage: export pdf <path>".to_string()
@@ -1112,14 +1113,30 @@ impl TerminalApp {
                             | crate::editor_core::command_catalog::ExportFormat::Txt,
                             None,
                         ) => {
-                            "export clipboard fallback is currently GUI-only".to_string()
+                            let _ = self.set_clipboard_charwise(content);
+                            self.with_clipboard_status(format!("exported {} to clipboard", format.as_str()))
                         }
                         (
-                            crate::editor_core::command_catalog::ExportFormat::Pdf
-                            | crate::editor_core::command_catalog::ExportFormat::Md
+                            crate::editor_core::command_catalog::ExportFormat::Md
                             | crate::editor_core::command_catalog::ExportFormat::Txt,
-                            Some(_),
-                        ) => "export command is currently GUI-only".to_string(),
+                            Some(path),
+                        ) => match crate::commands::export::export_to_file(path.clone(), content) {
+                            Ok(()) => format!("exported {} to {}", format.as_str(), path),
+                            Err(error) => format!("export failed: {error}"),
+                        },
+                        (
+                            crate::editor_core::command_catalog::ExportFormat::Pdf,
+                            Some(path),
+                        ) => match crate::commands::export::export_markdown_to_pdf_file(
+                            &note_sources(db),
+                            &self.active_note.id,
+                            &path,
+                            &content,
+                            &crate::commands::export::PdfExportPalette::default(),
+                        ) {
+                            Ok(()) => format!("exported {} to {}", format.as_str(), path),
+                            Err(error) => format!("export failed: {error}"),
+                        },
                     };
                     return;
                 }
