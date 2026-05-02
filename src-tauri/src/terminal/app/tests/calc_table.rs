@@ -873,9 +873,73 @@ fn shift_enter_in_table_cell_splits_into_next_row() {
     assert!(app.lines.iter().all(|line| !line.contains("<br>")));
     assert!(app.lines[2].contains("| ok"));
     assert!(app.lines[2].contains("| da"));
-    assert!(app.lines[3].starts_with('|'));
-    assert!(!app.lines[3].starts_with("|>"));
+    assert!(app.lines[3].starts_with("|>"));
     assert!(app.lines[3].contains("| ta"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn multiline_paste_inside_table_cell_creates_continuation_rows_in_same_cell() {
+    let (db, mut app, path) = app_with_note("| h1 | h2 |\n| --- | --- |\n| left | right |");
+    app.cursor_line = 2;
+    app.cursor_col = app.lines[2].find("right").expect("right") + 2; // ri|ght
+
+    app.insert_paste("A\nB\nC");
+
+    assert_eq!(app.lines.len(), 5);
+    assert_eq!(
+        crate::editor_core::table::split_table_cells(&app.lines[2])[1],
+        "riA"
+    );
+    assert!(crate::editor_core::table::is_table_continuation_line(
+        &app.lines[3]
+    ));
+    assert_eq!(
+        crate::editor_core::table::split_table_cells(&app.lines[3])[1],
+        "B"
+    );
+    assert!(crate::editor_core::table::is_table_continuation_line(
+        &app.lines[4]
+    ));
+    assert_eq!(
+        crate::editor_core::table::split_table_cells(&app.lines[4])[1],
+        "Cght"
+    );
+
+    app.insert_char('X');
+    assert_eq!(
+        crate::editor_core::table::split_table_cells(&app.lines[4])[1],
+        "CXght"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn deleting_last_content_in_continuation_row_removes_that_row() {
+    let (db, mut app, path) = app_with_note("| h |\n| --- |\n| base |\n|> tail |");
+    app.cursor_line = 3;
+    app.cursor_col = app.lines[3].find("tail").expect("tail") + "tail".chars().count();
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Backspace,
+            Key::Backspace,
+            Key::Backspace,
+            Key::Backspace,
+        ],
+    );
+
+    assert_eq!(app.lines, vec!["| h    |", "| ---- |", "| base |"]);
+    assert!(app.lines.iter().all(|line| !line.starts_with("|>")));
+    assert_eq!(app.cursor_line, 2);
 
     drop(app);
     drop(db);

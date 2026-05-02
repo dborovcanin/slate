@@ -209,6 +209,18 @@ fn strip_continuation_marker(raw: &str) -> String {
     out
 }
 
+fn normalize_continuation_first_cell_content(raw: &str) -> String {
+    let mut current = raw.to_string();
+    loop {
+        let next = strip_continuation_marker(&current);
+        if next == current {
+            break;
+        }
+        current = next;
+    }
+    current.trim().to_string()
+}
+
 fn split_row_cells_raw_with_kind(line: &str) -> Option<(Vec<String>, bool)> {
     if !is_table_line(line) {
         return None;
@@ -658,9 +670,10 @@ pub fn format_table_lines_with_cache(
 
     let mut normalized_content: Vec<Vec<String>> = Vec::with_capacity(normalized_rows.len());
     let mut delimiter_flags: Vec<bool> = Vec::with_capacity(normalized_rows.len());
-    for row in &normalized_rows {
+    for (row_idx, row) in normalized_rows.iter().enumerate() {
         let delimiter = is_delimiter_row(row);
         delimiter_flags.push(delimiter);
+        let continuation = *row_cont.get(row_idx).unwrap_or(&false);
         let mut out = Vec::with_capacity(column_count);
         for col in 0..column_count {
             let raw = row.get(col).map_or("", |cell| cell.as_str());
@@ -670,6 +683,8 @@ pub fn format_table_lines_with_cache(
                 } else {
                     normalize_delimiter_cell(raw)
                 }
+            } else if continuation && col == 0 {
+                normalize_continuation_first_cell_content(raw)
             } else {
                 raw.trim().to_string()
             };
@@ -822,30 +837,41 @@ pub fn map_table_cursor_column(source_line: &str, target_line: &str, source_col:
         return source_col.min(target_line.len());
     };
     let source_left = source_cell.left_pipe + 1;
+    let source_cont_first = is_table_continuation_line(source_line) && source_cell_index == 0;
+    let target_cont_first = is_table_continuation_line(target_line) && target_cell_index == 0;
+    let source_raw = &source_line[source_left..source_cell.right_pipe];
+    let (source_trim_start, source_trim_end) = logical_trim_offsets(source_raw, source_cont_first);
     let source_in_cell = source_col
         .saturating_sub(source_left)
         .min(source_cell.right_pipe.saturating_sub(source_left));
 
-    let source_content_len = source_cell.trim_end.saturating_sub(source_cell.trim_start);
+    let source_content_len = source_trim_end.saturating_sub(source_trim_start);
     let semantic_offset = if source_content_len == 0 {
         0
-    } else if source_in_cell <= source_cell.trim_start {
+    } else if source_in_cell <= source_trim_start {
         0
-    } else if source_in_cell >= source_cell.trim_end {
+    } else if source_in_cell >= source_trim_end {
         source_content_len
     } else {
-        source_in_cell.saturating_sub(source_cell.trim_start)
+        source_in_cell.saturating_sub(source_trim_start)
     };
 
     let Some(target_cell) = table_cell_span(target_line, &target_pipes, target_cell_index) else {
         return source_col.min(target_line.len());
     };
     let target_left = target_cell.left_pipe + 1;
-    let target_content_len = target_cell.trim_end.saturating_sub(target_cell.trim_start);
+    let target_raw = &target_line[target_left..target_cell.right_pipe];
+    let (target_trim_start, target_trim_end) = logical_trim_offsets(target_raw, target_cont_first);
+    let target_content_len = target_trim_end.saturating_sub(target_trim_start);
     if target_content_len == 0 {
-        return target_cell.navigation_anchor().min(target_line.len());
+        let anchor = if target_cont_first {
+            (target_cell.left_pipe + 2).min(target_cell.right_pipe)
+        } else {
+            target_cell.navigation_anchor()
+        };
+        return anchor.min(target_line.len());
     }
-    let mapped_in_target = target_cell.trim_start + semantic_offset.min(target_content_len);
+    let mapped_in_target = target_trim_start + semantic_offset.min(target_content_len);
     (target_left + mapped_in_target).min(target_line.len())
 }
 
@@ -979,6 +1005,15 @@ mod tests {
     }
 
     #[test]
+    fn map_table_cursor_column_ignores_continuation_marker_for_first_cell() {
+        let source = "|> abc |";
+        let target = "|> abcde |";
+        let source_col = source.find("b").expect("b");
+        let mapped = map_table_cursor_column(source, target, source_col);
+        assert_eq!(mapped, target.find("b").expect("b"));
+    }
+
+    #[test]
     fn table_cell_cursor_info_cached_reuses_and_invalidates_on_table_change() {
         let mut lines = vec![
             "before".to_string(),
@@ -1023,6 +1058,18 @@ mod tests {
         let out = format_table_lines(&lines);
         assert_eq!(out[3], "|> beta detail | two   |");
         assert_eq!(out[2], "| alpha       | one   |");
+    }
+
+    #[test]
+    fn format_table_lines_strips_repeated_continuation_marker_artifacts() {
+        let lines = vec![
+            "| name |".to_string(),
+            "| --- |".to_string(),
+            "| alpha |".to_string(),
+            "|> > detail |".to_string(),
+        ];
+        let out = format_table_lines(&lines);
+        assert_eq!(out[3], "|> detail |");
     }
 
     #[test]

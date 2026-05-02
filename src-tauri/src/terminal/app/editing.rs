@@ -1677,6 +1677,7 @@ impl TerminalApp {
                 self.cursor_col = col;
                 self.refresh_calc_line_metadata_at(self.cursor_line);
                 self.mark_edited();
+                self.prune_empty_table_continuation_row_at_cursor();
                 return true;
             }
         }
@@ -1697,6 +1698,7 @@ impl TerminalApp {
         self.cursor_col = col;
         self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
+        self.prune_empty_table_continuation_row_at_cursor();
         true
     }
 
@@ -1726,6 +1728,149 @@ impl TerminalApp {
         self.mark_edited();
     }
 
+    fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
+        if !self.note_table_module_enabled() || !normalized.contains('\n') || self.lines.is_empty()
+        {
+            return false;
+        }
+
+        let line_idx = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let Some(cell_info) = table_cell_info_at_char(&self.lines, line_idx, self.cursor_col)
+        else {
+            return false;
+        };
+        let Some(current_line) = self.lines.get(line_idx).cloned() else {
+            return false;
+        };
+        if !is_markdown_table_line(&current_line) {
+            return false;
+        }
+        if crate::editor_core::table::is_delimiter_row(
+            &crate::editor_core::table::split_table_cells(&current_line),
+        ) {
+            return false;
+        }
+
+        let mut block_start = line_idx;
+        while block_start > 0 && is_markdown_table_line(&self.lines[block_start - 1]) {
+            block_start -= 1;
+        }
+        let mut block_end = line_idx;
+        while block_end + 1 < self.lines.len() && is_markdown_table_line(&self.lines[block_end + 1])
+        {
+            block_end += 1;
+        }
+
+        let parts: Vec<&str> = normalized.split('\n').collect();
+        if parts.len() < 2 {
+            return false;
+        }
+
+        let mut row_cells: Vec<Vec<String>> = (block_start..=block_end)
+            .map(|ln| crate::editor_core::table::split_table_cells(&self.lines[ln]))
+            .collect();
+        let mut row_continuations: Vec<bool> = (block_start..=block_end)
+            .map(|ln| crate::editor_core::table::is_table_continuation_line(&self.lines[ln]))
+            .collect();
+        let relative_row = line_idx.saturating_sub(block_start);
+        let Some(current_row_len) = row_cells.get(relative_row).map(|row| row.len()) else {
+            return false;
+        };
+        let column_count = current_row_len
+            .max(cell_info.column_count)
+            .max(cell_info.column_index + 1)
+            .max(1);
+        for row in &mut row_cells {
+            while row.len() < column_count {
+                row.push(String::new());
+            }
+        }
+
+        let pipes = crate::editor_core::table::table_pipe_positions(&current_line);
+        let Some(span) = crate::editor_core::table::table_cell_span(
+            &current_line,
+            &pipes,
+            cell_info.column_index,
+        ) else {
+            return false;
+        };
+        let content_start = (span.left_pipe + 1 + span.trim_start).min(current_line.len());
+        let content_end = (span.left_pipe + 1 + span.trim_end).min(current_line.len());
+        let cursor_byte =
+            byte_index(&current_line, self.cursor_col).clamp(content_start, content_end);
+        let left_existing = current_line[content_start..cursor_byte].to_string();
+        let right_existing = current_line[cursor_byte..content_end].to_string();
+
+        if let Some(cell) = row_cells
+            .get_mut(relative_row)
+            .and_then(|row| row.get_mut(cell_info.column_index))
+        {
+            *cell = format!("{left_existing}{}", parts[0]);
+        }
+
+        for (idx, part) in parts.iter().enumerate().skip(1) {
+            let mut next_row = vec![String::new(); column_count];
+            if let Some(cell) = next_row.get_mut(cell_info.column_index) {
+                if idx + 1 == parts.len() {
+                    *cell = format!("{part}{right_existing}");
+                } else {
+                    *cell = (*part).to_string();
+                }
+            }
+            row_cells.insert(relative_row + idx, next_row);
+            row_continuations.insert(relative_row + idx, true);
+        }
+
+        let raw_lines: Vec<String> = row_cells
+            .iter()
+            .enumerate()
+            .map(|(idx, cells)| {
+                crate::editor_core::table::serialize_table_row_with_kind(
+                    cells,
+                    row_continuations[idx],
+                )
+            })
+            .collect();
+        let formatted = crate::editor_core::table::format_table_lines_with_cache(
+            &raw_lines,
+            &mut self.table_format_cache,
+        );
+
+        let replaced_count = block_end.saturating_sub(block_start) + 1;
+        self.lines
+            .splice(block_start..=block_end, formatted.clone());
+
+        let target_relative_row = relative_row + parts.len() - 1;
+        self.cursor_line =
+            (block_start + target_relative_row).min(self.lines.len().saturating_sub(1));
+        if let Some(target_line) = self.lines.get(self.cursor_line) {
+            let target_pipes = crate::editor_core::table::table_pipe_positions(target_line);
+            if let Some(target_span) = crate::editor_core::table::table_cell_span(
+                target_line,
+                &target_pipes,
+                cell_info.column_index,
+            ) {
+                let target_start = target_span
+                    .edit_start()
+                    .min(target_span.navigation_anchor());
+                let mut target_byte =
+                    target_start.saturating_add(parts.last().map(|part| part.len()).unwrap_or(0));
+                if target_byte > target_span.navigation_anchor() {
+                    target_byte = target_span.navigation_anchor();
+                }
+                self.cursor_col = target_line[..target_byte].chars().count();
+            } else {
+                self.cursor_col = 0;
+            }
+        } else {
+            self.cursor_col = 0;
+        }
+
+        self.splice_calc_line_metadata(block_start, replaced_count, formatted.len());
+        self.mark_edited_from_line(block_start);
+        true
+    }
+
     pub(super) fn insert_paste(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -1737,6 +1882,9 @@ impl TerminalApp {
 
         // Normalize line endings to keep cursor/line mapping predictable.
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        if self.try_insert_table_cell_multiline_paste(&normalized) {
+            return;
+        }
         let parts: Vec<&str> = normalized.split('\n').collect();
         if parts.is_empty() {
             return;
@@ -2320,6 +2468,9 @@ impl TerminalApp {
         let changed = !op.changes.is_empty();
         let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
         self.apply_edit_operation(&mapped);
+        if changed {
+            self.prune_empty_table_continuation_row_at_cursor();
+        }
         Some(changed)
     }
 
@@ -2487,6 +2638,52 @@ impl TerminalApp {
         self.adjust_scroll();
     }
 
+    fn prune_empty_table_continuation_row_at_cursor(&mut self) -> bool {
+        if !self.note_table_module_enabled() || self.lines.is_empty() {
+            return false;
+        }
+        if self.cursor_line >= self.lines.len() {
+            return false;
+        }
+        let current = self.current_line();
+        if !crate::editor_core::table::is_table_continuation_line(current) {
+            return false;
+        }
+        let mut cells = crate::editor_core::table::split_table_cells(current);
+        if let Some(first) = cells.first_mut() {
+            let mut cleaned = first.trim().to_string();
+            while let Some(rest) = cleaned.strip_prefix('>') {
+                cleaned = rest.trim_start().to_string();
+            }
+            *first = cleaned;
+        }
+        if cells.iter().any(|cell| !cell.trim().is_empty()) {
+            return false;
+        }
+
+        let remove_line = self.cursor_line;
+        self.lines.remove(remove_line);
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+            self.cursor_line = 0;
+            self.cursor_col = 0;
+        } else {
+            self.cursor_line = remove_line.saturating_sub(1).min(self.lines.len() - 1);
+            self.cursor_col = self.cursor_col.min(line_char_len(self.current_line()));
+            if self.note_table_module_enabled() {
+                if let Some(cell) =
+                    table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
+                {
+                    self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+                }
+            }
+        }
+
+        self.splice_calc_line_metadata(remove_line, 1, 0);
+        self.mark_edited_from_line(remove_line.saturating_sub(1));
+        true
+    }
+
     pub(super) fn backspace(&mut self) {
         if self.note_table_module_enabled() {
             if let Some(cell) =
@@ -2495,20 +2692,24 @@ impl TerminalApp {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
                 if self.cursor_col <= edit_start {
+                    self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
                 if self.cursor_col > edit_end {
                     self.cursor_col = edit_end;
+                    self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
                 let new_col = self.cursor_col - 1;
                 if new_col < edit_start {
+                    self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
                 remove_char_at(&mut self.lines[self.cursor_line], new_col);
                 self.cursor_col = new_col;
                 self.refresh_calc_line_metadata_at(self.cursor_line);
                 self.mark_edited();
+                self.prune_empty_table_continuation_row_at_cursor();
                 return;
             }
         }
@@ -2519,6 +2720,7 @@ impl TerminalApp {
             self.cursor_col = new_col;
             self.refresh_calc_line_metadata_at(self.cursor_line);
             self.mark_edited();
+            self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
 
@@ -2544,15 +2746,18 @@ impl TerminalApp {
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
                 if self.cursor_col < edit_start {
                     self.cursor_col = edit_start;
+                    self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
                 if self.cursor_col >= edit_end {
+                    self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
                 let col = self.cursor_col;
                 remove_char_at(&mut self.lines[self.cursor_line], col);
                 self.refresh_calc_line_metadata_at(self.cursor_line);
                 self.mark_edited();
+                self.prune_empty_table_continuation_row_at_cursor();
                 return;
             }
         }
@@ -2563,6 +2768,7 @@ impl TerminalApp {
             remove_char_at(&mut self.lines[self.cursor_line], col);
             self.refresh_calc_line_metadata_at(self.cursor_line);
             self.mark_edited();
+            self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
 

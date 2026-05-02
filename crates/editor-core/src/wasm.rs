@@ -337,16 +337,30 @@ enum HostCommandPlanWire {
     Date,
     Notify,
     NotifyDelete,
-    Write { quit: bool, force: bool },
+    Write {
+        quit: bool,
+        force: bool,
+    },
     Export {
         format: String,
         path: Option<String>,
     },
-    Module { command: String },
-    Fold { action: String },
-    ClipWatch { action: String },
-    NoteSecurity { action: String, password: String },
-    Quit { force: bool },
+    Module {
+        command: String,
+    },
+    Fold {
+        action: String,
+    },
+    ClipWatch {
+        action: String,
+    },
+    NoteSecurity {
+        action: String,
+        password: String,
+    },
+    Quit {
+        force: bool,
+    },
 }
 
 fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {

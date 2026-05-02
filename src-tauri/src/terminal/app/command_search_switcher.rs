@@ -1114,7 +1114,10 @@ impl TerminalApp {
                             None,
                         ) => {
                             let _ = self.set_clipboard_charwise(content);
-                            self.with_clipboard_status(format!("exported {} to clipboard", format.as_str()))
+                            self.with_clipboard_status(format!(
+                                "exported {} to clipboard",
+                                format.as_str()
+                            ))
                         }
                         (
                             crate::editor_core::command_catalog::ExportFormat::Md
@@ -1124,19 +1127,18 @@ impl TerminalApp {
                             Ok(()) => format!("exported {} to {}", format.as_str(), path),
                             Err(error) => format!("export failed: {error}"),
                         },
-                        (
-                            crate::editor_core::command_catalog::ExportFormat::Pdf,
-                            Some(path),
-                        ) => match crate::commands::export::export_markdown_to_pdf_file(
-                            &note_sources(db),
-                            &self.active_note.id,
-                            &path,
-                            &content,
-                            &crate::commands::export::PdfExportPalette::default(),
-                        ) {
-                            Ok(()) => format!("exported {} to {}", format.as_str(), path),
-                            Err(error) => format!("export failed: {error}"),
-                        },
+                        (crate::editor_core::command_catalog::ExportFormat::Pdf, Some(path)) => {
+                            match crate::commands::export::export_markdown_to_pdf_file(
+                                &note_sources(db),
+                                &self.active_note.id,
+                                &path,
+                                &content,
+                                &crate::commands::export::PdfExportPalette::default(),
+                            ) {
+                                Ok(()) => format!("exported {} to {}", format.as_str(), path),
+                                Err(error) => format!("export failed: {error}"),
+                            }
+                        }
                     };
                     return;
                 }

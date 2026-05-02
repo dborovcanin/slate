@@ -1238,7 +1238,7 @@ pub fn run_table_multiline_break_rule_with_table_cache(
         *cell = right_text;
     }
     row_cells.insert(relative_row + 1, next_row_cells);
-    row_continuations.insert(relative_row + 1, false);
+    row_continuations.insert(relative_row + 1, true);
 
     let had_delimiter_row = row_cells
         .iter()
@@ -2319,7 +2319,7 @@ mod tests {
         let op = run_table_multiline_break_rule(&snap, true).expect("rule fires");
         assert_eq!(
             apply_operation(text, &op),
-            "| left | va  |\n| ---- | --- |\n|      | lue |"
+            "| left | va  |\n| ---- | --- |\n|>      | lue |"
         );
         let result = apply_operation(text, &op);
         let anchor = op.selection.expect("selection").anchor;

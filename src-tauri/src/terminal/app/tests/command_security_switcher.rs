@@ -474,10 +474,7 @@ fn export_txt_with_path_writes_file() {
 
     app.execute_terminal_command(&db, &format!("export txt {}", export_path_str));
 
-    assert_eq!(
-        app.status,
-        format!("exported txt to {}", export_path_str)
-    );
+    assert_eq!(app.status, format!("exported txt to {}", export_path_str));
     assert_eq!(
         std::fs::read_to_string(&export_path).expect("exported text file should be readable"),
         "plain text body"
@@ -498,10 +495,7 @@ fn export_pdf_with_path_writes_pdf_file() {
 
     app.execute_terminal_command(&db, &format!("export pdf {}", export_path_str));
 
-    assert_eq!(
-        app.status,
-        format!("exported pdf to {}", export_path_str)
-    );
+    assert_eq!(app.status, format!("exported pdf to {}", export_path_str));
     let bytes = std::fs::read(&export_path).expect("exported pdf should be readable");
     assert!(bytes.starts_with(b"%PDF-"), "missing PDF header");
     assert!(bytes.len() > 100, "pdf output unexpectedly small");

@@ -331,6 +331,21 @@ impl RenderContext {
         let len = chars.len();
         let mut styles = vec![CharStyle::default(); len];
         let mut hidden_ranges: Vec<(usize, usize)> = Vec::new();
+        if crate::editor_core::table::is_table_continuation_line(text) {
+            // `|>` is a structural continuation marker, not editable cell content.
+            if let Some(style) = styles.get_mut(1) {
+                style.dim = true;
+                style.italic = true;
+                style.fg = Some(self.palette.code_comment);
+            }
+            if text.chars().nth(2).is_some_and(|ch| ch == ' ') {
+                if let Some(style) = styles.get_mut(2) {
+                    style.dim = true;
+                    style.italic = true;
+                    style.fg = Some(self.palette.code_comment);
+                }
+            }
+        }
 
         let info = markdown_tokens::classify_markdown_line(text);
 
