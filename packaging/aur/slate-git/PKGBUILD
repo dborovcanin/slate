@@ -1,0 +1,66 @@
+_pkgname=slate
+pkgname=${_pkgname}-git
+pkgver=0.2.0.r0.g0000000
+pkgrel=1
+pkgdesc="Minimal, keyboard-first note-taking scratchpad (git)"
+arch=("x86_64")
+url="https://github.com/dborovcanin/slate"
+license=("custom")
+depends=(
+  "cairo"
+  "desktop-file-utils"
+  "gdk-pixbuf2"
+  "glib2"
+  "gtk3"
+  "hicolor-icon-theme"
+  "libsoup3"
+  "pango"
+  "webkit2gtk-4.1"
+)
+makedepends=(
+  "binaryen"
+  "cargo"
+  "git"
+  "nodejs"
+  "npm"
+  "rust"
+  "wasm-pack"
+)
+provides=("slate")
+conflicts=("slate")
+source=(
+  "git+${url}.git"
+  "slate.desktop"
+)
+sha256sums=(
+  "SKIP"
+  "a8499b67a79500cae96ff79204a00a6df294e4987abe6063c20b311ea146f19d"
+)
+
+pkgver() {
+  cd "${_pkgname}"
+  local base
+  base="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+  printf "%s.r%s.g%s" \
+    "${base}" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+  cd "${_pkgname}"
+  npm ci --cache "${srcdir}/npm-cache" --prefer-offline
+}
+
+build() {
+  cd "${_pkgname}"
+  npm run build
+  cargo build --manifest-path src-tauri/Cargo.toml --release --locked
+}
+
+package() {
+  cd "${_pkgname}"
+  install -Dm755 "src-tauri/target/release/slate" "${pkgdir}/usr/bin/slate"
+  install -Dm644 "${srcdir}/slate.desktop" "${pkgdir}/usr/share/applications/slate.desktop"
+  install -Dm644 "slate.png" "${pkgdir}/usr/share/pixmaps/slate.png"
+}

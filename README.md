@@ -211,6 +211,25 @@ Or use:
 make install
 ```
 
+### Arch AUR Build Scripts
+
+This repo includes AUR packaging scripts under `packaging/aur/`:
+
+- `packaging/aur/slate-git/` (builds from latest GitHub `main`)
+
+Build locally with:
+
+```sh
+cd packaging/aur/slate-git
+makepkg -si
+```
+
+Refresh package metadata with:
+
+```sh
+./packaging/aur/update-srcinfo.sh
+```
+
 ### Cross-platform release artifacts
 
 ```sh
