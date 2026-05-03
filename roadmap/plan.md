@@ -240,6 +240,12 @@ Acceptance criteria:
 
 ## Future Updates
 
+## WASM Plugin System Track
+
+- [ ] Design finalized in `roadmap/wasm-plugin-system.md`.
+- [ ] Implement shared host runtime and `HostPlugin` command dispatch.
+- [ ] Add capability prompts, lifecycle hooks, and parity/conformance suites.
+
 ### Global
 
 - [x] Ability to open markdown files directly and save (export) to them (GUI launch via `slate <file.md>`)
