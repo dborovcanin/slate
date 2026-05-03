@@ -858,9 +858,8 @@ fn typing_space_in_table_cell_allows_followup_word_input() {
 
 #[test]
 fn typing_space_in_longest_cell_middle_preserves_text_and_keeps_table_aligned() {
-    let (db, mut app, path) = app_with_note(
-        "| h | v |\n| --- | --- |\n| abcd efgh | ok |\n| aa | bb |",
-    );
+    let (db, mut app, path) =
+        app_with_note("| h | v |\n| --- | --- |\n| abcd efgh | ok |\n| aa | bb |");
     app.cursor_line = 2;
     app.cursor_col = app.lines[2].find("efgh").expect("efgh");
 
@@ -891,13 +890,10 @@ fn typing_space_in_longest_cell_middle_preserves_text_and_keeps_table_aligned() 
 
 #[test]
 fn typing_spaces_at_right_edge_of_widest_cell_preserves_text_and_padding() {
-    let (db, mut app, path) = app_with_note(
-        "| h | v |\n| --- | --- |\n| alpha beta gamma | ok |\n| aa | bb |",
-    );
+    let (db, mut app, path) =
+        app_with_note("| h | v |\n| --- | --- |\n| alpha beta gamma | ok |\n| aa | bb |");
     app.cursor_line = 2;
-    app.cursor_col = app.lines[2]
-        .find("alpha beta gamma")
-        .expect("widest cell")
+    app.cursor_col = app.lines[2].find("alpha beta gamma").expect("widest cell")
         + "alpha beta gamma".chars().count();
 
     app.handle_editor_key(&db, Key::Char(' '))
@@ -927,8 +923,14 @@ fn typing_spaces_at_right_edge_of_widest_cell_preserves_text_and_padding() {
     let pipes = crate::editor_core::table::table_pipe_positions(&app.lines[2]);
     assert!(pipes.len() >= 2);
     let right_pipe = pipes[1];
-    assert_eq!(app.lines[2].chars().nth(right_pipe.saturating_sub(1)), Some(' '));
-    assert_eq!(app.lines[2].chars().nth(right_pipe.saturating_sub(2)), Some('x'));
+    assert_eq!(
+        app.lines[2].chars().nth(right_pipe.saturating_sub(1)),
+        Some(' ')
+    );
+    assert_eq!(
+        app.lines[2].chars().nth(right_pipe.saturating_sub(2)),
+        Some('x')
+    );
 
     drop(app);
     drop(db);

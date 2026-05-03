@@ -384,11 +384,12 @@ fn gui_try_apply_shared_vim_action(
         changed_range: None,
     };
     let register = gui_shared_vim_register(state);
-    let Some(result) = crate::editor_core::vim_actions::execute_vim_action(
+    let Some(result) = crate::editor_core::vim_actions::execute_vim_action_with_target(
         &snapshot,
         action.intent,
         action.count.max(1),
         register.as_ref(),
+        action.target_char,
     ) else {
         return false;
     };
@@ -900,6 +901,7 @@ fn apply_gui_vim_action(
         VimIntent::PasteAfter => {
             gui_paste_after(state, count);
         }
+        VimIntent::DeleteTillChar => {}
         VimIntent::Swallow => {}
         other => panic!(
             "unsupported GUI parity action {:?} in replay case {}",

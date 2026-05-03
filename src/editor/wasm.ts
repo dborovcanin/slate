@@ -224,6 +224,7 @@ export const VIM_INTENT = {
   DELETE_WORD_FORWARD: "delete_word_forward",
   DELETE_WORD_BACKWARD: "delete_word_backward",
   DELETE_WORD_END: "delete_word_end",
+  DELETE_TILL_CHAR: "delete_till_char",
   YANK_WORD_FORWARD: "yank_word_forward",
   YANK_WORD_BACKWARD: "yank_word_backward",
   YANK_VISUAL_SELECTION: "yank_visual_selection",
@@ -235,6 +236,7 @@ export type VimIntent = (typeof VIM_INTENT)[keyof typeof VIM_INTENT];
 export interface VimAction {
   intent: VimIntent;
   count: number;
+  targetChar?: string;
 }
 
 export interface VimStep {
@@ -1101,6 +1103,7 @@ export function executeVimActionFromWasm(
   intent: VimIntent,
   count: number,
   register: VimRegisterValue | null,
+  targetChar?: string | null,
 ): VimActionExecutionResult | null {
   if (!ensureWasmReadyNonBlocking()) return null;
   const text = snapshot.text;
@@ -1116,6 +1119,7 @@ export function executeVimActionFromWasm(
     count,
     register?.text ?? "",
     register?.mode ?? "",
+    targetChar?.slice(0, 1) ?? "",
   ) as unknown;
   return decodeVimActionExecutionResult(raw, text);
 }
@@ -1729,7 +1733,12 @@ function decodeVimStep(raw: unknown): VimStep {
       const intent = asVimIntent(action.intent);
       if (!intent) continue;
       const rawCount = typeof action.count === "number" ? action.count : 1;
-      actions.push({ intent, count: Math.max(1, rawCount) });
+      const rawTargetChar = action.target_char;
+      const targetChar =
+        typeof rawTargetChar === "string" && rawTargetChar.length > 0
+          ? rawTargetChar.slice(0, 1)
+          : undefined;
+      actions.push({ intent, count: Math.max(1, rawCount), targetChar });
     }
   }
 

@@ -19,6 +19,7 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
             | crate::editor_core::vim::VimIntent::DeleteAroundPipe
             | crate::editor_core::vim::VimIntent::YankInsidePipe
             | crate::editor_core::vim::VimIntent::YankAroundPipe
+            | crate::editor_core::vim::VimIntent::DeleteTillChar
     )
 }
 
@@ -109,6 +110,7 @@ impl TerminalApp {
         &mut self,
         intent: crate::editor_core::vim::VimIntent,
         count: usize,
+        target_char: Option<char>,
     ) -> Option<(
         crate::editor_core::vim_actions::VimActionExecutionResult,
         usize,
@@ -128,11 +130,12 @@ impl TerminalApp {
                 (self.build_snapshot(), 0)
             };
         let register = self.shared_vim_register();
-        let result = crate::editor_core::vim_actions::execute_vim_action(
+        let result = crate::editor_core::vim_actions::execute_vim_action_with_target(
             &snapshot,
             intent,
             count.max(1),
             register.as_ref(),
+            target_char,
         )?;
         Some((result, scope_start_offset))
     }
@@ -599,7 +602,7 @@ impl TerminalApp {
                 continue;
             }
             if let Some((shared, scope_start_offset)) =
-                self.try_execute_shared_vim_action(action.intent, count)
+                self.try_execute_shared_vim_action(action.intent, count, action.target_char)
             {
                 let had_register = shared.register.is_some();
                 let mapped = crate::editor_core::vim_actions::VimActionExecutionResult {
@@ -645,6 +648,9 @@ impl TerminalApp {
                         }
                         crate::editor_core::vim::VimIntent::DeleteWordEnd => {
                             Some(self.with_clipboard_status("deleted to word end"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteTillChar => {
+                            Some(self.with_clipboard_status("deleted till char"))
                         }
                         crate::editor_core::vim::VimIntent::DeleteInsideWord => {
                             Some(self.with_clipboard_status("deleted inside word"))
@@ -1163,6 +1169,7 @@ impl TerminalApp {
                     let _ = self.apply_visual_selection_action(true);
                 }
                 crate::editor_core::vim::VimIntent::DeleteWordEnd => {}
+                crate::editor_core::vim::VimIntent::DeleteTillChar => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
         }

@@ -521,6 +521,7 @@ pub fn wasm_execute_vim_action(
     count: usize,
     register_text: &str,
     register_mode: &str,
+    target_char: &str,
 ) -> Option<JsValue> {
     let intent: VimIntent = from_js_value(intent)?;
     let snapshot = EditorContextSnapshot {
@@ -536,7 +537,14 @@ pub fn wasm_execute_vim_action(
         text: register_text.to_string(),
         mode,
     });
-    let result = vim_actions::execute_vim_action(&snapshot, intent, count, register.as_ref())?;
+    let target_char = target_char.chars().next();
+    let result = vim_actions::execute_vim_action_with_target(
+        &snapshot,
+        intent,
+        count,
+        register.as_ref(),
+        target_char,
+    )?;
     vim_action_execution_result_to_js(&result)
 }
 

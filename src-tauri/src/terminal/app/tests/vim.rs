@@ -478,6 +478,55 @@ fn vim_de_uses_word_end_semantics_distinct_from_dw() {
 }
 
 #[test]
+fn vim_dt_deletes_until_before_target_char() {
+    let (db, mut app, path) = app_with_note("alpha beta gamma");
+    app.mode = UiMode::Normal;
+    app.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('d'), Key::Char('t'), Key::Char('b')],
+    );
+
+    assert_eq!(app.lines, vec!["beta gamma".to_string()]);
+    assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+    assert_eq!(app.clipboard.text, "alpha ");
+    assert_eq!(app.cursor_col, 0);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vim_d2tx_targets_second_match_of_char() {
+    let (db, mut app, path) = app_with_note("a x b x c");
+    app.mode = UiMode::Normal;
+    app.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('d'),
+            Key::Char('2'),
+            Key::Char('t'),
+            Key::Char('x'),
+        ],
+    );
+
+    assert_eq!(app.lines, vec!["x c".to_string()]);
+    assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+    assert_eq!(app.clipboard.text, "a x b ");
+    assert_eq!(app.cursor_col, 0);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn vim_yw_yanks_across_newline_when_motion_crosses_lines() {
     let (db, mut app, path) = app_with_note("alpha\nbeta");
     app.mode = UiMode::Normal;

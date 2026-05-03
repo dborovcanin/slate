@@ -259,7 +259,8 @@ impl TerminalApp {
                 }
             }
             Key::Char(ch) => {
-                let defer_table_space_autoformat = ch == ' ' && self.should_defer_table_space_autoformat();
+                let defer_table_space_autoformat =
+                    ch == ' ' && self.should_defer_table_space_autoformat();
                 if ch == '|' && self.try_table_pipe_insert_column_rule() {
                     should_autoformat = false;
                     clamp_table_padding = false;

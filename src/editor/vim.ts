@@ -79,6 +79,7 @@ function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
     case VIM_INTENT.DELETE_WORD_FORWARD:
     case VIM_INTENT.DELETE_WORD_BACKWARD:
     case VIM_INTENT.DELETE_WORD_END:
+    case VIM_INTENT.DELETE_TILL_CHAR:
     case VIM_INTENT.YANK_WORD_FORWARD:
     case VIM_INTENT.YANK_WORD_BACKWARD:
     case VIM_INTENT.DELETE_INSIDE_WORD:
@@ -108,6 +109,7 @@ function scopedSharedVimMarginLines(intent: VimIntent, count: number): number {
     case VIM_INTENT.DELETE_WORD_FORWARD:
     case VIM_INTENT.DELETE_WORD_BACKWARD:
     case VIM_INTENT.DELETE_WORD_END:
+    case VIM_INTENT.DELETE_TILL_CHAR:
     case VIM_INTENT.YANK_WORD_FORWARD:
     case VIM_INTENT.YANK_WORD_BACKWARD:
       return repeats + 8;
@@ -137,6 +139,7 @@ function executeSharedVimAction(
       action.intent,
       count,
       register,
+      action.targetChar ?? null,
     );
   }
 
@@ -149,6 +152,7 @@ function executeSharedVimAction(
     action.intent,
     count,
     register,
+    action.targetChar ?? null,
   );
   if (!result) return null;
   return {
@@ -875,6 +879,31 @@ export function vimModeExtension(options: VimOptions = {}) {
     return true;
   };
 
+  const deleteTillChar = (
+    view: EditorView,
+    count: number,
+    targetChar: string | undefined,
+  ) => {
+    const target = targetChar?.slice(0, 1);
+    if (!target) return false;
+    const head = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(head);
+    const rel = Math.max(0, Math.min(head - line.from, line.text.length));
+    let searchFrom = rel;
+    let matchIdx = -1;
+    for (let i = 0; i < count; i++) {
+      matchIdx = line.text.indexOf(target, searchFrom);
+      if (matchIdx < 0) return false;
+      searchFrom = matchIdx + target.length;
+    }
+    if (matchIdx <= rel) return false;
+    const from = line.from + rel;
+    const to = line.from + matchIdx;
+    setRegister(view.state.sliceDoc(from, to));
+    deleteRange(view, from, to);
+    return true;
+  };
+
   const yankWordForward = (view: EditorView, count: number) => {
     const chunks: string[] = [];
     const origHead = view.state.selection.main.head;
@@ -1187,6 +1216,8 @@ export function vimModeExtension(options: VimOptions = {}) {
         return deleteWordBackward(view, count);
       case VIM_INTENT.DELETE_WORD_END:
         return deleteWordEnd(view, count);
+      case VIM_INTENT.DELETE_TILL_CHAR:
+        return deleteTillChar(view, count, action.targetChar);
       case VIM_INTENT.YANK_WORD_FORWARD:
         return yankWordForward(view, count);
       case VIM_INTENT.YANK_WORD_BACKWARD:

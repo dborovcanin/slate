@@ -36,6 +36,16 @@ pub fn execute_vim_action(
     count: usize,
     register: Option<&VimRegisterValue>,
 ) -> Option<VimActionExecutionResult> {
+    execute_vim_action_with_target(snapshot, intent, count, register, None)
+}
+
+pub fn execute_vim_action_with_target(
+    snapshot: &EditorContextSnapshot,
+    intent: VimIntent,
+    count: usize,
+    register: Option<&VimRegisterValue>,
+    target_char: Option<char>,
+) -> Option<VimActionExecutionResult> {
     if !supports_intent(intent) {
         return None;
     }
@@ -75,6 +85,7 @@ pub fn execute_vim_action(
         VimIntent::YankWordBackward => Some(execute_yank_word_backward(snapshot, repeats)),
         VimIntent::PasteAfter => execute_paste_after(snapshot, repeats, register),
         VimIntent::DeleteChar => Some(execute_delete_char(snapshot, repeats)),
+        VimIntent::DeleteTillChar => Some(execute_delete_till_char(snapshot, repeats, target_char)),
         _ => None,
     }
 }
@@ -103,6 +114,7 @@ pub fn supports_intent(intent: VimIntent) -> bool {
             | VimIntent::YankWordBackward
             | VimIntent::PasteAfter
             | VimIntent::DeleteChar
+            | VimIntent::DeleteTillChar
     )
 }
 
@@ -461,6 +473,59 @@ fn execute_delete_word_end(
     }
 }
 
+fn execute_delete_till_char(
+    snapshot: &EditorContextSnapshot,
+    count: usize,
+    target_char: Option<char>,
+) -> VimActionExecutionResult {
+    let Some(target_char) = target_char else {
+        return VimActionExecutionResult::default();
+    };
+    let text = &snapshot.text;
+    let cursor = clamp_offset(text, snapshot.selection.head);
+    let spans = line_spans(text);
+    let idx = line_index_for_offset(&spans, cursor);
+    let (_line_from, line_to) = spans[idx];
+    if cursor >= line_to {
+        return VimActionExecutionResult::default();
+    }
+
+    let mut search = cursor;
+    let mut match_at: Option<usize> = None;
+    for _ in 0..count.max(1) {
+        let Some(next) = find_next_char_in_line(text, search, line_to, target_char) else {
+            return VimActionExecutionResult::default();
+        };
+        match_at = Some(next);
+        let after = next_char_boundary(text, next);
+        if after <= next {
+            break;
+        }
+        search = after.min(line_to);
+    }
+
+    let delete_to = match_at.unwrap_or(cursor);
+    if delete_to <= cursor {
+        return VimActionExecutionResult::default();
+    }
+    let deleted = text[cursor..delete_to].to_string();
+    VimActionExecutionResult {
+        operations: vec![replace_range(
+            cursor,
+            delete_to,
+            "",
+            Some(OperationSelection {
+                anchor: cursor,
+                head: None,
+            }),
+        )],
+        register: Some(VimRegisterValue {
+            text: deleted,
+            mode: VimRegisterMode::Charwise,
+        }),
+    }
+}
+
 fn execute_word_text_object(
     snapshot: &EditorContextSnapshot,
     around: bool,
@@ -752,6 +817,22 @@ fn char_at(text: &str, offset: usize) -> Option<char> {
     } else {
         text[offset..].chars().next()
     }
+}
+
+fn find_next_char_in_line(text: &str, from: usize, line_to: usize, target: char) -> Option<usize> {
+    let mut cursor = from.min(text.len()).min(line_to);
+    while cursor < line_to {
+        let ch = char_at(text, cursor)?;
+        if ch == target {
+            return Some(cursor);
+        }
+        let next = next_char_boundary(text, cursor);
+        if next <= cursor {
+            break;
+        }
+        cursor = next.min(line_to);
+    }
+    None
 }
 
 fn char_class(ch: char) -> u8 {
@@ -1218,6 +1299,41 @@ mod tests {
         assert_eq!(charwise_register(&result), Some("   "));
         let next = apply_operations(doc.text, &result.operations);
         assert_eq!(next, "foo");
+    }
+
+    #[test]
+    fn delete_till_char_deletes_up_to_but_not_including_target() {
+        let text = "alpha beta gamma";
+        let cursor = text.find("alpha").expect("alpha");
+        let doc = snapshot(text, cursor);
+        let result =
+            execute_vim_action_with_target(&doc, VimIntent::DeleteTillChar, 1, None, Some('b'))
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("alpha "));
+        let next = apply_operations(doc.text, &result.operations);
+        assert_eq!(next, "beta gamma");
+    }
+
+    #[test]
+    fn delete_till_char_count_targets_nth_match() {
+        let text = "a x b x c";
+        let doc = snapshot(text, 0);
+        let result =
+            execute_vim_action_with_target(&doc, VimIntent::DeleteTillChar, 2, None, Some('x'))
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("a x b "));
+        let next = apply_operations(doc.text, &result.operations);
+        assert_eq!(next, "x c");
+    }
+
+    #[test]
+    fn delete_till_char_noops_when_target_missing() {
+        let doc = snapshot("alpha beta", 0);
+        let result =
+            execute_vim_action_with_target(&doc, VimIntent::DeleteTillChar, 1, None, Some('z'))
+                .expect("handled");
+        assert!(result.operations.is_empty());
+        assert!(result.register.is_none());
     }
 
     #[test]

@@ -15,6 +15,7 @@ pub enum VimPending {
     Delete,
     Yank,
     Go,
+    DeleteTill,
     DeleteInner,
     DeleteAround,
     YankInner,
@@ -106,6 +107,7 @@ pub enum VimIntent {
     DeleteWordForward,
     DeleteWordBackward,
     DeleteWordEnd,
+    DeleteTillChar,
     YankInsideWord,
     YankAroundWord,
     YankWordForward,
@@ -132,6 +134,8 @@ pub struct VimAction {
     pub intent: VimIntent,
     #[serde(default)]
     pub count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_char: Option<char>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -145,6 +149,19 @@ fn make_action(intent: VimIntent, count: usize) -> VimAction {
     VimAction {
         intent,
         count: count.max(1),
+        target_char: None,
+    }
+}
+
+fn make_action_with_target(
+    intent: VimIntent,
+    count: usize,
+    target_char: Option<char>,
+) -> VimAction {
+    VimAction {
+        intent,
+        count: count.max(1),
+        target_char,
     }
 }
 
@@ -499,6 +516,15 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::Delete, VimKey::Char('t')) => {
+                next.pending = Some(VimPending::DeleteTill);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::Yank, VimKey::Char('y')) => {
                 let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankLine, count));
@@ -657,6 +683,20 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             (VimPending::YankAround, VimKey::Char('|')) => {
                 let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankAroundPipe, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteTill, VimKey::Char(target)) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action_with_target(
+                    VimIntent::DeleteTillChar,
+                    count,
+                    Some(target),
+                ));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -894,6 +934,28 @@ mod tests {
         assert!(two.handled);
         assert_eq!(two.actions[0].intent, VimIntent::DeleteWordEnd);
         assert_eq!(two.actions[0].count, 1);
+    }
+
+    #[test]
+    fn dt_emits_delete_till_char_with_target_and_count() {
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:t");
+        let three = step_token(&two.state, "char:x");
+        assert!(three.handled);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteTillChar);
+        assert_eq!(three.actions[0].count, 1);
+        assert_eq!(three.actions[0].target_char, Some('x'));
+
+        let start = VimState::default();
+        let one = step_token(&start, "char:2");
+        let two = step_token(&one.state, "char:d");
+        let three = step_token(&two.state, "char:3");
+        let four = step_token(&three.state, "char:t");
+        let five = step_token(&four.state, "char:.");
+        assert!(five.handled);
+        assert_eq!(five.actions[0].intent, VimIntent::DeleteTillChar);
+        assert_eq!(five.actions[0].count, 6);
+        assert_eq!(five.actions[0].target_char, Some('.'));
     }
 
     #[test]

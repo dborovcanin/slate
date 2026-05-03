@@ -474,6 +474,7 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::DeleteWordForward
                 | crate::editor_core::vim::VimIntent::DeleteWordBackward
                 | crate::editor_core::vim::VimIntent::DeleteWordEnd
+                | crate::editor_core::vim::VimIntent::DeleteTillChar
                 | crate::editor_core::vim::VimIntent::DeleteVisualSelection
                 | crate::editor_core::vim::VimIntent::Undo
                 | crate::editor_core::vim::VimIntent::Redo
