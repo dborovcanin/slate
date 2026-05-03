@@ -312,7 +312,7 @@ export const BACKGROUND_PRESETS: Record<string, BackgroundPreset> = {
   },
 };
 
-export const DEFAULT_COLOR_SCHEME = "gruvbox-light";
+export const DEFAULT_COLOR_SCHEME = "slate";
 export const DEFAULT_BACKGROUND = "plain";
 export const DEFAULT_FONT = "jetbrains-mono";
 export const DEFAULT_FONT_SIZE = 14;

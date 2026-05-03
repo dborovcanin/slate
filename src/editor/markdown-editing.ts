@@ -539,6 +539,73 @@ function tableMultilineBreak(view: EditorView, tableEnabled: boolean): boolean {
   return true;
 }
 
+interface TableLineBounds {
+  startLine: number;
+  endLine: number;
+}
+
+function tableBoundsForLineNo(state: EditorView["state"], lineNo: number): TableLineBounds | null {
+  if (lineNo < 1 || lineNo > state.doc.lines) return null;
+  if (!isMarkdownTableLine(state.doc.line(lineNo).text)) return null;
+  let startLine = lineNo;
+  let endLine = lineNo;
+  while (startLine > 1 && isMarkdownTableLine(state.doc.line(startLine - 1).text)) startLine -= 1;
+  while (endLine < state.doc.lines && isMarkdownTableLine(state.doc.line(endLine + 1).text)) endLine += 1;
+  return { startLine, endLine };
+}
+
+function isExactTableSelection(
+  state: EditorView["state"],
+  selection: EditorView["state"]["selection"]["main"],
+  bounds: TableLineBounds,
+): boolean {
+  if (selection.empty) return false;
+  const tableFrom = state.doc.line(bounds.startLine).from;
+  const tableTo = state.doc.line(bounds.endLine).to;
+  const selFrom = Math.min(selection.anchor, selection.head);
+  const selTo = Math.max(selection.anchor, selection.head);
+  return selFrom === tableFrom && selTo === tableTo;
+}
+
+function selectTableBounds(view: EditorView, bounds: TableLineBounds): boolean {
+  const from = view.state.doc.line(bounds.startLine).from;
+  const to = view.state.doc.line(bounds.endLine).to;
+  view.dispatch({
+    selection: { anchor: from, head: to },
+    scrollIntoView: true,
+  });
+  return true;
+}
+
+function tableVerticalTraverse(view: EditorView, direction: -1 | 1): boolean {
+  const main = view.state.selection.main;
+  const doc = view.state.doc;
+
+  if (!main.empty) {
+    const headLine = doc.lineAt(main.head).number;
+    const bounds = tableBoundsForLineNo(view.state, headLine);
+    if (!bounds || !isExactTableSelection(view.state, main, bounds)) return false;
+    const targetLine = direction < 0 ? bounds.startLine - 1 : bounds.endLine + 1;
+    if (targetLine < 1 || targetLine > doc.lines) return true;
+    view.dispatch({
+      selection: { anchor: doc.line(targetLine).from },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+
+  const headLine = doc.lineAt(main.head).number;
+  const currentBounds = tableBoundsForLineNo(view.state, headLine);
+  if (currentBounds) {
+    return selectTableBounds(view, currentBounds);
+  }
+
+  const adjacentLine = headLine + direction;
+  const adjacentBounds = tableBoundsForLineNo(view.state, adjacentLine);
+  if (!adjacentBounds) return false;
+  return selectTableBounds(view, adjacentBounds);
+}
+
 function markdownShortcutKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   const keys: KeyBinding[] = [
     { key: "Mod-b", preventDefault: true, run: (view) => toggleWrap(view, "**") },
@@ -575,6 +642,14 @@ function markdownTabKeymap(autoformat: boolean, tableEnabled: boolean): KeyBindi
 
 function tableCursorKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   return [
+    {
+      key: "ArrowUp",
+      run: (view) => tableVerticalTraverse(view, -1),
+    },
+    {
+      key: "ArrowDown",
+      run: (view) => tableVerticalTraverse(view, 1),
+    },
     {
       key: "Backspace",
       run: (view) => tableBoundaryEdit(view, autoformat, tableEnabled, true),

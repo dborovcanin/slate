@@ -1,15 +1,15 @@
 :root {
-  --bg: #1e1e2e;
-  --bg-surface: #252536;
-  --bg-overlay: #2a2a3c;
-  --fg: #cdd6f4;
-  --fg-dim: #6c7086;
-  --fg-muted: #585b70;
-  --accent: #89b4fa;
-  --border: #363647;
-  --selection-bg: rgba(137, 180, 250, 0.25);
-  --active-line-bg: rgba(255, 255, 255, 0.03);
-  --pattern-color: rgba(166, 173, 200, 0.08);
+  --bg: #f3efe8;
+  --bg-surface: #fbf8f2;
+  --bg-overlay: #f6f1e8;
+  --fg: #1e1c18;
+  --fg-dim: #6d665b;
+  --fg-muted: #8f8678;
+  --accent: #7a5a3a;
+  --border: #d8cec0;
+  --selection-bg: rgba(122, 90, 58, 0.18);
+  --active-line-bg: rgba(30, 28, 24, 0.05);
+  --pattern-color: rgba(30, 28, 24, 0.06);
   --code-bg: rgba(127, 132, 156, 0.08);
   --code-border: rgba(166, 173, 200, 0.2);
   --code-token-keyword: #89b4fa;

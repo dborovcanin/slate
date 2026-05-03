@@ -455,6 +455,7 @@ function moveTableColumnFromHeader(
   lineFrom: number,
   sourceColumn: number,
   targetColumn: number,
+  placeAfter = false,
 ): boolean {
   const lineNo = view.state.doc.lineAt(lineFrom).number;
   const bounds = findTableBlockBounds(view.state.doc, lineNo);
@@ -465,14 +466,19 @@ function moveTableColumnFromHeader(
   if (columnCount <= 1) return false;
   if (sourceColumn < 0 || sourceColumn >= columnCount) return false;
   if (targetColumn < 0 || targetColumn >= columnCount) return false;
-  if (sourceColumn === targetColumn) return false;
+  const insertBeforeRemoval = targetColumn + (placeAfter ? 1 : 0);
+  let insertAt = insertBeforeRemoval;
+  if (insertAt > sourceColumn) insertAt -= 1;
+  if (insertAt < 0) insertAt = 0;
+  if (insertAt >= columnCount) insertAt = columnCount - 1;
+  if (insertAt === sourceColumn) return false;
 
   for (const row of rows) {
     while (row.cells.length < columnCount) row.cells.push("");
     const [moved] = row.cells.splice(sourceColumn, 1);
-    row.cells.splice(targetColumn, 0, moved ?? "");
+    row.cells.splice(insertAt, 0, moved ?? "");
   }
-  return applyTableBlockRows(view, bounds, rows, targetColumn);
+  return applyTableBlockRows(view, bounds, rows, insertAt);
 }
 
 function deleteTableColumnFromHeader(
@@ -680,11 +686,44 @@ function appendTableBodyRow(view: EditorView, lineFrom: number): boolean {
   return applyTableBlockRows(view, bounds, rows);
 }
 
+function insertTableBodyRowAfter(
+  view: EditorView,
+  lineFrom: number,
+  afterRowOffset: number,
+): boolean {
+  const lineNo = view.state.doc.lineAt(lineFrom).number;
+  const bounds = findTableBlockBounds(view.state.doc, lineNo);
+  if (!bounds || bounds.headerLine !== lineNo) return false;
+  const rows = tableBlockRows(view.state.doc, bounds);
+  if (afterRowOffset < 0 || afterRowOffset >= rows.length) return false;
+  const headerOffset = bounds.headerLine - bounds.startLine;
+  const dividerOffset = bounds.headerLine + 1 - bounds.startLine;
+  if (afterRowOffset === headerOffset || afterRowOffset === dividerOffset) return false;
+
+  const columnCount = Math.max(1, rows.reduce((max, row) => Math.max(max, row.cells.length), 1));
+  for (const row of rows) {
+    row.cells = ensureCols(row.cells, columnCount);
+  }
+
+  let insertAt = afterRowOffset + 1;
+  while (insertAt < rows.length && rows[insertAt]?.continuation) insertAt += 1;
+
+  const indent = rows[afterRowOffset]?.indent ?? rows[headerOffset]?.indent ?? "";
+  rows.splice(insertAt, 0, {
+    indent,
+    continuation: false,
+    delimiter: false,
+    cells: new Array(columnCount).fill(""),
+  });
+  return applyTableBlockRows(view, bounds, rows);
+}
+
 function moveTableBodyRow(
   view: EditorView,
   lineFrom: number,
   sourceRowOffset: number,
   targetRowOffset: number,
+  placeAfter = false,
 ): boolean {
   const lineNo = view.state.doc.lineAt(lineFrom).number;
   const bounds = findTableBlockBounds(view.state.doc, lineNo);
@@ -699,8 +738,20 @@ function moveTableBodyRow(
   if (sourceLineNo === bounds.headerLine || sourceLineNo === dividerLine) return false;
   if (targetLineNo === bounds.headerLine || targetLineNo === dividerLine) return false;
   if (rows[sourceRowOffset]?.continuation || rows[targetRowOffset]?.continuation) return false;
-  const [moved] = rows.splice(sourceRowOffset, 1);
-  rows.splice(targetRowOffset, 0, moved!);
+
+  let sourceEnd = sourceRowOffset;
+  while (sourceEnd + 1 < rows.length && rows[sourceEnd + 1]?.continuation) sourceEnd += 1;
+  let targetEnd = targetRowOffset;
+  while (targetEnd + 1 < rows.length && rows[targetEnd + 1]?.continuation) targetEnd += 1;
+
+  const insertBeforeRemoval = placeAfter ? targetEnd + 1 : targetRowOffset;
+  const block = rows.splice(sourceRowOffset, sourceEnd - sourceRowOffset + 1);
+  let insertAt = insertBeforeRemoval;
+  if (insertAt > sourceRowOffset) insertAt -= block.length;
+  if (insertAt < 0) insertAt = 0;
+  if (insertAt > rows.length) insertAt = rows.length;
+  if (insertAt === sourceRowOffset) return false;
+  rows.splice(insertAt, 0, ...block);
   return applyTableBlockRows(view, bounds, rows);
 }
 
@@ -943,6 +994,8 @@ class TableBlockWidget extends WidgetType {
       if (!payloadText) return;
       event.preventDefault();
       event.stopPropagation();
+      const rect = target.getBoundingClientRect();
+      const placeAfter = event.clientX > rect.left + rect.width / 2;
       const payload = parseTableColumnDragPayload(payloadText);
       if (!payload) return;
       if (
@@ -957,6 +1010,7 @@ class TableBlockWidget extends WidgetType {
         view.state.doc.line(this.model.headerLine).from,
         payload.sourceColumn,
         columnIndex,
+        placeAfter,
       );
     });
   }
@@ -975,6 +1029,8 @@ class TableBlockWidget extends WidgetType {
       if (!payloadText) return;
       event.preventDefault();
       event.stopPropagation();
+      const rect = target.getBoundingClientRect();
+      const placeAfter = event.clientY > rect.top + rect.height / 2;
       const payload = parseTableRowDragPayload(payloadText);
       if (!payload) return;
       if (
@@ -989,6 +1045,7 @@ class TableBlockWidget extends WidgetType {
         view.state.doc.line(this.model.headerLine).from,
         payload.sourceRowOffset,
         rowOffset,
+        placeAfter,
       );
     });
   }
@@ -1047,6 +1104,9 @@ class TableBlockWidget extends WidgetType {
     input.className = header
       ? "md-table-ui-input md-table-ui-input-header"
       : "md-table-ui-input";
+    if (showFormulaStar && !header) {
+      input.classList.add("md-table-ui-input-formula");
+    }
     input.wrap = "off";
     input.value = displayValue;
     input.dataset.tableRowOffset = `${physicalRowOffset}`;
@@ -1139,6 +1199,29 @@ class TableBlockWidget extends WidgetType {
         if (next) {
           next.focus();
           next.setSelectionRange(0, 0);
+        }
+        return;
+      }
+      if (
+        event.key === "Enter"
+        && event.shiftKey
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+        && !header
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        commitValue(true);
+        if (insertTableBodyRowAfter(view, view.state.doc.line(this.model.headerLine).from, logicalFirstOffset)) {
+          requestAnimationFrame(() => {
+            const next = view.dom.querySelector<HTMLTextAreaElement>(
+              `.md-table-ui-wrap textarea[data-table-logical-row="${logicalRowIndex + 1}"][data-table-column-index="${columnIndex}"]`,
+            );
+            if (!next) return;
+            next.focus();
+            next.setSelectionRange(0, 0);
+          });
         }
         return;
       }
@@ -1434,7 +1517,6 @@ class TableBlockWidget extends WidgetType {
         }
       });
       shell.appendChild(grip);
-      this.attachColumnDragHandlers(shell, view, col);
       this.attachColumnDragHandlers(th, view, col);
       if (col === this.model.columnCount - 1) {
         const add = document.createElement("button");
@@ -1520,8 +1602,6 @@ class TableBlockWidget extends WidgetType {
             }
           });
           controls.appendChild(rowGrip);
-          this.attachRowDragHandlers(td, view, logical.firstOffset);
-
           const isLastLogicalRow = logicalIndex === logicalRows.length - 1;
           if (isLastLogicalRow) {
             const addRow = document.createElement("button");
