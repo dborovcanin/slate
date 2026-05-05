@@ -1,5 +1,6 @@
 import {
   Annotation,
+  EditorState,
   RangeSetBuilder,
   StateEffect,
   StateField,
@@ -416,6 +417,10 @@ function applyTableBlockRows(
   const withIndent = formatted.map((line, idx) => `${rows[idx]!.indent}${line}`);
   const insert = withIndent.join("\n");
 
+  // userEvent tag lets textRulesPlugin skip re-processing: the table is
+  // already formatted here and a second wasm pass would scroll the viewport.
+  const TABLE_CELL_EVENT = "table.cell.edit";
+
   let anchor: number | null = null;
   if (bounds.headerLine !== null && selectedHeaderColumn !== undefined) {
     const headerIndex = bounds.headerLine - bounds.startLine;
@@ -428,10 +433,35 @@ function applyTableBlockRows(
     }
   }
 
+  const current = view.state.doc.sliceString(blockFrom, blockTo);
+  if (insert === current) {
+    if (anchor !== null) {
+      const main = view.state.selection.main;
+      if (main.anchor !== anchor || main.head !== anchor) {
+        view.dispatch({
+          selection: { anchor },
+          scrollIntoView: false,
+        });
+        return true;
+      }
+    }
+    return false;
+  }
+  // Pin CM cursor outside the replaced range. If the selection was inside
+  // [blockFrom, blockTo] it would map to blockFrom (position 0 for tables at
+  // note start), and any later scrollIntoView:true dispatch would jump there.
+  let sel: { anchor: number } | undefined = anchor !== null ? { anchor } : undefined;
+  if (sel === undefined) {
+    const curHead = view.state.selection.main.head;
+    if (curHead >= blockFrom && curHead <= blockTo) {
+      sel = { anchor: blockFrom };
+    }
+  }
   view.dispatch({
     changes: { from: blockFrom, to: blockTo, insert },
-    selection: anchor === null ? undefined : { anchor },
-    scrollIntoView: true,
+    selection: sel,
+    scrollIntoView: false,
+    userEvent: TABLE_CELL_EVENT,
   });
   return true;
 }
@@ -515,6 +545,7 @@ function updateTableCellInBlock(
   const row = rows[rowOffset]!;
   const colCount = Math.max(row.cells.length, columnIndex + 1, 1);
   row.cells = ensureCols(row.cells, colCount);
+  if ((row.cells[columnIndex] ?? "") === nextValue) return false;
   row.cells[columnIndex] = nextValue;
   // Cell edits can affect dependent table formulas in sibling rows/cells.
   // Clear display cache so stale rendered values don't linger before eval.
@@ -664,7 +695,7 @@ function applyRawTableBlock(view: EditorView, lineFrom: number, rawText: string)
   if (insert === view.state.doc.sliceString(blockFrom, blockTo)) return false;
   view.dispatch({
     changes: { from: blockFrom, to: blockTo, insert },
-    scrollIntoView: true,
+    scrollIntoView: false,
   });
   return true;
 }
@@ -869,15 +900,21 @@ function setLogicalRowCellValues(
   const targetLineCount = Math.max(1, lineValues.length);
   const replacements: TableRowDraft[] = [];
   for (let i = 0; i < targetLineCount; i += 1) {
+    const isNewContinuation = i >= logical.offsets.length;
     const fromOffset = logical.offsets[Math.min(i, logical.offsets.length - 1)] ?? logical.firstOffset;
     const base = rows[fromOffset] ?? rows[logical.firstOffset];
-    const next = {
+    // New continuation rows must start empty for all other columns — copying
+    // base cells would duplicate adjacent column content into the new line.
+    const cells = isNewContinuation
+      ? ensureCols(new Array<string>(model.columnCount).fill(""), model.columnCount)
+      : ensureCols([...(base?.cells ?? [])], model.columnCount);
+    cells[columnIndex] = lineValues[i] ?? "";
+    const next: TableRowDraft = {
       indent: base?.indent ?? "",
       continuation: i > 0,
       delimiter: false,
-      cells: ensureCols([...(base?.cells ?? [])], model.columnCount),
+      cells,
     };
-    next.cells[columnIndex] = lineValues[i] ?? "";
     replacements.push(next);
   }
   const start = logical.firstOffset;
@@ -901,6 +938,8 @@ function updateTableLogicalCellInBlock(
   const logicalRows = tableLogicalRows(model);
   const logical = logicalRows.find((entry) => entry.firstOffset === logicalFirstOffset);
   if (!logical) return false;
+  const currentValue = trimTrailingEmptyLogicalLines(logicalRowCellValues(model, logical)[columnIndex] ?? "");
+  if (currentValue === trimTrailingEmptyLogicalLines(nextValue)) return false;
   setLogicalRowCellValues(model, rows, logical, columnIndex, nextValue);
   // Logical-row edits can affect dependent table formulas across the block.
   tableFormulaDisplayCache.clear();
@@ -927,35 +966,26 @@ function tableCellDocPosition(
   return line.from + range.from + clamped;
 }
 
-function activateTableSourceMode(view: EditorView, anchorPos: number) {
-  view.dispatch({
-    selection: { anchor: anchorPos },
-    effects: tableWidgetSourceModeEffect.of(anchorPos),
-    scrollIntoView: true,
-  });
-}
-
-function selectionStart(input: HTMLInputElement | HTMLTextAreaElement): number {
-  return input.selectionStart ?? input.value.length;
-}
-
-function selectionEnd(input: HTMLInputElement | HTMLTextAreaElement): number {
-  return input.selectionEnd ?? input.value.length;
-}
-
-function syncInputSize(input: HTMLTextAreaElement, minCh: number, minRows = 1) {
-  const lines = input.value.split("\n");
-  let max = 1;
-  for (const line of lines) {
-    max = Math.max(max, line.length);
+class FormulaDisplayWidget extends WidgetType {
+  constructor(private readonly displayValue: string) {
+    super();
   }
-  input.cols = Math.max(3, minCh, max + 1);
-  input.rows = Math.max(1, minRows, lines.length);
+
+  eq(other: FormulaDisplayWidget): boolean {
+    return this.displayValue === other.displayValue;
+  }
+
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "md-table-formula-display";
+    span.textContent = this.displayValue;
+    return span;
+  }
+
+  ignoreEvent(): boolean { return true; }
 }
 
-class TableBlockWidget extends WidgetType {
-  private deleteTapAt = 0;
-
+class TableDisplayWidget extends WidgetType {
   constructor(
     private readonly model: TableWidgetModel,
     private readonly signature: string,
@@ -963,830 +993,161 @@ class TableBlockWidget extends WidgetType {
     super();
   }
 
-  eq(other: TableBlockWidget): boolean {
-    return other.signature === this.signature;
+  eq(other: TableDisplayWidget): boolean {
+    return this.signature === other.signature;
   }
 
-  private dragPayload(columnIndex: number): string {
-    return JSON.stringify({
-      startLine: this.model.startLine,
-      endLine: this.model.endLine,
-      headerLine: this.model.headerLine,
-      sourceColumn: columnIndex,
-    });
-  }
-
-  private rowDragPayload(rowOffset: number): string {
-    return JSON.stringify({
-      startLine: this.model.startLine,
-      endLine: this.model.endLine,
-      headerLine: this.model.headerLine,
-      sourceRowOffset: rowOffset,
-    });
-  }
-
-  private attachColumnDragHandlers(
-    target: HTMLElement,
-    view: EditorView,
-    columnIndex: number,
-  ) {
-    target.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    });
-    target.addEventListener("drop", (event) => {
-      const payloadText = event.dataTransfer?.getData("application/x-slate-table-column");
-      if (!payloadText) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const rect = target.getBoundingClientRect();
-      const placeAfter = event.clientX > rect.left + rect.width / 2;
-      const payload = parseTableColumnDragPayload(payloadText);
-      if (!payload) return;
-      if (
-        payload.startLine !== this.model.startLine
-        || payload.endLine !== this.model.endLine
-        || payload.headerLine !== this.model.headerLine
-      ) {
-        return;
-      }
-      moveTableColumnFromHeader(
-        view,
-        view.state.doc.line(this.model.headerLine).from,
-        payload.sourceColumn,
-        columnIndex,
-        placeAfter,
-      );
-    });
-  }
-
-  private attachRowDragHandlers(
-    target: HTMLElement,
-    view: EditorView,
+  private formulaDisplayValue(
+    cellResults: Map<number, TableCellEvaluation[]>,
     rowOffset: number,
-  ) {
-    target.addEventListener("dragover", (event) => {
-      event.preventDefault();
-      if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-    });
-    target.addEventListener("drop", (event) => {
-      const payloadText = event.dataTransfer?.getData("application/x-slate-table-row");
-      if (!payloadText) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const rect = target.getBoundingClientRect();
-      const placeAfter = event.clientY > rect.top + rect.height / 2;
-      const payload = parseTableRowDragPayload(payloadText);
-      if (!payload) return;
-      if (
-        payload.startLine !== this.model.startLine
-        || payload.endLine !== this.model.endLine
-        || payload.headerLine !== this.model.headerLine
-      ) {
-        return;
-      }
-      moveTableBodyRow(
-        view,
-        view.state.doc.line(this.model.headerLine).from,
-        payload.sourceRowOffset,
-        rowOffset,
-        placeAfter,
-      );
-    });
-  }
-
-  private currentRawText(view: EditorView): string {
-    const lineNo = this.model.headerLine;
-    const bounds = findTableBlockBounds(view.state.doc, lineNo);
-    if (!bounds) return this.model.rawText;
-    const lines: string[] = [];
-    for (let ln = bounds.startLine; ln <= bounds.endLine; ln += 1) {
-      lines.push(view.state.doc.line(ln).text);
-    }
-    return lines.join("\n");
-  }
-
-  private tableFormulaDisplayValue(
-    cellResultMap: Map<number, TableCellEvaluation[]>,
-    rowOffset: number,
-    columnIndex: number,
+    colIndex: number,
     sourceValue: string,
   ): string | null {
-    if (!sourceValue.trimStart().startsWith(":=")) return null;
-    const cacheKey = tableFormulaDisplayCacheKey(this.model.startLine, rowOffset, columnIndex);
+    const trimmed = sourceValue.trimStart();
+    if (!trimmed.startsWith(":=")) return null;
     const lineIndex = this.model.startLine + rowOffset - 1;
-    const perLine = cellResultMap.get(lineIndex);
-    if (!perLine || perLine.length === 0) {
-      return tableFormulaDisplayCache.get(cacheKey) ?? sourceValue;
-    }
-    const hit = perLine.find((entry) => entry.cell_index === columnIndex);
-    if (!hit) return tableFormulaDisplayCache.get(cacheKey) ?? sourceValue;
-    if (hit.error_kind) {
-      const value = `!ERROR#${hit.error_kind}`;
-      tableFormulaDisplayCache.set(cacheKey, value);
-      return value;
-    }
-    const value = calcFormatFormulaDisplayValue(hit.value);
-    tableFormulaDisplayCache.set(cacheKey, value);
-    return value;
+    const perLine = cellResults.get(lineIndex);
+    if (!perLine || perLine.length === 0) return trimmed;
+    const entry = perLine.find((e) => e.cell_index === colIndex);
+    if (!entry) return trimmed;
+    if (entry.error_kind) return `!${entry.error_kind}`;
+    return calcFormatFormulaDisplayValue(entry.value);
   }
 
-  private buildCellInput(
-    view: EditorView,
-    logicalFirstOffset: number,
-    logicalRowIndex: number,
-    physicalRowOffset: number,
-    logicalLineCount: number,
-    totalLogicalRowCount: number,
-    columnIndex: number,
-    sourceValue: string,
-    displayValue: string,
-    showFormulaStar: boolean,
-    header: boolean,
-    widthCh: number,
-    wrap: HTMLElement,
-  ): HTMLTextAreaElement {
-    const input = document.createElement("textarea");
-    input.className = header
-      ? "md-table-ui-input md-table-ui-input-header"
-      : "md-table-ui-input";
-    if (showFormulaStar && !header) {
-      input.classList.add("md-table-ui-input-formula");
+  updateDOM(dom: HTMLElement, view: EditorView): boolean {
+    const structSig = `${this.model.columnCount}:${this.model.rows.length}`;
+    if ((dom as HTMLElement & { __tableStructSig?: string }).__tableStructSig !== structSig) {
+      return false;
     }
-    input.wrap = "off";
-    input.value = displayValue;
-    input.dataset.tableRowOffset = `${physicalRowOffset}`;
-    input.dataset.tableColumnIndex = `${columnIndex}`;
-    input.dataset.tableLogicalRow = `${logicalRowIndex}`;
-    input.dataset.tableLogicalFirstOffset = `${logicalFirstOffset}`;
-    input.dataset.tablePhysicalRowOffset = `${physicalRowOffset}`;
-    syncInputSize(input, widthCh + 1, logicalLineCount);
-    let dirty = false;
-    let lastDisplayValue = displayValue;
-    input.addEventListener("mousedown", (event) => event.stopPropagation());
-    input.addEventListener("focus", () => {
-      if (!showFormulaStar) return;
-      input.value = sourceValue;
-      syncInputSize(input, widthCh + 1, logicalLineCount);
-    });
-    input.addEventListener("input", () => {
-      dirty = true;
-      syncInputSize(input, widthCh + 1, logicalLineCount);
-    });
-    const commitValue = (force = false) => {
-      if (!force && !dirty) return;
-      if (header) {
-        updateTableCellInBlock(
-          view,
-          view.state.doc.line(this.model.headerLine).from,
-          logicalFirstOffset,
-          columnIndex,
-          input.value,
-        );
-        dirty = false;
-        return;
+    const cellResults = getTableCellEvaluationMapFromState(view.state);
+    const logicalRows = tableLogicalRows(this.model);
+    for (let col = 0; col < this.model.columnCount; col++) {
+      const span = dom.querySelector<HTMLElement>(`[data-cell="h:${col}"]`);
+      if (!span) continue;
+      const rawValue = (this.model.rows[this.model.headerLine - this.model.startLine]?.cells[col] ?? "").trim();
+      if (span.textContent !== rawValue) span.textContent = rawValue;
+    }
+    for (let li = 0; li < logicalRows.length; li++) {
+      const logical = logicalRows[li]!;
+      const values = logicalRowCellValues(this.model, logical);
+      for (let col = 0; col < this.model.columnCount; col++) {
+        const span = dom.querySelector<HTMLElement>(`[data-cell="${li}:${col}"]`);
+        if (!span) continue;
+        const sourceValue = (values[col] ?? "").trim();
+        const display = this.formulaDisplayValue(cellResults, logical.firstOffset, col, sourceValue) ?? sourceValue;
+        if (span.textContent !== display) span.textContent = display;
+        const isFormula = this.formulaDisplayValue(cellResults, logical.firstOffset, col, sourceValue) !== null;
+        span.dataset.tableRowOffset = `${logical.firstOffset}`;
+        span.dataset.tableColumnIndex = `${col}`;
+        if (isFormula) span.classList.add("md-table-formula-cell");
+        else span.classList.remove("md-table-formula-cell");
       }
-      updateTableLogicalCellInBlock(
-        view,
-        view.state.doc.line(this.model.headerLine).from,
-        logicalFirstOffset,
-        columnIndex,
-        input.value,
-      );
-      dirty = false;
-    };
-    const tableCellInput = (row: number, col: number): HTMLTextAreaElement | null => (
-      wrap.querySelector<HTMLTextAreaElement>(
-        `textarea[data-table-logical-row="${row}"][data-table-column-index="${col}"]`,
-      )
-    );
-    const focusTableCell = (
-      row: number,
-      col: number,
-      mode: "start" | "end" | "clamp",
-      refPos = 0,
-    ): boolean => {
-      const next = tableCellInput(row, col);
-      if (!next) return false;
-      next.focus();
-      let pos = 0;
-      if (mode === "end") pos = next.value.length;
-      else if (mode === "clamp") pos = Math.max(0, Math.min(refPos, next.value.length));
-      next.setSelectionRange(pos, pos);
-      return true;
-    };
-    const moveOutsideTable = (direction: -1 | 1) => {
-      const doc = view.state.doc;
-      const targetLineNo = direction < 0 ? this.model.startLine - 1 : this.model.endLine + 1;
-      if (targetLineNo < 1) {
-        view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
-        view.focus();
-        return;
-      }
-      if (targetLineNo > doc.lines) {
-        view.dispatch({ selection: { anchor: doc.length }, scrollIntoView: true });
-        view.focus();
-        return;
-      }
-      const targetLine = doc.line(targetLineNo);
-      view.dispatch({
-        selection: { anchor: targetLine.from },
-        scrollIntoView: true,
-      });
-      view.focus();
-    };
-    const leaveTable = (direction: -1 | 1) => {
-      commitValue(true);
-      moveOutsideTable(direction);
-    };
-
-    input.addEventListener("keydown", (event) => {
-      // Keep table-cell editing independent from Vim key handling while focused.
-      event.stopPropagation();
-      if (
-        header
-        && event.key === "Backspace"
-        && event.ctrlKey
-        && !event.altKey
-        && !event.metaKey
-      ) {
-        if (input.value.trim().length === 0) {
-          event.preventDefault();
-          deleteTableColumnFromHeader(
-            view,
-            view.state.doc.line(this.model.headerLine).from,
-            columnIndex,
-          );
-        }
-        return;
-      }
-      if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
-        const start = selectionStart(input);
-        const end = selectionEnd(input);
-        const firstNavigableRow = -1;
-        const lastNavigableRow = totalLogicalRowCount - 1;
-        if (start === end) {
-          if (event.key === "ArrowLeft" && start === 0) {
-            event.preventDefault();
-            let targetRow = logicalRowIndex;
-            let targetCol = columnIndex - 1;
-            if (targetCol < 0) {
-              targetRow = logicalRowIndex - 1;
-              targetCol = this.model.columnCount - 1;
-            }
-            if (targetRow < firstNavigableRow || targetCol < 0) {
-              leaveTable(-1);
-            } else if (!focusTableCell(targetRow, targetCol, "end")) {
-              leaveTable(-1);
-            }
-            return;
-          }
-          if (event.key === "ArrowRight" && end === input.value.length) {
-            event.preventDefault();
-            let targetRow = logicalRowIndex;
-            let targetCol = columnIndex + 1;
-            if (targetCol >= this.model.columnCount) {
-              targetRow = logicalRowIndex + 1;
-              targetCol = 0;
-            }
-            if (targetRow > lastNavigableRow || targetCol >= this.model.columnCount) {
-              leaveTable(1);
-            } else if (!focusTableCell(targetRow, targetCol, "start")) {
-              leaveTable(1);
-            }
-            return;
-          }
-          if (event.key === "ArrowUp") {
-            const before = input.value.slice(0, start);
-            const atFirstVisualLine = !before.includes("\n");
-            if (atFirstVisualLine) {
-              event.preventDefault();
-              const prevRow = logicalRowIndex - 1;
-              if (prevRow >= -1) {
-                if (!focusTableCell(prevRow, columnIndex, "clamp", start)) {
-                  leaveTable(-1);
-                }
-              } else {
-                leaveTable(-1);
-              }
-              return;
-            }
-          }
-          if (event.key === "ArrowDown") {
-            const after = input.value.slice(end);
-            const atLastVisualLine = !after.includes("\n");
-            if (atLastVisualLine) {
-              event.preventDefault();
-              const nextRow = logicalRowIndex + 1;
-              if (nextRow < totalLogicalRowCount) {
-                if (!focusTableCell(nextRow, columnIndex, "clamp", start)) {
-                  leaveTable(1);
-                }
-              } else {
-                leaveTable(1);
-              }
-              return;
-            }
-          }
-        }
-      }
-      if (event.key === "|") {
-        event.preventDefault();
-        const start = selectionStart(input);
-        const end = selectionEnd(input);
-        const before = input.value.slice(0, start);
-        const after = input.value.slice(end);
-        input.value = `${before}\\|${after}`;
-        const next = start + 2;
-        input.setSelectionRange(next, next);
-        return;
-      }
-      if (event.key === "ArrowLeft" && event.ctrlKey && !event.altKey && !event.metaKey) {
-        event.preventDefault();
-        const next = wrap.querySelector<HTMLTextAreaElement>(
-          `[data-table-logical-row="${logicalRowIndex}"][data-table-column-index="${Math.max(0, columnIndex - 1)}"]`,
-        );
-        if (next) {
-          next.focus();
-          const pos = next.value.length;
-          next.setSelectionRange(pos, pos);
-        }
-        return;
-      }
-      if (event.key === "ArrowRight" && event.ctrlKey && !event.altKey && !event.metaKey) {
-        event.preventDefault();
-        const next = wrap.querySelector<HTMLTextAreaElement>(
-          `[data-table-logical-row="${logicalRowIndex}"][data-table-column-index="${columnIndex + 1}"]`,
-        );
-        if (next) {
-          next.focus();
-          next.setSelectionRange(0, 0);
-        }
-        return;
-      }
-      if (
-        event.key === "Enter"
-        && event.shiftKey
-        && !event.ctrlKey
-        && !event.metaKey
-        && !event.altKey
-        && !header
-      ) {
-        event.preventDefault();
-        event.stopPropagation();
-        commitValue(true);
-        if (insertTableBodyRowAfter(view, view.state.doc.line(this.model.headerLine).from, logicalFirstOffset)) {
-          requestAnimationFrame(() => {
-            const next = view.dom.querySelector<HTMLTextAreaElement>(
-              `.md-table-ui-wrap textarea[data-table-logical-row="${logicalRowIndex + 1}"][data-table-column-index="${columnIndex}"]`,
-            );
-            if (!next) return;
-            next.focus();
-            next.setSelectionRange(0, 0);
-          });
-        }
-        return;
-      }
-      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-        event.preventDefault();
-        commitValue(true);
-        input.blur();
-      }
-    });
-    input.addEventListener("paste", (event) => {
-      if (header) return;
-      if (!(event instanceof ClipboardEvent)) return;
-      commitValue(true);
-      const beforeCursor = input.value.slice(0, selectionStart(input));
-      const beforeLines = beforeCursor.split("\n");
-      const visualLineIndex = beforeLines.length - 1;
-      const lastBeforeLine = beforeLines[beforeLines.length - 1] ?? "";
-      const lineOffset = lastBeforeLine.length;
-      const targetPhysicalOffset = logicalFirstOffset + Math.max(
-        0,
-        Math.min(visualLineIndex, Math.max(0, logicalLineCount - 1)),
-      );
-      const docPos = tableCellDocPosition(
-        view,
-        view.state.doc.line(this.model.headerLine).from,
-        targetPhysicalOffset,
-        columnIndex,
-        lineOffset,
-      );
-      if (docPos === null) return;
-      if (handleImagePasteAtPosition(event, view, docPos)) {
-        event.preventDefault();
-      }
-    });
-    const restoreFormulaDisplayOnBlur = () => {
-      if (!showFormulaStar || header) return;
-      const source = trimTrailingEmptyLogicalLines(input.value);
-      if (!source.trimStart().startsWith(":=")) return;
-      const formulaValue = this.tableFormulaDisplayValue(
-        getTableCellEvaluationMap(view),
-        logicalFirstOffset,
-        columnIndex,
-        source,
-      );
-      const nextDisplay = (formulaValue && formulaValue !== source) ? formulaValue : lastDisplayValue;
-      input.value = nextDisplay;
-      lastDisplayValue = nextDisplay;
-      syncInputSize(input, widthCh + 1, logicalLineCount);
-    };
-    input.addEventListener("blur", () => {
-      commitValue(false);
-      restoreFormulaDisplayOnBlur();
-    });
-    return input;
-  }
-
-  private rowOffsetFromTarget(target: EventTarget | null): number | null {
-    if (!(target instanceof HTMLElement)) return null;
-    const holder = target.closest<HTMLElement>("[data-table-row-offset]");
-    if (!holder) return null;
-    const value = Number(holder.dataset.tableRowOffset);
-    return Number.isFinite(value) ? value : null;
+    }
+    return true;
   }
 
   toDOM(view: EditorView): HTMLElement {
+    const doc = view.state.doc;
+    const cellResults = getTableCellEvaluationMapFromState(view.state);
+    const logicalRows = tableLogicalRows(this.model);
+
     const wrap = document.createElement("div");
     wrap.className = "md-table-ui-wrap";
-    wrap.contentEditable = "false";
-    wrap.setAttribute("draggable", "false");
-    wrap.addEventListener("mousedown", (event) => event.stopPropagation());
-    let selectionAnchor: TableCellCoord | null = null;
-    let selectionHead: TableCellCoord | null = null;
-    const selectionShells = new Map<string, HTMLElement>();
-    const logicalRows = tableLogicalRows(this.model);
-    const logicalRowCount = logicalRows.length;
-    const keyForCell = (row: number, col: number) => `${row}:${col}`;
-    const clearCellSelection = () => {
-      for (const shell of selectionShells.values()) {
-        shell.classList.remove("md-table-ui-cell-selected");
-      }
-      selectionAnchor = null;
-      selectionHead = null;
-    };
-    const hasCellSelection = () => selectionAnchor !== null && selectionHead !== null;
-    const applyCellSelection = () => {
-      for (const shell of selectionShells.values()) {
-        shell.classList.remove("md-table-ui-cell-selected");
-      }
-      if (!selectionAnchor || !selectionHead) return;
-      const minRow = Math.min(selectionAnchor.row, selectionHead.row);
-      const maxRow = Math.max(selectionAnchor.row, selectionHead.row);
-      const minCol = Math.min(selectionAnchor.col, selectionHead.col);
-      const maxCol = Math.max(selectionAnchor.col, selectionHead.col);
-      for (let r = minRow; r <= maxRow; r += 1) {
-        for (let c = minCol; c <= maxCol; c += 1) {
-          selectionShells.get(keyForCell(r, c))?.classList.add("md-table-ui-cell-selected");
-        }
-      }
-    };
-    const setCellSelection = (anchor: TableCellCoord, head: TableCellCoord) => {
-      selectionAnchor = anchor;
-      selectionHead = head;
-      applyCellSelection();
-    };
-    wrap.addEventListener("focusout", () => {
-      requestAnimationFrame(() => {
-        if (!wrap.contains(document.activeElement)) {
-          clearCellSelection();
-        }
-      });
-    });
-    wrap.addEventListener("beforeinput", (event) => {
-      if (!hasCellSelection()) return;
-      if (!(event.target instanceof HTMLTextAreaElement)) return;
-      if (!(event instanceof InputEvent) || event.inputType.startsWith("insert")) {
-        clearCellSelection();
-      }
-    });
-    const selectedLogicalRows = (): number[] => {
-      if (!selectionAnchor || !selectionHead) return [];
-      const minRow = Math.min(selectionAnchor.row, selectionHead.row);
-      const maxRow = Math.max(selectionAnchor.row, selectionHead.row);
-      const minCol = Math.min(selectionAnchor.col, selectionHead.col);
-      const maxCol = Math.max(selectionAnchor.col, selectionHead.col);
-      if (minCol !== 0 || maxCol !== this.model.columnCount - 1) return [];
-      const rows: number[] = [];
-      for (let row = minRow; row <= maxRow; row += 1) rows.push(row);
-      return rows;
-    };
-    const activeTableCell = (): TableCellCoord | null => {
-      const active = document.activeElement;
-      if (!(active instanceof HTMLTextAreaElement)) return null;
-      if (!wrap.contains(active)) return null;
-      const row = Number(active.dataset.tableLogicalRow ?? "");
-      const col = Number(active.dataset.tableColumnIndex ?? "");
-      if (!Number.isFinite(row) || !Number.isFinite(col) || row < 0 || col < 0) return null;
-      return { row, col };
-    };
-    const textareaForCell = (row: number, col: number): HTMLTextAreaElement | null => (
-      wrap.querySelector<HTMLTextAreaElement>(
-        `textarea[data-table-logical-row="${row}"][data-table-column-index="${col}"]`,
-      )
-    );
-    wrap.addEventListener("mousedown", (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLTextAreaElement)) return;
-      if (!wrap.contains(target)) return;
-      const row = Number(target.dataset.tableLogicalRow ?? "");
-      const col = Number(target.dataset.tableColumnIndex ?? "");
-      if (!Number.isFinite(row) || !Number.isFinite(col) || row < 0 || col < 0) {
-        clearCellSelection();
-        return;
-      }
-      if (event.shiftKey) {
-        if (selectionAnchor) {
-          setCellSelection(selectionAnchor, { row, col });
-        } else {
-          setCellSelection({ row, col }, { row, col });
-        }
-      } else if (hasCellSelection()) {
-        // Plain click inside table cancels any existing cell-range selection.
-        clearCellSelection();
-      }
-    }, true);
-    wrap.addEventListener("keydown", (event) => {
-      if (event.shiftKey && (
-        event.key === "ArrowLeft"
-        || event.key === "ArrowRight"
-        || event.key === "ArrowUp"
-        || event.key === "ArrowDown"
-      )) {
-        const current = activeTableCell();
-        if (current) {
-          event.preventDefault();
-          event.stopPropagation();
-          if (!selectionAnchor) {
-            selectionAnchor = { row: current.row, col: current.col };
-          }
-          let nextRow = current.row;
-          let nextCol = current.col;
-          if (event.key === "ArrowLeft") nextCol = Math.max(0, current.col - 1);
-          if (event.key === "ArrowRight") nextCol = Math.min(this.model.columnCount - 1, current.col + 1);
-          if (event.key === "ArrowUp") nextRow = Math.max(0, current.row - 1);
-          if (event.key === "ArrowDown") nextRow = Math.min(logicalRowCount - 1, current.row + 1);
-          selectionHead = { row: nextRow, col: nextCol };
-          applyCellSelection();
-          const next = textareaForCell(nextRow, nextCol);
-          if (next) {
-            next.focus();
-            next.setSelectionRange(next.selectionStart ?? 0, next.selectionEnd ?? 0);
-          }
-          return;
-        }
-      }
-      if (view.dom.dataset.vimMode !== "normal") {
-        this.deleteTapAt = 0;
-      }
-      if (
-        (event.key === "Delete" || event.key === "Backspace")
-        && view.dom.dataset.vimMode !== "normal"
-      ) {
-        const selectedRows = selectedLogicalRows();
-        if (selectedRows.length > 0) {
-          const firstOffsets = selectedRows
-            .map((rowIdx) => logicalRows[rowIdx]?.firstOffset)
-            .filter((value): value is number => typeof value === "number");
-          if (firstOffsets.length > 0) {
-            event.preventDefault();
-            event.stopPropagation();
-            deleteTableLogicalRowsByFirstOffsets(
-              view,
-              view.state.doc.line(this.model.headerLine).from,
-              firstOffsets,
-            );
-            return;
-          }
-        }
-      }
-      if (event.key !== "d" || event.altKey || event.ctrlKey || event.metaKey) {
-        this.deleteTapAt = 0;
-        return;
-      }
-      const rowOffset = this.rowOffsetFromTarget(event.target)
-        ?? this.rowOffsetFromTarget(document.activeElement);
-      if (rowOffset === null) return;
-      event.preventDefault();
-      event.stopPropagation();
-      const now = Date.now();
-      if (now - this.deleteTapAt > 450) {
-        this.deleteTapAt = now;
-        return;
-      }
-      this.deleteTapAt = 0;
-      deleteTableLogicalRow(
-        view,
-        view.state.doc.line(this.model.headerLine).from,
-        rowOffset,
-      );
-    });
-
-    const toolbar = document.createElement("div");
-    toolbar.className = "md-table-ui-toolbar";
-    const sourceToggle = document.createElement("button");
-    sourceToggle.className = "md-table-ui-source-toggle";
-    sourceToggle.type = "button";
-    sourceToggle.textContent = "Source";
-    toolbar.appendChild(sourceToggle);
-
-    const surface = document.createElement("div");
-    surface.className = "md-table-ui-surface";
-    const cellResultMap = getTableCellEvaluationMap(view);
-    const columnWidthCh = new Array(this.model.columnCount).fill(3);
-    for (let rowOffset = 0; rowOffset < this.model.rows.length; rowOffset += 1) {
-      const row = this.model.rows[rowOffset];
-      if (!row) continue;
-      for (let col = 0; col < this.model.columnCount; col += 1) {
-        const sourceValue = row.cells[col] ?? "";
-        const displaySourceValue = trimTrailingEmptyLogicalLines(sourceValue);
-        const formulaValue = this.tableFormulaDisplayValue(
-          cellResultMap,
-          rowOffset,
-          col,
-          displaySourceValue,
-        );
-        const displayValue = formulaValue ?? displaySourceValue;
-        const width = displayValue.split("\n").reduce((max, seg) => Math.max(max, seg.length), 0);
-        columnWidthCh[col] = Math.max(columnWidthCh[col] ?? 3, width + (formulaValue ? 2 : 1));
-      }
-    }
+    wrap.dataset.tableStartLine = `${this.model.startLine}`;
+    const structSig = `${this.model.columnCount}:${this.model.rows.length}`;
+    (wrap as HTMLElement & { __tableStructSig?: string }).__tableStructSig = structSig;
 
     const table = document.createElement("table");
     table.className = "md-table-ui";
+
+    // Header
     const thead = document.createElement("thead");
     const headerTr = document.createElement("tr");
-    const headerOffset = this.model.headerLine - this.model.startLine;
-    const headerRow = this.model.rows[headerOffset]!;
+    const headerLineNo = this.model.headerLine;
+    const headerLine = doc.line(headerLineNo);
+    const headerPipes = tablePipeOffsets(headerLine.text);
 
-    for (let col = 0; col < this.model.columnCount; col += 1) {
+    for (let col = 0; col < this.model.columnCount; col++) {
       const th = document.createElement("th");
       th.className = "md-table-ui-header-cell";
-      const shell = document.createElement("div");
-      shell.className = "md-table-ui-cell-shell";
-      const sourceValue = headerRow.cells[col] ?? "";
-      const input = this.buildCellInput(
-        view,
-        headerOffset,
-        -1,
-        headerOffset,
-        1,
-        logicalRowCount,
-        col,
-        sourceValue,
-        sourceValue,
-        false,
-        true,
-        columnWidthCh[col] ?? 3,
-        wrap,
-      );
-      shell.appendChild(input);
-      const grip = document.createElement("span");
-      grip.className = "md-table-col-grip";
-      grip.textContent = "||";
-      grip.setAttribute("draggable", "true");
-      grip.title = "Drag to reorder column";
-      grip.addEventListener("dragstart", (event) => {
-        if (event.dataTransfer) {
-          event.dataTransfer.effectAllowed = "move";
-          event.dataTransfer.setData("application/x-slate-table-column", this.dragPayload(col));
-          event.dataTransfer.setData("text/plain", "table-column");
-        }
-      });
-      shell.appendChild(grip);
-      this.attachColumnDragHandlers(th, view, col);
-      if (col === this.model.columnCount - 1) {
-        const add = document.createElement("button");
-        add.className = "md-table-col-add";
-        add.type = "button";
-        add.textContent = "+";
-        add.title = "Add column";
-        add.addEventListener("mousedown", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-        });
-        add.addEventListener("click", (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          appendTableColumnFromHeader(view, view.state.doc.line(this.model.headerLine).from);
-        });
-        shell.appendChild(add);
+      const span = document.createElement("span");
+      span.className = "md-table-ui-cell-content";
+      span.dataset.cell = `h:${col}`;
+      const rawValue = (this.model.rows[headerLineNo - this.model.startLine]?.cells[col] ?? "").trim();
+      span.textContent = rawValue;
+      th.appendChild(span);
+      if (col < headerPipes.length - 1) {
+        const cellDocPos = headerLine.from + headerPipes[col]! + 1;
+        th.dataset.cellDocPos = `${cellDocPos}`;
       }
-      th.appendChild(shell);
       headerTr.appendChild(th);
     }
     thead.appendChild(headerTr);
     table.appendChild(thead);
 
+    // Body
     const tbody = document.createElement("tbody");
-    for (let logicalIndex = 0; logicalIndex < logicalRows.length; logicalIndex += 1) {
-      const logical = logicalRows[logicalIndex]!;
+    for (let li = 0; li < logicalRows.length; li++) {
+      const logical = logicalRows[li]!;
       const tr = document.createElement("tr");
-      if (logical.offsets.length > 1) tr.classList.add("md-table-ui-row-continuation");
-      this.attachRowDragHandlers(tr, view, logical.firstOffset);
-      const logicalValues = logicalRowCellValues(this.model, logical);
-      for (let col = 0; col < this.model.columnCount; col += 1) {
+      const values = logicalRowCellValues(this.model, logical);
+      const firstLineNo = this.model.startLine + logical.firstOffset;
+      const firstLine = doc.line(firstLineNo);
+      const linePipes = tablePipeOffsets(firstLine.text);
+
+      for (let col = 0; col < this.model.columnCount; col++) {
         const td = document.createElement("td");
-        const shell = document.createElement("div");
-        shell.className = "md-table-ui-cell-shell";
-        shell.dataset.tableRowOffset = `${logical.firstOffset}`;
-        shell.dataset.tableColumnIndex = `${col}`;
-        selectionShells.set(keyForCell(logicalIndex, col), shell);
-        const sourceValue = logicalValues[col] ?? "";
-        const displaySourceValue = trimTrailingEmptyLogicalLines(sourceValue);
-        const formulaValue = this.tableFormulaDisplayValue(
-          cellResultMap,
-          logical.firstOffset,
-          col,
-          displaySourceValue,
-        );
-        const displayValue = formulaValue ?? displaySourceValue;
-        const input = this.buildCellInput(
-          view,
-          logical.firstOffset,
-          logicalIndex,
-          logical.firstOffset,
-          logical.offsets.length,
-          logicalRowCount,
-          col,
-          sourceValue,
-          displayValue,
-          formulaValue !== null,
-          false,
-          columnWidthCh[col] ?? Math.max(3, displayValue.length + 1),
-          wrap,
-        );
-        shell.appendChild(input);
-        if (formulaValue !== null) {
-          const marker = document.createElement("span");
-          marker.className = "md-table-formula-star";
-          marker.textContent = "*";
-          marker.title = "Formula result";
-          shell.appendChild(marker);
+        td.className = "md-table-ui-cell";
+        const span = document.createElement("span");
+        span.className = "md-table-ui-cell-content";
+        span.dataset.cell = `${li}:${col}`;
+        const sourceValue = (values[col] ?? "").trim();
+        const display = this.formulaDisplayValue(cellResults, logical.firstOffset, col, sourceValue);
+        span.textContent = display ?? sourceValue;
+        if (display !== null) {
+          span.classList.add("md-table-formula-cell");
+          span.dataset.tableRowOffset = `${logical.firstOffset}`;
+          span.dataset.tableColumnIndex = `${col}`;
         }
-        if (col === this.model.columnCount - 1) {
-          shell.classList.add("md-table-ui-cell-shell-with-row-controls");
-          const controls = document.createElement("div");
-          controls.className = "md-table-ui-row-controls";
-          const rowGrip = document.createElement("span");
-          rowGrip.className = "md-table-row-grip";
-          rowGrip.textContent = "::";
-          rowGrip.title = "Drag to reorder row";
-          rowGrip.setAttribute("draggable", "true");
-          rowGrip.addEventListener("dragstart", (event) => {
-            if (event.dataTransfer) {
-              event.dataTransfer.effectAllowed = "move";
-              event.dataTransfer.setData("application/x-slate-table-row", this.rowDragPayload(logical.firstOffset));
-              event.dataTransfer.setData("text/plain", "table-row");
-            }
-          });
-          controls.appendChild(rowGrip);
-          const isLastLogicalRow = logicalIndex === logicalRows.length - 1;
-          if (isLastLogicalRow) {
-            const addRow = document.createElement("button");
-            addRow.className = "md-table-row-add";
-            addRow.type = "button";
-            addRow.textContent = "+";
-            addRow.title = "Add row";
-            addRow.addEventListener("mousedown", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            });
-            addRow.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              appendTableBodyRow(view, view.state.doc.line(this.model.headerLine).from);
-            });
-            controls.appendChild(addRow);
-          }
-          shell.appendChild(controls);
+        td.appendChild(span);
+        if (col < linePipes.length - 1) {
+          const cellDocPos = firstLine.from + linePipes[col]! + 1;
+          td.dataset.cellDocPos = `${cellDocPos}`;
         }
-        td.appendChild(shell);
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
+    wrap.appendChild(table);
 
-    const renderTable = () => {
-      sourceToggle.textContent = "Source";
-      surface.replaceChildren(table);
-    };
-
-    sourceToggle.addEventListener("click", (event) => {
+    // Click to enter edit mode: place CM cursor at the clicked cell
+    wrap.addEventListener("mousedown", (event) => {
+      const target = event.target as Element;
+      const cell = target.closest<HTMLElement>("[data-cell-doc-pos]");
+      if (!cell) {
+        const firstCellEl = wrap.querySelector<HTMLElement>("[data-cell-doc-pos]");
+        if (firstCellEl) {
+          const pos = parseInt(firstCellEl.dataset.cellDocPos ?? "");
+          if (Number.isFinite(pos)) {
+            event.preventDefault();
+            view.dispatch({ selection: { anchor: pos }, scrollIntoView: false });
+            view.focus();
+          }
+        }
+        return;
+      }
+      const pos = parseInt(cell.dataset.cellDocPos ?? "");
+      if (!Number.isFinite(pos)) return;
       event.preventDefault();
-      event.stopPropagation();
-      const blockFrom = view.state.doc.line(this.model.startLine).from;
-      activateTableSourceMode(view, blockFrom);
+      view.dispatch({ selection: { anchor: pos }, scrollIntoView: false });
+      view.focus();
     });
 
-    renderTable();
-    wrap.appendChild(toolbar);
-    wrap.appendChild(surface);
     return wrap;
   }
+
+  ignoreEvent(): boolean { return false; }
 }
 
 const decVariable = Decoration.mark({ class: "md-variable" });
@@ -2632,6 +1993,9 @@ export interface MarkdownDecorationBuildOptions {
   variableMatcher?: VariableMatcher;
   profiling?: MarkdownBuildProfiling;
   includeTableWidgets?: boolean;
+  // Lines belonging to a table currently shown in source mode — table-specific
+  // decorations (pipe hiding, row/header/divider classes) are skipped for them.
+  activeSourceTableLines?: Set<number>;
   // null = unknown/pending; { exists: false } = broken; { exists: true, title } = resolved
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null;
   // Only lines returning true can enqueue wiki-link resolution work.
@@ -2747,6 +2111,7 @@ export function buildMarkdownDecorationsForSpans(
 
   const profiling = options.profiling;
   const includeTableWidgets = options.includeTableWidgets ?? true;
+  const activeSourceTableLines = options.activeSourceTableLines;
   const sortedSpans = [...spans].sort(
     (a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine,
   );
@@ -2812,7 +2177,7 @@ export function buildMarkdownDecorationsForSpans(
               blockFrom,
               blockFrom,
               Decoration.widget({
-                widget: new TableBlockWidget(model, tableWidgetSignature(model)),
+                widget: new TableDisplayWidget(model, tableWidgetSignature(model)),
               }),
             );
           }
@@ -2839,6 +2204,7 @@ export function buildMarkdownDecorationsForSpans(
           : options.imagePreviewResolver
             ? (src: string) => options.imagePreviewResolver!(lineNo, src)
             : undefined,
+        activeSourceTableLines?.has(lineNo),
       );
     }
   }
@@ -2925,10 +2291,137 @@ function buildMarkdownDecorations(
   });
 }
 
-function buildTableWidgetDecorations(
+// Tracks the startLine of the table currently being edited (cursor inside it), or null.
+const tableEditLineField = StateField.define<number | null>({
+  create(state) {
+    if (state.doc.length === 0) return null;
+    const head = state.selection.main.head;
+    if (head > state.doc.length) return null;
+    const line = state.doc.lineAt(head);
+    if (!tableRowRe.test(line.text)) return null;
+    const bounds = findTableBlockBounds(state.doc, line.number);
+    if (!bounds || bounds.headerLine === null) return null;
+    return bounds.startLine;
+  },
+  update(value, tr) {
+    if (!tr.docChanged && tr.startState.selection.main.head === tr.state.selection.main.head) {
+      return value;
+    }
+    const head = tr.state.selection.main.head;
+    if (head > tr.state.doc.length) return null;
+    const line = tr.state.doc.lineAt(head);
+    if (!tableRowRe.test(line.text)) return null;
+    const bounds = findTableBlockBounds(tr.state.doc, line.number);
+    if (!bounds || bounds.headerLine === null) return null;
+    return bounds.startLine;
+  },
+});
+
+function buildTableEditDecorations(
+  state: EditorState,
+  editStartLine: number,
+): DecorationSet {
+  const doc = state.doc;
+  const bounds = findTableBlockBounds(doc, editStartLine);
+  if (!bounds || bounds.headerLine === null) return Decoration.none;
+
+  const cellResults = getTableCellEvaluationMapFromState(state);
+  const cursorPos = state.selection.main.head;
+  const cursorLine = doc.lineAt(Math.min(cursorPos, doc.length));
+  const cursorLineNo = cursorLine.number;
+  const cursorOffsetInLine = cursorPos - cursorLine.from;
+
+  const builder = new RangeSetBuilder<Decoration>();
+  const headerOffset = bounds.headerLine - bounds.startLine;
+  const dividerOffset = headerOffset + 1;
+
+  for (let lineNo = bounds.startLine; lineNo <= bounds.endLine; lineNo++) {
+    const rowOffset = lineNo - bounds.startLine;
+    const line = doc.line(lineNo);
+    const lineText = line.text;
+    const isCursorLine = lineNo === cursorLineNo;
+
+    if (rowOffset === headerOffset) {
+      builder.add(line.from, line.from, decTableHeaderLine);
+    } else if (rowOffset === dividerOffset) {
+      builder.add(line.from, line.from, decTableDividerLine);
+      for (const p of tablePipeOffsets(lineText)) {
+        builder.add(line.from + p, line.from + p + 1, decTablePipe);
+      }
+      continue;
+    } else {
+      builder.add(line.from, line.from, decTableLine);
+    }
+
+    const pipes = tablePipeOffsets(lineText);
+    if (pipes.length < 2) continue;
+
+    for (let col = 0; col < pipes.length; col++) {
+      const pipeDocPos = line.from + pipes[col]!;
+      builder.add(pipeDocPos, pipeDocPos + 1, decTablePipe);
+
+      if (col >= pipes.length - 1) break;
+
+      const cellFrom = line.from + pipes[col]! + 1;
+      const cellTo = line.from + pipes[col + 1]!;
+      if (cellFrom >= cellTo) continue;
+
+      const isCursorInCell = isCursorLine
+        && cursorOffsetInLine > pipes[col]!
+        && cursorOffsetInLine <= pipes[col + 1]!;
+
+      if (isCursorInCell) {
+        builder.add(cellFrom, cellTo, Decoration.mark({ class: "md-table-active-cell" }));
+      } else {
+        const rawCellText = lineText.slice(pipes[col]! + 1, pipes[col + 1]!);
+        const trimmed = rawCellText.trim();
+        if (trimmed.startsWith(":=")) {
+          const lineIndex = lineNo - 1;
+          const perLine = cellResults.get(lineIndex);
+          let displayValue = trimmed;
+          if (perLine) {
+            const entry = perLine.find((e) => e.cell_index === col);
+            if (entry) {
+              displayValue = entry.error_kind
+                ? `!${entry.error_kind}`
+                : calcFormatFormulaDisplayValue(entry.value);
+            }
+          }
+          builder.add(cellFrom, cellTo, Decoration.replace({
+            widget: new FormulaDisplayWidget(displayValue),
+            inclusive: false,
+          }));
+        }
+      }
+    }
+  }
+
+  return builder.finish();
+}
+
+const tableEditDecorationsField = StateField.define<DecorationSet>({
+  create(state) {
+    const editLine = state.field(tableEditLineField, false) ?? null;
+    if (editLine == null) return Decoration.none;
+    return buildTableEditDecorations(state, editLine);
+  },
+  update(value, tr) {
+    const editLine = tr.state.field(tableEditLineField, false) ?? null;
+    if (editLine == null) return Decoration.none;
+    const prevCells = getTableCellEvaluationMapFromState(tr.startState);
+    const nextCells = getTableCellEvaluationMapFromState(tr.state);
+    const calcChanged = prevCells !== nextCells;
+    const selChanged = tr.startState.selection.main.head !== tr.state.selection.main.head;
+    if (!tr.docChanged && !calcChanged && !selChanged) return value.map(tr.changes);
+    return buildTableEditDecorations(tr.state, editLine);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+function buildTableDisplayDecorations(
   doc: Text,
   cellResults: Map<number, TableCellEvaluation[]>,
-  sourceModeLine: number | null,
+  editStartLine: number | null,
 ): DecorationSet {
   if (doc.lines === 0) return Decoration.none;
   const builder = new RangeSetBuilder<Decoration>();
@@ -2952,25 +2445,23 @@ function buildTableWidgetDecorations(
       continue;
     }
     if (
-      sourceModeLine !== null
-      && sourceModeLine >= model.startLine
-      && sourceModeLine <= model.endLine
+      editStartLine !== null
+      && editStartLine >= model.startLine
+      && editStartLine <= model.endLine
     ) {
       lineNo = model.endLine + 1;
       continue;
     }
     const blockFrom = doc.line(model.startLine).from;
     const blockTo = doc.line(model.endLine).to;
+    const sig = `${tableWidgetSignature(model)}${tableWidgetCalcSignature(model, cellResults)}`;
     builder.add(
       blockFrom,
       blockTo,
       Decoration.replace({
         block: true,
         inclusive: false,
-        widget: new TableBlockWidget(
-          model,
-          `${tableWidgetSignature(model)}\u0003${tableWidgetCalcSignature(model, cellResults)}`,
-        ),
+        widget: new TableDisplayWidget(model, sig),
       }),
     );
     lineNo = model.endLine + 1;
@@ -2978,50 +2469,26 @@ function buildTableWidgetDecorations(
   return builder.finish();
 }
 
-const tableWidgetSourceModeField = StateField.define<number | null>({
-  create() {
-    return null;
-  },
-  update(value, tr) {
-    let next = value;
-    for (const effect of tr.effects) {
-      if (effect.is(tableWidgetSourceModeEffect)) {
-        next = effect.value;
-      }
-    }
-    if (next === null) return null;
-    const mapped = tr.changes.mapPos(next, -1);
-    if (mapped < 0 || mapped > tr.state.doc.length) return null;
-    const tableLineNo = tr.state.doc.lineAt(mapped).number;
-    const bounds = findTableBlockBounds(tr.state.doc, tableLineNo);
-    if (!bounds) return null;
-    const selLineNo = tr.state.doc.lineAt(tr.state.selection.main.head).number;
-    if (selLineNo < bounds.startLine || selLineNo > bounds.endLine) return null;
-    return mapped;
-  },
-});
-
 const tableWidgetDecorationsField = StateField.define<DecorationSet>({
   create(state) {
-    const sourceAnchor = state.field(tableWidgetSourceModeField, false);
-    const sourceLine = sourceAnchor == null ? null : state.doc.lineAt(sourceAnchor).number;
-    return buildTableWidgetDecorations(
+    const editLine = state.field(tableEditLineField, false) ?? null;
+    return buildTableDisplayDecorations(
       state.doc,
       getTableCellEvaluationMapFromState(state),
-      sourceLine,
+      editLine,
     );
   },
   update(value, tr) {
+    const prevEdit = tr.startState.field(tableEditLineField, false) ?? null;
+    const nextEdit = tr.state.field(tableEditLineField, false) ?? null;
+    const editChanged = prevEdit !== nextEdit;
     const prevCells = getTableCellEvaluationMapFromState(tr.startState);
     const nextCells = getTableCellEvaluationMapFromState(tr.state);
-    const prevSourceAnchor = tr.startState.field(tableWidgetSourceModeField, false);
-    const nextSourceAnchor = tr.state.field(tableWidgetSourceModeField, false);
-    const sourceChanged = prevSourceAnchor !== nextSourceAnchor;
-    if (!tr.docChanged && prevCells === nextCells && !sourceChanged) {
+    const calcChanged = prevCells !== nextCells;
+    if (!tr.docChanged && !editChanged && !calcChanged) {
       return value.map(tr.changes);
     }
-    const sourceLine = nextSourceAnchor == null ? null : tr.state.doc.lineAt(nextSourceAnchor).number;
-    return buildTableWidgetDecorations(tr.state.doc, nextCells, sourceLine);
+    return buildTableDisplayDecorations(tr.state.doc, nextCells, nextEdit);
   },
   provide: (field) => EditorView.decorations.from(field),
 });
@@ -3183,9 +2650,10 @@ function decorateContentLine(
   profiling?: MarkdownBuildProfiling,
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
   imagePreviewResolver?: (src: string) => ResolvedImagePreview | null,
+  skipTableDecorations?: boolean,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
-  const tableKind = classifyTableLineKind(line.text, prevLineText, nextLineText);
+  const tableKind = skipTableDecorations ? null : classifyTableLineKind(line.text, prevLineText, nextLineText);
   const pending: PendingDecoration[] = [];
 
   if (tableKind === "divider") {
@@ -3417,6 +2885,33 @@ function changedRangeCount(update: ViewUpdate): number {
     count += 1;
   });
   return count;
+}
+
+function rangeTouchesTableRows(doc: Text, from: number, to: number): boolean {
+  if (doc.lines <= 0) return false;
+  const lo = Math.max(0, Math.min(from, to));
+  const hi = Math.max(from, to);
+  const startLine = Math.max(1, doc.lineAt(lo).number - 1);
+  const endLine = Math.min(doc.lines, doc.lineAt(hi).number + 1);
+  for (let lineNo = startLine; lineNo <= endLine; lineNo += 1) {
+    if (tableRowRe.test(doc.line(lineNo).text)) return true;
+  }
+  return false;
+}
+
+function updateTouchesTableRows(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  let touched = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (touched) return;
+    if (
+      rangeTouchesTableRows(update.startState.doc, fromA, toA)
+      || rangeTouchesTableRows(update.state.doc, fromB, toB)
+    ) {
+      touched = true;
+    }
+  });
+  return touched;
 }
 
 const markdownRichPlugin = ViewPlugin.fromClass(
@@ -3732,6 +3227,15 @@ const markdownRichPlugin = ViewPlugin.fromClass(
 
       if (update.docChanged) {
         this.fenceCache.invalidateFromLine(earliestChangedLine(update));
+        if (updateTouchesTableRows(update)) {
+          this.decorations = this.safeBuild(
+            update.view,
+            this.decorations,
+            VIEWPORT_MARGIN_LINES,
+            "docChanged_table",
+          );
+          return;
+        }
       }
 
       const prevVars = update.startState.field(variableIndexField, false) ?? [];
@@ -3944,8 +3448,79 @@ const markdownRichPlugin = ViewPlugin.fromClass(
   },
 );
 
+function tableCellContentStart(lineText: string, lineFrom: number, col: number): number | null {
+  const pipes = tablePipeOffsets(lineText);
+  if (col >= pipes.length - 1) return null;
+  const afterPipe = pipes[col]! + 1;
+  const nextChar = lineText[afterPipe];
+  return lineFrom + (nextChar === " " ? afterPipe + 1 : afterPipe);
+}
+
+export function tableTabMove(view: EditorView, shift: boolean): boolean {
+  const state = view.state;
+  const head = state.selection.main.head;
+  if (head > state.doc.length) return false;
+  const curLine = state.doc.lineAt(head);
+  if (!tableRowRe.test(curLine.text)) return false;
+
+  const bounds = findTableBlockBounds(state.doc, curLine.number);
+  if (!bounds || bounds.headerLine === null) return false;
+
+  const dividerLineNo = bounds.headerLine + 1;
+  const navCells: Array<{ lineNo: number; col: number }> = [];
+  for (let ln = bounds.startLine; ln <= bounds.endLine; ln++) {
+    if (ln === dividerLineNo) continue;
+    const pipes = tablePipeOffsets(state.doc.line(ln).text);
+    for (let c = 0; c < pipes.length - 1; c++) navCells.push({ lineNo: ln, col: c });
+  }
+
+  const curPipes = tablePipeOffsets(curLine.text);
+  const offsetInLine = head - curLine.from;
+  let currentCellIdx = -1;
+  for (let i = 0; i < curPipes.length - 1; i++) {
+    if (offsetInLine > curPipes[i]! && offsetInLine <= curPipes[i + 1]!) {
+      currentCellIdx = navCells.findIndex((c) => c.lineNo === curLine.number && c.col === i);
+      break;
+    }
+  }
+
+  const nextIdx = currentCellIdx + (shift ? -1 : 1);
+
+  if (!shift && (currentCellIdx === -1 || nextIdx >= navCells.length)) {
+    // Append a new row and move to its first cell
+    const rows = tableBlockRows(state.doc, bounds);
+    const model = buildTableWidgetModel(state.doc, bounds.startLine);
+    if (!model) return false;
+    const newRow: TableRowDraft = {
+      indent: rows[rows.length - 1]?.indent ?? "",
+      continuation: false,
+      delimiter: false,
+      cells: new Array<string>(model.columnCount).fill(""),
+    };
+    rows.push(newRow);
+    applyTableBlockRows(view, bounds, rows);
+    requestAnimationFrame(() => {
+      const newBounds = findTableBlockBounds(view.state.doc, bounds.startLine);
+      if (!newBounds) return;
+      const newLine = view.state.doc.line(newBounds.endLine);
+      const pos = tableCellContentStart(newLine.text, newLine.from, 0);
+      if (pos !== null) view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+    });
+    return true;
+  }
+
+  if (nextIdx < 0 || nextIdx >= navCells.length) return false;
+
+  const next = navCells[nextIdx]!;
+  const nextLine = state.doc.line(next.lineNo);
+  const pos = tableCellContentStart(nextLine.text, nextLine.from, next.col);
+  if (pos === null) return false;
+  view.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
+  return true;
+}
+
 export function markdownRichTextExtensions(options?: { tableWidgets?: boolean }) {
   const tableWidgets = options?.tableWidgets ?? true;
   if (!tableWidgets) return [markdownRichPlugin];
-  return [tableWidgetSourceModeField, tableWidgetDecorationsField, markdownRichPlugin];
+  return [tableEditLineField, tableWidgetDecorationsField, tableEditDecorationsField, markdownRichPlugin];
 }

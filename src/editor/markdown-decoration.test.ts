@@ -641,7 +641,7 @@ test("buildMarkdownDecorationsForSpans uses block table widget for markdown tabl
   const flat = collectDecorations(decos);
 
   assert.ok(
-    flat.some((d) => d.widget === "TableBlockWidget"),
+    flat.some((d) => d.widget === "TableDisplayWidget"),
     "table block widget should render for markdown tables",
   );
   assert.equal(flat.some((d) => d.widget === "MarkdownImageDisplayWidget"), false);
@@ -664,7 +664,7 @@ test("buildMarkdownDecorationsForSpans keeps escaped pipes inside the same heade
   const flat = collectDecorations(decos);
   const tableWidget = flat.find(
     (entry) =>
-      entry.widget === "TableBlockWidget"
+      entry.widget === "TableDisplayWidget"
       && entry.from === header.from
       && entry.to === header.from,
   );

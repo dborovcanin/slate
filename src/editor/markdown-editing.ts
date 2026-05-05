@@ -16,6 +16,7 @@ import {
   runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
+import { tableTabMove } from "./markdown-decoration.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix };
@@ -35,6 +36,10 @@ interface TableCellInfo {
 function isMarkdownTableLine(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("|") && trimmed.endsWith("|");
+}
+
+function isTableDelimiterLine(text: string): boolean {
+  return isMarkdownTableLine(text) && /^[\s|:-]+$/.test(text);
 }
 
 function firstNonSpaceOffset(text: string): number {
@@ -358,6 +363,80 @@ function indentListOnTab(
   return true;
 }
 
+function tableArrowMovePrev(
+  view: EditorView,
+  line: ReturnType<EditorView["state"]["doc"]["lineAt"]>,
+  cell: TableCellInfo,
+): boolean {
+  const state = view.state;
+  if (cell.index > 0) {
+    const prevCell = tableCellAtColumn(line.text, cell.leftPipe - 1);
+    if (prevCell && prevCell.index !== cell.index) {
+      view.dispatch({
+        selection: { anchor: line.from + tableCellNavigationAnchorInLine(prevCell) },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+  }
+  const bounds = tableBoundsForLineNo(state, line.number);
+  for (let ln = line.number - 1; ln >= (bounds?.startLine ?? 1); ln -= 1) {
+    const prevLine = state.doc.line(ln);
+    if (isTableDelimiterLine(prevLine.text)) continue;
+    const prevCell = tableCellAtColumn(prevLine.text, prevLine.text.length);
+    if (prevCell) {
+      view.dispatch({
+        selection: { anchor: prevLine.from + tableCellNavigationAnchorInLine(prevCell) },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+  }
+  if (!bounds || bounds.startLine <= 1) {
+    view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
+  } else {
+    const exitLine = state.doc.line(bounds.startLine - 1);
+    view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
+  }
+  return true;
+}
+
+function tableArrowMoveNext(
+  view: EditorView,
+  line: ReturnType<EditorView["state"]["doc"]["lineAt"]>,
+  cell: TableCellInfo,
+): boolean {
+  const state = view.state;
+  const nextCell = tableCellAtColumn(line.text, cell.rightPipe + 1);
+  if (nextCell && nextCell.index !== cell.index) {
+    view.dispatch({
+      selection: { anchor: line.from + Math.min(nextCell.leftPipe + 2, nextCell.rightPipe) },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+  const bounds = tableBoundsForLineNo(state, line.number);
+  for (let ln = line.number + 1; ln <= (bounds?.endLine ?? state.doc.lines); ln += 1) {
+    const nextLine = state.doc.line(ln);
+    if (isTableDelimiterLine(nextLine.text)) continue;
+    const firstCell = tableCellAtColumn(nextLine.text, 1);
+    if (firstCell) {
+      view.dispatch({
+        selection: { anchor: nextLine.from + Math.min(firstCell.leftPipe + 2, firstCell.rightPipe) },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+  }
+  if (!bounds || bounds.endLine >= state.doc.lines) {
+    view.dispatch({ selection: { anchor: state.doc.length }, scrollIntoView: true });
+  } else {
+    const exitLine = state.doc.line(bounds.endLine + 1);
+    view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
+  }
+  return true;
+}
+
 function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
   const main = view.state.selection.main;
   if (!main.empty) return false;
@@ -365,34 +444,29 @@ function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
   const cell = tableCellAtStatePosition(view.state, main.head);
   if (!cell) return false;
 
-  const cellStart = cell.leftPipe + 1;
-  const contentStart = line.from + Math.min(cellStart + 1, cell.rightPipe);
+  const contentStart = line.from + Math.min(cell.leftPipe + 2, cell.rightPipe);
   const contentEnd = line.from + tableCellNavigationAnchorInLine(cell);
-  let target = main.head;
 
-  if (cell.trimEnd <= cell.trimStart) {
-    target = contentEnd;
-  } else if (main.head > contentEnd) {
-    target = contentEnd;
-  } else if (direction === -1) {
-    if (main.head > contentStart) {
-      target = main.head - 1;
-    } else {
-      target = contentStart;
+  if (cell.trimEnd <= cell.trimStart || main.head > contentEnd) {
+    if (main.head !== contentEnd) {
+      view.dispatch({ selection: { anchor: contentEnd }, scrollIntoView: true });
     }
-  } else if (main.head < contentEnd) {
-    target = main.head + 1;
-  } else {
-    target = contentEnd;
+    return true;
   }
 
-  if (target !== main.head) {
-    view.dispatch({
-      selection: { anchor: target },
-      scrollIntoView: true,
-    });
+  if (direction === -1) {
+    if (main.head > contentStart) {
+      view.dispatch({ selection: { anchor: main.head - 1 }, scrollIntoView: true });
+      return true;
+    }
+    return tableArrowMovePrev(view, line, cell);
   }
-  return true;
+
+  if (main.head < contentEnd) {
+    view.dispatch({ selection: { anchor: main.head + 1 }, scrollIntoView: true });
+    return true;
+  }
+  return tableArrowMoveNext(view, line, cell);
 }
 
 function tableBoundaryEdit(
@@ -591,83 +665,16 @@ function firstColumnCaretInTableLine(
   return preferEnd ? contentEnd : contentStart;
 }
 
-function focusRichTableColumnCell(
-  view: EditorView,
-  bounds: TableLineBounds,
-  direction: -1 | 1,
-): boolean {
-  const wraps = view.dom.querySelectorAll<HTMLElement>(".md-table-ui-wrap");
-  let targetWrap: HTMLElement | null = null;
-  for (const wrap of wraps) {
-    try {
-      const pos = view.posAtDOM(wrap, 0);
-      const lineNo = view.state.doc.lineAt(pos).number;
-      if (lineNo === bounds.startLine) {
-        targetWrap = wrap;
-        break;
-      }
-    } catch {
-      // Ignore widgets that cannot be mapped to the current document.
-    }
-  }
-  if (!targetWrap) return false;
-  if (direction > 0) {
-    const firstHeader = targetWrap.querySelector<HTMLTextAreaElement>(
-      'textarea[data-table-column-index="0"][data-table-logical-row="-1"]',
-    );
-    const firstBody = targetWrap.querySelector<HTMLTextAreaElement>(
-      'textarea[data-table-column-index="0"][data-table-logical-row="0"]',
-    );
-    const target = firstHeader ?? firstBody;
-    if (!target) return false;
-    target.focus();
-    target.setSelectionRange(0, 0);
-    return true;
-  }
-  const candidates = Array.from(
-    targetWrap.querySelectorAll<HTMLTextAreaElement>(
-      'textarea[data-table-column-index="0"][data-table-logical-row]',
-    ),
-  );
-  let target: HTMLTextAreaElement | null = null;
-  let bestLogicalRow = Number.NEGATIVE_INFINITY;
-  for (const candidate of candidates) {
-    const row = Number(candidate.dataset.tableLogicalRow ?? "");
-    if (!Number.isFinite(row)) continue;
-    if (row > bestLogicalRow) {
-      bestLogicalRow = row;
-      target = candidate;
-    }
-  }
-  if (!target) return false;
-  const pos = target.value.length;
-  target.focus();
-  target.setSelectionRange(pos, pos);
-  return true;
-}
-
 function tableVerticalTraverse(
   view: EditorView,
   direction: -1 | 1,
   richTableUi: boolean,
 ): boolean {
+  // Rich mode: arrows work naturally through table text — no interception needed.
+  if (richTableUi) return false;
+
   const main = view.state.selection.main;
   const doc = view.state.doc;
-
-  if (richTableUi) {
-    const headLine = doc.lineAt(main.head).number;
-    const adjacentLine = headLine + direction;
-    const adjacentBounds = tableBoundsForLineNo(view.state, adjacentLine);
-    if (!adjacentBounds) return false;
-    if (focusRichTableColumnCell(view, adjacentBounds, direction)) return true;
-    const targetLine = direction > 0 ? adjacentBounds.startLine : adjacentBounds.endLine;
-    const target = firstColumnCaretInTableLine(view.state, targetLine, direction < 0);
-    view.dispatch({
-      selection: { anchor: target },
-      scrollIntoView: true,
-    });
-    return true;
-  }
 
   if (!main.empty) {
     const headLine = doc.lineAt(main.head).number;
@@ -734,17 +741,9 @@ function tableCursorKeymap(
   richTableUi: boolean,
 ): KeyBinding[] {
   if (richTableUi) {
-    // Rich table widget owns in-table caret behavior. In markdown source,
-    // keep only block enter/exit traversal to avoid cursor drift.
     return [
-      {
-        key: "ArrowUp",
-        run: (view) => tableVerticalTraverse(view, -1, richTableUi),
-      },
-      {
-        key: "ArrowDown",
-        run: (view) => tableVerticalTraverse(view, 1, richTableUi),
-      },
+      { key: "Tab", run: (view) => tableTabMove(view, false) },
+      { key: "Shift-Tab", run: (view) => tableTabMove(view, true) },
     ];
   }
   return [
@@ -829,6 +828,7 @@ function textRulesPlugin(
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
         if (shouldDeferTableAutoformatForSpace(update)) return;
+        if (update.transactions.some((tr) => tr.isUserEvent("table.cell.edit"))) return;
         if (!updateMightTriggerDocChangeRules(update)) return;
         const changedRange = changedRangeFromChanges(update.changes);
         const tableScoped = snapshotFromViewTableBlock(update.view);

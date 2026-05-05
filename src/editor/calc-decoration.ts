@@ -59,6 +59,8 @@ export interface CalcExtensionOptions {
 const MAX_CALC_EVAL_LINES = 200_000;
 const MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE = 512;
 const MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE = 2_000;
+const CALC_EVAL_DELAY_MS = 150;
+const CALC_TABLE_EDIT_EVAL_DELAY_MS = 24;
 
 // Pure cache: lineText → TableFormulaSegment[]. Results are deterministic so
 // no invalidation is needed — a changed line produces a different key.
@@ -1311,12 +1313,12 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
       serverCacheSeeded = false;
     }
 
-    function scheduleEval() {
+    function scheduleEval(delayMs = CALC_EVAL_DELAY_MS) {
       deferredEval = false;
       if (timer !== null) clearTimeout(timer);
       timer = window.setTimeout(() => {
         void runEval(view);
-      }, 150);
+      }, Math.max(0, delayMs));
     }
 
     async function runEval(view: EditorView) {
@@ -1634,7 +1636,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
         }
         const touchesCalcExpression = updateTouchesCalcExpression(update) || touchesTableRows;
         if (shouldScheduleEval(update.view, touchesCalcExpression)) {
-          scheduleEval();
+          scheduleEval(touchesTableRows ? CALC_TABLE_EDIT_EVAL_DELAY_MS : CALC_EVAL_DELAY_MS);
         } else {
           deferredEval = true;
         }

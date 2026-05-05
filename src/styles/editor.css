@@ -320,63 +320,29 @@
   letter-spacing: 0.02em;
 }
 
+/* Block-level wrap so the table is a proper block in CM's document flow.
+   inline-flex / fit-content caused surrounding text to flow inline with it. */
 .md-table-ui-wrap {
-  display: inline-flex;
-  flex-direction: column;
-  width: fit-content;
-  max-width: 100%;
-  margin: 10px 0 14px;
+  display: block;
+  width: 100%;
+  margin: 4px 0 8px;
+  overflow-x: auto;
 }
 
-.md-table-ui-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 4px;
-}
-
-.md-table-ui-source-toggle {
-  border: 1px solid var(--border);
-  background: var(--bg-overlay);
-  color: color-mix(in srgb, var(--fg) 55%, var(--fg-dim));
-  font: inherit;
-  font-size: 0.78em;
-  border-radius: 999px;
-  padding: 3px 10px;
-  cursor: pointer;
-}
-
-.md-table-ui-source-toggle:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.md-table-ui-surface {
-  display: inline-block;
-  max-width: 100%;
-  overflow: auto;
-  border: 1px solid color-mix(in srgb, var(--border) 62%, var(--fg-dim) 38%);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--bg-surface) 94%, var(--accent) 6%);
-  box-shadow:
-    0 1px 0 color-mix(in srgb, var(--bg-overlay) 85%, transparent),
-    0 12px 24px color-mix(in srgb, var(--bg) 24%, transparent);
-}
-
+/* Clean Obsidian-style table */
 .md-table-ui {
-  border-collapse: separate;
-  border-spacing: 0;
-  display: inline-table;
+  border-collapse: collapse;
+  display: table;
   width: max-content;
-  max-width: max-content;
+  max-width: 100%;
   background: transparent;
-  border: none;
+  border: 1px solid var(--border);
 }
 
 .md-table-ui th,
 .md-table-ui td {
-  border: 0;
-  border-right: 1px solid color-mix(in srgb, var(--border) 74%, var(--fg-dim) 26%);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 74%, var(--fg-dim) 26%);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   vertical-align: top;
   padding: 0;
 }
@@ -389,161 +355,50 @@
   border-bottom: 0;
 }
 
+/* Header: bold, no uppercase, no tiny text — matches Obsidian */
 .md-table-ui thead th {
-  background: color-mix(in srgb, var(--bg-overlay) 90%, var(--accent) 10%);
-  border-bottom-color: color-mix(in srgb, var(--fg-dim) 52%, var(--border) 48%);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.81em;
-}
-
-.md-table-ui-cell-shell {
-  display: flex;
-  position: relative;
-  align-items: stretch;
-  gap: 4px;
-  padding: 0;
-  box-sizing: border-box;
-  width: 100%;
-}
-
-.md-table-ui-cell-shell.md-table-ui-cell-selected {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--accent) 64%, transparent);
-  outline-offset: -1px;
-}
-
-.md-table-ui-cell-stack {
-  display: flex;
-  flex-direction: column;
-}
-
-.md-table-ui-cell-stack > .md-table-ui-cell-shell + .md-table-ui-cell-shell {
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
-.md-table-ui-row-controls {
-  display: inline-flex;
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  padding: 0;
-}
-
-.md-table-ui-cell-shell-with-row-controls .md-table-ui-input {
-  padding-right: 2.5em;
-}
-
-.md-table-col-grip {
-  opacity: 0;
-  color: var(--fg-dim);
-  cursor: grab;
-  user-select: none;
-  font-size: 0.75em;
-  letter-spacing: -0.08em;
-}
-
-.md-table-ui thead th:hover .md-table-col-grip,
-.md-table-ui thead th:focus-within .md-table-col-grip {
-  opacity: 0.85;
-}
-
-.md-table-col-add {
-  opacity: 0;
-  border: 1px solid var(--border);
   background: var(--bg-overlay);
-  color: var(--fg);
-  border-radius: 4px;
-  width: 18px;
-  height: 18px;
-  line-height: 14px;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
+  border-bottom: 2px solid var(--border);
+  font-weight: 600;
 }
 
-.md-table-ui thead th:hover .md-table-col-add,
-.md-table-ui thead th:focus-within .md-table-col-add {
-  opacity: 1;
+/* Display widget cell content span */
+.md-table-ui-cell-content {
+  display: block;
+  padding: 5px 8px;
+  min-width: 3ch;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
 }
 
-.md-table-col-add:hover {
-  border-color: var(--accent);
-  color: var(--accent);
+/* Formula result in display widget */
+.md-table-ui-cell-content.md-table-formula-cell {
+  color: var(--fg-accent, var(--accent));
+  font-style: italic;
 }
 
-.md-table-ui-row-continuation td {
-  background: var(--bg-overlay);
-}
-
+/* Alternating row background — subtle, Obsidian-style */
 .md-table-ui tbody tr:nth-child(even) td {
-  background: color-mix(in srgb, var(--bg-overlay) 56%, transparent);
+  background: color-mix(in srgb, var(--bg-overlay) 45%, transparent);
 }
 
 .md-table-ui tbody tr:hover td {
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
-.md-table-row-grip {
-  opacity: 0;
-  color: var(--fg-dim);
-  cursor: grab;
-  user-select: none;
-  font-size: 0.72em;
-  letter-spacing: -0.06em;
+/* Edit mode: active cell highlight */
+.cm-editor .cm-line .md-table-active-cell {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 2px;
+  outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: -1px;
 }
 
-.md-table-ui tbody tr:hover .md-table-row-grip,
-.md-table-ui tbody tr:focus-within .md-table-row-grip {
-  opacity: 0.9;
-}
-
-.md-table-row-add {
-  opacity: 0;
-  border: 1px solid var(--border);
-  background: var(--bg-overlay);
-  color: var(--fg);
-  border-radius: 4px;
-  width: 18px;
-  height: 18px;
-  line-height: 14px;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0;
-}
-
-.md-table-ui tbody tr:hover .md-table-row-add,
-.md-table-ui tbody tr:focus-within .md-table-row-add {
-  opacity: 1;
-}
-
-.md-table-row-add:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.md-table-ui-source {
-  display: block;
-}
-
-.md-table-ui-source-textarea {
-  min-height: 120px;
-  resize: vertical;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  line-height: inherit;
-  padding: 0;
-  width: 100%;
-  outline: none;
-  white-space: pre;
-  overflow-wrap: normal;
-  font-family: var(--font-mono);
+/* Edit mode: inline formula result display */
+.cm-editor .cm-line .md-table-formula-display {
+  color: var(--fg-accent, var(--accent));
+  font-style: italic;
 }
 
 .md-heading-content {
@@ -707,47 +562,49 @@
 }
 
 .md-table-ui-input {
+  /* Match editor font exactly so table text is consistent with document text */
+  display: block;
   width: 100%;
   min-width: 3ch;
-  max-width: none;
   flex: 1 1 auto;
   align-self: stretch;
   box-sizing: border-box;
   border: 0;
   margin: 0;
-  padding: 6px 8px;
+  padding: 5px 8px;
   background: transparent;
   color: var(--fg);
-  font-family: var(--font-sans);
-  font-size: 0.92em;
-  line-height: inherit;
+  font: inherit;
   outline: none;
   caret-color: var(--accent);
   resize: none;
-  overflow: auto;
+  overflow: hidden;
+  /* pre keeps columns aligned; textarea cols/rows are set programmatically */
   white-space: pre;
   height: auto;
+  vertical-align: top;
 }
 
 .md-table-ui-input:focus {
-  background: color-mix(in srgb, var(--active-line-bg) 65%, transparent);
+  background: var(--active-line-bg);
 }
 
 .md-table-ui-input-header {
   font-weight: 600;
-  color: color-mix(in srgb, var(--fg) 84%, var(--fg-dim));
 }
 
 .md-table-ui-input-formula {
   color: var(--fg-dim);
-  font-weight: 700;
+  font-style: italic;
 }
 
 .md-table-formula-star {
   color: var(--fg-dim);
-  font-weight: 700;
-  font-size: 0.86em;
+  font-size: 0.8em;
+  align-self: flex-start;
+  padding-top: 6px;
   user-select: none;
+  flex-shrink: 0;
 }
 
 .md-table-display-table tbody tr:nth-child(even) td {
