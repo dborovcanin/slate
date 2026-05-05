@@ -1117,7 +1117,6 @@ class TableBlockWidget extends WidgetType {
     syncInputSize(input, widthCh + 1, logicalLineCount);
     let dirty = false;
     let lastDisplayValue = displayValue;
-    input.addEventListener("mousedown", (event) => event.stopPropagation());
     input.addEventListener("focus", () => {
       if (!showFormulaStar) return;
       input.value = sourceValue;
@@ -1305,6 +1304,7 @@ class TableBlockWidget extends WidgetType {
       selectionAnchor = null;
       selectionHead = null;
     };
+    const hasCellSelection = () => selectionAnchor !== null && selectionHead !== null;
     const applyCellSelection = () => {
       for (const shell of selectionShells.values()) {
         shell.classList.remove("md-table-ui-cell-selected");
@@ -1325,6 +1325,20 @@ class TableBlockWidget extends WidgetType {
       selectionHead = head;
       applyCellSelection();
     };
+    wrap.addEventListener("focusout", () => {
+      requestAnimationFrame(() => {
+        if (!wrap.contains(document.activeElement)) {
+          clearCellSelection();
+        }
+      });
+    });
+    wrap.addEventListener("beforeinput", (event) => {
+      if (!hasCellSelection()) return;
+      if (!(event.target instanceof HTMLTextAreaElement)) return;
+      if (!(event instanceof InputEvent) || event.inputType.startsWith("insert")) {
+        clearCellSelection();
+      }
+    });
     const selectedLogicalRows = (): number[] => {
       if (!selectionAnchor || !selectionHead) return [];
       const minRow = Math.min(selectionAnchor.row, selectionHead.row);
@@ -1587,6 +1601,7 @@ class TableBlockWidget extends WidgetType {
           shell.appendChild(marker);
         }
         if (col === this.model.columnCount - 1) {
+          shell.classList.add("md-table-ui-cell-shell-with-row-controls");
           const controls = document.createElement("div");
           controls.className = "md-table-ui-row-controls";
           const rowGrip = document.createElement("span");

@@ -386,10 +386,10 @@ function snapEditorScrollToPixels() {
 
         const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
         const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-        const dpr = Math.max(1, window.devicePixelRatio || 1);
-
-        const nextTop = Math.round(clamp(scroller.scrollTop + deltaY, 0, maxTop) * dpr) / dpr;
-        const nextLeft = Math.round(clamp(scroller.scrollLeft + deltaX, 0, maxLeft) * dpr) / dpr;
+        // Keep wheel scrolling on whole CSS pixels to avoid subpixel text
+        // raster jitter (especially visible on wheel mice on fractional DPR).
+        const nextTop = Math.round(clamp(scroller.scrollTop + deltaY, 0, maxTop));
+        const nextLeft = Math.round(clamp(scroller.scrollLeft + deltaX, 0, maxLeft));
         if (
           Math.abs(nextTop - scroller.scrollTop) < 0.001 &&
           Math.abs(nextLeft - scroller.scrollLeft) < 0.001

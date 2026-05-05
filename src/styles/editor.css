@@ -398,6 +398,7 @@
 
 .md-table-ui-cell-shell {
   display: flex;
+  position: relative;
   align-items: stretch;
   gap: 4px;
   padding: 0;
@@ -422,11 +423,18 @@
 
 .md-table-ui-row-controls {
   display: inline-flex;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
   align-items: center;
-  align-self: center;
   justify-content: flex-end;
   gap: 6px;
-  padding: 0.08em 0.22em 0.08em 0.1em;
+  padding: 0;
+}
+
+.md-table-ui-cell-shell-with-row-controls .md-table-ui-input {
+  padding-right: 2.5em;
 }
 
 .md-table-col-grip {
