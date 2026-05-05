@@ -1123,7 +1123,9 @@ impl TerminalApp {
                             crate::editor_core::command_catalog::ExportFormat::Md
                             | crate::editor_core::command_catalog::ExportFormat::Txt,
                             Some(path),
-                        ) => match crate::commands::export::export_to_file(path.clone(), content) {
+                        ) => match crate::commands::export::export_to_file_blocking(
+                            &path, &content,
+                        ) {
                             Ok(()) => format!("exported {} to {}", format.as_str(), path),
                             Err(error) => format!("export failed: {error}"),
                         },

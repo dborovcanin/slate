@@ -38,6 +38,9 @@ const TABLE_BORDER_WIDTH_PT: f32 = 0.7;
 const IMAGE_MAX_HEIGHT_PT: f32 = 280.0;
 const CHECKBOX_SIZE_PT: f32 = 9.0;
 
+const MAX_PDF_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_PDF_TOTAL_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Clone, Copy, Debug)]
 enum FontFace {
     Body,
@@ -337,21 +340,32 @@ fn resolve_home_dir() -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub fn export_to_file(path: String, content: String) -> Result<(), String> {
-    let resolved = resolve_export_path(&path)?;
-    fs::write(&resolved, &content)
+pub async fn export_to_file(path: String, content: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || export_to_file_blocking(&path, &content))
+        .await
+        .map_err(|e| format!("export task join failed: {e}"))?
+}
+
+pub fn export_to_file_blocking(path: &str, content: &str) -> Result<(), String> {
+    let resolved = resolve_export_path(path)?;
+    fs::write(&resolved, content)
         .map_err(|e| format!("Failed to write file '{}': {e}", resolved.display()))
 }
 
 #[tauri::command]
-pub fn export_to_pdf(
+pub async fn export_to_pdf(
     core: State<'_, AppCore>,
     note_id: String,
     path: String,
     content: String,
     palette: PdfExportPalette,
 ) -> Result<(), String> {
-    export_markdown_to_pdf_file(&core.note_sources(), &note_id, &path, &content, &palette)
+    let note_sources = core.note_sources().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        export_markdown_to_pdf_file(&note_sources, &note_id, &path, &content, &palette)
+    })
+    .await
+    .map_err(|e| format!("PDF export task join failed: {e}"))?
 }
 
 pub fn export_markdown_to_pdf_file(
@@ -382,7 +396,18 @@ fn resolve_markdown_image_bytes(
     };
 
     if value.starts_with("data:") {
-        return decode_data_url_image_bytes(&value).map(Some);
+        let bytes = decode_data_url_image_bytes(&value)?;
+        if bytes.len() as u64 > MAX_PDF_IMAGE_BYTES {
+            return Ok(None);
+        }
+        return Ok(Some(bytes));
+    }
+
+    let size = fs::metadata(&value)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    if size > MAX_PDF_IMAGE_BYTES {
+        return Ok(None);
     }
 
     fs::read(&value)
@@ -413,14 +438,23 @@ fn build_markdown_pdf(
     let image_sources = collect_image_sources(content);
     let mut image_name_by_src: HashMap<String, String> = HashMap::new();
     let mut image_assets: Vec<(String, PdfImageObject)> = Vec::new();
+    let mut total_image_bytes: u64 = 0;
 
     for src in image_sources {
+        if total_image_bytes >= MAX_PDF_TOTAL_IMAGE_BYTES {
+            break;
+        }
         let Some(image_bytes) = resolve_image(src.as_str()) else {
             continue;
         };
+        let byte_len = image_bytes.len() as u64;
+        if total_image_bytes.saturating_add(byte_len) > MAX_PDF_TOTAL_IMAGE_BYTES {
+            continue;
+        }
         let Ok(image_obj) = decode_pdf_image(&image_bytes) else {
             continue;
         };
+        total_image_bytes += byte_len;
         let name = format!("Im{}", image_assets.len() + 1);
         image_name_by_src.insert(src, name.clone());
         image_assets.push((name, image_obj));
@@ -1899,7 +1933,7 @@ mod tests {
         let raw = format!("~/{}", relative);
         let home = resolve_home_dir().expect("home should be set");
         let full_path = home.join(relative);
-        match export_to_file(raw, "hello".to_string()) {
+        match export_to_file_blocking(&raw, "hello") {
             Ok(()) => {
                 let read_back =
                     fs::read_to_string(&full_path).expect("exported file should be readable");

@@ -771,22 +771,27 @@ impl Db {
     }
 
     pub fn list_notes_meta(&self) -> Result<Vec<NoteSummary>, String> {
-        let conn = self.conn.lock().unwrap();
-        let rows = self.load_note_summary_rows(&conn)?;
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            self.load_note_summary_rows(&conn)?
+        };
         let mut notes = Vec::with_capacity(rows.len());
         for row in &rows {
-            notes.push(self.note_summary_from_row(&conn, row)?);
+            notes.push(self.note_summary_from_row(row)?);
         }
 
         Ok(notes)
     }
 
     pub fn get_note_meta(&self, id: &str) -> Result<Option<NoteSummary>, String> {
-        let conn = self.conn.lock().unwrap();
-        let Some(row) = self.load_note_summary_row(&conn, id)? else {
-            return Ok(None);
+        let row = {
+            let conn = self.conn.lock().unwrap();
+            self.load_note_summary_row(&conn, id)?
         };
-        self.note_summary_from_row(&conn, &row).map(Some)
+        match row {
+            Some(row) => self.note_summary_from_row(&row).map(Some),
+            None => Ok(None),
+        }
     }
 
     pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
@@ -1425,21 +1430,14 @@ impl Db {
     ) -> Result<Option<NoteSummaryRow>, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at
+                "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
+                        encryption_salt, encryption_nonce, encrypted_body
                  FROM notes
                  WHERE id = ?1",
             )
             .map_err(|e| e.to_string())?;
         let row = stmt
-            .query_row([id], |row| {
-                Ok(NoteSummaryRow {
-                    id: row.get(0)?,
-                    note_title: row.get(1)?,
-                    body_prefix: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(3)?),
-                    updated_at: row.get(4)?,
-                })
-            })
+            .query_row([id], map_note_summary_row)
             .optional()
             .map_err(|e| e.to_string())?;
         Ok(row)
@@ -1448,50 +1446,18 @@ impl Db {
     fn load_note_summary_rows(&self, conn: &Connection) -> Result<Vec<NoteSummaryRow>, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at
+                "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
+                        encryption_salt, encryption_nonce, encrypted_body
                  FROM notes
                  ORDER BY updated_at DESC",
             )
             .map_err(|e| e.to_string())?;
         let rows = stmt
-            .query_map([], |row| {
-                Ok(NoteSummaryRow {
-                    id: row.get(0)?,
-                    note_title: row.get(1)?,
-                    body_prefix: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
-                    access_mode: parse_note_access_mode(row.get::<_, Option<String>>(3)?),
-                    updated_at: row.get(4)?,
-                })
-            })
+            .query_map([], map_note_summary_row)
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
         Ok(rows)
-    }
-
-    fn load_note_encrypted_payload_row(
-        &self,
-        conn: &Connection,
-        id: &str,
-    ) -> Result<Option<NoteEncryptedPayloadRow>, String> {
-        let mut stmt = conn
-            .prepare(
-                "SELECT encryption_salt, encryption_nonce, encrypted_body
-                 FROM notes
-                 WHERE id = ?1",
-            )
-            .map_err(|e| e.to_string())?;
-        let row = stmt
-            .query_row([id], |row| {
-                Ok(NoteEncryptedPayloadRow {
-                    encryption_salt: row.get(0)?,
-                    encryption_nonce: row.get(1)?,
-                    encrypted_body: row.get(2)?,
-                })
-            })
-            .optional()
-            .map_err(|e| e.to_string())?;
-        Ok(row)
     }
 
     fn load_note_access_row(
@@ -1574,11 +1540,7 @@ impl Db {
         })
     }
 
-    fn note_summary_from_row(
-        &self,
-        conn: &Connection,
-        row: &NoteSummaryRow,
-    ) -> Result<NoteSummary, String> {
+    fn note_summary_from_row(&self, row: &NoteSummaryRow) -> Result<NoteSummary, String> {
         let mut is_unlocked =
             !is_note_protected(row.access_mode) || self.is_note_unlocked(row.id.as_str());
         let body_prefix = if is_unlocked {
@@ -1597,10 +1559,7 @@ impl Db {
                             updated_at: row.updated_at.clone(),
                         });
                     };
-                    let payload = self
-                        .load_note_encrypted_payload_row(conn, row.id.as_str())?
-                        .ok_or_else(|| "Note not found".to_string())?;
-                    let payload_salt = payload
+                    let payload_salt = row
                         .encryption_salt
                         .as_ref()
                         .ok_or_else(|| "encrypted note salt missing".to_string())?;
@@ -1610,12 +1569,10 @@ impl Db {
                         "[locked]".to_string()
                     } else {
                         match decrypt_note_body_with_key(
-                            payload
-                                .encrypted_body
+                            row.encrypted_body
                                 .as_ref()
                                 .ok_or_else(|| "encrypted note payload missing".to_string())?,
-                            payload
-                                .encryption_nonce
+                            row.encryption_nonce
                                 .as_ref()
                                 .ok_or_else(|| "encrypted note nonce missing".to_string())?,
                             &encryption.key,
@@ -1795,10 +1752,6 @@ struct NoteSummaryRow {
     body_prefix: String,
     access_mode: NoteAccessMode,
     updated_at: String,
-}
-
-#[derive(Debug, Clone)]
-struct NoteEncryptedPayloadRow {
     encryption_salt: Option<Vec<u8>>,
     encryption_nonce: Option<Vec<u8>>,
     encrypted_body: Option<Vec<u8>>,
@@ -1825,6 +1778,19 @@ fn parse_note_modules_json(value: Option<String>) -> NoteModules {
         Ok(modules) => modules,
         Err(_) => NoteModules::default(),
     }
+}
+
+fn map_note_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummaryRow> {
+    Ok(NoteSummaryRow {
+        id: row.get(0)?,
+        note_title: row.get(1)?,
+        body_prefix: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+        access_mode: parse_note_access_mode(row.get::<_, Option<String>>(3)?),
+        updated_at: row.get(4)?,
+        encryption_salt: row.get(5)?,
+        encryption_nonce: row.get(6)?,
+        encrypted_body: row.get(7)?,
+    })
 }
 
 fn parse_note_access_mode(value: Option<String>) -> NoteAccessMode {

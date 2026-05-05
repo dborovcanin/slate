@@ -1,8 +1,7 @@
 use crate::table;
 use regex::{Regex, RegexBuilder};
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
@@ -949,7 +948,7 @@ pub fn collect_assignment_names(lines: &[String]) -> Vec<String> {
 
 pub fn collect_assignment_names_with_mask(lines: &[String], mask: CalcFeatureMask) -> Vec<String> {
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen: FxHashSet<String> = FxHashSet::default();
     for line in lines {
         let Some(name) = assignment_name_with_mask(line, mask) else {
             continue;
@@ -970,8 +969,8 @@ struct VariableDependencyDef {
 fn collect_variable_dependency_defs(
     lines: &[String],
     mask: CalcFeatureMask,
-) -> HashMap<String, VariableDependencyDef> {
-    let mut defs = HashMap::new();
+) -> FxHashMap<String, VariableDependencyDef> {
+    let mut defs: FxHashMap<String, VariableDependencyDef> = FxHashMap::default();
     for (line_idx, line) in lines.iter().enumerate() {
         let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) else {
             continue;
@@ -1004,7 +1003,7 @@ fn build_variable_ref_regex(names_sorted: &[String]) -> Option<regex::Regex> {
 fn expression_references_any(
     expression: &str,
     variable_regex: &regex::Regex,
-    affected_variables: &HashSet<String>,
+    affected_variables: &FxHashSet<String>,
 ) -> bool {
     variable_regex
         .find_iter(expression)
@@ -1132,7 +1131,7 @@ fn coordinate_formula_dependency_window(
             continue;
         }
 
-        let mut changed_cells: HashSet<(usize, usize)> = HashSet::new();
+        let mut changed_cells: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut structure_changed = false;
         for idx in changed_from.max(table_start)..changed_to.min(table_end.saturating_add(1)) {
             let Some(row_1based) = table_row_index_1based(&data_rows, idx) else {
@@ -1150,9 +1149,10 @@ fn coordinate_formula_dependency_window(
             }
         }
 
-        let mut formula_nodes: HashMap<(usize, usize), usize> = HashMap::new();
-        let mut reverse_refs: HashMap<(usize, usize), HashSet<(usize, usize)>> = HashMap::new();
-        let mut nodes_with_coords: HashSet<(usize, usize)> = HashSet::new();
+        let mut formula_nodes: FxHashMap<(usize, usize), usize> = FxHashMap::default();
+        let mut reverse_refs: FxHashMap<(usize, usize), FxHashSet<(usize, usize)>> =
+            FxHashMap::default();
+        let mut nodes_with_coords: FxHashSet<(usize, usize)> = FxHashSet::default();
 
         for (logical_idx, row_line_idxs) in data_rows.iter().enumerate() {
             let row_1based = logical_idx.saturating_add(1);
@@ -1177,7 +1177,7 @@ fn coordinate_formula_dependency_window(
             continue;
         }
 
-        let mut affected_nodes: HashSet<(usize, usize)> = HashSet::new();
+        let mut affected_nodes: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut stack: Vec<(usize, usize)> = Vec::new();
 
         if structure_changed {
@@ -1349,7 +1349,7 @@ fn variable_dependency_window(
     prev_changed_had_assignment: bool,
     mask: CalcFeatureMask,
 ) -> Option<(usize, usize)> {
-    let mut changed_variables: HashSet<String> = HashSet::new();
+    let mut changed_variables: FxHashSet<String> = FxHashSet::default();
 
     if let Some(slice) = lines.get(changed_from..changed_to) {
         for name in collect_assignment_names_with_mask(slice, mask) {
@@ -1383,7 +1383,7 @@ fn variable_dependency_window(
         return Some((0, lines.len()));
     };
 
-    let mut reverse_dependencies: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut reverse_dependencies: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
     for (name, def) in &defs {
         for m in variable_regex.find_iter(def.rhs.as_str()) {
             let referenced = def.rhs[m.start()..m.end()].to_ascii_lowercase();
