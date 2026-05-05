@@ -180,13 +180,13 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-05 5:17pm GMT+2
+# [slate] recent context, 2026-05-05 8:01pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (17,930t read) | 1,066,402t work | 98% savings
+Stats: 50 obs (18,861t read) | 859,147t work | 98% savings
 
 ### Apr 28, 2026
 S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
@@ -194,18 +194,6 @@ S108 Create slate.desktop XDG desktop entry file for the Slate application (Apr 
 S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 28, 10:44 PM)
 ### Apr 29, 2026
 S160 Design discussion for Obsidian-style wiki links [[notename#heading]] and [[notename^block]] in notes editor (Apr 29, 9:29 AM)
-128 9:40a 🔵 TableEvalCache implements lazy splitting and caching of table row cells
-129 " 🔵 Table formula scope (Row/Column) controls which cells are collected for sum operations
-130 " 🔵 Table cell references detect self-reference, bounds, and empty cells with specific error codes
-131 9:41a 🔵 NoteEvaluationOptions eval_range enables partial document evaluation while maintaining full variable scope
-132 9:42a 🔵 Calc decoration builder collects metrics on viewport spans for debugging and optimization
-133 " ✅ Added rustc-hash v2 dependency to editor-core crate
-134 9:43a 🔄 hash_line migrated from DefaultHasher to FxHasher in calc_plan.rs
-135 " ✅ Arc added to engine.rs sync imports in preparation for shared state
-136 " 🔄 note_line_cache and TableEvalCache migrated to Arc-wrapped Vec for cheap cloning
-137 10:06a 🔴 Table formula :=(1,2) cell reference without operator fails
-139 " 🔵 Root cause investigation: :=(1,2) bare cell reference filtering in table_expression_segments
-182 11:51p 🔵 Slate project architecture mapped for wiki-link feature investigation
 S161 Note title vs ID storage — how Slate handles title storage, uniqueness, and duplicate title resolution for wiki-style links (Apr 29, 11:52 PM)
 183 11:56p 🔵 Slate note title is derived from body and stored as denormalized column
 S163 Wiki-link syntax: short 8-char ID + mandatory autocomplete picker (Apr 29, 11:56 PM)
@@ -252,7 +240,19 @@ S210 Architecture and performance review of the Slate project — code only, ign
 232 5:16p 🔴 Table cell selection now cancels on outside click or any keypress
 233 " ✅ Slate light theme colors shifted warmer and slightly deeper
 234 " 🔴 Editor wheel scroll snaps to whole CSS pixels, removing subpixel jitter
+235 5:18p 🟣 Table cell selection cancels on focus-out, typing, and outside click
+236 " 🔵 markdown-decoration.ts has significant dead code accumulation causing TypeScript errors
+237 5:24p 🔄 Table row controls repositioned as absolute overlay over last cell
+238 5:25p ✅ Session changes committed to main branch — 5 files, 4 distinct fixes
+239 5:33p ⚖️ Table cursor navigation UX — enter selects all, exit restores normal cursor
+240 " 🔵 Table cursor navigation architecture traced in TUI editor (CodeMirror/markdown-editing.ts)
+241 " 🔵 Table widget uses Decoration.replace + sourceModeLine to toggle between widget and raw-edit modes
+242 5:34p 🔴 Rich table UI — stripped conflicting TUI cursor keymap and tableCursorGuards when richTableUi=true
+243 " 🔴 Editor CSS blur fix — text-rendering changed from optimizeLegibility to auto on cm-content
+245 6:22p ⚖️ Table cursor navigation UX — simplified arrow key behavior confirmed
+247 6:25p 🔵 Table cursor navigation code structure traced in markdown-editing.ts
+248 6:26p 🟣 Rich table arrow-key entry implemented — direct cell focus without whole-table selection
 
-Access 1066k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 859k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 

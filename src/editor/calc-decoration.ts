@@ -812,6 +812,32 @@ function updateTouchesCalcExpression(update: ViewUpdate): boolean {
   return touches;
 }
 
+function rangeTouchesTableRow(doc: Text, from: number, to: number): boolean {
+  const startLine = doc.lineAt(from).number;
+  const endPos = to > from ? to - 1 : from;
+  const endLine = doc.lineAt(Math.max(from, endPos)).number;
+  if (endLine - startLine > MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE) return true;
+  for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
+    if (tableRowRe.test(doc.line(lineNo).text)) return true;
+  }
+  return false;
+}
+
+function updateTouchesTableRows(update: ViewUpdate): boolean {
+  let touches = false;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    if (touches) return;
+    if (rangeTouchesTableRow(update.startState.doc, fromA, toA)) {
+      touches = true;
+      return;
+    }
+    if (rangeTouchesTableRow(update.state.doc, fromB, toB)) {
+      touches = true;
+    }
+  });
+  return touches;
+}
+
 export interface CommitMarkerLoc {
   docPos: number;
   lineIdx: number;
@@ -1229,6 +1255,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let rerunRequested = false;
     let destroyed = false;
     let deferredEval = false;
+    let pendingFullTableRecalc = false;
     let prevLines: string[] = [];
     let prevResults: Map<number, string> = new Map();
     let prevVariables: VariableIndexEntry[] = [];
@@ -1325,15 +1352,25 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const prevChangedTo =
             prevLines.length - nextLines.length + plan.evalFrom + plan.evalLines.length;
           const prevChangedLines = prevLines.slice(plan.evalFrom, prevChangedTo);
-          const evalWindow = calcDecideEvalWindow(
-            nextLines,
-            plan.evalFrom,
-            plan.evalFrom + plan.evalLines.length,
-            prevChangedLines,
-            hasPrev,
-            variablesEnabled,
-            tableEnabled,
-          );
+          const forceFullTableRecalc = pendingFullTableRecalc;
+          pendingFullTableRecalc = false;
+          const evalWindow = forceFullTableRecalc
+            ? {
+              evalFrom: 0,
+              evalTo: nextLines.length,
+              touchesAnyAssignment: true,
+              touchesBuiltinFormula: true,
+              canUsePartial: false,
+            }
+            : calcDecideEvalWindow(
+              nextLines,
+              plan.evalFrom,
+              plan.evalFrom + plan.evalLines.length,
+              prevChangedLines,
+              hasPrev,
+              variablesEnabled,
+              tableEnabled,
+            );
           const canUsePartial = evalWindow.canUsePartial;
           const noteId = getActiveNoteId?.() ?? null;
 
@@ -1589,7 +1626,13 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           cachedHasGlobalSyntax = null;
         }
 
-        const touchesCalcExpression = updateTouchesCalcExpression(update);
+        const touchesTableRows = tableEnabled && updateTouchesTableRows(update);
+        if (touchesTableRows) {
+          // Table formula dependencies can span rows/cols; force a full pass
+          // to keep UI formula rendering in sync after table cell edits.
+          pendingFullTableRecalc = true;
+        }
+        const touchesCalcExpression = updateTouchesCalcExpression(update) || touchesTableRows;
         if (shouldScheduleEval(update.view, touchesCalcExpression)) {
           scheduleEval();
         } else {

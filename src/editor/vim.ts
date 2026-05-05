@@ -1277,6 +1277,28 @@ export function vimModeExtension(options: VimOptions = {}) {
         pendingGoToLinkUntilMs = 0;
       }
 
+      // Let plain arrow navigation flow through to CodeMirror/markdown table
+      // handlers so cursor movement works the same in normal and insert modes.
+      if (
+        activeMode === "normal"
+        && !event.ctrlKey
+        && !event.metaKey
+        && !event.altKey
+        && !event.shiftKey
+        && (
+          event.key === "ArrowUp"
+          || event.key === "ArrowDown"
+          || event.key === "ArrowLeft"
+          || event.key === "ArrowRight"
+          || event.key === "Up"
+          || event.key === "Down"
+          || event.key === "Left"
+          || event.key === "Right"
+        )
+      ) {
+        return false;
+      }
+
       const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
       if (activeMode === "normal" && plain) {
         const plainKey = event.key.toLowerCase();

@@ -516,6 +516,9 @@ function updateTableCellInBlock(
   const colCount = Math.max(row.cells.length, columnIndex + 1, 1);
   row.cells = ensureCols(row.cells, colCount);
   row.cells[columnIndex] = nextValue;
+  // Cell edits can affect dependent table formulas in sibling rows/cells.
+  // Clear display cache so stale rendered values don't linger before eval.
+  tableFormulaDisplayCache.clear();
   return applyTableBlockRows(view, bounds, rows);
 }
 
@@ -899,6 +902,8 @@ function updateTableLogicalCellInBlock(
   const logical = logicalRows.find((entry) => entry.firstOffset === logicalFirstOffset);
   if (!logical) return false;
   setLogicalRowCellValues(model, rows, logical, columnIndex, nextValue);
+  // Logical-row edits can affect dependent table formulas across the block.
+  tableFormulaDisplayCache.clear();
   return applyTableBlockRows(view, bounds, rows);
 }
 
@@ -1092,6 +1097,7 @@ class TableBlockWidget extends WidgetType {
     logicalRowIndex: number,
     physicalRowOffset: number,
     logicalLineCount: number,
+    totalLogicalRowCount: number,
     columnIndex: number,
     sourceValue: string,
     displayValue: string,
@@ -1117,6 +1123,7 @@ class TableBlockWidget extends WidgetType {
     syncInputSize(input, widthCh + 1, logicalLineCount);
     let dirty = false;
     let lastDisplayValue = displayValue;
+    input.addEventListener("mousedown", (event) => event.stopPropagation());
     input.addEventListener("focus", () => {
       if (!showFormulaStar) return;
       input.value = sourceValue;
@@ -1148,8 +1155,54 @@ class TableBlockWidget extends WidgetType {
       );
       dirty = false;
     };
+    const tableCellInput = (row: number, col: number): HTMLTextAreaElement | null => (
+      wrap.querySelector<HTMLTextAreaElement>(
+        `textarea[data-table-logical-row="${row}"][data-table-column-index="${col}"]`,
+      )
+    );
+    const focusTableCell = (
+      row: number,
+      col: number,
+      mode: "start" | "end" | "clamp",
+      refPos = 0,
+    ): boolean => {
+      const next = tableCellInput(row, col);
+      if (!next) return false;
+      next.focus();
+      let pos = 0;
+      if (mode === "end") pos = next.value.length;
+      else if (mode === "clamp") pos = Math.max(0, Math.min(refPos, next.value.length));
+      next.setSelectionRange(pos, pos);
+      return true;
+    };
+    const moveOutsideTable = (direction: -1 | 1) => {
+      const doc = view.state.doc;
+      const targetLineNo = direction < 0 ? this.model.startLine - 1 : this.model.endLine + 1;
+      if (targetLineNo < 1) {
+        view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
+        view.focus();
+        return;
+      }
+      if (targetLineNo > doc.lines) {
+        view.dispatch({ selection: { anchor: doc.length }, scrollIntoView: true });
+        view.focus();
+        return;
+      }
+      const targetLine = doc.line(targetLineNo);
+      view.dispatch({
+        selection: { anchor: targetLine.from },
+        scrollIntoView: true,
+      });
+      view.focus();
+    };
+    const leaveTable = (direction: -1 | 1) => {
+      commitValue(true);
+      moveOutsideTable(direction);
+    };
 
     input.addEventListener("keydown", (event) => {
+      // Keep table-cell editing independent from Vim key handling while focused.
+      event.stopPropagation();
       if (
         header
         && event.key === "Backspace"
@@ -1166,6 +1219,76 @@ class TableBlockWidget extends WidgetType {
           );
         }
         return;
+      }
+      if (!event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        const start = selectionStart(input);
+        const end = selectionEnd(input);
+        const firstNavigableRow = -1;
+        const lastNavigableRow = totalLogicalRowCount - 1;
+        if (start === end) {
+          if (event.key === "ArrowLeft" && start === 0) {
+            event.preventDefault();
+            let targetRow = logicalRowIndex;
+            let targetCol = columnIndex - 1;
+            if (targetCol < 0) {
+              targetRow = logicalRowIndex - 1;
+              targetCol = this.model.columnCount - 1;
+            }
+            if (targetRow < firstNavigableRow || targetCol < 0) {
+              leaveTable(-1);
+            } else if (!focusTableCell(targetRow, targetCol, "end")) {
+              leaveTable(-1);
+            }
+            return;
+          }
+          if (event.key === "ArrowRight" && end === input.value.length) {
+            event.preventDefault();
+            let targetRow = logicalRowIndex;
+            let targetCol = columnIndex + 1;
+            if (targetCol >= this.model.columnCount) {
+              targetRow = logicalRowIndex + 1;
+              targetCol = 0;
+            }
+            if (targetRow > lastNavigableRow || targetCol >= this.model.columnCount) {
+              leaveTable(1);
+            } else if (!focusTableCell(targetRow, targetCol, "start")) {
+              leaveTable(1);
+            }
+            return;
+          }
+          if (event.key === "ArrowUp") {
+            const before = input.value.slice(0, start);
+            const atFirstVisualLine = !before.includes("\n");
+            if (atFirstVisualLine) {
+              event.preventDefault();
+              const prevRow = logicalRowIndex - 1;
+              if (prevRow >= -1) {
+                if (!focusTableCell(prevRow, columnIndex, "clamp", start)) {
+                  leaveTable(-1);
+                }
+              } else {
+                leaveTable(-1);
+              }
+              return;
+            }
+          }
+          if (event.key === "ArrowDown") {
+            const after = input.value.slice(end);
+            const atLastVisualLine = !after.includes("\n");
+            if (atLastVisualLine) {
+              event.preventDefault();
+              const nextRow = logicalRowIndex + 1;
+              if (nextRow < totalLogicalRowCount) {
+                if (!focusTableCell(nextRow, columnIndex, "clamp", start)) {
+                  leaveTable(1);
+                }
+              } else {
+                leaveTable(1);
+              }
+              return;
+            }
+          }
+        }
       }
       if (event.key === "|") {
         event.preventDefault();
@@ -1374,16 +1497,17 @@ class TableBlockWidget extends WidgetType {
         clearCellSelection();
         return;
       }
-      if (event.shiftKey && selectionAnchor) {
-        setCellSelection(selectionAnchor, { row, col });
-      } else if (selectionAnchor && selectionHead) {
-        // Single click on a selected table cell should cancel the table-cell
-        // selection so editing can continue with a plain caret.
+      if (event.shiftKey) {
+        if (selectionAnchor) {
+          setCellSelection(selectionAnchor, { row, col });
+        } else {
+          setCellSelection({ row, col }, { row, col });
+        }
+      } else if (hasCellSelection()) {
+        // Plain click inside table cancels any existing cell-range selection.
         clearCellSelection();
-      } else {
-        setCellSelection({ row, col }, { row, col });
       }
-    });
+    }, true);
     wrap.addEventListener("keydown", (event) => {
       if (event.shiftKey && (
         event.key === "ArrowLeft"
@@ -1509,6 +1633,7 @@ class TableBlockWidget extends WidgetType {
         -1,
         headerOffset,
         1,
+        logicalRowCount,
         col,
         sourceValue,
         sourceValue,
@@ -1584,6 +1709,7 @@ class TableBlockWidget extends WidgetType {
           logicalIndex,
           logical.firstOffset,
           logical.offsets.length,
+          logicalRowCount,
           col,
           sourceValue,
           displayValue,

@@ -551,7 +551,6 @@ function buildEditorExtensions(options: EditorMountOptions): {
       }),
       imageImportDomHandlers(),
       tableCellNavigationDomHandler(),
-      snapEditorScrollToPixels(),
       Prec.highest(keymap.of([
         {
           key: "Ctrl-w",

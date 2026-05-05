@@ -577,9 +577,97 @@ function selectTableBounds(view: EditorView, bounds: TableLineBounds): boolean {
   return true;
 }
 
-function tableVerticalTraverse(view: EditorView, direction: -1 | 1): boolean {
+function firstColumnCaretInTableLine(
+  state: EditorView["state"],
+  lineNo: number,
+  preferEnd: boolean,
+): number {
+  const line = state.doc.line(lineNo);
+  const cell = tableCellAtStatePosition(state, line.from + 1);
+  if (!cell) return line.from;
+  const cellStart = cell.leftPipe + 1;
+  const contentStart = line.from + Math.min(cellStart + 1, cell.rightPipe);
+  const contentEnd = line.from + tableCellNavigationAnchorInLine(cell);
+  return preferEnd ? contentEnd : contentStart;
+}
+
+function focusRichTableColumnCell(
+  view: EditorView,
+  bounds: TableLineBounds,
+  direction: -1 | 1,
+): boolean {
+  const wraps = view.dom.querySelectorAll<HTMLElement>(".md-table-ui-wrap");
+  let targetWrap: HTMLElement | null = null;
+  for (const wrap of wraps) {
+    try {
+      const pos = view.posAtDOM(wrap, 0);
+      const lineNo = view.state.doc.lineAt(pos).number;
+      if (lineNo === bounds.startLine) {
+        targetWrap = wrap;
+        break;
+      }
+    } catch {
+      // Ignore widgets that cannot be mapped to the current document.
+    }
+  }
+  if (!targetWrap) return false;
+  if (direction > 0) {
+    const firstHeader = targetWrap.querySelector<HTMLTextAreaElement>(
+      'textarea[data-table-column-index="0"][data-table-logical-row="-1"]',
+    );
+    const firstBody = targetWrap.querySelector<HTMLTextAreaElement>(
+      'textarea[data-table-column-index="0"][data-table-logical-row="0"]',
+    );
+    const target = firstHeader ?? firstBody;
+    if (!target) return false;
+    target.focus();
+    target.setSelectionRange(0, 0);
+    return true;
+  }
+  const candidates = Array.from(
+    targetWrap.querySelectorAll<HTMLTextAreaElement>(
+      'textarea[data-table-column-index="0"][data-table-logical-row]',
+    ),
+  );
+  let target: HTMLTextAreaElement | null = null;
+  let bestLogicalRow = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const row = Number(candidate.dataset.tableLogicalRow ?? "");
+    if (!Number.isFinite(row)) continue;
+    if (row > bestLogicalRow) {
+      bestLogicalRow = row;
+      target = candidate;
+    }
+  }
+  if (!target) return false;
+  const pos = target.value.length;
+  target.focus();
+  target.setSelectionRange(pos, pos);
+  return true;
+}
+
+function tableVerticalTraverse(
+  view: EditorView,
+  direction: -1 | 1,
+  richTableUi: boolean,
+): boolean {
   const main = view.state.selection.main;
   const doc = view.state.doc;
+
+  if (richTableUi) {
+    const headLine = doc.lineAt(main.head).number;
+    const adjacentLine = headLine + direction;
+    const adjacentBounds = tableBoundsForLineNo(view.state, adjacentLine);
+    if (!adjacentBounds) return false;
+    if (focusRichTableColumnCell(view, adjacentBounds, direction)) return true;
+    const targetLine = direction > 0 ? adjacentBounds.startLine : adjacentBounds.endLine;
+    const target = firstColumnCaretInTableLine(view.state, targetLine, direction < 0);
+    view.dispatch({
+      selection: { anchor: target },
+      scrollIntoView: true,
+    });
+    return true;
+  }
 
   if (!main.empty) {
     const headLine = doc.lineAt(main.head).number;
@@ -640,15 +728,33 @@ function markdownTabKeymap(autoformat: boolean, tableEnabled: boolean): KeyBindi
   ];
 }
 
-function tableCursorKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
+function tableCursorKeymap(
+  autoformat: boolean,
+  tableEnabled: boolean,
+  richTableUi: boolean,
+): KeyBinding[] {
+  if (richTableUi) {
+    // Rich table widget owns in-table caret behavior. In markdown source,
+    // keep only block enter/exit traversal to avoid cursor drift.
+    return [
+      {
+        key: "ArrowUp",
+        run: (view) => tableVerticalTraverse(view, -1, richTableUi),
+      },
+      {
+        key: "ArrowDown",
+        run: (view) => tableVerticalTraverse(view, 1, richTableUi),
+      },
+    ];
+  }
   return [
     {
       key: "ArrowUp",
-      run: (view) => tableVerticalTraverse(view, -1),
+      run: (view) => tableVerticalTraverse(view, -1, richTableUi),
     },
     {
       key: "ArrowDown",
-      run: (view) => tableVerticalTraverse(view, 1),
+      run: (view) => tableVerticalTraverse(view, 1, richTableUi),
     },
     {
       key: "Backspace",
@@ -880,8 +986,8 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   const tableExtensions = tableEnabled
     ? [
       ...(richTableUi ? [Prec.high(tablePipeInputHandler())] : []),
-      Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled))),
-      tableCursorGuards(),
+      Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled, richTableUi))),
+      ...(richTableUi ? [] : [tableCursorGuards()]),
     ]
     : [];
   return [
