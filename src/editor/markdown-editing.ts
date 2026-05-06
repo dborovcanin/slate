@@ -1,4 +1,4 @@
-import { Prec } from "@codemirror/state";
+import { Prec, type Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import { getCalcResultAtCursor } from "./calc-decoration.ts";
@@ -16,6 +16,7 @@ import {
   runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
+import { tableEnterEffect, tableEditLineField } from "./markdown-decoration.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix };
@@ -688,8 +689,21 @@ function tableVerticalTraverse(
   const headLine = doc.lineAt(main.head).number;
   const currentBounds = tableBoundsForLineNo(view.state, headLine);
   if (currentBounds) {
-    // In rich mode, cursor is in raw source — arrows move naturally through lines.
-    if (richTableUi) return false;
+    if (richTableUi) {
+      const editLine = view.state.field(tableEditLineField, false);
+      if (editLine == null) {
+        // Cursor landed on a table line but widget is still showing (CM snapped to
+        // block boundary). Enter from the side we came from.
+        const entryLineNo = direction < 0 ? currentBounds.endLine : currentBounds.startLine;
+        view.dispatch({
+          effects: tableEnterEffect.of(currentBounds.startLine),
+          selection: { anchor: firstColumnCaretInTableLine(view.state, entryLineNo, false) },
+          scrollIntoView: true,
+        });
+        return true;
+      }
+      return false;
+    }
     return selectTableBounds(view, currentBounds);
   }
 
@@ -698,10 +712,12 @@ function tableVerticalTraverse(
   if (!adjacentBounds) return false;
 
   if (richTableUi) {
-    // Display widget blocks natural arrow entry; dispatch cursor into first/last row.
     const targetLineNo = direction > 0 ? adjacentBounds.startLine : adjacentBounds.endLine;
-    const targetLine = doc.line(targetLineNo);
-    view.dispatch({ selection: { anchor: targetLine.from + 1 }, scrollIntoView: true });
+    view.dispatch({
+      effects: tableEnterEffect.of(adjacentBounds.startLine),
+      selection: { anchor: firstColumnCaretInTableLine(view.state, targetLineNo, false) },
+      scrollIntoView: true,
+    });
     return true;
   }
   return selectTableBounds(view, adjacentBounds);
@@ -971,6 +987,89 @@ function checklistClickHandlers() {
   });
 }
 
+// Safety-net plugin for richTableUi: catches the case where CM's block-replace
+// widget causes the cursor to jump PAST a table (landing on the wrong side of it)
+// rather than at the widget edge. Fires after CM commits the move, detects the
+// jump, and re-dispatches entry into the table from the correct side.
+function tableRichEntryPlugin(): Extension {
+  return ViewPlugin.define(() => {
+    let prevHead: number | null = null;
+    return {
+      update(update: ViewUpdate) {
+        const head = update.state.selection.main.head;
+
+        if (update.docChanged) {
+          prevHead = head;
+          return;
+        }
+        if (!update.selectionSet) return;
+
+        const state = update.state;
+        const main = state.selection.main;
+        if (!main.empty) {
+          prevHead = head;
+          return;
+        }
+
+        const editLine = state.field(tableEditLineField, false);
+        const prev = prevHead;
+        prevHead = head;
+
+        if (editLine != null) return; // already in edit mode
+
+        const doc = state.doc;
+        const headLine = doc.lineAt(head).number;
+
+        // Case A: cursor landed directly on a table line while widget is showing
+        // (CM snapped to block boundary and tableVerticalTraverse already returned true,
+        // OR some other navigation landed here).
+        const onTableBounds = tableBoundsForLineNo(state, headLine);
+        if (onTableBounds) {
+          const prevLine = prev !== null ? doc.lineAt(Math.min(prev, doc.length)).number : null;
+          const direction = prevLine !== null && prevLine !== headLine
+            ? (headLine > prevLine ? 1 : -1)
+            : 0;
+          // Don't re-enter if cursor just moved upward within the table (exitng).
+          const prevWasInside = prevLine !== null
+            && prevLine >= onTableBounds.startLine
+            && prevLine <= onTableBounds.endLine;
+          if (!prevWasInside) {
+            const entryLineNo = direction < 0 ? onTableBounds.endLine : onTableBounds.startLine;
+            update.view.dispatch({
+              effects: tableEnterEffect.of(onTableBounds.startLine),
+              selection: { anchor: firstColumnCaretInTableLine(state, entryLineNo, false) },
+              scrollIntoView: true,
+            });
+            return;
+          }
+        }
+
+        // Case B: cursor jumped PAST a table (landed on the far side of the block widget).
+        if (prev === null) return;
+        const prevLine = doc.lineAt(Math.min(prev, doc.length)).number;
+        if (headLine === prevLine) return;
+
+        const direction = headLine > prevLine ? 1 : -1;
+        // The line immediately "behind" us in the direction we moved from
+        const edgeLine = headLine - direction;
+        const jumpedBounds = tableBoundsForLineNo(state, edgeLine);
+        if (!jumpedBounds) return;
+
+        // Make sure we came from outside (not from inside the table itself)
+        const prevWasInside = prevLine >= jumpedBounds.startLine && prevLine <= jumpedBounds.endLine;
+        if (prevWasInside) return;
+
+        const targetLineNo = direction > 0 ? jumpedBounds.startLine : jumpedBounds.endLine;
+        update.view.dispatch({
+          effects: tableEnterEffect.of(jumpedBounds.startLine),
+          selection: { anchor: firstColumnCaretInTableLine(state, targetLineNo, false) },
+          scrollIntoView: true,
+        });
+      },
+    };
+  });
+}
+
 interface MarkdownEditingOptions {
   autoformat?: boolean;
   checklistAutoReorder?: boolean;
@@ -988,6 +1087,7 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
       Prec.high(tablePipeInputHandler()),
       Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled, richTableUi))),
       tableCursorGuards(),
+      ...(richTableUi ? [tableRichEntryPlugin()] : []),
     ]
     : [];
   return [

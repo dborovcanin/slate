@@ -575,10 +575,10 @@ function tableWidgetSignature(model: TableWidgetModel): string {
   ];
   for (const row of model.rows) {
     parts.push(
-      `${row.indent}|${row.continuation ? "1" : "0"}|${row.delimiter ? "1" : "0"}|${row.cells.join("\u0001")}`,
+      `${row.indent}|${row.continuation ? "1" : "0"}|${row.delimiter ? "1" : "0"}|${row.cells.join("")}`,
     );
   }
-  return parts.join("\u0002");
+  return parts.join("");
 }
 
 function tableWidgetCalcSignature(
@@ -965,7 +965,6 @@ function tableCellDocPosition(
   const clamped = Math.max(0, Math.min(inCellOffset, Math.max(0, range.to - range.from)));
   return line.from + range.from + clamped;
 }
-
 class TableDisplayWidget extends WidgetType {
   constructor(
     private readonly model: TableWidgetModel,
@@ -1041,7 +1040,6 @@ class TableDisplayWidget extends WidgetType {
     const table = document.createElement("table");
     table.className = "md-table-ui";
 
-    // Header
     const thead = document.createElement("thead");
     const headerTr = document.createElement("tr");
     const headerLineNo = this.model.headerLine;
@@ -1066,7 +1064,6 @@ class TableDisplayWidget extends WidgetType {
     thead.appendChild(headerTr);
     table.appendChild(thead);
 
-    // Body
     const tbody = document.createElement("tbody");
     for (let li = 0; li < logicalRows.length; li++) {
       const logical = logicalRows[li]!;
@@ -1102,26 +1099,19 @@ class TableDisplayWidget extends WidgetType {
     table.appendChild(tbody);
     wrap.appendChild(table);
 
-    // Click to enter edit mode: place CM cursor at the clicked cell
     wrap.addEventListener("mousedown", (event) => {
       const target = event.target as Element;
       const cell = target.closest<HTMLElement>("[data-cell-doc-pos]");
-      if (!cell) {
-        const firstCellEl = wrap.querySelector<HTMLElement>("[data-cell-doc-pos]");
-        if (firstCellEl) {
-          const pos = parseInt(firstCellEl.dataset.cellDocPos ?? "");
-          if (Number.isFinite(pos)) {
-            event.preventDefault();
-            view.dispatch({ selection: { anchor: pos }, scrollIntoView: false });
-            view.focus();
-          }
-        }
-        return;
-      }
-      const pos = parseInt(cell.dataset.cellDocPos ?? "");
+      const pos = cell
+        ? parseInt(cell.dataset.cellDocPos ?? "")
+        : parseInt(wrap.querySelector<HTMLElement>("[data-cell-doc-pos]")?.dataset.cellDocPos ?? "");
       if (!Number.isFinite(pos)) return;
       event.preventDefault();
-      view.dispatch({ selection: { anchor: pos }, scrollIntoView: false });
+      view.dispatch({
+        effects: tableEnterEffect.of(this.model.startLine),
+        selection: { anchor: pos },
+        scrollIntoView: false,
+      });
       view.focus();
     });
 
@@ -1973,7 +1963,6 @@ export interface MarkdownDecorationBuildOptions {
   getFenceStateBeforeLine?: (lineNumber: number) => FenceState;
   variableMatcher?: VariableMatcher;
   profiling?: MarkdownBuildProfiling;
-  includeTableWidgets?: boolean;
   // Lines belonging to a table currently shown in source mode — table-specific
   // decorations (pipe hiding, row/header/divider classes) are skipped for them.
   activeSourceTableLines?: Set<number>;
@@ -2091,13 +2080,11 @@ export function buildMarkdownDecorationsForSpans(
   if (spans.length === 0) return Decoration.none;
 
   const profiling = options.profiling;
-  const includeTableWidgets = options.includeTableWidgets ?? true;
   const activeSourceTableLines = options.activeSourceTableLines;
   const sortedSpans = [...spans].sort(
     (a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine,
   );
   const builder = new RangeSetBuilder<Decoration>();
-  const renderedTableBlocks = new Set<string>();
   const matcher = options.variableMatcher ?? createVariableMatcher(variableIndex);
 
   for (const span of sortedSpans) {
@@ -2145,26 +2132,6 @@ export function buildMarkdownDecorationsForSpans(
         builder.add(line.from, line.from, decCodeBlockLine);
         addCodeSyntaxDecorations(builder, line.from, lineAnalysis.codeTokens);
         continue;
-      }
-
-      if (includeTableWidgets && tableRowRe.test(line.text)) {
-        const model = buildTableWidgetModel(doc, lineNo);
-        if (model) {
-          const tableKey = `${model.startLine}:${model.endLine}`;
-          if (!renderedTableBlocks.has(tableKey)) {
-            renderedTableBlocks.add(tableKey);
-            const blockFrom = doc.line(model.startLine).from;
-            builder.add(
-              blockFrom,
-              blockFrom,
-              Decoration.widget({
-                widget: new TableDisplayWidget(model, tableWidgetSignature(model)),
-              }),
-            );
-          }
-          idx = Math.max(idx, model.endLine - fromLine);
-          continue;
-        }
       }
 
       decorateContentLine(
@@ -2262,7 +2229,6 @@ function buildMarkdownDecorations(
       fenceCache.getStateBeforeLine(doc, lineNumber),
     variableMatcher: matcher,
     profiling,
-    includeTableWidgets: false,
     wikiLinkResolver,
     resolveWikiLinksForLine: (lineNumber) =>
       lineInVisibleSpans(lineNumber, strictVisibleSpans),
@@ -2271,107 +2237,6 @@ function buildMarkdownDecorations(
       lineInVisibleSpans(lineNumber, strictVisibleSpans),
   });
 }
-
-// Tracks the startLine of the table currently being edited (cursor inside it), or null.
-const tableEditLineField = StateField.define<number | null>({
-  create(state) {
-    if (state.doc.length === 0) return null;
-    const head = state.selection.main.head;
-    if (head > state.doc.length) return null;
-    const line = state.doc.lineAt(head);
-    if (!tableRowRe.test(line.text)) return null;
-    const bounds = findTableBlockBounds(state.doc, line.number);
-    if (!bounds || bounds.headerLine === null) return null;
-    return bounds.startLine;
-  },
-  update(value, tr) {
-    if (!tr.docChanged && tr.startState.selection.main.head === tr.state.selection.main.head) {
-      return value;
-    }
-    const head = tr.state.selection.main.head;
-    if (head > tr.state.doc.length) return null;
-    const line = tr.state.doc.lineAt(head);
-    if (!tableRowRe.test(line.text)) return null;
-    const bounds = findTableBlockBounds(tr.state.doc, line.number);
-    if (!bounds || bounds.headerLine === null) return null;
-    return bounds.startLine;
-  },
-});
-
-function buildTableDisplayDecorations(
-  doc: Text,
-  cellResults: Map<number, TableCellEvaluation[]>,
-  editStartLine: number | null,
-): DecorationSet {
-  if (doc.lines === 0) return Decoration.none;
-  const builder = new RangeSetBuilder<Decoration>();
-  let inCodeBlock = false;
-  let lineNo = 1;
-  while (lineNo <= doc.lines) {
-    const line = doc.line(lineNo);
-    const info = markdownClassifyLine(line.text);
-    if (info.isCodeFence) {
-      inCodeBlock = !inCodeBlock;
-      lineNo += 1;
-      continue;
-    }
-    if (inCodeBlock || !tableRowRe.test(line.text)) {
-      lineNo += 1;
-      continue;
-    }
-    const model = buildTableWidgetModel(doc, lineNo);
-    if (!model) {
-      lineNo += 1;
-      continue;
-    }
-    if (
-      editStartLine !== null
-      && editStartLine >= model.startLine
-      && editStartLine <= model.endLine
-    ) {
-      lineNo = model.endLine + 1;
-      continue;
-    }
-    const blockFrom = doc.line(model.startLine).from;
-    const blockTo = doc.line(model.endLine).to;
-    const sig = `${tableWidgetSignature(model)}${tableWidgetCalcSignature(model, cellResults)}`;
-    builder.add(
-      blockFrom,
-      blockTo,
-      Decoration.replace({
-        block: true,
-        inclusive: false,
-        widget: new TableDisplayWidget(model, sig),
-      }),
-    );
-    lineNo = model.endLine + 1;
-  }
-  return builder.finish();
-}
-
-const tableWidgetDecorationsField = StateField.define<DecorationSet>({
-  create(state) {
-    const editLine = state.field(tableEditLineField, false) ?? null;
-    return buildTableDisplayDecorations(
-      state.doc,
-      getTableCellEvaluationMapFromState(state),
-      editLine,
-    );
-  },
-  update(value, tr) {
-    const prevEdit = tr.startState.field(tableEditLineField, false) ?? null;
-    const nextEdit = tr.state.field(tableEditLineField, false) ?? null;
-    const editChanged = prevEdit !== nextEdit;
-    const prevCells = getTableCellEvaluationMapFromState(tr.startState);
-    const nextCells = getTableCellEvaluationMapFromState(tr.state);
-    const calcChanged = prevCells !== nextCells;
-    if (!tr.docChanged && !editChanged && !calcChanged) {
-      return value.map(tr.changes);
-    }
-    return buildTableDisplayDecorations(tr.state.doc, nextCells, nextEdit);
-  },
-  provide: (field) => EditorView.decorations.from(field),
-});
 
 function lineChecklistRevealRanges(
   line: { from: number; text: string },
@@ -2697,6 +2562,7 @@ function decorateContentLine(
 const markdownWasmReadyAnnotation = Annotation.define<boolean>();
 const markdownDeferredRefreshAnnotation = Annotation.define<boolean>();
 const tableWidgetSourceModeEffect = StateEffect.define<number | null>();
+export const tableEnterEffect = StateEffect.define<number>();
 const markdownManualRefreshAnnotation = Annotation.define<{
   invalidateWikiLinkCache?: boolean;
   invalidatedShortIds?: string[];
@@ -3328,8 +3194,193 @@ const markdownRichPlugin = ViewPlugin.fromClass(
   },
 );
 
-export function markdownRichTextExtensions(options?: { tableWidgets?: boolean }) {
-  const tableWidgets = options?.tableWidgets ?? true;
-  if (!tableWidgets) return [markdownRichPlugin];
-  return [tableEditLineField, tableWidgetDecorationsField, markdownRichPlugin];
+// Tracks the startLine of the table currently being edited (cursor inside it), or null.
+export const tableEditLineField = StateField.define<number | null>({
+  create(state) {
+    if (state.doc.length === 0) return null;
+    const head = state.selection.main.head;
+    if (head > state.doc.length) return null;
+    const line = state.doc.lineAt(head);
+    if (!tableRowRe.test(line.text)) return null;
+    const bounds = findTableBlockBounds(state.doc, line.number);
+    if (!bounds || bounds.headerLine === null) return null;
+    return bounds.startLine;
+  },
+  update(value, tr) {
+    for (const effect of tr.effects) {
+      if (effect.is(tableEnterEffect)) return effect.value;
+    }
+    if (!tr.docChanged && tr.startState.selection.main.head === tr.state.selection.main.head) {
+      return value;
+    }
+    const head = tr.state.selection.main.head;
+    if (head > tr.state.doc.length) return null;
+    const line = tr.state.doc.lineAt(head);
+    if (!tableRowRe.test(line.text)) return null;
+    const bounds = findTableBlockBounds(tr.state.doc, line.number);
+    if (!bounds || bounds.headerLine === null) return null;
+    return bounds.startLine;
+  },
+});
+
+function buildTableDisplayDecorations(
+  doc: Text,
+  cellResults: Map<number, TableCellEvaluation[]>,
+  editStartLine: number | null,
+): DecorationSet {
+  if (doc.lines === 0) return Decoration.none;
+  const builder = new RangeSetBuilder<Decoration>();
+  let inCodeBlock = false;
+  let lineNo = 1;
+  while (lineNo <= doc.lines) {
+    const line = doc.line(lineNo);
+    const info = markdownClassifyLine(line.text);
+    if (info.isCodeFence) {
+      inCodeBlock = !inCodeBlock;
+      lineNo += 1;
+      continue;
+    }
+    if (inCodeBlock || !tableRowRe.test(line.text)) {
+      lineNo += 1;
+      continue;
+    }
+    const model = buildTableWidgetModel(doc, lineNo);
+    if (!model) {
+      lineNo += 1;
+      continue;
+    }
+    if (editStartLine !== null && editStartLine >= model.startLine && editStartLine <= model.endLine) {
+      lineNo = model.endLine + 1;
+      continue;
+    }
+    const blockFrom = doc.line(model.startLine).from;
+    const blockTo = doc.line(model.endLine).to;
+    const sig = `${tableWidgetSignature(model)}${tableWidgetCalcSignature(model, cellResults)}`;
+    builder.add(
+      blockFrom,
+      blockTo,
+      Decoration.replace({
+        block: true,
+        inclusive: false,
+        widget: new TableDisplayWidget(model, sig),
+      }),
+    );
+    lineNo = model.endLine + 1;
+  }
+  return builder.finish();
+}
+
+const tableWidgetDecorationsField = StateField.define<DecorationSet>({
+  create(state) {
+    const editLine = state.field(tableEditLineField, false) ?? null;
+    return buildTableDisplayDecorations(
+      state.doc,
+      getTableCellEvaluationMapFromState(state),
+      editLine,
+    );
+  },
+  update(value, tr) {
+    const prevEdit = tr.startState.field(tableEditLineField, false) ?? null;
+    const nextEdit = tr.state.field(tableEditLineField, false) ?? null;
+    const editChanged = prevEdit !== nextEdit;
+    const prevCells = getTableCellEvaluationMapFromState(tr.startState);
+    const nextCells = getTableCellEvaluationMapFromState(tr.state);
+    const calcChanged = prevCells !== nextCells;
+    if (!tr.docChanged && !editChanged && !calcChanged) {
+      return value.map(tr.changes);
+    }
+    return buildTableDisplayDecorations(tr.state.doc, nextCells, nextEdit);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+class FormulaDisplayWidget extends WidgetType {
+  constructor(private readonly displayValue: string) { super(); }
+  eq(other: FormulaDisplayWidget): boolean { return this.displayValue === other.displayValue; }
+  toDOM(): HTMLElement {
+    const span = document.createElement("span");
+    span.className = "md-table-formula-display";
+    span.textContent = this.displayValue;
+    return span;
+  }
+  ignoreEvent(): boolean { return true; }
+}
+
+function buildTableEditDecorations(state: EditorState, editStartLine: number): DecorationSet {
+  const doc = state.doc;
+  const bounds = findTableBlockBounds(doc, editStartLine);
+  if (!bounds || bounds.headerLine === null) return Decoration.none;
+
+  const cellResults = getTableCellEvaluationMapFromState(state);
+  const cursorPos = state.selection.main.head;
+  const cursorLine = doc.lineAt(Math.min(cursorPos, doc.length));
+  const cursorLineNo = cursorLine.number;
+  const cursorOffsetInLine = cursorPos - cursorLine.from;
+  const dividerLineNo = bounds.headerLine + 1;
+
+  const builder = new RangeSetBuilder<Decoration>();
+  for (let lineNo = bounds.startLine; lineNo <= bounds.endLine; lineNo++) {
+    if (lineNo === dividerLineNo) continue;
+    const line = doc.line(lineNo);
+    const pipes = tablePipeOffsets(line.text);
+    if (pipes.length < 2) continue;
+    const isCursorLine = lineNo === cursorLineNo;
+
+    for (let col = 0; col < pipes.length - 1; col++) {
+      const cellFrom = line.from + pipes[col]! + 1;
+      const cellTo = line.from + pipes[col + 1]!;
+      if (cellFrom >= cellTo) continue;
+      const isCursorInCell = isCursorLine
+        && cursorOffsetInLine > pipes[col]!
+        && cursorOffsetInLine <= pipes[col + 1]!;
+      if (isCursorInCell) continue;
+
+      const rawCellText = line.text.slice(pipes[col]! + 1, pipes[col + 1]!);
+      if (!rawCellText.trim().startsWith(":=")) continue;
+
+      const lineIndex = lineNo - 1;
+      const perLine = cellResults.get(lineIndex);
+      let displayValue = rawCellText.trim();
+      if (perLine) {
+        const entry = perLine.find((e) => e.cell_index === col);
+        if (entry) {
+          displayValue = entry.error_kind
+            ? `!${entry.error_kind}`
+            : calcFormatFormulaDisplayValue(entry.value);
+        }
+      }
+      // Pad the displayed value to the same width as the raw cell content so
+      // pipe column alignment in the source view is preserved.
+      const cellWidth = rawCellText.length;
+      const paddedValue = (` ${displayValue} `).padEnd(cellWidth).slice(0, cellWidth);
+      builder.add(cellFrom, cellTo, Decoration.replace({
+        widget: new FormulaDisplayWidget(paddedValue),
+        inclusive: false,
+      }));
+    }
+  }
+  return builder.finish();
+}
+
+const tableEditDecorationsField = StateField.define<DecorationSet>({
+  create(state) {
+    const editLine = state.field(tableEditLineField, false) ?? null;
+    if (editLine == null) return Decoration.none;
+    return buildTableEditDecorations(state, editLine);
+  },
+  update(value, tr) {
+    const editLine = tr.state.field(tableEditLineField, false) ?? null;
+    if (editLine == null) return Decoration.none;
+    const prevCells = getTableCellEvaluationMapFromState(tr.startState);
+    const nextCells = getTableCellEvaluationMapFromState(tr.state);
+    const calcChanged = prevCells !== nextCells;
+    const selChanged = tr.startState.selection.main.head !== tr.state.selection.main.head;
+    if (!tr.docChanged && !calcChanged && !selChanged) return value.map(tr.changes);
+    return buildTableEditDecorations(tr.state, editLine);
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+export function markdownRichTextExtensions() {
+  return [tableEditLineField, tableWidgetDecorationsField, tableEditDecorationsField, markdownRichPlugin];
 }

@@ -490,7 +490,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
 
   if (!plainTextMode) {
     extensions.push(
-      ...(disableMarkdownDecorations ? [] : markdownRichTextExtensions({ tableWidgets: tableEnabled })),
+      ...(disableMarkdownDecorations ? [] : markdownRichTextExtensions()),
       ...(disableFolding ? [] : foldingExtensions()),
       markdownEditingExtensions({
         autoformat: markdownAutoformat,

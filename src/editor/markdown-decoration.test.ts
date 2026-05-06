@@ -625,11 +625,11 @@ test("buildMarkdownDecorationsForSpans image widget carries compact [Image #n] t
   );
 });
 
-test("buildMarkdownDecorationsForSpans uses block table widget for markdown tables", () => {
+test("buildMarkdownDecorationsForSpans applies TUI-style decorations for markdown tables", () => {
   const doc = Text.of([
     "| Item | Preview |",
     "| --- | --- |",
-    "| Plan | ![Diagram](./assets/plan.png) |",
+    "| Plan | content |",
   ]);
   const line = doc.line(3);
   const decos = buildMarkdownDecorationsForSpans(
@@ -641,11 +641,17 @@ test("buildMarkdownDecorationsForSpans uses block table widget for markdown tabl
   const flat = collectDecorations(decos);
 
   assert.ok(
-    flat.some((d) => d.widget === "TableDisplayWidget"),
-    "table block widget should render for markdown tables",
+    flat.some((d) => d.cls.includes("md-table-header")),
+    "header row should get header line decoration",
   );
-  assert.equal(flat.some((d) => d.widget === "MarkdownImageDisplayWidget"), false);
-  assert.ok(line.text.includes("![Diagram]"), "fixture sanity");
+  assert.ok(
+    flat.some((d) => d.cls.includes("md-table-divider")),
+    "divider row should get divider line decoration",
+  );
+  assert.ok(
+    flat.some((d) => d.cls.includes("md-table-pipe")),
+    "pipe characters should get pipe decoration",
+  );
 });
 
 test("buildMarkdownDecorationsForSpans keeps escaped pipes inside the same header cell", () => {
@@ -662,16 +668,20 @@ test("buildMarkdownDecorationsForSpans keeps escaped pipes inside the same heade
     { from: header.to, to: header.to, empty: true },
   );
   const flat = collectDecorations(decos);
-  const tableWidget = flat.find(
-    (entry) =>
-      entry.widget === "TableDisplayWidget"
-      && entry.from === header.from
-      && entry.to === header.from,
+
+  // Escaped pipe at position (backslash + pipe) should NOT get a pipe decoration
+  const escapedPipeIdx = header.text.indexOf("\\|");
+  const escapedPipeDocPos = header.from + escapedPipeIdx + 1;
+  assert.equal(
+    flat.some((d) => d.cls.includes("md-table-pipe") && d.from === escapedPipeDocPos),
+    false,
+    "escaped pipe should not get pipe decoration",
   );
-  assert.ok(tableWidget, "table block widget should be anchored at table start");
-  const model = (tableWidget!.widgetRef as { model?: { rows?: Array<{ cells: string[] }> } }).model;
-  assert.equal(model?.rows?.[0]?.cells?.[0], "left \\| right");
-  assert.equal(model?.rows?.[0]?.cells?.[1], "value");
+  // The leading real pipe should get pipe decoration
+  assert.ok(
+    flat.some((d) => d.cls.includes("md-table-pipe") && d.from === header.from),
+    "leading pipe should get pipe decoration",
+  );
 });
 
 test("buildMarkdownDecorationsForSpans reveals full wiki-link source inside [[...]] for editing", () => {
