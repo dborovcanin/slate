@@ -16,7 +16,6 @@ import {
   runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
-import { tableTabMove } from "./markdown-decoration.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix };
@@ -670,9 +669,6 @@ function tableVerticalTraverse(
   direction: -1 | 1,
   richTableUi: boolean,
 ): boolean {
-  // Rich mode: arrows work naturally through table text — no interception needed.
-  if (richTableUi) return false;
-
   const main = view.state.selection.main;
   const doc = view.state.doc;
 
@@ -692,12 +688,22 @@ function tableVerticalTraverse(
   const headLine = doc.lineAt(main.head).number;
   const currentBounds = tableBoundsForLineNo(view.state, headLine);
   if (currentBounds) {
+    // In rich mode, cursor is in raw source — arrows move naturally through lines.
+    if (richTableUi) return false;
     return selectTableBounds(view, currentBounds);
   }
 
   const adjacentLine = headLine + direction;
   const adjacentBounds = tableBoundsForLineNo(view.state, adjacentLine);
   if (!adjacentBounds) return false;
+
+  if (richTableUi) {
+    // Display widget blocks natural arrow entry; dispatch cursor into first/last row.
+    const targetLineNo = direction > 0 ? adjacentBounds.startLine : adjacentBounds.endLine;
+    const targetLine = doc.line(targetLineNo);
+    view.dispatch({ selection: { anchor: targetLine.from + 1 }, scrollIntoView: true });
+    return true;
+  }
   return selectTableBounds(view, adjacentBounds);
 }
 
@@ -740,12 +746,6 @@ function tableCursorKeymap(
   tableEnabled: boolean,
   richTableUi: boolean,
 ): KeyBinding[] {
-  if (richTableUi) {
-    return [
-      { key: "Tab", run: (view) => tableTabMove(view, false) },
-      { key: "Shift-Tab", run: (view) => tableTabMove(view, true) },
-    ];
-  }
   return [
     {
       key: "ArrowUp",
@@ -985,9 +985,9 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
   const richTableUi = options.richTableUi ?? false;
   const tableExtensions = tableEnabled
     ? [
-      ...(richTableUi ? [Prec.high(tablePipeInputHandler())] : []),
+      Prec.high(tablePipeInputHandler()),
       Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled, richTableUi))),
-      ...(richTableUi ? [] : [tableCursorGuards()]),
+      tableCursorGuards(),
     ]
     : [];
   return [
