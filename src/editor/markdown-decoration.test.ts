@@ -649,6 +649,10 @@ test("buildMarkdownDecorationsForSpans applies TUI-style decorations for markdow
     "divider row should get divider line decoration",
   );
   assert.ok(
+    flat.some((d) => d.from === line.from && d.cls.includes("md-table-row")),
+    "last body row should keep table row decoration",
+  );
+  assert.ok(
     flat.some((d) => d.cls.includes("md-table-pipe")),
     "pipe characters should get pipe decoration",
   );

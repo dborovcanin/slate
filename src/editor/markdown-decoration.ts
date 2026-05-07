@@ -1111,6 +1111,7 @@ class TableDisplayWidget extends WidgetType {
         effects: tableEnterEffect.of(this.model.startLine),
         selection: { anchor: pos },
         scrollIntoView: false,
+        userEvent: "select.pointer",
       });
       view.focus();
     });
@@ -1171,7 +1172,7 @@ function classifyTableLineKind(
   }
   if (nextIsDelimiter) return "header";
   if (prevIsDelimiter) return "body";
-  if (prevIsRow && nextIsRow) return "body";
+  if (prevIsRow || nextIsRow) return "body";
   return null;
 }
 
@@ -3382,5 +3383,5 @@ const tableEditDecorationsField = StateField.define<DecorationSet>({
 });
 
 export function markdownRichTextExtensions() {
-  return [tableEditLineField, tableWidgetDecorationsField, tableEditDecorationsField, markdownRichPlugin];
+  return [tableEditLineField, tableEditDecorationsField, markdownRichPlugin];
 }

@@ -229,6 +229,42 @@ function createTestEditorView(doc: string, cursor: number): {
   return { view, getState: () => state };
 }
 
+test("table vertical traverse in rich mode auto-enters last row when moving up from below", () => {
+  const doc = ["alpha", "| col   |", "| ----- |", "| value |", "omega"].join("\n");
+  const cursor = doc.lastIndexOf("omega") + 4;
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  const handled = __tableCursorInternals.tableVerticalTraverse(view, -1, true);
+  assert.equal(handled, true);
+  const state = getState();
+  const targetLine = state.doc.line(4);
+  assert.equal(state.doc.lineAt(state.selection.main.head).number, 4);
+  assert.equal(state.selection.main.head - targetLine.from, 4);
+});
+
+test("table vertical traverse in rich mode still auto-enters when moving down from above", () => {
+  const doc = ["alpha", "| col   |", "| ----- |", "| value |", "omega"].join("\n");
+  const cursor = doc.indexOf("alpha") + 4;
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  const handled = __tableCursorInternals.tableVerticalTraverse(view, 1, true);
+  assert.equal(handled, true);
+  const state = getState();
+  const targetLine = state.doc.line(2);
+  assert.equal(state.doc.lineAt(state.selection.main.head).number, 2);
+  assert.equal(state.selection.main.head - targetLine.from, 4);
+});
+
+test("table vertical traverse in rich mode does not auto-enter when table is not adjacent", () => {
+  const doc = ["alpha", "mid", "| col |", "| --- |", "| 1 |", "after", "omega"].join("\n");
+  const cursor = doc.lastIndexOf("omega");
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  const handled = __tableCursorInternals.tableVerticalTraverse(view, -1, true);
+  assert.equal(handled, false);
+  assert.equal(getState().selection.main.head, cursor);
+});
+
 test("table scoped snapshot remaps edit operation back to document offsets", () => {
   const doc = [
     "alpha",
