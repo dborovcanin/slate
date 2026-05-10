@@ -2399,7 +2399,7 @@ function decorateContentLine(
   skipTableDecorations?: boolean,
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
-  const tableKind = skipTableDecorations ? null : classifyTableLineKind(line.text, prevLineText, nextLineText);
+  const tableKind: TableLineKind = null;
   const pending: PendingDecoration[] = [];
 
   if (tableKind === "divider") {
@@ -3383,5 +3383,5 @@ const tableEditDecorationsField = StateField.define<DecorationSet>({
 });
 
 export function markdownRichTextExtensions() {
-  return [tableEditLineField, tableEditDecorationsField, markdownRichPlugin];
+  return [markdownRichPlugin];
 }

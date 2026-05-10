@@ -16,7 +16,6 @@ import {
   runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
 } from "./wasm.ts";
-import { tableEnterEffect, tableEditLineField } from "./markdown-decoration.ts";
 
 export { formatTableLines } from "./core/markdown-table.ts";
 export { rewriteLineWithChecklistToggleSuffix };
@@ -628,87 +627,6 @@ function tableBoundsForLineNo(state: EditorView["state"], lineNo: number): Table
   return { startLine, endLine };
 }
 
-function isExactTableSelection(
-  state: EditorView["state"],
-  selection: EditorView["state"]["selection"]["main"],
-  bounds: TableLineBounds,
-): boolean {
-  if (selection.empty) return false;
-  const tableFrom = state.doc.line(bounds.startLine).from;
-  const tableTo = state.doc.line(bounds.endLine).to;
-  const selFrom = Math.min(selection.anchor, selection.head);
-  const selTo = Math.max(selection.anchor, selection.head);
-  return selFrom === tableFrom && selTo === tableTo;
-}
-
-function selectTableBounds(view: EditorView, bounds: TableLineBounds): boolean {
-  const from = view.state.doc.line(bounds.startLine).from;
-  const to = view.state.doc.line(bounds.endLine).to;
-  view.dispatch({
-    selection: { anchor: from, head: to },
-    scrollIntoView: true,
-  });
-  return true;
-}
-
-function tableVerticalTraverse(
-  view: EditorView,
-  direction: -1 | 1,
-  richTableUi: boolean,
-): boolean {
-  const main = view.state.selection.main;
-  const doc = view.state.doc;
-
-  if (!main.empty) {
-    const headLine = doc.lineAt(main.head).number;
-    const bounds = tableBoundsForLineNo(view.state, headLine);
-    if (!bounds || !isExactTableSelection(view.state, main, bounds)) return false;
-    const targetLine = direction < 0 ? bounds.startLine - 1 : bounds.endLine + 1;
-    if (targetLine < 1 || targetLine > doc.lines) return true;
-    view.dispatch({
-      selection: { anchor: doc.line(targetLine).from },
-      scrollIntoView: true,
-    });
-    return true;
-  }
-
-  const headLine = doc.lineAt(main.head).number;
-  const currentBounds = tableBoundsForLineNo(view.state, headLine);
-  if (currentBounds) {
-    if (richTableUi) {
-      const editLine = view.state.field(tableEditLineField, false);
-      if (editLine == null) {
-        view.dispatch({
-          effects: tableEnterEffect.of(currentBounds.startLine),
-          selection: { anchor: main.head },
-          scrollIntoView: true,
-        });
-        return true;
-      }
-      return false;
-    }
-    return selectTableBounds(view, currentBounds);
-  }
-
-  const adjacentLine = headLine + direction;
-  const adjacentBounds = tableBoundsForLineNo(view.state, adjacentLine);
-  if (!adjacentBounds) return false;
-
-  if (richTableUi) {
-    const targetLineNo = direction > 0 ? adjacentBounds.startLine : adjacentBounds.endLine;
-    const targetLine = view.state.doc.line(targetLineNo);
-    const sourceLine = view.state.doc.lineAt(main.head);
-    const target = targetLine.from + Math.min(main.head - sourceLine.from, targetLine.length);
-    view.dispatch({
-      effects: tableEnterEffect.of(adjacentBounds.startLine),
-      selection: { anchor: target },
-      scrollIntoView: true,
-    });
-    return true;
-  }
-  return selectTableBounds(view, adjacentBounds);
-}
-
 function markdownShortcutKeymap(autoformat: boolean, tableEnabled: boolean): KeyBinding[] {
   const keys: KeyBinding[] = [
     { key: "Mod-b", preventDefault: true, run: (view) => toggleWrap(view, "**") },
@@ -746,17 +664,8 @@ function markdownTabKeymap(autoformat: boolean, tableEnabled: boolean): KeyBindi
 function tableCursorKeymap(
   autoformat: boolean,
   tableEnabled: boolean,
-  richTableUi: boolean,
 ): KeyBinding[] {
   return [
-    {
-      key: "ArrowUp",
-      run: () => false,
-    },
-    {
-      key: "ArrowDown",
-      run: () => false,
-    },
     {
       key: "Backspace",
       run: (view) => tableBoundaryEdit(view, autoformat, tableEnabled, true),
@@ -872,59 +781,10 @@ function textRulesPlugin(
   });
 }
 
-function tableCursorGuards() {
-  return ViewPlugin.define(() => {
-    let syncing = false;
-    let lastCellKey: string | null = null;
-    return {
-      update(update: ViewUpdate) {
-        if (syncing || update.docChanged || !update.selectionSet) return;
-        const main = update.state.selection.main;
-        if (!main.empty) {
-          lastCellKey = null;
-          return;
-        }
-        const editLine = update.state.field(tableEditLineField, false);
-        if (editLine == null) {
-          lastCellKey = null;
-          return;
-        }
-        const line = update.state.doc.lineAt(main.head);
-        const cell = tableCellAtStatePosition(update.state, main.head);
-        if (!cell) {
-          lastCellKey = null;
-          return;
-        }
-
-        const cellKey = `${line.from}:${cell.index}`;
-        const pointerSelection = update.transactions.some((tr) => tr.isUserEvent("select.pointer"));
-        const anchor = line.from + tableCellNavigationAnchorInLine(cell);
-        const clamped = clampTableCursorToContent(update.state, main.head);
-        const shouldSnapToEnd = clamped === null && (lastCellKey !== cellKey || pointerSelection);
-        const target = clamped ?? (shouldSnapToEnd ? anchor : null);
-
-        lastCellKey = cellKey;
-        if (target === null || target === main.head) return;
-
-        syncing = true;
-        try {
-          update.view.dispatch({
-            selection: { anchor: target },
-            scrollIntoView: true,
-          });
-        } finally {
-          syncing = false;
-        }
-      },
-    };
-  });
-}
-
 export const __tableCursorInternals = {
   tableCellAtColumn,
   tableCellNavigationAnchorInLine,
   clampTableCursorToContent,
-  tableVerticalTraverse,
 };
 
 function toggleChecklistAtPos(view: EditorView, pos: number): boolean {
@@ -979,25 +839,20 @@ function checklistClickHandlers() {
   });
 }
 
-// Rich table mode rule: keep normal cursor movement, and only enter table source
-// mode when the cursor is actually on a table line.
 interface MarkdownEditingOptions {
   autoformat?: boolean;
   checklistAutoReorder?: boolean;
   tableEnabled?: boolean;
-  richTableUi?: boolean;
 }
 
 export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) {
   const autoformat = options.autoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
   const tableEnabled = options.tableEnabled ?? true;
-  const richTableUi = options.richTableUi ?? false;
   const tableExtensions = tableEnabled
     ? [
       Prec.high(tablePipeInputHandler()),
-      Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled, richTableUi))),
-      tableCursorGuards(),
+      Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled))),
     ]
     : [];
   return [

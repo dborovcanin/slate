@@ -496,7 +496,6 @@ function buildEditorExtensions(options: EditorMountOptions): {
         autoformat: markdownAutoformat,
         checklistAutoReorder,
         tableEnabled,
-        richTableUi: !disableMarkdownDecorations,
       }),
       ...(() => {
         if (disableAutocomplete) return [];
@@ -524,7 +523,6 @@ function buildEditorExtensions(options: EditorMountOptions): {
         : calcExtensions({
             variablesEnabled: options.variablesEnabled ?? true,
             tableEnabled,
-            richTableUi: !disableMarkdownDecorations && tableEnabled,
             getActiveNoteId: () => state.activeNote?.id ?? null,
           })),
       ...(disableNotify

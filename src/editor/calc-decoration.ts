@@ -52,7 +52,6 @@ import {
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
   tableEnabled?: boolean;
-  richTableUi?: boolean;
   getActiveNoteId?: () => string | null;
 }
 
@@ -381,10 +380,8 @@ function calcLineInSpans(lineNumber: number, spans: readonly CalcVisibleLineSpan
 function buildCalcDecorationsForSpans(
   state: EditorState,
   spans: readonly CalcVisibleLineSpan[],
-  options?: { suppressTableGhosts?: boolean },
 ): DecorationSet {
   if (spans.length === 0) return Decoration.none;
-  const suppressTableGhosts = options?.suppressTableGhosts ?? false;
   const results = state.field(calcResultsField);
   const cellResults = state.field(cellCalcResultsField);
   // Range additions must be sorted by from-position. Collect them in a
@@ -398,7 +395,6 @@ function buildCalcDecorationsForSpans(
     for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber++) {
       const lineIndex = lineNumber - 1;
       const line = state.doc.line(lineNumber); // 1-based
-      if (suppressTableGhosts && tableRowRe.test(line.text)) continue;
       const result = results.get(lineIndex);
       const cellsForLine = cellResults.get(lineIndex);
       if (result == null && (!cellsForLine || cellsForLine.length === 0)) continue;
@@ -421,43 +417,11 @@ function buildCalcDecorationsForSpans(
         segments.forEach((seg, fi) => {
           const marker = formulaMarkerToken(fi);
           const computed = valueForCell(seg.cellIndex);
-          const sourceText = line.text.slice(seg.fromChar, seg.toChar).trim();
 
-          const cellFrom = seg.cellLeftPipeChar + 1;
-          const cellTo = seg.cellRightPipeChar;
-          const editingCell = selectionTouchesSegment(
-            selection,
-            line.from,
-            cellFrom,
-            cellTo,
-          );
-
-          // Ghost trailer: when the cell is being edited the trailer shows
-          // the computed value (so the user sees the result without leaving
-          // the cell). When the cell is at rest the trailer shows the
-          // formula source (the user can see what formula produced the
-          // displayed value).
-          const trailerText =
-            editingCell && computed && !computed.hasError ? computed.value : sourceText;
+          const trailerText = computed && !computed.hasError ? computed.value : null;
           if (trailerText) {
             trailerParts.push(`${marker} \u279c ${trailerText}`);
           }
-
-          if (editingCell) return;
-          if (computed == null) return;
-          const value = computed.value;
-          const minWidthCh = Math.max(
-            1,
-            seg.toChar - seg.fromChar,
-            value.length + marker.length,
-          );
-          items.push({
-            from: line.from + seg.fromChar,
-            to: line.from + seg.toChar,
-            deco: Decoration.replace({
-              widget: new FormulaCellWidget(value, marker, minWidthCh),
-            }),
-          });
         });
 
         if (trailerParts.length > 0) {
@@ -565,12 +529,10 @@ function buildCalcDecorationsForSpans(
 
 function buildCalcDecorations(
   view: EditorView,
-  options?: { suppressTableGhosts?: boolean },
 ): DecorationSet {
   return buildCalcDecorationsForSpans(
     view.state,
     expandedCalcVisibleSpans(view),
-    options,
   );
 }
 
@@ -622,8 +584,7 @@ function calcDecorationRebuildReason(
   return reasons.length > 0 ? reasons.join("+") : "unspecified";
 }
 
-function calcDecorationsPlugin(options?: { suppressTableGhosts?: boolean }) {
-  const suppressTableGhosts = options?.suppressTableGhosts ?? false;
+function calcDecorationsPlugin() {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
@@ -664,7 +625,7 @@ function calcDecorationsPlugin(options?: { suppressTableGhosts?: boolean }) {
         const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
         const metrics = profilingEnabled ? calcDecorationBuildMetrics(view) : null;
         try {
-          const next = buildCalcDecorations(view, { suppressTableGhosts });
+          const next = buildCalcDecorations(view);
           if (profilingEnabled) {
             recordEditorProfilerSample(
               "calc.decorations.safeBuild",
@@ -1731,13 +1692,12 @@ export function getTableCellEvaluationMapFromState(
 }
 
 export function calcExtensions(options: CalcExtensionOptions = {}) {
-  const suppressTableGhosts = !!options.richTableUi && (options.tableEnabled ?? true);
   return [
     calcResultsField,
     cellCalcResultsField,
     variableIndexField,
     commitMarksField,
-    calcDecorationsPlugin({ suppressTableGhosts }),
+    calcDecorationsPlugin(),
     buildCalcPlugin(options),
     calcTabKeymap,
   ];

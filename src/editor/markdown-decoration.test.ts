@@ -625,7 +625,7 @@ test("buildMarkdownDecorationsForSpans image widget carries compact [Image #n] t
   );
 });
 
-test("buildMarkdownDecorationsForSpans applies TUI-style decorations for markdown tables", () => {
+test("buildMarkdownDecorationsForSpans leaves markdown tables as plain text", () => {
   const doc = Text.of([
     "| Item | Preview |",
     "| --- | --- |",
@@ -640,25 +640,10 @@ test("buildMarkdownDecorationsForSpans applies TUI-style decorations for markdow
   );
   const flat = collectDecorations(decos);
 
-  assert.ok(
-    flat.some((d) => d.cls.includes("md-table-header")),
-    "header row should get header line decoration",
-  );
-  assert.ok(
-    flat.some((d) => d.cls.includes("md-table-divider")),
-    "divider row should get divider line decoration",
-  );
-  assert.ok(
-    flat.some((d) => d.from === line.from && d.cls.includes("md-table-row")),
-    "last body row should keep table row decoration",
-  );
-  assert.ok(
-    flat.some((d) => d.cls.includes("md-table-pipe")),
-    "pipe characters should get pipe decoration",
-  );
+  assert.equal(flat.some((d) => d.cls.includes("md-table-")), false);
 });
 
-test("buildMarkdownDecorationsForSpans keeps escaped pipes inside the same header cell", () => {
+test("buildMarkdownDecorationsForSpans does not decorate markdown table pipes", () => {
   const doc = Text.of([
     "| left \\| right | value |",
     "| --- | --- |",
@@ -673,19 +658,7 @@ test("buildMarkdownDecorationsForSpans keeps escaped pipes inside the same heade
   );
   const flat = collectDecorations(decos);
 
-  // Escaped pipe at position (backslash + pipe) should NOT get a pipe decoration
-  const escapedPipeIdx = header.text.indexOf("\\|");
-  const escapedPipeDocPos = header.from + escapedPipeIdx + 1;
-  assert.equal(
-    flat.some((d) => d.cls.includes("md-table-pipe") && d.from === escapedPipeDocPos),
-    false,
-    "escaped pipe should not get pipe decoration",
-  );
-  // The leading real pipe should get pipe decoration
-  assert.ok(
-    flat.some((d) => d.cls.includes("md-table-pipe") && d.from === header.from),
-    "leading pipe should get pipe decoration",
-  );
+  assert.equal(flat.some((d) => d.cls.includes("md-table-pipe")), false);
 });
 
 test("buildMarkdownDecorationsForSpans reveals full wiki-link source inside [[...]] for editing", () => {
