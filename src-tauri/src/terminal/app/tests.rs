@@ -931,6 +931,7 @@ fn run_gui_parity_case(case: &VimParityReplayCase) -> ParitySnapshot {
         let ctx = crate::editor_core::vim::VimContext {
             has_search_matches: false,
             line_count: state.lines.len(),
+            macro_recording: false,
         };
         let step =
             crate::editor_core::engine::EditorEngine::step_vim(&state.vim_state, vim_key, &ctx);

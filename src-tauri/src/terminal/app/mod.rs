@@ -121,6 +121,12 @@ struct VimRegister {
     mode: VimRegisterMode,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VimMacroStep {
+    Action(crate::editor_core::vim::VimAction),
+    InsertKey(crate::editor_core::vim::VimKey),
+}
+
 impl Default for VimRegister {
     fn default() -> Self {
         Self {
@@ -346,6 +352,9 @@ struct TerminalApp {
     date_time_format: String,
     // Vim state
     vim_state: crate::editor_core::vim::VimState,
+    vim_macro_recording: Option<char>,
+    vim_macro_registers: HashMap<char, Vec<VimMacroStep>>,
+    vim_macro_replaying: bool,
     clipboard: VimRegister,
     last_clipboard_backend: Option<ClipboardWriteBackend>,
     selection_anchor: Option<(usize, usize)>, // (line, col)
@@ -672,6 +681,9 @@ impl TerminalApp {
             date_format,
             date_time_format,
             vim_state: crate::editor_core::vim::VimState::default(),
+            vim_macro_recording: None,
+            vim_macro_registers: HashMap::new(),
+            vim_macro_replaying: false,
             clipboard: VimRegister::default(),
             last_clipboard_backend: None,
             selection_anchor: None,

@@ -5,6 +5,7 @@ import {
   cursorLineEnd,
   cursorLineStart,
   cursorLineUp,
+  deleteCharBackward,
   deleteCharForward,
   redo,
   undo,
@@ -64,7 +65,20 @@ interface VimRegister {
   mode: VimRegisterMode;
 }
 
+interface MacroInsertEvent {
+  key: string;
+  code: string;
+  ctrlKey: boolean;
+  altKey: boolean;
+  metaKey: boolean;
+}
+
+type MacroStep =
+  | { kind: "action"; action: VimAction }
+  | { kind: "insert_event"; event: MacroInsertEvent };
+
 const SHARED_VIM_FULL_DOC_MAX_BYTES = 200_000;
+const VIM_MACRO_REPLAY_STEP_BUDGET = 10_000;
 
 function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
   switch (intent) {
@@ -93,6 +107,19 @@ function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
       return true;
     default:
       return false;
+  }
+}
+
+function isRecordableMacroIntent(intent: VimIntent): boolean {
+  switch (intent) {
+    case VIM_INTENT.START_MACRO_RECORD:
+    case VIM_INTENT.STOP_MACRO_RECORD:
+    case VIM_INTENT.PLAY_MACRO:
+    case VIM_INTENT.OPEN_COMMAND_BAR:
+    case VIM_INTENT.OPEN_SEARCH:
+      return false;
+    default:
+      return true;
   }
 }
 
@@ -355,6 +382,79 @@ function shouldSwallowInNormalLikeMode(event: KeyboardEvent): boolean {
   );
 }
 
+function toRecordableInsertMacroEvent(event: KeyboardEvent): MacroInsertEvent | null {
+  if (event.ctrlKey || event.altKey || event.metaKey) return null;
+  const key = event.key;
+  const code = event.code;
+  const isNavigation =
+    key === "ArrowUp" ||
+    key === "ArrowDown" ||
+    key === "ArrowLeft" ||
+    key === "ArrowRight";
+  const isEditingKey =
+    key === "Escape" ||
+    key === "Enter" ||
+    key === "Tab" ||
+    key === "Backspace" ||
+    key === "Delete";
+  const isChar = key.length === 1;
+  if (!isNavigation && !isEditingKey && !isChar) return null;
+  return {
+    key,
+    code,
+    ctrlKey: false,
+    altKey: false,
+    metaKey: false,
+  };
+}
+
+function applyInsertMacroEvent(view: EditorView, event: MacroInsertEvent): boolean {
+  const key = event.key;
+  if (key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
+    const sel = view.state.selection.main;
+    view.dispatch({
+      changes: { from: sel.from, to: sel.to, insert: key },
+      selection: { anchor: sel.from + key.length },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+  switch (key) {
+    case "Enter": {
+      const sel = view.state.selection.main;
+      view.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: "\n" },
+        selection: { anchor: sel.from + 1 },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+    case "Tab": {
+      const sel = view.state.selection.main;
+      view.dispatch({
+        changes: { from: sel.from, to: sel.to, insert: "\t" },
+        selection: { anchor: sel.from + 1 },
+        scrollIntoView: true,
+      });
+      return true;
+    }
+    case "Backspace":
+      return deleteCharBackward(view);
+    case "Delete":
+      return deleteCharForward(view);
+    case "ArrowUp":
+      return cursorLineUp(view);
+    case "ArrowDown":
+      return cursorLineDown(view);
+    case "ArrowLeft":
+      return cursorCharLeft(view);
+    case "ArrowRight":
+      return cursorCharRight(view);
+    default:
+      return true;
+  }
+}
+
 function findWordObjectRange(
   view: EditorView,
   around: boolean,
@@ -446,6 +546,9 @@ export function vimModeExtension(options: VimOptions = {}) {
   const session = new VimSession("normal");
   let currentMode: VimUiMode = "normal";
   let unnamedRegister: VimRegister | null = null;
+  let macroRecordingRegister: string | null = null;
+  const macroRegisters = new Map<string, MacroStep[]>();
+  let macroReplaying = false;
   let pendingFoldPrefixUntilMs = 0;
   let pendingGoToLinkUntilMs = 0;
 
@@ -1056,6 +1159,18 @@ export function vimModeExtension(options: VimOptions = {}) {
     sourceMode: VimUiMode = mode(),
   ) => {
     const count = action.count > 0 ? action.count : 1;
+    if (!macroReplaying && macroRecordingRegister && isRecordableMacroIntent(action.intent)) {
+      const macroSteps = macroRegisters.get(macroRecordingRegister) ?? [];
+      macroSteps.push({
+        kind: "action",
+        action: {
+          intent: action.intent,
+          count,
+          targetChar: action.targetChar,
+        },
+      });
+      macroRegisters.set(macroRecordingRegister, macroSteps);
+    }
     if (shouldExecuteSharedVimAction(action.intent)) {
       const sharedRegister: VimRegisterValue | null = unnamedRegister
         ? { text: unnamedRegister.text, mode: unnamedRegister.mode }
@@ -1078,6 +1193,71 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
 
     switch (action.intent) {
+      case VIM_INTENT.START_MACRO_RECORD: {
+        const register = (action.targetChar ?? "").toLowerCase();
+        if (!register) return true;
+        macroRecordingRegister = register;
+        macroRegisters.set(register, []);
+        return true;
+      }
+      case VIM_INTENT.STOP_MACRO_RECORD:
+        macroRecordingRegister = null;
+        return true;
+      case VIM_INTENT.PLAY_MACRO: {
+        if (macroReplaying) return true;
+        const register = (action.targetChar ?? "").toLowerCase();
+        if (!register) return true;
+        const sequence = macroRegisters.get(register);
+        if (!sequence || sequence.length === 0) return true;
+        const totalSteps = count * sequence.length;
+        if (!Number.isFinite(totalSteps) || totalSteps > VIM_MACRO_REPLAY_STEP_BUDGET) {
+          return true;
+        }
+        macroReplaying = true;
+        let executedSteps = 0;
+        let aborted = false;
+        for (let i = 0; i < count; i++) {
+          for (let idx = 0; idx < sequence.length; idx++) {
+            if (executedSteps >= VIM_MACRO_REPLAY_STEP_BUDGET) {
+              aborted = true;
+              break;
+            }
+            const step = sequence[idx];
+            if (!step) {
+              aborted = true;
+              break;
+            }
+            if (step.kind === "action") {
+              applyAction(view, step.action, mode());
+              executedSteps += 1;
+              continue;
+            }
+            const pipeline = runUiVimPipeline(session, step.event, {
+              hasSearchMatches: editorSearchHasMatches(view),
+              lineCount: view.state.doc.lines,
+              macroRecording: macroRecordingRegister !== null,
+            });
+            if (pipeline.kind === "handled" || pipeline.kind === "unhandled") {
+              currentMode = toUiMode(pipeline.step.mode);
+              syncModeClasses(view);
+              if (pipeline.kind === "handled") {
+                for (const action of pipeline.step.actions) {
+                  applyAction(view, action, mode());
+                }
+              }
+            }
+            if (mode() === "insert") {
+              applyInsertMacroEvent(view, step.event);
+            }
+            executedSteps += 1;
+          }
+          if (aborted) {
+            break;
+          }
+        }
+        macroReplaying = false;
+        return true;
+      }
       case VIM_INTENT.MOVE_LEFT:
         return runMove(view, cursorCharLeft, count);
       case VIM_INTENT.MOVE_RIGHT:
@@ -1323,12 +1503,34 @@ export function vimModeExtension(options: VimOptions = {}) {
 
       // Insert-mode fast path: avoid wasm roundtrip for regular insert editing.
       if (activeMode === "insert" && event.key !== "Escape") {
+        if (!macroReplaying && macroRecordingRegister) {
+          const insertEvent = toRecordableInsertMacroEvent(event);
+          if (insertEvent) {
+            const macroSteps = macroRegisters.get(macroRecordingRegister) ?? [];
+            macroSteps.push({ kind: "insert_event", event: insertEvent });
+            macroRegisters.set(macroRecordingRegister, macroSteps);
+          }
+        }
         return false;
+      }
+      if (
+        activeMode === "insert" &&
+        event.key === "Escape" &&
+        !macroReplaying &&
+        macroRecordingRegister
+      ) {
+        const insertEvent = toRecordableInsertMacroEvent(event);
+        if (insertEvent) {
+          const macroSteps = macroRegisters.get(macroRecordingRegister) ?? [];
+          macroSteps.push({ kind: "insert_event", event: insertEvent });
+          macroRegisters.set(macroRecordingRegister, macroSteps);
+        }
       }
 
       const pipeline = runUiVimPipeline(session, event, {
         hasSearchMatches: editorSearchHasMatches(view),
         lineCount: view.state.doc.lines,
+        macroRecording: macroRecordingRegister !== null,
       });
       if (pipeline.kind === "no_step") {
         if (activeMode !== "insert" || event.key === "Escape") {

@@ -782,3 +782,90 @@ fn vim_n_and_shift_n_cycle_last_search_matches() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn vim_macros_record_and_replay_normal_mode_actions() {
+    let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+    app.mode = UiMode::Normal;
+    app.cursor_line = 0;
+    app.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('q'),
+            Key::Char('a'),
+            Key::Char('j'),
+            Key::Char('d'),
+            Key::Char('d'),
+            Key::Char('q'),
+        ],
+    );
+    assert_eq!(app.lines, vec!["one".to_string(), "three".to_string()]);
+
+    run_keys(&mut app, &db, &[Key::Char('@'), Key::Char('a')]);
+    assert_eq!(app.lines, vec!["one".to_string()]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vim_macros_support_counted_playback() {
+    let (db, mut app, path) = app_with_note("abcdef");
+    app.mode = UiMode::Normal;
+    app.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('q'),
+            Key::Char('a'),
+            Key::Char('x'),
+            Key::Char('q'),
+        ],
+    );
+    assert_eq!(app.lines, vec!["bcdef".to_string()]);
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('2'), Key::Char('@'), Key::Char('a')],
+    );
+    assert_eq!(app.lines, vec!["def".to_string()]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vim_macros_capture_and_replay_insert_mode_input() {
+    let (db, mut app, path) = app_with_note("A");
+    app.mode = UiMode::Normal;
+    app.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('q'),
+            Key::Char('a'),
+            Key::Char('i'),
+            Key::Char('x'),
+            Key::Esc,
+            Key::Char('q'),
+        ],
+    );
+    assert_eq!(app.lines, vec!["xA".to_string()]);
+
+    run_keys(&mut app, &db, &[Key::Char('@'), Key::Char('a')]);
+    assert_eq!(app.lines, vec!["xxA".to_string()]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

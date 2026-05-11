@@ -14,6 +14,7 @@ export type UiVimEventInput = Pick<
 export interface UiVimPipelineContext {
   hasSearchMatches: boolean;
   lineCount: number;
+  macroRecording: boolean;
 }
 
 export type UiVimPipelineResult =
@@ -82,6 +83,7 @@ export function buildUiVimContext(context: UiVimPipelineContext): VimContext {
   return {
     has_search_matches: context.hasSearchMatches,
     line_count: context.lineCount,
+    macro_recording: context.macroRecording,
   };
 }
 

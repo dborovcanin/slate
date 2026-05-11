@@ -1114,6 +1114,7 @@ impl WasmVimSession {
         let context = VimContext {
             has_search_matches,
             line_count,
+            macro_recording: false,
         };
         let step = EditorEngine::step_vim(&self.state, key, &context);
         self.state = step.state.clone();

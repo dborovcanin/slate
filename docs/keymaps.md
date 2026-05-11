@@ -72,6 +72,7 @@ Supported and tested core motions/actions include:
 - movement: `h`, `j`, `k`, `l`, `w`, `b`, `0`, `$`, `gg`, `G`
 - edit actions: `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 - yank/delete with counts: examples `yy`, `3yy`, `d2w`, `yaw`
+- macros (normal + insert flows): `q<register>` start, `q` stop, `@<register>` replay, `3@a` counted replay
 - fold toggle: `za`
 - wiki-link navigation: `gd`
 

@@ -27,6 +27,7 @@ This document lists major Slate capabilities and how they behave.
 - yank/delete/paste workflows with clipboard integration
 - fold toggle at cursor (`za`)
 - wiki-link navigation with `gd`
+- macros across normal + insert flows (`q<register>` start, `q` stop, `@<register>` replay, counted replay)
 
 ## Terminal mode (optional)
 

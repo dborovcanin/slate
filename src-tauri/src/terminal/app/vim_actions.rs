@@ -1,9 +1,11 @@
 use super::{
-    byte_index, line_char_len, min, split_lines, Key, TerminalApp, TerminalVimAdapter, UiMode,
-    VimPipelineResult, VimRegister, VimRegisterMode,
+    byte_index, line_char_len, min, split_lines, Db, Key, TerminalApp, TerminalVimAdapter, UiMode,
+    VimMacroStep, VimPipelineResult, VimRegister, VimRegisterMode,
 };
 use super::{clipboard, ClipboardWriteBackend};
 use crate::terminal::text_utils::{is_word_char, join_lines};
+
+const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
 
 fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bool {
     matches!(
@@ -23,16 +25,44 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
     )
 }
 
+fn key_from_insert_macro_step(key: crate::editor_core::vim::VimKey) -> Option<Key> {
+    match key {
+        crate::editor_core::vim::VimKey::Esc => Some(Key::Esc),
+        crate::editor_core::vim::VimKey::Enter => Some(Key::Enter),
+        crate::editor_core::vim::VimKey::Tab => Some(Key::Tab),
+        crate::editor_core::vim::VimKey::Backspace => Some(Key::Backspace),
+        crate::editor_core::vim::VimKey::Delete => Some(Key::Delete),
+        crate::editor_core::vim::VimKey::ArrowUp => Some(Key::ArrowUp),
+        crate::editor_core::vim::VimKey::ArrowDown => Some(Key::ArrowDown),
+        crate::editor_core::vim::VimKey::ArrowLeft => Some(Key::ArrowLeft),
+        crate::editor_core::vim::VimKey::ArrowRight => Some(Key::ArrowRight),
+        crate::editor_core::vim::VimKey::Char(ch) => Some(Key::Char(ch)),
+        crate::editor_core::vim::VimKey::Ctrl(_) => None,
+    }
+}
+
+fn is_recordable_macro_intent(intent: crate::editor_core::vim::VimIntent) -> bool {
+    !matches!(
+        intent,
+        crate::editor_core::vim::VimIntent::StartMacroRecord
+            | crate::editor_core::vim::VimIntent::StopMacroRecord
+            | crate::editor_core::vim::VimIntent::PlayMacro
+            | crate::editor_core::vim::VimIntent::OpenCommandBar
+            | crate::editor_core::vim::VimIntent::OpenSearch
+    )
+}
+
 // Ownership: vim intent pipeline, text objects, and vim action application.
 impl TerminalApp {
     pub(super) fn build_vim_context(&self) -> crate::editor_core::vim::VimContext {
         crate::editor_core::vim::VimContext {
             has_search_matches: !self.search_matches.is_empty(),
             line_count: self.lines.len(),
+            macro_recording: self.vim_macro_recording.is_some(),
         }
     }
 
-    pub(super) fn run_vim_pipeline(&mut self, key: &Key) -> VimPipelineResult {
+    pub(super) fn run_vim_pipeline(&mut self, db: &Db, key: &Key) -> VimPipelineResult {
         let perf_start = std::time::Instant::now();
         // Pipeline: terminal input -> vim intent translation -> shared-core
         // engine step -> terminal action rendering.
@@ -50,7 +80,7 @@ impl TerminalApp {
             .actions
             .iter()
             .any(|action| Self::vim_intent_mutates_document(action.intent));
-        self.apply_vim_actions(&step.actions);
+        self.apply_vim_actions(db, &step.actions);
         self.record_perf_duration(
             "tui.vim.step",
             if doc_mutated { "mutating" } else { "movement" },
@@ -594,9 +624,129 @@ impl TerminalApp {
         self.status = ":".to_string();
     }
 
-    pub(super) fn apply_vim_actions(&mut self, actions: &[crate::editor_core::vim::VimAction]) {
+    pub(super) fn apply_vim_actions(
+        &mut self,
+        db: &Db,
+        actions: &[crate::editor_core::vim::VimAction],
+    ) {
         for action in actions {
             let count = action.count.max(1);
+            if !self.vim_macro_replaying {
+                if let Some(register) = self.vim_macro_recording {
+                    if is_recordable_macro_intent(action.intent) {
+                        self.vim_macro_registers
+                            .entry(register)
+                            .or_default()
+                            .push(VimMacroStep::Action(action.clone()));
+                    }
+                }
+            }
+            match action.intent {
+                crate::editor_core::vim::VimIntent::StartMacroRecord => {
+                    if let Some(register) = action.target_char.map(|ch| ch.to_ascii_lowercase()) {
+                        self.vim_macro_recording = Some(register);
+                        self.vim_macro_registers.insert(register, Vec::new());
+                        self.status = format!("recording @{}", register);
+                    } else {
+                        self.status = "macro register required".to_string();
+                    }
+                    continue;
+                }
+                crate::editor_core::vim::VimIntent::StopMacroRecord => {
+                    if let Some(register) = self.vim_macro_recording.take() {
+                        let steps = self
+                            .vim_macro_registers
+                            .get(&register)
+                            .map(|items| items.len())
+                            .unwrap_or(0);
+                        self.status = format!("recorded @{} ({} steps)", register, steps);
+                    } else {
+                        self.status = "no active macro recording".to_string();
+                    }
+                    continue;
+                }
+                crate::editor_core::vim::VimIntent::PlayMacro => {
+                    if self.vim_macro_replaying {
+                        continue;
+                    }
+                    let Some(register) = action.target_char.map(|ch| ch.to_ascii_lowercase())
+                    else {
+                        self.status = "macro register required".to_string();
+                        continue;
+                    };
+                    let Some(sequence_len) = self.vim_macro_registers.get(&register).map(Vec::len)
+                    else {
+                        self.status = format!("macro @{} is empty", register);
+                        continue;
+                    };
+                    if sequence_len == 0 {
+                        self.status = format!("macro @{} is empty", register);
+                        continue;
+                    }
+                    let Some(total_steps) = count.checked_mul(sequence_len) else {
+                        self.status = format!(
+                            "macro @{} replay aborted: step budget exceeded (>{})",
+                            register, VIM_MACRO_REPLAY_STEP_BUDGET
+                        );
+                        continue;
+                    };
+                    if total_steps > VIM_MACRO_REPLAY_STEP_BUDGET {
+                        self.status = format!(
+                            "macro @{} replay aborted: step budget exceeded (>{})",
+                            register, VIM_MACRO_REPLAY_STEP_BUDGET
+                        );
+                        continue;
+                    }
+                    self.vim_macro_replaying = true;
+                    let mut executed_steps = 0usize;
+                    let mut aborted = false;
+                    for _ in 0..count {
+                        for idx in 0..sequence_len {
+                            if executed_steps >= VIM_MACRO_REPLAY_STEP_BUDGET {
+                                aborted = true;
+                                break;
+                            }
+                            let Some(step) = self
+                                .vim_macro_registers
+                                .get(&register)
+                                .and_then(|sequence| sequence.get(idx))
+                                .cloned()
+                            else {
+                                aborted = true;
+                                break;
+                            };
+                            match step {
+                                VimMacroStep::Action(vim_action) => {
+                                    self.apply_vim_actions(db, &[vim_action]);
+                                }
+                                VimMacroStep::InsertKey(insert_key) => {
+                                    if self.mode == UiMode::Editor {
+                                        let key = key_from_insert_macro_step(insert_key);
+                                        if let Some(key) = key {
+                                            let _ = self.handle_editor_key(db, key);
+                                        }
+                                    }
+                                }
+                            }
+                            executed_steps += 1;
+                        }
+                        if aborted {
+                            break;
+                        }
+                    }
+                    self.vim_macro_replaying = false;
+                    if aborted {
+                        self.status = format!(
+                            "macro @{} replay aborted: step budget exceeded (>{})",
+                            register, VIM_MACRO_REPLAY_STEP_BUDGET
+                        );
+                    } else {
+                        self.status = format!("replayed @{} x{}", register, count);
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             if !self.active_note_is_editable() && Self::vim_intent_mutates_document(action.intent) {
                 self.set_locked_note_status();
                 continue;
@@ -1168,6 +1318,9 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::DeleteVisualSelection => {
                     let _ = self.apply_visual_selection_action(true);
                 }
+                crate::editor_core::vim::VimIntent::StartMacroRecord => {}
+                crate::editor_core::vim::VimIntent::StopMacroRecord => {}
+                crate::editor_core::vim::VimIntent::PlayMacro => {}
                 crate::editor_core::vim::VimIntent::DeleteWordEnd => {}
                 crate::editor_core::vim::VimIntent::DeleteTillChar => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}

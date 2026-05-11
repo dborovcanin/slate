@@ -20,6 +20,8 @@ pub enum VimPending {
     DeleteAround,
     YankInner,
     YankAround,
+    MacroRecord,
+    MacroPlay,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +120,9 @@ pub enum VimIntent {
     YankAroundPipe,
     YankVisualSelection,
     DeleteVisualSelection,
+    StartMacroRecord,
+    StopMacroRecord,
+    PlayMacro,
     Swallow,
 }
 
@@ -127,6 +132,8 @@ pub struct VimContext {
     pub has_search_matches: bool,
     #[serde(default)]
     pub line_count: usize,
+    #[serde(default)]
+    pub macro_recording: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +186,10 @@ fn consume_pending_effective_count(state: &mut VimState) -> usize {
     let operator_count = state.pending_count.take().unwrap_or(1);
     let motion_count = consume_count(state);
     operator_count.saturating_mul(motion_count).max(1)
+}
+
+fn is_macro_register_char(ch: char) -> bool {
+    ch.is_ascii_alphanumeric()
 }
 
 pub fn parse_key_token(token: &str) -> Option<VimKey> {
@@ -250,6 +261,20 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
         next.pending_count = None;
         next.count_buffer.clear();
         actions.push(make_action(VimIntent::ExitVisual, 1));
+        handled = true;
+        return VimStep {
+            state: next,
+            actions,
+            handled,
+        };
+    }
+
+    if ctx.macro_recording
+        && next.pending.is_none()
+        && !has_count(&next)
+        && key == VimKey::Char('q')
+    {
+        actions.push(make_action(VimIntent::StopMacroRecord, 1));
         handled = true;
         return VimStep {
             state: next,
@@ -704,6 +729,36 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::MacroRecord, VimKey::Char(register))
+                if is_macro_register_char(register) =>
+            {
+                next.count_buffer.clear();
+                actions.push(make_action_with_target(
+                    VimIntent::StartMacroRecord,
+                    1,
+                    Some(register.to_ascii_lowercase()),
+                ));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::MacroPlay, VimKey::Char(register)) if is_macro_register_char(register) => {
+                let count = consume_count(&mut next);
+                actions.push(make_action_with_target(
+                    VimIntent::PlayMacro,
+                    count,
+                    Some(register.to_ascii_lowercase()),
+                ));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             _ => {}
         }
         next.pending_count = None;
@@ -862,6 +917,16 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             next.pending = Some(VimPending::Go);
             handled = true;
         }
+        VimKey::Char('q') if next.pending.is_none() && !has_count(&next) => {
+            next.pending_count = None;
+            next.pending = Some(VimPending::MacroRecord);
+            handled = true;
+        }
+        VimKey::Char('@') => {
+            next.pending_count = None;
+            next.pending = Some(VimPending::MacroPlay);
+            handled = true;
+        }
         VimKey::Enter | VimKey::Tab | VimKey::Backspace | VimKey::Delete => {
             actions.push(make_action(VimIntent::Swallow, 1));
             handled = true;
@@ -892,6 +957,7 @@ mod tests {
             &VimContext {
                 has_search_matches: true,
                 line_count: 200,
+                macro_recording: false,
             },
         )
     }
@@ -1115,5 +1181,46 @@ mod tests {
         assert_eq!(cut.state.mode, VimMode::Normal);
         assert_eq!(cut.actions.len(), 1);
         assert_eq!(cut.actions[0].intent, VimIntent::DeleteVisualSelection);
+    }
+
+    #[test]
+    fn qa_starts_macro_recording_and_q_stops_when_context_reports_recording() {
+        let one = step_token(&VimState::default(), "char:q");
+        assert!(one.handled);
+        assert!(matches!(one.state.pending, Some(VimPending::MacroRecord)));
+
+        let two = step_token(&one.state, "char:a");
+        assert!(two.handled);
+        assert_eq!(two.actions.len(), 1);
+        assert_eq!(two.actions[0].intent, VimIntent::StartMacroRecord);
+        assert_eq!(two.actions[0].target_char, Some('a'));
+
+        let stop = step(
+            &VimState::default(),
+            parse_key_token("char:q").expect("q"),
+            &VimContext {
+                has_search_matches: false,
+                line_count: 200,
+                macro_recording: true,
+            },
+        );
+        assert!(stop.handled);
+        assert_eq!(stop.actions.len(), 1);
+        assert_eq!(stop.actions[0].intent, VimIntent::StopMacroRecord);
+    }
+
+    #[test]
+    fn counted_macro_play_emits_play_macro_with_target() {
+        let one = step_token(&VimState::default(), "char:2");
+        let two = step_token(&one.state, "char:@");
+        assert!(two.handled);
+        assert!(matches!(two.state.pending, Some(VimPending::MacroPlay)));
+
+        let three = step_token(&two.state, "char:B");
+        assert!(three.handled);
+        assert_eq!(three.actions.len(), 1);
+        assert_eq!(three.actions[0].intent, VimIntent::PlayMacro);
+        assert_eq!(three.actions[0].count, 2);
+        assert_eq!(three.actions[0].target_char, Some('b'));
     }
 }

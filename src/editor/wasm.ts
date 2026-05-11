@@ -170,6 +170,7 @@ export type VimMode = "insert" | "normal" | "visual" | "visual_line";
 export interface VimContext {
   has_search_matches?: boolean;
   line_count?: number;
+  macro_recording?: boolean;
 }
 
 export interface VimKeyInput {
@@ -229,6 +230,9 @@ export const VIM_INTENT = {
   YANK_WORD_BACKWARD: "yank_word_backward",
   YANK_VISUAL_SELECTION: "yank_visual_selection",
   DELETE_VISUAL_SELECTION: "delete_visual_selection",
+  START_MACRO_RECORD: "start_macro_record",
+  STOP_MACRO_RECORD: "stop_macro_record",
+  PLAY_MACRO: "play_macro",
 } as const;
 
 export type VimIntent = (typeof VIM_INTENT)[keyof typeof VIM_INTENT];

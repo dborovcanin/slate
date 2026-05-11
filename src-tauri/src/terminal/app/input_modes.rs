@@ -8,6 +8,34 @@ use std::time::{Duration, Instant};
 
 // Ownership: key dispatch and per-mode key handling entry points.
 impl TerminalApp {
+    fn maybe_record_vim_insert_macro_key(&mut self, key: &Key) {
+        if self.vim_macro_replaying {
+            return;
+        }
+        let Some(register) = self.vim_macro_recording else {
+            return;
+        };
+        let recorded = match key {
+            Key::Esc => Some(crate::editor_core::vim::VimKey::Esc),
+            Key::Enter => Some(crate::editor_core::vim::VimKey::Enter),
+            Key::Tab => Some(crate::editor_core::vim::VimKey::Tab),
+            Key::Backspace => Some(crate::editor_core::vim::VimKey::Backspace),
+            Key::Delete => Some(crate::editor_core::vim::VimKey::Delete),
+            Key::ArrowUp => Some(crate::editor_core::vim::VimKey::ArrowUp),
+            Key::ArrowDown => Some(crate::editor_core::vim::VimKey::ArrowDown),
+            Key::ArrowLeft => Some(crate::editor_core::vim::VimKey::ArrowLeft),
+            Key::ArrowRight => Some(crate::editor_core::vim::VimKey::ArrowRight),
+            Key::Char(ch) => Some(crate::editor_core::vim::VimKey::Char(*ch)),
+            _ => None,
+        };
+        if let Some(vim_key) = recorded {
+            self.vim_macro_registers
+                .entry(register)
+                .or_default()
+                .push(super::VimMacroStep::InsertKey(vim_key));
+        }
+    }
+
     pub(super) fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.mode != UiMode::Normal {
             self.folds.pending_prefix_until = None;
@@ -26,6 +54,7 @@ impl TerminalApp {
     }
 
     pub(super) fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        self.maybe_record_vim_insert_macro_key(&key);
         let mut should_autoformat = false;
         let mut clamp_table_padding = true;
         let mut moved_cursor = false;
@@ -390,7 +419,7 @@ impl TerminalApp {
             return Ok(());
         }
 
-        let doc_mutated = match self.run_vim_pipeline(&key) {
+        let doc_mutated = match self.run_vim_pipeline(db, &key) {
             VimPipelineResult::NoIntent | VimPipelineResult::Unhandled => return Ok(()),
             VimPipelineResult::Applied { doc_mutated } => doc_mutated,
         };
@@ -433,7 +462,7 @@ impl TerminalApp {
 
         let normalized_key = if key == Key::Ctrl('c') { Key::Esc } else { key };
         if matches!(
-            self.run_vim_pipeline(&normalized_key),
+            self.run_vim_pipeline(db, &normalized_key),
             VimPipelineResult::NoIntent
         ) {
             self.adjust_cursor();

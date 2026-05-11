@@ -71,6 +71,7 @@ mod tests {
         let context = VimContext {
             has_search_matches: false,
             line_count: 10,
+            macro_recording: false,
         };
         let step = TerminalVimAdapter::step(&state, &Key::Esc, &context).expect("step");
         assert_eq!(step.state.mode, crate::editor_core::vim::VimMode::Normal);

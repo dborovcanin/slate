@@ -54,10 +54,12 @@ test("buildUiVimContext maps frontend context to wasm context shape", () => {
     buildUiVimContext({
       hasSearchMatches: true,
       lineCount: 42,
+      macroRecording: false,
     }),
     {
       has_search_matches: true,
       line_count: 42,
+      macro_recording: false,
     },
   );
 });
