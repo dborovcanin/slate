@@ -1,5 +1,5 @@
 use crate::table;
-use regex::{Regex, RegexBuilder};
+use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
@@ -961,53 +961,275 @@ pub fn collect_assignment_names_with_mask(lines: &[String], mask: CalcFeatureMas
 }
 
 #[derive(Debug, Clone)]
-struct VariableDependencyDef {
-    line_idx: usize,
-    rhs: String,
+pub struct VariableDependencyGraph {
+    assignment_name_by_line: Vec<Option<String>>,
+    assignment_rhs_refs_by_line: Vec<FxHashSet<String>>,
+    assignment_line_by_name: FxHashMap<String, usize>,
+    variable_dependents: FxHashMap<String, FxHashSet<String>>,
+    line_variable_refs: Vec<FxHashSet<String>>,
+    has_duplicate_assignment_names: bool,
 }
 
-fn collect_variable_dependency_defs(
+fn collect_identifier_refs(text: &str) -> FxHashSet<String> {
+    let bytes = text.as_bytes();
+    let mut out = FxHashSet::default();
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let ch = bytes[idx];
+        let starts_ident = ch.is_ascii_alphabetic() || ch == b'_';
+        if !starts_ident {
+            idx += 1;
+            continue;
+        }
+        let start = idx;
+        idx += 1;
+        while idx < bytes.len() {
+            let next = bytes[idx];
+            if next.is_ascii_alphanumeric() || next == b'_' {
+                idx += 1;
+            } else {
+                break;
+            }
+        }
+        out.insert(text[start..idx].to_ascii_lowercase());
+    }
+    out
+}
+
+fn line_assignment_def(line: &str, mask: CalcFeatureMask) -> (Option<String>, FxHashSet<String>) {
+    let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) else {
+        return (None, FxHashSet::default());
+    };
+    let Some((name, rhs)) = parse_variable_assignment_name_rhs(eval_target.trim()) else {
+        return (None, FxHashSet::default());
+    };
+    let refs = collect_identifier_refs(rhs.as_str())
+        .into_iter()
+        .filter(|candidate| candidate != &name)
+        .collect::<FxHashSet<_>>();
+    (Some(name), refs)
+}
+
+fn line_variable_refs(line: &str, mask: CalcFeatureMask) -> FxHashSet<String> {
+    if mask.table_active() && is_table_line(line) {
+        let formula_segments = find_table_formula_segments(line);
+        if !formula_segments.is_empty() {
+            let mut refs = FxHashSet::default();
+            for segment in formula_segments {
+                let segment_text = line[segment.from_byte..segment.to_byte].trim();
+                if segment_text.is_empty() {
+                    continue;
+                }
+                let assignment_rhs =
+                    parse_variable_assignment_name_rhs(segment_text).map(|(_, rhs)| rhs);
+                let expression_for_refs = assignment_rhs.as_deref().unwrap_or(segment_text);
+                refs.extend(collect_identifier_refs(expression_for_refs));
+            }
+            return refs;
+        }
+    }
+
+    let eval_target = line_for_calc_evaluation_with_mask(line, mask);
+    let trimmed = eval_target.trim();
+    if trimmed.is_empty() {
+        return FxHashSet::default();
+    }
+    let assignment_rhs = parse_variable_assignment_name_rhs(trimmed).map(|(_, rhs)| rhs);
+    let expression_for_refs = assignment_rhs.as_deref().unwrap_or(trimmed);
+    collect_identifier_refs(expression_for_refs)
+}
+
+fn rebuild_dependency_maps(graph: &mut VariableDependencyGraph) {
+    graph.assignment_line_by_name.clear();
+    graph.variable_dependents.clear();
+    graph.has_duplicate_assignment_names = false;
+
+    let mut assignment_name_counts: FxHashMap<String, usize> = FxHashMap::default();
+    for (line_idx, maybe_name) in graph.assignment_name_by_line.iter().enumerate() {
+        let Some(name) = maybe_name.as_ref() else {
+            continue;
+        };
+        let count = assignment_name_counts.entry(name.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            graph.has_duplicate_assignment_names = true;
+        }
+        graph.assignment_line_by_name.insert(name.clone(), line_idx);
+    }
+
+    for (name, line_idx) in &graph.assignment_line_by_name {
+        let refs = graph
+            .assignment_rhs_refs_by_line
+            .get(*line_idx)
+            .cloned()
+            .unwrap_or_default();
+        for referenced in refs {
+            if referenced == *name {
+                continue;
+            }
+            graph
+                .variable_dependents
+                .entry(referenced)
+                .or_default()
+                .insert(name.clone());
+        }
+    }
+}
+
+pub fn build_variable_dependency_graph(
     lines: &[String],
     mask: CalcFeatureMask,
-) -> FxHashMap<String, VariableDependencyDef> {
-    let mut defs: FxHashMap<String, VariableDependencyDef> = FxHashMap::default();
-    for (line_idx, line) in lines.iter().enumerate() {
-        let Some(eval_target) = line_for_calc_evaluation_slice_with_mask(line, mask) else {
-            continue;
-        };
-        let Some((name, rhs)) = parse_variable_assignment_name_rhs(eval_target.trim()) else {
-            continue;
-        };
-        defs.insert(name, VariableDependencyDef { line_idx, rhs });
-    }
-    defs
-}
-
-fn build_variable_ref_regex(names_sorted: &[String]) -> Option<regex::Regex> {
-    let escaped: Vec<String> = names_sorted
-        .iter()
-        .filter(|name| !name.is_empty())
-        .map(|name| regex::escape(name))
-        .collect();
-    if escaped.is_empty() {
+) -> Option<VariableDependencyGraph> {
+    if !mask.variables_active() {
         return None;
     }
-    let pattern = format!(r"\b(?:{})\b", escaped.join("|"));
-    RegexBuilder::new(&pattern)
-        .unicode(false)
-        .case_insensitive(true)
-        .build()
-        .ok()
+
+    let mut assignment_name_by_line = vec![None; lines.len()];
+    let mut assignment_rhs_refs_by_line: Vec<FxHashSet<String>> =
+        vec![FxHashSet::default(); lines.len()];
+    let mut line_variable_refs_cache: Vec<FxHashSet<String>> =
+        vec![FxHashSet::default(); lines.len()];
+    for (line_idx, line) in lines.iter().enumerate() {
+        let (name, rhs_refs) = line_assignment_def(line, mask);
+        assignment_name_by_line[line_idx] = name;
+        assignment_rhs_refs_by_line[line_idx] = rhs_refs;
+        line_variable_refs_cache[line_idx] = line_variable_refs(line, mask);
+    }
+    if !assignment_name_by_line.iter().any(|name| name.is_some()) {
+        return None;
+    }
+
+    let mut graph = VariableDependencyGraph {
+        assignment_name_by_line,
+        assignment_rhs_refs_by_line,
+        assignment_line_by_name: FxHashMap::default(),
+        variable_dependents: FxHashMap::default(),
+        line_variable_refs: line_variable_refs_cache,
+        has_duplicate_assignment_names: false,
+    };
+    rebuild_dependency_maps(&mut graph);
+    Some(graph)
 }
 
-fn expression_references_any(
-    expression: &str,
-    variable_regex: &regex::Regex,
-    affected_variables: &FxHashSet<String>,
-) -> bool {
-    variable_regex
-        .find_iter(expression)
-        .any(|m| affected_variables.contains(&expression[m.start()..m.end()].to_ascii_lowercase()))
+pub fn sync_variable_dependency_graph(
+    graph: &mut Option<VariableDependencyGraph>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    mask: CalcFeatureMask,
+) {
+    if !mask.variables_active() {
+        *graph = None;
+        return;
+    }
+
+    let can_patch_in_place = graph
+        .as_mut()
+        .map(|cached| {
+            if cached.has_duplicate_assignment_names
+                || cached.assignment_name_by_line.len() != lines.len()
+                || cached.assignment_rhs_refs_by_line.len() != lines.len()
+                || cached.line_variable_refs.len() != lines.len()
+            {
+                return false;
+            }
+
+            let from = changed_from.min(lines.len());
+            let to = changed_to.min(lines.len()).max(from);
+            for line_idx in from..to {
+                let Some(line) = lines.get(line_idx) else {
+                    return false;
+                };
+                let (name, rhs_refs) = line_assignment_def(line, mask);
+                cached.assignment_name_by_line[line_idx] = name;
+                cached.assignment_rhs_refs_by_line[line_idx] = rhs_refs;
+                cached.line_variable_refs[line_idx] = line_variable_refs(line, mask);
+            }
+            rebuild_dependency_maps(cached);
+            !cached.has_duplicate_assignment_names
+        })
+        .unwrap_or(false);
+
+    if !can_patch_in_place {
+        *graph = build_variable_dependency_graph(lines, mask);
+    }
+}
+
+fn variable_dependency_window_from_graph(
+    graph: &VariableDependencyGraph,
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+) -> Option<(usize, usize)> {
+    let line_count = graph.assignment_name_by_line.len();
+    let mut changed_variables: FxHashSet<String> = FxHashSet::default();
+    let from = changed_from.min(line_count);
+    let to = changed_to.min(line_count).max(from);
+
+    for line_idx in from..to {
+        if let Some(name) = graph
+            .assignment_name_by_line
+            .get(line_idx)
+            .and_then(|name| name.as_ref())
+        {
+            changed_variables.insert(name.clone());
+        }
+    }
+    for name in prev_changed_assignment_names {
+        if !name.is_empty() {
+            changed_variables.insert(name.to_ascii_lowercase());
+        }
+    }
+
+    if changed_variables.is_empty() {
+        if prev_changed_had_assignment {
+            return Some((0, line_count));
+        }
+        return None;
+    }
+
+    let mut affected_variables = changed_variables.clone();
+    let mut stack: Vec<String> = changed_variables.into_iter().collect();
+    while let Some(variable) = stack.pop() {
+        let Some(dependents) = graph.variable_dependents.get(&variable) else {
+            continue;
+        };
+        for dependent in dependents {
+            if affected_variables.insert(dependent.clone()) {
+                stack.push(dependent.clone());
+            }
+        }
+    }
+
+    let mut min_line = from;
+    let mut max_line_exclusive = to;
+    let mut found_any = from < to;
+
+    for variable in &affected_variables {
+        if let Some(line_idx) = graph.assignment_line_by_name.get(variable).copied() {
+            min_line = min_line.min(line_idx);
+            max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
+            found_any = true;
+        }
+    }
+
+    for (line_idx, refs) in graph.line_variable_refs.iter().enumerate() {
+        if refs.is_empty() {
+            continue;
+        }
+        if refs.iter().any(|name| affected_variables.contains(name)) {
+            min_line = min_line.min(line_idx);
+            max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
+            found_any = true;
+        }
+    }
+
+    if found_any {
+        Some((min_line, max_line_exclusive))
+    } else {
+        None
+    }
 }
 
 static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
@@ -1362,132 +1584,47 @@ fn variable_dependency_window(
     prev_changed_had_assignment: bool,
     mask: CalcFeatureMask,
 ) -> Option<(usize, usize)> {
-    let mut changed_variables: FxHashSet<String> = FxHashSet::default();
-
-    if let Some(slice) = lines.get(changed_from..changed_to) {
-        for name in collect_assignment_names_with_mask(slice, mask) {
-            changed_variables.insert(name);
-        }
-    }
-    for name in prev_changed_assignment_names {
-        if !name.is_empty() {
-            changed_variables.insert(name.to_ascii_lowercase());
-        }
-    }
-
-    if changed_variables.is_empty() {
+    let Some(graph) = build_variable_dependency_graph(lines, mask) else {
         if prev_changed_had_assignment {
             return Some((0, lines.len()));
         }
         return None;
-    }
-
-    let defs = collect_variable_dependency_defs(lines, mask);
-    if defs.is_empty() {
-        return Some((0, lines.len()));
-    }
-
-    let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
-    names_sorted.extend(changed_variables.iter().cloned());
-    names_sorted.sort();
-    names_sorted.dedup();
-    names_sorted.sort_by(|left, right| right.len().cmp(&left.len()).then(left.cmp(right)));
-    let Some(variable_regex) = build_variable_ref_regex(&names_sorted) else {
-        return Some((0, lines.len()));
     };
+    variable_dependency_window_from_graph(
+        &graph,
+        changed_from,
+        changed_to,
+        prev_changed_assignment_names,
+        prev_changed_had_assignment,
+    )
+}
 
-    let mut reverse_dependencies: FxHashMap<String, FxHashSet<String>> = FxHashMap::default();
-    for (name, def) in &defs {
-        for m in variable_regex.find_iter(def.rhs.as_str()) {
-            let referenced = def.rhs[m.start()..m.end()].to_ascii_lowercase();
-            if referenced == *name {
-                continue;
-            }
-            reverse_dependencies
-                .entry(referenced)
-                .or_default()
-                .insert(name.clone());
-        }
+fn variable_dependency_window_with_cached_graph(
+    graph: Option<&VariableDependencyGraph>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+    mask: CalcFeatureMask,
+) -> Option<(usize, usize)> {
+    if let Some(cached) = graph {
+        return variable_dependency_window_from_graph(
+            cached,
+            changed_from,
+            changed_to,
+            prev_changed_assignment_names,
+            prev_changed_had_assignment,
+        );
     }
-
-    let mut affected_variables = changed_variables.clone();
-    let mut stack: Vec<String> = changed_variables.into_iter().collect();
-    while let Some(variable) = stack.pop() {
-        let Some(dependents) = reverse_dependencies.get(&variable) else {
-            continue;
-        };
-        for dependent in dependents {
-            if affected_variables.insert(dependent.clone()) {
-                stack.push(dependent.clone());
-            }
-        }
-    }
-
-    let mut min_line = changed_from.min(lines.len());
-    let mut max_line_exclusive = changed_to.min(lines.len()).max(min_line);
-    let mut found_any = changed_from < changed_to;
-
-    for variable in &affected_variables {
-        if let Some(def) = defs.get(variable) {
-            min_line = min_line.min(def.line_idx);
-            max_line_exclusive = max_line_exclusive.max(def.line_idx.saturating_add(1));
-            found_any = true;
-        }
-    }
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        // Table rows may contain multiple formula cells. `line_for_calc_evaluation`
-        // intentionally returns at most one cell expression, which is not enough
-        // for dependency tracking. Scan every formula segment first.
-        if mask.table_active() && is_table_line(line) {
-            let formula_segments = find_table_formula_segments(line);
-            if !formula_segments.is_empty() {
-                let mut line_hits_dependency = false;
-                for segment in formula_segments {
-                    let segment_text = line[segment.from_byte..segment.to_byte].trim();
-                    if segment_text.is_empty() {
-                        continue;
-                    }
-                    let assignment_rhs =
-                        parse_variable_assignment_name_rhs(segment_text).map(|(_, rhs)| rhs);
-                    let expression_for_refs = assignment_rhs.as_deref().unwrap_or(segment_text);
-                    if expression_references_any(
-                        expression_for_refs,
-                        &variable_regex,
-                        &affected_variables,
-                    ) {
-                        line_hits_dependency = true;
-                        break;
-                    }
-                }
-                if line_hits_dependency {
-                    min_line = min_line.min(line_idx);
-                    max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
-                    found_any = true;
-                }
-                continue;
-            }
-        }
-
-        let eval_target = line_for_calc_evaluation_with_mask(line, mask);
-        let trimmed = eval_target.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let assignment_rhs = parse_variable_assignment_name_rhs(trimmed).map(|(_, rhs)| rhs);
-        let expression_for_refs = assignment_rhs.as_deref().unwrap_or(trimmed);
-        if expression_references_any(expression_for_refs, &variable_regex, &affected_variables) {
-            min_line = min_line.min(line_idx);
-            max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
-            found_any = true;
-        }
-    }
-
-    if found_any {
-        Some((min_line, max_line_exclusive))
-    } else {
-        None
-    }
+    variable_dependency_window(
+        lines,
+        changed_from,
+        changed_to,
+        prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        mask,
+    )
 }
 
 pub fn decide_eval_window(
@@ -1598,6 +1735,32 @@ pub fn decide_eval_window_with_flags(
     variables_enabled: bool,
     table_enabled: bool,
 ) -> CalcEvalWindowDecision {
+    decide_eval_window_with_cached_variable_graph_and_flags(
+        None,
+        lines,
+        changed_from,
+        changed_to,
+        prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        has_prev,
+        variables_enabled,
+        table_enabled,
+    )
+}
+
+pub fn decide_eval_window_with_cached_variable_graph_and_flags(
+    variable_graph: Option<&VariableDependencyGraph>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+    prev_changed_had_builtin_formula: bool,
+    has_prev: bool,
+    variables_enabled: bool,
+    table_enabled: bool,
+) -> CalcEvalWindowDecision {
     let line_count = lines.len();
     let mut eval_from = changed_from.min(line_count);
     let mut eval_to = changed_to.min(line_count).max(eval_from);
@@ -1625,7 +1788,8 @@ pub fn decide_eval_window_with_flags(
     }
 
     if touches_any_assignment {
-        if let Some((from, to)) = variable_dependency_window(
+        if let Some((from, to)) = variable_dependency_window_with_cached_graph(
+            variable_graph,
             lines,
             eval_from,
             eval_to,
@@ -2372,6 +2536,87 @@ mod tests {
             decide_eval_window_with_mask(&lines, 2, 3, &[], true, CalcFeatureMask::default());
         assert_eq!(decision.eval_from, 2);
         assert_eq!(decision.eval_to, 5);
+    }
+
+    #[test]
+    fn cached_variable_dependency_graph_matches_uncached_window_decision_after_line_edit() {
+        let mut lines = vec![
+            "a := 1".to_string(),
+            "b := a + 2".to_string(),
+            "c := b + 3".to_string(),
+            "c".to_string(),
+        ];
+        let mask = CalcFeatureMask::default();
+        let mut graph = build_variable_dependency_graph(&lines, mask);
+
+        lines[1] = "b := z + 2".to_string();
+        sync_variable_dependency_graph(&mut graph, &lines, 1, 2, mask);
+
+        let prev_changed_assignment_names = vec!["b".to_string()];
+        let decision_cached = decide_eval_window_with_cached_variable_graph_and_flags(
+            graph.as_ref(),
+            &lines,
+            1,
+            2,
+            &prev_changed_assignment_names,
+            true,
+            false,
+            true,
+            true,
+            true,
+        );
+        let decision_uncached = decide_eval_window_with_flags(
+            &lines,
+            1,
+            2,
+            &prev_changed_assignment_names,
+            true,
+            false,
+            true,
+            true,
+            true,
+        );
+        assert_eq!(decision_cached, decision_uncached);
+    }
+
+    #[test]
+    fn sync_variable_dependency_graph_rebuilds_when_document_shape_changes() {
+        let mut lines = vec![
+            "a := 1".to_string(),
+            "b := a + 2".to_string(),
+            "b".to_string(),
+        ];
+        let mask = CalcFeatureMask::default();
+        let mut graph = build_variable_dependency_graph(&lines, mask);
+        lines.insert(1, "x := 7".to_string());
+
+        sync_variable_dependency_graph(&mut graph, &lines, 1, 2, mask);
+
+        let prev_changed_assignment_names = vec!["x".to_string()];
+        let decision_cached = decide_eval_window_with_cached_variable_graph_and_flags(
+            graph.as_ref(),
+            &lines,
+            1,
+            2,
+            &prev_changed_assignment_names,
+            true,
+            false,
+            true,
+            true,
+            true,
+        );
+        let decision_uncached = decide_eval_window_with_flags(
+            &lines,
+            1,
+            2,
+            &prev_changed_assignment_names,
+            true,
+            false,
+            true,
+            true,
+            true,
+        );
+        assert_eq!(decision_cached, decision_uncached);
     }
 
     #[test]

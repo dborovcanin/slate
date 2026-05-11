@@ -655,6 +655,7 @@ impl TerminalApp {
         self.calc.results = vec![None; self.lines.len()];
         self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         self.calc.variable_names.clear();
+        self.calc.variable_dependency_graph = None;
         self.calc.line_metadata.clear();
         self.calc.prev_line_metadata.clear();
         self.calc.stale = false;
@@ -1316,6 +1317,11 @@ impl TerminalApp {
             self.calc.results = calc_data.line_results;
             self.calc.cell_results = calc_data.cell_results;
             self.calc.variable_names = calc_data.variable_names;
+            self.calc.variable_dependency_graph =
+                crate::editor_core::calc_plan::build_variable_dependency_graph(
+                    &self.lines,
+                    self.calc_feature_mask(),
+                );
             self.calc.stale = false;
             self.calc_recompute_pending = false;
             self.calc_recompute_due_at = None;
@@ -1358,17 +1364,27 @@ impl TerminalApp {
         let prev_changed_had_builtin_formula = prev_changed_slice
             .iter()
             .any(|meta| meta.has_builtin_formula);
-        let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_flags(
+        let calc_mask = self.calc_feature_mask();
+        crate::editor_core::calc_plan::sync_variable_dependency_graph(
+            &mut self.calc.variable_dependency_graph,
             &self.lines,
             plan.eval_from,
             plan.eval_to,
-            &prev_changed_assignment_names,
-            prev_changed_had_assignment,
-            prev_changed_had_builtin_formula,
-            has_prev,
-            calc_variables_enabled,
-            calc_table_enabled,
+            calc_mask,
         );
+        let eval_window =
+            crate::editor_core::calc_plan::decide_eval_window_with_cached_variable_graph_and_flags(
+                self.calc.variable_dependency_graph.as_ref(),
+                &self.lines,
+                plan.eval_from,
+                plan.eval_to,
+                &prev_changed_assignment_names,
+                prev_changed_had_assignment,
+                prev_changed_had_builtin_formula,
+                has_prev,
+                calc_variables_enabled,
+                calc_table_enabled,
+            );
         let can_use_partial = eval_window.can_use_partial;
         let eval_from = eval_window.eval_from;
         let eval_to = eval_window.eval_to;
