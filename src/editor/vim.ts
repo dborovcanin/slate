@@ -56,6 +56,7 @@ interface VimOptions {
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
   onNavigateToNote?: (noteId: string, heading?: string) => void;
+  onMacroRecordingChange?: (register: string | null) => void;
 }
 
 type VimRegisterMode = "charwise" | "linewise";
@@ -551,6 +552,8 @@ export function vimModeExtension(options: VimOptions = {}) {
   let macroReplaying = false;
   let pendingFoldPrefixUntilMs = 0;
   let pendingGoToLinkUntilMs = 0;
+
+  options.onMacroRecordingChange?.(null);
 
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
@@ -1198,10 +1201,12 @@ export function vimModeExtension(options: VimOptions = {}) {
         if (!register) return true;
         macroRecordingRegister = register;
         macroRegisters.set(register, []);
+        options.onMacroRecordingChange?.(macroRecordingRegister);
         return true;
       }
       case VIM_INTENT.STOP_MACRO_RECORD:
         macroRecordingRegister = null;
+        options.onMacroRecordingChange?.(null);
         return true;
       case VIM_INTENT.PLAY_MACRO: {
         if (macroReplaying) return true;

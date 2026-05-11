@@ -140,6 +140,10 @@ function editorOptionsForNote(note: Note | null) {
       const suffix = text.includes("\n") ? " (multiline)" : "";
       showToast(`clip-watch pasted${suffix}`);
     },
+    onMacroRecordingChange: (register: string | null) => {
+      macroRecordingRegister = register;
+      updateStatusBar();
+    },
     getNoteModules: () =>
       appConfig ? modulesForNote(state.activeNote, appConfig) : null,
     setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),
@@ -1050,6 +1054,7 @@ function showToast(message: string) {
 let statusTitleEl: HTMLElement;
 let statusMetaEl: HTMLElement;
 let clipWatchActive = false;
+let macroRecordingRegister: string | null = null;
 
 function createStatusBar(container: HTMLElement) {
   const bar = document.createElement("div");
@@ -1126,6 +1131,22 @@ function updateStatusBar() {
     }
   } else if (watchEl) {
     watchEl.remove();
+  }
+
+  let macroEl = statusMetaEl.querySelector(".status-macro-recording") as HTMLElement | null;
+  if (appConfig?.vim_mode && macroRecordingRegister) {
+    if (!macroEl) {
+      macroEl = document.createElement("span");
+      macroEl.className = "status-macro-recording";
+    }
+    macroEl.textContent = `REC @${macroRecordingRegister}`;
+    if (hintEl) {
+      statusMetaEl.insertBefore(macroEl, hintEl);
+    } else {
+      statusMetaEl.appendChild(macroEl);
+    }
+  } else if (macroEl) {
+    macroEl.remove();
   }
 }
 

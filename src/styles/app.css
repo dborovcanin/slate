@@ -69,6 +69,18 @@ html, body {
   letter-spacing: 0.02em;
 }
 
+.status-macro-recording {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--bg-overlay);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .status-modules {
   display: inline-flex;
   align-items: center;
