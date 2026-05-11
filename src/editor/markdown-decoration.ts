@@ -339,6 +339,7 @@ const decChecklistLine = lineClass("md-line md-checklist-item");
 const decRuleLine = lineClass("md-line md-hr");
 const decCodeFenceLine = lineClass("md-line md-code-fence");
 const decCodeBlockLine = lineClass("md-line md-code-block-line");
+const decTableLine = lineClass("md-line md-tabular-line");
 const tableRowRe = /^\s*\|.*\|\s*$/;
 
 class ChecklistMarkWidget extends WidgetType {
@@ -1531,6 +1532,9 @@ function decorateContentLine(
 ): void {
   const revealLinePrefixSyntax = selectionTouchesRange(activeSelection, line.from, line.to);
   const pending: PendingDecoration[] = [];
+  if (tableRowRe.test(line.text)) {
+    builder.add(line.from, line.from, decTableLine);
+  }
 
   if (info.headingLevel) {
     builder.add(line.from, line.from, decHeadingLine[info.headingLevel - 1]);

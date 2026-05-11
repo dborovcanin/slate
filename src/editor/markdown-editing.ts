@@ -157,7 +157,14 @@ function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
   const main = update.state.selection.main;
   if (!main.empty) return false;
   const line = update.state.doc.lineAt(main.head);
-  return isMarkdownTableLine(line.text);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const cell = tableCellAtStatePosition(update.state, main.head);
+  if (!cell) return false;
+  const anchor = tableCellNavigationAnchorInLine(cell);
+  const colInLine = Math.max(0, Math.min(main.head - line.from, line.text.length));
+  // Match TUI behavior: defer only for space typing at/after the content
+  // anchor while still before the right pipe (right-padding region).
+  return colInLine >= anchor && colInLine < cell.rightPipe;
 }
 
 function lineMightTriggerDocChangeRules(line: string): boolean {
@@ -843,6 +850,7 @@ function tableCursorPaddingGuard() {
   return ViewPlugin.define(() => ({
     update(update: ViewUpdate) {
       if (!update.selectionSet) return;
+      if (shouldDeferTableAutoformatForSpace(update)) return;
       const main = update.state.selection.main;
       if (!main.empty) return;
       const clamped = clampTableCursorToContent(update.state, main.head);

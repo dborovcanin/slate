@@ -182,6 +182,11 @@
   color: var(--code-fg);
 }
 
+.cm-editor .cm-line.md-tabular-line {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
 .md-code-token-keyword {
   color: var(--code-token-keyword);
   font-weight: 650;

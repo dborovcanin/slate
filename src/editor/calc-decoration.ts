@@ -230,19 +230,20 @@ class CalcResultWidget extends WidgetType {
 class FormulaCellWidget extends WidgetType {
   readonly value: string;
   readonly marker: string;
-  readonly minWidthCh: number;
+  readonly widthCh: number;
 
-  constructor(value: string, marker: string, minWidthCh: number) {
+  constructor(value: string, marker: string, widthCh: number) {
     super();
     this.value = value;
     this.marker = marker;
-    this.minWidthCh = minWidthCh;
+    this.widthCh = widthCh;
   }
 
   toDOM(): HTMLElement {
     const span = document.createElement("span");
     span.className = "calc-formula-inline";
-    span.style.minWidth = `${this.minWidthCh}ch`;
+    span.style.minWidth = `${this.widthCh}ch`;
+    span.style.maxWidth = `${this.widthCh}ch`;
 
     const value = document.createElement("span");
     value.className = "calc-formula-value";
@@ -261,7 +262,7 @@ class FormulaCellWidget extends WidgetType {
     return (
       this.value === other.value &&
       this.marker === other.marker &&
-      this.minWidthCh === other.minWidthCh
+      this.widthCh === other.widthCh
     );
   }
 
@@ -288,7 +289,10 @@ function selectionTouchesSegment(
 ): boolean {
   const from = lineFrom + fromCol;
   const to = lineFrom + toCol;
-  return selection.from <= to && selection.to >= from;
+  if (selection.from === selection.to) {
+    return selection.from >= from && selection.from < to;
+  }
+  return selection.from < to && selection.to > from;
 }
 
 interface TableCellBounds {
@@ -324,6 +328,38 @@ function formulaGhostExplanation(labels: readonly string[]): string {
   return labels
     .map((label, index) => `${formulaMarkerToken(index)} \u279c ${label}`)
     .join("  ");
+}
+
+function maskedFormulaValue(value: string, hasError: boolean): string {
+  if (hasError) return "!ERROR";
+  return value;
+}
+
+function fitFormulaMarkerReplacement(
+  value: string,
+  marker: string,
+  targetChars: number,
+  hasError: boolean,
+): { value: string; marker: string } {
+  if (targetChars <= 0) return { value: "", marker: "" };
+  const markerChars = marker.length;
+  if (markerChars >= targetChars) {
+    return { value: "", marker: marker.slice(0, targetChars) };
+  }
+  const valueBudget = targetChars - markerChars;
+  const masked = maskedFormulaValue(value, hasError);
+  let valuePart = masked;
+  if (masked.length > valueBudget) {
+    if (valueBudget >= 2) {
+      valuePart = `${masked.slice(0, valueBudget - 1)}\u2026`;
+    } else {
+      valuePart = masked.slice(0, valueBudget);
+    }
+  }
+  // Keep the marker attached to the rendered value (TUI parity), then pad
+  // the remaining cell width after the marker so table pipes stay aligned.
+  const trailingPad = Math.max(0, targetChars - (valuePart.length + markerChars));
+  return { value: valuePart, marker: `${marker}${" ".repeat(trailingPad)}` };
 }
 
 function segmentFormulaSource(lineText: string, segment: TableFormulaSegment): string {
@@ -430,16 +466,18 @@ function buildCalcDecorationsForSpans(
           );
 
           if (computed && !computed.hasError && !editingCell) {
-            const minWidthCh = Math.max(
-              1,
-              seg.toChar - seg.fromChar,
-              computed.value.length + marker.length,
+            const widthCh = Math.max(1, seg.toChar - seg.fromChar);
+            const fitted = fitFormulaMarkerReplacement(
+              computed.value,
+              marker,
+              widthCh,
+              computed.hasError,
             );
             items.push({
               from: line.from + seg.fromChar,
               to: line.from + seg.toChar,
               deco: Decoration.replace({
-                widget: new FormulaCellWidget(computed.value, marker, minWidthCh),
+                widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
               }),
             });
             trailerParts.push(`${marker} \u279c ${formulaSource}`);
@@ -489,17 +527,19 @@ function buildCalcDecorationsForSpans(
 
         const formatted = formatFormulaDisplayValue(result);
         const marker = formulaMarkerSuffix(labels.length);
-        const minWidthCh = Math.max(
-          1,
-          cell.toCol - cell.fromCol,
-          formatted.length + marker.length,
+        const widthCh = Math.max(1, cell.toCol - cell.fromCol);
+        const fitted = fitFormulaMarkerReplacement(
+          formatted,
+          marker,
+          widthCh,
+          formatted.startsWith("!ERROR"),
         );
 
         items.push({
           from: line.from + cell.fromCol,
           to: line.from + cell.toCol,
           deco: Decoration.replace({
-            widget: new FormulaCellWidget(formatted, marker, minWidthCh),
+            widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
           }),
         });
         items.push({
