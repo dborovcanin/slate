@@ -31,6 +31,8 @@ This document lists major Slate capabilities and how they behave.
 ## Terminal mode (optional)
 
 - full-screen terminal app with editor + note switcher
+- dedicated TUI binary: `slight`
+- `slate --terminal` selector remains supported
 - supports opening and editing markdown files
 - command bar and module behavior aligned with GUI
 - clipboard watch and command workflows

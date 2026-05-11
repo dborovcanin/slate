@@ -34,7 +34,7 @@ Slate stores notes in SQLite with WAL mode.
 Markdown file notes are also supported:
 
 - GUI: `slate path/to/file.md`
-- TUI: `slate --terminal path/to/file.md`
+- TUI: `slight path/to/file.md` (or `slate --terminal path/to/file.md`)
 
 Edits sync back to the source markdown file.
 

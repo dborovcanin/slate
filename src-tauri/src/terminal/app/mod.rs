@@ -544,16 +544,10 @@ impl TerminalApp {
         active_note.body = String::new();
         let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
 
-        // Lazy-load switcher note metadata on demand, but prime it when the
-        // opened note already contains wiki-link syntax so first paint can
-        // resolve link titles instead of showing broken placeholders.
-        let switcher_begin = Instant::now();
-        let switcher_items = if lines.iter().any(|line| line.contains("[[")) {
-            switcher::load_note_meta(db, Some(&active_note.id))?
-        } else {
-            Vec::new()
-        };
-        let loading_switcher = switcher_begin.elapsed();
+        // Keep startup memory lean: load switcher/wiki metadata lazily on
+        // first explicit switcher/wiki-autocomplete use.
+        let switcher_items = Vec::new();
+        let loading_switcher = Duration::default();
 
         let calc_engine = CalcEngine::new();
         let note_math_enabled = active_note.modules.math;
@@ -749,8 +743,6 @@ impl TerminalApp {
             },
         };
 
-        app.rebuild_wiki_link_prefix_index();
-        app.rebuild_wiki_link_note_suggestions_cache();
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();

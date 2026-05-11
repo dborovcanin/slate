@@ -1780,9 +1780,6 @@ impl TerminalApp {
         self.last_edit = Instant::now();
         self.search_query.clear();
         self.search_matches.clear();
-        if self.switcher_items.is_empty() && self.lines.iter().any(|line| line.contains("[[")) {
-            self.refresh_switcher_items(db)?;
-        }
         self.rebuild_wiki_link_prefix_index();
         self.rebuild_wiki_link_note_suggestions_cache();
         self.wiki_link_render_cache.clear();

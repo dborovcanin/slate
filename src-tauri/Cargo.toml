@@ -14,11 +14,11 @@ path = "src/main.rs"
 [dependencies]
 app-core = { path = "../crates/app-core" }
 editor-core = { path = "../crates/editor-core" }
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset"], optional = true }
 ulid = "1"
 fend-core = "1"
 regex = "1"
-tauri-plugin-dialog = "2"
+tauri-plugin-dialog = { version = "2", optional = true }
 libc = "0.2"
 arboard = "3.6.1"
 base64 = "0.22"
@@ -34,7 +34,8 @@ unicode-width = "0.2"
 url = "2"
 
 [features]
-default = ["imap"]
+default = ["imap", "gui"]
+gui = ["dep:tauri", "dep:tauri-plugin-dialog"]
 imap = ["dep:rustls", "dep:rustls-native-certs", "dep:mailparse"]
 
 [build-dependencies]

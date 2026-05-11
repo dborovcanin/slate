@@ -3,6 +3,7 @@ mod config;
 pub mod editor_core;
 #[cfg(feature = "imap")]
 mod imap;
+#[cfg(feature = "gui")]
 mod ipc;
 mod startup_log;
 mod storage;
@@ -10,12 +11,16 @@ mod storage;
 mod terminal;
 
 use app_core::AppCore;
+#[cfg(feature = "gui")]
 use ipc::server;
 use std::io::IsTerminal as _;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
+#[cfg(feature = "gui")]
 use std::sync::Mutex;
+#[cfg(feature = "imap")]
 use std::thread;
+#[cfg(feature = "imap")]
 use std::time::Duration;
 use ulid::Ulid;
 
@@ -34,10 +39,12 @@ enum Mode {
     Append,
 }
 
+#[cfg(feature = "gui")]
 pub(crate) struct StartupMarkdownFileState {
     startup_file: Mutex<Option<PathBuf>>,
 }
 
+#[cfg(feature = "gui")]
 impl StartupMarkdownFileState {
     fn new(startup_file: Option<PathBuf>) -> Self {
         Self {
@@ -76,6 +83,7 @@ struct TerminalOptions {
     list_only: bool,
 }
 
+#[cfg(feature = "gui")]
 fn run_gui(startup_markdown_file: Option<PathBuf>) -> Result<(), String> {
     let core = AppCore::open_default()?;
     if let Err(err) = config::ensure_config_file() {
@@ -140,6 +148,11 @@ fn run_gui(startup_markdown_file: Option<PathBuf>) -> Result<(), String> {
 
     server::cleanup_socket();
     Ok(())
+}
+
+#[cfg(not(feature = "gui"))]
+fn run_gui(_startup_markdown_file: Option<PathBuf>) -> Result<(), String> {
+    Err("GUI mode is not compiled in (missing 'gui' feature)".to_string())
 }
 
 fn print_help() {

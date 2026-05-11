@@ -1717,7 +1717,7 @@ fn wiki_link_heading_autocomplete_cancel_removes_auto_hash() {
 }
 
 #[test]
-fn startup_with_wiki_links_primes_resolution_for_first_render() {
+fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
     db.save_note("n-active", "[[01HX4VHR]]")
@@ -1744,11 +1744,8 @@ fn startup_with_wiki_links_primes_resolution_for_first_render() {
     )
     .expect("terminal app");
 
-    let entry = app
-        .wiki_link_prefix_index
-        .get("01HX4VHR")
-        .expect("short id should be resolved on startup");
-    assert_eq!(entry.title, "Destination Title");
+    assert!(app.switcher_items.is_empty());
+    assert!(app.wiki_link_prefix_index.is_empty());
 
     drop(app);
     drop(db);

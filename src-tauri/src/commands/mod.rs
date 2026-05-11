@@ -1,7 +1,13 @@
+#[cfg(feature = "gui")]
 pub mod calc;
+#[cfg(feature = "gui")]
 pub mod clipboard;
+#[cfg(feature = "gui")]
 pub mod config;
 pub mod export;
+#[cfg(feature = "gui")]
 pub mod notes;
+#[cfg(feature = "gui")]
 pub mod perf;
+#[cfg(feature = "gui")]
 pub mod reminders;

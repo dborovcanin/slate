@@ -3320,6 +3320,18 @@ impl TerminalApp {
             .collect();
     }
 
+    fn ensure_wiki_link_sources_loaded(&mut self, db: &crate::storage::Db) {
+        if !self.switcher_items.is_empty() {
+            return;
+        }
+        if let Ok(items) = crate::terminal::switcher::load_note_meta(db, Some(&self.active_note.id))
+        {
+            self.switcher_items = items;
+            self.rebuild_wiki_link_prefix_index();
+            self.rebuild_wiki_link_note_suggestions_cache();
+        }
+    }
+
     pub(super) fn dismiss_wiki_link_autocomplete(&mut self) {
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState::default();
     }
@@ -3371,7 +3383,8 @@ impl TerminalApp {
         self.dismiss_wiki_link_autocomplete();
     }
 
-    pub(super) fn open_wiki_link_autocomplete(&mut self, _db: &crate::storage::Db) {
+    pub(super) fn open_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
+        self.ensure_wiki_link_sources_loaded(db);
         let from_col = self.cursor_col.saturating_sub(2);
         let note_suggestions = self.wiki_link_note_suggestions_cache.clone();
         let suggestions = note_suggestions.clone();
@@ -3398,6 +3411,7 @@ impl TerminalApp {
         &mut self,
         db: &crate::storage::Db,
     ) -> bool {
+        self.ensure_wiki_link_sources_loaded(db);
         if self.wiki_link_autocomplete_popup.visible {
             return false;
         }

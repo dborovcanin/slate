@@ -1,4 +1,5 @@
 use app_core::note_sources::NoteSourceService;
+#[cfg(feature = "gui")]
 use app_core::AppCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -14,6 +15,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+#[cfg(feature = "gui")]
 use tauri::State;
 use url::Url;
 
@@ -339,6 +341,7 @@ fn resolve_home_dir() -> Option<PathBuf> {
     }
 }
 
+#[cfg(feature = "gui")]
 #[tauri::command]
 pub async fn export_to_file(path: String, content: String) -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(move || export_to_file_blocking(&path, &content))
@@ -352,6 +355,7 @@ pub fn export_to_file_blocking(path: &str, content: &str) -> Result<(), String> 
         .map_err(|e| format!("Failed to write file '{}': {e}", resolved.display()))
 }
 
+#[cfg(feature = "gui")]
 #[tauri::command]
 pub async fn export_to_pdf(
     core: State<'_, AppCore>,

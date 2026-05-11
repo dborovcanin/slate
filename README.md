@@ -71,11 +71,13 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 
 **Optional terminal mode**
 - Enable with `[editor] terminal_mode = true`
-- Or run explicitly with `slate --terminal`
-- Open markdown files with `slate path/to/file.md` (GUI) or `slate --terminal path/to/file.md` (TUI); supports `.md`, `.markdown`, `.mdown`, `.mkd` and saves edits back to that file
+- Run TUI directly with `slight` (dedicated terminal binary)
+- `slate --terminal` remains available
+- Open markdown files with `slate path/to/file.md` (GUI), `slate --terminal path/to/file.md` (TUI), or `slight path/to/file.md` (TUI); supports `.md`, `.markdown`, `.mdown`, `.mkd` and saves edits back to that file
 - Runs as a standalone full-screen terminal app (no Tauri window)
 - Built-in editor with note list/switcher and status bar
-- Terminal flags: `--new`, `--id <note-id>`, `--list`, `--gui`, `--terminal`
+- Terminal flags (`slight`): `--new`, `--id <note-id>`, `--list`
+- Runtime selector flags (`slate`): `--gui`, `--terminal`
 - Pipe append mode: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
 - Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save (when `autosave = true`), `Ctrl+Q`/`Ctrl+W` quit
 - Terminal folding keymap (normal mode): `za` toggle fold at cursor
