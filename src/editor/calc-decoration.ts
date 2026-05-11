@@ -1290,7 +1290,6 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
     let rerunRequested = false;
     let destroyed = false;
     let deferredEval = false;
-    let pendingFullTableRecalc = false;
     let prevLines: string[] = [];
     let prevResults: Map<number, string> = new Map();
     let prevVariables: VariableIndexEntry[] = [];
@@ -1387,25 +1386,15 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           const prevChangedTo =
             prevLines.length - nextLines.length + plan.evalFrom + plan.evalLines.length;
           const prevChangedLines = prevLines.slice(plan.evalFrom, prevChangedTo);
-          const forceFullTableRecalc = pendingFullTableRecalc;
-          pendingFullTableRecalc = false;
-          const evalWindow = forceFullTableRecalc
-            ? {
-              evalFrom: 0,
-              evalTo: nextLines.length,
-              touchesAnyAssignment: true,
-              touchesBuiltinFormula: true,
-              canUsePartial: false,
-            }
-            : calcDecideEvalWindow(
-              nextLines,
-              plan.evalFrom,
-              plan.evalFrom + plan.evalLines.length,
-              prevChangedLines,
-              hasPrev,
-              variablesEnabled,
-              tableEnabled,
-            );
+          const evalWindow = calcDecideEvalWindow(
+            nextLines,
+            plan.evalFrom,
+            plan.evalFrom + plan.evalLines.length,
+            prevChangedLines,
+            hasPrev,
+            variablesEnabled,
+            tableEnabled,
+          );
           const canUsePartial = evalWindow.canUsePartial;
           const noteId = getActiveNoteId?.() ?? null;
 
@@ -1662,11 +1651,6 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
         }
 
         const touchesTableRows = tableEnabled && updateTouchesTableRows(update);
-        if (touchesTableRows) {
-          // Table formula dependencies can span rows/cols; force a full pass
-          // to keep UI formula rendering in sync after table cell edits.
-          pendingFullTableRecalc = true;
-        }
         const touchesCalcExpression = updateTouchesCalcExpression(update) || touchesTableRows;
         if (shouldScheduleEval(update.view, touchesCalcExpression)) {
           scheduleEval(touchesTableRows ? CALC_TABLE_EDIT_EVAL_DELAY_MS : CALC_EVAL_DELAY_MS);

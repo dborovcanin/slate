@@ -12,6 +12,7 @@ import {
 import {
   getTableCursorCellInfo,
   markdownClassifyLine,
+  runTablePipeInsertColumnRule,
   runTableMultilineBreakRule,
   runMarkdownTransactions,
   rewriteLineWithChecklistToggleSuffix,
@@ -55,39 +56,72 @@ function lastNonSpaceEndOffset(text: string): number {
   return 0;
 }
 
+function isEscapedTablePipe(text: string, pipeIndex: number): boolean {
+  let backslashCount = 0;
+  for (let i = pipeIndex - 1; i >= 0; i -= 1) {
+    if (text[i] !== "\\") break;
+    backslashCount += 1;
+  }
+  return (backslashCount & 1) === 1;
+}
+
+function unescapedTablePipeOffsets(lineText: string): number[] {
+  const pipes: number[] = [];
+  for (let i = 0; i < lineText.length; i += 1) {
+    if (lineText[i] !== "|") continue;
+    if (isEscapedTablePipe(lineText, i)) continue;
+    pipes.push(i);
+  }
+  return pipes;
+}
+
 function tableCellAtColumn(lineText: string, col: number): TableCellInfo | null {
   if (!isMarkdownTableLine(lineText)) return null;
   const colInLine = Math.max(0, Math.min(col, lineText.length));
-  let prevPipe = -1;
-  let cellIndex = 0;
+  const pipes = unescapedTablePipeOffsets(lineText);
+  if (pipes.length < 2) return null;
+  const cellCount = pipes.length - 1;
   let selected: TableCellInfo | null = null;
   let fallback: TableCellInfo | null = null;
 
-  for (let i = 0; i < lineText.length; i += 1) {
-    if (lineText[i] !== "|") continue;
-    if (prevPipe >= 0) {
-      const raw = lineText.slice(prevPipe + 1, i);
-      const cell: TableCellInfo = {
-        index: cellIndex,
-        cellCount: 0,
-        leftPipe: prevPipe,
-        rightPipe: i,
-        trimStart: firstNonSpaceOffset(raw),
-        trimEnd: lastNonSpaceEndOffset(raw),
-      };
-      if (selected === null && colInLine <= i) {
-        selected = cell;
-      }
-      fallback = cell;
-      cellIndex += 1;
+  for (let cellIndex = 0; cellIndex < cellCount; cellIndex += 1) {
+    const leftPipe = pipes[cellIndex]!;
+    const rightPipe = pipes[cellIndex + 1]!;
+    const raw = lineText.slice(leftPipe + 1, rightPipe);
+    const cell: TableCellInfo = {
+      index: cellIndex,
+      cellCount,
+      leftPipe,
+      rightPipe,
+      trimStart: firstNonSpaceOffset(raw),
+      trimEnd: lastNonSpaceEndOffset(raw),
+    };
+    if (selected === null && colInLine <= rightPipe) {
+      selected = cell;
     }
-    prevPipe = i;
+    fallback = cell;
   }
 
-  const picked = selected ?? fallback;
-  if (!picked) return null;
-  picked.cellCount = cellIndex;
-  return picked;
+  return selected ?? fallback;
+}
+
+function tableCellAtIndex(lineText: string, index: number): TableCellInfo | null {
+  if (!isMarkdownTableLine(lineText)) return null;
+  const pipes = unescapedTablePipeOffsets(lineText);
+  if (pipes.length < 2) return null;
+  const cellCount = pipes.length - 1;
+  const clamped = Math.max(0, Math.min(index, cellCount - 1));
+  const leftPipe = pipes[clamped]!;
+  const rightPipe = pipes[clamped + 1]!;
+  const raw = lineText.slice(leftPipe + 1, rightPipe);
+  return {
+    index: clamped,
+    cellCount,
+    leftPipe,
+    rightPipe,
+    trimStart: firstNonSpaceOffset(raw),
+    trimEnd: lastNonSpaceEndOffset(raw),
+  };
 }
 
 function tableCellAtStatePosition(
@@ -97,24 +131,25 @@ function tableCellAtStatePosition(
   const line = state.doc.lineAt(pos);
   if (!isMarkdownTableLine(line.text)) return null;
   const colInLine = Math.max(0, Math.min(pos - line.from, line.text.length));
+  const inlineCell = tableCellAtColumn(line.text, colInLine);
+  if (!inlineCell) return null;
+  // Most lookups happen on normal table rows; avoid rebuilding the whole table
+  // block unless we are on a continuation row that needs logical-row metadata.
+  if (!line.text.trimStart().startsWith("|>")) {
+    return inlineCell;
+  }
 
-  let startLine = line.number;
-  while (startLine > 1 && isMarkdownTableLine(state.doc.line(startLine - 1).text)) {
-    startLine -= 1;
-  }
-  let endLine = line.number;
-  while (endLine < state.doc.lines && isMarkdownTableLine(state.doc.line(endLine + 1).text)) {
-    endLine += 1;
-  }
+  const bounds = tableBoundsForLineNo(state, line.number);
+  if (!bounds) return inlineCell;
 
   const blockLines: string[] = [];
-  for (let lineNo = startLine; lineNo <= endLine; lineNo += 1) {
+  for (let lineNo = bounds.startLine; lineNo <= bounds.endLine; lineNo += 1) {
     blockLines.push(state.doc.line(lineNo).text);
   }
 
-  const info = getTableCursorCellInfo(blockLines, line.number - startLine, colInLine);
+  const info = getTableCursorCellInfo(blockLines, line.number - bounds.startLine, colInLine);
   if (!info) {
-    return tableCellAtColumn(line.text, colInLine);
+    return inlineCell;
   }
   return {
     index: info.columnIndex,
@@ -164,7 +199,7 @@ function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
   const colInLine = Math.max(0, Math.min(main.head - line.from, line.text.length));
   // Match TUI behavior: defer only for space typing at/after the content
   // anchor while still before the right pipe (right-padding region).
-  return colInLine >= anchor && colInLine < cell.rightPipe;
+  return colInLine > anchor && colInLine < cell.rightPipe;
 }
 
 function lineMightTriggerDocChangeRules(line: string): boolean {
@@ -475,6 +510,53 @@ function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
   return tableArrowMoveNext(view, line, cell);
 }
 
+function tableVerticalMove(view: EditorView, direction: -1 | 1): boolean {
+  const main = view.state.selection.main;
+  if (!main.empty) return false;
+  const state = view.state;
+  const line = state.doc.lineAt(main.head);
+  const cell = tableCellAtStatePosition(state, main.head);
+  if (!cell || !isMarkdownTableLine(line.text)) return false;
+
+  const bounds = tableBoundsForLineNo(state, line.number);
+  if (!bounds) return false;
+
+  const step = direction < 0 ? -1 : 1;
+  for (
+    let lineNo = line.number + step;
+    lineNo >= bounds.startLine && lineNo <= bounds.endLine;
+    lineNo += step
+  ) {
+    const targetLine = state.doc.line(lineNo);
+    if (isTableDelimiterLine(targetLine.text)) continue;
+    const targetCell = tableCellAtIndex(targetLine.text, cell.index);
+    if (!targetCell) continue;
+    view.dispatch({
+      selection: { anchor: targetLine.from + tableCellNavigationAnchorInLine(targetCell) },
+      scrollIntoView: true,
+    });
+    return true;
+  }
+
+  if (direction < 0) {
+    if (bounds.startLine <= 1) {
+      view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
+    } else {
+      const exitLine = state.doc.line(bounds.startLine - 1);
+      view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
+    }
+    return true;
+  }
+
+  if (bounds.endLine >= state.doc.lines) {
+    view.dispatch({ selection: { anchor: state.doc.length }, scrollIntoView: true });
+  } else {
+    const exitLine = state.doc.line(bounds.endLine + 1);
+    view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
+  }
+  return true;
+}
+
 function tableBoundaryEdit(
   view: EditorView,
   autoformat: boolean,
@@ -509,11 +591,11 @@ function tablePipeInputHandler() {
     if (!main.empty || main.from !== from || main.to !== to) return false;
     const line = view.state.doc.lineAt(from);
     if (!isMarkdownTableLine(line.text)) return false;
-    view.dispatch({
-      changes: { from, to, insert: "\\|" },
-      selection: { anchor: from + 2 },
-      scrollIntoView: false,
-    });
+    const scoped = snapshotFromViewTableBlock(view);
+    if (!scoped) return false;
+    const op = runTablePipeInsertColumnRule(scoped.snapshot);
+    if (!op) return false;
+    applyEditOperation(view, offsetEditOperation(op, scoped.offset));
     return true;
   });
 }
@@ -591,6 +673,13 @@ export function runTableCellNavigationCommand(
   if (!result) return false;
   applyEditOperation(view, offsetEditOperation(result.operation, scoped.offset));
   return true;
+}
+
+export function runTableVerticalMoveCommand(
+  view: EditorView,
+  direction: -1 | 1,
+): boolean {
+  return tableVerticalMove(view, direction);
 }
 
 function tableCellJump(
@@ -708,6 +797,14 @@ function tableCursorKeymap(
       key: "Ctrl-ArrowRight",
       preventDefault: true,
       run: (view) => tableCellJump(view, autoformat, tableEnabled, false),
+    },
+    {
+      key: "ArrowUp",
+      run: (view) => tableVerticalMove(view, -1),
+    },
+    {
+      key: "ArrowDown",
+      run: (view) => tableVerticalMove(view, 1),
     },
     {
       key: "Shift-Enter",

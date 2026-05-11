@@ -6,6 +6,7 @@ import {
   formatTableLines,
   runTableCellNavigationCommand,
   runTableHeaderDeleteColumnCommand,
+  runTableVerticalMoveCommand,
   rewriteLineWithChecklistToggleSuffix,
 } from "./markdown-editing.ts";
 import {
@@ -114,6 +115,17 @@ test("table cursor internals compute empty-cell anchor after left padding", () =
   const cell = __tableCursorInternals.tableCellAtColumn(line, 8);
   assert.ok(cell);
   assert.equal(__tableCursorInternals.tableCellNavigationAnchorInLine(cell), 8);
+});
+
+test("table cursor internals ignore escaped pipes inside cell text", () => {
+  const line = "| left \\| right | value |";
+  const firstCell = __tableCursorInternals.tableCellAtColumn(line, 10);
+  const secondCell = __tableCursorInternals.tableCellAtColumn(line, line.indexOf("value") + 1);
+  assert.ok(firstCell);
+  assert.ok(secondCell);
+  assert.equal(firstCell?.index, 0);
+  assert.equal(secondCell?.index, 1);
+  assert.equal(secondCell?.cellCount, 2);
 });
 
 test("table cursor internals clamp right padding to content anchor", () => {
@@ -288,4 +300,19 @@ test("table scoped snapshot remaps navigation selection back to document offsets
     true,
   );
   assert.equal(getState().selection.main.head, tableStart + 7);
+});
+
+test("table vertical move lands at target cell text end (not padding column)", () => {
+  const doc = [
+    "| longvalue | x |",
+    "| --------- | - |",
+    "| a         | y |",
+  ].join("\n");
+  const firstRowStart = 0;
+  const cursor = firstRowStart + "| longvalue".length;
+  const { view, getState } = createTestEditorView(doc, cursor);
+
+  assert.equal(runTableVerticalMoveCommand(view, 1), true);
+  const thirdLine = getState().doc.line(3);
+  assert.equal(getState().selection.main.head, thirdLine.from + 3);
 });

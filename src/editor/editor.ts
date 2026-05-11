@@ -292,6 +292,8 @@ interface EditorMountOptions {
 let currentFormatOnSave = false;
 let backendDetached = false;
 let tableModuleEnabled = true;
+let tableArrowCaptureEnabled = true;
+let globalEditorListenersBound = false;
 
 function isLeftArrowKey(key: string): boolean {
   return key === "ArrowLeft" || key === "Left";
@@ -341,6 +343,43 @@ function tableCellNavigationDomHandler() {
       },
     }),
   );
+}
+
+function onGlobalTableArrowKeydown(event: KeyboardEvent) {
+  if (!tableArrowCaptureEnabled) return;
+  if (!view || !view.hasFocus) return;
+  const isMod = event.ctrlKey || event.metaKey;
+  if (!isMod || event.altKey || event.shiftKey) return;
+
+  if (isLeftArrowEvent(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+    moveTableCellOrWord(view, true, true);
+    return;
+  }
+  if (isRightArrowEvent(event)) {
+    event.preventDefault();
+    event.stopPropagation();
+    moveTableCellOrWord(view, false, false);
+  }
+}
+
+function onGlobalBeforeUnload() {
+  void flushSave();
+}
+
+function onGlobalVisibilityChange() {
+  if (document.visibilityState === "hidden") flushSave();
+}
+
+function ensureGlobalEditorListeners() {
+  if (globalEditorListenersBound) return;
+  // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is
+  // always available when the editor has focus.
+  window.addEventListener("keydown", onGlobalTableArrowKeydown, true);
+  window.addEventListener("beforeunload", onGlobalBeforeUnload);
+  document.addEventListener("visibilitychange", onGlobalVisibilityChange);
+  globalEditorListenersBound = true;
 }
 
 function snapEditorScrollToPixels() {
@@ -613,40 +652,9 @@ export function mountEditor(parent: HTMLElement, options: EditorMountOptions = {
   autosaveSnapshots.reset(view.state.doc, doc);
   startupMark("ui_codemirror_ready");
   applyViewModeClasses(setup.vimMode, setup.plainTextMode);
+  tableArrowCaptureEnabled = !setup.plainTextMode;
+  ensureGlobalEditorListeners();
   view.focus();
-
-  if (!setup.plainTextMode) {
-    // Capture Ctrl/Meta+Arrow before browser/CM defaults so table navigation is
-    // always available when the editor has focus.
-    window.addEventListener(
-      "keydown",
-      (event) => {
-        if (!view || !view.hasFocus) return;
-        const isMod = event.ctrlKey || event.metaKey;
-        if (!isMod || event.altKey || event.shiftKey) return;
-
-        if (isLeftArrowEvent(event)) {
-          event.preventDefault();
-          event.stopPropagation();
-          moveTableCellOrWord(view, true, true);
-          return;
-        }
-        if (isRightArrowEvent(event)) {
-          event.preventDefault();
-          event.stopPropagation();
-          moveTableCellOrWord(view, false, false);
-        }
-      },
-      true,
-    );
-  }
-
-  window.addEventListener("beforeunload", () => {
-    void flushSave();
-  });
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") flushSave();
-  });
 }
 
 export function reconfigureEditor(options: EditorMountOptions = {}) {
@@ -666,6 +674,8 @@ export function reconfigureEditor(options: EditorMountOptions = {}) {
     suppressProgrammaticDocSync = false;
   }
   applyViewModeClasses(setup.vimMode, setup.plainTextMode);
+  tableArrowCaptureEnabled = !setup.plainTextMode;
+  ensureGlobalEditorListeners();
 }
 
 interface SetEditorContentOptions {
