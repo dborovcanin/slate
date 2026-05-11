@@ -236,7 +236,6 @@ jobs:
   publish-aur-bin:
     name: Publish AUR Binary
     needs: build-linux-binary
-    if: ${{ secrets.GH_AUR_KEY != '' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -245,7 +244,21 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check AUR publish secret
+        id: aur-gate
+        env:
+          GH_AUR_KEY: ${{ secrets.GH_AUR_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_AUR_KEY:-}" ]; then
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "AUR publish disabled: GH_AUR_KEY is not configured."
+          else
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Download Linux artifact
+        if: steps.aur-gate.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
         with:
           name: slate-linux
@@ -253,6 +266,7 @@ jobs:
 
       - name: Package binary artifact
         id: package
+        if: steps.aur-gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           version="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
@@ -275,6 +289,7 @@ jobs:
           echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
 
       - name: Publish rolling release asset
+        if: steps.aur-gate.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -285,6 +300,7 @@ jobs:
           gh release upload aur-bin "${{ steps.package.outputs.artifact_path }}" --clobber
 
       - name: Update AUR PKGBUILD metadata
+        if: steps.aur-gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -307,6 +323,7 @@ jobs:
           PY
 
       - name: Regenerate .SRCINFO
+        if: steps.aur-gate.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           docker run --rm \
@@ -316,6 +333,7 @@ jobs:
             bash -lc "cd packaging/aur/slate-bin && makepkg --printsrcinfo > .SRCINFO"
 
       - name: Push to AUR
+        if: steps.aur-gate.outputs.enabled == 'true'
         env:
           GH_AUR_KEY: ${{ secrets.GH_AUR_KEY }}
         run: |
