@@ -172,34 +172,9 @@ function tableCellNavigationAnchorInLine(cell: TableCellInfo): number {
   return Math.min(cellStart + cell.trimEnd, cell.rightPipe);
 }
 
-function isSingleSpaceInsertion(update: ViewUpdate): boolean {
-  let inserted = "";
-  let changeCount = 0;
-  let hasDeletion = false;
-  for (const tr of update.transactions) {
-    tr.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
-      changeCount += 1;
-      if (fromA !== toA) hasDeletion = true;
-      inserted += text.toString();
-    });
-  }
-  return !hasDeletion && changeCount === 1 && inserted === " ";
-}
-
 function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
-  if (!update.docChanged) return false;
-  if (!isSingleSpaceInsertion(update)) return false;
-  const main = update.state.selection.main;
-  if (!main.empty) return false;
-  const line = update.state.doc.lineAt(main.head);
-  if (!isMarkdownTableLine(line.text)) return false;
-  const cell = tableCellAtStatePosition(update.state, main.head);
-  if (!cell) return false;
-  const anchor = tableCellNavigationAnchorInLine(cell);
-  const colInLine = Math.max(0, Math.min(main.head - line.from, line.text.length));
-  // Match TUI behavior: defer only for space typing at/after the content
-  // anchor while still before the right pipe (right-padding region).
-  return colInLine > anchor && colInLine < cell.rightPipe;
+  void update;
+  return false;
 }
 
 function lineMightTriggerDocChangeRules(line: string): boolean {
