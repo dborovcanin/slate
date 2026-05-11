@@ -14,6 +14,7 @@ pub enum VimMode {
 pub enum VimPending {
     Delete,
     Yank,
+    Change,
     Go,
     DeleteTill,
     DeleteInner,
@@ -429,7 +430,10 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
 
     if let VimKey::Char(digit) = key {
         if digit.is_ascii_digit() {
-            if matches!(next.pending, Some(VimPending::Delete | VimPending::Yank))
+            if matches!(
+                next.pending,
+                Some(VimPending::Delete | VimPending::Yank | VimPending::Change)
+            )
                 && !(digit == '0' && !has_count(&next))
             {
                 next.count_buffer.push(digit);
@@ -611,6 +615,78 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             }
             (VimPending::Yank, VimKey::Char('a')) => {
                 next.pending = Some(VimPending::YankAround);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('c')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteLine, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('w')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteWordForward, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('b')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteWordBackward, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('e')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteWordEnd, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('0')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteToLineStart, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('$')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteToLineEnd, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -848,14 +924,11 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             actions.push(make_action(VimIntent::MoveRight, count));
             handled = true;
         }
-        VimKey::Char('c') => {
-            let count = consume_count(&mut next);
-            actions.push(make_action(VimIntent::MoveRight, count));
-            handled = true;
-        }
         VimKey::Char('C') => {
             let count = consume_count(&mut next);
-            actions.push(make_action(VimIntent::MoveLeft, count));
+            next.mode = VimMode::Insert;
+            actions.push(make_action(VimIntent::DeleteToLineEnd, count));
+            actions.push(make_action(VimIntent::EnterInsert, 1));
             handled = true;
         }
         VimKey::ArrowUp | VimKey::Char('k') => {
@@ -919,6 +992,12 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
         VimKey::Char('y') => {
             let pending_count = consume_count(&mut next);
             next.pending = Some(VimPending::Yank);
+            next.pending_count = Some(pending_count);
+            handled = true;
+        }
+        VimKey::Char('c') => {
+            let pending_count = consume_count(&mut next);
+            next.pending = Some(VimPending::Change);
             next.pending_count = Some(pending_count);
             handled = true;
         }
@@ -1235,29 +1314,35 @@ mod tests {
     }
 
     #[test]
-    fn c_and_upper_c_move_horizontally_with_counts_in_normal_mode() {
-        let right = step_token(&VimState::default(), "char:c");
-        assert!(right.handled);
-        assert_eq!(right.actions.len(), 1);
-        assert_eq!(right.actions[0].intent, VimIntent::MoveRight);
-        assert_eq!(right.actions[0].count, 1);
+    fn c_operator_supports_cw_cc_and_upper_c() {
+        let one = step_token(&VimState::default(), "char:c");
+        assert!(one.handled);
+        assert!(matches!(one.state.pending, Some(VimPending::Change)));
 
-        let one = step_token(&VimState::default(), "char:4");
+        let two = step_token(&one.state, "char:w");
+        assert!(two.handled);
+        assert_eq!(two.state.mode, VimMode::Insert);
+        assert_eq!(two.actions.len(), 2);
+        assert_eq!(two.actions[0].intent, VimIntent::DeleteWordForward);
+        assert_eq!(two.actions[0].count, 1);
+        assert_eq!(two.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:2");
         let two = step_token(&one.state, "char:c");
-        assert!(two.handled);
-        assert_eq!(two.actions[0].intent, VimIntent::MoveRight);
-        assert_eq!(two.actions[0].count, 4);
+        let three = step_token(&two.state, "char:c");
+        assert!(three.handled);
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteLine);
+        assert_eq!(three.actions[0].count, 2);
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
 
-        let left = step_token(&VimState::default(), "char:C");
-        assert!(left.handled);
-        assert_eq!(left.actions.len(), 1);
-        assert_eq!(left.actions[0].intent, VimIntent::MoveLeft);
-        assert_eq!(left.actions[0].count, 1);
-
-        let one = step_token(&VimState::default(), "char:3");
-        let two = step_token(&one.state, "char:C");
-        assert!(two.handled);
-        assert_eq!(two.actions[0].intent, VimIntent::MoveLeft);
-        assert_eq!(two.actions[0].count, 3);
+        let upper = step_token(&VimState::default(), "char:C");
+        assert!(upper.handled);
+        assert_eq!(upper.state.mode, VimMode::Insert);
+        assert_eq!(upper.actions.len(), 2);
+        assert_eq!(upper.actions[0].intent, VimIntent::DeleteToLineEnd);
+        assert_eq!(upper.actions[0].count, 1);
+        assert_eq!(upper.actions[1].intent, VimIntent::EnterInsert);
     }
 }
