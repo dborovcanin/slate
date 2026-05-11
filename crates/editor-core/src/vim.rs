@@ -848,6 +848,16 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             actions.push(make_action(VimIntent::MoveRight, count));
             handled = true;
         }
+        VimKey::Char('c') => {
+            let count = consume_count(&mut next);
+            actions.push(make_action(VimIntent::MoveRight, count));
+            handled = true;
+        }
+        VimKey::Char('C') => {
+            let count = consume_count(&mut next);
+            actions.push(make_action(VimIntent::MoveLeft, count));
+            handled = true;
+        }
         VimKey::ArrowUp | VimKey::Char('k') => {
             let count = consume_count(&mut next);
             actions.push(make_action(VimIntent::MoveUp, count));
@@ -1222,5 +1232,32 @@ mod tests {
         assert_eq!(three.actions[0].intent, VimIntent::PlayMacro);
         assert_eq!(three.actions[0].count, 2);
         assert_eq!(three.actions[0].target_char, Some('b'));
+    }
+
+    #[test]
+    fn c_and_upper_c_move_horizontally_with_counts_in_normal_mode() {
+        let right = step_token(&VimState::default(), "char:c");
+        assert!(right.handled);
+        assert_eq!(right.actions.len(), 1);
+        assert_eq!(right.actions[0].intent, VimIntent::MoveRight);
+        assert_eq!(right.actions[0].count, 1);
+
+        let one = step_token(&VimState::default(), "char:4");
+        let two = step_token(&one.state, "char:c");
+        assert!(two.handled);
+        assert_eq!(two.actions[0].intent, VimIntent::MoveRight);
+        assert_eq!(two.actions[0].count, 4);
+
+        let left = step_token(&VimState::default(), "char:C");
+        assert!(left.handled);
+        assert_eq!(left.actions.len(), 1);
+        assert_eq!(left.actions[0].intent, VimIntent::MoveLeft);
+        assert_eq!(left.actions[0].count, 1);
+
+        let one = step_token(&VimState::default(), "char:3");
+        let two = step_token(&one.state, "char:C");
+        assert!(two.handled);
+        assert_eq!(two.actions[0].intent, VimIntent::MoveLeft);
+        assert_eq!(two.actions[0].count, 3);
     }
 }
