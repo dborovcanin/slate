@@ -1,4 +1,4 @@
-import { Prec, type Extension } from "@codemirror/state";
+import { Prec } from "@codemirror/state";
 import { EditorView, keymap, ViewPlugin, type KeyBinding } from "@codemirror/view";
 import type { ViewUpdate } from "@codemirror/view";
 import { getCalcResultAtCursor } from "./calc-decoration.ts";

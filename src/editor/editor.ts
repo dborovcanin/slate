@@ -26,7 +26,7 @@ import {
 } from "./markdown-editing";
 import { foldingExtensions } from "./folding.ts";
 import { notifyExtensions } from "./notify-decoration";
-import { makeVariableCompletionSource, variableAutocompleteExtensions } from "./variable-autocomplete";
+import { makeVariableCompletionSource } from "./variable-autocomplete";
 import {
   invalidateWikiLinkCompletionCaches,
   wikiLinkCompletionSource,
@@ -380,69 +380,6 @@ function ensureGlobalEditorListeners() {
   window.addEventListener("beforeunload", onGlobalBeforeUnload);
   document.addEventListener("visibilitychange", onGlobalVisibilityChange);
   globalEditorListenersBound = true;
-}
-
-function snapEditorScrollToPixels() {
-  // Most wheel mice report ±3 line deltas per notch. Normalize that to ~1 line
-  // while keeping sub-line movement for smaller deltas.
-  const normalizeLineDelta = (delta: number): number => {
-    const abs = Math.abs(delta);
-    if (abs < 0.001) return 0;
-    return Math.sign(delta) * Math.max(0.5, abs / 3);
-  };
-
-  const clamp = (value: number, min: number, max: number) =>
-    Math.min(max, Math.max(min, value));
-
-  const wheelScale = (event: WheelEvent, view: EditorView): number => {
-    if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
-      const rootLineHeight = Number.parseFloat(
-        document.documentElement.style.getPropertyValue("--line-height") || "",
-      );
-      if (Number.isFinite(rootLineHeight) && rootLineHeight > 0) {
-        return rootLineHeight;
-      }
-      const lineHeight = Number.parseFloat(window.getComputedStyle(view.contentDOM).lineHeight || "");
-      return Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 24;
-    }
-    if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
-      return view.scrollDOM.clientHeight || 1;
-    }
-    return 1;
-  };
-
-  return Prec.highest(
-    EditorView.domEventHandlers({
-      wheel: (event, view) => {
-        if (event.ctrlKey || event.metaKey) return false;
-
-        const scroller = view.scrollDOM;
-        const scale = wheelScale(event, view);
-        const lineMode = event.deltaMode === WheelEvent.DOM_DELTA_LINE;
-        const deltaY = lineMode ? normalizeLineDelta(event.deltaY) * scale : event.deltaY * scale;
-        const deltaX = lineMode ? normalizeLineDelta(event.deltaX) * scale : event.deltaX * scale;
-        if (Math.abs(deltaY) < 0.001 && Math.abs(deltaX) < 0.001) return false;
-
-        const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-        const maxLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
-        // Keep wheel scrolling on whole CSS pixels to avoid subpixel text
-        // raster jitter (especially visible on wheel mice on fractional DPR).
-        const nextTop = Math.round(clamp(scroller.scrollTop + deltaY, 0, maxTop));
-        const nextLeft = Math.round(clamp(scroller.scrollLeft + deltaX, 0, maxLeft));
-        if (
-          Math.abs(nextTop - scroller.scrollTop) < 0.001 &&
-          Math.abs(nextLeft - scroller.scrollLeft) < 0.001
-        ) {
-          return false;
-        }
-
-        event.preventDefault();
-        scroller.scrollTop = nextTop;
-        scroller.scrollLeft = nextLeft;
-        return true;
-      },
-    }),
-  );
 }
 
 function moveTableCellOrWord(

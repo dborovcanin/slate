@@ -1,19 +1,12 @@
 import {
   Annotation,
-  EditorState,
   RangeSetBuilder,
-  StateEffect,
-  StateField,
   type Text,
 } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import {
-  getTableCellEvaluationMap,
-  getTableCellEvaluationMapFromState,
-  variableIndexField,
-} from "./calc-decoration.ts";
-import type { TableCellEvaluation, VariableIndexEntry } from "../api.ts";
+import { variableIndexField } from "./calc-decoration.ts";
+import type { VariableIndexEntry } from "../api.ts";
 import { resolveNoteImagePaths, resolveWikiLinks } from "../api.ts";
 import { state } from "../state.ts";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -25,14 +18,11 @@ import {
   markdownFindInlineTokens,
   markdownInlineMarkerComponentRanges,
   markdownTokenizeCodeLine,
-  calcFormatFormulaDisplayValue,
   type MarkdownCodeToken as SharedCodeToken,
   type MarkdownInlineMarkerComponentRange as SharedInlineMarkerComponentRange,
   type MarkdownInlineToken as SharedInlineToken,
   type MarkdownLineInfo as SharedMarkdownLineInfo,
 } from "./wasm.ts";
-import { formatTableLines } from "./core/markdown-table.ts";
-import { handleImagePasteAtPosition } from "./image-import.ts";
 import {
   editorProfilerNowMs,
   isEditorProfilerEnabled,
@@ -264,61 +254,6 @@ class MarkdownImageDisplayWidget extends WidgetType {
     figure.appendChild(caption);
     return figure;
   }
-}
-
-function parseTableCells(lineText: string): string[] {
-  const trimmed = lineText.trim();
-  if (!trimmed.startsWith("|") || !trimmed.endsWith("|")) return [];
-  const continuation = trimmed.startsWith("|>");
-  let inner = trimmed.slice(continuation ? 2 : 1, -1);
-  if (continuation) {
-    inner = inner.replace(/^\s/, "");
-  }
-  const cells: string[] = [];
-  let current = "";
-  for (let i = 0; i < inner.length; i++) {
-    const ch = inner[i]!;
-    if (ch === "\\" && i + 1 < inner.length && inner[i + 1] === "|") {
-      current += "\\|";
-      i += 1;
-      continue;
-    }
-    if (ch === "|") {
-      cells.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  cells.push(current.trim());
-  return cells;
-}
-
-function isEscapedPipe(text: string, index: number): boolean {
-  if (index <= 0 || text[index] !== "|") return false;
-  let slashCount = 0;
-  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) {
-    slashCount += 1;
-  }
-  return slashCount % 2 === 1;
-}
-
-function isTableContinuationLine(lineText: string): boolean {
-  return /^\s*\|>/.test(lineText);
-}
-
-function escapeTableCell(value: string): string {
-  const normalized = value.replace(/\r?\n/g, " ").trim();
-  let out = "";
-  for (let i = 0; i < normalized.length; i += 1) {
-    const ch = normalized[i]!;
-    if (ch === "|" && !isEscapedPipe(normalized, i)) {
-      out += "\\|";
-      continue;
-    }
-    out += ch;
-  }
-  return out;
 }
 
 const decVariable = Decoration.mark({ class: "md-variable" });
@@ -748,8 +683,6 @@ function emitWikiLinkDecorations(
   wl: WLAccum,
   closingMarkerFrom: number,
   closingMarkerTo: number,
-  lineText: string,
-  lineFrom: number,
   wikiLinkResolver: ((shortId: string) => WikiLinkResolution | null) | undefined,
   pending: PendingDecoration[],
 ): void {
@@ -976,7 +909,7 @@ function collectInlineDecorations(
           };
         } else {
           // Closing ]]
-          emitWikiLinkDecorations(wlAccum, from, to, lineText, lineFrom, wikiLinkResolver, pending);
+          emitWikiLinkDecorations(wlAccum, from, to, wikiLinkResolver, pending);
           wlAccum = null;
         }
         break;

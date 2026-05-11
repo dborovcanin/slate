@@ -414,17 +414,6 @@
   color: var(--fg);
 }
 
-.md-checklist-token {
-  display: inline-block;
-  width: 0;
-  overflow: hidden;
-  color: transparent;
-  opacity: 0;
-  font-size: 0;
-  user-select: none;
-  pointer-events: none;
-}
-
 .md-hidden-token {
   color: transparent;
   opacity: 0;
