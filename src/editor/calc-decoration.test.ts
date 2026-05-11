@@ -15,6 +15,7 @@ import {
   formatFormulaDisplayValue,
   lineUsesAssignmentGhostPrefix,
   mergePartialCalcResults,
+  mergeTableCellResults,
   patchLineArrayForDocChange,
   remapCalcResultsForDocChange,
   remapVariableIndexForDocChange,
@@ -212,6 +213,48 @@ test("mergePartialCalcResults deletes entries when backend returns null in range
   assert.equal(merged.has(1), false);
   assert.equal(merged.get(0), "4");
   assert.equal(merged.get(2), "9");
+});
+
+test("mergeTableCellResults keeps previous formula cell values when partial result is temporarily empty", () => {
+  const previous = new Map<number, { cell_index: number; value: string; error_kind: null }[]>([
+    [1, [{ cell_index: 1, value: "42", error_kind: null }]],
+  ]);
+  const lines = ["| a | b |", "| row | :=avg_col() |"];
+  const evalCells: { cell_index: number; value: string; error_kind: null }[][] = [[], []];
+  const merged = mergeTableCellResults(previous, lines, evalCells, 1, 2, true);
+  assert.equal(merged.get(1)?.[0]?.value, "42");
+});
+
+test("mergeTableCellResults drops stale values when line is no longer a formula line", () => {
+  const previous = new Map<number, { cell_index: number; value: string; error_kind: null }[]>([
+    [1, [{ cell_index: 1, value: "42", error_kind: null }]],
+  ]);
+  const lines = ["| a | b |", "| row | plain text |"];
+  const evalCells: { cell_index: number; value: string; error_kind: null }[][] = [[], []];
+  const merged = mergeTableCellResults(previous, lines, evalCells, 1, 2, true);
+  assert.equal(merged.has(1), false);
+});
+
+test("mergeTableCellResults keeps previous cell values when partial update returns subset", () => {
+  const previous = new Map<number, { cell_index: number; value: string; error_kind: null }[]>([
+    [
+      1,
+      [
+        { cell_index: 1, value: "10", error_kind: null },
+        { cell_index: 2, value: "20", error_kind: null },
+      ],
+    ],
+  ]);
+  const lines = ["| a | b | c |", "| row | :=avg_col() | :=sum_col() |"];
+  const evalCells: { cell_index: number; value: string; error_kind: null }[][] = [
+    [],
+    [{ cell_index: 1, value: "11", error_kind: null }],
+  ];
+  const merged = mergeTableCellResults(previous, lines, evalCells, 1, 2, true);
+  assert.deepEqual(merged.get(1), [
+    { cell_index: 1, value: "11", error_kind: null },
+    { cell_index: 2, value: "20", error_kind: null },
+  ]);
 });
 
 test("patchLineArrayForDocChange applies single-line replacement", () => {

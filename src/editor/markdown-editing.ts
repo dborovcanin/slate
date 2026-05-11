@@ -172,9 +172,36 @@ function tableCellNavigationAnchorInLine(cell: TableCellInfo): number {
   return Math.min(cellStart + cell.trimEnd, cell.rightPipe);
 }
 
-function shouldDeferTableAutoformatForSpace(update: ViewUpdate): boolean {
-  void update;
-  return false;
+function insertedTextFromPureInsert(update: ViewUpdate): string | null {
+  let inserted = "";
+  let changeCount = 0;
+  let hasDeletion = false;
+  for (const tr of update.transactions) {
+    tr.changes.iterChanges((fromA, toA, _fromB, _toB, text) => {
+      changeCount += 1;
+      if (fromA !== toA) hasDeletion = true;
+      inserted += text.toString();
+    });
+  }
+  if (hasDeletion || changeCount !== 1 || inserted.length === 0) return null;
+  return inserted;
+}
+
+function shouldDeferTableAutoformatForInsertion(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  if (insertedTextFromPureInsert(update) === null) return false;
+  const main = update.state.selection.main;
+  if (!main.empty) return false;
+  const line = update.state.doc.lineAt(main.head);
+  if (!isMarkdownTableLine(line.text)) return false;
+  const cell = tableCellAtStatePosition(update.state, main.head);
+  if (!cell) return false;
+  const anchor = tableCellNavigationAnchorInLine(cell);
+  const colInLine = Math.max(0, Math.min(main.head - line.from, line.text.length));
+  // Defer table autoformat in the right-edge edit zone for any typed text.
+  // This keeps inline edits stable (including trailing spaces) instead of
+  // immediately normalizing them back to formatter padding.
+  return colInLine > anchor && colInLine <= cell.rightPipe;
 }
 
 function lineMightTriggerDocChangeRules(line: string): boolean {
@@ -817,7 +844,7 @@ function textRulesPlugin(
     return {
       update(update: ViewUpdate) {
         if (applying || !update.docChanged) return;
-        if (shouldDeferTableAutoformatForSpace(update)) return;
+        if (shouldDeferTableAutoformatForInsertion(update)) return;
         if (update.transactions.some((tr) => tr.isUserEvent("table.cell.edit"))) return;
         if (!updateMightTriggerDocChangeRules(update)) return;
         const changedRange = changedRangeFromChanges(update.changes);
@@ -922,7 +949,7 @@ function tableCursorPaddingGuard() {
   return ViewPlugin.define(() => ({
     update(update: ViewUpdate) {
       if (!update.selectionSet) return;
-      if (shouldDeferTableAutoformatForSpace(update)) return;
+      if (shouldDeferTableAutoformatForInsertion(update)) return;
       const main = update.state.selection.main;
       if (!main.empty) return;
       const clamped = clampTableCursorToContent(update.state, main.head);

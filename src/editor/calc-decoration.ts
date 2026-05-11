@@ -59,7 +59,7 @@ const MAX_CALC_EVAL_LINES = 200_000;
 const MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE = 512;
 const MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE = 2_000;
 const CALC_EVAL_DELAY_MS = 150;
-const CALC_TABLE_EDIT_EVAL_DELAY_MS = 24;
+const CALC_TABLE_EDIT_EVAL_DELAY_MS = CALC_EVAL_DELAY_MS;
 
 // Pure cache: lineText → TableFormulaSegment[]. Results are deterministic so
 // no invalidation is needed — a changed line produces a different key.
@@ -925,6 +925,55 @@ export function mergePartialCalcResults(
   return next;
 }
 
+export function mergeTableCellResults(
+  prevResults: ReadonlyMap<number, TableCellEvaluation[]>,
+  nextLines: readonly string[],
+  lineResults: readonly TableCellEvaluation[][],
+  evalFrom: number,
+  evalTo: number,
+  canUsePartial: boolean,
+): Map<number, TableCellEvaluation[]> {
+  const next = new Map(prevResults);
+  const from = canUsePartial ? Math.max(0, evalFrom) : 0;
+  const to = canUsePartial ? Math.min(nextLines.length, evalTo) : nextLines.length;
+  for (let i = from; i < to; i++) {
+    const segments = cachedCalcFindTableFormulaSegments(nextLines[i] ?? "");
+    if (segments.length === 0) {
+      next.delete(i);
+      continue;
+    }
+    const expected = new Set<number>(segments.map((s) => s.cellIndex));
+    const previousLine = next.get(i) ?? [];
+    const cells = lineResults[i];
+    if (cells && cells.length > 0) {
+      const byCell = new Map<number, TableCellEvaluation>();
+      for (const prev of previousLine) {
+        if (expected.has(prev.cell_index)) byCell.set(prev.cell_index, prev);
+      }
+      for (const cell of cells) {
+        if (expected.has(cell.cell_index)) byCell.set(cell.cell_index, cell);
+      }
+      const merged = segments
+        .map((seg) => byCell.get(seg.cellIndex))
+        .filter((cell): cell is TableCellEvaluation => cell != null);
+      if (merged.length > 0) {
+        next.set(i, merged);
+      } else {
+        next.delete(i);
+      }
+      continue;
+    }
+
+    const retained = previousLine.filter((cell) => expected.has(cell.cell_index));
+    if (retained.length > 0) {
+      next.set(i, retained);
+    } else {
+      next.delete(i);
+    }
+  }
+  return next;
+}
+
 interface ChangedRange {
   fromA: number;
   toA: number;
@@ -1483,23 +1532,14 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           // state field and remapped through doc changes).
           const evalCellResults = evaluated.table_cell_results;
           const prevCellResults = view.state.field(cellCalcResultsField);
-          const nextCellMap = canUsePartial ? new Map(prevCellResults) : new Map();
-          if (canUsePartial) {
-            for (let i = evalFrom; i < evalTo; i++) {
-              const cells = evalCellResults[i];
-              if (cells && cells.length > 0) {
-                nextCellMap.set(i, cells);
-              } else {
-                nextCellMap.delete(i);
-              }
-            }
-          } else {
-            evalCellResults.forEach((cells, lineIndex) => {
-              if (cells && cells.length > 0) {
-                nextCellMap.set(lineIndex, cells);
-              }
-            });
-          }
+          const nextCellMap = mergeTableCellResults(
+            prevCellResults,
+            nextLines,
+            evalCellResults,
+            evalFrom,
+            evalTo,
+            canUsePartial,
+          );
 
           // Compute refresh plan for committed trailers. Collect markers in
           // doc order (which is line order) via RangeSet.between so the
