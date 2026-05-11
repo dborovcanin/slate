@@ -11,12 +11,14 @@ use image::GenericImageView as _;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 #[cfg(feature = "gui")]
 use tauri::State;
+use ttf_parser::Face;
 use url::Url;
 
 const PDF_PAGE_WIDTH_PT: f32 = 595.0;
@@ -276,6 +278,22 @@ struct Page {
     used_images: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct PdfUnicodeFontAsset {
+    bytes: Vec<u8>,
+    units_per_em: u16,
+    ascent: i16,
+    descent: i16,
+    cap_height: i16,
+    bbox_min_x: i16,
+    bbox_min_y: i16,
+    bbox_max_x: i16,
+    bbox_max_y: i16,
+    flags: u32,
+    stem_v: i32,
+    fallback_gid: u16,
+}
+
 fn resolve_export_path(path: &str) -> Result<PathBuf, String> {
     let raw = path.trim().trim_matches(|c| c == '"' || c == '\'');
     if raw.is_empty() {
@@ -348,6 +366,74 @@ fn resolve_home_dir() -> Option<PathBuf> {
         }
         _ => None,
     }
+}
+
+fn default_unicode_font_candidates() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+        PathBuf::from("/usr/share/fonts/TTF/DejaVuSans.ttf"),
+        PathBuf::from("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf"),
+        PathBuf::from("/usr/share/fonts/noto/NotoSans-Regular.ttf"),
+        PathBuf::from("/Library/Fonts/Arial Unicode.ttf"),
+        PathBuf::from("/Library/Fonts/Arial Unicode MS.ttf"),
+        PathBuf::from("/System/Library/Fonts/Supplemental/Arial Unicode.ttf"),
+        PathBuf::from("C:\\Windows\\Fonts\\arialuni.ttf"),
+        PathBuf::from("C:\\Windows\\Fonts\\seguiemj.ttf"),
+        PathBuf::from("C:\\Windows\\Fonts\\segoeui.ttf"),
+    ]
+}
+
+fn load_unicode_pdf_font_asset() -> Option<PdfUnicodeFontAsset> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(path) = env::var_os("SLATE_PDF_UNICODE_FONT") {
+        let candidate = PathBuf::from(path);
+        if !candidate.as_os_str().is_empty() {
+            candidates.push(candidate);
+        }
+    }
+    candidates.extend(default_unicode_font_candidates());
+
+    for path in candidates {
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(face) = Face::parse(&bytes, 0) else {
+            continue;
+        };
+        let bbox = face.global_bounding_box();
+        let mut flags = 32u32; // Nonsymbolic
+        if face.is_monospaced() {
+            flags |= 1;
+        }
+        if face.is_italic() {
+            flags |= 64;
+        }
+        let fallback_gid = face.glyph_index('?').map(|id| id.0).unwrap_or(0);
+        let units_per_em = face.units_per_em();
+        let ascent = face.ascender();
+        let descent = face.descender();
+        let cap_height = face.capital_height().unwrap_or(face.ascender());
+        return Some(PdfUnicodeFontAsset {
+            bytes,
+            units_per_em,
+            ascent,
+            descent,
+            cap_height,
+            bbox_min_x: bbox.x_min,
+            bbox_min_y: bbox.y_min,
+            bbox_max_x: bbox.x_max,
+            bbox_max_y: bbox.y_max,
+            flags,
+            stem_v: 80,
+            fallback_gid,
+        });
+    }
+    None
+}
+
+fn resolve_unicode_pdf_font_asset() -> Option<PdfUnicodeFontAsset> {
+    static CACHE: OnceLock<Option<PdfUnicodeFontAsset>> = OnceLock::new();
+    CACHE.get_or_init(load_unicode_pdf_font_asset).clone()
 }
 
 #[cfg(feature = "gui")]
@@ -1682,10 +1768,31 @@ fn serialize_pdf(
     pages: Vec<Page>,
     image_assets: Vec<(String, PdfImageObject)>,
 ) -> Result<Vec<u8>, String> {
+    let unicode_font = resolve_unicode_pdf_font_asset();
     let page_count = pages.len().max(1);
+    let actual_pages = if pages.is_empty() {
+        vec![Page::default()]
+    } else {
+        pages
+    };
+
+    let mut next_object_id = 8usize;
+    let unicode_ids = if unicode_font.is_some() {
+        let ids = (
+            next_object_id,
+            next_object_id + 1,
+            next_object_id + 2,
+            next_object_id + 3,
+            next_object_id + 4,
+        );
+        next_object_id += 5;
+        Some(ids)
+    } else {
+        None
+    };
 
     let image_count = image_assets.len();
-    let image_first_id = 8usize;
+    let image_first_id = next_object_id;
     let page_first_id = image_first_id + image_count;
 
     let mut image_obj_id_by_name: HashMap<String, usize> = HashMap::new();
@@ -1716,6 +1823,73 @@ fn serialize_pdf(
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>\n".to_vec());
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >>\n".to_vec());
 
+    let mut unicode_cmap: HashMap<u16, char> = HashMap::new();
+    let streams: Vec<String> = actual_pages
+        .iter()
+        .map(|page| page_stream(page, unicode_font.as_ref(), &mut unicode_cmap))
+        .collect();
+
+    if let (Some(font), Some((type0_id, cid_id, descriptor_id, font_file_id, to_unicode_id))) =
+        (unicode_font.as_ref(), unicode_ids)
+    {
+        let base_font_name = "SlateUnicode";
+        objects.push(
+            format!(
+                "<< /Type /Font /Subtype /Type0 /BaseFont /{} /Encoding /Identity-H /DescendantFonts [{} 0 R] /ToUnicode {} 0 R >>\n",
+                base_font_name, cid_id, to_unicode_id
+            )
+            .into_bytes(),
+        );
+        let default_width = 1000i32;
+        objects.push(
+            format!(
+                "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /{} /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor {} 0 R /CIDToGIDMap /Identity /DW {} >>\n",
+                base_font_name, descriptor_id, default_width
+            )
+            .into_bytes(),
+        );
+        let scale = 1000.0f32 / (font.units_per_em as f32);
+        let ascent = (font.ascent as f32 * scale).round() as i32;
+        let descent = (font.descent as f32 * scale).round() as i32;
+        let cap_height = (font.cap_height as f32 * scale).round() as i32;
+        let bbox_min_x = (font.bbox_min_x as f32 * scale).round() as i32;
+        let bbox_min_y = (font.bbox_min_y as f32 * scale).round() as i32;
+        let bbox_max_x = (font.bbox_max_x as f32 * scale).round() as i32;
+        let bbox_max_y = (font.bbox_max_y as f32 * scale).round() as i32;
+        objects.push(
+            format!(
+                "<< /Type /FontDescriptor /FontName /{} /Flags {} /FontBBox [{} {} {} {}] /ItalicAngle 0 /Ascent {} /Descent {} /CapHeight {} /StemV {} /FontFile2 {} 0 R >>\n",
+                base_font_name,
+                font.flags,
+                bbox_min_x,
+                bbox_min_y,
+                bbox_max_x,
+                bbox_max_y,
+                ascent,
+                descent,
+                cap_height,
+                font.stem_v,
+                font_file_id
+            )
+            .into_bytes(),
+        );
+        let mut font_stream =
+            format!("<< /Length {} /Length1 {} >>\nstream\n", font.bytes.len(), font.bytes.len())
+                .into_bytes();
+        font_stream.extend_from_slice(&font.bytes);
+        font_stream.extend_from_slice(b"\nendstream\n");
+        objects.push(font_stream);
+        let to_unicode_stream = build_to_unicode_cmap(&unicode_cmap);
+        let mut to_unicode_obj =
+            format!("<< /Length {} >>\nstream\n", to_unicode_stream.len()).into_bytes();
+        to_unicode_obj.extend_from_slice(&to_unicode_stream);
+        to_unicode_obj.extend_from_slice(b"\nendstream\n");
+        objects.push(to_unicode_obj);
+
+        debug_assert_eq!(type0_id, 8);
+        debug_assert_eq!(cid_id, 9);
+    }
+
     for (_, image) in &image_assets {
         let mut body = format!(
             "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
@@ -1728,12 +1902,6 @@ fn serialize_pdf(
         body.extend_from_slice(b"\nendstream\n");
         objects.push(body);
     }
-
-    let actual_pages = if pages.is_empty() {
-        vec![Page::default()]
-    } else {
-        pages
-    };
 
     for (idx, page) in actual_pages.iter().enumerate() {
         let page_obj_id = page_first_id + (idx * 2);
@@ -1750,25 +1918,35 @@ fn serialize_pdf(
         } else {
             format!(" /XObject << {xobjects} >>")
         };
+        let unicode_font_section = if let Some((type0_id, _, _, _, _)) = unicode_ids {
+            format!(" /F6 {} 0 R", type0_id)
+        } else {
+            String::new()
+        };
 
         objects.push(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PDF_PAGE_WIDTH_PT:.0} {PDF_PAGE_HEIGHT_PT:.0}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R /F5 7 0 R >>{xobject_section} >> /Contents {content_obj_id} 0 R >>\n"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {PDF_PAGE_WIDTH_PT:.0} {PDF_PAGE_HEIGHT_PT:.0}] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R /F5 7 0 R{unicode_font_section} >>{xobject_section} >> /Contents {content_obj_id} 0 R >>\n"
             )
             .into_bytes(),
         );
 
-        let stream = page_stream(page);
+        let stream = &streams[idx];
         let mut content_obj = format!("<< /Length {} >>\nstream\n", stream.len()).into_bytes();
         content_obj.extend_from_slice(stream.as_bytes());
         content_obj.extend_from_slice(b"\nendstream\n");
         objects.push(content_obj);
     }
 
+    debug_assert_eq!(actual_pages.len(), page_count);
     serialize_objects(objects)
 }
 
-fn page_stream(page: &Page) -> String {
+fn page_stream(
+    page: &Page,
+    unicode_font: Option<&PdfUnicodeFontAsset>,
+    unicode_cmap: &mut HashMap<u16, char>,
+) -> String {
     let mut out = String::new();
     for op in &page.ops {
         match op {
@@ -1781,13 +1959,24 @@ fn page_stream(page: &Page) -> String {
                 text,
             } => {
                 let (r, g, b) = color.as_pdf_rgb();
-                let encoded = encode_pdf_text_bytes(text);
+                let (font_resource, encoded) = if let Some(unicode) = unicode_font {
+                    if text_requires_unicode_font(text) {
+                        (
+                            "F6",
+                            encode_pdf_unicode_text_bytes(text, unicode, unicode_cmap),
+                        )
+                    } else {
+                        (font.resource_name(), encode_pdf_text_bytes(text))
+                    }
+                } else {
+                    (font.resource_name(), encode_pdf_text_bytes(text))
+                };
                 if encoded.is_empty() {
                     continue;
                 }
                 let hex = encode_pdf_hex_string(&encoded);
                 out.push_str("BT\n");
-                out.push_str(&format!("/{} {:.2} Tf\n", font.resource_name(), size));
+                out.push_str(&format!("/{} {:.2} Tf\n", font_resource, size));
                 out.push_str(&format!("{r:.4} {g:.4} {b:.4} rg\n"));
                 out.push_str(&format!("1 0 0 1 {:.2} {:.2} Tm <{}> Tj\n", x, y, hex));
                 out.push_str("ET\n");
@@ -1915,6 +2104,79 @@ fn unicode_to_winansi_byte(ch: char) -> Option<u8> {
         0x0178 => Some(0x9f), // Ÿ
         _ => None,
     }
+}
+
+fn text_requires_unicode_font(text: &str) -> bool {
+    text.chars()
+        .any(|ch| unicode_to_winansi_byte(ch).is_none() && !ch.is_ascii_control())
+}
+
+fn encode_pdf_unicode_text_bytes(
+    input: &str,
+    font: &PdfUnicodeFontAsset,
+    unicode_cmap: &mut HashMap<u16, char>,
+) -> Vec<u8> {
+    let Ok(face) = Face::parse(&font.bytes, 0) else {
+        return Vec::new();
+    };
+    let mut out = Vec::with_capacity(input.chars().count() * 2);
+    for ch in input.chars() {
+        if ch.is_ascii_control() && ch != '\t' && ch != ' ' {
+            continue;
+        }
+        let normalized = if ch == '\u{00a0}' { ' ' } else { ch };
+        let gid = face
+            .glyph_index(normalized)
+            .map(|id| id.0)
+            .or_else(|| face.glyph_index('?').map(|id| id.0))
+            .unwrap_or(font.fallback_gid);
+        out.push((gid >> 8) as u8);
+        out.push((gid & 0xff) as u8);
+        unicode_cmap.entry(gid).or_insert(normalized);
+    }
+    out
+}
+
+fn utf16be_hex_for_char(ch: char) -> String {
+    let mut out = String::new();
+    let code = ch as u32;
+    if code <= 0xFFFF {
+        out.push_str(&format!("{:04X}", code));
+        return out;
+    }
+    let scalar = code - 0x1_0000;
+    let high = 0xD800 + ((scalar >> 10) as u16);
+    let low = 0xDC00 + ((scalar & 0x3FF) as u16);
+    out.push_str(&format!("{:04X}{:04X}", high, low));
+    out
+}
+
+fn build_to_unicode_cmap(unicode_cmap: &HashMap<u16, char>) -> Vec<u8> {
+    let mut entries: Vec<(u16, char)> = unicode_cmap.iter().map(|(k, v)| (*k, *v)).collect();
+    entries.sort_by_key(|(gid, _)| *gid);
+    let mut out = String::new();
+    out.push_str("/CIDInit /ProcSet findresource begin\n");
+    out.push_str("12 dict begin\n");
+    out.push_str("begincmap\n");
+    out.push_str("/CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> def\n");
+    out.push_str("/CMapName /SlateUnicodeToUnicode def\n");
+    out.push_str("/CMapType 2 def\n");
+    out.push_str("1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n");
+    if entries.is_empty() {
+        out.push_str("0 beginbfchar\nendbfchar\n");
+    } else {
+        for chunk in entries.chunks(100) {
+            out.push_str(&format!("{} beginbfchar\n", chunk.len()));
+            for (gid, ch) in chunk {
+                out.push_str(&format!("<{:04X}> <{}>\n", gid, utf16be_hex_for_char(*ch)));
+            }
+            out.push_str("endbfchar\n");
+        }
+    }
+    out.push_str("endcmap\n");
+    out.push_str("CMapName currentdict /CMap defineresource pop\n");
+    out.push_str("end\nend\n");
+    out.into_bytes()
 }
 
 #[cfg(test)]
@@ -2151,6 +2413,27 @@ mod tests {
             .expect("pdf generation should succeed");
         let text = String::from_utf8_lossy(&bytes);
         assert!(text.contains("<5469746C65> Tj"));
+    }
+
+    #[test]
+    fn text_requires_unicode_font_flags_non_winansi() {
+        assert!(!text_requires_unicode_font("hello"));
+        assert!(text_requires_unicode_font("Привет"));
+        assert!(text_requires_unicode_font("你好"));
+    }
+
+    #[test]
+    fn markdown_pdf_uses_unicode_font_for_non_winansi_when_available() {
+        if resolve_unicode_pdf_font_asset().is_none() {
+            return;
+        }
+        let source = "Unicode: Привет 你好";
+        let bytes = build_markdown_pdf(source, &PdfExportPalette::default(), |_| None)
+            .expect("pdf generation should succeed");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("/Subtype /Type0"));
+        assert!(text.contains("/Subtype /CIDFontType2"));
+        assert!(text.contains("/F6"));
     }
 
     fn pdf_contains_text(pdf_text: &str, text: &str) -> bool {
