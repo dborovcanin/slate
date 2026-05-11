@@ -1,0 +1,34 @@
+pkgname=slate-bin
+pkgver=0.2.0.r0.g0000000
+pkgrel=1
+pkgdesc="Minimal, keyboard-first note-taking scratchpad (prebuilt binary)"
+arch=("x86_64")
+url="https://github.com/dborovcanin/slate"
+license=("custom")
+depends=(
+  "cairo"
+  "desktop-file-utils"
+  "gdk-pixbuf2"
+  "glib2"
+  "gtk3"
+  "hicolor-icon-theme"
+  "libsoup3"
+  "pango"
+  "webkit2gtk-4.1"
+)
+provides=("slate")
+conflicts=("slate" "slate-git")
+source=(
+  "slate-${pkgver}-linux-x86_64.tar.gz::https://github.com/dborovcanin/slate/releases/download/aur-bin/slate-${pkgver}-linux-x86_64.tar.gz"
+  "slate.desktop"
+)
+sha256sums=(
+  "REPLACE_WITH_CI_SHA256"
+  "a8499b67a79500cae96ff79204a00a6df294e4987abe6063c20b311ea146f19d"
+)
+
+package() {
+  install -Dm755 "slate" "${pkgdir}/usr/bin/slate"
+  install -Dm644 "${srcdir}/slate.desktop" "${pkgdir}/usr/share/applications/slate.desktop"
+  install -Dm644 "slate.png" "${pkgdir}/usr/share/pixmaps/slate.png"
+}

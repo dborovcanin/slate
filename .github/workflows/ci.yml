@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -54,6 +57,60 @@ jobs:
       - name: Run tests
         run: npm run test
 
+  build-linux-binary:
+    name: Build Linux Binary
+    needs: test-linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: slate-${{ runner.os }}-rust
+          cache-workspace-crates: true
+          workspaces: |
+            . -> target
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@wasm-pack
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build release binary (Tauri, no bundle)
+        run: npm run tauri build -- --no-bundle --ci
+
+      - name: Upload Linux binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: slate-linux
+          path: |
+            target/release/slate
+            src-tauri/target/release/slate
+          if-no-files-found: error
+
   build-binaries:
     name: Build Binary (${{ matrix.os }})
     needs: test-linux
@@ -62,7 +119,6 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-latest
           - windows-latest
           - macos-latest
 
@@ -87,26 +143,11 @@ jobs:
           workspaces: |
             . -> target
 
-      - name: Install Linux system dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            patchelf
-
       - name: Install wasm-pack
         uses: taiki-e/install-action@wasm-pack
 
       - name: Install npm dependencies
         run: npm ci
-
-      - name: Build release binary (Tauri, no bundle)
-        if: runner.os == 'Linux'
-        run: npm run tauri build -- --no-bundle --ci
 
       - name: Build macOS DMG bundle
         if: runner.os == 'macOS'
@@ -152,16 +193,6 @@ jobs:
         if: runner.os == 'Windows'
         run: npm run tauri build -- --bundles nsis --ci
 
-      - name: Upload Linux binary
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
-        with:
-          name: slate-linux
-          path: |
-            target/release/slate
-            src-tauri/target/release/slate
-          if-no-files-found: error
-
       - name: Upload macOS binary
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
@@ -201,3 +232,115 @@ jobs:
             target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
+
+  publish-aur-bin:
+    name: Publish AUR Binary
+    needs: build-linux-binary
+    if: ${{ secrets.GH_AUR_KEY != '' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: slate-linux
+          path: .tmp/slate-linux
+
+      - name: Package binary artifact
+        id: package
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -n1)"
+          rev_count="$(git rev-list --count HEAD)"
+          rev_short="$(git rev-parse --short HEAD)"
+          pkgver="${version}.r${rev_count}.g${rev_short}"
+          artifact_path=".tmp/slate-${pkgver}-linux-x86_64.tar.gz"
+          binary_path="$(find .tmp/slate-linux -type f -name slate -print -quit)"
+          if [ -z "${binary_path}" ]; then
+            echo "::error::Could not find Linux slate binary in artifact payload"
+            exit 1
+          fi
+          tmpdir="$(mktemp -d)"
+          install -Dm755 "${binary_path}" "${tmpdir}/slate"
+          install -Dm644 "slate.png" "${tmpdir}/slate.png"
+          tar -C "${tmpdir}" -czf "${artifact_path}" slate slate.png
+          sha256="$(sha256sum "${artifact_path}" | awk '{print $1}')"
+          echo "pkgver=${pkgver}" >> "${GITHUB_OUTPUT}"
+          echo "artifact_path=${artifact_path}" >> "${GITHUB_OUTPUT}"
+          echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish rolling release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! gh release view aur-bin >/dev/null 2>&1; then
+            gh release create aur-bin --title "AUR binary feed" --notes "Rolling assets for AUR slate-bin packaging."
+          fi
+          gh release upload aur-bin "${{ steps.package.outputs.artifact_path }}" --clobber
+
+      - name: Update AUR PKGBUILD metadata
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          pkgbuild_path = Path("packaging/aur/slate-bin/PKGBUILD")
+          text = pkgbuild_path.read_text()
+          pkgver = "${{ steps.package.outputs.pkgver }}"
+          sha256 = "${{ steps.package.outputs.sha256 }}"
+
+          text = re.sub(r"^pkgver=.*$", f"pkgver={pkgver}", text, flags=re.MULTILINE)
+          text = re.sub(
+            r'(sha256sums=\(\n\s*")([^"]+)(")',
+            rf'\g<1>{sha256}\g<3>',
+            text,
+            count=1,
+          )
+          pkgbuild_path.write_text(text)
+          PY
+
+      - name: Regenerate .SRCINFO
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${PWD}:/work" \
+            -w /work \
+            archlinux:base-devel \
+            bash -lc "cd packaging/aur/slate-bin && makepkg --printsrcinfo > .SRCINFO"
+
+      - name: Push to AUR
+        env:
+          GH_AUR_KEY: ${{ secrets.GH_AUR_KEY }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${GH_AUR_KEY}" > ~/.ssh/aur_key
+          chmod 600 ~/.ssh/aur_key
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur_key -o IdentitiesOnly=yes"
+          aur_dir="$(mktemp -d)"
+          git clone "ssh://aur@aur.archlinux.org/slate-bin.git" "${aur_dir}"
+
+          install -Dm644 packaging/aur/slate-bin/PKGBUILD "${aur_dir}/PKGBUILD"
+          install -Dm644 packaging/aur/slate-bin/.SRCINFO "${aur_dir}/.SRCINFO"
+          install -Dm644 packaging/aur/slate-bin/slate.desktop "${aur_dir}/slate.desktop"
+
+          cd "${aur_dir}"
+          if git diff --quiet; then
+            echo "No AUR changes to publish."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO slate.desktop
+          git commit -m "Update slate-bin to ${{ steps.package.outputs.pkgver }}"
+          git push origin master

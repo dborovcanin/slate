@@ -216,6 +216,7 @@ make install
 This repo includes AUR packaging scripts under `packaging/aur/`:
 
 - `packaging/aur/slate-git/` (builds from latest GitHub `main`)
+- `packaging/aur/slate-bin/` (installs prebuilt Linux binary from GitHub releases)
 
 Build locally with:
 
@@ -229,6 +230,9 @@ Refresh package metadata with:
 ```sh
 ./packaging/aur/update-srcinfo.sh
 ```
+
+CI can publish `slate-bin` to AUR via `.github/workflows/ci.yml` when the `GH_AUR_KEY`
+GitHub secret is configured with an SSH private key registered in your AUR account.
 
 ### Cross-platform release artifacts
 
