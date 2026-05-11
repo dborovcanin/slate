@@ -73,6 +73,8 @@ Supported and tested core motions/actions include:
 - edit actions: `x`, `dd`, `cw`, `cc`, `C`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 - yank/delete with counts: examples `yy`, `3yy`, `d2w`, `yaw`
 - macros (normal + insert flows): `q<register>` start, `q` stop, `@<register>` replay, `3@a` counted replay
+- macro pending cancel: `Esc` cancels pending register input after `q` or `@`
+- macro status summary: `Q` (normal mode) prints recorded macro registers + step counts
 - fold toggle: `za`
 - wiki-link navigation: `gd`
 

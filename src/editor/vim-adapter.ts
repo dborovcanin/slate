@@ -9,7 +9,9 @@ import {
 export type UiVimEventInput = Pick<
   KeyboardEvent,
   "key" | "code" | "ctrlKey" | "altKey" | "metaKey"
->;
+> & {
+  getModifierState?: (keyArg: string) => boolean;
+};
 
 export interface UiVimPipelineContext {
   hasSearchMatches: boolean;
@@ -32,6 +34,7 @@ function firstCodePoint(value: string): number | null {
 export function toUiVimKeyInput(event: UiVimEventInput): VimKeyInput | null {
   const key = event.key;
   const code = event.code;
+  const altGraphActive = event.getModifierState?.("AltGraph") === true;
 
   if (key === "Escape" || key === "Esc" || code === "Escape") {
     return { kind: VIM_KEY_KIND.ESC };
@@ -69,7 +72,8 @@ export function toUiVimKeyInput(event: UiVimEventInput): VimKeyInput | null {
     return null;
   }
 
-  if (isPlain && key.length === 1) {
+  const isAltGraphChar = altGraphActive && !event.metaKey && key.length === 1;
+  if ((isPlain || isAltGraphChar) && key.length === 1) {
     const codePoint = firstCodePoint(key);
     if (codePoint !== null) {
       return { kind: VIM_KEY_KIND.CHAR, charCode: codePoint };

@@ -288,6 +288,7 @@ interface EditorMountOptions {
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
   onNavigateToNote?: (noteId: string, heading?: string) => void;
   onMacroRecordingChange?: (register: string | null) => void;
+  onVimStatusMessage?: (message: string) => void;
 }
 
 let currentFormatOnSave = false;
@@ -569,6 +570,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
           setNoteModules: options.setNoteModules,
           onNavigateToNote: options.onNavigateToNote,
           onMacroRecordingChange: options.onMacroRecordingChange,
+          onVimStatusMessage: options.onVimStatusMessage,
         }),
       ),
     );

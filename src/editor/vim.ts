@@ -1,16 +1,20 @@
 import {
   cursorCharLeft,
   cursorCharRight,
+  cursorGroupLeft,
+  cursorGroupRight,
   cursorLineDown,
   cursorLineEnd,
   cursorLineStart,
   cursorLineUp,
   deleteCharBackward,
   deleteCharForward,
+  deleteGroupBackward,
+  deleteGroupForward,
   redo,
   undo,
 } from "@codemirror/commands";
-import { EditorView } from "@codemirror/view";
+import { EditorView, ViewPlugin } from "@codemirror/view";
 import { isCommandPickerOpen, openCommandPicker } from "./command-picker";
 import type { NoteModules } from "../api.ts";
 import { toggleFoldAtCursor } from "./folding.ts";
@@ -57,6 +61,7 @@ interface VimOptions {
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
   onNavigateToNote?: (noteId: string, heading?: string) => void;
   onMacroRecordingChange?: (register: string | null) => void;
+  onVimStatusMessage?: (message: string) => void;
 }
 
 type VimRegisterMode = "charwise" | "linewise";
@@ -80,6 +85,25 @@ type MacroStep =
 
 const SHARED_VIM_FULL_DOC_MAX_BYTES = 200_000;
 const VIM_MACRO_REPLAY_STEP_BUDGET = 10_000;
+const VIM_MACRO_PENDING_RECORD = 1;
+const VIM_MACRO_PENDING_PLAY = 2;
+
+function isMacroRegisterChar(char: string | undefined): boolean {
+  if (!char || char.length === 0) return false;
+  return /^[A-Za-z0-9]$/.test(char.slice(0, 1));
+}
+
+function macroRegisterSummary(registers: Map<string, MacroStep[]>): string {
+  if (registers.size === 0) return "no recorded macros";
+  const entries = [...registers.entries()]
+    .map(([register, steps]) => [register, steps.length] as const)
+    .filter(([, steps]) => steps > 0)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) return "no recorded macros";
+  const preview = entries.slice(0, 6).map(([register, steps]) => `@${register}:${steps}`);
+  const remainder = entries.length > 6 ? ` +${entries.length - 6}` : "";
+  return `macros ${preview.join(" ")}${remainder}`;
+}
 
 function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
   switch (intent) {
@@ -384,33 +408,45 @@ function shouldSwallowInNormalLikeMode(event: KeyboardEvent): boolean {
 }
 
 function toRecordableInsertMacroEvent(event: KeyboardEvent): MacroInsertEvent | null {
-  if (event.ctrlKey || event.altKey || event.metaKey) return null;
+  if (event.metaKey) return null;
   const key = event.key;
   const code = event.code;
   const isNavigation =
     key === "ArrowUp" ||
     key === "ArrowDown" ||
     key === "ArrowLeft" ||
-    key === "ArrowRight";
+    key === "ArrowRight" ||
+    key === "Home" ||
+    key === "End";
   const isEditingKey =
     key === "Escape" ||
     key === "Enter" ||
     key === "Tab" ||
     key === "Backspace" ||
     key === "Delete";
+  const isWordNavigation =
+    (key === "ArrowLeft" || key === "ArrowRight") && (event.ctrlKey || event.altKey);
+  const isWordDelete =
+    (key === "Backspace" || key === "Delete") && (event.ctrlKey || event.altKey);
   const isChar = key.length === 1;
-  if (!isNavigation && !isEditingKey && !isChar) return null;
+  if (!isNavigation && !isEditingKey && !isChar && !isWordNavigation && !isWordDelete) return null;
+  if (event.ctrlKey || event.altKey) {
+    if (!isWordNavigation && !isWordDelete) {
+      return null;
+    }
+  }
   return {
     key,
     code,
-    ctrlKey: false,
-    altKey: false,
+    ctrlKey: !!event.ctrlKey,
+    altKey: !!event.altKey,
     metaKey: false,
   };
 }
 
 function applyInsertMacroEvent(view: EditorView, event: MacroInsertEvent): boolean {
   const key = event.key;
+  const wordMotion = event.ctrlKey || event.altKey;
   if (key.length === 1 && !event.ctrlKey && !event.altKey && !event.metaKey) {
     const sel = view.state.selection.main;
     view.dispatch({
@@ -421,6 +457,10 @@ function applyInsertMacroEvent(view: EditorView, event: MacroInsertEvent): boole
     return true;
   }
   switch (key) {
+    case "Home":
+      return cursorLineStart(view);
+    case "End":
+      return cursorLineEnd(view);
     case "Enter": {
       const sel = view.state.selection.main;
       view.dispatch({
@@ -440,16 +480,20 @@ function applyInsertMacroEvent(view: EditorView, event: MacroInsertEvent): boole
       return true;
     }
     case "Backspace":
+      if (wordMotion) return deleteGroupBackward(view);
       return deleteCharBackward(view);
     case "Delete":
+      if (wordMotion) return deleteGroupForward(view);
       return deleteCharForward(view);
     case "ArrowUp":
       return cursorLineUp(view);
     case "ArrowDown":
       return cursorLineDown(view);
     case "ArrowLeft":
+      if (wordMotion) return cursorGroupLeft(view);
       return cursorCharLeft(view);
     case "ArrowRight":
+      if (wordMotion) return cursorGroupRight(view);
       return cursorCharRight(view);
     default:
       return true;
@@ -554,6 +598,8 @@ export function vimModeExtension(options: VimOptions = {}) {
   let pendingGoToLinkUntilMs = 0;
 
   options.onMacroRecordingChange?.(null);
+  const emitVimStatusMessage =
+    options.onVimStatusMessage ?? ((_message: string) => {});
 
   let visualAnchorPos: number | null = null;
   let visualAnchorLine: number | null = null; // 1-based
@@ -1198,24 +1244,48 @@ export function vimModeExtension(options: VimOptions = {}) {
     switch (action.intent) {
       case VIM_INTENT.START_MACRO_RECORD: {
         const register = (action.targetChar ?? "").toLowerCase();
-        if (!register) return true;
+        if (!register) {
+          emitVimStatusMessage("macro register required");
+          return true;
+        }
         macroRecordingRegister = register;
         macroRegisters.set(register, []);
         options.onMacroRecordingChange?.(macroRecordingRegister);
+        emitVimStatusMessage(`recording @${register}`);
         return true;
       }
-      case VIM_INTENT.STOP_MACRO_RECORD:
+      case VIM_INTENT.STOP_MACRO_RECORD: {
+        if (!macroRecordingRegister) {
+          emitVimStatusMessage("no active macro recording");
+          return true;
+        }
+        const register = macroRecordingRegister;
+        const steps = macroRegisters.get(register)?.length ?? 0;
         macroRecordingRegister = null;
         options.onMacroRecordingChange?.(null);
+        emitVimStatusMessage(`recorded @${register} (${steps} steps)`);
         return true;
+      }
       case VIM_INTENT.PLAY_MACRO: {
-        if (macroReplaying) return true;
+        if (macroReplaying) {
+          emitVimStatusMessage("macro replay ignored while replaying");
+          return true;
+        }
         const register = (action.targetChar ?? "").toLowerCase();
-        if (!register) return true;
+        if (!register) {
+          emitVimStatusMessage("macro register required");
+          return true;
+        }
         const sequence = macroRegisters.get(register);
-        if (!sequence || sequence.length === 0) return true;
+        if (!sequence || sequence.length === 0) {
+          emitVimStatusMessage(`macro @${register} is empty`);
+          return true;
+        }
         const totalSteps = count * sequence.length;
         if (!Number.isFinite(totalSteps) || totalSteps > VIM_MACRO_REPLAY_STEP_BUDGET) {
+          emitVimStatusMessage(
+            `macro @${register} replay aborted: step budget exceeded (>${VIM_MACRO_REPLAY_STEP_BUDGET})`,
+          );
           return true;
         }
         macroReplaying = true;
@@ -1261,6 +1331,13 @@ export function vimModeExtension(options: VimOptions = {}) {
           }
         }
         macroReplaying = false;
+        if (aborted) {
+          emitVimStatusMessage(
+            `macro @${register} replay aborted: step budget exceeded (>${VIM_MACRO_REPLAY_STEP_BUDGET})`,
+          );
+        } else {
+          emitVimStatusMessage(`replayed @${register} x${count}`);
+        }
         return true;
       }
       case VIM_INTENT.MOVE_LEFT:
@@ -1449,6 +1526,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const activeMode = mode();
+      const macroPendingBefore = session.macroPendingKind();
       const now = Date.now();
       if (pendingFoldPrefixUntilMs > 0 && now > pendingFoldPrefixUntilMs) {
         pendingFoldPrefixUntilMs = 0;
@@ -1485,6 +1563,41 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
+      if (
+        activeMode === "normal"
+        && plain
+        && event.key === "Q"
+      ) {
+        event.preventDefault();
+        emitVimStatusMessage(macroRegisterSummary(macroRegisters));
+        return true;
+      }
+      if (
+        activeMode === "normal"
+        && plain
+        && event.key.toLowerCase() === "q"
+        && event.repeat
+      ) {
+        // Browser key-repeat can accidentally retrigger q and start a new
+        // pending recording right after stopping one.
+        event.preventDefault();
+        return true;
+      }
+      if (
+        activeMode === "normal"
+        && plain
+        && event.key.toLowerCase() === "q"
+        && macroRecordingRegister
+      ) {
+        // Keep UI behavior stable even if session/pending state drifts.
+        event.preventDefault();
+        applyAction(
+          view,
+          { intent: VIM_INTENT.STOP_MACRO_RECORD, count: 1 },
+          activeMode,
+        );
+        return true;
+      }
       if (activeMode === "normal" && plain) {
         const plainKey = event.key.toLowerCase();
         if (pendingFoldPrefixUntilMs > 0) {
@@ -1538,6 +1651,27 @@ export function vimModeExtension(options: VimOptions = {}) {
         macroRecording: macroRecordingRegister !== null,
       });
       if (pipeline.kind === "no_step") {
+        if (event.key === "Escape" && macroPendingBefore === VIM_MACRO_PENDING_RECORD) {
+          emitVimStatusMessage("macro record canceled");
+        } else if (event.key === "Escape" && macroPendingBefore === VIM_MACRO_PENDING_PLAY) {
+          emitVimStatusMessage("macro replay canceled");
+        } else if (
+          activeMode === "normal"
+          && macroPendingBefore === VIM_MACRO_PENDING_RECORD
+          && plain
+          && event.key.length === 1
+          && !isMacroRegisterChar(event.key)
+        ) {
+          emitVimStatusMessage("invalid macro register: use [a-z0-9]");
+        } else if (
+          activeMode === "normal"
+          && macroPendingBefore === VIM_MACRO_PENDING_PLAY
+          && plain
+          && event.key.length === 1
+          && !isMacroRegisterChar(event.key)
+        ) {
+          emitVimStatusMessage("invalid macro register: use [a-z0-9]");
+        }
         if (activeMode !== "insert" || event.key === "Escape") {
           event.preventDefault();
           return true;
@@ -1545,6 +1679,19 @@ export function vimModeExtension(options: VimOptions = {}) {
         return false;
       }
       if (pipeline.kind === "no_intent") {
+        if (event.key === "Escape" && macroPendingBefore === VIM_MACRO_PENDING_RECORD) {
+          emitVimStatusMessage("macro record canceled");
+        } else if (event.key === "Escape" && macroPendingBefore === VIM_MACRO_PENDING_PLAY) {
+          emitVimStatusMessage("macro replay canceled");
+        } else if (
+          activeMode === "normal"
+          && (macroPendingBefore === VIM_MACRO_PENDING_RECORD || macroPendingBefore === VIM_MACRO_PENDING_PLAY)
+          && plain
+          && event.key.length === 1
+          && !isMacroRegisterChar(event.key)
+        ) {
+          emitVimStatusMessage("invalid macro register: use [a-z0-9]");
+        }
         if (activeMode !== "insert" && shouldSwallowInNormalLikeMode(event)) {
           event.preventDefault();
           return true;
@@ -1553,6 +1700,17 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const step = pipeline.step;
+      if (
+        activeMode === "normal"
+        && (macroPendingBefore === VIM_MACRO_PENDING_RECORD || macroPendingBefore === VIM_MACRO_PENDING_PLAY)
+        && plain
+        && event.key.length === 1
+        && !isMacroRegisterChar(event.key)
+        && step.actions.length > 0
+        && step.actions.every((action) => action.intent === VIM_INTENT.SWALLOW)
+      ) {
+        emitVimStatusMessage("invalid macro register: use [a-z0-9]");
+      }
       currentMode = toUiMode(step.mode);
       syncModeClasses(view);
 
@@ -1593,5 +1751,14 @@ export function vimModeExtension(options: VimOptions = {}) {
     },
   });
 
-  return [handlers, focusSync];
+  const lifecycle = ViewPlugin.fromClass(
+    class {
+      destroy() {
+        // Reconfiguration or teardown must clear UI recording badges.
+        options.onMacroRecordingChange?.(null);
+      }
+    },
+  );
+
+  return [handlers, focusSync, lifecycle];
 }

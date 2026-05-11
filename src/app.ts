@@ -144,6 +144,12 @@ function editorOptionsForNote(note: Note | null) {
       macroRecordingRegister = register;
       updateStatusBar();
     },
+    onVimStatusMessage: (message: string) => {
+      const trimmed = message.trim();
+      if (trimmed.length > 0) {
+        showToast(trimmed);
+      }
+    },
     getNoteModules: () =>
       appConfig ? modulesForNote(state.activeNote, appConfig) : null,
     setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),

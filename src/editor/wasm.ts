@@ -1757,19 +1757,33 @@ export class VimSession {
     this.initialMode = initialMode;
   }
 
-  step(key: VimKeyInput, context: VimContext = {}): VimStep | null {
+  private ensureSession(): WasmVimSession | null {
     if (!ensureWasmReadyNonBlocking()) return null;
     if (!this.session) {
       this.session = new WasmVimSession(modeToId(this.initialMode));
     }
+    return this.session;
+  }
 
-    const raw = this.session.step(
+  step(key: VimKeyInput, context: VimContext = {}): VimStep | null {
+    const session = this.ensureSession();
+    if (!session) return null;
+
+    const raw = session.step(
       key.kind,
       key.charCode ?? 0,
       context.has_search_matches ?? false,
       context.line_count ?? 0,
+      context.macro_recording ?? false,
     );
     return decodeVimStep(raw);
+  }
+
+  macroPendingKind(): 0 | 1 | 2 {
+    const session = this.ensureSession();
+    if (!session) return 0;
+    const raw = session.macro_pending_kind();
+    return raw === 1 || raw === 2 ? raw : 0;
   }
 }
 

@@ -1106,6 +1106,7 @@ impl WasmVimSession {
         key_char: u32,
         has_search_matches: bool,
         line_count: usize,
+        macro_recording: bool,
     ) -> JsValue {
         let Some(key) = decode_key(key_kind, key_char) else {
             return encode_empty_step(self.state.mode);
@@ -1114,10 +1115,18 @@ impl WasmVimSession {
         let context = VimContext {
             has_search_matches,
             line_count,
-            macro_recording: false,
+            macro_recording,
         };
         let step = EditorEngine::step_vim(&self.state, key, &context);
         self.state = step.state.clone();
         encode_step(&step)
+    }
+
+    pub fn macro_pending_kind(&self) -> u32 {
+        match self.state.pending {
+            Some(vim::VimPending::MacroRecord) => 1,
+            Some(vim::VimPending::MacroPlay) => 2,
+            _ => 0,
+        }
     }
 }
