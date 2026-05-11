@@ -457,7 +457,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
 
   const extensions = [
     EditorState.allowMultipleSelections.of(true),
-    history(),
+    history({ newGroupDelay: 300 }),
     drawSelection(),
     highlightActiveLine(),
     placeholder("Start typing..."),

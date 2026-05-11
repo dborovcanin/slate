@@ -75,6 +75,7 @@ Supported and tested core motions/actions include:
 - macros (normal + insert flows): `q<register>` start, `q` stop, `@<register>` replay, `3@a` counted replay
 - macro pending cancel: `Esc` cancels pending register input after `q` or `@`
 - macro status summary: `Q` (normal mode) prints recorded macro registers + step counts
+- undo/redo semantics: in vim mode use `u` / `Ctrl+r` (TUI-style status + cursor behavior); outside vim, `Ctrl+z`/`Ctrl+y` remains native editor behavior
 - fold toggle: `za`
 - wiki-link navigation: `gd`
 

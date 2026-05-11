@@ -30,6 +30,7 @@ This document lists major Slate capabilities and how they behave.
 - macros across normal + insert flows (`q<register>` start, `q` stop, `@<register>` replay, counted replay)
 - macro pending cancel: `Esc` cancels pending `q`/`@` register input
 - macro status summary: `Q` in normal mode shows recorded registers and step counts
+- undo/redo: vim mode uses TUI-like undo/redo semantics (`u`, `Ctrl+r`); non-vim shortcut handling remains native editor UX
 
 ## Terminal mode (optional)
 

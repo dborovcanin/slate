@@ -11,7 +11,9 @@ import {
   deleteCharForward,
   deleteGroupBackward,
   deleteGroupForward,
+  redoDepth,
   redo,
+  undoDepth,
   undo,
 } from "@codemirror/commands";
 import { EditorView, ViewPlugin } from "@codemirror/view";
@@ -23,6 +25,7 @@ import {
   offsetEditOperation,
   snapshotFromViewLines,
 } from "./core/codemirror-adapter.ts";
+import { Transaction } from "@codemirror/state";
 import {
   editorSearchHasMatches,
   editorSearchNext,
@@ -499,6 +502,83 @@ function applyInsertMacroEvent(view: EditorView, event: MacroInsertEvent): boole
       return true;
   }
 }
+
+interface VimLineColPosition {
+  line: number;
+  col: number;
+}
+
+function lineColFromPos(view: EditorView, pos: number): VimLineColPosition {
+  const clamped = Math.max(0, Math.min(pos, view.state.doc.length));
+  const line = view.state.doc.lineAt(clamped);
+  return { line: line.number, col: clamped - line.from };
+}
+
+function posFromLineCol(view: EditorView, position: VimLineColPosition): number {
+  const lineNo = Math.max(1, Math.min(position.line, view.state.doc.lines));
+  const line = view.state.doc.line(lineNo);
+  return Math.min(line.to, line.from + Math.max(0, position.col));
+}
+
+function restoreCursorWithoutHistory(view: EditorView, position: VimLineColPosition) {
+  const anchor = posFromLineCol(view, position);
+  view.dispatch({
+    selection: { anchor },
+    scrollIntoView: true,
+    annotations: Transaction.addToHistory.of(false),
+  });
+}
+
+function runUndoLikeTui(
+  view: EditorView,
+  count: number,
+  emitStatus: (message: string) => void,
+): boolean {
+  let applied = 0;
+  for (let i = 0; i < Math.max(1, count); i++) {
+    const depthBefore = undoDepth(view.state);
+    if (depthBefore <= 0) break;
+    const keepCursorOnExhaust = depthBefore === 1;
+    const cursorBefore = lineColFromPos(view, view.state.selection.main.head);
+    if (!undo(view)) break;
+    if (keepCursorOnExhaust) {
+      restoreCursorWithoutHistory(view, cursorBefore);
+    }
+    applied += 1;
+  }
+
+  if (applied === 0) {
+    emitStatus("already at oldest change");
+    return true;
+  }
+  emitStatus(`undo (${undoDepth(view.state)} left)`);
+  return true;
+}
+
+function runRedoLikeTui(
+  view: EditorView,
+  count: number,
+  emitStatus: (message: string) => void,
+): boolean {
+  let applied = 0;
+  for (let i = 0; i < Math.max(1, count); i++) {
+    const depthBefore = redoDepth(view.state);
+    if (depthBefore <= 0) break;
+    if (!redo(view)) break;
+    applied += 1;
+  }
+  if (applied === 0) {
+    emitStatus("already at newest change");
+    return true;
+  }
+  emitStatus(`redo (${redoDepth(view.state)} left)`);
+  return true;
+}
+
+export const __vimUndoRedoInternals = {
+  runUndoLikeTui,
+  runRedoLikeTui,
+};
 
 function findWordObjectRange(
   view: EditorView,
@@ -1416,9 +1496,9 @@ export function vimModeExtension(options: VimOptions = {}) {
       case VIM_INTENT.PASTE_AFTER:
         return pasteAfter(view, count);
       case VIM_INTENT.UNDO:
-        return runCounted(view, undo, count);
+        return runUndoLikeTui(view, count, emitVimStatusMessage);
       case VIM_INTENT.REDO:
-        return runCounted(view, redo, count);
+        return runRedoLikeTui(view, count, emitVimStatusMessage);
       case VIM_INTENT.OPEN_COMMAND_BAR:
         // Preserve visual selection for command execution: command-bar focus
         // can collapse the CM selection when mode is normal.

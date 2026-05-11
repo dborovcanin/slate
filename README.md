@@ -64,6 +64,7 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 - Vim-like macros across normal + insert flows: `q<register>` start, `q` stop, `@<register>` replay, count support (`3@a`)
 - `Esc` cancels pending macro register input (`q`/`@` prefixes)
 - `Q` in normal mode shows macro register status (`@a:steps` summary)
+- Undo/redo semantics: Vim mode (`u`, `Ctrl+r`) follows TUI-style status/cursor behavior; non-vim `Ctrl+z`/`Ctrl+y` stays native CodeMirror UX.
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Folding: `za` toggles fold at cursor (GUI headings/code fences)
