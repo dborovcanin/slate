@@ -1216,8 +1216,9 @@ impl TerminalApp {
         }
 
         let status_owned = if self.mode == UiMode::Editor {
-            self.wiki_link_autocomplete_status_hint()
-                .or_else(|| self.variable_autocomplete_status_hint())
+            // Keep status bar stable during wiki-link popup usage; the popup
+            // itself already renders suggestions and selection state.
+            self.variable_autocomplete_status_hint()
                 .map(|hint| format!("{}  [{}]", self.status, hint))
         } else {
             None

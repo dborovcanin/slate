@@ -9,7 +9,7 @@ use super::{
     CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_RECOMPUTE_PENDING_RETRY_MS,
     CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
     HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
-    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
@@ -3538,8 +3538,9 @@ impl TerminalApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn filtered_wiki_link_suggestions(&self) -> Vec<&WikiLinkSuggestion> {
-        let (start, end) = self.wiki_link_visible_window(WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
+        let (start, end) = self.wiki_link_visible_window(super::WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
         self.wiki_link_autocomplete_popup
             .suggestions
             .iter()
@@ -3727,42 +3728,6 @@ impl TerminalApp {
                 return;
             }
         }
-    }
-
-    pub(super) fn wiki_link_autocomplete_status_hint(&self) -> Option<String> {
-        if !self.wiki_link_autocomplete_popup.visible {
-            return None;
-        }
-        let suggestions = self.filtered_wiki_link_suggestions();
-        if suggestions.is_empty() {
-            return Some(format!(
-                "[[{}… (no matches)",
-                self.wiki_link_autocomplete_popup.query
-            ));
-        }
-        let (start, _) = self.wiki_link_visible_window(WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE);
-        let selected = self.wiki_link_autocomplete_popup.selected_index.min(
-            self.wiki_link_autocomplete_popup
-                .suggestions
-                .len()
-                .saturating_sub(1),
-        );
-        let picks: Vec<String> = suggestions
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                if start + i == selected {
-                    format!(">{}<", s.title)
-                } else {
-                    s.title.clone()
-                }
-            })
-            .collect();
-        Some(format!(
-            "[[{} → {} (Tab/Enter)",
-            self.wiki_link_autocomplete_popup.query,
-            picks.join("  ")
-        ))
     }
 
     pub(super) fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {
