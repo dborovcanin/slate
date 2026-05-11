@@ -46,7 +46,8 @@ At a high level:
 2. User edits text.
 3. Frontend applies shared-core edits/rules where required.
 4. Calc/variables refresh derived results.
-5. Autosave or explicit save writes note content.
+5. Wiki-link and image resolution refreshes derived inline display state.
+6. Autosave or explicit save writes note content.
 
 Save behavior:
 
@@ -92,6 +93,18 @@ When math modules are enabled, Slate evaluates expressions from note content and
 
 - if variable completion is active, accept completion
 - otherwise, apply available calc ghost result
+
+## Wiki-link flow
+
+Wiki-link syntax is parsed in shared core and resolved in frontend/runtime services.
+
+- syntax supports `[[shortid]]`, `[[shortid#heading]]`, `[[shortid|title]]`, `[[shortid#heading|title]]`
+- parser/tokenization and cursor-hit detection are shared-core owned
+- note/headings lookup is performed through note-source services
+- GUI and TUI render collapsed display for out-of-cursor links and keep full raw source while editing inside the link
+- navigation:
+  - GUI: Ctrl/Cmd+click and vim `gd`
+  - TUI: `Ctrl+]` and vim `gd`
 
 ## Export flow
 

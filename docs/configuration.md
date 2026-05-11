@@ -16,6 +16,8 @@ accent = "auto"
 background = "plain"
 font = "jetbrains-mono"
 font_size = 14
+animation_mode = "fast"
+animation_style = "pop-up"
 
 [editor]
 markdown_autoformat = true
@@ -33,6 +35,10 @@ math = true
 table = true
 variables = true
 style = true
+
+[editor.security]
+encrypt_notes = false
+password_env = "SLATE_NOTES_PASSWORD"
 
 [special_notes]
 email_note_prefix = "inbox-email"
@@ -61,6 +67,8 @@ max_body_bytes = 524288
 - `background`
 - `font`
 - `font_size`
+- `animation_mode`
+- `animation_style`
 
 ### color_scheme values
 
@@ -109,6 +117,20 @@ max_body_bytes = 524288
 
 `font_size` range: `11` to `28`.
 
+### animation_mode values
+
+- `fast`
+- `fade`
+- `smooth`
+- `spring`
+- compatibility mode: `none` (disables animations)
+
+### animation_style values
+
+- `slide-up`
+- `pop-up`
+- `none`
+
 ## Editor settings
 
 `[editor]` keys:
@@ -130,6 +152,7 @@ Behavior notes:
 - `format_on_save = true` runs format before save.
 - `terminal_mode = true` makes `slate` default to terminal runtime when possible.
 - `vim_mode = true` enables GUI vim key mappings.
+- `variable_autocomplete_min_chars` is clamped to `1..8`.
 
 ## Per-note module defaults
 
@@ -141,6 +164,18 @@ Behavior notes:
 - `style`
 
 Module state is then persisted per note and can diverge note-by-note.
+
+## Note security defaults
+
+`[editor.security]` keys:
+
+- `encrypt_notes`: whether newly created notes default to encrypted-at-rest storage
+- `password_env`: environment variable name used for default encryption password
+
+Behavior notes:
+
+- if `encrypt_notes = true`, `password_env` must resolve to a non-empty environment variable at runtime
+- note lock/encrypt commands are not supported for file-backed markdown notes (`slate path/to/file.md`)
 
 ## Special notes
 
@@ -160,6 +195,14 @@ Module state is then persisted per note and can diverge note-by-note.
   - `initial_sync_past_days`
   - `max_message_bytes`
   - `max_body_bytes`
+
+Runtime validation constraints:
+
+- `poll_seconds`: `10..86400`
+- `initial_sync_max_messages`: `1..100000`
+- `initial_sync_past_days`: `0..3650`
+- `max_body_bytes <= max_message_bytes`
+- `host`, `username`, `password_env`, and `folder` must be non-empty
 
 ## Date format tokens
 

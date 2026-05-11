@@ -44,7 +44,19 @@ This document summarizes GUI, terminal, and vim key mappings.
 | `Ctrl+S` | Manual save |
 | `Ctrl+Q` | Quit |
 | `Ctrl+W` | Quit |
+| `Ctrl+]` | Navigate wiki link at cursor |
 | `Tab` | Accept variable completion or apply calc result |
+
+## Table editing keys (GUI + TUI editor input)
+
+| Shortcut | Action |
+| --- | --- |
+| `ArrowLeft` / `ArrowRight` | Move within table cell content; cross cells at boundaries |
+| `ArrowUp` / `ArrowDown` | Move vertically in the same table column |
+| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight` | Jump to previous / next table cell |
+| `Shift+Enter` | Split cell into multiline continuation row (`|>`) |
+| `Backspace` / `Delete` | Table-aware boundary edit inside current row/cell |
+| `Ctrl+Backspace` / `Ctrl+Delete` | Structural table boundary/column edit where applicable |
 
 ## Vim mode basics
 
@@ -61,6 +73,7 @@ Supported and tested core motions/actions include:
 - edit actions: `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 - yank/delete with counts: examples `yy`, `3yy`, `d2w`, `yaw`
 - fold toggle: `za`
+- wiki-link navigation: `gd`
 
 ## Vim command bar entry
 

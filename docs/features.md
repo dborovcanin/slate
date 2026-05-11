@@ -6,7 +6,7 @@ This document lists major Slate capabilities and how they behave.
 
 - fast plain-text editing with markdown-aware visual behavior
 - undo/redo
-- command palette in both editor and vim command modes
+- command bar in both editor and vim command modes
 - per-note module toggles (`math`, `table`, `variables`, `style`)
 
 ## Markdown editing helpers
@@ -16,6 +16,8 @@ This document lists major Slate capabilities and how they behave.
 - checklist support (`- [ ]` / `- [x]`)
 - optional checklist auto-reorder
 - markdown table autoformat/alignment
+- table-aware cursor movement and boundary editing
+- wiki-link rendering that keeps raw source editable when cursor is inside the link
 
 ## Vim mode (optional)
 
@@ -24,6 +26,7 @@ This document lists major Slate capabilities and how they behave.
 - ex commands (`:w`, `:q`, `:wq`, calc/list/module/export commands)
 - yank/delete/paste workflows with clipboard integration
 - fold toggle at cursor (`za`)
+- wiki-link navigation with `gd`
 
 ## Terminal mode (optional)
 
@@ -31,11 +34,13 @@ This document lists major Slate capabilities and how they behave.
 - supports opening and editing markdown files
 - command bar and module behavior aligned with GUI
 - clipboard watch and command workflows
+- wiki-link navigation with `Ctrl+]` and `gd`
+- wiki-link autocomplete for note ids and headings
 
 ## Inline calculations
 
 - ghost result rendering for evaluable expressions
-- `Tab` applies result to text
+- `Tab` accepts variable completion when active, otherwise applies calc result
 - works in normal lines, lists, and table formula cells
 - unit conversions and fend-compatible expressions supported
 
@@ -55,6 +60,12 @@ Detailed semantics: [Variables Specification](./variables.md).
 - per-cell formula marker: `:=...`
 - row/column aggregate helpers (`sum_row`, `avg_col`, etc.)
 - table references `(row,col)` with error markers for invalid references
+- rich table keyboard behavior:
+  - `ArrowLeft/Right` stay within cell content before leaving the cell
+  - `ArrowUp/Down` move by column inside table and only exit at table boundaries
+  - `Ctrl+ArrowLeft/Right` jump to previous/next cell anchor
+  - `Shift+Enter` splits cell content into multiline continuation rows (`|>`)
+  - header-aware structural edits for column insert/delete/merge workflows
 
 ## Modules
 
@@ -89,6 +100,19 @@ Details: [Export Reference](./export.md).
 - fuzzy note switcher
 - note create/open/delete workflows
 - first non-empty line title derivation
+
+## Wiki links
+
+- supported syntax:
+  - `[[shortid]]`
+  - `[[shortid#heading]]`
+  - `[[shortid|title]]`
+  - `[[shortid#heading|title]]`
+- short id is an 8-character alphanumeric note-id prefix
+- autocomplete suggestions for notes and headings
+- GUI navigation via Ctrl/Cmd+click and vim `gd`
+- TUI navigation via `Ctrl+]` and `gd`
+- broken-link rendering with automatic re-resolution
 
 ## IMAP sync
 

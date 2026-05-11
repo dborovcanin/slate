@@ -25,11 +25,11 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 - Plain-text editing powered by CodeMirror 6 (undo/redo, IME, clipboard — all browser-grade)
 - Autosave with 500ms debounce + flush on blur and close
 - Restores last-open note on startup
-- Dark theme with Catppuccin-inspired colors
+- Multi-theme editor with live config reload (default: `gruvbox-light`)
 - Shared command panel in both Vim and non-Vim modes
   - Vim mode: open with `:`
   - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
-  - Built-in commands: `sum`, `sum list`, `sum row`, `sum column`, `sum doc`, `avg`, `avg list`, `avg row`, `avg column`, `avg doc`, `date`, `format`, `clip-watch`, `clip-watch-stop`, `clist`, `ulist`, `olist`, `module status`, `module on <math|table|variables|style>`, `module off <math|table|variables|style>`, `module toggle <math|table|variables|style>`
+  - Built-in commands include calc/date/reminder/list/module/fold/export/note-security flows (full list + aliases: `docs/command-reference.md`)
 - Per-note modules (`math`, `table`, `variables`, `style`)
   - New notes start with defaults from `[editor.modules]` in config
   - Module state is saved with each note and restored when that note is opened
@@ -43,11 +43,15 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
   - End a list/checklist line with ` /x` to toggle checkbox state (`- item /x` -> `- [x] item`, `- [x] item /x` -> `- [ ] item`)
   - Checklist auto-reorder (when enabled): checking an item moves it to the bottom, unchecking moves it to the top
   - Markdown table autoformat/alignment while editing
+  - Wiki-link authoring: type `[[` to auto-close to `[[]]`, then use autocomplete for notes/headings
+  - Wiki-link rendering: collapsed display when cursor is outside, full source shown when cursor is inside
+  - Rich table cursor behavior: Arrow keys stay cell-aware, `Ctrl+ArrowLeft/Right` jumps cells, `Shift+Enter` splits multiline cell content
 - Controlled by `[editor] markdown_autoformat` (defaults to `true`) and `[editor] checklist_auto_reorder` (defaults to `true`)
 
 **Themes and backgrounds**
-- 12 built-in color schemes: `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
+- 14 built-in color schemes: `slate`, `slate-dark`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
 - 5 background patterns: `plain`, `lines`, `squares`, `dots`, `diagonal`
+- Motion config: `[theme] animation_mode = fast|fade|smooth|spring` and `[theme] animation_style = slide-up|pop-up|none`
 - Configurable via TOML (`$XDG_CONFIG_HOME/slate/config.toml` or `~/.config/slate/config.toml`)
 - Live reload while the app is running (polls config changes automatically)
 
@@ -60,6 +64,7 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 - Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Folding: `za` toggles fold at cursor (GUI headings/code fences)
+- Wiki-link navigation: `gd` opens the link under cursor (`[[shortid]]` / `[[shortid#heading]]`)
 - Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:w`, `:wq`, `:q`
 - `:sum` and `:avg` compute from the selected scope, insert only `<value>` at cursor/selection, and copy the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
@@ -75,6 +80,8 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 - Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save (when `autosave = true`), `Ctrl+Q`/`Ctrl+W` quit
 - Terminal folding keymap (normal mode): `za` toggle fold at cursor
 - Terminal folding commands: `:fold`, `:unfold`, `:fold-toggle` (aliases: `:zc`, `:zo`, `:za`)
+- Wiki-link navigation in terminal: `Ctrl+]` (editor/normal mode) or `gd` (normal mode)
+- Wiki-link autocomplete in terminal: type `[[` to open note suggestions; type `#` after short id for heading suggestions
 - `vim_mode` is optional and independent (GUI-only behavior)
 
 **IMAP email sync (special notes)**
@@ -114,6 +121,17 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 sqrt(144) + 3^2         → 21
 ```
 
+**Wiki links**
+- Link syntax supports short-id notes and optional heading/title parts:
+  - `[[01HX4VHR]]`
+  - `[[01HX4VHR#Heading]]`
+  - `[[01HX4VHR|Display Title]]`
+  - `[[01HX4VHR#Heading|Display Title]]`
+- Short ids are 8-character alphanumeric prefixes of note ids
+- GUI supports Ctrl/Cmd+click navigation; Vim normal mode supports `gd`
+- TUI supports `Ctrl+]` and `gd` navigation
+- Broken links are rendered distinctly and resolve automatically when notes become available
+
 **Multiple notes**
 - Create, switch, and delete notes with keyboard shortcuts
 - Fuzzy search switcher (Ctrl+P) with match highlighting
@@ -142,7 +160,7 @@ sqrt(144) + 3^2         → 21
 | Ctrl+Backspace          | Delete previous word          |
 | Ctrl+Shift+Backspace    | Delete current note (confirm) |
 | Ctrl+Shift+;            | Open command picker           |
-| Tab                     | Apply calc result             |
+| Tab                     | Accept variable completion or apply calc result |
 | Ctrl+E                  | Copy note to clipboard        |
 | Ctrl+Shift+E            | Export note to file           |
 | Ctrl+Shift+D            | Open calendar date picker     |
@@ -159,6 +177,8 @@ sqrt(144) + 3^2         → 21
 | Escape                  | Close switcher                |
 
 - In the `Ctrl+P` switcher (GUI and terminal): `Delete` or `Ctrl+Backspace` prompts to delete the selected note.
+- In table cells: Arrow keys stay table-aware, `Ctrl+ArrowLeft/Right` jumps cells, and `Shift+Enter` inserts table multiline continuation (`|>` row).
+- In Vim normal mode: `gd` navigates wiki links; in terminal, `Ctrl+]` also navigates wiki links.
 
 **Storage**
 - SQLite with WAL mode in `~/.local/share/slate/notes.db`
