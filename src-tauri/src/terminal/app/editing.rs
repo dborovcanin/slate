@@ -20,6 +20,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const IMAGE_EXTENSIONS: [&str; 8] = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
+const CALC_PATHOLOGICAL_WINDOW_MIN_LINES: usize = 2000;
+const CALC_PATHOLOGICAL_WINDOW_PERCENT: usize = 85;
+const CALC_PATHOLOGICAL_WINDOW_STREAK_THRESHOLD: usize = 3;
+const CALC_FORCED_FULL_RECOMPUTE_CYCLES: usize = 2;
 
 fn is_image_path(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|value| value.to_str()) else {
@@ -656,9 +660,12 @@ impl TerminalApp {
         self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         self.calc.variable_names.clear();
         self.calc.variable_dependency_graph = None;
+        self.calc.table_formula_dependency_index = None;
         self.calc.line_metadata.clear();
         self.calc.prev_line_metadata.clear();
         self.calc.stale = false;
+        self.calc.pathological_window_streak = 0;
+        self.calc.forced_full_recompute_remaining = 0;
         self.calc_last_view_eval_range = None;
         self.calc_recompute_pending = false;
         self.calc_recompute_due_at = None;
@@ -1313,15 +1320,28 @@ impl TerminalApp {
                 calc_table_enabled,
                 None,
             );
-            self.calc.prev_line_metadata = self.calc.line_metadata.clone();
-            self.calc.results = calc_data.line_results;
-            self.calc.cell_results = calc_data.cell_results;
-            self.calc.variable_names = calc_data.variable_names;
+            let calc_mask = self.calc_feature_mask();
             self.calc.variable_dependency_graph =
                 crate::editor_core::calc_plan::build_variable_dependency_graph(
                     &self.lines,
-                    self.calc_feature_mask(),
+                    calc_mask,
                 );
+            self.calc.table_formula_dependency_index =
+                crate::editor_core::calc_plan::build_table_formula_dependency_index(
+                    &self.lines,
+                    calc_mask,
+                );
+            self.calc.prev_line_metadata = self.calc.line_metadata.clone();
+            self.calc.results = calc_data.line_results;
+            self.calc.cell_results = calc_data.cell_results;
+            self.calc.variable_names = self
+                .calc
+                .variable_dependency_graph
+                .as_ref()
+                .map(crate::editor_core::calc_plan::variable_names_from_dependency_graph)
+                .unwrap_or(calc_data.variable_names);
+            self.calc.pathological_window_streak = 0;
+            self.calc.forced_full_recompute_remaining = 0;
             self.calc.stale = false;
             self.calc_recompute_pending = false;
             self.calc_recompute_due_at = None;
@@ -1372,42 +1392,68 @@ impl TerminalApp {
             plan.eval_to,
             calc_mask,
         );
-        let eval_window =
-            crate::editor_core::calc_plan::decide_eval_window_with_cached_variable_graph_and_flags(
-                self.calc.variable_dependency_graph.as_ref(),
-                &self.lines,
-                plan.eval_from,
-                plan.eval_to,
-                &prev_changed_assignment_names,
-                prev_changed_had_assignment,
-                prev_changed_had_builtin_formula,
-                has_prev,
-                calc_variables_enabled,
-                calc_table_enabled,
-            );
-        let can_use_partial = eval_window.can_use_partial;
-        let eval_from = eval_window.eval_from;
-        let eval_to = eval_window.eval_to;
+        crate::editor_core::calc_plan::sync_table_formula_dependency_index(
+            &mut self.calc.table_formula_dependency_index,
+            &self.lines,
+            plan.eval_from,
+            plan.eval_to,
+            calc_mask,
+        );
+        let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_cached_dependency_indexes_and_flags(
+            self.calc.variable_dependency_graph.as_ref(),
+            self.calc.table_formula_dependency_index.as_ref(),
+            &self.lines,
+            plan.eval_from,
+            plan.eval_to,
+            &prev_changed_assignment_names,
+            prev_changed_had_assignment,
+            prev_changed_had_builtin_formula,
+            has_prev,
+            calc_variables_enabled,
+            calc_table_enabled,
+        );
+        let mut can_use_partial = eval_window.can_use_partial;
+        let mut eval_from = eval_window.eval_from;
+        let mut eval_to = eval_window.eval_to;
 
-        let (mut new_results, mut new_cell_results, variable_names) = if can_use_partial {
-            let mut merged_results = vec![None; self.lines.len()];
-            for entry in &plan.base_results {
-                if let Some(slot) = merged_results.get_mut(entry.line_idx) {
-                    *slot = Some(entry.result.clone());
-                }
-            }
-            // Carry forward cached cell results for unchanged lines (same
-            // alignment as base_results, which the planner already validated).
-            let mut merged_cells: Vec<Vec<app_core::calc::TableCellEvaluation>> =
-                vec![Vec::new(); self.lines.len()];
-            for entry in &plan.base_results {
-                if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
-                    if let Some(cached) = self.calc.cell_results.get(entry.line_idx) {
-                        *slot = cached.clone();
-                    }
-                }
-            }
+        let line_count = self.lines.len();
+        let eval_span = eval_to.saturating_sub(eval_from);
+        let is_pathological_window = can_use_partial
+            && line_count >= CALC_PATHOLOGICAL_WINDOW_MIN_LINES
+            && eval_span.saturating_mul(100)
+                >= line_count.saturating_mul(CALC_PATHOLOGICAL_WINDOW_PERCENT);
+        if is_pathological_window {
+            self.calc.pathological_window_streak =
+                self.calc.pathological_window_streak.saturating_add(1);
+        } else {
+            self.calc.pathological_window_streak = 0;
+        }
 
+        let mut force_full_now = false;
+        if self.calc.forced_full_recompute_remaining > 0 {
+            self.calc.forced_full_recompute_remaining -= 1;
+            force_full_now = true;
+        }
+        if self.calc.pathological_window_streak >= CALC_PATHOLOGICAL_WINDOW_STREAK_THRESHOLD {
+            self.calc.pathological_window_streak = 0;
+            self.calc.forced_full_recompute_remaining = CALC_FORCED_FULL_RECOMPUTE_CYCLES;
+            force_full_now = true;
+        }
+        if force_full_now {
+            can_use_partial = false;
+            eval_from = 0;
+            eval_to = line_count;
+        }
+
+        let prev_results = std::mem::take(&mut self.calc.results);
+        let prev_results_snapshot = prev_results.clone();
+        let prev_cell_results = std::mem::take(&mut self.calc.cell_results);
+        let same_shape_cache =
+            prev_results.len() == self.lines.len() && prev_cell_results.len() == self.lines.len();
+
+        let (mut new_results, mut new_cell_results) = if can_use_partial && same_shape_cache {
+            let mut merged_results = prev_results;
+            let mut merged_cells = prev_cell_results;
             if eval_from < eval_to {
                 let calc_data = compute_calc_data(
                     &self.calc.engine,
@@ -1424,14 +1470,42 @@ impl TerminalApp {
                         *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
                     }
                 }
-                (merged_results, merged_cells, calc_data.variable_names)
-            } else {
-                (
-                    merged_results,
-                    merged_cells,
-                    self.calc.variable_names.clone(),
-                )
             }
+            (merged_results, merged_cells)
+        } else if can_use_partial {
+            let mut merged_results = vec![None; self.lines.len()];
+            for entry in &plan.base_results {
+                if let Some(slot) = merged_results.get_mut(entry.line_idx) {
+                    *slot = Some(entry.result.clone());
+                }
+            }
+            let mut merged_cells: Vec<Vec<app_core::calc::TableCellEvaluation>> =
+                vec![Vec::new(); self.lines.len()];
+            for entry in &plan.base_results {
+                if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
+                    if let Some(cached) = prev_cell_results.get(entry.line_idx) {
+                        *slot = cached.clone();
+                    }
+                }
+            }
+            if eval_from < eval_to {
+                let calc_data = compute_calc_data(
+                    &self.calc.engine,
+                    &self.lines,
+                    calc_variables_enabled,
+                    calc_table_enabled,
+                    Some((eval_from, eval_to)),
+                );
+                for idx in eval_from..eval_to {
+                    if let Some(slot) = merged_results.get_mut(idx) {
+                        *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
+                    }
+                    if let Some(slot) = merged_cells.get_mut(idx) {
+                        *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
+                    }
+                }
+            }
+            (merged_results, merged_cells)
         } else {
             let calc_data = compute_calc_data(
                 &self.calc.engine,
@@ -1440,12 +1514,15 @@ impl TerminalApp {
                 calc_table_enabled,
                 None,
             );
-            (
-                calc_data.line_results,
-                calc_data.cell_results,
-                calc_data.variable_names,
-            )
+            (calc_data.line_results, calc_data.cell_results)
         };
+
+        let variable_names = self
+            .calc
+            .variable_dependency_graph
+            .as_ref()
+            .map(crate::editor_core::calc_plan::variable_names_from_dependency_graph)
+            .unwrap_or_default();
 
         // Auto-refresh committed-style trailers. Eligibility is deliberately
         // conservative — it requires that the line is byte-identical to the
@@ -1463,7 +1540,7 @@ impl TerminalApp {
         // reseed the snapshot below, so eligibility returns on the next
         // recompute once the user resumes normal in-line editing.
         let aligned = self.calc.prev_line_metadata.len() == self.lines.len()
-            && self.calc.results.len() == self.lines.len();
+            && prev_results_snapshot.len() == self.lines.len();
         let mut trailer_rewritten_lines: Vec<usize> = Vec::new();
 
         if aligned {
@@ -1494,7 +1571,7 @@ impl TerminalApp {
                 if !crate::editor_core::calc_plan::should_attempt_calc_trailer_refresh(
                     self.calc.prev_line_metadata[i].hash,
                     self.calc.line_metadata[i].hash,
-                    self.calc.results[i].as_deref(),
+                    prev_results_snapshot[i].as_deref(),
                     line_is_selected,
                 ) {
                     continue;
@@ -3153,6 +3230,21 @@ impl TerminalApp {
         if eval_from >= eval_to || eval_to > self.lines.len() {
             return;
         }
+        let calc_mask = self.calc_feature_mask();
+        crate::editor_core::calc_plan::sync_variable_dependency_graph(
+            &mut self.calc.variable_dependency_graph,
+            &self.lines,
+            eval_from,
+            eval_to,
+            calc_mask,
+        );
+        crate::editor_core::calc_plan::sync_table_formula_dependency_index(
+            &mut self.calc.table_formula_dependency_index,
+            &self.lines,
+            eval_from,
+            eval_to,
+            calc_mask,
+        );
         let calc_data = compute_calc_data(
             &self.calc.engine,
             &self.lines,
@@ -3182,7 +3274,12 @@ impl TerminalApp {
                     .unwrap_or_default();
             }
         }
-        self.calc.variable_names = calc_data.variable_names;
+        self.calc.variable_names = self
+            .calc
+            .variable_dependency_graph
+            .as_ref()
+            .map(crate::editor_core::calc_plan::variable_names_from_dependency_graph)
+            .unwrap_or(calc_data.variable_names);
     }
 
     // --- Wiki-link autocomplete ---

@@ -966,6 +966,7 @@ pub struct VariableDependencyGraph {
     assignment_rhs_refs_by_line: Vec<FxHashSet<String>>,
     assignment_line_by_name: FxHashMap<String, usize>,
     variable_dependents: FxHashMap<String, FxHashSet<String>>,
+    variable_consumer_lines: FxHashMap<String, FxHashSet<usize>>,
     line_variable_refs: Vec<FxHashSet<String>>,
     has_duplicate_assignment_names: bool,
 }
@@ -1042,6 +1043,7 @@ fn line_variable_refs(line: &str, mask: CalcFeatureMask) -> FxHashSet<String> {
 fn rebuild_dependency_maps(graph: &mut VariableDependencyGraph) {
     graph.assignment_line_by_name.clear();
     graph.variable_dependents.clear();
+    graph.variable_consumer_lines.clear();
     graph.has_duplicate_assignment_names = false;
 
     let mut assignment_name_counts: FxHashMap<String, usize> = FxHashMap::default();
@@ -1074,6 +1076,139 @@ fn rebuild_dependency_maps(graph: &mut VariableDependencyGraph) {
                 .insert(name.clone());
         }
     }
+
+    for (line_idx, refs) in graph.line_variable_refs.iter().enumerate() {
+        for referenced in refs {
+            graph
+                .variable_consumer_lines
+                .entry(referenced.clone())
+                .or_default()
+                .insert(line_idx);
+        }
+    }
+}
+
+fn add_dependency_edges(
+    graph: &mut VariableDependencyGraph,
+    dependent: &str,
+    refs: &FxHashSet<String>,
+) {
+    for referenced in refs {
+        if referenced == dependent {
+            continue;
+        }
+        graph
+            .variable_dependents
+            .entry(referenced.clone())
+            .or_default()
+            .insert(dependent.to_string());
+    }
+}
+
+fn remove_dependency_edges(
+    graph: &mut VariableDependencyGraph,
+    dependent: &str,
+    refs: &FxHashSet<String>,
+) {
+    for referenced in refs {
+        let mut empty = false;
+        if let Some(dependents) = graph.variable_dependents.get_mut(referenced) {
+            dependents.remove(dependent);
+            empty = dependents.is_empty();
+        }
+        if empty {
+            graph.variable_dependents.remove(referenced);
+        }
+    }
+}
+
+fn add_line_variable_refs(
+    graph: &mut VariableDependencyGraph,
+    line_idx: usize,
+    refs: &FxHashSet<String>,
+) {
+    for referenced in refs {
+        graph
+            .variable_consumer_lines
+            .entry(referenced.clone())
+            .or_default()
+            .insert(line_idx);
+    }
+}
+
+fn remove_line_variable_refs(
+    graph: &mut VariableDependencyGraph,
+    line_idx: usize,
+    refs: &FxHashSet<String>,
+) {
+    for referenced in refs {
+        let mut empty = false;
+        if let Some(consumers) = graph.variable_consumer_lines.get_mut(referenced) {
+            consumers.remove(&line_idx);
+            empty = consumers.is_empty();
+        }
+        if empty {
+            graph.variable_consumer_lines.remove(referenced);
+        }
+    }
+}
+
+fn try_patch_variable_dependency_graph_in_place(
+    graph: &mut VariableDependencyGraph,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    mask: CalcFeatureMask,
+) -> bool {
+    if graph.has_duplicate_assignment_names
+        || graph.assignment_name_by_line.len() != lines.len()
+        || graph.assignment_rhs_refs_by_line.len() != lines.len()
+        || graph.line_variable_refs.len() != lines.len()
+    {
+        return false;
+    }
+
+    let from = changed_from.min(lines.len());
+    let to = changed_to.min(lines.len()).max(from);
+    if from == to {
+        return true;
+    }
+
+    for line_idx in from..to {
+        let Some(line) = lines.get(line_idx) else {
+            return false;
+        };
+
+        let prev_name = graph.assignment_name_by_line[line_idx].clone();
+        let prev_rhs_refs = graph.assignment_rhs_refs_by_line[line_idx].clone();
+        let prev_line_refs = graph.line_variable_refs[line_idx].clone();
+
+        if let Some(name) = prev_name.as_ref() {
+            remove_dependency_edges(graph, name, &prev_rhs_refs);
+            graph.assignment_line_by_name.remove(name);
+        }
+        remove_line_variable_refs(graph, line_idx, &prev_line_refs);
+
+        let (next_name, next_rhs_refs) = line_assignment_def(line, mask);
+        let next_line_refs = line_variable_refs(line, mask);
+
+        if let Some(name) = next_name.as_ref() {
+            if let Some(existing_line) = graph.assignment_line_by_name.get(name).copied() {
+                if existing_line != line_idx {
+                    return false;
+                }
+            }
+            graph.assignment_line_by_name.insert(name.clone(), line_idx);
+            add_dependency_edges(graph, name, &next_rhs_refs);
+        }
+        add_line_variable_refs(graph, line_idx, &next_line_refs);
+
+        graph.assignment_name_by_line[line_idx] = next_name;
+        graph.assignment_rhs_refs_by_line[line_idx] = next_rhs_refs;
+        graph.line_variable_refs[line_idx] = next_line_refs;
+    }
+
+    true
 }
 
 pub fn build_variable_dependency_graph(
@@ -1104,6 +1239,7 @@ pub fn build_variable_dependency_graph(
         assignment_rhs_refs_by_line,
         assignment_line_by_name: FxHashMap::default(),
         variable_dependents: FxHashMap::default(),
+        variable_consumer_lines: FxHashMap::default(),
         line_variable_refs: line_variable_refs_cache,
         has_duplicate_assignment_names: false,
     };
@@ -1126,33 +1262,29 @@ pub fn sync_variable_dependency_graph(
     let can_patch_in_place = graph
         .as_mut()
         .map(|cached| {
-            if cached.has_duplicate_assignment_names
-                || cached.assignment_name_by_line.len() != lines.len()
-                || cached.assignment_rhs_refs_by_line.len() != lines.len()
-                || cached.line_variable_refs.len() != lines.len()
-            {
-                return false;
-            }
-
-            let from = changed_from.min(lines.len());
-            let to = changed_to.min(lines.len()).max(from);
-            for line_idx in from..to {
-                let Some(line) = lines.get(line_idx) else {
-                    return false;
-                };
-                let (name, rhs_refs) = line_assignment_def(line, mask);
-                cached.assignment_name_by_line[line_idx] = name;
-                cached.assignment_rhs_refs_by_line[line_idx] = rhs_refs;
-                cached.line_variable_refs[line_idx] = line_variable_refs(line, mask);
-            }
-            rebuild_dependency_maps(cached);
-            !cached.has_duplicate_assignment_names
+            try_patch_variable_dependency_graph_in_place(
+                cached,
+                lines,
+                changed_from,
+                changed_to,
+                mask,
+            )
         })
         .unwrap_or(false);
 
     if !can_patch_in_place {
         *graph = build_variable_dependency_graph(lines, mask);
     }
+}
+
+pub fn variable_names_from_dependency_graph(graph: &VariableDependencyGraph) -> Vec<String> {
+    let mut names = graph
+        .assignment_line_by_name
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    names.sort();
+    names
 }
 
 fn variable_dependency_window_from_graph(
@@ -1214,12 +1346,12 @@ fn variable_dependency_window_from_graph(
         }
     }
 
-    for (line_idx, refs) in graph.line_variable_refs.iter().enumerate() {
-        if refs.is_empty() {
+    for variable in &affected_variables {
+        let Some(consumers) = graph.variable_consumer_lines.get(variable) else {
             continue;
-        }
-        if refs.iter().any(|name| affected_variables.contains(name)) {
-            min_line = min_line.min(line_idx);
+        };
+        for line_idx in consumers {
+            min_line = min_line.min(*line_idx);
             max_line_exclusive = max_line_exclusive.max(line_idx.saturating_add(1));
             found_any = true;
         }
@@ -1275,6 +1407,7 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
+#[derive(Debug, Clone)]
 struct TableDataRows {
     rows: Vec<Vec<usize>>,
     row_for_line: FxHashMap<usize, usize>,
@@ -1333,62 +1466,70 @@ fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Ta
     }
 }
 
-fn coordinate_formula_dependency_window(
+#[derive(Debug, Clone)]
+struct TableFormulaLineInfo {
+    line_idx: usize,
+    has_row_formula: bool,
+    has_col_formula: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TableFormulaDependencyBlock {
+    table_start: usize,
+    table_end: usize,
+    formula_lines: Vec<TableFormulaLineInfo>,
+    data_rows: TableDataRows,
+    formula_nodes: FxHashMap<(usize, usize), usize>,
+    reverse_refs: FxHashMap<(usize, usize), FxHashSet<(usize, usize)>>,
+    nodes_with_coords: FxHashSet<(usize, usize)>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableFormulaDependencyIndex {
+    line_count: usize,
+    blocks: Vec<TableFormulaDependencyBlock>,
+}
+
+fn build_table_formula_dependency_block(
     lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    mask: CalcFeatureMask,
-) -> Option<(usize, usize)> {
-    if !mask.table_active() || changed_from >= changed_to {
-        return None;
-    }
+    table_start: usize,
+    table_end: usize,
+) -> Option<TableFormulaDependencyBlock> {
+    let data_rows = table_data_rows(lines, table_start, table_end);
+    let mut formula_lines = Vec::new();
+    let mut formula_nodes: FxHashMap<(usize, usize), usize> = FxHashMap::default();
+    let mut reverse_refs: FxHashMap<(usize, usize), FxHashSet<(usize, usize)>> =
+        FxHashMap::default();
+    let mut nodes_with_coords: FxHashSet<(usize, usize)> = FxHashSet::default();
 
-    let mut min_line = usize::MAX;
-    let mut max_line_exclusive = 0usize;
-    let mut line_idx = 0usize;
-
-    while line_idx < lines.len() {
-        if !is_table_line(&lines[line_idx]) {
-            line_idx = line_idx.saturating_add(1);
-            continue;
-        }
-        let Some((table_start, table_end)) = table_block_range(lines, line_idx) else {
-            line_idx = line_idx.saturating_add(1);
+    for line_idx in table_start..=table_end {
+        let Some(line) = lines.get(line_idx) else {
             continue;
         };
-        line_idx = table_end.saturating_add(1);
-
-        if table_end.saturating_add(1) <= changed_from || changed_to <= table_start {
+        let segments = find_table_formula_segments(line);
+        if segments.is_empty() {
             continue;
         }
+        let has_row_formula = segments.iter().any(|segment| {
+            segment
+                .labels
+                .iter()
+                .any(|label| label == "sum_row()" || label == "avg_row()")
+        });
+        let has_col_formula = segments.iter().any(|segment| {
+            segment
+                .labels
+                .iter()
+                .any(|label| label == "sum_col()" || label == "avg_col()")
+        });
+        formula_lines.push(TableFormulaLineInfo {
+            line_idx,
+            has_row_formula,
+            has_col_formula,
+        });
+    }
 
-        let data_rows = table_data_rows(lines, table_start, table_end);
-        if data_rows.rows.is_empty() {
-            continue;
-        }
-
-        let mut changed_cells: FxHashSet<(usize, usize)> = FxHashSet::default();
-        let mut structure_changed = false;
-        for idx in changed_from.max(table_start)..changed_to.min(table_end.saturating_add(1)) {
-            let Some(row_1based) = data_rows.row_for_line.get(&idx).copied() else {
-                structure_changed = true;
-                continue;
-            };
-            let col_count = data_rows.col_count_for_line.get(&idx).copied().unwrap_or(0);
-            if col_count == 0 {
-                structure_changed = true;
-                continue;
-            }
-            for col_1based in 1..=col_count {
-                changed_cells.insert((row_1based, col_1based));
-            }
-        }
-
-        let mut formula_nodes: FxHashMap<(usize, usize), usize> = FxHashMap::default();
-        let mut reverse_refs: FxHashMap<(usize, usize), FxHashSet<(usize, usize)>> =
-            FxHashMap::default();
-        let mut nodes_with_coords: FxHashSet<(usize, usize)> = FxHashSet::default();
-
+    if !data_rows.rows.is_empty() {
         for (logical_idx, row_line_idxs) in data_rows.rows.iter().enumerate() {
             let row_1based = logical_idx.saturating_add(1);
             for row_line_idx in row_line_idxs {
@@ -1407,23 +1548,130 @@ fn coordinate_formula_dependency_window(
                 }
             }
         }
+    }
 
-        if formula_nodes.is_empty() {
+    if formula_lines.is_empty() && formula_nodes.is_empty() {
+        return None;
+    }
+
+    Some(TableFormulaDependencyBlock {
+        table_start,
+        table_end,
+        formula_lines,
+        data_rows,
+        formula_nodes,
+        reverse_refs,
+        nodes_with_coords,
+    })
+}
+
+pub fn build_table_formula_dependency_index(
+    lines: &[String],
+    mask: CalcFeatureMask,
+) -> Option<TableFormulaDependencyIndex> {
+    if !mask.table_active() {
+        return None;
+    }
+
+    let mut blocks = Vec::new();
+    let mut line_idx = 0usize;
+    while line_idx < lines.len() {
+        if !is_table_line(&lines[line_idx]) {
+            line_idx = line_idx.saturating_add(1);
             continue;
+        }
+        let Some((table_start, table_end)) = table_block_range(lines, line_idx) else {
+            line_idx = line_idx.saturating_add(1);
+            continue;
+        };
+        if let Some(block) = build_table_formula_dependency_block(lines, table_start, table_end) {
+            blocks.push(block);
+        }
+        line_idx = table_end.saturating_add(1);
+    }
+
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(TableFormulaDependencyIndex {
+            line_count: lines.len(),
+            blocks,
+        })
+    }
+}
+
+pub fn sync_table_formula_dependency_index(
+    index: &mut Option<TableFormulaDependencyIndex>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    mask: CalcFeatureMask,
+) {
+    if !mask.table_active() {
+        *index = None;
+        return;
+    }
+
+    let needs_rebuild = index
+        .as_ref()
+        .map(|cached| {
+            cached.line_count != lines.len()
+                || table_range_maybe_impacts_formulas(lines, changed_from, changed_to, mask)
+        })
+        .unwrap_or(true);
+    if needs_rebuild {
+        *index = build_table_formula_dependency_index(lines, mask);
+    }
+}
+
+fn coordinate_formula_dependency_window_in_block(
+    block: &TableFormulaDependencyBlock,
+    changed_from: usize,
+    changed_to: usize,
+) -> Option<(usize, usize)> {
+    if changed_from >= changed_to
+        || block.table_end.saturating_add(1) <= changed_from
+        || changed_to <= block.table_start
+        || block.data_rows.rows.is_empty()
+        || block.formula_nodes.is_empty()
+    {
+        None
+    } else {
+        let mut changed_cells: FxHashSet<(usize, usize)> = FxHashSet::default();
+        let mut structure_changed = false;
+        for idx in
+            changed_from.max(block.table_start)..changed_to.min(block.table_end.saturating_add(1))
+        {
+            let Some(row_1based) = block.data_rows.row_for_line.get(&idx).copied() else {
+                structure_changed = true;
+                continue;
+            };
+            let col_count = block
+                .data_rows
+                .col_count_for_line
+                .get(&idx)
+                .copied()
+                .unwrap_or(0);
+            if col_count == 0 {
+                structure_changed = true;
+                continue;
+            }
+            for col_1based in 1..=col_count {
+                changed_cells.insert((row_1based, col_1based));
+            }
         }
 
         let mut affected_nodes: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut stack: Vec<(usize, usize)> = Vec::new();
-
         if structure_changed {
-            for node in &nodes_with_coords {
+            for node in &block.nodes_with_coords {
                 if affected_nodes.insert(*node) {
                     stack.push(*node);
                 }
             }
         } else {
             for changed in &changed_cells {
-                if let Some(dependents) = reverse_refs.get(changed) {
+                if let Some(dependents) = block.reverse_refs.get(changed) {
                     for dependent in dependents {
                         if affected_nodes.insert(*dependent) {
                             stack.push(*dependent);
@@ -1434,7 +1682,7 @@ fn coordinate_formula_dependency_window(
         }
 
         while let Some(node) = stack.pop() {
-            if let Some(dependents) = reverse_refs.get(&node) {
+            if let Some(dependents) = block.reverse_refs.get(&node) {
                 for dependent in dependents {
                     if affected_nodes.insert(*dependent) {
                         stack.push(*dependent);
@@ -1443,18 +1691,19 @@ fn coordinate_formula_dependency_window(
             }
         }
 
+        let mut min_line = usize::MAX;
+        let mut max_line_exclusive = 0usize;
         for node in &affected_nodes {
-            if let Some(dep_line_idx) = formula_nodes.get(node) {
+            if let Some(dep_line_idx) = block.formula_nodes.get(node) {
                 min_line = min_line.min(*dep_line_idx);
                 max_line_exclusive = max_line_exclusive.max(dep_line_idx.saturating_add(1));
             }
         }
-    }
-
-    if min_line == usize::MAX {
-        None
-    } else {
-        Some((min_line, max_line_exclusive))
+        if min_line == usize::MAX {
+            None
+        } else {
+            Some((min_line, max_line_exclusive))
+        }
     }
 }
 
@@ -1482,11 +1731,75 @@ fn formula_dependency_window(
     changed_to: usize,
     mask: CalcFeatureMask,
 ) -> Option<(usize, usize)> {
+    formula_dependency_window_with_cached_index(None, lines, changed_from, changed_to, mask)
+}
+
+fn formula_dependency_window_with_cached_index(
+    table_index: Option<&TableFormulaDependencyIndex>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    mask: CalcFeatureMask,
+) -> Option<(usize, usize)> {
     if !mask.table_active() {
         return None;
     }
     if changed_from >= changed_to {
         return None;
+    }
+
+    if let Some(index) = table_index {
+        let mut min_line = usize::MAX;
+        let mut max_line_exclusive = 0usize;
+        for block in &index.blocks {
+            if block.table_end.saturating_add(1) <= changed_from || changed_to <= block.table_start
+            {
+                continue;
+            }
+
+            let mut block_builtin_from = usize::MAX;
+            let mut block_builtin_to = 0usize;
+            for info in &block.formula_lines {
+                let mut impacted = info.line_idx >= changed_from && info.line_idx < changed_to;
+                if !impacted && info.has_col_formula {
+                    let dep_from = block.table_start;
+                    let dep_to = info.line_idx;
+                    impacted = dep_from < dep_to && dep_from < changed_to && changed_from < dep_to;
+                }
+                if !impacted && info.has_row_formula {
+                    impacted = info.line_idx >= changed_from && info.line_idx < changed_to;
+                }
+                if impacted {
+                    block_builtin_from = block_builtin_from.min(info.line_idx);
+                    block_builtin_to = block_builtin_to.max(info.line_idx.saturating_add(1));
+                }
+            }
+
+            let builtin_window = if block_builtin_from == usize::MAX {
+                None
+            } else {
+                Some((block_builtin_from, block_builtin_to))
+            };
+            let coord_window =
+                coordinate_formula_dependency_window_in_block(block, changed_from, changed_to);
+
+            let block_window = match (builtin_window, coord_window) {
+                (Some((from_a, to_a)), Some((from_b, to_b))) => {
+                    Some((from_a.min(from_b), to_a.max(to_b)))
+                }
+                (Some(window), None) | (None, Some(window)) => Some(window),
+                (None, None) => None,
+            };
+            if let Some((from, to)) = block_window {
+                min_line = min_line.min(from);
+                max_line_exclusive = max_line_exclusive.max(to);
+            }
+        }
+
+        if min_line == usize::MAX {
+            return None;
+        }
+        return Some((min_line, max_line_exclusive));
     }
 
     let mut min_line = usize::MAX;
@@ -1538,7 +1851,37 @@ fn formula_dependency_window(
     } else {
         Some((min_line, max_line_exclusive))
     };
-    let coord_window = coordinate_formula_dependency_window(lines, changed_from, changed_to, mask);
+    let coord_window = {
+        let mut min_coord = usize::MAX;
+        let mut max_coord = 0usize;
+        let mut line_idx = 0usize;
+        while line_idx < lines.len() {
+            if !is_table_line(&lines[line_idx]) {
+                line_idx = line_idx.saturating_add(1);
+                continue;
+            }
+            let Some((table_start, table_end)) = table_block_range(lines, line_idx) else {
+                line_idx = line_idx.saturating_add(1);
+                continue;
+            };
+            line_idx = table_end.saturating_add(1);
+            let Some(block) = build_table_formula_dependency_block(lines, table_start, table_end)
+            else {
+                continue;
+            };
+            if let Some((from, to)) =
+                coordinate_formula_dependency_window_in_block(&block, changed_from, changed_to)
+            {
+                min_coord = min_coord.min(from);
+                max_coord = max_coord.max(to);
+            }
+        }
+        if min_coord == usize::MAX {
+            None
+        } else {
+            Some((min_coord, max_coord))
+        }
+    };
 
     match (builtin_window, coord_window) {
         (Some((from_a, to_a)), Some((from_b, to_b))) => Some((from_a.min(from_b), to_a.max(to_b))),
@@ -1761,6 +2104,34 @@ pub fn decide_eval_window_with_cached_variable_graph_and_flags(
     variables_enabled: bool,
     table_enabled: bool,
 ) -> CalcEvalWindowDecision {
+    decide_eval_window_with_cached_dependency_indexes_and_flags(
+        variable_graph,
+        None,
+        lines,
+        changed_from,
+        changed_to,
+        prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        has_prev,
+        variables_enabled,
+        table_enabled,
+    )
+}
+
+pub fn decide_eval_window_with_cached_dependency_indexes_and_flags(
+    variable_graph: Option<&VariableDependencyGraph>,
+    table_formula_index: Option<&TableFormulaDependencyIndex>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+    prev_changed_had_builtin_formula: bool,
+    has_prev: bool,
+    variables_enabled: bool,
+    table_enabled: bool,
+) -> CalcEvalWindowDecision {
     let line_count = lines.len();
     let mut eval_from = changed_from.min(line_count);
     let mut eval_to = changed_to.min(line_count).max(eval_from);
@@ -1809,7 +2180,13 @@ pub fn decide_eval_window_with_cached_variable_graph_and_flags(
         || prev_changed_had_builtin_formula
         || table_range_maybe_impacts_formulas(lines, eval_from, eval_to, mask);
     if maybe_formula_deps {
-        if let Some((from, to)) = formula_dependency_window(lines, eval_from, eval_to, mask) {
+        if let Some((from, to)) = formula_dependency_window_with_cached_index(
+            table_formula_index,
+            lines,
+            eval_from,
+            eval_to,
+            mask,
+        ) {
             eval_from = eval_from.min(from);
             eval_to = eval_to.max(to);
         } else if touches_builtin_formula || prev_changed_had_builtin_formula {
@@ -2616,6 +2993,36 @@ mod tests {
             true,
             true,
         );
+        assert_eq!(decision_cached, decision_uncached);
+    }
+
+    #[test]
+    fn cached_table_dependency_index_matches_uncached_eval_window_decision() {
+        let lines = vec![
+            "| item | value | total |".to_string(),
+            "| --- | --- | --- |".to_string(),
+            "| a | 10 | |".to_string(),
+            "| b | 20 | |".to_string(),
+            "| c | 0 | :=(1,2) + (2,2) |".to_string(),
+        ];
+        let mask = CalcFeatureMask::default();
+        let table_index = build_table_formula_dependency_index(&lines, mask);
+
+        let decision_cached = decide_eval_window_with_cached_dependency_indexes_and_flags(
+            None,
+            table_index.as_ref(),
+            &lines,
+            2,
+            3,
+            &[],
+            false,
+            false,
+            true,
+            true,
+            true,
+        );
+        let decision_uncached =
+            decide_eval_window_with_flags(&lines, 2, 3, &[], false, false, true, true, true);
         assert_eq!(decision_cached, decision_uncached);
     }
 

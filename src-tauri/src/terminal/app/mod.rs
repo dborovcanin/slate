@@ -621,6 +621,18 @@ impl TerminalApp {
                 },
             )
         };
+        let table_formula_dependency_index = if skip_initial_calc {
+            None
+        } else {
+            crate::editor_core::calc_plan::build_table_formula_dependency_index(
+                &lines,
+                crate::editor_core::calc_plan::CalcFeatureMask {
+                    math_enabled: note_math_enabled,
+                    table_enabled: note_table_enabled,
+                    variables_enabled: note_variables_enabled,
+                },
+            )
+        };
         let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
         let initial_mode = if vim_mode {
             UiMode::Normal
@@ -689,11 +701,14 @@ impl TerminalApp {
                 cell_results: calc_data.cell_results,
                 variable_names: calc_data.variable_names,
                 variable_dependency_graph,
+                table_formula_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
                 stale: false,
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,
+                pathological_window_streak: 0,
+                forced_full_recompute_remaining: 0,
             },
             calc_recompute_pending: false,
             calc_recompute_due_at: None,

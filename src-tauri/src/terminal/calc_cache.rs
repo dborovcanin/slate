@@ -7,6 +7,8 @@ pub struct CalcCache {
     pub cell_results: Vec<Vec<app_core::calc::TableCellEvaluation>>,
     pub variable_names: Vec<String>,
     pub variable_dependency_graph: Option<crate::editor_core::calc_plan::VariableDependencyGraph>,
+    pub table_formula_dependency_index:
+        Option<crate::editor_core::calc_plan::TableFormulaDependencyIndex>,
     /// Metadata for current `lines`, incrementally patched on edits.
     pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,
     /// Snapshot aligned with `results` from the last recompute.
@@ -14,4 +16,6 @@ pub struct CalcCache {
     pub stale: bool,
     pub cached_has_builtin_formula: bool,
     pub cached_has_variable_assignment: bool,
+    pub pathological_window_streak: usize,
+    pub forced_full_recompute_remaining: usize,
 }
