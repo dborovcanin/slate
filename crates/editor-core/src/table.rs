@@ -1,12 +1,65 @@
 use std::hash::{Hash, Hasher};
 
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
+
+const TABLE_PARSE_CACHE_MAX_ENTRIES: usize = 2048;
 
 #[derive(Debug, Clone, Default)]
 pub struct TableFormatCache {
     row_cells: Vec<Vec<String>>,
     delimiter_flags: Vec<bool>,
     widths: Vec<usize>,
+    parsed_rows: FxHashMap<String, CachedTableRowParse>,
+    parsed_rows_hits: usize,
+    parsed_rows_misses: usize,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CachedTableRowParse {
+    pipes: Vec<usize>,
+    cells: Vec<String>,
+}
+
+impl TableFormatCache {
+    fn cached_row_parse(&mut self, line: &str) -> &CachedTableRowParse {
+        if self.parsed_rows.len() >= TABLE_PARSE_CACHE_MAX_ENTRIES {
+            self.parsed_rows.clear();
+        }
+        match self.parsed_rows.entry(line.to_string()) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                self.parsed_rows_hits = self.parsed_rows_hits.saturating_add(1);
+                entry.into_mut()
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                self.parsed_rows_misses = self.parsed_rows_misses.saturating_add(1);
+                entry.insert(CachedTableRowParse {
+                    pipes: table_pipe_positions(line),
+                    cells: split_row_cells_raw(line)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|cell| cell.trim().to_string())
+                        .collect(),
+                })
+            }
+        }
+    }
+
+    pub fn invalidate_parsed_rows(&mut self) {
+        self.parsed_rows.clear();
+    }
+
+    pub fn parsed_row_cache_stats(&self) -> (usize, usize) {
+        (self.parsed_rows_hits, self.parsed_rows_misses)
+    }
+
+    pub fn parsed_row_cache_size(&self) -> usize {
+        self.parsed_rows.len()
+    }
+
+    pub fn reset_parsed_row_cache_stats(&mut self) {
+        self.parsed_rows_hits = 0;
+        self.parsed_rows_misses = 0;
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +304,14 @@ pub fn split_table_cells(line: &str) -> Vec<String> {
         .into_iter()
         .map(|cell| cell.trim().to_string())
         .collect()
+}
+
+pub fn split_table_cells_with_cache(line: &str, cache: &mut TableFormatCache) -> Vec<String> {
+    cache.cached_row_parse(line).cells.clone()
+}
+
+pub fn table_pipe_positions_with_cache(line: &str, cache: &mut TableFormatCache) -> Vec<usize> {
+    cache.cached_row_parse(line).pipes.clone()
 }
 
 pub fn split_table_cells_for_logical_row(line: &str) -> Vec<String> {
@@ -966,6 +1027,41 @@ mod tests {
         assert_eq!(
             split_table_cells(line),
             vec!["left \\| right".to_string(), "ok".to_string()]
+        );
+    }
+
+    #[test]
+    fn cached_table_row_parse_reuses_cells_and_pipe_positions() {
+        let mut cache = TableFormatCache::default();
+        let line = "| left \\| right | ok |";
+        assert_eq!(
+            split_table_cells_with_cache(line, &mut cache),
+            vec!["left \\| right".to_string(), "ok".to_string()]
+        );
+        assert_eq!(
+            table_pipe_positions_with_cache(line, &mut cache),
+            vec![0, 16, 21]
+        );
+
+        // Re-read the same line to exercise cache reuse path.
+        assert_eq!(
+            split_table_cells_with_cache(line, &mut cache),
+            vec!["left \\| right".to_string(), "ok".to_string()]
+        );
+    }
+
+    #[test]
+    fn cached_table_row_parse_invalidate_drops_previous_entries() {
+        let mut cache = TableFormatCache::default();
+        let line = "| a | b |";
+        assert_eq!(
+            split_table_cells_with_cache(line, &mut cache),
+            vec!["a", "b"]
+        );
+        cache.invalidate_parsed_rows();
+        assert_eq!(
+            table_pipe_positions_with_cache(line, &mut cache),
+            table_pipe_positions(line)
         );
     }
 

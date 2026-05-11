@@ -65,6 +65,18 @@ const CALC_TABLE_EDIT_EVAL_DELAY_MS = CALC_EVAL_DELAY_MS;
 // no invalidation is needed — a changed line produces a different key.
 const FORMULA_SEGMENT_CACHE = new Map<string, TableFormulaSegment[]>();
 const FORMULA_SEGMENT_CACHE_MAX = 512;
+interface CachedFormulaLineDecoration {
+  replacements: Array<{
+    fromChar: number;
+    toChar: number;
+    value: string;
+    marker: string;
+    widthCh: number;
+  }>;
+  trailer: string;
+}
+const FORMULA_LINE_RENDER_CACHE = new Map<string, CachedFormulaLineDecoration>();
+const FORMULA_LINE_RENDER_CACHE_MAX = 1024;
 const tableRowRe = /^\s*\|.*\|\s*$/;
 
 function cachedCalcFindTableFormulaSegments(lineText: string): TableFormulaSegment[] {
@@ -76,6 +88,33 @@ function cachedCalcFindTableFormulaSegments(lineText: string): TableFormulaSegme
   }
   FORMULA_SEGMENT_CACHE.set(lineText, result);
   return result;
+}
+
+function cachedFormulaLineDecorationGet(key: string): CachedFormulaLineDecoration | null {
+  const hit = FORMULA_LINE_RENDER_CACHE.get(key);
+  if (!hit) return null;
+  FORMULA_LINE_RENDER_CACHE.delete(key);
+  FORMULA_LINE_RENDER_CACHE.set(key, hit);
+  return hit;
+}
+
+function cachedFormulaLineDecorationSet(key: string, value: CachedFormulaLineDecoration): void {
+  if (FORMULA_LINE_RENDER_CACHE.size >= FORMULA_LINE_RENDER_CACHE_MAX) {
+    FORMULA_LINE_RENDER_CACHE.delete(FORMULA_LINE_RENDER_CACHE.keys().next().value!);
+  }
+  FORMULA_LINE_RENDER_CACHE.set(key, value);
+}
+
+function formulaLineRenderCacheKey(
+  lineText: string,
+  lineResult: string | null,
+  cells: readonly TableCellEvaluation[],
+): string {
+  let cellSig = "";
+  for (const cell of cells) {
+    cellSig += `${cell.cell_index}:${cell.value}:${cell.error_kind ?? ""};`;
+  }
+  return `${lineText}\u0000${lineResult ?? ""}\u0000${cellSig}`;
 }
 
 // Effect to update calc results from backend
@@ -484,6 +523,8 @@ function buildCalcDecorationsForSpans(
   // throwaway list then add to the builder in document order at the end.
   const items: { from: number; to: number; deco: Decoration }[] = [];
   const selection = state.selection.main;
+  const collapsedSelection = selection.from === selection.to;
+  const cursorLineNumber = state.doc.lineAt(selection.head).number;
 
   for (const span of spans) {
     const fromLine = Math.max(1, span.fromLine);
@@ -498,6 +539,38 @@ function buildCalcDecorationsForSpans(
       const segments = cachedCalcFindTableFormulaSegments(line.text);
       if (segments.length > 0) {
         const cells = cellsForLine ?? [];
+        const canUseLineMemo = collapsedSelection && lineNumber !== cursorLineNumber;
+        let lineMemoKey: string | null = null;
+        if (canUseLineMemo) {
+          lineMemoKey = formulaLineRenderCacheKey(line.text, result ?? null, cells);
+          const memoHit = cachedFormulaLineDecorationGet(lineMemoKey);
+          if (memoHit) {
+            for (const replacement of memoHit.replacements) {
+              items.push({
+                from: line.from + replacement.fromChar,
+                to: line.from + replacement.toChar,
+                deco: Decoration.replace({
+                  widget: new FormulaCellWidget(
+                    replacement.value,
+                    replacement.marker,
+                    replacement.widthCh,
+                  ),
+                }),
+              });
+            }
+            if (memoHit.trailer.length > 0) {
+              items.push({
+                from: line.to,
+                to: line.to,
+                deco: Decoration.widget({
+                  widget: new CalcResultWidget(memoHit.trailer, " "),
+                  side: 1,
+                }),
+              });
+            }
+            continue;
+          }
+        }
         const cellsByIndex = new Map<number, { value: string; hasError: boolean }>();
         for (const cell of cells) {
           cellsByIndex.set(cell.cell_index, {
@@ -526,6 +599,8 @@ function buildCalcDecorationsForSpans(
         };
 
         const trailerParts: string[] = [];
+        const memoReplacements: CachedFormulaLineDecoration["replacements"] = [];
+        let memoEligible = canUseLineMemo;
         segments.forEach((seg, fi) => {
           const marker = formulaMarkerToken(fi);
           const computed = valueForCell(seg.cellIndex, fi);
@@ -552,15 +627,24 @@ function buildCalcDecorationsForSpans(
                 widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
               }),
             });
+            memoReplacements.push({
+              fromChar: seg.fromChar,
+              toChar: seg.toChar,
+              value: fitted.value,
+              marker: fitted.marker,
+              widthCh,
+            });
             trailerParts.push(`${marker} \u279c ${formulaSource}`);
             return;
           }
 
           if (computed && !computed.hasError && editingCell) {
+            memoEligible = false;
             trailerParts.push(`${marker} \u279c ${computed.value}`);
             return;
           }
 
+          memoEligible = false;
           if (formulaSource.length > 0) {
             trailerParts.push(`${marker} \u279c ${formulaSource}`);
           }
@@ -574,6 +658,13 @@ function buildCalcDecorationsForSpans(
               widget: new CalcResultWidget(trailerParts.join("  "), " "),
               side: 1,
             }),
+          });
+        }
+
+        if (memoEligible && lineMemoKey) {
+          cachedFormulaLineDecorationSet(lineMemoKey, {
+            replacements: memoReplacements,
+            trailer: trailerParts.join("  "),
           });
         }
 

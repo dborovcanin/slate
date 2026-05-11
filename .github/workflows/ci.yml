@@ -57,6 +57,9 @@ jobs:
       - name: Run tests
         run: npm run test
 
+      - name: Run unified perf check
+        run: npm run perf:check
+
   build-linux-binary:
     name: Build Linux Binary
     needs: test-linux

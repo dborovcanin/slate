@@ -43,6 +43,9 @@ const DEFAULT_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 200;
 const DEFAULT_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 1;
 const DEFAULT_IMAP_MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
+const DEFAULT_PERF_ENABLED: bool = false;
+const DEFAULT_PERF_UI_LOG_PATH: &str = "";
+const DEFAULT_PERF_TUI_LOG_PATH: &str = "";
 const MIN_IMAP_MAX_BYTES: usize = 1024;
 const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MIN_IMAP_POLL_SECONDS: u64 = 10;
@@ -161,6 +164,14 @@ max_message_bytes = 8388608
 # Maximum stored message body bytes. Must be <= max_message_bytes.
 # Range: 1024..67108864
 max_body_bytes = 524288
+
+[perf]
+# Enable runtime perf/startup logging and perf check runners.
+enabled = false
+# Optional explicit log paths. Empty means OS temp dir:
+# Linux -> /tmp/slate-log-ui.log and /tmp/slate-log-tui.log
+ui_log_path = ""
+tui_log_path = ""
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -250,6 +261,23 @@ pub struct ImapConfig {
     pub initial_sync_past_days: u16,
     pub max_message_bytes: usize,
     pub max_body_bytes: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PerfConfig {
+    pub enabled: bool,
+    pub ui_log_path: String,
+    pub tui_log_path: String,
+}
+
+impl Default for PerfConfig {
+    fn default() -> Self {
+        Self {
+            enabled: DEFAULT_PERF_ENABLED,
+            ui_log_path: DEFAULT_PERF_UI_LOG_PATH.to_string(),
+            tui_log_path: DEFAULT_PERF_TUI_LOG_PATH.to_string(),
+        }
+    }
 }
 
 impl Default for ImapConfig {
@@ -355,6 +383,8 @@ struct FileConfig {
     special_notes: SpecialNotesSection,
     #[serde(default)]
     imap: ImapSection,
+    #[serde(default)]
+    perf: PerfSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -418,6 +448,13 @@ struct ImapSection {
     initial_sync_past_days: Option<u16>,
     max_message_bytes: Option<u64>,
     max_body_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct PerfSection {
+    enabled: Option<bool>,
+    ui_log_path: Option<String>,
+    tui_log_path: Option<String>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -544,6 +581,32 @@ pub fn load_imap_config() -> ImapConfig {
     }
 }
 
+pub fn load_perf_config() -> PerfConfig {
+    let path = match ensure_config_file() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("Config: {err}");
+            return PerfConfig::default();
+        }
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("Config: failed to read {}: {err}", path.display());
+            return PerfConfig::default();
+        }
+    };
+
+    match parse_perf_config(&text) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            PerfConfig::default()
+        }
+    }
+}
+
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     let date_format = normalize_date_format(raw.editor.date_format);
@@ -649,6 +712,15 @@ fn parse_imap_config(text: &str) -> Result<ImapConfig, String> {
     })
 }
 
+fn parse_perf_config(text: &str) -> Result<PerfConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(PerfConfig {
+        enabled: raw.perf.enabled.unwrap_or(DEFAULT_PERF_ENABLED),
+        ui_log_path: normalize_optional_path(raw.perf.ui_log_path),
+        tui_log_path: normalize_optional_path(raw.perf.tui_log_path),
+    })
+}
+
 fn normalize_name(value: Option<String>, fallback: &str) -> String {
     let name = value
         .as_deref()
@@ -672,6 +744,15 @@ fn normalize_nonempty(value: Option<String>, fallback: &str) -> String {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .unwrap_or(fallback)
+        .to_string()
+}
+
+fn normalize_optional_path(value: Option<String>) -> String {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("")
         .to_string()
 }
 
@@ -1159,6 +1240,25 @@ mod tests {
     fn imap_defaults_initial_sync_past_days_to_one() {
         let imap = parse_imap_config("[imap]\n").expect("imap parsed");
         assert_eq!(imap.initial_sync_past_days, 1);
+    }
+
+    #[test]
+    fn parses_perf_section_and_defaults() {
+        let defaults = parse_perf_config("").expect("perf config parsed");
+        assert_eq!(defaults, PerfConfig::default());
+
+        let parsed = parse_perf_config(
+            r#"
+            [perf]
+            enabled = true
+            ui_log_path = "/tmp/slate-log-ui.log"
+            tui_log_path = "/tmp/slate-log-tui.log"
+            "#,
+        )
+        .expect("perf config parsed");
+        assert!(parsed.enabled);
+        assert_eq!(parsed.ui_log_path, "/tmp/slate-log-ui.log");
+        assert_eq!(parsed.tui_log_path, "/tmp/slate-log-tui.log");
     }
 
     #[test]

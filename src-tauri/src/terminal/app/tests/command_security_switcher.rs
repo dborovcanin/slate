@@ -1441,7 +1441,7 @@ fn execute_terminal_perf_where_reports_tui_log_path() {
     let (db, mut app, path) = app_with_note("alpha");
     app.execute_terminal_command(&db, "perf where");
     assert!(app.status.starts_with("perf logs: "));
-    assert!(app.status.contains("note-startup-tui_perf.log"));
+    assert!(app.status.contains("slate-log-tui.log"));
 
     drop(app);
     drop(db);

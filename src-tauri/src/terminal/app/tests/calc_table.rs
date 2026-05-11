@@ -1,5 +1,33 @@
 use super::*;
 
+fn strip_ansi_control_sequences(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if b == 0x1b {
+            idx += 1;
+            if idx < bytes.len() && bytes[idx] == b'[' {
+                idx += 1;
+                while idx < bytes.len() {
+                    let c = bytes[idx];
+                    idx += 1;
+                    if (0x40..=0x7e).contains(&c) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if b != b'\r' {
+            out.push(b as char);
+        }
+        idx += 1;
+    }
+    out
+}
+
 #[test]
 fn find_calc_segment_range_detects_single_table_expression_cell() {
     let line = "| name | 4+2 |";
@@ -85,6 +113,54 @@ fn should_mask_formula_cell_reveals_when_cursor_is_anywhere_in_formula_cell() {
         &seg
     ));
     assert!(should_mask_formula_cell(true, seg.cell_to_char, &seg));
+}
+
+#[test]
+fn formula_cell_stays_masked_and_updates_after_dependent_cell_edit() {
+    let (db, mut app, path) =
+        app_with_note("| value | calc |\n| --- | --- |\n| 2 | :=(1,1) * 10 |\n| 3 | plain |");
+
+    app.cursor_line = 0;
+    app.cursor_col = 0;
+    app.run_calc_recompute();
+
+    let mut frame_before = Vec::new();
+    app.draw(&mut frame_before).expect("draw before edit");
+    let rendered_before = strip_ansi_control_sequences(&String::from_utf8_lossy(&frame_before));
+    assert!(
+        rendered_before.contains("20*"),
+        "expected masked computed value before edit, got:\n{rendered_before}"
+    );
+    assert!(
+        !rendered_before.contains("| :=(1,1) * 10 |"),
+        "formula source leaked into table cell before edit:\n{rendered_before}"
+    );
+
+    app.cursor_line = 2;
+    let old_value_col = app.lines[2].find('2').expect("numeric source value") + 1;
+    app.cursor_col = old_value_col + 1;
+    app.handle_editor_key(&db, Key::Backspace)
+        .expect("backspace source value");
+    app.handle_editor_key(&db, Key::Char('4'))
+        .expect("type source value");
+
+    app.run_calc_recompute();
+
+    let mut frame_after = Vec::new();
+    app.draw(&mut frame_after).expect("draw after edit");
+    let rendered_after = strip_ansi_control_sequences(&String::from_utf8_lossy(&frame_after));
+    assert!(
+        rendered_after.contains("40*"),
+        "expected masked computed value after edit, got:\n{rendered_after}"
+    );
+    assert!(
+        !rendered_after.contains("| :=(1,1) * 10 |"),
+        "formula source leaked into table cell after edit:\n{rendered_after}"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
 }
 
 #[test]

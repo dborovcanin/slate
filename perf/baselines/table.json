@@ -1,0 +1,8 @@
+{
+  "description": "Table hot-path guardrails for CI profile",
+  "limits_p95_ms": {
+    "format_table_lines_with_cache": 80,
+    "table_cell_cursor_info_cached": 5,
+    "run_doc_change_rules_with_cache": 150
+  }
+}

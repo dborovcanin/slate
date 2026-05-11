@@ -856,6 +856,7 @@ impl TerminalApp {
                 let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
                 let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
                 let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
+                let mut formula_segment_char_delta_prefix: Vec<isize> = Vec::new();
                 let line_text = self.lines[line_idx].clone();
                 let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
                 let collapsed_hidden_count = self
@@ -893,19 +894,29 @@ impl TerminalApp {
                             .calc
                             .cell_results
                             .get(line_idx)
-                            .cloned()
-                            .unwrap_or_default();
+                            .map(Vec::as_slice)
+                            .unwrap_or(&[]);
+                        let mut cell_result_by_index: Vec<
+                            Option<&app_core::calc::TableCellEvaluation>,
+                        > = Vec::new();
+                        for entry in cell_results {
+                            if entry.cell_index >= cell_result_by_index.len() {
+                                cell_result_by_index.resize(entry.cell_index + 1, None);
+                            }
+                            cell_result_by_index[entry.cell_index] = Some(entry);
+                        }
                         let value_for_cell = |cell_index: usize| {
-                            cell_results
-                                .iter()
-                                .find(|entry| entry.cell_index == cell_index)
-                                .cloned()
+                            cell_result_by_index
+                                .get(cell_index)
+                                .and_then(|entry| *entry)
                         };
 
                         let mut out = String::with_capacity(line_text.len() + 16);
                         let mut last_byte = 0usize;
                         let mut char_delta: isize = 0;
                         let mut trailer_parts: Vec<String> = Vec::new();
+                        formula_segment_char_delta_prefix.clear();
+                        formula_segment_char_delta_prefix.push(0);
                         // Char position of the cursor in the rendered line; we
                         // collect this only when the cursor sits inside a
                         // focused (un-masked) formula cell.
@@ -915,13 +926,10 @@ impl TerminalApp {
                             let marker = formula_marker_token(fi);
                             let eval = value_for_cell(seg.cell_index);
                             let value = eval
-                                .as_ref()
                                 .map(|entry| format_formula_display_value(&entry.value))
                                 .unwrap_or_else(|| String::from("…"));
-                            let has_error = eval
-                                .as_ref()
-                                .and_then(|entry| entry.error_kind.as_ref())
-                                .is_some();
+                            let has_error =
+                                eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
                             let source_text =
                                 line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
@@ -933,10 +941,8 @@ impl TerminalApp {
                             // (so the user can see the result while editing),
                             // resting cells show the formula source.
                             let trailer_text = if let Some(err) = Self::table_error_text(
-                                eval.as_ref().and_then(|entry| entry.error_kind.as_ref()),
-                                eval.as_ref()
-                                    .map(|entry| entry.value.as_str())
-                                    .unwrap_or(""),
+                                eval.and_then(|entry| entry.error_kind.as_ref()),
+                                eval.map(|entry| entry.value.as_str()).unwrap_or(""),
                             ) {
                                 err
                             } else if is_focused && !has_error {
@@ -955,6 +961,7 @@ impl TerminalApp {
                                 let mapped =
                                     (self.cursor_col as isize + char_delta).max(0) as usize;
                                 focused_cursor_col = Some(mapped);
+                                formula_segment_char_delta_prefix.push(char_delta);
                             } else {
                                 let old_chars = seg.to_char.saturating_sub(seg.from_char);
                                 let replacement = Self::fit_formula_marker_replacement(
@@ -966,6 +973,7 @@ impl TerminalApp {
                                 let marker_end = marker_char + marker.chars().count();
                                 ghost_dim_ranges.push((marker_char, marker_end));
                                 char_delta += rendered_chars as isize - old_chars as isize;
+                                formula_segment_char_delta_prefix.push(char_delta);
                                 out.push_str(&replacement);
                             }
                             last_byte = seg.to_byte;
@@ -981,26 +989,14 @@ impl TerminalApp {
                                 // the segments that lie entirely before the
                                 // cursor and accumulate their rendered-vs-
                                 // source char delta.
-                                let mut delta: isize = 0;
-                                for (fi, seg) in formula_segments.iter().enumerate() {
-                                    if seg.cell_to_char <= self.cursor_col {
-                                        let eval = value_for_cell(seg.cell_index);
-                                        let value = eval
-                                            .as_ref()
-                                            .map(|entry| format_formula_display_value(&entry.value))
-                                            .unwrap_or_else(|| String::from("…"));
-                                        let has_error = eval
-                                            .as_ref()
-                                            .and_then(|entry| entry.error_kind.as_ref())
-                                            .is_some();
-                                        let marker = formula_marker_token(fi);
-                                        let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                                        let rep = Self::fit_formula_marker_replacement(
-                                            &value, &marker, old_chars, has_error,
-                                        );
-                                        delta += rep.chars().count() as isize - old_chars as isize;
-                                    }
-                                }
+                                let seg_count = formula_segments
+                                    .iter()
+                                    .take_while(|seg| seg.cell_to_char <= self.cursor_col)
+                                    .count();
+                                let delta = formula_segment_char_delta_prefix
+                                    .get(seg_count)
+                                    .copied()
+                                    .unwrap_or(0);
                                 ((self.cursor_col as isize) + delta).max(0) as usize
                             });
                             line_cursor_col = Some(mapped_col);
@@ -1082,31 +1078,14 @@ impl TerminalApp {
                         let left_pipe_char = line_text[..info.left_pipe].chars().count();
                         let right_pipe_char = line_text[..info.right_pipe].chars().count();
                         let translate = |src_col: usize| -> usize {
-                            let mut delta: isize = 0;
-                            for (fi, seg) in formula_segments.iter().enumerate() {
-                                if seg.cell_to_char <= src_col {
-                                    let eval =
-                                        self.calc.cell_results.get(line_idx).and_then(|row| {
-                                            row.iter()
-                                                .find(|entry| entry.cell_index == seg.cell_index)
-                                                .cloned()
-                                        });
-                                    let value = eval
-                                        .as_ref()
-                                        .map(|entry| format_formula_display_value(&entry.value))
-                                        .unwrap_or_else(|| String::from("…"));
-                                    let has_error = eval
-                                        .as_ref()
-                                        .and_then(|entry| entry.error_kind.as_ref())
-                                        .is_some();
-                                    let marker = formula_marker_token(fi);
-                                    let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                                    let rep = Self::fit_formula_marker_replacement(
-                                        &value, &marker, old_chars, has_error,
-                                    );
-                                    delta += rep.chars().count() as isize - old_chars as isize;
-                                }
-                            }
+                            let seg_count = formula_segments
+                                .iter()
+                                .take_while(|seg| seg.cell_to_char <= src_col)
+                                .count();
+                            let delta = formula_segment_char_delta_prefix
+                                .get(seg_count)
+                                .copied()
+                                .unwrap_or(0);
                             ((src_col as isize) + delta).max(0) as usize
                         };
                         let lp = translate(left_pipe_char);

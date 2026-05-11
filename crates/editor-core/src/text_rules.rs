@@ -902,13 +902,25 @@ fn is_table_separator(text: &str) -> bool {
     table::is_delimiter_row(&cells)
 }
 
-fn table_header_line_number(
+fn is_table_separator_with_cache(
+    text: &str,
+    table_format_cache: &mut table::TableFormatCache,
+) -> bool {
+    if !table::is_table_line(text) {
+        return false;
+    }
+    let cells = table::split_table_cells_with_cache(text, table_format_cache);
+    table::is_delimiter_row(&cells)
+}
+
+fn table_header_line_number_with_cache(
     ctx: &ResolvedContext<'_>,
     start_line: usize,
     end_line: usize,
+    table_format_cache: &mut table::TableFormatCache,
 ) -> usize {
     for line_no in start_line..=end_line {
-        if is_table_separator(ctx.line_text(line_no)) {
+        if is_table_separator_with_cache(ctx.line_text(line_no), table_format_cache) {
             if line_no > start_line {
                 return line_no - 1;
             }
@@ -1239,11 +1251,11 @@ pub fn run_table_multiline_break_rule_with_table_cache(
     if !is_table_line(&line.text) {
         return None;
     }
-    if is_table_separator(&line.text) {
+    if is_table_separator_with_cache(&line.text, table_format_cache) {
         return None;
     }
     let block = ctx.table_range_at_line(line.number, 1)?;
-    let pipes = table::table_pipe_positions(&line.text);
+    let pipes = table::table_pipe_positions_with_cache(&line.text, table_format_cache);
     if pipes.len() < 2 {
         return None;
     }
@@ -1260,7 +1272,9 @@ pub fn run_table_multiline_break_rule_with_table_cache(
     let split_byte = split_col.min(line.text.len());
 
     let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
-        .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
+        .map(|line_no| {
+            table::split_table_cells_with_cache(ctx.line_text(line_no), table_format_cache)
+        })
         .collect();
     let mut row_continuations: Vec<bool> = (block.start_line..=block.end_line)
         .map(|line_no| table::is_table_continuation_line(ctx.line_text(line_no)))
@@ -1327,7 +1341,7 @@ pub fn run_table_multiline_break_rule_with_table_cache(
         inserted_row_offset
     };
     let target_line = formatted.get(formatted_target_offset)?;
-    let target_pipes = table::table_pipe_positions(target_line);
+    let target_pipes = table::table_pipe_positions_with_cache(target_line, table_format_cache);
     let anchor_col = table::table_cell_span(target_line, &target_pipes, cell_index)
         .map(|span| span.edit_start())
         .unwrap_or_else(|| {
@@ -1375,12 +1389,17 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
 
     let block = ctx.table_range_at_line(line.number, 1)?;
 
-    let header_line = table_header_line_number(&ctx, block.start_line, block.end_line);
+    let header_line = table_header_line_number_with_cache(
+        &ctx,
+        block.start_line,
+        block.end_line,
+        table_format_cache,
+    );
     if line.number != header_line {
         return None;
     }
 
-    let pipes = table::table_pipe_positions(&line.text);
+    let pipes = table::table_pipe_positions_with_cache(&line.text, table_format_cache);
     if pipes.len() < 2 {
         return None;
     }
@@ -1391,7 +1410,9 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
     // the table-wide column count first so the insert index lines up
     // across rows that previously had different cell counts.
     let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
-        .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
+        .map(|line_no| {
+            table::split_table_cells_with_cache(ctx.line_text(line_no), table_format_cache)
+        })
         .collect();
     let row_continuations: Vec<bool> = (block.start_line..=block.end_line)
         .map(|line_no| table::is_table_continuation_line(ctx.line_text(line_no)))
@@ -1442,7 +1463,8 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
     // New cursor: navigation anchor of the inserted cell on the header row.
     let header_offset_in_block = header_line - block.start_line;
     let new_header_text = formatted.get(header_offset_in_block)?;
-    let new_header_pipes = table::table_pipe_positions(new_header_text);
+    let new_header_pipes =
+        table::table_pipe_positions_with_cache(new_header_text, table_format_cache);
     let anchor_col =
         table::table_cell_navigation_anchor(new_header_text, &new_header_pipes, insert_at);
     let anchor =
@@ -1485,26 +1507,33 @@ pub fn run_table_header_delete_column_rule_with_table_cache(
 
     let block = ctx.table_range_at_line(line.number, 1)?;
 
-    let header_line = table_header_line_number(&ctx, block.start_line, block.end_line);
+    let header_line = table_header_line_number_with_cache(
+        &ctx,
+        block.start_line,
+        block.end_line,
+        table_format_cache,
+    );
     if line.number != header_line {
         return None;
     }
 
-    let pipes = table::table_pipe_positions(&line.text);
+    let pipes = table::table_pipe_positions_with_cache(&line.text, table_format_cache);
     if pipes.len() < 2 {
         return None;
     }
     let cursor_col = selection.head.saturating_sub(line.from);
     let current_cell = table::table_cell_index_for_column(&pipes, cursor_col)?;
 
-    let header_cells = table::split_table_cells(&line.text);
+    let header_cells = table::split_table_cells_with_cache(&line.text, table_format_cache);
     let header_cell_text = header_cells.get(current_cell)?;
     if !header_cell_text.trim().is_empty() {
         return None;
     }
 
     let mut row_cells: Vec<Vec<String>> = (block.start_line..=block.end_line)
-        .map(|line_no| table::split_table_cells(ctx.line_text(line_no)))
+        .map(|line_no| {
+            table::split_table_cells_with_cache(ctx.line_text(line_no), table_format_cache)
+        })
         .collect();
     let row_continuations: Vec<bool> = (block.start_line..=block.end_line)
         .map(|line_no| table::is_table_continuation_line(ctx.line_text(line_no)))
@@ -1554,7 +1583,8 @@ pub fn run_table_header_delete_column_rule_with_table_cache(
 
     let header_offset_in_block = header_line - block.start_line;
     let new_header_text = formatted.get(header_offset_in_block)?;
-    let new_header_pipes = table::table_pipe_positions(new_header_text);
+    let new_header_pipes =
+        table::table_pipe_positions_with_cache(new_header_text, table_format_cache);
     let new_cell_count = new_header_pipes.len().saturating_sub(1);
     let target_cell = if new_cell_count == 0 {
         0

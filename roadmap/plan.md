@@ -178,7 +178,7 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 4. Add architecture guardrails in CI:
 
 - parity suites,
-- startup/hot-path performance checks,
+- startup/hot-path performance checks (`perf:check` unified startup+table guardrail),
 - protections against reintroducing duplicated semantics.
 
 1. Decide migration feature-flag policy for remaining moves:
@@ -198,38 +198,35 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 
 Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, and UI adapters.
 
-1. Eliminate full-document snapshot churn in shared Vim action execution.
+### 2026-05-11 Table Performance Update (shipped)
 
-- UI currently passes `view.state.doc.toString()` into shared action execution for each handled intent.
-- TUI currently builds full snapshot text via `join_lines(&self.lines)` for shared action execution.
-- Track: add line-window or line/column-native shared Vim action API, and keep local fast-paths where measurable.
+- [x] Shared-core table parse hot path now caches per-row pipe/cell parsing in `TableFormatCache` and reuses it across table edit rules (multiline break, insert/delete column, header detection).
+- [x] UI calc decoration path reduced repaint churn with deferred rebuilds, selection-only skip guards, and memoized non-cursor formula-line replacement plans.
+- [x] TUI formula-row rendering now avoids repeated per-segment scans by indexing `cell_results` once per row and reusing precomputed segment char-delta prefixes for cursor/pipe translation.
+- [x] Perf checks are unified under `npm run perf:check` (startup + table), with one global switch in `config.toml` (`[perf].enabled`, default `false`) and OS temp log defaults (`slate-log-ui.log`, `slate-log-tui.log`) unless overridden.
 
-2. Remove full-document `join -> replace -> split` path from TUI edit operation application.
+### Next Sprint Checklist (2026-05-12 to 2026-05-23)
 
-- `apply_edit_operation` currently rebuilds full text for many localized edits.
-- Track: apply edit changes directly to line slices where possible, with full rebuild only as fallback.
+- [ ] Shared vim action snapshot elimination (line-window / line+col API)
+  Owner: editor-core + UI adapter
+  Expected impact: removes O(document size) string snapshots on intent execution and reduces UI/TUI latency spikes on large notes.
+- [ ] TUI localized edit application (`apply_edit_operation` without full `join -> replace -> split` for local edits)
+  Owner: TUI adapter
+  Expected impact: lower per-edit allocation churn and smoother terminal typing on large files.
+- [ ] Calc note-line cache mutation hardening (`sync_note_lines` path)
+  Owner: calc runtime + editor-core
+  Expected impact: avoids accidental full `Vec<String>` clones during eval overlap, reducing jitter during rapid edits.
+- [ ] Partial calc variable-definition indexing (incremental index for changed windows)
+  Owner: calc runtime + editor-core
+  Expected impact: makes partial eval truly partial and cuts needless full-note scans after localized edits.
+- [ ] Live GUI parity runner for markdown/calc/folding (CodeMirror-backed)
+  Owner: UI adapter + test infrastructure
+  Expected impact: catches simulator-vs-runtime parity drift earlier and protects cross-frontend behavior consistency.
+- [ ] `TerminalApp` state decomposition (`EditorModel`, `CalcRuntime`, `OverlayState`, `RenderState`, `FoldRuntime`)
+  Owner: TUI adapter
+  Expected impact: smaller, safer diffs in terminal rendering/runtime changes and easier targeted performance work.
 
-3. Harden calc delta cache mutation path to avoid accidental full `Vec<String>` clones under concurrency.
-
-- `sync_note_lines` uses `Arc::make_mut`; with concurrent eval readers this can clone the whole note line cache.
-- Track: move note line cache to mutable shared storage with non-copying patch application semantics.
-
-4. Make partial calc truly partial for variable-definition indexing.
-
-- `evaluate_note_context_inner` still scans all lines to collect variable definitions even when `eval_range` is narrow.
-- Track: maintain/update incremental variable-definition index from changed windows.
-
-5. Upgrade parity coverage to include real GUI runtime path (not only simulator parity).
-
-- Existing replay coverage is strong but simulator-heavy for GUI parity behavior.
-- Track: add live CodeMirror-backed parity runner for markdown/calc/folding flows.
-
-6. Decompose `TerminalApp` state into focused runtime components.
-
-- `TerminalApp` still owns too many responsibilities in one struct.
-- Track: extract focused state modules (`EditorModel`, `CalcRuntime`, `OverlayState`, `RenderState`, `FoldRuntime`) while keeping shared-core semantics canonical.
-
-Acceptance criteria:
+Sprint acceptance criteria:
 
 - No O(document size) conversions in hot edit/action paths unless explicitly required.
 - Large-note edit latency remains stable for localized edits.

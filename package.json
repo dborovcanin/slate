@@ -16,7 +16,9 @@
     "test:rust": "cargo test --workspace",
     "perf:startup:record": "node scripts/startup-record.mjs",
     "perf:startup:check": "node scripts/startup-check.mjs",
-    "perf:table": "cargo run -p slate --bin table-perf --release"
+    "perf:table": "cargo run -p slate --bin table-perf --release",
+    "perf:table:check": "node scripts/table-perf-check.mjs",
+    "perf:check": "node scripts/perf-check.mjs"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

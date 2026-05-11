@@ -50,7 +50,7 @@ interface MutableBucket {
 const DEFAULT_CAPACITY = 512;
 const DEFAULT_TOP_BUCKETS = 12;
 const PERF_LOG_MODE = "ui_perf";
-const PERF_LOG_BASENAME = "note-startup-ui_perf.log";
+const PERF_LOG_BASENAME = "slate-log-ui.log";
 const STORAGE_KEY = "slate.editorProfiler.enabled";
 const QUERY_KEYS = [
   "editor_profiler",

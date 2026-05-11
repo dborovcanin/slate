@@ -180,79 +180,79 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-05 9:23pm GMT+2
+# [slate] recent context, 2026-05-11 1:49pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (18,861t read) | 859,147t work | 98% savings
+Stats: 50 obs (21,072t read) | 838,394t work | 97% savings
 
-### Apr 28, 2026
-S94 Change table formula cell prefix from bare = to := to align with variable assignment syntax, update docs (Apr 28, 3:52 PM)
-S108 Create slate.desktop XDG desktop entry file for the Slate application (Apr 28, 3:52 PM)
-S109 Calc engine and tables architecture review — identifying optimizations for performance without sacrificing code quality (Apr 28, 10:44 PM)
-### Apr 29, 2026
-S160 Design discussion for Obsidian-style wiki links [[notename#heading]] and [[notename^block]] in notes editor (Apr 29, 9:29 AM)
-S161 Note title vs ID storage — how Slate handles title storage, uniqueness, and duplicate title resolution for wiki-style links (Apr 29, 11:52 PM)
-183 11:56p 🔵 Slate note title is derived from body and stored as denormalized column
-S163 Wiki-link syntax: short 8-char ID + mandatory autocomplete picker (Apr 29, 11:56 PM)
 ### Apr 30, 2026
-184 12:01a ⚖️ Wiki-link syntax: short 8-char ID + mandatory autocomplete picker
 S171 Wiki-link tokenizer passes all 5 tests and full editor-core test suite (158 tests) passes (Apr 30, 12:01 AM)
-185 12:02a ⚖️ Wiki-link UX decisions: broken links, variable-style syntax, and autoclose behavior
-186 12:03a 🔵 Slate Pass 2 implementation checklist and project architecture confirmed
-188 12:04a 🟣 Wiki-link feature plan documented in docs/plan.md with full architecture spec
-189 " 🔵 markdown_tokens.rs InlineTokenType enum and tokenize_inline_markdown structure mapped
-190 12:05a 🔵 tokenize_inline_markdown uses sequential single-pass-per-type pattern with protect() guards
-192 12:08a 🟣 Added WikiLink token types to InlineTokenType enum in markdown_tokens.rs
-193 " 🟣 Extended is_inline_marker_token_kind() to recognize WikiLinkMarker tokens
-194 12:09a 🟣 Implemented wiki-link parser in tokenize_inline_markdown() with validation and token emission
-195 " 🟣 Added comprehensive test suite for wiki-link tokenizer with five test cases
-197 " 🟣 Wiki-link tokenizer passes all 5 tests and full editor-core test suite (158 tests) passes
 S174 Implement Obsidian-style wiki-links in Slate — broken link rendering, variable-like styling, and [[ autoclose before picker — starting with editor-core tokenizer (Apr 30, 12:09 AM)
 S192 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case (Apr 30, 12:10 AM)
-198 12:10a 🔵 app-core sqlite.rs public API mapped — get_note_meta and NoteSummary confirmed as insertion point for resolve_wiki_link
-200 12:11a 🟣 Implemented resolve_wiki_link() in app-core sqlite.rs using prefix LIKE query
-201 12:15a ⚖️ Wiki-link broken link, styling, and autoclose UX finalized
-202 " 🟣 Integration tests added for resolve_wiki_link() in sqlite.rs
-203 12:16a 🔴 Compile error in resolve_wiki_link test — create_note_with_defaults called with wrong arity
-204 " 🔴 resolve_wiki_link test fixed — create_note_with_defaults called with correct arguments
-205 " 🔵 Note IDs use ULID format — short_id slice of [..8] is valid for ULID strings
-206 12:17a 🔵 Note IDs generated as Ulid::new().to_string() without lowercasing in Tauri/TUI layer
-207 " 🔴 Wiki-link tokenizer ID validation changed from hex to alphanumeric to match ULID format
-209 " 🔴 Wiki-link tokenizer tests updated to use real ULID short IDs instead of hex short IDs
-211 12:20a 🔵 All tests pass after wiki-link fixes — 158 unit tests + 3 golden replay
-212 " 🔵 wasm_markdown_find_inline_tokens already exists — exposes inline tokenizer to UI
-213 " 🔵 inline_tokens_to_js defined at line 647 — must be read to check WikiLink* coverage
-214 12:21a 🟣 Obsidian-style extended wiki-link syntax requested — heading and block anchors
-215 12:23a 🔵 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case
-216 " 🔵 Tauri notes command surface mapped — no resolve_wiki_link command exists yet
-217 1:39p 🟣 Wiki-link heading autocomplete in UI and TUI
-218 " 🔵 extract_markdown_headings lives in editor-core, not app-core
-219 1:43p 🔵 Wiki-link navigation and TUI autocomplete bugs identified
+S210 Architecture and performance review of the Slate project — code only, ignoring markdown and tests (Apr 30, 12:23 AM)
 ### May 5, 2026
-225 12:19p 🟣 Broken image inline placeholder — [Image #n: alt] widget with undo/redo support
-S210 Architecture and performance review of the Slate project — code only, ignoring markdown and tests (May 5, 12:19 PM)
-229 12:20p ⚖️ Architecture review converted to four prioritized action tasks
-230 12:21p 🔵 calc_plan.rs FxHashMap migration scope confirmed — 9 sites across 4 functions
-231 5:09p 🟣 Table selection cancels on outside click or typing
-232 5:16p 🔴 Table cell selection now cancels on outside click or any keypress
-233 " ✅ Slate light theme colors shifted warmer and slightly deeper
-234 " 🔴 Editor wheel scroll snaps to whole CSS pixels, removing subpixel jitter
-235 5:18p 🟣 Table cell selection cancels on focus-out, typing, and outside click
-236 " 🔵 markdown-decoration.ts has significant dead code accumulation causing TypeScript errors
-237 5:24p 🔄 Table row controls repositioned as absolute overlay over last cell
-238 5:25p ✅ Session changes committed to main branch — 5 files, 4 distinct fixes
-239 5:33p ⚖️ Table cursor navigation UX — enter selects all, exit restores normal cursor
-240 " 🔵 Table cursor navigation architecture traced in TUI editor (CodeMirror/markdown-editing.ts)
-241 " 🔵 Table widget uses Decoration.replace + sourceModeLine to toggle between widget and raw-edit modes
+S227 Table cursor navigation improvements — implement Obsidian-like behavior for arrow keys in/out of tables with vim insert mode, including cross-cell and table boundary navigation (May 5, 12:19 PM)
+241 5:33p 🔵 Table widget uses Decoration.replace + sourceModeLine to toggle between widget and raw-edit modes
 242 5:34p 🔴 Rich table UI — stripped conflicting TUI cursor keymap and tableCursorGuards when richTableUi=true
 243 " 🔴 Editor CSS blur fix — text-rendering changed from optimizeLegibility to auto on cm-content
 245 6:22p ⚖️ Table cursor navigation UX — simplified arrow key behavior confirmed
 247 6:25p 🔵 Table cursor navigation code structure traced in markdown-editing.ts
 248 6:26p 🟣 Rich table arrow-key entry implemented — direct cell focus without whole-table selection
+249 10:39p ⚖️ Table cursor navigation UX — Obsidian-style arrow key behavior in UI
+250 " 🔵 Table cursor navigation code structure fully traced in markdown-editing.ts
+251 10:40p 🔵 Rich table widget textarea keydown already implements Obsidian-style arrow wrapping
+252 " 🔵 moveOutsideTable places CodeMirror cursor at line before/after table block, then calls view.focus()
+253 " 🔵 richTableUi is true whenever markdown decorations are enabled; Vim mode detected via view.dom.dataset.vimMode
+254 10:41p 🔵 Table widget replaces entire block with Decoration.replace — source mode toggled via StateField
+255 " 🔵 tableCursorGuards only runs in non-rich mode; Vim mode set via CSS classes and data-vimMode on view.dom
+S228 Implement Obsidian-like table cursor navigation for markdown tables in UI and TUI modes, with arrow keys behaving like normal text movement but constrained by table structure (May 5, 10:46 PM)
+256 10:53p 🔄 Add isTableDelimiterLine utility for table structure detection
+257 " 🟣 Refactor table arrow key navigation for Obsidian-like cursor behavior
+258 10:54p 🟣 Add rich table entry from adjacent prose and fix last-cell selection
+259 " ✅ Bind arrow keys to rich table entry in tableCursorKeymap
+260 10:55p ✅ Table cursor navigation implementation validated and tested
+S229 Table cursor navigation overhaul — Obsidian-like behavior for UI editor with cross-cell arrow wrapping, shift+arrow cell selection, and scroll/artifact fixes (May 5, 10:55 PM)
+261 11:12p ⚖️ Table cursor navigation UX — Obsidian-style arrow key behavior for UI
+262 11:13p 🔵 Table cell navigation code structure traced in markdown-decoration.ts
+263 " 🔵 Table widget DOM structure, blur commit, and cell selection mechanics traced
+264 11:18p 🔵 Table widget DOM construction — buildCellInput call sites and header vs body cell distinction
+265 11:19p 🔴 moveOutsideTable now scrolls cursor into view after table exit
+266 " 🟣 buildCellInput gains onShiftArrow callback parameter for Shift+arrow cell range selection
+S230 Obsidian-style table cursor navigation in rich table UI — all secondary fixes completed, tests passing (May 5, 11:23 PM)
+267 11:35p ⚖️ Table cursor navigation UX — Obsidian-style arrow key behavior confirmed
+268 11:36p 🔵 Table cell update and logical row architecture traced in markdown-decoration.ts
+269 11:37p 🔵 Full table arrow navigation implementation traced in markdown-editing.ts
+270 " ✅ TABLE_CELL_EVENT annotation constant added to applyTableBlockRows in markdown-decoration.ts
+271 " 🟣 TABLE_CELL_EVENT userEvent tag wired into applyTableBlockRows dispatch
+S231 Table cursor navigation UX overhaul — Obsidian-style arrow key behavior with character-level movement and cell/table boundary wrapping (May 5, 11:41 PM)
+272 11:59p ⚖️ Table cursor UX redesign — Obsidian-style arrow navigation
+273 " 🔵 Table cursor dispatch locations traced in markdown-editing.ts and markdown-decoration.ts
+### May 6, 2026
+274 12:04a 🔵 Table widget cursor navigation code structure traced in markdown-decoration.ts
+275 12:05a 🔵 Table cursor navigation split between rich UI mode and source mode with distinct implementations
+276 " 🔵 Rich table UI widget includes multi-cell selection, drag-reorder, and formula evaluation display
+277 12:11a 🔵 TableWidgetModel interface and multi-line cell continuation row format traced
+278 " 🔵 tableCursorGuards ViewPlugin clamps source-mode cursor to valid cell content positions
+279 12:12a 🔵 richTableUi flag controls plugin set — tableCursorGuards disabled in rich mode, tablePipeInputHandler added
+S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:12 AM)
+280 12:19a 🔴 Table cell update cursor jump — pin selection outside replaced range
+281 " 🔴 Table cell commit reentrancy — prevent double-dispatch on blur
+### May 11, 2026
+282 1:10p ✅ Roadmap Updated to Reflect Recent Updates and Performance Tweaks
+283 " 🔵 Slate Project Structure and Roadmap Coverage Confirmed
+284 1:11p 🔵 Calc Decoration Architecture: Dual Result Fields, Formula Cache, and Commit Marks
+285 " 🟣 TableFormatCache Gains Hit/Miss Instrumentation for Parsed Row Cache
+286 " ✅ Standalone table-perf Binary Deleted
+287 1:12p 🔵 Slate Project Architecture: Tauri App with Shared Rust Core
+288 " 🟣 New table-perf Binary: Comprehensive Multi-Scenario Table Performance Benchmark
+290 " 🔵 Table Implementation: UI is Pure WASM Delegation, TUI Has Thread-Local Cache Layer
+291 " 🔵 Table Core: Multi-Level Caching for Parse, Format, and Logical Row Structure
+292 " 🔵 TUI Table Cell Cache Uses Linear Scan on Cache Miss Path
+289 1:13p ✅ serde_json Promoted from dev-dependencies to dependencies in src-tauri
 
-Access 859k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 838k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 

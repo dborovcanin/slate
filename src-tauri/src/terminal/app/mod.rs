@@ -609,6 +609,7 @@ impl TerminalApp {
         } else {
             UiMode::Editor
         };
+        let perf_enabled = crate::config::load_perf_config().enabled;
         let initial_status = if vim_mode {
             "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit".to_string()
         } else {
@@ -718,7 +719,10 @@ impl TerminalApp {
             last_cursor_col: 0,
             last_cursor_block: false,
             last_draw_had_overlay: false,
-            perf_trace: PerfTraceState::default(),
+            perf_trace: PerfTraceState {
+                enabled: perf_enabled,
+                ..PerfTraceState::default()
+            },
         };
 
         app.rebuild_wiki_link_prefix_index();

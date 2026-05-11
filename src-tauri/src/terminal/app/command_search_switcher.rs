@@ -1263,10 +1263,19 @@ impl TerminalApp {
                     .and_then(|raw| raw.parse::<usize>().ok())
                     .unwrap_or(12);
                 let report = self.perf_dump_report(top);
+                let mut write_errors = 0usize;
                 for line in report.lines() {
-                    let _ = crate::startup_log::append_startup_log_line("tui_perf", line);
+                    if crate::startup_log::append_startup_log_line("tui_perf", line).is_err() {
+                        write_errors += 1;
+                    }
                 }
-                Some(format!("perf dump logged -> {path_text}"))
+                if write_errors > 0 {
+                    Some(format!(
+                        "perf dump write issue ({write_errors} lines) -> {path_text}"
+                    ))
+                } else {
+                    Some(format!("perf dump logged -> {path_text}"))
+                }
             }
             _ => Some(
                 "perf usage: perf [status|on|off|toggle|dump [top]|where|clear|cap <n>]"

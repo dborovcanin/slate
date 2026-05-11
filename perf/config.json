@@ -1,0 +1,14 @@
+{
+  "description": "Unified performance checks (startup + table). Global enable/disable comes from config.toml [perf].enabled.",
+  "checks": {
+    "startup": {
+      "enabled": true,
+      "runs": 3,
+      "threshold_pct": 15
+    },
+    "table": {
+      "enabled": true,
+      "profile": "ci"
+    }
+  }
+}
