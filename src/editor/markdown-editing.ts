@@ -839,6 +839,22 @@ function checklistClickHandlers() {
   });
 }
 
+function tableCursorPaddingGuard() {
+  return ViewPlugin.define(() => ({
+    update(update: ViewUpdate) {
+      if (!update.selectionSet) return;
+      const main = update.state.selection.main;
+      if (!main.empty) return;
+      const clamped = clampTableCursorToContent(update.state, main.head);
+      if (clamped === null || clamped === main.head) return;
+      update.view.dispatch({
+        selection: { anchor: clamped },
+        scrollIntoView: false,
+      });
+    },
+  }));
+}
+
 interface MarkdownEditingOptions {
   autoformat?: boolean;
   checklistAutoReorder?: boolean;
@@ -853,6 +869,7 @@ export function markdownEditingExtensions(options: MarkdownEditingOptions = {}) 
     ? [
       Prec.high(tablePipeInputHandler()),
       Prec.high(keymap.of(tableCursorKeymap(autoformat, tableEnabled))),
+      tableCursorPaddingGuard(),
     ]
     : [];
   return [

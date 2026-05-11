@@ -326,6 +326,10 @@ function formulaGhostExplanation(labels: readonly string[]): string {
     .join("  ");
 }
 
+function segmentFormulaSource(lineText: string, segment: TableFormulaSegment): string {
+  return lineText.slice(segment.fromChar, segment.toChar).trim();
+}
+
 const focusedPipeMark = Decoration.mark({ class: "cm-table-pipe-focused" });
 
 const CALC_VIEWPORT_MARGIN_LINES = 80;
@@ -417,10 +421,38 @@ function buildCalcDecorationsForSpans(
         segments.forEach((seg, fi) => {
           const marker = formulaMarkerToken(fi);
           const computed = valueForCell(seg.cellIndex);
+          const formulaSource = segmentFormulaSource(line.text, seg);
+          const editingCell = selectionTouchesSegment(
+            selection,
+            line.from,
+            seg.cellLeftPipeChar + 1,
+            seg.cellRightPipeChar,
+          );
 
-          const trailerText = computed && !computed.hasError ? computed.value : null;
-          if (trailerText) {
-            trailerParts.push(`${marker} \u279c ${trailerText}`);
+          if (computed && !computed.hasError && !editingCell) {
+            const minWidthCh = Math.max(
+              1,
+              seg.toChar - seg.fromChar,
+              computed.value.length + marker.length,
+            );
+            items.push({
+              from: line.from + seg.fromChar,
+              to: line.from + seg.toChar,
+              deco: Decoration.replace({
+                widget: new FormulaCellWidget(computed.value, marker, minWidthCh),
+              }),
+            });
+            trailerParts.push(`${marker} \u279c ${formulaSource}`);
+            return;
+          }
+
+          if (computed && !computed.hasError && editingCell) {
+            trailerParts.push(`${marker} \u279c ${computed.value}`);
+            return;
+          }
+
+          if (formulaSource.length > 0) {
+            trailerParts.push(`${marker} \u279c ${formulaSource}`);
           }
         });
 

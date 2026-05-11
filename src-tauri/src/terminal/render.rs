@@ -435,7 +435,7 @@ impl RenderContext {
 
         for &(start, end) in red_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
-                s.fg = Some(196);
+                s.fg = Some(self.palette.primary);
                 s.bold = true;
                 s.dim = false;
             }

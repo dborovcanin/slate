@@ -1070,7 +1070,7 @@ impl TerminalApp {
                 let line_width = line_display_cols(rendered_line.as_ref());
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
-                // Highlight the focused table cell's pipe characters in red so
+                // Highlight the focused table cell's pipe characters in accent so
                 // the active cell is obvious. Pipe positions are taken from
                 // the source `line_text` and translated to rendered char
                 // positions using the formula-mask delta accumulated above.
