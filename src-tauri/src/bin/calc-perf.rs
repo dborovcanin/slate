@@ -1,7 +1,6 @@
 use editor_core::calc_plan::{
-    build_table_formula_dependency_index, build_variable_dependency_graph,
-    decide_eval_window_with_cached_dependency_indexes_and_flags, decide_eval_window_with_flags,
-    sync_table_formula_dependency_index, sync_variable_dependency_graph, CalcFeatureMask,
+    build_calc_dependency_index, decide_eval_window_with_cached_calc_dependency_index_and_flags,
+    decide_eval_window_with_flags, sync_calc_dependency_index, CalcFeatureMask,
 };
 use serde::Serialize;
 use std::time::Instant;
@@ -157,8 +156,7 @@ fn bench_variable_chain(profile: BenchProfile) -> Vec<BenchStat> {
     };
     let mask = CalcFeatureMask::default();
     let mut lines = make_variable_chain_doc(chain_len, sink_count);
-    let mut variable_graph = build_variable_dependency_graph(&lines, mask);
-    let mut table_index = build_table_formula_dependency_index(&lines, mask);
+    let mut calc_dependency_index = build_calc_dependency_index(&lines, mask);
 
     let mut sync_ms = Vec::with_capacity(iterations);
     let mut cached_ms = Vec::with_capacity(iterations);
@@ -176,14 +174,18 @@ fn bench_variable_chain(profile: BenchProfile) -> Vec<BenchStat> {
         );
 
         let sync_start = Instant::now();
-        sync_variable_dependency_graph(&mut variable_graph, &lines, edit_idx, edit_idx + 1, mask);
-        sync_table_formula_dependency_index(&mut table_index, &lines, edit_idx, edit_idx + 1, mask);
+        sync_calc_dependency_index(
+            &mut calc_dependency_index,
+            &lines,
+            edit_idx,
+            edit_idx + 1,
+            mask,
+        );
         sync_ms.push(sync_start.elapsed().as_secs_f64() * 1000.0);
 
         let cached_start = Instant::now();
-        let cached = decide_eval_window_with_cached_dependency_indexes_and_flags(
-            variable_graph.as_ref(),
-            table_index.as_ref(),
+        let cached = decide_eval_window_with_cached_calc_dependency_index_and_flags(
+            calc_dependency_index.as_ref(),
             &lines,
             edit_idx,
             edit_idx + 1,
@@ -249,8 +251,7 @@ fn bench_table_coord(profile: BenchProfile) -> Vec<BenchStat> {
         variables_enabled: false,
     };
     let mut lines = make_large_coord_table(rows);
-    let mut variable_graph = build_variable_dependency_graph(&lines, mask);
-    let mut table_index = build_table_formula_dependency_index(&lines, mask);
+    let mut calc_dependency_index = build_calc_dependency_index(&lines, mask);
 
     let mut sync_ms = Vec::with_capacity(iterations);
     let mut cached_ms = Vec::with_capacity(iterations);
@@ -264,9 +265,8 @@ fn bench_table_coord(profile: BenchProfile) -> Vec<BenchStat> {
         let changed_to = changed_from + 1;
 
         let sync_start = Instant::now();
-        sync_variable_dependency_graph(&mut variable_graph, &lines, changed_from, changed_to, mask);
-        sync_table_formula_dependency_index(
-            &mut table_index,
+        sync_calc_dependency_index(
+            &mut calc_dependency_index,
             &lines,
             changed_from,
             changed_to,
@@ -275,9 +275,8 @@ fn bench_table_coord(profile: BenchProfile) -> Vec<BenchStat> {
         sync_ms.push(sync_start.elapsed().as_secs_f64() * 1000.0);
 
         let cached_start = Instant::now();
-        let cached = decide_eval_window_with_cached_dependency_indexes_and_flags(
-            variable_graph.as_ref(),
-            table_index.as_ref(),
+        let cached = decide_eval_window_with_cached_calc_dependency_index_and_flags(
+            calc_dependency_index.as_ref(),
             &lines,
             changed_from,
             changed_to,
@@ -355,8 +354,7 @@ fn bench_mixed_structural_and_content_edits(profile: BenchProfile) -> Vec<BenchS
     };
     let mask = CalcFeatureMask::default();
     let mut lines = make_mixed_doc(var_count, table_rows, prose_count);
-    let mut variable_graph = build_variable_dependency_graph(&lines, mask);
-    let mut table_index = build_table_formula_dependency_index(&lines, mask);
+    let mut calc_dependency_index = build_calc_dependency_index(&lines, mask);
 
     let mut sync_ms = Vec::with_capacity(iterations);
     let mut cached_ms = Vec::with_capacity(iterations);
@@ -408,9 +406,8 @@ fn bench_mixed_structural_and_content_edits(profile: BenchProfile) -> Vec<BenchS
         };
 
         let sync_start = Instant::now();
-        sync_variable_dependency_graph(&mut variable_graph, &lines, changed_from, changed_to, mask);
-        sync_table_formula_dependency_index(
-            &mut table_index,
+        sync_calc_dependency_index(
+            &mut calc_dependency_index,
             &lines,
             changed_from,
             changed_to,
@@ -419,9 +416,8 @@ fn bench_mixed_structural_and_content_edits(profile: BenchProfile) -> Vec<BenchS
         sync_ms.push(sync_start.elapsed().as_secs_f64() * 1000.0);
 
         let cached_start = Instant::now();
-        let cached = decide_eval_window_with_cached_dependency_indexes_and_flags(
-            variable_graph.as_ref(),
-            table_index.as_ref(),
+        let cached = decide_eval_window_with_cached_calc_dependency_index_and_flags(
+            calc_dependency_index.as_ref(),
             &lines,
             changed_from,
             changed_to,

@@ -1490,6 +1490,13 @@ pub struct TableFormulaDependencyIndex {
     blocks: Vec<TableFormulaDependencyBlock>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CalcDependencyIndex {
+    mask: CalcFeatureMask,
+    variable_graph: Option<VariableDependencyGraph>,
+    table_formula_index: Option<TableFormulaDependencyIndex>,
+}
+
 fn build_table_formula_dependency_block(
     lines: &[String],
     table_start: usize,
@@ -1622,6 +1629,79 @@ pub fn sync_table_formula_dependency_index(
     if needs_rebuild {
         *index = build_table_formula_dependency_index(lines, mask);
     }
+}
+
+pub fn build_calc_dependency_index(
+    lines: &[String],
+    mask: CalcFeatureMask,
+) -> Option<CalcDependencyIndex> {
+    if !mask.math_enabled {
+        return None;
+    }
+    let variable_graph = build_variable_dependency_graph(lines, mask);
+    let table_formula_index = build_table_formula_dependency_index(lines, mask);
+    if variable_graph.is_none() && table_formula_index.is_none() {
+        None
+    } else {
+        Some(CalcDependencyIndex {
+            mask,
+            variable_graph,
+            table_formula_index,
+        })
+    }
+}
+
+pub fn sync_calc_dependency_index(
+    index: &mut Option<CalcDependencyIndex>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    mask: CalcFeatureMask,
+) {
+    if !mask.math_enabled {
+        *index = None;
+        return;
+    }
+
+    if index
+        .as_ref()
+        .map(|cached| cached.mask != mask)
+        .unwrap_or(true)
+    {
+        *index = build_calc_dependency_index(lines, mask);
+        return;
+    }
+
+    if let Some(cached) = index.as_mut() {
+        sync_variable_dependency_graph(
+            &mut cached.variable_graph,
+            lines,
+            changed_from,
+            changed_to,
+            mask,
+        );
+        sync_table_formula_dependency_index(
+            &mut cached.table_formula_index,
+            lines,
+            changed_from,
+            changed_to,
+            mask,
+        );
+        if cached.variable_graph.is_none() && cached.table_formula_index.is_none() {
+            *index = None;
+        }
+    } else {
+        *index = build_calc_dependency_index(lines, mask);
+    }
+}
+
+pub fn variable_names_from_calc_dependency_index(
+    index: Option<&CalcDependencyIndex>,
+) -> Vec<String> {
+    index
+        .and_then(|cached| cached.variable_graph.as_ref())
+        .map(variable_names_from_dependency_graph)
+        .unwrap_or_default()
 }
 
 fn coordinate_formula_dependency_window_in_block(
@@ -2107,6 +2187,33 @@ pub fn decide_eval_window_with_cached_variable_graph_and_flags(
     decide_eval_window_with_cached_dependency_indexes_and_flags(
         variable_graph,
         None,
+        lines,
+        changed_from,
+        changed_to,
+        prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        has_prev,
+        variables_enabled,
+        table_enabled,
+    )
+}
+
+pub fn decide_eval_window_with_cached_calc_dependency_index_and_flags(
+    calc_dependency_index: Option<&CalcDependencyIndex>,
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_assignment_names: &[String],
+    prev_changed_had_assignment: bool,
+    prev_changed_had_builtin_formula: bool,
+    has_prev: bool,
+    variables_enabled: bool,
+    table_enabled: bool,
+) -> CalcEvalWindowDecision {
+    decide_eval_window_with_cached_dependency_indexes_and_flags(
+        calc_dependency_index.and_then(|cached| cached.variable_graph.as_ref()),
+        calc_dependency_index.and_then(|cached| cached.table_formula_index.as_ref()),
         lines,
         changed_from,
         changed_to,

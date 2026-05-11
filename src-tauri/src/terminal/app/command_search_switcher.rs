@@ -1802,8 +1802,7 @@ impl TerminalApp {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
-            self.calc.variable_dependency_graph = None;
-            self.calc.table_formula_dependency_index = None;
+            self.calc.calc_dependency_index = None;
             self.calc.line_metadata.clear();
             self.calc.prev_line_metadata.clear();
             self.calc.stale = false;
@@ -1817,8 +1816,7 @@ impl TerminalApp {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
             self.calc.variable_names.clear();
-            self.calc.variable_dependency_graph = None;
-            self.calc.table_formula_dependency_index = None;
+            self.calc.calc_dependency_index = None;
             self.calc.line_metadata.clear();
             self.calc.prev_line_metadata.clear();
             self.calc.stale = true;

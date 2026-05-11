@@ -609,22 +609,10 @@ impl TerminalApp {
                 },
             )
         };
-        let variable_dependency_graph = if skip_initial_calc {
+        let calc_dependency_index = if skip_initial_calc {
             None
         } else {
-            crate::editor_core::calc_plan::build_variable_dependency_graph(
-                &lines,
-                crate::editor_core::calc_plan::CalcFeatureMask {
-                    math_enabled: note_math_enabled,
-                    table_enabled: note_table_enabled,
-                    variables_enabled: note_variables_enabled,
-                },
-            )
-        };
-        let table_formula_dependency_index = if skip_initial_calc {
-            None
-        } else {
-            crate::editor_core::calc_plan::build_table_formula_dependency_index(
+            crate::editor_core::calc_plan::build_calc_dependency_index(
                 &lines,
                 crate::editor_core::calc_plan::CalcFeatureMask {
                     math_enabled: note_math_enabled,
@@ -700,8 +688,7 @@ impl TerminalApp {
                 results: calc_data.line_results,
                 cell_results: calc_data.cell_results,
                 variable_names: calc_data.variable_names,
-                variable_dependency_graph,
-                table_formula_dependency_index,
+                calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
                 stale: false,

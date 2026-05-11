@@ -659,8 +659,7 @@ impl TerminalApp {
         self.calc.results = vec![None; self.lines.len()];
         self.calc.cell_results = vec![Vec::new(); self.lines.len()];
         self.calc.variable_names.clear();
-        self.calc.variable_dependency_graph = None;
-        self.calc.table_formula_dependency_index = None;
+        self.calc.calc_dependency_index = None;
         self.calc.line_metadata.clear();
         self.calc.prev_line_metadata.clear();
         self.calc.stale = false;
@@ -1321,25 +1320,20 @@ impl TerminalApp {
                 None,
             );
             let calc_mask = self.calc_feature_mask();
-            self.calc.variable_dependency_graph =
-                crate::editor_core::calc_plan::build_variable_dependency_graph(
-                    &self.lines,
-                    calc_mask,
-                );
-            self.calc.table_formula_dependency_index =
-                crate::editor_core::calc_plan::build_table_formula_dependency_index(
-                    &self.lines,
-                    calc_mask,
-                );
+            self.calc.calc_dependency_index =
+                crate::editor_core::calc_plan::build_calc_dependency_index(&self.lines, calc_mask);
             self.calc.prev_line_metadata = self.calc.line_metadata.clone();
             self.calc.results = calc_data.line_results;
             self.calc.cell_results = calc_data.cell_results;
-            self.calc.variable_names = self
-                .calc
-                .variable_dependency_graph
-                .as_ref()
-                .map(crate::editor_core::calc_plan::variable_names_from_dependency_graph)
-                .unwrap_or(calc_data.variable_names);
+            let variable_names =
+                crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
+                    self.calc.calc_dependency_index.as_ref(),
+                );
+            self.calc.variable_names = if variable_names.is_empty() {
+                calc_data.variable_names
+            } else {
+                variable_names
+            };
             self.calc.pathological_window_streak = 0;
             self.calc.forced_full_recompute_remaining = 0;
             self.calc.stale = false;
@@ -1385,23 +1379,15 @@ impl TerminalApp {
             .iter()
             .any(|meta| meta.has_builtin_formula);
         let calc_mask = self.calc_feature_mask();
-        crate::editor_core::calc_plan::sync_variable_dependency_graph(
-            &mut self.calc.variable_dependency_graph,
+        crate::editor_core::calc_plan::sync_calc_dependency_index(
+            &mut self.calc.calc_dependency_index,
             &self.lines,
             plan.eval_from,
             plan.eval_to,
             calc_mask,
         );
-        crate::editor_core::calc_plan::sync_table_formula_dependency_index(
-            &mut self.calc.table_formula_dependency_index,
-            &self.lines,
-            plan.eval_from,
-            plan.eval_to,
-            calc_mask,
-        );
-        let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_cached_dependency_indexes_and_flags(
-            self.calc.variable_dependency_graph.as_ref(),
-            self.calc.table_formula_dependency_index.as_ref(),
+        let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_cached_calc_dependency_index_and_flags(
+            self.calc.calc_dependency_index.as_ref(),
             &self.lines,
             plan.eval_from,
             plan.eval_to,
@@ -1517,12 +1503,10 @@ impl TerminalApp {
             (calc_data.line_results, calc_data.cell_results)
         };
 
-        let variable_names = self
-            .calc
-            .variable_dependency_graph
-            .as_ref()
-            .map(crate::editor_core::calc_plan::variable_names_from_dependency_graph)
-            .unwrap_or_default();
+        let variable_names =
+            crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
+                self.calc.calc_dependency_index.as_ref(),
+            );
 
         // Auto-refresh committed-style trailers. Eligibility is deliberately
         // conservative — it requires that the line is byte-identical to the
@@ -3231,15 +3215,8 @@ impl TerminalApp {
             return;
         }
         let calc_mask = self.calc_feature_mask();
-        crate::editor_core::calc_plan::sync_variable_dependency_graph(
-            &mut self.calc.variable_dependency_graph,
-            &self.lines,
-            eval_from,
-            eval_to,
-            calc_mask,
-        );
-        crate::editor_core::calc_plan::sync_table_formula_dependency_index(
-            &mut self.calc.table_formula_dependency_index,
+        crate::editor_core::calc_plan::sync_calc_dependency_index(
+            &mut self.calc.calc_dependency_index,
             &self.lines,
             eval_from,
             eval_to,
@@ -3274,12 +3251,15 @@ impl TerminalApp {
                     .unwrap_or_default();
             }
         }
-        self.calc.variable_names = self
-            .calc
-            .variable_dependency_graph
-            .as_ref()
-            .map(crate::editor_core::calc_plan::variable_names_from_dependency_graph)
-            .unwrap_or(calc_data.variable_names);
+        let variable_names =
+            crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
+                self.calc.calc_dependency_index.as_ref(),
+            );
+        self.calc.variable_names = if variable_names.is_empty() {
+            calc_data.variable_names
+        } else {
+            variable_names
+        };
     }
 
     // --- Wiki-link autocomplete ---
