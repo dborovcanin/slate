@@ -1806,6 +1806,9 @@ impl TerminalApp {
             self.calc.prev_line_metadata.clear();
             self.calc.stale = false;
             self.calc_recompute_pending = false;
+            self.calc_recompute_due_at = None;
+            self.calc_pending_viewport_pass = false;
+            self.calc_pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
             self.calc.results = vec![None; self.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.lines.len()];
@@ -1814,6 +1817,9 @@ impl TerminalApp {
             self.calc.prev_line_metadata.clear();
             self.calc.stale = true;
             self.calc_recompute_pending = false;
+            self.calc_recompute_due_at = None;
+            self.calc_pending_viewport_pass = false;
+            self.calc_pending_full_pass = false;
         } else {
             self.run_calc_recompute();
         }

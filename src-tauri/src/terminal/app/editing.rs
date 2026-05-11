@@ -6,9 +6,10 @@ use super::{
     table_cell_info_at_char, table_cell_is_empty, table_cell_navigation_anchor, FoldKind,
     TerminalApp, UiMode, VariableAutocompletePopupState, VariableAutocompleteState,
     WikiLinkAutocompletePopupState, WikiLinkSuggestion, CALC_ASYNC_MIN_LINES,
-    CALC_RECOMPUTE_DEBOUNCE_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
-    FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
-    UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_RECOMPUTE_PENDING_RETRY_MS,
+    CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
+    HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
+    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
@@ -505,6 +506,17 @@ impl TerminalApp {
             && !self.calc.stale
     }
 
+    fn calc_recompute_debounce_duration(&self) -> Duration {
+        Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS)
+    }
+
+    fn schedule_calc_recompute(&mut self, viewport_pass: bool, full_pass: bool) {
+        self.calc_recompute_pending = true;
+        self.calc_pending_viewport_pass |= viewport_pass;
+        self.calc_pending_full_pass |= full_pass;
+        self.calc_recompute_due_at = None;
+    }
+
     fn shared_prefix_len_hashes(prev_hashes: &[u64], next_hashes: &[u64]) -> usize {
         let max = prev_hashes.len().min(next_hashes.len());
         let mut idx = 0usize;
@@ -633,6 +645,9 @@ impl TerminalApp {
         self.calc.prev_line_metadata = self.calc.line_metadata.clone();
         self.calc.stale = false;
         self.calc_recompute_pending = false;
+        self.calc_recompute_due_at = None;
+        self.calc_pending_viewport_pass = false;
+        self.calc_pending_full_pass = false;
         true
     }
 
@@ -645,6 +660,9 @@ impl TerminalApp {
         self.calc.stale = false;
         self.calc_last_view_eval_range = None;
         self.calc_recompute_pending = false;
+        self.calc_recompute_due_at = None;
+        self.calc_pending_viewport_pass = false;
+        self.calc_pending_full_pass = false;
     }
 
     pub(super) fn defer_calc_state_after_edit(&mut self) {
@@ -1164,9 +1182,15 @@ impl TerminalApp {
             // recompute, but the planner falls back to full eval safely when
             // the diff looks large, so correctness holds.
             self.calc_recompute_pending = false;
+            self.calc_recompute_due_at = None;
+            self.calc_pending_viewport_pass = false;
+            self.calc_pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
             self.defer_calc_state_after_edit();
             self.calc_recompute_pending = false;
+            self.calc_recompute_due_at = None;
+            self.calc_pending_viewport_pass = false;
+            self.calc_pending_full_pass = false;
         } else {
             if self.lines.len() >= CALC_ASYNC_MIN_LINES {
                 if line_count_changed {
@@ -1187,7 +1211,7 @@ impl TerminalApp {
                     if let Some(slot) = self.calc.cell_results.get_mut(self.cursor_line) {
                         slot.clear();
                     }
-                    self.calc_recompute_pending = true;
+                    self.schedule_calc_recompute(true, true);
                 }
             } else {
                 self.run_calc_recompute();
@@ -1264,6 +1288,9 @@ impl TerminalApp {
 
     pub(super) fn run_calc_recompute(&mut self) {
         let started = Instant::now();
+        self.calc_recompute_due_at = None;
+        self.calc_pending_viewport_pass = false;
+        self.calc_pending_full_pass = false;
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
             self.calc_recompute_pending = false;
@@ -1291,6 +1318,9 @@ impl TerminalApp {
             self.calc.variable_names = calc_data.variable_names;
             self.calc.stale = false;
             self.calc_recompute_pending = false;
+            self.calc_recompute_due_at = None;
+            self.calc_pending_viewport_pass = false;
+            self.calc_pending_full_pass = false;
             self.record_perf_duration("tui.calc.recompute", "stale_full", started.elapsed());
             return;
         }
@@ -1514,6 +1544,9 @@ impl TerminalApp {
         self.calc.variable_names = variable_names;
         self.calc.stale = false;
         self.calc_recompute_pending = false;
+        self.calc_recompute_due_at = None;
+        self.calc_pending_viewport_pass = false;
+        self.calc_pending_full_pass = false;
         self.record_perf_duration("tui.calc.recompute", "incremental", started.elapsed());
     }
 
@@ -1521,14 +1554,38 @@ impl TerminalApp {
         if !self.calc_recompute_pending {
             return;
         }
-        if self.last_edit.elapsed() < Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS) {
+        if self
+            .calc_recompute_due_at
+            .is_some_and(|due| Instant::now() < due)
+        {
+            return;
+        }
+        if self.last_edit.elapsed() < self.calc_recompute_debounce_duration() {
             return;
         }
         if self.calc_viewport_only {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
             self.calc_recompute_pending = false;
+            self.calc_recompute_due_at = None;
+            self.calc_pending_viewport_pass = false;
+            self.calc_pending_full_pass = false;
             return;
+        }
+        if self.lines.len() >= CALC_ASYNC_MIN_LINES {
+            let budget = Duration::from_millis(CALC_IDLE_EVAL_BUDGET_MS);
+            let tick_started = Instant::now();
+            if self.calc_pending_viewport_pass {
+                let editor_height = self.editor_height();
+                self.ensure_calc_for_viewport(editor_height, true);
+                self.calc_pending_viewport_pass = false;
+                if tick_started.elapsed() >= budget {
+                    self.calc_recompute_due_at = Some(
+                        Instant::now() + Duration::from_millis(CALC_RECOMPUTE_PENDING_RETRY_MS),
+                    );
+                    return;
+                }
+            }
         }
         self.run_calc_recompute();
     }
@@ -2215,6 +2272,9 @@ impl TerminalApp {
                 let editor_height = self.editor_height();
                 self.ensure_calc_for_viewport(editor_height, true);
                 self.calc_recompute_pending = false;
+                self.calc_recompute_due_at = None;
+                self.calc_pending_viewport_pass = false;
+                self.calc_pending_full_pass = false;
             } else {
                 self.run_calc_recompute();
             }

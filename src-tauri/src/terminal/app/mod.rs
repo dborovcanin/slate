@@ -26,6 +26,8 @@ use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
 const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
+const CALC_RECOMPUTE_PENDING_RETRY_MS: u64 = 35;
+const CALC_IDLE_EVAL_BUDGET_MS: u64 = 6;
 const CALC_ASYNC_MIN_LINES: usize = 2_000;
 const UNDO_DEBOUNCE_MS: u64 = 300;
 const CLIPBOARD_WATCH_POLL_MS: u64 = 350;
@@ -352,6 +354,9 @@ struct TerminalApp {
     // Calc ghost cache
     calc: CalcCache,
     calc_recompute_pending: bool,
+    calc_recompute_due_at: Option<Instant>,
+    calc_pending_viewport_pass: bool,
+    calc_pending_full_pass: bool,
     calc_viewport_only: bool,
     calc_last_view_eval_range: Option<(usize, usize)>,
     reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
@@ -678,6 +683,9 @@ impl TerminalApp {
                 cached_has_variable_assignment: initial_has_variable_assignment,
             },
             calc_recompute_pending: false,
+            calc_recompute_due_at: None,
+            calc_pending_viewport_pass: false,
+            calc_pending_full_pass: false,
             calc_viewport_only,
             calc_last_view_eval_range: None,
             reminder_ghosts,
