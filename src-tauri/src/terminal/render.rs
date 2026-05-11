@@ -329,9 +329,17 @@ impl RenderContext {
     ) -> String {
         let chars: Vec<char> = text.chars().collect();
         let len = chars.len();
-        let mut styles = vec![CharStyle::default(); len];
+        let is_table_row = text.trim_start().starts_with('|');
+        let is_table_continuation_line =
+            crate::editor_core::table::is_table_continuation_line(text);
+        let base_style = CharStyle {
+            fg: Some(self.palette.text_fg()),
+            bg: Some(self.palette.surface_bg()),
+            ..Default::default()
+        };
+        let mut styles = vec![base_style; len];
         let mut hidden_ranges: Vec<(usize, usize)> = Vec::new();
-        if crate::editor_core::table::is_table_continuation_line(text) {
+        if is_table_continuation_line {
             // `|>` is a structural continuation marker, not editable cell content.
             if let Some(style) = styles.get_mut(1) {
                 style.dim = true;
@@ -363,7 +371,6 @@ impl RenderContext {
         } else if self.in_code_block {
             for style in &mut styles {
                 style.dim = true;
-                style.fg = None;
             }
             let code_tokens =
                 markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
@@ -381,7 +388,6 @@ impl RenderContext {
             // would otherwise leak italic/bold across cell boundaries.
             // Skip inline emphasis tokens for table rows; keep code, links,
             // and strikethrough (which are not asterisk-based).
-            let is_table_row = text.trim_start().starts_with('|');
             let filtered_tokens: Vec<markdown_tokens::InlineToken>;
             let inline_tokens_to_apply: &[markdown_tokens::InlineToken] = if is_table_row {
                 filtered_tokens = inline_tokens
@@ -411,7 +417,11 @@ impl RenderContext {
         for &(start, end) in dim_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
                 s.dim = true;
+                s.fg = Some(self.palette.code_comment);
             }
+        }
+        if is_table_row && text.contains('*') {
+            apply_table_formula_marker_styles(&chars, &mut styles, self.palette.code_comment);
         }
 
         for &(start, end) in search_ranges {
@@ -470,6 +480,8 @@ impl RenderContext {
             reminder_ghost,
             reminder_strikethrough,
             &hidden_ranges,
+            base_style,
+            self.palette.code_comment,
         )
     }
 }
@@ -496,6 +508,40 @@ fn contains_assignment_operator(text: &str) -> bool {
     }
 
     false
+}
+
+fn apply_table_formula_marker_styles(chars: &[char], styles: &mut [CharStyle], marker_color: u8) {
+    let len = chars.len();
+    let mut i = 0usize;
+    while i < len {
+        if chars[i] != '*' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < len && chars[i] == '*' {
+            i += 1;
+        }
+        let end = i;
+        let prev = if start > 0 {
+            Some(chars[start - 1])
+        } else {
+            None
+        };
+        let next = if end < len { Some(chars[end]) } else { None };
+        let prev_ok = prev
+            .map(|ch| ch.is_ascii_digit() || ch == '.' || ch == ')')
+            .unwrap_or(false);
+        let next_ok = next
+            .map(|ch| ch == '|' || ch.is_whitespace())
+            .unwrap_or(true);
+        if prev_ok && next_ok {
+            for s in styles.iter_mut().take(end).skip(start) {
+                s.dim = true;
+                s.fg = Some(marker_color);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -544,6 +590,8 @@ fn build_ansi_output(
         None,
         false,
         &[],
+        CharStyle::default(),
+        244,
     )
 }
 
@@ -597,9 +645,14 @@ fn build_ansi_output_window(
     reminder_ghost: Option<&str>,
     reminder_strikethrough: bool,
     hidden_ranges: &[(usize, usize)],
+    base_style: CharStyle,
+    ghost_fg: u8,
 ) -> String {
     let mut buf = String::with_capacity(width * 4);
-    let mut current = CharStyle::default();
+    let mut current = base_style;
+    if !current.is_plain() {
+        current.write_ansi(&mut buf);
+    }
     let mut stream_col = 0usize;
     let mut emitted = 0usize;
     let window_end = window_col.saturating_add(width);
@@ -653,6 +706,8 @@ fn build_ansi_output_window(
         let ghost_style = CharStyle {
             dim: true,
             italic: true,
+            fg: Some(ghost_fg),
+            bg: base_style.bg,
             ..Default::default()
         };
         for ch in calc_prefix.chars().chain(ghost.chars()) {
@@ -675,6 +730,8 @@ fn build_ansi_output_window(
             dim: true,
             italic: true,
             strikethrough: reminder_strikethrough,
+            fg: Some(ghost_fg),
+            bg: base_style.bg,
             ..Default::default()
         };
         let reminder_prefix = if calc_ghost.is_some() { "  " } else { " " };
@@ -693,12 +750,17 @@ fn build_ansi_output_window(
         }
     }
 
-    if !current.is_plain() {
-        buf.push_str(RESET);
+    let filler_style = base_style;
+    if current != filler_style {
+        filler_style.write_ansi(&mut buf);
+        current = filler_style;
     }
     while emitted < width {
         buf.push(' ');
         emitted += 1;
+    }
+    if !current.is_plain() {
+        buf.push_str(RESET);
     }
     buf
 }
@@ -841,14 +903,27 @@ mod tests {
             &[],
             &[],
         );
-        assert!(out.contains("\x1b[0;2;3;9m"));
+        assert!(out.contains(";2;3;9;"));
     }
 
     #[test]
     fn render_line_with_dim_ranges_dims_marker_character() {
         let mut ctx = RenderContext::new();
         let out = ctx.render_line_with_dim_ranges("abc*", 12, None, &[], &[], &[], &[(3, 4)], &[]);
-        assert!(out.contains("\x1b[0;2m*"));
+        assert!(out.contains(";2;"));
+        assert!(strip_ansi(&out).starts_with("abc*"));
+    }
+
+    #[test]
+    fn render_table_formula_markers_use_ghost_style() {
+        let mut ctx = RenderContext::new();
+        let palette = RenderPalette::default();
+        let out = ctx.render_line("| a | 88* | 1455.86** |", 80, None, &[], &[], &[]);
+        assert!(out.contains(";2;"));
+        assert!(out.contains(&format!("38;5;{}", palette.code_comment)));
+        let visible = strip_ansi(&out);
+        assert!(visible.contains("88*"));
+        assert!(visible.contains("1455.86**"));
     }
 
     #[test]

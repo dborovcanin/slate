@@ -106,6 +106,35 @@ pub fn draw_row_at_styled(
     buf.push_str(render::RESET);
 }
 
+pub fn draw_framed_surface(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    width: usize,
+    height: usize,
+    bg: u8,
+    border_fg: u8,
+    border_bold: bool,
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let fill_style = AnsiStyle {
+        bg: Some(bg),
+        ..Default::default()
+    };
+    for dy in 0..height {
+        draw_row_at_styled(buf, row + dy, col, width, "", fill_style);
+    }
+    let border_style = AnsiStyle {
+        fg: Some(border_fg),
+        bg: Some(bg),
+        bold: border_bold,
+        ..Default::default()
+    };
+    draw_box_border(buf, row, col, width, height, border_style);
+}
+
 pub fn draw_box_border(
     buf: &mut String,
     row: usize,
@@ -114,45 +143,41 @@ pub fn draw_box_border(
     height: usize,
     style: AnsiStyle,
 ) {
+    let mut put = |r: usize, c: usize, ch: char| {
+        buf.push_str(&goto(r, c));
+        style.write_to(buf);
+        buf.push(ch);
+    };
+
     if width == 0 || height == 0 {
         return;
     }
     let row = row.max(1);
     let col = col.max(1);
-    style.write_to(buf);
     if width == 1 || height == 1 {
         for dx in 0..width {
-            buf.push_str(&goto(row, col + dx));
-            buf.push('─');
+            put(row, col + dx, '─');
         }
         buf.push_str(render::RESET);
         return;
     }
 
-    buf.push_str(&goto(row, col));
-    buf.push('┌');
+    put(row, col, '┌');
     for dx in 1..width.saturating_sub(1) {
-        buf.push_str(&goto(row, col + dx));
-        buf.push('─');
+        put(row, col + dx, '─');
     }
-    buf.push_str(&goto(row, col + width - 1));
-    buf.push('┐');
+    put(row, col + width - 1, '┐');
 
     let bottom = row + height - 1;
-    buf.push_str(&goto(bottom, col));
-    buf.push('└');
+    put(bottom, col, '└');
     for dx in 1..width.saturating_sub(1) {
-        buf.push_str(&goto(bottom, col + dx));
-        buf.push('─');
+        put(bottom, col + dx, '─');
     }
-    buf.push_str(&goto(bottom, col + width - 1));
-    buf.push('┘');
+    put(bottom, col + width - 1, '┘');
 
     for dy in 1..height.saturating_sub(1) {
-        buf.push_str(&goto(row + dy, col));
-        buf.push('│');
-        buf.push_str(&goto(row + dy, col + width - 1));
-        buf.push('│');
+        put(row + dy, col, '│');
+        put(row + dy, col + width - 1, '│');
     }
     buf.push_str(render::RESET);
 }

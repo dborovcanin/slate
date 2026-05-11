@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, goto, AnsiStyle};
+use super::ansi::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, goto, AnsiStyle};
 use super::render::{self, RenderPalette};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -199,23 +199,23 @@ pub fn draw_date_picker(
     let box_h: usize = 18;
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let surface_bg = palette.surface_bg();
 
-    let border_style = AnsiStyle {
-        fg: Some(palette.code_type),
-        ..Default::default()
-    };
     let title_style = AnsiStyle {
         fg: Some(palette.primary()),
+        bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
     let header_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
     let day_style = AnsiStyle {
         fg: Some(palette.variable),
+        bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
@@ -227,25 +227,32 @@ pub fn draw_date_picker(
     };
     let footer_style = AnsiStyle {
         fg: Some(palette.search_match),
+        bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
     let time_style = AnsiStyle {
         fg: Some(palette.code_string),
+        bg: Some(surface_bg),
         ..Default::default()
     };
     let hint_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
 
-    // Clear box area
-    for dy in 0..box_h {
-        draw_row_at_styled(buf, y + dy, x, box_w, "", AnsiStyle::default());
-    }
-
-    draw_box_border(buf, y, x, box_w, box_h, border_style);
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        false,
+    );
 
     let inner_w = box_w.saturating_sub(2);
     let inner_h = box_h.saturating_sub(2);
@@ -365,4 +372,37 @@ pub fn draw_date_picker(
     footer_style.write_to(buf);
     buf.push_str(&selected);
     buf.push_str(render::RESET);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::render::RenderPalette;
+
+    #[test]
+    fn draw_date_picker_border_uses_accent_and_surface_background() {
+        let palette = RenderPalette {
+            primary: 201,
+            surface_bg: 250,
+            ..RenderPalette::default()
+        };
+        let view = DatePickerView {
+            year: 2026,
+            month: 5,
+            day: 11,
+            hour: 14,
+            minute: 30,
+            include_time: true,
+            require_time: false,
+            is_notify: false,
+            date_format: "YYYY-MM-DD",
+            date_time_format: "YYYY-MM-DD HH:mm",
+        };
+        let mut buf = String::new();
+        draw_date_picker(&view, &mut buf, 24, 80, palette);
+        assert!(
+            buf.contains("38;5;201;48;5;250m┌"),
+            "date picker border should use accent fg with surface bg"
+        );
+    }
 }

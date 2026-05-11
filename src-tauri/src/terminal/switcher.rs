@@ -1,10 +1,9 @@
 use std::cmp::min;
 
-use super::ansi::{contrast_fg_for_bg, draw_box_border, draw_row_at_styled, AnsiStyle};
+use super::ansi::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, AnsiStyle};
 use super::render::RenderPalette;
 use app_core::storage::{NoteAccessMode, NoteSearchResult};
 
-const OVERLAY_SURFACE_BG: u8 = 236;
 const CONTENT_SEARCH_MIN_H: usize = 9;
 const CONTENT_SEARCH_MAX_H: usize = 14;
 const CONTENT_SEARCH_PREVIEW_LINES: usize = 3;
@@ -24,6 +23,7 @@ fn fill_box_interior(
         draw_row_at_styled(buf, row + dy, col + 1, width.saturating_sub(2), "", style);
     }
 }
+
 #[derive(Debug, Clone)]
 pub struct NoteMeta {
     pub id: String,
@@ -144,27 +144,23 @@ pub fn draw_switcher(
     let box_h = min(rows.saturating_sub(4).max(8), 14);
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let surface_bg = palette.surface_bg();
 
-    let border_style = AnsiStyle {
-        fg: Some(palette.code_type),
-        bg: Some(OVERLAY_SURFACE_BG),
-        ..Default::default()
-    };
     let prompt_style = AnsiStyle {
         fg: Some(palette.primary()),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
     let label_style = AnsiStyle {
         fg: Some(palette.code_comment),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
     let row_style = AnsiStyle {
         fg: Some(palette.variable),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
@@ -175,7 +171,16 @@ pub fn draw_switcher(
         ..Default::default()
     };
 
-    draw_box_border(buf, y, x, box_w, box_h, border_style);
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        false,
+    );
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
     let prompt = format!(" search: {}", view.query);
@@ -309,27 +314,23 @@ pub fn draw_content_search(
     palette: RenderPalette,
 ) {
     let (x, y, box_w, box_h) = content_search_box_geometry(rows, cols);
+    let surface_bg = palette.surface_bg();
 
-    let border_style = AnsiStyle {
-        fg: Some(palette.code_type),
-        bg: Some(OVERLAY_SURFACE_BG),
-        ..Default::default()
-    };
     let prompt_style = AnsiStyle {
         fg: Some(palette.primary()),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
     let label_style = AnsiStyle {
         fg: Some(palette.code_comment),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
     let row_style = AnsiStyle {
         fg: Some(palette.variable),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
@@ -341,12 +342,21 @@ pub fn draw_content_search(
     };
     let snippet_style = AnsiStyle {
         fg: Some(palette.code_comment),
-        bg: Some(OVERLAY_SURFACE_BG),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
 
-    draw_box_border(buf, y, x, box_w, box_h, border_style);
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        false,
+    );
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
     let prompt = format!(" content: {}", view.query);
@@ -469,24 +479,22 @@ pub fn draw_delete_confirm(
     let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let surface_bg = palette.surface_bg();
 
-    let border_style = AnsiStyle {
-        fg: Some(palette.primary()),
-        bold: true,
-        ..Default::default()
-    };
     let message_style = AnsiStyle {
         fg: Some(palette.primary()),
+        bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
     let hint_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
 
-    draw_box_border(buf, y, x, box_w, box_h, border_style);
+    draw_framed_surface(buf, y, x, box_w, box_h, surface_bg, palette.primary(), true);
 
     draw_row_at_styled(
         buf,
@@ -561,24 +569,22 @@ fn draw_confirm(
     let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let surface_bg = palette.surface_bg();
 
-    let border_style = AnsiStyle {
-        fg: Some(palette.primary()),
-        bold: true,
-        ..Default::default()
-    };
     let message_style = AnsiStyle {
         fg: Some(palette.primary()),
+        bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
     let hint_style = AnsiStyle {
         fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
 
-    draw_box_border(buf, y, x, box_w, box_h, border_style);
+    draw_framed_surface(buf, y, x, box_w, box_h, surface_bg, palette.primary(), true);
 
     draw_row_at_styled(
         buf,
@@ -658,6 +664,27 @@ mod tests {
         assert!(
             !buf.contains("38;5;33"),
             "prompt should not use keyword color"
+        );
+    }
+
+    #[test]
+    fn draw_switcher_border_uses_accent_and_surface_background() {
+        let palette = RenderPalette {
+            primary: 201,
+            surface_bg: 250,
+            ..RenderPalette::default()
+        };
+        let view = SwitcherView {
+            query: "",
+            items: &[],
+            matches: &[],
+            selected: 0,
+        };
+        let mut buf = String::new();
+        draw_switcher(&view, &mut buf, 24, 80, palette);
+        assert!(
+            buf.contains("38;5;201;48;5;250m┌"),
+            "switcher border should use accent fg with surface bg"
         );
     }
 

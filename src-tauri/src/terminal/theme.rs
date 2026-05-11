@@ -10,6 +10,8 @@ pub struct RenderPalette {
     pub search_match: u8,
     pub search_current: u8,
     pub primary: u8,
+    pub surface_bg: u8,
+    pub text_fg: u8,
 }
 
 impl Default for RenderPalette {
@@ -128,6 +130,69 @@ fn accent_rgb(accent: &str) -> Option<(u8, u8, u8)> {
     parse_hex_color(token_or_hex)
 }
 
+fn scheme_accent_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
+    let hex = match normalize_color_scheme(color_scheme).as_str() {
+        "slate" => "#7a5a3a",
+        "slate-dark" => "#3e5266",
+        "catppuccin-mocha" => "#89b4fa",
+        "catppuccin-latte" => "#1e66f5",
+        "gruvbox-dark" => "#fabd2f",
+        "gruvbox-light" => "#d65d0e",
+        "dracula" => "#bd93f9",
+        "dark" => "#4aa8ff",
+        "white" => "#005cc5",
+        "solarized-dark" => "#b58900",
+        "solarized-light" => "#cb4b16",
+        "nord" => "#88c0d0",
+        "tokyo-night" => "#7aa2f7",
+        "one-dark" => "#61afef",
+        _ => return None,
+    };
+    parse_hex_color(hex)
+}
+
+fn scheme_surface_bg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
+    let hex = match normalize_color_scheme(color_scheme).as_str() {
+        "slate" => "#f8f1e6",
+        "slate-dark" => "#1d1c20",
+        "catppuccin-mocha" => "#252536",
+        "catppuccin-latte" => "#e6e9ef",
+        "gruvbox-dark" => "#32302f",
+        "gruvbox-light" => "#f2e5bc",
+        "dracula" => "#313442",
+        "dark" => "#1a1d23",
+        "white" => "#f8f9fb",
+        "solarized-dark" => "#073642",
+        "solarized-light" => "#f5efdd",
+        "nord" => "#3b4252",
+        "tokyo-night" => "#212433",
+        "one-dark" => "#2f343f",
+        _ => return None,
+    };
+    parse_hex_color(hex)
+}
+
+fn scheme_text_fg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
+    let hex = match normalize_color_scheme(color_scheme).as_str() {
+        "slate" => "#1f1b16",
+        "slate-dark" => "#ece8e0",
+        "catppuccin-mocha" => "#cdd6f4",
+        "catppuccin-latte" => "#4c4f69",
+        "gruvbox-dark" => "#ebdbb2",
+        "gruvbox-light" => "#3c3836",
+        "dracula" => "#f8f8f2",
+        "dark" => "#e6edf3",
+        "white" => "#1f2933",
+        "solarized-dark" => "#93a1a1",
+        "solarized-light" => "#586e75",
+        "nord" => "#e5e9f0",
+        "tokyo-night" => "#c0caf5",
+        "one-dark" => "#abb2bf",
+        _ => return None,
+    };
+    parse_hex_color(hex)
+}
+
 impl RenderPalette {
     const fn from_values(
         code_keyword: u8,
@@ -151,11 +216,14 @@ impl RenderPalette {
             search_match,
             search_current,
             primary: code_keyword,
+            surface_bg: 236,
+            text_fg: 231,
         }
     }
 
     pub fn for_color_scheme(color_scheme: &str) -> Self {
-        match normalize_color_scheme(color_scheme).as_str() {
+        let normalized = normalize_color_scheme(color_scheme);
+        let mut palette = match normalized.as_str() {
             "catppuccin-mocha" => Self::from_values(111, 150, 217, 103, 117, 183, 180, 147, 211),
             "catppuccin-latte" => Self::from_values(33, 29, 166, 102, 25, 61, 130, 69, 160),
             "gruvbox-dark" => Self::from_values(214, 142, 208, 245, 109, 175, 172, 179, 167),
@@ -169,7 +237,17 @@ impl RenderPalette {
             "tokyo-night" => Self::from_values(111, 114, 216, 103, 75, 147, 153, 147, 204),
             "one-dark" => Self::from_values(75, 114, 180, 245, 74, 176, 152, 111, 203),
             _ => Self::default(),
+        };
+        if let Some(accent) = scheme_accent_rgb(&normalized) {
+            palette.primary = rgb_to_ansi_256(accent);
         }
+        if let Some(surface_bg) = scheme_surface_bg_rgb(&normalized) {
+            palette.surface_bg = rgb_to_ansi_256(surface_bg);
+        }
+        if let Some(text_fg) = scheme_text_fg_rgb(&normalized) {
+            palette.text_fg = rgb_to_ansi_256(text_fg);
+        }
+        palette
     }
 
     pub fn for_theme(color_scheme: &str, accent: &str) -> Self {
@@ -182,6 +260,14 @@ impl RenderPalette {
 
     pub fn primary(&self) -> u8 {
         self.primary
+    }
+
+    pub fn surface_bg(&self) -> u8 {
+        self.surface_bg
+    }
+
+    pub fn text_fg(&self) -> u8 {
+        self.text_fg
     }
 }
 
@@ -222,6 +308,7 @@ mod tests {
         assert_ne!(themed.primary(), base.primary());
         assert_eq!(themed.code_keyword, base.code_keyword);
         assert_eq!(themed.search_match, base.search_match);
+        assert_eq!(themed.surface_bg(), base.surface_bg());
     }
 
     #[test]
@@ -230,5 +317,26 @@ mod tests {
         let themed = RenderPalette::for_theme("dark", "#4f7bd9");
         assert_ne!(themed.primary(), base.primary());
         assert_eq!(themed.code_keyword, base.code_keyword);
+    }
+
+    #[test]
+    fn render_palette_for_theme_falls_back_to_scheme_accent_when_accent_is_empty_or_invalid() {
+        let base = RenderPalette::for_color_scheme("gruvbox-light");
+        let empty = RenderPalette::for_theme("gruvbox-light", "");
+        let invalid = RenderPalette::for_theme("gruvbox-light", "not-a-color");
+        assert_eq!(empty.primary(), base.primary());
+        assert_eq!(invalid.primary(), base.primary());
+        assert_eq!(empty.surface_bg(), base.surface_bg());
+        assert_eq!(invalid.surface_bg(), base.surface_bg());
+    }
+
+    #[test]
+    fn render_palette_uses_light_surface_background_for_light_schemes() {
+        use crate::terminal::ansi::contrast_fg_for_bg;
+
+        let light = RenderPalette::for_color_scheme("gruvbox-light");
+        let dark = RenderPalette::for_color_scheme("gruvbox-dark");
+        assert_eq!(contrast_fg_for_bg(light.surface_bg()), 16);
+        assert_eq!(contrast_fg_for_bg(dark.surface_bg()), 231);
     }
 }

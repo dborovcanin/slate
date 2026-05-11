@@ -1,6 +1,6 @@
 use super::adapter::TerminalVimAdapter;
 use super::ansi::{
-    contrast_fg_for_bg, draw_box_border, draw_row_at_styled, goto, pad_right, AnsiStyle,
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, goto, pad_right, AnsiStyle,
 };
 use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};

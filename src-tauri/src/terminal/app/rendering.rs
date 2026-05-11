@@ -1,5 +1,5 @@
 use super::{
-    contrast_fg_for_bg, cursor_render_char_col, display_cols_for_prefix, draw_box_border,
+    contrast_fg_for_bg, cursor_render_char_col, display_cols_for_prefix, draw_framed_surface,
     draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
     formula_marker_token, goto, line_display_cols, min, pad_right, table_cell_info_at_char,
     viewport_col_for_display_col, AnsiStyle, DatePickerAction, TableFormulaSegment, TerminalApp,
@@ -574,12 +574,9 @@ impl TerminalApp {
             .max(EDITOR_TOP_ROW)
             .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
 
-        let border_style = AnsiStyle {
-            fg: Some(self.render_palette.code_type),
-            ..Default::default()
-        };
         let row_style = AnsiStyle {
             fg: Some(self.render_palette.variable),
+            bg: Some(self.render_palette.surface_bg()),
             ..Default::default()
         };
         let selected_bg = self.render_palette.primary();
@@ -590,7 +587,16 @@ impl TerminalApp {
             ..Default::default()
         };
 
-        draw_box_border(buf, y, x, box_width, box_height, border_style);
+        draw_framed_surface(
+            buf,
+            y,
+            x,
+            box_width,
+            box_height,
+            self.render_palette.surface_bg(),
+            self.render_palette.primary(),
+            false,
+        );
 
         for (idx, suggestion) in suggestions.iter().enumerate() {
             let row = y + 1 + idx;
@@ -670,12 +676,9 @@ impl TerminalApp {
         y = y
             .max(EDITOR_TOP_ROW)
             .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
-        let border_style = AnsiStyle {
-            fg: Some(self.render_palette.code_type),
-            ..Default::default()
-        };
         let row_style = AnsiStyle {
             fg: Some(self.render_palette.variable),
+            bg: Some(self.render_palette.surface_bg()),
             ..Default::default()
         };
         let selected_bg = self.render_palette.primary();
@@ -685,7 +688,16 @@ impl TerminalApp {
             bold: true,
             ..Default::default()
         };
-        draw_box_border(buf, y, x, box_width, box_height, border_style);
+        draw_framed_surface(
+            buf,
+            y,
+            x,
+            box_width,
+            box_height,
+            self.render_palette.surface_bg(),
+            self.render_palette.primary(),
+            false,
+        );
         for (idx, suggestion) in visible_suggestions.iter().enumerate() {
             let row = y + 1 + idx;
             let text = format!(" {}", suggestion.title);
@@ -771,6 +783,7 @@ impl TerminalApp {
     pub(super) fn draw(&mut self, out: &mut impl Write) -> Result<(), String> {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
+        let editor_bg = self.render_palette.surface_bg();
         self.ensure_calc_for_viewport(editor_height, false);
         let gutter_width = self.gutter_width();
         let line_number_width = gutter_width.saturating_sub(2);
@@ -794,7 +807,7 @@ impl TerminalApp {
             " note  {}  {}{}{}",
             self.active_note.id, title, dirty_mark, mode_label
         );
-        let title_bg = self.render_palette.search_match;
+        let title_bg = self.render_palette.primary();
         draw_row_at_styled(
             &mut buf,
             TITLE_ROW,
@@ -828,6 +841,17 @@ impl TerminalApp {
 
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
+            draw_row_at_styled(
+                &mut buf,
+                row,
+                1,
+                cols,
+                "",
+                AnsiStyle {
+                    bg: Some(editor_bg),
+                    ..Default::default()
+                },
+            );
             let virtual_line = self.scroll_line + i;
             if let Some(line_idx) = self.real_line_for_virtual(virtual_line) {
                 if let Some(prev_real) = last_rendered_real {
@@ -1134,12 +1158,14 @@ impl TerminalApp {
                 let gutter_style = if is_cursor_line {
                     AnsiStyle {
                         fg: Some(self.render_palette.variable),
+                        bg: Some(editor_bg),
                         bold: true,
                         ..Default::default()
                     }
                 } else {
                     AnsiStyle {
                         fg: Some(self.render_palette.code_comment),
+                        bg: Some(editor_bg),
                         dim: true,
                         ..Default::default()
                     }
@@ -1150,6 +1176,7 @@ impl TerminalApp {
                 if viewport.has_left_overflow {
                     let indicator_style = AnsiStyle {
                         fg: Some(self.render_palette.code_comment),
+                        bg: Some(editor_bg),
                         dim: true,
                         ..Default::default()
                     };
@@ -1157,10 +1184,16 @@ impl TerminalApp {
                     buf.push(OVERFLOW_LEFT_MARKER);
                     buf.push_str(render::RESET);
                 }
+                AnsiStyle {
+                    bg: Some(editor_bg),
+                    ..Default::default()
+                }
+                .write_to(&mut buf);
                 buf.push_str(&rendered_text);
                 if viewport.has_right_overflow {
                     let indicator_style = AnsiStyle {
                         fg: Some(self.render_palette.code_comment),
+                        bg: Some(editor_bg),
                         dim: true,
                         ..Default::default()
                     };
@@ -1172,6 +1205,7 @@ impl TerminalApp {
                 buf.push_str(&goto(row, 1));
                 AnsiStyle {
                     fg: Some(self.render_palette.code_comment),
+                    bg: Some(editor_bg),
                     dim: true,
                     ..Default::default()
                 }
@@ -1219,7 +1253,7 @@ impl TerminalApp {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
         };
-        let status_bg = self.render_palette.search_match;
+        let status_bg = self.render_palette.primary();
         if !self.draw_command_completion_status_row(&mut buf, rows, cols, status_bg) {
             draw_row_at_styled(
                 &mut buf,
@@ -1403,6 +1437,8 @@ impl TerminalApp {
         }
         for row_idx in changed_rows {
             if let Some(chunk) = row_chunks.get(row_idx) {
+                out_buf.push_str(&goto(row_idx + 1, 1));
+                out_buf.push_str("\x1b[2K");
                 out_buf.push_str(chunk);
             }
         }

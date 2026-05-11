@@ -15,6 +15,7 @@ pub(super) struct CharStyle {
     pub(super) underline: bool,
     pub(super) reverse: bool,
     pub(super) fg: Option<u8>,
+    pub(super) bg: Option<u8>,
 }
 
 impl CharStyle {
@@ -42,6 +43,9 @@ impl CharStyle {
         if let Some(color) = self.fg {
             let _ = write!(buf, ";38;5;{color}");
         }
+        if let Some(color) = self.bg {
+            let _ = write!(buf, ";48;5;{color}");
+        }
         buf.push('m');
     }
 
@@ -53,6 +57,7 @@ impl CharStyle {
             && !self.underline
             && !self.reverse
             && self.fg.is_none()
+            && self.bg.is_none()
     }
 }
 
