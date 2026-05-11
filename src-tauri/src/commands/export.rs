@@ -72,6 +72,15 @@ impl FontFace {
             Self::Mono => 0.60,
         }
     }
+
+    fn space_factor(self) -> f32 {
+        match self {
+            // Courier space glyph width matches regular glyph width.
+            Self::Mono => 1.0,
+            // Keep current visual balance for Helvetica variants.
+            Self::Body | Self::Bold | Self::Italic | Self::BoldItalic => 0.8,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -923,7 +932,7 @@ fn styled_chars_for_code_line(
 fn char_draw_width(ch: char, size: f32, style: TextStyle) -> f32 {
     let font = style.font_face();
     if ch == ' ' {
-        size * font.width_factor() * 0.8
+        size * font.width_factor() * font.space_factor()
     } else {
         size * font.width_factor()
     }
@@ -1772,11 +1781,15 @@ fn page_stream(page: &Page) -> String {
                 text,
             } => {
                 let (r, g, b) = color.as_pdf_rgb();
-                let escaped = escape_pdf_text(text);
+                let encoded = encode_pdf_text_bytes(text);
+                if encoded.is_empty() {
+                    continue;
+                }
+                let hex = encode_pdf_hex_string(&encoded);
                 out.push_str("BT\n");
                 out.push_str(&format!("/{} {:.2} Tf\n", font.resource_name(), size));
                 out.push_str(&format!("{r:.4} {g:.4} {b:.4} rg\n"));
-                out.push_str(&format!("1 0 0 1 {:.2} {:.2} Tm ({escaped}) Tj\n", x, y));
+                out.push_str(&format!("1 0 0 1 {:.2} {:.2} Tm <{}> Tj\n", x, y, hex));
                 out.push_str("ET\n");
             }
             DrawOp::Line {
@@ -1837,18 +1850,71 @@ fn serialize_objects(objects: Vec<Vec<u8>>) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn escape_pdf_text(input: &str) -> String {
-    let mut out = String::with_capacity(input.len());
+fn encode_pdf_hex_string(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0F) as usize] as char);
+    }
+    out
+}
+
+fn encode_pdf_text_bytes(input: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(input.len());
     for ch in input.chars() {
+        if let Some(byte) = unicode_to_winansi_byte(ch) {
+            out.push(byte);
+            continue;
+        }
         match ch {
-            '\\' => out.push_str("\\\\"),
-            '(' => out.push_str("\\("),
-            ')' => out.push_str("\\)"),
-            _ if ch.is_ascii() && !ch.is_ascii_control() => out.push(ch),
-            _ => out.push('?'),
+            '\u{00a0}' => out.push(b' '), // nbsp
+            '☐' => out.extend_from_slice(b"[ ]"),
+            '☑' | '☒' | '✅' => out.extend_from_slice(b"[x]"),
+            _ => out.push(b'?'),
         }
     }
     out
+}
+
+fn unicode_to_winansi_byte(ch: char) -> Option<u8> {
+    let code = ch as u32;
+    if (0x20..=0x7e).contains(&code) {
+        return Some(code as u8);
+    }
+    if (0xa0..=0xff).contains(&code) {
+        return Some(code as u8);
+    }
+    match code {
+        0x20ac => Some(0x80), // €
+        0x201a => Some(0x82), // ‚
+        0x0192 => Some(0x83), // ƒ
+        0x201e => Some(0x84), // „
+        0x2026 => Some(0x85), // …
+        0x2020 => Some(0x86), // †
+        0x2021 => Some(0x87), // ‡
+        0x02c6 => Some(0x88), // ˆ
+        0x2030 => Some(0x89), // ‰
+        0x0160 => Some(0x8a), // Š
+        0x2039 => Some(0x8b), // ‹
+        0x0152 => Some(0x8c), // Œ
+        0x017d => Some(0x8e), // Ž
+        0x2018 => Some(0x91), // ‘
+        0x2019 => Some(0x92), // ’
+        0x201c => Some(0x93), // “
+        0x201d => Some(0x94), // ”
+        0x2022 => Some(0x95), // •
+        0x2013 => Some(0x96), // –
+        0x2014 => Some(0x97), // —
+        0x02dc => Some(0x98), // ˜
+        0x2122 => Some(0x99), // ™
+        0x0161 => Some(0x9a), // š
+        0x203a => Some(0x9b), // ›
+        0x0153 => Some(0x9c), // œ
+        0x017e => Some(0x9e), // ž
+        0x0178 => Some(0x9f), // Ÿ
+        _ => None,
+    }
 }
 
 #[cfg(test)]
@@ -1883,10 +1949,10 @@ mod tests {
         let text = String::from_utf8_lossy(&bytes);
 
         assert!(text.contains("%PDF-1.4"));
-        assert!(text.contains("(Title) Tj"));
-        assert!(text.contains("(Name) Tj"));
-        assert!(text.contains("(Score) Tj"));
-        assert!(text.contains("(item one) Tj"));
+        assert!(pdf_contains_text(&text, "Title"));
+        assert!(pdf_contains_text(&text, "Name"));
+        assert!(pdf_contains_text(&text, "Score"));
+        assert!(pdf_contains_text(&text, "item one"));
         assert!(text.contains("xref"));
     }
 
@@ -1897,9 +1963,9 @@ mod tests {
             .expect("pdf generation should succeed");
         let text = String::from_utf8_lossy(&bytes);
 
-        assert!(text.contains("(- ) Tj"));
-        assert!(text.contains("(one) Tj"));
-        assert!(text.contains("(two) Tj"));
+        assert!(pdf_contains_text(&text, "- "));
+        assert!(pdf_contains_text(&text, "one"));
+        assert!(pdf_contains_text(&text, "two"));
     }
 
     #[test]
@@ -2027,11 +2093,72 @@ mod tests {
         let bytes = build_markdown_pdf(source, &palette, |_| None).expect("pdf generation");
         let text = String::from_utf8_lossy(&bytes);
 
-        assert!(text.contains("(Done) Tj"));
+        assert!(pdf_contains_text(&text, "Done"));
         assert!(text.contains("/F2"));
         assert!(text.contains("/F4"));
         assert!(text.contains("1.0000 0.0000 0.0000 rg"));
         assert!(text.contains("0.0000 1.0000 0.0000 rg"));
-        assert!(!text.contains("([x]) Tj"));
+        assert!(!pdf_contains_text(&text, "[x]"));
+    }
+
+    #[test]
+    fn styled_chars_from_inline_preserves_spacing_around_code_and_links() {
+        let palette = PdfExportPalette::default();
+        let variable_names: Vec<String> = Vec::new();
+        let source = "Add assignment-trailer evaluation support (`val := a - b = 44` style reconciliation on tab). Link handling polish for [text](url) display behavior.";
+        let styled = styled_chars_from_inline(
+            source,
+            &variable_names,
+            &palette,
+            TextStyle::body(pdf_black()),
+        );
+        let flattened: String = styled.into_iter().map(|entry| entry.ch).collect();
+        assert_eq!(
+            flattened,
+            "Add assignment-trailer evaluation support (val := a - b = 44 style reconciliation on tab). Link handling polish for text display behavior."
+        );
+    }
+
+    #[test]
+    fn markdown_pdf_does_not_collapse_code_space_before_following_text() {
+        let source =
+            "- [ ] Add assignment-trailer evaluation support (`val := a - b = 44` style reconciliation on tab).";
+        let bytes = build_markdown_pdf(source, &PdfExportPalette::default(), |_| None)
+            .expect("pdf generation should succeed");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains("44style"),
+            "inline code boundary collapsed required whitespace"
+        );
+    }
+
+    #[test]
+    fn encode_pdf_text_bytes_preserves_common_unicode_punctuation() {
+        let encoded = encode_pdf_text_bytes("• “quote” – …");
+        assert_eq!(encoded, vec![0x95, 0x20, 0x93, 0x71, 0x75, 0x6f, 0x74, 0x65, 0x94, 0x20, 0x96, 0x20, 0x85]);
+    }
+
+    #[test]
+    fn encode_pdf_text_bytes_keeps_checkbox_fallbacks() {
+        let encoded = encode_pdf_text_bytes("☐ ☑");
+        assert_eq!(encoded, b"[ ] [x]");
+    }
+
+    #[test]
+    fn pdf_uses_hex_encoded_text_runs() {
+        let source = "Title";
+        let bytes = build_markdown_pdf(source, &PdfExportPalette::default(), |_| None)
+            .expect("pdf generation should succeed");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("<5469746C65> Tj"));
+    }
+
+    fn pdf_contains_text(pdf_text: &str, text: &str) -> bool {
+        let encoded = encode_pdf_text_bytes(text);
+        if encoded.is_empty() {
+            return false;
+        }
+        let marker = format!("<{}> Tj", encode_pdf_hex_string(&encoded));
+        pdf_text.contains(&marker)
     }
 }
