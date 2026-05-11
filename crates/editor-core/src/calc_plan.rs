@@ -1053,7 +1053,13 @@ fn is_table_delimiter_row(cells: &[String]) -> bool {
     !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
 }
 
-fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Vec<Vec<usize>> {
+struct TableDataRows {
+    rows: Vec<Vec<usize>>,
+    row_for_line: FxHashMap<usize, usize>,
+    col_count_for_line: FxHashMap<usize, usize>,
+}
+
+fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> TableDataRows {
     let mut delimiter_row: Option<usize> = None;
     for row_idx in table_start..=table_end {
         let Some(line) = lines.get(row_idx) else {
@@ -1066,35 +1072,43 @@ fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Ve
         }
     }
     let Some(data_start) = delimiter_row.map(|row| row.saturating_add(1)) else {
-        return Vec::new();
+        return TableDataRows {
+            rows: Vec::new(),
+            row_for_line: FxHashMap::default(),
+            col_count_for_line: FxHashMap::default(),
+        };
     };
     let mut rows: Vec<Vec<usize>> = Vec::new();
+    let mut row_for_line: FxHashMap<usize, usize> = FxHashMap::default();
+    let mut col_count_for_line: FxHashMap<usize, usize> = FxHashMap::default();
     for row_idx in data_start..=table_end {
         let Some(line) = lines.get(row_idx) else {
             continue;
         };
         let cells = split_table_cells(line);
+        col_count_for_line.insert(row_idx, cells.len());
         if is_table_delimiter_row(&cells) {
             continue;
         }
         if table::is_table_continuation_line(line) {
-            if let Some(last) = rows.last_mut() {
-                last.push(row_idx);
-            } else {
+            if rows.is_empty() {
                 rows.push(vec![row_idx]);
+                row_for_line.insert(row_idx, 1);
+            } else {
+                let logical_row = rows.len();
+                rows[logical_row - 1].push(row_idx);
+                row_for_line.insert(row_idx, logical_row);
             }
         } else {
             rows.push(vec![row_idx]);
+            row_for_line.insert(row_idx, rows.len());
         }
     }
-    rows
-}
-
-fn table_row_index_1based(data_rows: &[Vec<usize>], line_idx: usize) -> Option<usize> {
-    data_rows
-        .iter()
-        .position(|row| row.contains(&line_idx))
-        .map(|pos| pos.saturating_add(1))
+    TableDataRows {
+        rows,
+        row_for_line,
+        col_count_for_line,
+    }
 }
 
 fn coordinate_formula_dependency_window(
@@ -1127,19 +1141,18 @@ fn coordinate_formula_dependency_window(
         }
 
         let data_rows = table_data_rows(lines, table_start, table_end);
-        if data_rows.is_empty() {
+        if data_rows.rows.is_empty() {
             continue;
         }
 
         let mut changed_cells: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut structure_changed = false;
         for idx in changed_from.max(table_start)..changed_to.min(table_end.saturating_add(1)) {
-            let Some(row_1based) = table_row_index_1based(&data_rows, idx) else {
+            let Some(row_1based) = data_rows.row_for_line.get(&idx).copied() else {
                 structure_changed = true;
                 continue;
             };
-            let Some(line) = lines.get(idx) else { continue };
-            let col_count = split_table_cells(line).len();
+            let col_count = data_rows.col_count_for_line.get(&idx).copied().unwrap_or(0);
             if col_count == 0 {
                 structure_changed = true;
                 continue;
@@ -1154,7 +1167,7 @@ fn coordinate_formula_dependency_window(
             FxHashMap::default();
         let mut nodes_with_coords: FxHashSet<(usize, usize)> = FxHashSet::default();
 
-        for (logical_idx, row_line_idxs) in data_rows.iter().enumerate() {
+        for (logical_idx, row_line_idxs) in data_rows.rows.iter().enumerate() {
             let row_1based = logical_idx.saturating_add(1);
             for row_line_idx in row_line_idxs {
                 let line = &lines[*row_line_idx];

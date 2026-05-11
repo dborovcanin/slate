@@ -449,6 +449,30 @@ function calcLineInSpans(lineNumber: number, spans: readonly CalcVisibleLineSpan
   return false;
 }
 
+function lineMayNeedCalcDecorationRefresh(state: EditorState, lineNumber: number): boolean {
+  if (lineNumber < 1 || lineNumber > state.doc.lines) return false;
+  const lineIndex = lineNumber - 1;
+  if (state.field(calcResultsField).has(lineIndex)) return true;
+  const cells = state.field(cellCalcResultsField).get(lineIndex);
+  if (cells && cells.length > 0) return true;
+  // Focused table-pipe marks are also emitted from calc decorations.
+  return tableRowRe.test(state.doc.line(lineNumber).text);
+}
+
+function shouldSkipSelectionOnlyCalcRebuild(update: ViewUpdate): boolean {
+  if (!update.selectionSet || update.docChanged || update.viewportChanged) {
+    return false;
+  }
+
+  const prevLine = update.startState.doc.lineAt(update.startState.selection.main.head).number;
+  const nextLine = update.state.doc.lineAt(update.state.selection.main.head).number;
+
+  return (
+    !lineMayNeedCalcDecorationRefresh(update.startState, prevLine)
+    && !lineMayNeedCalcDecorationRefresh(update.state, nextLine)
+  );
+}
+
 function buildCalcDecorationsForSpans(
   state: EditorState,
   spans: readonly CalcVisibleLineSpan[],
@@ -474,6 +498,13 @@ function buildCalcDecorationsForSpans(
       const segments = cachedCalcFindTableFormulaSegments(line.text);
       if (segments.length > 0) {
         const cells = cellsForLine ?? [];
+        const cellsByIndex = new Map<number, { value: string; hasError: boolean }>();
+        for (const cell of cells) {
+          cellsByIndex.set(cell.cell_index, {
+            value: formatFormulaDisplayValue(cell.value),
+            hasError: cell.error_kind != null,
+          });
+        }
         const lineFallback = result == null
           ? null
           : {
@@ -484,17 +515,14 @@ function buildCalcDecorationsForSpans(
           cellIndex: number,
           segmentIndex: number,
         ): { value: string; hasError: boolean } | null => {
-          const hit = cells.find((c) => c.cell_index === cellIndex);
+          const hit = cellsByIndex.get(cellIndex);
           if (!hit) {
             // Keep the first formula cell stable if per-cell payload is
             // temporarily absent but legacy per-line result is available.
             if (segmentIndex === 0 && lineFallback) return lineFallback;
             return null;
           }
-          return {
-            value: formatFormulaDisplayValue(hit.value),
-            hasError: hit.error_kind != null,
-          };
+          return hit;
         };
 
         const trailerParts: string[] = [];
@@ -747,6 +775,14 @@ function calcDecorationsPlugin() {
           !update.docChanged &&
           !update.selectionSet &&
           !update.viewportChanged
+        ) {
+          return;
+        }
+
+        if (
+          !resultsChanged &&
+          !cellsChanged &&
+          shouldSkipSelectionOnlyCalcRebuild(update)
         ) {
           return;
         }
