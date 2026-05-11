@@ -55,6 +55,7 @@ const thresholdPct = Number.parseFloat(
 const thresholdFactor = 1 + thresholdPct / 100;
 
 const regressions = [];
+const modeSummaries = {};
 
 for (const mode of Object.keys(baseline.modes ?? {})) {
   const samples = [];
@@ -63,6 +64,7 @@ for (const mode of Object.keys(baseline.modes ?? {})) {
   }
 
   const current = summarize(samples);
+  modeSummaries[mode] = current;
   const expected = baseline.modes[mode] ?? {};
 
   for (const [metric, expectedMs] of Object.entries(expected)) {
@@ -83,7 +85,19 @@ for (const mode of Object.keys(baseline.modes ?? {})) {
   }
 }
 
+function printModeSummaries() {
+  for (const [mode, marks] of Object.entries(modeSummaries)) {
+    console.log(`- ${mode} median marks:`);
+    for (const [name, value] of Object.entries(marks).sort(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      console.log(`  ${name}: ${Number(value).toFixed(3)}ms`);
+    }
+  }
+}
+
 if (regressions.length > 0) {
+  printModeSummaries();
   console.error("Startup regression detected:");
   for (const r of regressions) {
     console.error(
@@ -94,3 +108,4 @@ if (regressions.length > 0) {
 }
 
 console.log(`Startup check passed (${thresholdPct}% threshold, ${RUNS} runs).`);
+printModeSummaries();

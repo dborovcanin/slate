@@ -1,5 +1,12 @@
+use app_core::calc::{CalcEngine, NoteEvaluationOptions};
 use app_core::config;
+use app_core::storage::Note;
 use app_core::AppCore;
+use editor_core::calc_plan::{
+    build_calc_dependency_index, decide_eval_window_with_cached_calc_dependency_index_and_flags,
+    decide_eval_window_with_flags, line_metadata_with_mask, sync_calc_dependency_index,
+    CalcFeatureMask,
+};
 use std::fmt::Write as _;
 use std::time::Instant;
 
@@ -30,9 +37,13 @@ impl Probe {
 
     fn mark(&mut self, name: &str) {
         let elapsed_ms = self.start.elapsed().as_secs_f64() * 1000.0;
+        self.mark_ms(name, elapsed_ms);
+    }
+
+    fn mark_ms(&mut self, name: &str, ms: f64) {
         self.marks.push(StartupMark {
             name: name.to_string(),
-            ms: elapsed_ms,
+            ms,
         });
     }
 
@@ -42,6 +53,110 @@ impl Probe {
             marks: self.marks,
         }
     }
+}
+
+fn split_lines(body: &str) -> Vec<String> {
+    if body.is_empty() {
+        vec![String::new()]
+    } else {
+        body.split('\n').map(|line| line.to_string()).collect()
+    }
+}
+
+fn collect_note_calc_marks(probe: &mut Probe, note: &Note) {
+    let mask = CalcFeatureMask {
+        math_enabled: note.modules.math,
+        table_enabled: note.modules.table,
+        variables_enabled: note.modules.variables,
+    };
+    if !mask.math_enabled {
+        probe.mark_ms("note_calc_skipped_ms", 0.0);
+        return;
+    }
+
+    let lines = split_lines(&note.body);
+    let changed_from = if lines.is_empty() { 0 } else { lines.len() / 2 };
+    let changed_to = (changed_from + 1).min(lines.len());
+
+    let build_started = Instant::now();
+    let mut dep_index = build_calc_dependency_index(&lines, mask);
+    probe.mark_ms(
+        "note_calc_dependency_index_build_ms",
+        build_started.elapsed().as_secs_f64() * 1000.0,
+    );
+
+    let prev_line_meta = lines
+        .get(changed_from.min(lines.len().saturating_sub(1)))
+        .map(|line| line_metadata_with_mask(line, mask));
+    let prev_assignment_names = prev_line_meta
+        .as_ref()
+        .and_then(|meta| meta.assignment_name.clone())
+        .into_iter()
+        .collect::<Vec<_>>();
+    let prev_had_assignment = prev_line_meta
+        .as_ref()
+        .map(|meta| meta.has_assignment)
+        .unwrap_or(false);
+    let prev_had_builtin_formula = prev_line_meta
+        .as_ref()
+        .map(|meta| meta.has_builtin_formula)
+        .unwrap_or(false);
+
+    let cached_started = Instant::now();
+    let _cached = decide_eval_window_with_cached_calc_dependency_index_and_flags(
+        dep_index.as_ref(),
+        &lines,
+        changed_from,
+        changed_to,
+        &prev_assignment_names,
+        prev_had_assignment,
+        prev_had_builtin_formula,
+        true,
+        mask.variables_enabled,
+        mask.table_enabled,
+    );
+    probe.mark_ms(
+        "note_calc_eval_window_cached_ms",
+        cached_started.elapsed().as_secs_f64() * 1000.0,
+    );
+
+    let uncached_started = Instant::now();
+    let _uncached = decide_eval_window_with_flags(
+        &lines,
+        changed_from,
+        changed_to,
+        &prev_assignment_names,
+        prev_had_assignment,
+        prev_had_builtin_formula,
+        true,
+        mask.variables_enabled,
+        mask.table_enabled,
+    );
+    probe.mark_ms(
+        "note_calc_eval_window_uncached_ms",
+        uncached_started.elapsed().as_secs_f64() * 1000.0,
+    );
+
+    let sync_started = Instant::now();
+    sync_calc_dependency_index(&mut dep_index, &lines, changed_from, changed_to, mask);
+    probe.mark_ms(
+        "note_calc_dependency_index_sync_ms",
+        sync_started.elapsed().as_secs_f64() * 1000.0,
+    );
+
+    let eval_started = Instant::now();
+    let _ = CalcEngine::new().evaluate_note_context(
+        &lines,
+        NoteEvaluationOptions {
+            variables_enabled: note.modules.variables,
+            table_enabled: note.modules.table,
+            eval_range: None,
+        },
+    );
+    probe.mark_ms(
+        "note_calc_full_eval_ms",
+        eval_started.elapsed().as_secs_f64() * 1000.0,
+    );
 }
 
 fn probe_gui() -> Result<StartupReport, String> {
@@ -57,8 +172,11 @@ fn probe_gui() -> Result<StartupReport, String> {
     let core = AppCore::open_default()?;
     probe.mark("app_core_opened");
 
-    let _note = core.db().get_most_recent_note()?;
+    let note = core.db().get_most_recent_note()?;
     probe.mark("note_fetch_complete");
+    if let Some(note) = note.as_ref() {
+        collect_note_calc_marks(&mut probe, note);
+    }
 
     Ok(probe.finish("gui"))
 }
@@ -92,6 +210,9 @@ fn probe_tui() -> Result<StartupReport, String> {
 
     if line_count > 0 {
         probe.mark("line_split_ready");
+    }
+    if let Some(note) = note.as_ref() {
+        collect_note_calc_marks(&mut probe, note);
     }
 
     Ok(probe.finish("tui"))
