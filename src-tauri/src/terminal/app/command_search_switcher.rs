@@ -1123,12 +1123,13 @@ impl TerminalApp {
                             crate::editor_core::command_catalog::ExportFormat::Md
                             | crate::editor_core::command_catalog::ExportFormat::Txt,
                             Some(path),
-                        ) => match crate::commands::export::export_to_file_blocking(
-                            &path, &content,
-                        ) {
-                            Ok(()) => format!("exported {} to {}", format.as_str(), path),
-                            Err(error) => format!("export failed: {error}"),
-                        },
+                        ) => {
+                            match crate::commands::export::export_to_file_blocking(&path, &content)
+                            {
+                                Ok(()) => format!("exported {} to {}", format.as_str(), path),
+                                Err(error) => format!("export failed: {error}"),
+                            }
+                        }
                         (crate::editor_core::command_catalog::ExportFormat::Pdf, Some(path)) => {
                             match crate::commands::export::export_markdown_to_pdf_file(
                                 &note_sources(db),

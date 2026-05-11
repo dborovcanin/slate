@@ -403,9 +403,7 @@ fn resolve_markdown_image_bytes(
         return Ok(Some(bytes));
     }
 
-    let size = fs::metadata(&value)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let size = fs::metadata(&value).map(|m| m.len()).unwrap_or(0);
     if size > MAX_PDF_IMAGE_BYTES {
         return Ok(None);
     }

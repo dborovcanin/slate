@@ -620,6 +620,52 @@ fn collect_table_blocks_for_autoformat(ctx: &ResolvedContext<'_>) -> Vec<(usize,
     blocks
 }
 
+fn table_block_offset_to_absolute(
+    block_from: usize,
+    formatted_lines: &[String],
+    line_offset: usize,
+    col: usize,
+) -> usize {
+    let mut anchor = block_from;
+    for line_text in formatted_lines.iter().take(line_offset) {
+        anchor += line_text.len() + 1;
+    }
+    anchor + col
+}
+
+fn push_incremental_table_block_changes(
+    ctx: &ResolvedContext<'_>,
+    start_line: usize,
+    original_lines: &[String],
+    formatted_lines: &[String],
+    changes: &mut Vec<TextChange>,
+) -> bool {
+    if original_lines.len() != formatted_lines.len() {
+        return false;
+    }
+
+    let mut idx = 0usize;
+    while idx < original_lines.len() {
+        if original_lines[idx] == formatted_lines[idx] {
+            idx += 1;
+            continue;
+        }
+
+        let run_start = idx;
+        while idx < original_lines.len() && original_lines[idx] != formatted_lines[idx] {
+            idx += 1;
+        }
+        let run_end = idx - 1;
+
+        let from = ctx.line(start_line + run_start).from;
+        let to = ctx.line(start_line + run_end).to;
+        let insert = formatted_lines[run_start..=run_end].join("\n");
+        changes.push(TextChange { from, to, insert });
+    }
+
+    true
+}
+
 fn table_autoformat_rule(
     ctx: &ResolvedContext<'_>,
     table_format_cache: &mut table::TableFormatCache,
@@ -649,15 +695,21 @@ fn table_autoformat_rule(
         if formatted_lines == original_lines {
             continue;
         }
-        let formatted_text = formatted_lines.join("\n");
-
         let start = ctx.line(start_line).from;
-        let end = ctx.line(end_line).to;
-        changes.push(TextChange {
-            from: start,
-            to: end,
-            insert: formatted_text,
-        });
+        if !push_incremental_table_block_changes(
+            ctx,
+            start_line,
+            &original_lines,
+            &formatted_lines,
+            &mut changes,
+        ) {
+            let end = ctx.line(end_line).to;
+            changes.push(TextChange {
+                from: start,
+                to: end,
+                insert: formatted_lines.join("\n"),
+            });
+        }
 
         if mapped_selection.is_none()
             && selection.empty
@@ -680,12 +732,8 @@ fn table_autoformat_rule(
             let target_line_text = &formatted_lines[target_idx];
             let mapped_col =
                 table::map_table_cursor_column(source_line_text, target_line_text, cursor_col);
-
-            let mut anchor = start;
-            for line_text in formatted_lines.iter().take(target_idx) {
-                anchor += line_text.len() + 1;
-            }
-            anchor += mapped_col;
+            let anchor =
+                table_block_offset_to_absolute(start, &formatted_lines, target_idx, mapped_col);
             mapped_selection = Some(OperationSelection { anchor, head: None });
         }
     }
@@ -1252,8 +1300,24 @@ pub fn run_table_multiline_break_rule_with_table_cache(
     let formatted = table::format_table_lines_with_cache(&raw_lines, table_format_cache);
 
     let block_from = ctx.line(block.start_line).from;
-    let block_to = ctx.line(block.end_line).to;
-    let insert_text = formatted.join("\n");
+    let mut changes = Vec::new();
+    let original_lines: Vec<String> = (block.start_line..=block.end_line)
+        .map(|line_no| ctx.line_text(line_no).to_string())
+        .collect();
+    if !push_incremental_table_block_changes(
+        ctx,
+        block.start_line,
+        &original_lines,
+        &formatted,
+        &mut changes,
+    ) {
+        let block_to = ctx.line(block.end_line).to;
+        changes.push(TextChange {
+            from: block_from,
+            to: block_to,
+            insert: formatted.join("\n"),
+        });
+    }
 
     let inserted_row_offset = relative_row + 1;
     let delimiter_injected = !had_delimiter_row && row_cells.len() >= 2;
@@ -1269,16 +1333,11 @@ pub fn run_table_multiline_break_rule_with_table_cache(
         .unwrap_or_else(|| {
             table::table_cell_navigation_anchor(target_line, &target_pipes, cell_index)
         });
-    let target_line_from = block_from
-        + insert_text[..byte_offset_of_line(&insert_text, formatted_target_offset)].len();
-    let anchor = target_line_from + anchor_col;
+    let anchor =
+        table_block_offset_to_absolute(block_from, &formatted, formatted_target_offset, anchor_col);
 
     Some(EditOperation {
-        changes: vec![TextChange {
-            from: block_from,
-            to: block_to,
-            insert: insert_text,
-        }],
+        changes,
         selection: Some(OperationSelection { anchor, head: None }),
     })
 }
@@ -1361,8 +1420,24 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
     let formatted = table::format_table_lines_with_cache(&raw_lines, table_format_cache);
 
     let block_from = ctx.line(block.start_line).from;
-    let block_to = ctx.line(block.end_line).to;
-    let insert_text = formatted.join("\n");
+    let mut changes = Vec::new();
+    let original_lines: Vec<String> = (block.start_line..=block.end_line)
+        .map(|line_no| ctx.line_text(line_no).to_string())
+        .collect();
+    if !push_incremental_table_block_changes(
+        ctx,
+        block.start_line,
+        &original_lines,
+        &formatted,
+        &mut changes,
+    ) {
+        let block_to = ctx.line(block.end_line).to;
+        changes.push(TextChange {
+            from: block_from,
+            to: block_to,
+            insert: formatted.join("\n"),
+        });
+    }
 
     // New cursor: navigation anchor of the inserted cell on the header row.
     let header_offset_in_block = header_line - block.start_line;
@@ -1370,16 +1445,11 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
     let new_header_pipes = table::table_pipe_positions(new_header_text);
     let anchor_col =
         table::table_cell_navigation_anchor(new_header_text, &new_header_pipes, insert_at);
-    let header_line_from =
-        block_from + insert_text[..byte_offset_of_line(&insert_text, header_offset_in_block)].len();
-    let anchor = header_line_from + anchor_col;
+    let anchor =
+        table_block_offset_to_absolute(block_from, &formatted, header_offset_in_block, anchor_col);
 
     Some(EditOperation {
-        changes: vec![TextChange {
-            from: block_from,
-            to: block_to,
-            insert: insert_text,
-        }],
+        changes,
         selection: Some(OperationSelection { anchor, head: None }),
     })
 }
@@ -1463,8 +1533,24 @@ pub fn run_table_header_delete_column_rule_with_table_cache(
     let formatted = table::format_table_lines_with_cache(&raw_lines, table_format_cache);
 
     let block_from = ctx.line(block.start_line).from;
-    let block_to = ctx.line(block.end_line).to;
-    let insert_text = formatted.join("\n");
+    let mut changes = Vec::new();
+    let original_lines: Vec<String> = (block.start_line..=block.end_line)
+        .map(|line_no| ctx.line_text(line_no).to_string())
+        .collect();
+    if !push_incremental_table_block_changes(
+        ctx,
+        block.start_line,
+        &original_lines,
+        &formatted,
+        &mut changes,
+    ) {
+        let block_to = ctx.line(block.end_line).to;
+        changes.push(TextChange {
+            from: block_from,
+            to: block_to,
+            insert: formatted.join("\n"),
+        });
+    }
 
     let header_offset_in_block = header_line - block.start_line;
     let new_header_text = formatted.get(header_offset_in_block)?;
@@ -1479,34 +1565,13 @@ pub fn run_table_header_delete_column_rule_with_table_cache(
     };
     let anchor_col =
         table::table_cell_navigation_anchor(new_header_text, &new_header_pipes, target_cell);
-    let header_line_from =
-        block_from + insert_text[..byte_offset_of_line(&insert_text, header_offset_in_block)].len();
-    let anchor = header_line_from + anchor_col;
+    let anchor =
+        table_block_offset_to_absolute(block_from, &formatted, header_offset_in_block, anchor_col);
 
     Some(EditOperation {
-        changes: vec![TextChange {
-            from: block_from,
-            to: block_to,
-            insert: insert_text,
-        }],
+        changes,
         selection: Some(OperationSelection { anchor, head: None }),
     })
-}
-
-fn byte_offset_of_line(text: &str, line_idx: usize) -> usize {
-    if line_idx == 0 {
-        return 0;
-    }
-    let mut count = 0usize;
-    for (i, ch) in text.char_indices() {
-        if ch == '\n' {
-            count += 1;
-            if count == line_idx {
-                return i + 1;
-            }
-        }
-    }
-    text.len()
 }
 
 fn prev_char_start(text: &str, at: usize) -> Option<usize> {
@@ -1936,6 +2001,21 @@ mod tests {
         assert_eq!(
             apply_operation(doc.text(), &op),
             "| first | value |\n| ----- | ----- |\n| x     |       |"
+        );
+    }
+
+    #[test]
+    fn run_doc_change_rules_table_autoformat_emits_localized_change_when_widths_are_stable() {
+        let text = "| a   | b   |\n| --- | --- |\n| 1   | 2  |";
+        let head = text.len();
+        let row_start = text.rfind("\n| 1").expect("row start") + 1;
+        let doc = snapshot_with_changed_range(text, head, head, row_start, head);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(op.changes.len(), 1);
+        assert_eq!(op.changes[0].from, row_start);
+        assert_eq!(
+            apply_operation(doc.text(), &op),
+            "| a   | b   |\n| --- | --- |\n| 1   | 2   |"
         );
     }
 

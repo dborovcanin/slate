@@ -82,6 +82,7 @@ function cachedCalcFindTableFormulaSegments(lineText: string): TableFormulaSegme
 const setCalcResults = StateEffect.define<Map<number, string>>();
 const setCellCalcResults = StateEffect.define<Map<number, TableCellEvaluation[]>>();
 const setVariableIndex = StateEffect.define<VariableIndexEntry[]>();
+const calcDeferredDecorationRebuildAnnotation = Annotation.define<boolean>();
 
 // Marks transactions originating from the refresh pass so the plugin does not
 // re-schedule an eval in response to its own trailer rewrites.
@@ -225,6 +226,13 @@ class CalcResultWidget extends WidgetType {
   eq(other: CalcResultWidget): boolean {
     return this.result === other.result && this.prefix === other.prefix;
   }
+
+  override updateDOM(dom: HTMLElement): boolean {
+    if (!(dom instanceof HTMLSpanElement)) return false;
+    const next = `${this.prefix}${this.result}`;
+    if (dom.textContent !== next) dom.textContent = next;
+    return true;
+  }
 }
 
 class FormulaCellWidget extends WidgetType {
@@ -264,6 +272,30 @@ class FormulaCellWidget extends WidgetType {
       this.marker === other.marker &&
       this.widthCh === other.widthCh
     );
+  }
+
+  override updateDOM(dom: HTMLElement): boolean {
+    if (!(dom instanceof HTMLSpanElement)) return false;
+    if (!dom.classList.contains("calc-formula-inline")) return false;
+
+    const valueEl = dom.firstElementChild;
+    const markerEl = valueEl?.nextElementSibling;
+    if (!(valueEl instanceof HTMLSpanElement) || !(markerEl instanceof HTMLSpanElement)) {
+      return false;
+    }
+    if (
+      !valueEl.classList.contains("calc-formula-value")
+      || !markerEl.classList.contains("calc-formula-marker")
+    ) {
+      return false;
+    }
+
+    const width = `${this.widthCh}ch`;
+    if (dom.style.minWidth !== width) dom.style.minWidth = width;
+    if (dom.style.maxWidth !== width) dom.style.maxWidth = width;
+    if (valueEl.textContent !== this.value) valueEl.textContent = this.value;
+    if (markerEl.textContent !== this.marker) markerEl.textContent = this.marker;
+    return true;
   }
 
   override ignoreEvent(): boolean {
@@ -442,11 +474,23 @@ function buildCalcDecorationsForSpans(
       const segments = cachedCalcFindTableFormulaSegments(line.text);
       if (segments.length > 0) {
         const cells = cellsForLine ?? [];
+        const lineFallback = result == null
+          ? null
+          : {
+              value: formatFormulaDisplayValue(result),
+              hasError: result.trimStart().startsWith("!ERROR"),
+            };
         const valueForCell = (
           cellIndex: number,
+          segmentIndex: number,
         ): { value: string; hasError: boolean } | null => {
           const hit = cells.find((c) => c.cell_index === cellIndex);
-          if (!hit) return null;
+          if (!hit) {
+            // Keep the first formula cell stable if per-cell payload is
+            // temporarily absent but legacy per-line result is available.
+            if (segmentIndex === 0 && lineFallback) return lineFallback;
+            return null;
+          }
           return {
             value: formatFormulaDisplayValue(hit.value),
             hasError: hit.error_kind != null,
@@ -456,7 +500,7 @@ function buildCalcDecorationsForSpans(
         const trailerParts: string[] = [];
         segments.forEach((seg, fi) => {
           const marker = formulaMarkerToken(fi);
-          const computed = valueForCell(seg.cellIndex);
+          const computed = valueForCell(seg.cellIndex, fi);
           const formulaSource = segmentFormulaSource(line.text, seg);
           const editingCell = selectionTouchesSegment(
             selection,
@@ -660,12 +704,38 @@ function calcDecorationsPlugin() {
   return ViewPlugin.fromClass(
     class {
       decorations: DecorationSet;
+      private pendingRebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
       constructor(view: EditorView) {
         this.decorations = this.safeBuild(view, Decoration.none, "init");
       }
 
+      private scheduleDeferredRebuild(view: EditorView) {
+        if (this.pendingRebuildTimer !== null) {
+          clearTimeout(this.pendingRebuildTimer);
+        }
+        this.pendingRebuildTimer = setTimeout(() => {
+          this.pendingRebuildTimer = null;
+          view.dispatch({
+            annotations: calcDeferredDecorationRebuildAnnotation.of(true),
+          });
+        }, 90);
+      }
+
       update(update: ViewUpdate) {
+        if (
+          update.transactions.some((transaction) =>
+            transaction.annotation(calcDeferredDecorationRebuildAnnotation),
+          )
+        ) {
+          this.decorations = this.safeBuild(
+            update.view,
+            this.decorations,
+            "docChanged_deferred",
+          );
+          return;
+        }
+
         const resultsChanged =
           update.startState.field(calcResultsField) !== update.state.field(calcResultsField);
         const cellsChanged =
@@ -679,6 +749,22 @@ function calcDecorationsPlugin() {
           !update.viewportChanged
         ) {
           return;
+        }
+
+        if (
+          update.docChanged &&
+          !resultsChanged &&
+          !cellsChanged &&
+          !update.viewportChanged
+        ) {
+          this.decorations = this.decorations.map(update.changes);
+          this.scheduleDeferredRebuild(update.view);
+          return;
+        }
+
+        if (this.pendingRebuildTimer !== null) {
+          clearTimeout(this.pendingRebuildTimer);
+          this.pendingRebuildTimer = null;
         }
 
         this.decorations = this.safeBuild(
@@ -719,6 +805,13 @@ function calcDecorationsPlugin() {
             );
           }
           return fallback;
+        }
+      }
+
+      destroy() {
+        if (this.pendingRebuildTimer !== null) {
+          clearTimeout(this.pendingRebuildTimer);
+          this.pendingRebuildTimer = null;
         }
       }
     },
