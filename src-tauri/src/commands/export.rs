@@ -1235,7 +1235,7 @@ fn render_list_block(
                     let bullet = if ordered {
                         format!("{}. ", idx + 1)
                     } else {
-                        "• ".to_string()
+                        "- ".to_string()
                     };
                     push_text_op(
                         current_page_mut(pages),
@@ -1888,6 +1888,18 @@ mod tests {
         assert!(text.contains("(Score) Tj"));
         assert!(text.contains("(item one) Tj"));
         assert!(text.contains("xref"));
+    }
+
+    #[test]
+    fn markdown_pdf_renders_unordered_list_markers_as_ascii_dash() {
+        let source = "- one\n- two";
+        let bytes = build_markdown_pdf(source, &PdfExportPalette::default(), |_| None)
+            .expect("pdf generation should succeed");
+        let text = String::from_utf8_lossy(&bytes);
+
+        assert!(text.contains("(- ) Tj"));
+        assert!(text.contains("(one) Tj"));
+        assert!(text.contains("(two) Tj"));
     }
 
     #[test]
