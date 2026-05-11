@@ -19,7 +19,7 @@ function completionContext(text: string, from = 0): CompletionContext {
   } as unknown as CompletionContext;
 }
 
-test("wiki-link completion suggests notes and keeps caret before closing markers", async () => {
+test("wiki-link completion suggests notes and primes heading prompt", async () => {
   const note: NoteSummary = {
     id: "01HX4VHR9ABCDEFGHJKMNPQRS",
     title: "Section Notes",
@@ -58,9 +58,9 @@ test("wiki-link completion suggests notes and keeps caret before closing markers
   ) => void;
   apply(fakeView, {}, 0, 6);
   assert.equal(dispatched.length, 1);
-  assert.equal(dispatched[0].changes.insert, "[[01HX4VHR]]");
+  assert.equal(dispatched[0].changes.insert, "[[01HX4VHR#]]");
   assert.equal(dispatched[0].changes.to, 8);
-  assert.equal(dispatched[0].selection.anchor, 10);
+  assert.equal(dispatched[0].selection.anchor, 11);
 });
 
 test("wiki-link completion suggests headings for short id + hash query", async () => {

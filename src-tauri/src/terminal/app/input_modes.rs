@@ -178,7 +178,7 @@ impl TerminalApp {
                 refresh_variable_popup = true;
             }
             Key::Enter => {
-                if self.apply_wiki_link_selection() {
+                if self.apply_wiki_link_selection(db) {
                     should_autoformat = true;
                 } else if self.apply_variable_autocomplete_popup_selection() {
                     should_autoformat = true;
@@ -205,7 +205,7 @@ impl TerminalApp {
                 }
             }
             Key::Tab => {
-                if self.apply_wiki_link_selection() {
+                if self.apply_wiki_link_selection(db) {
                     should_autoformat = true;
                 } else if self.apply_variable_autocomplete_tab() {
                     should_autoformat = true;
@@ -225,7 +225,7 @@ impl TerminalApp {
                 }
             }
             Key::Ctrl(']') => {
-                self.dismiss_wiki_link_autocomplete();
+                self.cancel_wiki_link_autocomplete();
                 self.navigate_wiki_link_at_cursor(db);
                 return Ok(());
             }
@@ -297,7 +297,7 @@ impl TerminalApp {
             }
             Key::Esc => {
                 if self.wiki_link_autocomplete_popup.visible {
-                    self.dismiss_wiki_link_autocomplete();
+                    self.cancel_wiki_link_autocomplete();
                 } else if self.variable_autocomplete_popup.visible {
                     self.dismiss_variable_autocomplete_popup();
                 } else {
@@ -320,14 +320,14 @@ impl TerminalApp {
         if self.mode == UiMode::Editor {
             if moved_cursor {
                 self.dismiss_variable_autocomplete_popup();
-                self.dismiss_wiki_link_autocomplete();
+                self.cancel_wiki_link_autocomplete();
             } else if refresh_variable_popup {
                 self.refresh_variable_autocomplete_popup();
                 self.refresh_wiki_link_autocomplete(db);
             }
         } else {
             self.dismiss_variable_autocomplete_popup();
-            self.dismiss_wiki_link_autocomplete();
+            self.cancel_wiki_link_autocomplete();
         }
 
         Ok(())

@@ -3171,6 +3171,53 @@ impl TerminalApp {
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState::default();
     }
 
+    fn cleanup_pending_wiki_link_heading_prompt(&mut self) {
+        let Some(short_id) = self
+            .wiki_link_autocomplete_popup
+            .pending_heading_short_id
+            .clone()
+        else {
+            return;
+        };
+        let line_idx = self.wiki_link_autocomplete_popup.cursor_line;
+        if line_idx >= self.lines.len() {
+            return;
+        }
+        let from_col = self.wiki_link_autocomplete_popup.from_col;
+        let line = self.lines[line_idx].clone();
+        let chars: Vec<char> = line.chars().collect();
+        let hash_col = from_col + 2 + short_id.chars().count();
+        if hash_col >= chars.len() || chars[hash_col] != '#' {
+            return;
+        }
+        let mut end_col = hash_col;
+        while end_col + 1 < chars.len() {
+            if chars[end_col] == ']' && chars[end_col + 1] == ']' {
+                break;
+            }
+            end_col += 1;
+        }
+        if end_col + 1 >= chars.len() || chars[end_col] != ']' || chars[end_col + 1] != ']' {
+            return;
+        }
+        let from_byte = byte_index(&line, hash_col);
+        let to_byte = byte_index(&line, end_col);
+        if from_byte == to_byte {
+            return;
+        }
+        self.lines[line_idx].replace_range(from_byte..to_byte, "");
+        if self.cursor_line == line_idx {
+            self.cursor_col = hash_col;
+        }
+        self.refresh_calc_line_metadata_at(line_idx);
+        self.mark_edited();
+    }
+
+    pub(super) fn cancel_wiki_link_autocomplete(&mut self) {
+        self.cleanup_pending_wiki_link_heading_prompt();
+        self.dismiss_wiki_link_autocomplete();
+    }
+
     pub(super) fn open_wiki_link_autocomplete(&mut self, _db: &crate::storage::Db) {
         let from_col = self.cursor_col.saturating_sub(2);
         let note_suggestions = self.wiki_link_note_suggestions_cache.clone();
@@ -3185,6 +3232,7 @@ impl TerminalApp {
             anchor_col,
             from_col,
             query: String::new(),
+            pending_heading_short_id: None,
             note_suggestions,
             heading_cache: std::collections::HashMap::new(),
             suggestions,
@@ -3231,6 +3279,7 @@ impl TerminalApp {
             anchor_col,
             from_col,
             query,
+            pending_heading_short_id: None,
             note_suggestions,
             heading_cache: std::collections::HashMap::new(),
             suggestions,
@@ -3246,14 +3295,14 @@ impl TerminalApp {
             return;
         }
         if self.wiki_link_autocomplete_popup.cursor_line != self.cursor_line {
-            self.dismiss_wiki_link_autocomplete();
+            self.cancel_wiki_link_autocomplete();
             return;
         }
         let line = self.current_line();
         let from_col = self.wiki_link_autocomplete_popup.from_col;
         // Cursor must stay to the right of [[ and line must still have ]] ahead.
         if self.cursor_col < from_col + 2 {
-            self.dismiss_wiki_link_autocomplete();
+            self.cancel_wiki_link_autocomplete();
             return;
         }
         let query: String = line
@@ -3262,7 +3311,7 @@ impl TerminalApp {
             .take(self.cursor_col - from_col - 2)
             .collect();
         let Some((_, _heading_query)) = Self::parse_wiki_link_query(&query) else {
-            self.dismiss_wiki_link_autocomplete();
+            self.cancel_wiki_link_autocomplete();
             return;
         };
         self.wiki_link_autocomplete_popup.query = query;
@@ -3367,13 +3416,13 @@ impl TerminalApp {
         true
     }
 
-    pub(super) fn apply_wiki_link_selection(&mut self) -> bool {
+    pub(super) fn apply_wiki_link_selection(&mut self, db: &crate::storage::Db) -> bool {
         if !self.wiki_link_autocomplete_popup.visible {
             return false;
         }
         let len = self.wiki_link_autocomplete_popup.suggestions.len();
         if len == 0 {
-            self.dismiss_wiki_link_autocomplete();
+            self.cancel_wiki_link_autocomplete();
             return false;
         }
         let idx = self
@@ -3396,7 +3445,7 @@ impl TerminalApp {
         let replacement = if let Some(heading) = heading.as_deref() {
             format!("[[{}#{}]]", short_id, heading)
         } else {
-            format!("[[{}]]", short_id)
+            format!("[[{}#]]", short_id)
         };
 
         // Find end of [[...]] span: scan forward from from_col for ]]
@@ -3417,18 +3466,18 @@ impl TerminalApp {
         if heading.is_some() {
             self.cursor_col = from_col + replacement.chars().count();
         } else {
-            // Keep caret before closing markers so users can continue with #heading or |alt.
-            self.cursor_col = from_col + 2 + short_id.chars().count();
+            // Keep caret right after the auto-added # to filter heading picks.
+            self.cursor_col = from_col + 2 + short_id.chars().count() + 1;
         }
         self.refresh_calc_line_metadata_at(self.cursor_line);
         self.mark_edited();
         if heading.is_some() {
+            self.wiki_link_autocomplete_popup.pending_heading_short_id = None;
             self.dismiss_wiki_link_autocomplete();
             self.status = format!("link heading: {title}");
         } else {
-            self.wiki_link_autocomplete_popup.query = short_id;
-            self.wiki_link_autocomplete_popup.suggestions =
-                self.wiki_link_autocomplete_popup.note_suggestions.clone();
+            self.wiki_link_autocomplete_popup.query = format!("{short_id}#");
+            self.wiki_link_autocomplete_popup.pending_heading_short_id = Some(short_id);
             self.wiki_link_autocomplete_popup.selected_index = 0;
             self.wiki_link_autocomplete_popup.cursor_line = self.cursor_line;
             if let Some((anchor_row, anchor_col)) =
@@ -3437,6 +3486,7 @@ impl TerminalApp {
                 self.wiki_link_autocomplete_popup.anchor_row = anchor_row;
                 self.wiki_link_autocomplete_popup.anchor_col = anchor_col;
             }
+            self.refresh_wiki_link_autocomplete(db);
             self.status = format!("link: {title}");
         }
         true

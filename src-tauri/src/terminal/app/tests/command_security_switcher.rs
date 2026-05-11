@@ -1678,8 +1678,38 @@ fn wiki_link_autocomplete_selection_can_move_and_apply_beyond_first_sixteen_resu
     assert_eq!(app.filtered_wiki_link_suggestions().len(), 16);
 
     run_keys(&mut app, &db, &[Key::Tab]);
-    assert_eq!(app.current_line(), "[[A0000020]]");
+    assert_eq!(app.current_line(), "[[A0000020#]]");
     assert_eq!(app.status, "link: Note 20");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn wiki_link_heading_autocomplete_cancel_removes_auto_hash() {
+    let (db, mut app, path) = app_with_note("");
+    db.save_note("01HX4VHR9ABCDEFGHJKMNPQRS", "# Intro\n## Deep Dive")
+        .expect("target note saved");
+    run_keys(&mut app, &db, &[Key::Char('['), Key::Char('[')]);
+    assert!(app.wiki_link_autocomplete_popup.visible);
+
+    app.wiki_link_autocomplete_popup.suggestions = vec![WikiLinkSuggestion {
+        short_id: "01HX4VHR".to_string(),
+        title: "Target".to_string(),
+        title_lower: "target".to_string(),
+        heading: None,
+    }];
+    app.wiki_link_autocomplete_popup.note_suggestions =
+        app.wiki_link_autocomplete_popup.suggestions.clone();
+
+    run_keys(&mut app, &db, &[Key::Tab]);
+    assert_eq!(app.current_line(), "[[01HX4VHR#]]");
+    assert!(app.wiki_link_autocomplete_popup.visible);
+
+    run_keys(&mut app, &db, &[Key::Esc]);
+    assert_eq!(app.current_line(), "[[01HX4VHR]]");
+    assert!(!app.wiki_link_autocomplete_popup.visible);
 
     drop(app);
     drop(db);

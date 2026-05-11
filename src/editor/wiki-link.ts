@@ -1,8 +1,14 @@
 import {
+  completionStatus,
   startCompletion,
   type CompletionSource,
 } from "@codemirror/autocomplete";
-import { Prec, type Extension } from "@codemirror/state";
+import {
+  Prec,
+  StateEffect,
+  StateField,
+  type Extension,
+} from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { listNotesMeta, resolveWikiLink, resolveWikiLinkHeadings, type NoteSummary } from "../api.ts";
 import { markdownWikiLinkAtCursor } from "./wasm.ts";
@@ -53,6 +59,88 @@ type WikiLinkCompletionContext =
   | { kind: "note"; noteQuery: string }
   | { kind: "heading"; shortId: string; headingQuery: string };
 
+type PendingAutoHeadingPrompt = {
+  from: number;
+  shortId: string;
+  opened: boolean;
+};
+
+const setPendingAutoHeadingPrompt = StateEffect.define<PendingAutoHeadingPrompt | null>();
+const markPendingAutoHeadingPromptOpened = StateEffect.define<void>();
+const clearPendingAutoHeadingPrompt = StateEffect.define<void>();
+
+const pendingAutoHeadingPromptField = StateField.define<PendingAutoHeadingPrompt | null>({
+  create: () => null,
+  update: (value, tr) => {
+    let next = value ? { ...value, from: tr.changes.mapPos(value.from) } : null;
+    for (const effect of tr.effects) {
+      if (effect.is(setPendingAutoHeadingPrompt)) {
+        next = effect.value;
+      } else if (effect.is(markPendingAutoHeadingPromptOpened) && next) {
+        next = { ...next, opened: true };
+      } else if (effect.is(clearPendingAutoHeadingPrompt)) {
+        next = null;
+      }
+    }
+    return next;
+  },
+});
+
+function clearPendingAutoHeadingPromptIfPresent(view: EditorView) {
+  const pending = view.state.field(pendingAutoHeadingPromptField, false);
+  if (!pending) return;
+  view.dispatch({ effects: clearPendingAutoHeadingPrompt.of() });
+}
+
+function cleanupPendingAutoHeadingPrompt(view: EditorView, pending: PendingAutoHeadingPrompt) {
+  const line = view.state.doc.lineAt(pending.from);
+  const lineOffset = pending.from - line.from;
+  const prefix = `[[${pending.shortId}`;
+  if (!line.text.startsWith(prefix, lineOffset)) {
+    clearPendingAutoHeadingPromptIfPresent(view);
+    return;
+  }
+  const hashOffset = lineOffset + prefix.length;
+  if (hashOffset >= line.text.length || line.text[hashOffset] !== "#") {
+    clearPendingAutoHeadingPromptIfPresent(view);
+    return;
+  }
+  const closeOffset = line.text.indexOf("]]", hashOffset);
+  if (closeOffset < 0) {
+    clearPendingAutoHeadingPromptIfPresent(view);
+    return;
+  }
+  const from = line.from + hashOffset;
+  const to = line.from + closeOffset;
+  if (from >= to) {
+    clearPendingAutoHeadingPromptIfPresent(view);
+    return;
+  }
+  view.dispatch({
+    changes: { from, to, insert: "" },
+    selection: { anchor: from },
+    effects: clearPendingAutoHeadingPrompt.of(),
+  });
+}
+
+const autoHeadingPromptLifecycle = EditorView.updateListener.of((update) => {
+  const pending = update.state.field(pendingAutoHeadingPromptField, false);
+  if (!pending) return;
+  const status = completionStatus(update.state);
+  if (!pending.opened) {
+    if (status === "active" || status === "pending") {
+      update.view.dispatch({ effects: markPendingAutoHeadingPromptOpened.of() });
+      return;
+    }
+    // Ignore the insertion transaction; wait for completion state update.
+    if (update.docChanged) return;
+    cleanupPendingAutoHeadingPrompt(update.view, pending);
+    return;
+  }
+  if (status === "active" || status === "pending") return;
+  cleanupPendingAutoHeadingPrompt(update.view, pending);
+});
+
 function parseWikiLinkCompletionContext(raw: string): WikiLinkCompletionContext | null {
   if (raw.includes("]") || raw.includes("|")) return null;
   const hashIdx = raw.indexOf("#");
@@ -101,12 +189,20 @@ export function createWikiLinkCompletionSource(
               if (view.state.doc.sliceString(to, to + 2) === "]]") {
                 actualTo = to + 2;
               }
-              const insertText = `[[${shortId}]]`;
+              const insertText = `[[${shortId}#]]`;
               view.dispatch({
                 changes: { from, to: actualTo, insert: insertText },
-                // Keep caret before closing markers so heading/alt edits are immediate.
+                // Keep caret right after # so heading suggestions are immediate.
                 selection: { anchor: from + insertText.length - 2 },
+                effects: setPendingAutoHeadingPrompt.of({
+                  from,
+                  shortId,
+                  opened: false,
+                }),
               });
+              if (view instanceof EditorView) {
+                startCompletion(view);
+              }
             },
           };
         }),
@@ -137,6 +233,7 @@ export function createWikiLinkCompletionSource(
           view.dispatch({
             changes: { from, to, insert: heading },
             selection: { anchor: from + heading.length },
+            effects: clearPendingAutoHeadingPrompt.of(),
           });
         },
       })),
@@ -228,7 +325,11 @@ export function wikiLinkExtensions(
   onNavigate?: (noteId: string, heading?: string) => void,
   api: WikiLinkApi = defaultWikiLinkApi,
 ) {
-  const extensions: Extension[] = [wikiLinkInputHandler];
+  const extensions: Extension[] = [
+    pendingAutoHeadingPromptField,
+    autoHeadingPromptLifecycle,
+    wikiLinkInputHandler,
+  ];
 
   if (onNavigate) {
     extensions.push(

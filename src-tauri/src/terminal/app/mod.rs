@@ -227,6 +227,7 @@ struct WikiLinkAutocompletePopupState {
     anchor_col: usize,
     from_col: usize,
     query: String,
+    pending_heading_short_id: Option<String>,
     note_suggestions: Vec<WikiLinkSuggestion>,
     heading_cache: HashMap<String, Vec<WikiLinkSuggestion>>,
     suggestions: Vec<WikiLinkSuggestion>,
