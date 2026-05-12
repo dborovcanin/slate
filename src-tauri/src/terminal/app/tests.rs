@@ -52,6 +52,7 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
     )
     .expect("terminal app");
     app.mode = UiMode::Editor;
+    app.perf_trace.enabled = false;
     (db, app, path)
 }
 

@@ -21,6 +21,9 @@ pub enum VimPending {
     DeleteAround,
     YankInner,
     YankAround,
+    ChangeTill,
+    ChangeInner,
+    ChangeAround,
     MacroRecord,
     MacroPlay,
 }
@@ -694,6 +697,36 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::Change, VimKey::Char('t')) => {
+                next.pending_count = None;
+                next.pending = Some(VimPending::ChangeTill);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('i')) => {
+                next.pending_count = None;
+                next.pending = Some(VimPending::ChangeInner);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Change, VimKey::Char('a')) => {
+                next.pending_count = None;
+                next.pending = Some(VimPending::ChangeAround);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::Go, VimKey::Char('g')) => {
                 let count = consume_count(&mut next);
                 if count > 1 {
@@ -798,6 +831,70 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     count,
                     Some(target),
                 ));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeInner, VimKey::Char('w')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteInsideWord, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeInner, VimKey::Char('|')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteInsidePipe, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('w')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundWord, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('|')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundPipe, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeTill, VimKey::Char(target)) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action_with_target(
+                    VimIntent::DeleteTillChar,
+                    count,
+                    Some(target),
+                ));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -1344,5 +1441,69 @@ mod tests {
         assert_eq!(upper.actions[0].intent, VimIntent::DeleteToLineEnd);
         assert_eq!(upper.actions[0].count, 1);
         assert_eq!(upper.actions[1].intent, VimIntent::EnterInsert);
+    }
+
+    #[test]
+    fn ciw_emits_delete_inside_word_and_enter_insert() {
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:i");
+        assert!(matches!(two.state.pending, Some(VimPending::ChangeInner)));
+        let three = step_token(&two.state, "char:w");
+        assert!(three.handled);
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteInsideWord);
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
+    }
+
+    #[test]
+    fn caw_emits_delete_around_word_and_enter_insert() {
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        assert!(matches!(two.state.pending, Some(VimPending::ChangeAround)));
+        let three = step_token(&two.state, "char:w");
+        assert!(three.handled);
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteAroundWord);
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
+    }
+
+    #[test]
+    fn ci_pipe_emits_delete_inside_pipe_and_enter_insert() {
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:i");
+        let three = step_token(&two.state, "char:|");
+        assert!(three.handled);
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteInsidePipe);
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
+    }
+
+    #[test]
+    fn ca_pipe_emits_delete_around_pipe_and_enter_insert() {
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let three = step_token(&two.state, "char:|");
+        assert!(three.handled);
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteAroundPipe);
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
+    }
+
+    #[test]
+    fn ctx_emits_delete_till_char_and_enter_insert() {
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:t");
+        assert!(matches!(two.state.pending, Some(VimPending::ChangeTill)));
+        let three = step_token(&two.state, "char:x");
+        assert!(three.handled);
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteTillChar);
+        assert_eq!(three.actions[0].target_char, Some('x'));
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
     }
 }

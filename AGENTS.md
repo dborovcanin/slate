@@ -180,79 +180,80 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-12 12:26am GMT+2
+# [slate] recent context, 2026-05-12 11:27am GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (21,072t read) | 838,394t work | 97% savings
+Stats: 50 obs (19,060t read) | 1,667,414t work | 99% savings
 
 ### Apr 30, 2026
-S171 Wiki-link tokenizer passes all 5 tests and full editor-core test suite (158 tests) passes (Apr 30, 12:01 AM)
-S174 Implement Obsidian-style wiki-links in Slate — broken link rendering, variable-like styling, and [[ autoclose before picker — starting with editor-core tokenizer (Apr 30, 12:09 AM)
-S192 inline_tokens_to_js() uses generic serde serialization — WikiLink* variants auto-serialize via kebab-case (Apr 30, 12:10 AM)
 S210 Architecture and performance review of the Slate project — code only, ignoring markdown and tests (Apr 30, 12:23 AM)
 ### May 5, 2026
 S227 Table cursor navigation improvements — implement Obsidian-like behavior for arrow keys in/out of tables with vim insert mode, including cross-cell and table boundary navigation (May 5, 12:19 PM)
-241 5:33p 🔵 Table widget uses Decoration.replace + sourceModeLine to toggle between widget and raw-edit modes
-242 5:34p 🔴 Rich table UI — stripped conflicting TUI cursor keymap and tableCursorGuards when richTableUi=true
-243 " 🔴 Editor CSS blur fix — text-rendering changed from optimizeLegibility to auto on cm-content
-245 6:22p ⚖️ Table cursor navigation UX — simplified arrow key behavior confirmed
-247 6:25p 🔵 Table cursor navigation code structure traced in markdown-editing.ts
-248 6:26p 🟣 Rich table arrow-key entry implemented — direct cell focus without whole-table selection
-249 10:39p ⚖️ Table cursor navigation UX — Obsidian-style arrow key behavior in UI
-250 " 🔵 Table cursor navigation code structure fully traced in markdown-editing.ts
-251 10:40p 🔵 Rich table widget textarea keydown already implements Obsidian-style arrow wrapping
-252 " 🔵 moveOutsideTable places CodeMirror cursor at line before/after table block, then calls view.focus()
-253 " 🔵 richTableUi is true whenever markdown decorations are enabled; Vim mode detected via view.dom.dataset.vimMode
-254 10:41p 🔵 Table widget replaces entire block with Decoration.replace — source mode toggled via StateField
-255 " 🔵 tableCursorGuards only runs in non-rich mode; Vim mode set via CSS classes and data-vimMode on view.dom
 S228 Implement Obsidian-like table cursor navigation for markdown tables in UI and TUI modes, with arrow keys behaving like normal text movement but constrained by table structure (May 5, 10:46 PM)
-256 10:53p 🔄 Add isTableDelimiterLine utility for table structure detection
-257 " 🟣 Refactor table arrow key navigation for Obsidian-like cursor behavior
-258 10:54p 🟣 Add rich table entry from adjacent prose and fix last-cell selection
-259 " ✅ Bind arrow keys to rich table entry in tableCursorKeymap
-260 10:55p ✅ Table cursor navigation implementation validated and tested
 S229 Table cursor navigation overhaul — Obsidian-like behavior for UI editor with cross-cell arrow wrapping, shift+arrow cell selection, and scroll/artifact fixes (May 5, 10:55 PM)
-261 11:12p ⚖️ Table cursor navigation UX — Obsidian-style arrow key behavior for UI
-262 11:13p 🔵 Table cell navigation code structure traced in markdown-decoration.ts
-263 " 🔵 Table widget DOM structure, blur commit, and cell selection mechanics traced
-264 11:18p 🔵 Table widget DOM construction — buildCellInput call sites and header vs body cell distinction
-265 11:19p 🔴 moveOutsideTable now scrolls cursor into view after table exit
-266 " 🟣 buildCellInput gains onShiftArrow callback parameter for Shift+arrow cell range selection
 S230 Obsidian-style table cursor navigation in rich table UI — all secondary fixes completed, tests passing (May 5, 11:23 PM)
-267 11:35p ⚖️ Table cursor navigation UX — Obsidian-style arrow key behavior confirmed
-268 11:36p 🔵 Table cell update and logical row architecture traced in markdown-decoration.ts
-269 11:37p 🔵 Full table arrow navigation implementation traced in markdown-editing.ts
-270 " ✅ TABLE_CELL_EVENT annotation constant added to applyTableBlockRows in markdown-decoration.ts
-271 " 🟣 TABLE_CELL_EVENT userEvent tag wired into applyTableBlockRows dispatch
 S231 Table cursor navigation UX overhaul — Obsidian-style arrow key behavior with character-level movement and cell/table boundary wrapping (May 5, 11:41 PM)
-272 11:59p ⚖️ Table cursor UX redesign — Obsidian-style arrow navigation
-273 " 🔵 Table cursor dispatch locations traced in markdown-editing.ts and markdown-decoration.ts
 ### May 6, 2026
-274 12:04a 🔵 Table widget cursor navigation code structure traced in markdown-decoration.ts
-275 12:05a 🔵 Table cursor navigation split between rich UI mode and source mode with distinct implementations
-276 " 🔵 Rich table UI widget includes multi-cell selection, drag-reorder, and formula evaluation display
-277 12:11a 🔵 TableWidgetModel interface and multi-line cell continuation row format traced
-278 " 🔵 tableCursorGuards ViewPlugin clamps source-mode cursor to valid cell content positions
-279 12:12a 🔵 richTableUi flag controls plugin set — tableCursorGuards disabled in rich mode, tablePipeInputHandler added
-S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:12 AM)
-280 12:19a 🔴 Table cell update cursor jump — pin selection outside replaced range
-281 " 🔴 Table cell commit reentrancy — prevent double-dispatch on blur
+S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:02 AM)
+S233 Review last 40 commits and explore potential improvements in the slate project (May 6, 12:12 AM)
 ### May 11, 2026
-282 1:10p ✅ Roadmap Updated to Reflect Recent Updates and Performance Tweaks
-283 " 🔵 Slate Project Structure and Roadmap Coverage Confirmed
-284 1:11p 🔵 Calc Decoration Architecture: Dual Result Fields, Formula Cache, and Commit Marks
-285 " 🟣 TableFormatCache Gains Hit/Miss Instrumentation for Parsed Row Cache
-286 " ✅ Standalone table-perf Binary Deleted
+285 1:11p 🟣 TableFormatCache Gains Hit/Miss Instrumentation for Parsed Row Cache
 287 1:12p 🔵 Slate Project Architecture: Tauri App with Shared Rust Core
 288 " 🟣 New table-perf Binary: Comprehensive Multi-Scenario Table Performance Benchmark
 290 " 🔵 Table Implementation: UI is Pure WASM Delegation, TUI Has Thread-Local Cache Layer
 291 " 🔵 Table Core: Multi-Level Caching for Parse, Format, and Logical Row Structure
 292 " 🔵 TUI Table Cell Cache Uses Linear Scan on Cache Miss Path
 289 1:13p ✅ serde_json Promoted from dev-dependencies to dependencies in src-tauri
+### May 12, 2026
+293 8:48a 🔵 Slate Project: Last 40 Commits Overview
+294 8:49a 🔵 Slate Project Architecture: Tauri + Rust Backend + TypeScript Frontend
+295 " 🔵 Slate Hotspot Files: Most Frequently Changed in Last 40 Commits
+296 8:50a 🔄 Table Cell Parsing Refactored: Escaped Pipe Support and Stable Autoformat Deferral
+297 " 🔄 calc_plan.rs: VariableDependencyGraph Replaces Simple Struct with Full Incremental Graph
+298 " 🟣 PDF Export Engine: Custom Rust Implementation with Full UTF-8 and Table Support
+299 " 🔵 Vim Mode: Full CodeMirror Integration with WASM Core and Macro/Undo Support
+300 8:51a 🟣 Vim Core: Change Operator, Macros (qa/@), and C Keymap Added
+301 " 🟣 Macro System Implemented in Both TUI (Rust) and UI (TypeScript) Layers
+302 " 🟣 TUI Calc: Pathological Window Detection Forces Periodic Full Recomputes
+303 " 🔵 PDF Export Color System: Luma-Based Normalization for Print-Safe Palette
+304 " 🔵 Remaining std::collections::HashMap Usage — Potential FxHashMap Migration Opportunity
+S234 Evaluate items 1, 4, and 6 from a task list; user challenged item 1 (macros), leading to code investigation and plan revision (May 12, 8:52 AM)
+305 8:56a 🔵 Macros Behave Better in TUI Than in UI
+306 " 🔵 Vim Macro System Lives Entirely in TUI Layer of Slate
+307 8:57a 🔵 rustc_hash / FxHashMap Not Yet a Dependency in Any Slate Crate
+308 " 🔵 rustc-hash Is a Transitive Dep; std::collections::HashMap Used in 4 TUI Files
+309 " 🔵 FxHashMap Migration Scope: 4 Files in src-tauri, Dependency Only Missing There
+310 8:58a 🔵 FxHashMap Migration Scope Wider Than Expected: app-core and export.rs Also Use HashMap
+311 " 🔵 PDF Glyph Width Uses Font Factor Scaling, Not Real ttf-parser Advance Widths
+312 " 🔵 PDF Export Uses Flat DW=1000 for All Glyphs; No Per-Glyph Width Array Emitted
+313 8:59a 🔵 editor-core/markdown_tokens.rs Uses std::collections::HashSet
+314 " 🔵 engine.rs Explicitly Uses DefaultHasher — Cannot Be Fully Swapped to FxHash
+315 9:00a 🔵 command_search_switcher.rs Uses Inline std::collections::HashSet in collect()
+316 9:01a ✅ Added rustc-hash = "2" to src-tauri/Cargo.toml
+317 " 🟣 folding_state.rs Fully Migrated to FxHashSet; rustc-hash Added to app-core
+318 " 🟣 render.rs InlineTokenCache Migrated to FxHashMap; One ::new() → ::default() Remains
+319 " 🟣 render.rs and imap.rs Fully Migrated to Fx Collections
+320 9:03a 🔄 Migrated calc engine HashMap usage to FxHashMap/FxHasher
+321 9:04a 🔄 Replaced std::collections::HashSet with rustc_hash::FxHashSet in markdown_tokens.rs
+322 " 🔵 FxHashMap lacks ::new() — must use ::default() after rustc_hash migration
+323 " 🔵 Exact compilation errors after FxHashMap migration: export.rs and command_search_switcher.rs
+324 " 🔄 Migrated reminder_helpers.rs imports from std HashMap/HashSet to FxHashMap/FxHashSet
+325 " 🔄 Fully migrated reminder_helpers.rs to FxHashMap/FxHashSet — one HashMap::with_capacity remains
+326 9:05a 🔄 Fixed all FxHashMap::new() calls in export.rs — replaced with ::default()
+327 " 🔴 FxHashMap/FxHashSet migration compiles cleanly across workspace
+328 9:07a 🟣 PDF Export: Accurate Per-Character Width Measurement Using AFM Metrics and Font Advances
+329 " 🔴 Fixed Invalid std::collections::FxHashMap Path in calc/engine.rs Tests
+330 " 🔴 PDF Export Test: FxHashMap::<String, f32>::new() Turbofish Fails at Compile Time
+S235 Review last 40 commits and implement improvements — accurate per-character PDF glyph widths and FxHashMap migration (May 12, 9:10 AM)
+331 9:17a 🔵 Slate Vim Mode: VimPending Enum and State Machine Architecture
+332 " 🔵 Slate Tauri Commands Module Structure
+333 9:18a 🔵 Vim Dispatch in vim.rs: Massive Boilerplate Pattern Identified as Refactor Target
+334 " 🟣 Added ChangeTill, ChangeInner, ChangeAround Pending States to Vim Mode
+335 " 🟣 Completed Change Text Object Dispatch: ciw, ca|, ctX, etc. Now Fully Wired
 
-Access 838k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 1667k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 
