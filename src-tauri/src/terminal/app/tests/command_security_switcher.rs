@@ -894,12 +894,10 @@ fn content_search_matches_ui_fallback_behavior_for_empty_and_pending_queries() {
     );
     assert!(
         app.content_search_pending,
-        "query edits should stay pending while an in-flight worker is active"
+        "query edits should stay pending after superseding an in-flight worker"
     );
-    assert!(
-        app.content_search_rx.is_some(),
-        "existing worker receiver should remain active until it resolves"
-    );
+    assert!(app.content_search_rx.is_none());
+    assert_eq!(app.content_search_detached_rxs.len(), 1);
     assert_eq!(app.content_search_query, "apb");
 
     drop(app);
@@ -924,6 +922,35 @@ fn content_search_ctrl_backspace_trims_query_word() {
         !app.content_search_results.is_empty(),
         "word deletion should refresh fallback results instead of freezing the view"
     );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_allows_mid_query_cursor_editing() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+    app.open_content_search(&db).expect("open content search");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Paste("alpha".to_string()),
+            Key::ArrowLeft,
+            Key::ArrowLeft,
+            Key::Char('Z'),
+        ],
+    );
+    assert_eq!(app.content_search_query, "alpZha");
+    assert_eq!(app.content_search_cursor_col, 4);
+
+    run_keys(&mut app, &db, &[Key::Delete]);
+    assert_eq!(app.content_search_query, "alpZa");
+    assert_eq!(app.content_search_cursor_col, 4);
 
     drop(app);
     drop(db);
@@ -1150,10 +1177,43 @@ fn reopening_content_search_detaches_stale_receiver_and_dispatches_new_query() {
 }
 
 #[test]
+fn content_search_dispatches_even_with_full_detached_pool() {
+    let (db, mut app, path) = app_with_note("alpha body");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+    app.open_content_search(&db).expect("content search opens");
+
+    for _ in 0..2 {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        app.content_search_detached_rxs.push(rx);
+    }
+    assert_eq!(app.content_search_detached_rxs.len(), 2);
+
+    run_keys(&mut app, &db, &[Key::Paste("alpha".to_string())]);
+    for _ in 0..60 {
+        app.maybe_collect_search_results(&db);
+        if app.content_search_rx.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    assert!(
+        app.content_search_rx.is_some(),
+        "new content search should dispatch even when detached pool already has stale workers"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn content_search_cursor_stays_on_prompt_row_with_fixed_overlay_height() {
     let (db, mut app, path) = app_with_note("alpha body");
     app.open_content_search(&db).expect("content search opens");
     app.content_search_query = "franc".to_string();
+    app.content_search_cursor_col = app.content_search_query.chars().count();
     app.content_search_results = vec![app_core::storage::NoteSearchResult {
         id: "n1".to_string(),
         title: "alpha body".to_string(),
@@ -1186,6 +1246,7 @@ fn content_search_cursor_row_stays_stable_when_result_count_changes() {
     let (db, mut app, path) = app_with_note("alpha body");
     app.open_content_search(&db).expect("content search opens");
     app.content_search_query = "franc".to_string();
+    app.content_search_cursor_col = app.content_search_query.chars().count();
 
     app.content_search_results = vec![app_core::storage::NoteSearchResult {
         id: "n1".to_string(),

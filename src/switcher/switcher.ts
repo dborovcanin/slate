@@ -32,9 +32,12 @@ let activeCollectionOptions: Collection[] = [];
 let activeCollectionNotes: NoteEntry[] | null = null;
 let activeSearchRequestId = 0;
 let activeSearchTimer: number | null = null;
-let activeSearchInFlight = false;
 let queuedSearchQuery: string | null = null;
 const ALL_COLLECTIONS_TOKEN = "__all_collections__";
+
+function nextSwitcherMode(mode: SwitcherMode): SwitcherMode {
+  return mode === "title" ? "content" : "title";
+}
 
 function resetContentCollectionFilterFromWorkingCollection() {
   activeCollectionFilter = state.workingCollection?.id ?? null;
@@ -97,14 +100,12 @@ function clearContentSearchTimer() {
 function resetContentSearchState() {
   clearContentSearchTimer();
   activeSearchRequestId += 1;
-  activeSearchInFlight = false;
   queuedSearchQuery = null;
   activeSearchQuery = "";
   activeSearchItems = null;
 }
 
 function maybeDispatchQueuedContentSearch() {
-  if (activeSearchInFlight) return;
   const query = queuedSearchQuery;
   if (!query || query !== activeSearchQuery) {
     queuedSearchQuery = null;
@@ -113,7 +114,6 @@ function maybeDispatchQueuedContentSearch() {
   queuedSearchQuery = null;
 
   const requestId = ++activeSearchRequestId;
-  activeSearchInFlight = true;
   void searchNotesContentFiltered(query, 60, activeCollectionFilter)
     .then((results) => {
       if (requestId !== activeSearchRequestId || query !== activeSearchQuery) return;
@@ -126,9 +126,6 @@ function maybeDispatchQueuedContentSearch() {
       refreshSwitcher();
     })
     .finally(() => {
-      if (requestId === activeSearchRequestId) {
-        activeSearchInFlight = false;
-      }
       if (activeSearchTimer === null) {
         maybeDispatchQueuedContentSearch();
       }
@@ -365,6 +362,14 @@ export function openSwitcher(
       renderItem: renderSwitcherItem,
       onSelect: ({ item, lineNumber }) => onSelectCallback?.(item.id, lineNumber ?? null),
       onKeydown: (event, state) => {
+        if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          const selectCb = onSelectCallback;
+          if (!selectCb) return true;
+          openSwitcher(selectCb, onDeleteCallback ?? undefined, nextSwitcherMode(activeMode));
+          return true;
+        }
         const wantsDelete =
           event.key === "Delete" || (event.ctrlKey && !event.shiftKey && event.key === "Backspace");
         if (!wantsDelete || !onDeleteCallback) return false;
@@ -400,6 +405,9 @@ export function refreshSwitcher() {
 }
 
 export const __switcherInternals = {
+  nextSwitcherModeForTest(mode: SwitcherMode) {
+    return nextSwitcherMode(mode);
+  },
   resetContentCollectionFilterFromWorkingCollectionForTest() {
     resetContentCollectionFilterFromWorkingCollection();
   },

@@ -21,3 +21,8 @@ test("content search filter resets to all when no working collection is set", ()
 
   assert.equal(__switcherInternals.getActiveCollectionFilterForTest(), null);
 });
+
+test("Tab toggles between title and content switcher modes", () => {
+  assert.equal(__switcherInternals.nextSwitcherModeForTest("title"), "content");
+  assert.equal(__switcherInternals.nextSwitcherModeForTest("content"), "title");
+});

@@ -338,6 +338,7 @@ struct TerminalApp {
     collection_switcher_selected: usize,
     collection_edit_dialog: Option<CollectionEditDialogState>,
     content_search_query: String,
+    content_search_cursor_col: usize,
     content_search_results: Vec<NoteSearchResult>,
     content_search_selected: usize,
     content_search_pending: bool,
@@ -457,7 +458,7 @@ impl TerminalApp {
     pub(super) fn working_collection_status_suffix(&self) -> String {
         match self.working_collection_name.as_deref() {
             Some(name) if !name.trim().is_empty() => format!("  |  collection:{name}"),
-            _ => "  |  collection:All".to_string(),
+            _ => String::new(),
         }
     }
 
@@ -685,6 +686,7 @@ impl TerminalApp {
             collection_switcher_selected: 0,
             collection_edit_dialog: None,
             content_search_query: String::new(),
+            content_search_cursor_col: 0,
             content_search_results: Vec::new(),
             content_search_selected: 0,
             content_search_pending: false,
@@ -982,12 +984,6 @@ impl TerminalApp {
                 return;
             }
             self.content_search_debounce_until = None;
-        }
-        // Allow a fresh dialog session to continue even if previous detached
-        // workers are still draining, but keep a hard cap so we do not fan out
-        // unbounded DB workers during repeated reopen attempts.
-        if self.content_search_detached_rxs.len() >= CONTENT_SEARCH_MAX_DETACHED_WORKERS {
-            return;
         }
         let query = self.content_search_query.trim().to_string();
         if query.is_empty() {

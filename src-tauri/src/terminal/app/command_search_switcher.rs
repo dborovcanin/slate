@@ -3,7 +3,8 @@ use super::{
     CollectionEditDialogState, CommandCompletionMenuState, CommandCompletionOption,
     DatePickerAction, Db, Key, Note, NoteSearchResult, SwitcherDeleteConfirm, SwitcherOpenConfirm,
     TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
-    CONTENT_SEARCH_DEBOUNCE_MS, MAX_COMMAND_HISTORY_ENTRIES,
+    CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, ContentSearchResponse,
+    MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher};
@@ -90,6 +91,35 @@ fn parse_collection_default_tags_input(raw: &str) -> Vec<String> {
         }
     }
     out
+}
+
+fn char_len(text: &str) -> usize {
+    text.chars().count()
+}
+
+fn insert_str_at_char_col(target: &mut String, char_col: usize, insert: &str) {
+    let byte_col = byte_index(target, char_col);
+    target.insert_str(byte_col, insert);
+}
+
+fn remove_char_before_char_col(target: &mut String, char_col: usize) -> bool {
+    if char_col == 0 {
+        return false;
+    }
+    let from = byte_index(target, char_col - 1);
+    let to = byte_index(target, char_col);
+    target.replace_range(from..to, "");
+    true
+}
+
+fn remove_char_at_char_col(target: &mut String, char_col: usize) -> bool {
+    if char_col >= char_len(target) {
+        return false;
+    }
+    let from = byte_index(target, char_col);
+    let to = byte_index(target, char_col + 1);
+    target.replace_range(from..to, "");
+    true
 }
 
 // Ownership: switcher, command bar execution, and search workflows.
@@ -185,20 +215,36 @@ impl TerminalApp {
         // Move any in-flight receiver into the detached pool so the stale worker
         // can drain without blocking the next dialog session.
         if let Some(rx) = self.content_search_rx.take() {
-            self.content_search_detached_rxs.push(rx);
+            self.push_detached_content_search_rx(rx);
         }
         self.content_search_query.clear();
+        self.content_search_cursor_col = 0;
         self.content_search_results.clear();
         self.content_search_selected = 0;
         self.content_search_pending = false;
         self.content_search_debounce_until = None;
     }
 
+    fn push_detached_content_search_rx(
+        &mut self,
+        rx: std::sync::mpsc::Receiver<ContentSearchResponse>,
+    ) {
+        if self.content_search_detached_rxs.len() >= CONTENT_SEARCH_MAX_DETACHED_WORKERS {
+            self.content_search_detached_rxs.remove(0);
+        }
+        self.content_search_detached_rxs.push(rx);
+    }
+
     fn refresh_content_search_preview(&mut self) {
+        self.content_search_cursor_col = self
+            .content_search_cursor_col
+            .min(char_len(&self.content_search_query));
         let query = self.content_search_query.trim().to_string();
-        // Keep at most one active worker per visible dialog. Query changes are
-        // coalesced via `content_search_pending` and dispatched once the active
-        // worker resolves.
+        // Supersede any stale in-flight worker immediately when the query/filter
+        // changes so the next debounced dispatch is never blocked.
+        if let Some(rx) = self.content_search_rx.take() {
+            self.push_detached_content_search_rx(rx);
+        }
         self.content_search_results = self.content_search_title_fallback_results(&query);
         self.content_search_selected = 0;
         self.content_search_pending = !query.is_empty();
@@ -2210,7 +2256,19 @@ impl TerminalApp {
                 self.open_switcher(db)?;
             }
             Key::Ctrl('w') | Key::CtrlBackspace => {
-                trim_trailing_word(&mut self.content_search_query);
+                if self.content_search_cursor_col == char_len(&self.content_search_query) {
+                    trim_trailing_word(&mut self.content_search_query);
+                    self.content_search_cursor_col = char_len(&self.content_search_query);
+                } else {
+                    // Keep behavior predictable away from end-of-line by deleting one char.
+                    if remove_char_before_char_col(
+                        &mut self.content_search_query,
+                        self.content_search_cursor_col,
+                    ) {
+                        self.content_search_cursor_col =
+                            self.content_search_cursor_col.saturating_sub(1);
+                    }
+                }
                 self.refresh_content_search_preview();
             }
             Key::ArrowUp => {
@@ -2223,9 +2281,35 @@ impl TerminalApp {
                     self.content_search_selected += 1;
                 }
             }
+            Key::ArrowLeft => {
+                self.content_search_cursor_col = self.content_search_cursor_col.saturating_sub(1);
+            }
+            Key::ArrowRight => {
+                self.content_search_cursor_col = (self.content_search_cursor_col + 1)
+                    .min(char_len(&self.content_search_query));
+            }
+            Key::Home => {
+                self.content_search_cursor_col = 0;
+            }
+            Key::End => {
+                self.content_search_cursor_col = char_len(&self.content_search_query);
+            }
             Key::Backspace => {
-                self.content_search_query.pop();
-                self.refresh_content_search_preview();
+                if remove_char_before_char_col(
+                    &mut self.content_search_query,
+                    self.content_search_cursor_col,
+                ) {
+                    self.content_search_cursor_col = self.content_search_cursor_col.saturating_sub(1);
+                    self.refresh_content_search_preview();
+                }
+            }
+            Key::Delete => {
+                if remove_char_at_char_col(
+                    &mut self.content_search_query,
+                    self.content_search_cursor_col,
+                ) {
+                    self.refresh_content_search_preview();
+                }
             }
             Key::Enter => {
                 if let Some(result) = self
@@ -2266,14 +2350,30 @@ impl TerminalApp {
                 }
             }
             Key::Char(ch) => {
-                self.content_search_query.push(ch);
+                let insert = ch.to_string();
+                insert_str_at_char_col(
+                    &mut self.content_search_query,
+                    self.content_search_cursor_col,
+                    &insert,
+                );
+                self.content_search_cursor_col += 1;
                 self.refresh_content_search_preview();
             }
             Key::Paste(text) => {
-                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
-                    self.content_search_query.push(ch);
+                let sanitized = text
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .collect::<String>();
+                if !sanitized.is_empty() {
+                    let added = char_len(&sanitized);
+                    insert_str_at_char_col(
+                        &mut self.content_search_query,
+                        self.content_search_cursor_col,
+                        &sanitized,
+                    );
+                    self.content_search_cursor_col += added;
+                    self.refresh_content_search_preview();
                 }
-                self.refresh_content_search_preview();
             }
             _ => {}
         }

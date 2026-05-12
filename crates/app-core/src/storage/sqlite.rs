@@ -2705,10 +2705,16 @@ fn parse_search_terms(raw: &str) -> Vec<SearchTerm> {
                     if ch.is_whitespace() || ch == '"' {
                         break;
                     }
-                    chars.next();
                     if is_search_char(ch) {
+                        chars.next();
                         token.push(ch);
+                        continue;
                     }
+                    // Treat punctuation as a token boundary instead of silently
+                    // stripping and merging neighboring terms (e.g. "it's" ->
+                    // "it" + "s", not "its").
+                    chars.next();
+                    break;
                 }
                 if !token.is_empty() {
                     terms.push(SearchTerm::Prefix(token));
@@ -3829,8 +3835,12 @@ mod tests {
         );
         assert_eq!(build_fts_query(""), "");
         assert_eq!(build_fts_query("   "), "");
-        // punctuation stripped from unquoted tokens
-        assert_eq!(build_fts_query("hello!world"), "\"helloworld\"*");
+        // punctuation splits terms for better natural-language matching.
+        assert_eq!(build_fts_query("hello!world"), "\"hello\"* \"world\"*");
+        assert_eq!(
+            build_fts_query("it's not corr"),
+            "\"it\"* \"s\"* \"not\"* \"corr\"*"
+        );
     }
 
     #[test]

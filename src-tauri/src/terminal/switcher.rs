@@ -1,7 +1,10 @@
 use std::cmp::min;
 
-use super::ansi::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, AnsiStyle};
+use super::ansi::{
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, goto, pad_right, AnsiStyle,
+};
 use super::render::RenderPalette;
+use crate::terminal::render;
 use app_core::storage::{Collection, NoteAccessMode, NoteSearchResult};
 
 const CONTENT_SEARCH_MIN_H: usize = 9;
@@ -561,6 +564,97 @@ fn wrap_preview_lines(text: &str, width: usize, max_lines: usize) -> Vec<String>
     out
 }
 
+fn content_search_highlight_terms(query: &str) -> Vec<String> {
+    query
+        .to_lowercase()
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| term.to_string())
+        .collect()
+}
+
+fn highlight_ranges_for_terms(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let chars = text.chars().collect::<Vec<_>>();
+    let lower_chars = text.to_lowercase().chars().collect::<Vec<_>>();
+    if chars.is_empty() || lower_chars.is_empty() {
+        return Vec::new();
+    }
+    let mut mask = vec![false; chars.len()];
+    for term in terms {
+        let needle = term.chars().collect::<Vec<_>>();
+        if needle.is_empty() || needle.len() > lower_chars.len() {
+            continue;
+        }
+        for start in 0..=lower_chars.len() - needle.len() {
+            if lower_chars[start..start + needle.len()] == needle[..] {
+                for idx in start..start + needle.len() {
+                    if idx < mask.len() {
+                        mask[idx] = true;
+                    }
+                }
+            }
+        }
+    }
+    let mut ranges = Vec::new();
+    let mut start: Option<usize> = None;
+    for (idx, marked) in mask.into_iter().enumerate() {
+        match (start, marked) {
+            (None, true) => start = Some(idx),
+            (Some(from), false) => {
+                ranges.push((from, idx));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(from) = start {
+        ranges.push((from, chars.len()));
+    }
+    ranges
+}
+
+fn draw_row_with_highlights(
+    buf: &mut String,
+    row: usize,
+    col: usize,
+    width: usize,
+    text: &str,
+    base_style: AnsiStyle,
+    highlight_style: AnsiStyle,
+    terms: &[String],
+) {
+    let display = pad_right(text, width);
+    let chars = display.chars().collect::<Vec<_>>();
+    let ranges = highlight_ranges_for_terms(&display, terms);
+    let mut highlighted = vec![false; chars.len()];
+    for (from, to) in ranges {
+        for idx in from..to.min(highlighted.len()) {
+            highlighted[idx] = true;
+        }
+    }
+
+    buf.push_str(&goto(row, col));
+    let mut current_highlight = false;
+    base_style.write_to(buf);
+    for (idx, ch) in chars.into_iter().enumerate() {
+        let next_highlight = highlighted.get(idx).copied().unwrap_or(false);
+        if next_highlight != current_highlight {
+            if next_highlight {
+                highlight_style.write_to(buf);
+            } else {
+                base_style.write_to(buf);
+            }
+            current_highlight = next_highlight;
+        }
+        buf.push(ch);
+    }
+    buf.push_str(render::RESET);
+}
+
 pub fn draw_content_search(
     view: &ContentSearchView,
     buf: &mut String,
@@ -601,6 +695,13 @@ pub fn draw_content_search(
         dim: true,
         ..Default::default()
     };
+    let match_style = AnsiStyle {
+        fg: Some(palette.primary()),
+        bg: Some(surface_bg),
+        bold: true,
+        ..Default::default()
+    };
+    let highlight_terms = content_search_highlight_terms(view.query);
 
     draw_framed_surface(
         buf,
@@ -623,20 +724,24 @@ pub fn draw_content_search(
         &prompt,
         prompt_style,
     );
+    let has_collection_line = !view.collection_filter_label.trim().is_empty();
+    if has_collection_line {
+        draw_row_at_styled(
+            buf,
+            y + 2,
+            x + 1,
+            box_w.saturating_sub(2),
+            &format!(
+                " collection: {} (Ctrl+L cycle)",
+                view.collection_filter_label
+            ),
+            label_style,
+        );
+    }
+    let results_label_row = if has_collection_line { y + 3 } else { y + 2 };
     draw_row_at_styled(
         buf,
-        y + 2,
-        x + 1,
-        box_w.saturating_sub(2),
-        &format!(
-            " collection: {} (Ctrl+L cycle)",
-            view.collection_filter_label
-        ),
-        label_style,
-    );
-    draw_row_at_styled(
-        buf,
-        y + 3,
+        results_label_row,
         x + 1,
         box_w.saturating_sub(2),
         " results:",
@@ -644,14 +749,15 @@ pub fn draw_content_search(
     );
 
     // Reserve preview rows at the bottom; result rows fill the rest.
-    let max_rows = box_h.saturating_sub(5 + CONTENT_SEARCH_PREVIEW_LINES); // prompt + filter + label + preview + borders
+    let layout_rows = if has_collection_line { 5 } else { 4 }; // prompt + (optional filter) + label + preview + borders
+    let max_rows = box_h.saturating_sub(layout_rows + CONTENT_SEARCH_PREVIEW_LINES);
     let mut start = 0usize;
     if view.selected >= max_rows {
         start = view.selected + 1 - max_rows;
     }
 
     for i in 0..max_rows {
-        let row = y + 4 + i;
+        let row = results_label_row + 1 + i;
         if let Some(result) = view.results.get(start + i) {
             let marker = if start + i == view.selected { ">" } else { " " };
             let text = format!("{marker} L{}  {}", result.line_number.max(1), result.title);
@@ -665,7 +771,16 @@ pub fn draw_content_search(
                     selected_style,
                 );
             } else {
-                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
+                draw_row_with_highlights(
+                    buf,
+                    row,
+                    x + 1,
+                    box_w.saturating_sub(2),
+                    &text,
+                    row_style,
+                    match_style,
+                    &highlight_terms,
+                );
             }
         } else {
             draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
@@ -688,23 +803,24 @@ pub fn draw_content_search(
 
     let selected_result = view.results.get(view.selected);
     if let Some(result) = selected_result {
-        let prefix = format!(" L{} ", result.line_number.max(1));
         let snippet = sanitize_preview_text(result.snippet.trim());
         let preview_text = if snippet.trim().is_empty() {
-            format!("{prefix}no snippet preview")
+            "no snippet preview".to_string()
         } else {
-            format!("{prefix}{snippet}")
+            snippet
         };
         let lines =
             wrap_preview_lines(&preview_text, snippet_inner_w, CONTENT_SEARCH_PREVIEW_LINES);
         for (idx, line) in lines.into_iter().enumerate() {
-            draw_row_at_styled(
+            draw_row_with_highlights(
                 buf,
                 preview_start_row + idx,
                 x + 1,
                 snippet_inner_w,
                 &line,
                 snippet_style,
+                match_style,
+                &highlight_terms,
             );
         }
     }

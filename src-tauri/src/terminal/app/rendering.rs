@@ -1355,7 +1355,7 @@ impl TerminalApp {
                     collection_filter_label: self
                         .content_search_collection_filter_name
                         .as_deref()
-                        .unwrap_or("All"),
+                        .unwrap_or(""),
                     results: &self.content_search_results,
                     selected: self.content_search_selected,
                 },
@@ -1601,7 +1601,7 @@ impl TerminalApp {
                 let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);
                 let prompt = " content: ";
                 let col =
-                    (x + 1 + prompt.chars().count() + self.content_search_query.chars().count())
+                    (x + 1 + prompt.chars().count() + self.content_search_cursor_col)
                         .min(cols.max(1));
                 (y + 1, col.max(1))
             }
