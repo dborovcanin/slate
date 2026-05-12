@@ -2691,7 +2691,7 @@ mod tests {
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[4];
-        let by_idx: std::collections::FxHashMap<usize, String> = cells
+        let by_idx: FxHashMap<usize, String> = cells
             .iter()
             .map(|c| (c.cell_index, c.value.clone()))
             .collect();
@@ -2726,7 +2726,7 @@ mod tests {
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[4];
-        let by_idx: std::collections::FxHashMap<usize, String> = cells
+        let by_idx: FxHashMap<usize, String> = cells
             .iter()
             .map(|c| (c.cell_index, c.value.clone()))
             .collect();

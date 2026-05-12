@@ -386,6 +386,29 @@ struct Page {
     used_images: BTreeSet<String>,
 }
 
+// Standard Helvetica AFM widths (1/1000 em) for printable ASCII 32-126.
+// Source: Adobe Helvetica AFM, matches PDF 1.7 Annex D standard metrics.
+#[rustfmt::skip]
+const HELVETICA_CHAR_WIDTHS: [u16; 95] = [
+    278, 278, 355, 556, 556, 889, 667, 222, 333, 333, 389, 584, 278, 333, 278, 278, // 32-47
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, // 48-63
+   1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778, // 64-79
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556, // 80-95
+    222, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, // 96-111
+    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,      // 112-126
+];
+
+// Standard Helvetica-Bold AFM widths (1/1000 em) for printable ASCII 32-126.
+#[rustfmt::skip]
+const HELVETICA_BOLD_CHAR_WIDTHS: [u16; 95] = [
+    278, 333, 474, 556, 556, 889, 722, 278, 333, 333, 389, 584, 278, 333, 278, 278, // 32-47
+    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 333, 333, 584, 584, 584, 611, // 48-63
+    975, 722, 722, 722, 722, 667, 611, 778, 722, 278, 556, 722, 611, 833, 722, 778, // 64-79
+    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 584, 556, // 80-95
+    333, 556, 611, 556, 611, 556, 333, 611, 611, 278, 278, 556, 278, 889, 611, 611, // 96-111
+    611, 611, 389, 556, 333, 611, 556, 778, 556, 556, 500, 389, 280, 389, 584,      // 112-126
+];
+
 #[derive(Debug, Clone)]
 struct PdfUnicodeFontAsset {
     bytes: Vec<u8>,
@@ -400,6 +423,28 @@ struct PdfUnicodeFontAsset {
     flags: u32,
     stem_v: i32,
     fallback_gid: u16,
+    /// glyph_id → horizontal advance width in font units. Indexed by GlyphId.0.
+    glyph_advances: Vec<u16>,
+    /// BMP codepoint → glyph ID (0 = not in font). 65536 entries.
+    bmp_glyph_ids: Vec<u16>,
+}
+
+impl PdfUnicodeFontAsset {
+    fn glyph_advance_for_char(&self, ch: char) -> Option<f32> {
+        let cp = ch as u32;
+        if cp >= 65536 {
+            return None;
+        }
+        let gid = self.bmp_glyph_ids[cp as usize];
+        if gid == 0 {
+            return None;
+        }
+        let adv = *self.glyph_advances.get(gid as usize)?;
+        if adv == 0 {
+            return None;
+        }
+        Some(adv as f32 / self.units_per_em as f32)
+    }
 }
 
 fn resolve_export_path(path: &str) -> Result<PathBuf, String> {
@@ -521,6 +566,25 @@ fn load_unicode_pdf_font_asset() -> Option<PdfUnicodeFontAsset> {
         let ascent = face.ascender();
         let descent = face.descender();
         let cap_height = face.capital_height().unwrap_or(face.ascender());
+
+        let num_glyphs = face.number_of_glyphs() as usize;
+        let mut glyph_advances = vec![0u16; num_glyphs];
+        for gid in 0..num_glyphs {
+            if let Some(adv) = face.glyph_hor_advance(ttf_parser::GlyphId(gid as u16)) {
+                glyph_advances[gid] = adv;
+            }
+        }
+        let mut bmp_glyph_ids = vec![0u16; 65536];
+        for cp in 0x0020u32..=0xFFFFu32 {
+            if let Some(ch) = char::from_u32(cp) {
+                if let Some(gid) = face.glyph_index(ch) {
+                    if gid.0 != 0 {
+                        bmp_glyph_ids[cp as usize] = gid.0;
+                    }
+                }
+            }
+        }
+
         return Some(PdfUnicodeFontAsset {
             bytes,
             units_per_em,
@@ -534,6 +598,8 @@ fn load_unicode_pdf_font_asset() -> Option<PdfUnicodeFontAsset> {
             flags,
             stem_v: 80,
             fallback_gid,
+            glyph_advances,
+            bmp_glyph_ids,
         });
     }
     None
@@ -1172,6 +1238,32 @@ fn styled_chars_for_code_line(
 
 fn char_draw_width(ch: char, size: f32, style: TextStyle) -> f32 {
     let font = style.font_face();
+    // Courier is fixed-pitch; existing factor is already correct for all chars.
+    if matches!(font, FontFace::Mono) {
+        return if ch == ' ' {
+            size * font.width_factor() * font.space_factor()
+        } else {
+            size * font.width_factor()
+        };
+    }
+    let cp = ch as u32;
+    // ASCII printable: use standard Helvetica/Helvetica-Bold AFM metrics.
+    if cp >= 32 && cp <= 126 {
+        let idx = (cp - 32) as usize;
+        let w = if matches!(font, FontFace::Bold | FontFace::BoldItalic) {
+            HELVETICA_BOLD_CHAR_WIDTHS[idx]
+        } else {
+            HELVETICA_CHAR_WIDTHS[idx]
+        };
+        return size * w as f32 / 1000.0;
+    }
+    // Non-ASCII: look up actual advance width from the unicode fallback font.
+    if let Some(asset) = resolve_unicode_pdf_font_asset() {
+        if let Some(adv) = asset.glyph_advance_for_char(ch) {
+            return size * adv;
+        }
+    }
+    // Last resort: existing heuristic for chars not covered above.
     if ch == ' ' {
         size * font.width_factor() * font.space_factor()
     } else {
@@ -2945,7 +3037,7 @@ mod tests {
         let pages =
             render_markdown_to_pages(source, &PdfExportPalette::default(), &FxHashMap::default(), &[]);
 
-        let mut y_by_var = FxHashMap::<String, f32>::new();
+        let mut y_by_var = FxHashMap::<String, f32>::default();
         for page in pages {
             for op in page.ops {
                 if let DrawOp::Text { y, text, .. } = op {
