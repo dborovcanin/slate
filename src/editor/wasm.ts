@@ -495,6 +495,7 @@ export type CommandDispatchKind =
   | "host_write"
   | "host_export"
   | "host_module"
+  | "host_collection"
   | "host_fold"
   | "host_clip_watch"
   | "host_note_security"
@@ -510,6 +511,11 @@ export type HostCommandPlan =
   | { kind: "write"; quit: boolean; force: boolean }
   | { kind: "export"; format: "pdf" | "md" | "txt"; path?: string | null }
   | { kind: "module"; command: string }
+  | {
+    kind: "collection";
+    action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
+    collection?: string | null;
+  }
   | { kind: "fold"; action: HostFoldAction }
   | { kind: "clip_watch"; action: HostClipWatchAction }
   | { kind: "note_security"; action: NoteSecurityAction; password: string }
@@ -995,6 +1001,7 @@ export function classifyCommandDispatchFromWasm(
     raw === "host_write" ||
     raw === "host_export" ||
     raw === "host_module" ||
+    raw === "host_collection" ||
     raw === "host_fold" ||
     raw === "host_clip_watch" ||
     raw === "host_note_security" ||

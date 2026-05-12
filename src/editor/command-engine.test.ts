@@ -34,6 +34,14 @@ test("editor mode exposes only editing commands", async () => {
     "module style on",
     "module style off",
     "module style toggle",
+    "collection choose",
+    "collection clear",
+    "collection create",
+    "collection delete",
+    "collection update",
+    "collection purge",
+    "collection join",
+    "collection leave",
     "format",
     "clip-watch on",
     "clip-watch off",
@@ -125,4 +133,87 @@ test("export host command routes format/path and clipboard fallback", async () =
     onExportCommand: async () => "should-not-run",
   });
   assert.equal(pdfMissingPath, "usage: export pdf <path>");
+});
+
+test("collection host command routes choose/create/delete/update/purge/join/leave/clear", async () => {
+  const seen: Array<{ action: string; collection: string | null }> = [];
+  const choose = await executeCommand({} as any, "collection choose Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "working collection: Work";
+    },
+  });
+  assert.equal(choose, "working collection: Work");
+  assert.deepEqual(seen[0], { action: "choose", collection: "Work" });
+
+  const create = await executeCommand({} as any, "collection create Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "collection created";
+    },
+  });
+  assert.equal(create, "collection created");
+  assert.deepEqual(seen[1], { action: "create", collection: "Work" });
+
+  const update = await executeCommand({} as any, "collection update Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "collection updated";
+    },
+  });
+  assert.equal(update, "collection updated");
+  assert.deepEqual(seen[2], { action: "update", collection: "Work" });
+
+  const join = await executeCommand({} as any, "collection join Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "joined";
+    },
+  });
+  assert.equal(join, "joined");
+  assert.deepEqual(seen[3], { action: "add", collection: "Work" });
+
+  const leave = await executeCommand({} as any, "collection leave Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "left";
+    },
+  });
+  assert.equal(leave, "left");
+  assert.deepEqual(seen[4], { action: "remove", collection: "Work" });
+
+  const purge = await executeCommand({} as any, "collection purge Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "purged";
+    },
+  });
+  assert.equal(purge, "purged");
+  assert.deepEqual(seen[5], { action: "purge", collection: "Work" });
+
+  const del = await executeCommand({} as any, "collection delete Work", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "deleted";
+    },
+  });
+  assert.equal(del, "deleted");
+  assert.deepEqual(seen[6], { action: "delete", collection: "Work" });
+
+  const clear = await executeCommand({} as any, "collection choose none", {
+    mode: "editor",
+    onCollectionCommand: async (options) => {
+      seen.push(options);
+      return "working collection cleared";
+    },
+  });
+  assert.equal(clear, "working collection cleared");
+  assert.deepEqual(seen[7], { action: "clear", collection: null });
 });

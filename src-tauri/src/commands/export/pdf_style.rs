@@ -82,7 +82,11 @@ pub(super) fn blend_color(a: PdfRgbColor, b: PdfRgbColor, t: f32) -> PdfRgbColor
     }
 }
 
-pub(super) fn normalize_for_paper(mut color: PdfRgbColor, min_luma: f32, max_luma: f32) -> PdfRgbColor {
+pub(super) fn normalize_for_paper(
+    mut color: PdfRgbColor,
+    min_luma: f32,
+    max_luma: f32,
+) -> PdfRgbColor {
     let mut luma = color_luma(color);
     if luma > max_luma && luma > 0.0 {
         let scale = max_luma / luma;

@@ -104,7 +104,9 @@ Details: [Export Reference](./export.md).
 ## Search and note navigation
 
 - fuzzy note switcher
+- collection picker with session-scoped active working collection
 - note create/open/delete workflows
+- content-search collection filter defaults to active working collection on each dialog open
 - first non-empty line title derivation
 
 ## Wiki links

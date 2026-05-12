@@ -49,6 +49,10 @@ export interface CommandExecutionOptions {
     format: ExportCommandFormat;
     path: string | null;
   }) => Promise<string | void> | string | void;
+  onCollectionCommand?: (options: {
+    action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
+    collection: string | null;
+  }) => Promise<string | void> | string | void;
   selectionOverride?: {
     anchor: number;
     head: number;
@@ -272,6 +276,29 @@ export async function executeCommand(
             ? error
             : String(error);
       return `export failed: ${message}`;
+    }
+  }
+  if (hostPlan?.kind === "collection") {
+    if (!options.onCollectionCommand) {
+      return "collection command unavailable";
+    }
+    try {
+      const message = await options.onCollectionCommand({
+        action: hostPlan.action,
+        collection: hostPlan.collection ?? null,
+      });
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message;
+      }
+      return "collection updated";
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error);
+      return `collection command failed: ${message}`;
     }
   }
 

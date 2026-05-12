@@ -6,8 +6,8 @@ use crate::terminal::render_styles::{
     apply_variable_styles, CharStyle,
 };
 pub use crate::terminal::theme::RenderPalette;
-use std::cell::RefCell;
 use rustc_hash::FxHashMap;
+use std::cell::RefCell;
 use std::sync::Arc;
 
 pub const RESET: &str = "\x1b[0m";

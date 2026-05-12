@@ -204,6 +204,16 @@ pub fn execute_command(
         CommandId::ExportPdf | CommandId::ExportMd | CommandId::ExportTxt => {
             result_with_message("export command handled by host")
         }
+        CommandId::ChooseCollection
+        | CommandId::ClearCollection
+        | CommandId::CreateCollection
+        | CommandId::DeleteCollection
+        | CommandId::UpdateCollection
+        | CommandId::PurgeCollection
+        | CommandId::AddToCollection
+        | CommandId::RemoveFromCollection => {
+            result_with_message("collection command handled by host")
+        }
         CommandId::Write | CommandId::WriteQuit => {
             result_with_message("write command handled by host")
         }

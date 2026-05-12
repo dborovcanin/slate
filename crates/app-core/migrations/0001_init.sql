@@ -160,3 +160,66 @@ CREATE TABLE IF NOT EXISTS note_images (
 
 CREATE INDEX IF NOT EXISTS idx_note_images_note_updated
     ON note_images(note_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_normalized_name
+    ON collections(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_collections_name
+    ON collections(name);
+
+CREATE TABLE IF NOT EXISTS tags (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_normalized_name
+    ON tags(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_tags_name
+    ON tags(name);
+
+CREATE TABLE IF NOT EXISTS note_collections (
+    note_id TEXT NOT NULL,
+    collection_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (note_id, collection_id),
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+    FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_collections_collection_note
+    ON note_collections(collection_id, note_id);
+
+CREATE TABLE IF NOT EXISTS note_tags (
+    note_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (note_id, tag_id),
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_tags_tag_note
+    ON note_tags(tag_id, note_id);
+
+CREATE TABLE IF NOT EXISTS collection_default_tags (
+    collection_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (collection_id, tag_id),
+    FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+    FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_collection_default_tags_tag_collection
+    ON collection_default_tags(tag_id, collection_id);

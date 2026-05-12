@@ -11,7 +11,10 @@ use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines
 use crate::terminal::{date_picker, input, media_sources, notifications, switcher};
 use crate::terminal::{
     date_picker::DatePickerView,
-    switcher::{content_search_box_geometry, ContentSearchView, SwitcherView},
+    switcher::{
+        content_search_box_geometry, CollectionEditView, CollectionSwitcherView, ContentSearchView,
+        SwitcherView,
+    },
 };
 use std::borrow::Cow;
 use std::io::Write;
@@ -800,6 +803,7 @@ impl TerminalApp {
             UiMode::CommandBar => " CMD",
             UiMode::Search => " SEARCH",
             UiMode::Switcher => " SWITCH",
+            UiMode::CollectionSwitcher => " COLLS",
             UiMode::ContentSearch => " SEARCH",
             UiMode::DatePicker => " DATE",
         };
@@ -1215,7 +1219,7 @@ impl TerminalApp {
             }
         }
 
-        let status_owned = if self.mode == UiMode::Editor {
+        let editor_status_owned = if self.mode == UiMode::Editor {
             // Keep status bar stable during wiki-link popup usage; the popup
             // itself already renders suggestions and selection state.
             self.variable_autocomplete_status_hint()
@@ -1223,8 +1227,8 @@ impl TerminalApp {
         } else {
             None
         };
-        let status = match self.mode {
-            UiMode::Editor => status_owned.as_deref().unwrap_or(&self.status),
+        let status_base = match self.mode {
+            UiMode::Editor => editor_status_owned.as_deref().unwrap_or(&self.status),
             UiMode::Normal
             | UiMode::CommandBar
             | UiMode::Search
@@ -1240,20 +1244,28 @@ impl TerminalApp {
                         "Confirm delete: Enter/Y confirm, Esc/N cancel"
                     }
                 } else {
-                    "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
+                    "Switcher: type to filter, Enter open, Tab content search, Ctrl+G collections, Delete/Ctrl+Backspace delete, Esc close"
+                }
+            }
+            UiMode::CollectionSwitcher => {
+                if self.collection_edit_dialog.is_some() {
+                    "Collection edit: Tab/Shift+Tab field, Enter save, Esc cancel"
+                } else {
+                    "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close"
                 }
             }
             UiMode::ContentSearch => {
                 if self.switcher_open_confirm.is_some() {
                     "Open note: type password, Enter confirm, Esc cancel"
                 } else {
-                    "Content search: type to search, Enter open, Tab title search, Esc close"
+                    "Content search: type to search, Ctrl+L cycle collection, Enter open, Tab title search, Esc close"
                 }
             }
             UiMode::DatePicker => {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
         };
+        let status_text = format!("{status_base}{}", self.working_collection_status_suffix());
         let status_bg = self.render_palette.primary();
         if !self.draw_command_completion_status_row(&mut buf, rows, cols, status_bg) {
             draw_row_at_styled(
@@ -1261,7 +1273,7 @@ impl TerminalApp {
                 rows,
                 1,
                 cols,
-                status,
+                &status_text,
                 AnsiStyle {
                     fg: Some(contrast_fg_for_bg(status_bg)),
                     bg: Some(status_bg),
@@ -1306,10 +1318,44 @@ impl TerminalApp {
             }
         }
 
+        if self.mode == UiMode::CollectionSwitcher {
+            switcher::draw_collection_switcher(
+                &CollectionSwitcherView {
+                    query: &self.collection_switcher_query,
+                    items: &self.collection_switcher_items,
+                    matches: &self.collection_switcher_matches,
+                    selected: self.collection_switcher_selected,
+                    working_collection_id: self.working_collection_id.as_deref(),
+                },
+                &mut buf,
+                rows,
+                cols,
+                self.render_palette,
+            );
+            if let Some(dialog) = self.collection_edit_dialog.as_ref() {
+                switcher::draw_collection_edit_dialog(
+                    &CollectionEditView {
+                        name: &dialog.name,
+                        description: &dialog.description,
+                        default_tags: &dialog.default_tags,
+                        selected_field: dialog.selected_field,
+                    },
+                    &mut buf,
+                    rows,
+                    cols,
+                    self.render_palette,
+                );
+            }
+        }
+
         if self.mode == UiMode::ContentSearch {
             switcher::draw_content_search(
                 &ContentSearchView {
                     query: &self.content_search_query,
+                    collection_filter_label: self
+                        .content_search_collection_filter_name
+                        .as_deref()
+                        .unwrap_or("All"),
                     results: &self.content_search_results,
                     selected: self.content_search_selected,
                 },
@@ -1396,7 +1442,10 @@ impl TerminalApp {
             || self.last_drawn_rows.len() != row_chunks.len();
         let overlay_active = matches!(
             self.mode,
-            UiMode::Switcher | UiMode::ContentSearch | UiMode::DatePicker
+            UiMode::Switcher
+                | UiMode::CollectionSwitcher
+                | UiMode::ContentSearch
+                | UiMode::DatePicker
         ) || self.switcher_open_confirm.is_some()
             || self.switcher_delete_confirm.is_some();
         // Full-screen repaint only on overlay transitions (open/close) so
@@ -1514,6 +1563,39 @@ impl TerminalApp {
                 let col = (x + 1 + prompt.chars().count() + self.switcher_query.chars().count())
                     .min(cols.max(1));
                 (y + 1, col.max(1))
+            }
+            UiMode::CollectionSwitcher => {
+                let box_w = min(cols.saturating_sub(4).max(30), 72);
+                let box_h = min(rows.saturating_sub(4).max(8), 14);
+                let x = (cols.saturating_sub(box_w)) / 2 + 1;
+                let y = (rows.saturating_sub(box_h)) / 2 + 1;
+                if let Some(dialog) = self.collection_edit_dialog.as_ref() {
+                    let edit_w = min(cols.saturating_sub(4).max(48), 88);
+                    let edit_h = min(rows.saturating_sub(4).max(10), 12);
+                    let edit_x = (cols.saturating_sub(edit_w)) / 2 + 1;
+                    let edit_y = (rows.saturating_sub(edit_h)) / 2 + 1;
+                    let label_width = match dialog.selected_field {
+                        0 => " Name: ".chars().count(),
+                        1 => " Description: ".chars().count(),
+                        _ => " Default tags: ".chars().count(),
+                    };
+                    let text_len = match dialog.selected_field {
+                        0 => dialog.name.chars().count(),
+                        1 => dialog.description.chars().count(),
+                        _ => dialog.default_tags.chars().count(),
+                    };
+                    let col = (edit_x + 1 + label_width + text_len).min(cols.max(1));
+                    let row = edit_y + 4 + dialog.selected_field.min(2);
+                    (row.max(1), col.max(1))
+                } else {
+                    let prompt = " collections: ";
+                    let col = (x
+                        + 1
+                        + prompt.chars().count()
+                        + self.collection_switcher_query.chars().count())
+                    .min(cols.max(1));
+                    (y + 1, col.max(1))
+                }
             }
             UiMode::ContentSearch => {
                 let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);

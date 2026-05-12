@@ -93,6 +93,18 @@ html, body {
   letter-spacing: 0.02em;
 }
 
+.status-collection {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
+  border-radius: 999px;
+  color: color-mix(in srgb, var(--accent) 72%, var(--fg));
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-overlay));
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
 .toast {
   position: fixed;
   bottom: 40px;
@@ -163,6 +175,17 @@ html, body {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 70%, var(--border));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.app-collection-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-collection-field-label {
+  font-size: 12px;
+  color: var(--fg-dim);
 }
 
 .app-confirm-actions {

@@ -8,6 +8,7 @@ This document summarizes GUI, terminal, and vim key mappings.
 | --- | --- |
 | `Ctrl+N` | New note |
 | `Ctrl+P` | Open note switcher |
+| `Ctrl+G` | Open collection picker |
 | `Ctrl+Up` / `Ctrl+Down` | Previous / next note |
 | `Ctrl+Shift+;` | Open command picker |
 | `Ctrl+E` | Export active note to clipboard |
@@ -35,12 +36,22 @@ This document summarizes GUI, terminal, and vim key mappings.
 | `Delete` or `Ctrl+Backspace` | Delete selected note (with confirmation) |
 | `Escape` | Close switcher |
 
+## Collection picker keys (GUI + TUI)
+
+| Key | Action |
+| --- | --- |
+| `ArrowUp` / `ArrowDown` | Move selection |
+| `Enter` | Set active working collection |
+| `Ctrl+E` | Edit selected collection (name/description/default tags) |
+| `Escape` | Close picker |
+
 ## Terminal mode shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl+N` | New note |
 | `Ctrl+P` | Open note switcher |
+| `Ctrl+G` | Open collection picker |
 | `Ctrl+S` | Manual save |
 | `Ctrl+Q` | Quit |
 | `Ctrl+W` | Quit |

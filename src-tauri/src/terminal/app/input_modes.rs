@@ -1,6 +1,6 @@
 use super::{
-    is_markdown_table_line, new_note, DatePickerAction, Db, Key, LineReminderGhost, TerminalApp,
-    UiMode, VimPipelineResult, FOLD_PREFIX_TIMEOUT_MS,
+    is_markdown_table_line, new_note_with_context, DatePickerAction, Db, Key, LineReminderGhost,
+    TerminalApp, UiMode, VimPipelineResult, FOLD_PREFIX_TIMEOUT_MS,
 };
 use crate::terminal::date_picker;
 use crate::terminal::text_utils::line_char_len;
@@ -46,6 +46,7 @@ impl TerminalApp {
             UiMode::Normal => self.handle_normal_key(db, key)?,
             UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
+            UiMode::CollectionSwitcher => self.handle_collection_switcher_key(db, key)?,
             UiMode::ContentSearch => self.handle_content_search_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(db, key)?,
             UiMode::Search => self.handle_search_key(key)?,
@@ -96,7 +97,11 @@ impl TerminalApp {
                 if self.autosave_enabled {
                     self.save(db)?;
                 }
-                let note = new_note(db, &crate::config::load_theme_config())?;
+                let note = new_note_with_context(
+                    db,
+                    &crate::config::load_theme_config(),
+                    self.working_collection_id.as_deref(),
+                )?;
                 self.set_active_note(db, note)?;
                 self.refresh_switcher_items(db)?;
                 self.status = format!("new note {}", self.active_note.id);
@@ -105,6 +110,11 @@ impl TerminalApp {
             Key::Ctrl('p') => {
                 self.dismiss_variable_autocomplete_popup();
                 self.open_switcher(db)?;
+                return Ok(());
+            }
+            Key::Ctrl('g') => {
+                self.dismiss_variable_autocomplete_popup();
+                self.open_collection_switcher(db)?;
                 return Ok(());
             }
             Key::ArrowUp => {
@@ -379,6 +389,11 @@ impl TerminalApp {
             return Ok(());
         }
 
+        if key == Key::Ctrl('g') {
+            self.open_collection_switcher(db)?;
+            return Ok(());
+        }
+
         if key == Key::Ctrl(']') {
             self.navigate_wiki_link_at_cursor(db);
             return Ok(());
@@ -457,6 +472,11 @@ impl TerminalApp {
     pub(super) fn handle_visual_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if key == Key::Ctrl('p') {
             self.open_switcher(db)?;
+            return Ok(());
+        }
+
+        if key == Key::Ctrl('g') {
+            self.open_collection_switcher(db)?;
             return Ok(());
         }
 

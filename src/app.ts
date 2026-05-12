@@ -4,8 +4,18 @@ import {
   getNoteMeta,
   getNoteRevision,
   unlockNoteAccess,
-  listNotesMeta,
-  createNote,
+  listNotesMetaFiltered,
+  createNoteWithContext,
+  getNoteCollectionIds,
+  listCollections,
+  createCollection,
+  renameCollection,
+  updateCollectionDescription,
+  deleteCollection,
+  purgeCollection,
+  listCollectionDefaultTags,
+  setCollectionDefaultTags,
+  setNoteCollections,
   deleteNote,
   exportToFile,
   exportToPdf,
@@ -17,6 +27,7 @@ import {
   type RuntimeFlags,
   type ThemeConfig,
   type NoteSummary,
+  type Collection,
   type PdfExportPalette,
 } from "./api";
 import {
@@ -39,6 +50,12 @@ import {
   isSwitcherOpen,
   refreshSwitcher,
 } from "./switcher/switcher";
+import {
+  openCollectionSwitcher,
+  closeCollectionSwitcher,
+  isCollectionSwitcherOpen,
+} from "./switcher/collection-switcher";
+import { parseCollectionTagsInput } from "./collections/tags";
 import { state } from "./state";
 import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -88,6 +105,41 @@ function allowCtrlSSaveShortcut(): boolean {
 
 function applyNoteSummaries(summaries: NoteSummary[]) {
   state.setNoteSummaries(summaries);
+}
+
+function currentWorkingCollectionId(): string | null {
+  return state.workingCollection?.id ?? null;
+}
+
+async function refreshNoteSummaries(activeId?: string | null): Promise<NoteSummary[]> {
+  const activeNoteId = activeId ?? state.activeNote?.id ?? null;
+  let workingCollectionId = currentWorkingCollectionId();
+  if (workingCollectionId) {
+    try {
+      const collections = await listCollections();
+      const exists = collections.some((entry) => entry.id === workingCollectionId);
+      if (!exists) {
+        state.setWorkingCollection(null);
+        workingCollectionId = null;
+      }
+    } catch {
+      // Keep current selection on transient collection list failures.
+    }
+  }
+  let summaries: NoteSummary[];
+  try {
+    summaries = await listNotesMetaFiltered(workingCollectionId, activeNoteId);
+  } catch (error) {
+    const message = errorMessageOf(error);
+    if (workingCollectionId && message.toLowerCase().includes("collection")) {
+      state.setWorkingCollection(null);
+      summaries = await listNotesMetaFiltered(null, activeNoteId);
+    } else {
+      throw error;
+    }
+  }
+  applyNoteSummaries(summaries);
+  return summaries;
 }
 
 function showSaveError(message: string) {
@@ -156,6 +208,7 @@ function editorOptionsForNote(note: Note | null) {
     onNavigateToNote: (noteId: string, heading?: string) => {
       void switchToNote(noteId, null, heading ?? null);
     },
+    onCollectionCommand: handleCollectionCommand,
   };
 }
 
@@ -217,10 +270,7 @@ async function syncActiveNoteIfBackendChanged() {
       focusEditor();
     }
 
-    void listNotesMeta(state.activeNote?.id)
-      .then((summaries) => {
-        applyNoteSummaries(summaries);
-      })
+    void refreshNoteSummaries(state.activeNote?.id)
       .catch(() => {
         // Best-effort note list refresh after backend sync.
       });
@@ -254,10 +304,7 @@ async function startBackendNoteChangeListener() {
       if (state.activeNote?.id === payload.id) {
         void syncActiveNoteIfBackendChanged();
       }
-      void listNotesMeta(state.activeNote?.id)
-        .then((summaries) => {
-          applyNoteSummaries(summaries);
-        })
+      void refreshNoteSummaries(state.activeNote?.id)
         .catch(() => {
           // Keep current list when event-driven metadata refresh fails.
         });
@@ -267,6 +314,9 @@ async function startBackendNoteChangeListener() {
 }
 
 function openNoteSwitcher() {
+  if (isCollectionSwitcherOpen()) {
+    closeCollectionSwitcher();
+  }
   openSwitcher((noteId, lineNumber) => switchToNote(noteId, lineNumber), (noteId) => {
     void handleDeleteNoteById(noteId).catch((error) => {
       console.error("Action failed:", error);
@@ -373,10 +423,7 @@ async function switchToNote(id: string, lineNumber?: number | null, heading?: st
     focusEditor();
   }
 
-  void listNotesMeta(state.activeNote?.id)
-    .then((summaries) => {
-      applyNoteSummaries(summaries);
-    })
+  void refreshNoteSummaries(state.activeNote?.id)
     .catch(() => {
       // Keep existing note list when metadata refresh fails.
     });
@@ -413,8 +460,7 @@ async function unlockStartupActiveNoteAfterMount(note: Note, summaries: NoteSumm
   setEditorContent(unlocked.body, { forceStateReset: true });
   focusEditor();
 
-  const refreshed = await listNotesMeta(state.activeNote?.id).catch(() => summaries);
-  applyNoteSummaries(refreshed);
+  await refreshNoteSummaries(state.activeNote?.id).catch(() => summaries);
 }
 
 async function handleCreateNote() {
@@ -422,7 +468,7 @@ async function handleCreateNote() {
   if (!saved) {
     return;
   }
-  const note = await createNote();
+  const note = await createNoteWithContext(currentWorkingCollectionId());
   state.addNote(note);
   state.setActiveNote(note);
   reconfigureEditorForNote(note);
@@ -488,7 +534,7 @@ async function handleDeleteNoteById(noteId: string) {
   if (adjacentId) {
     await switchToNote(adjacentId);
   } else {
-    const note = await createNote();
+    const note = await createNoteWithContext(currentWorkingCollectionId());
     state.addNote(note);
     state.setActiveNote(note);
     reconfigureEditorForNote(note);
@@ -505,6 +551,174 @@ async function handlePrevNote() {
 async function handleNextNote() {
   const id = state.getAdjacentNoteId(1);
   if (id) await switchToNote(id);
+}
+
+function findCollectionByName(collections: Collection[], rawName: string): Collection | null {
+  const target = rawName.trim().toLowerCase();
+  if (!target) return null;
+  return collections.find((entry) => entry.name.trim().toLowerCase() === target) ?? null;
+}
+
+async function updateCollectionViaDialog(collection: Collection): Promise<string> {
+  const initialTags = await listCollectionDefaultTags(collection.id);
+  const next = await openCollectionDialogInApp({
+    title: `Update collection: ${collection.name}`,
+    confirmText: "Save",
+    initialName: collection.name,
+    initialDescription: collection.description,
+    initialTags,
+  });
+  if (!next) {
+    return "collection update canceled";
+  }
+
+  let current = collection;
+  if (next.name !== collection.name) {
+    current = await renameCollection(collection.id, next.name);
+  }
+  if (next.description !== current.description) {
+    current = await updateCollectionDescription(current.id, next.description);
+  }
+  await setCollectionDefaultTags(current.id, next.tags);
+
+  if (state.workingCollection?.id === collection.id) {
+    state.setWorkingCollection({ id: collection.id, name: current.name });
+  }
+  await refreshNoteSummaries(state.activeNote?.id);
+  return `collection updated: ${current.name}`;
+}
+
+async function openCollectionPickerForSession() {
+  if (isSwitcherOpen()) {
+    closeSwitcher();
+  }
+  openCollectionSwitcher({
+    onChoose: (collection) => {
+      runAction(async () => {
+        if (!collection) {
+          state.setWorkingCollection(null);
+          await refreshNoteSummaries(state.activeNote?.id);
+          showToast("Working collection cleared");
+          return;
+        }
+        state.setWorkingCollection({ id: collection.id, name: collection.name });
+        await refreshNoteSummaries(state.activeNote?.id);
+        showToast(`Working collection: ${collection.name}`);
+      });
+    },
+    onEdit: (collection) => {
+      runAction(async () => {
+        const message = await updateCollectionViaDialog(collection);
+        if (message.trim().length > 0) {
+          showToast(message);
+        }
+      });
+    },
+  });
+}
+
+async function handleCollectionCommand(options: {
+  action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
+  collection: string | null;
+}): Promise<string> {
+  if (options.action === "clear") {
+    state.setWorkingCollection(null);
+    await refreshNoteSummaries(state.activeNote?.id);
+    return "working collection cleared";
+  }
+
+  const rawCollection = options.collection?.trim() ?? "";
+  if (!rawCollection) {
+    if (options.action === "choose") return "usage: collection choose <collection|none>";
+    if (options.action === "create") return "usage: collection create <name>";
+    if (options.action === "delete") return "usage: collection delete <name>";
+    if (options.action === "update") return "usage: collection update <name>";
+    if (options.action === "purge") return "usage: collection purge <name>";
+    if (options.action === "add") return "usage: collection join <name>";
+    return "usage: collection leave <name>";
+  }
+  if (options.action === "choose" && rawCollection.toLowerCase() === "none") {
+    state.setWorkingCollection(null);
+    await refreshNoteSummaries(state.activeNote?.id);
+    return "working collection cleared";
+  }
+
+  if (options.action === "create") {
+    const created = await createCollection(rawCollection, "");
+    await refreshNoteSummaries(state.activeNote?.id);
+    return `collection created: ${created.name}`;
+  }
+
+  const collections = await listCollections();
+  const resolved = findCollectionByName(collections, rawCollection);
+  if (!resolved) {
+    return `collection not found: ${rawCollection}`;
+  }
+
+  if (options.action === "delete") {
+    await deleteCollection(resolved.id);
+    if (state.workingCollection?.id === resolved.id) {
+      state.setWorkingCollection(null);
+    }
+    await refreshNoteSummaries(state.activeNote?.id);
+    return `collection deleted: ${resolved.name}`;
+  }
+
+  if (options.action === "purge") {
+    const activeId = state.activeNote?.id ?? null;
+    let activeInPurgedCollection = false;
+    if (activeId) {
+      const activeCollections = await getNoteCollectionIds(activeId).catch(
+        (): string[] => [],
+      );
+      activeInPurgedCollection = activeCollections.includes(resolved.id);
+    }
+    const deletedCount = await purgeCollection(resolved.id);
+    if (state.workingCollection?.id === resolved.id) {
+      state.setWorkingCollection(null);
+    }
+    await refreshNoteSummaries(state.activeNote?.id);
+    if (activeInPurgedCollection) {
+      const replacement = await createNoteWithContext(currentWorkingCollectionId());
+      state.addNote(replacement);
+      state.setActiveNote(replacement);
+      reconfigureEditorForNote(replacement);
+      setEditorContent("");
+      focusEditor();
+    }
+    return `collection purged: ${resolved.name} (${deletedCount} notes deleted)`;
+  }
+
+  if (options.action === "update") {
+    return updateCollectionViaDialog(resolved);
+  }
+
+  if (options.action === "choose") {
+    state.setWorkingCollection({ id: resolved.id, name: resolved.name });
+    await refreshNoteSummaries(state.activeNote?.id);
+    return `working collection: ${resolved.name}`;
+  }
+
+  const active = state.activeNote;
+  if (!active) return "no active note";
+  const current = await getNoteCollectionIds(active.id);
+  const hasMembership = current.includes(resolved.id);
+  if (options.action === "add") {
+    if (hasMembership) {
+      return `note already in collection ${resolved.name}`;
+    }
+    await setNoteCollections(active.id, [...current, resolved.id]);
+    return `added to collection ${resolved.name}`;
+  }
+
+  if (!hasMembership) {
+    return `note is not in collection ${resolved.name}`;
+  }
+  await setNoteCollections(
+    active.id,
+    current.filter((id) => id !== resolved.id),
+  );
+  return `removed from collection ${resolved.name}`;
 }
 
 function deriveFilename(body: string): string {
@@ -878,6 +1092,171 @@ function promptPasswordInApp(message: string, confirmText = "Continue"): Promise
   });
 }
 
+interface CollectionDialogResult {
+  name: string;
+  description: string;
+  tags: string[];
+}
+
+function openCollectionDialogInApp(options: {
+  title: string;
+  confirmText: string;
+  initialName: string;
+  initialDescription: string;
+  initialTags: string[];
+}): Promise<CollectionDialogResult | null> {
+  return new Promise((resolve) => {
+    const restoreTarget =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const overlay = document.createElement("div");
+    overlay.className = "app-confirm-overlay";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", options.title);
+
+    const panel = document.createElement("div");
+    panel.className = "app-confirm-panel";
+
+    const titleEl = document.createElement("p");
+    titleEl.className = "app-confirm-message";
+    titleEl.textContent = options.title;
+
+    const nameField = document.createElement("label");
+    nameField.className = "app-collection-field";
+    const nameLabel = document.createElement("span");
+    nameLabel.className = "app-collection-field-label";
+    nameLabel.textContent = "Name";
+    const nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "app-confirm-input";
+    nameInput.value = options.initialName;
+    nameInput.placeholder = "Collection name";
+    nameField.appendChild(nameLabel);
+    nameField.appendChild(nameInput);
+
+    const descField = document.createElement("label");
+    descField.className = "app-collection-field";
+    const descLabel = document.createElement("span");
+    descLabel.className = "app-collection-field-label";
+    descLabel.textContent = "Description";
+    const descInput = document.createElement("input");
+    descInput.type = "text";
+    descInput.className = "app-confirm-input";
+    descInput.value = options.initialDescription;
+    descInput.placeholder = "Short description";
+    descField.appendChild(descLabel);
+    descField.appendChild(descInput);
+
+    const tagsField = document.createElement("label");
+    tagsField.className = "app-collection-field";
+    const tagsLabel = document.createElement("span");
+    tagsLabel.className = "app-collection-field-label";
+    tagsLabel.textContent = "Default tags (comma-separated)";
+    const tagsInput = document.createElement("input");
+    tagsInput.type = "text";
+    tagsInput.className = "app-confirm-input";
+    tagsInput.value = options.initialTags.join(", ");
+    tagsInput.placeholder = "tag-a, tag-b";
+    tagsField.appendChild(tagsLabel);
+    tagsField.appendChild(tagsInput);
+
+    const actions = document.createElement("div");
+    actions.className = "app-confirm-actions";
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "app-confirm-btn";
+    cancelBtn.textContent = "Cancel";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "app-confirm-btn app-confirm-btn-danger";
+    confirmBtn.textContent = options.confirmText;
+
+    actions.appendChild(cancelBtn);
+    actions.appendChild(confirmBtn);
+
+    panel.appendChild(titleEl);
+    panel.appendChild(nameField);
+    panel.appendChild(descField);
+    panel.appendChild(tagsField);
+    panel.appendChild(actions);
+    overlay.appendChild(panel);
+    document.body.appendChild(overlay);
+
+    let finished = false;
+    const finish = (value: CollectionDialogResult | null) => {
+      if (finished) return;
+      finished = true;
+      window.removeEventListener("keydown", onKeydown, true);
+      overlay.remove();
+      if (restoreTarget && restoreTarget.isConnected) {
+        restoreTarget.focus();
+      }
+      resolve(value);
+    };
+
+    const submit = () => {
+      const name = nameInput.value.trim();
+      if (!name) {
+        nameInput.focus();
+        return;
+      }
+      finish({
+        name,
+        description: descInput.value.trim(),
+        tags: parseCollectionTagsInput(tagsInput.value),
+      });
+    };
+
+    const onKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        finish(null);
+        return;
+      }
+      if (
+        event.key === "Enter" &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        !event.altKey &&
+        !event.shiftKey
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        submit();
+        return;
+      }
+      if (event.key === "Tab") {
+        const focusables = [nameInput, descInput, tagsInput, cancelBtn, confirmBtn];
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        const active = document.activeElement;
+        if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    overlay.addEventListener("mousedown", (event) => {
+      if (event.target === overlay) {
+        finish(null);
+      }
+    });
+    cancelBtn.addEventListener("click", () => finish(null));
+    confirmBtn.addEventListener("click", () => submit());
+    window.addEventListener("keydown", onKeydown, true);
+    nameInput.focus();
+    nameInput.select();
+  });
+}
+
 function runAction(action: () => Promise<void> | void) {
   void Promise.resolve()
     .then(action)
@@ -929,9 +1308,12 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl+P — title switcher
+    // Ctrl+P — note switcher
     if (e.ctrlKey && !e.shiftKey && key === "p") {
       e.preventDefault();
+      if (isCollectionSwitcherOpen()) {
+        closeCollectionSwitcher();
+      }
       if (isSwitcherOpen()) {
         closeSwitcher();
         focusEditor();
@@ -941,14 +1323,14 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl+Shift+P — content search
-    if (e.ctrlKey && e.shiftKey && key === "p") {
+    // Ctrl+G — collection switcher
+    if (e.ctrlKey && !e.shiftKey && key === "g") {
       e.preventDefault();
-      if (isSwitcherOpen()) {
-        closeSwitcher();
+      if (isCollectionSwitcherOpen()) {
+        closeCollectionSwitcher();
         focusEditor();
       } else {
-        openSwitcher((noteId, lineNumber) => switchToNote(noteId, lineNumber), undefined, "content");
+        runAction(openCollectionPickerForSession);
       }
       return;
     }
@@ -1016,12 +1398,20 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Escape — close switcher
-    if (e.key === "Escape" && isSwitcherOpen()) {
-      e.preventDefault();
-      closeSwitcher();
-      focusEditor();
-      return;
+    // Escape — close active picker
+    if (e.key === "Escape") {
+      if (isCollectionSwitcherOpen()) {
+        e.preventDefault();
+        closeCollectionSwitcher();
+        focusEditor();
+        return;
+      }
+      if (isSwitcherOpen()) {
+        e.preventDefault();
+        closeSwitcher();
+        focusEditor();
+        return;
+      }
     }
 
     // Ctrl+S - format & save
@@ -1074,7 +1464,7 @@ function createStatusBar(container: HTMLElement) {
 
   const hint = document.createElement("span");
   hint.className = "status-bar-hint";
-  hint.textContent = "Ctrl+P search";
+  hint.textContent = "Ctrl+P notes | Ctrl+G collections";
 
   statusMetaEl.appendChild(hint);
   bar.appendChild(statusTitleEl);
@@ -1102,6 +1492,22 @@ function updateStatusBar() {
   }
 
   const hintEl = statusMetaEl.querySelector(".status-bar-hint");
+  let collectionEl = statusMetaEl.querySelector(".status-collection") as HTMLElement | null;
+  if (state.workingCollection) {
+    if (!collectionEl) {
+      collectionEl = document.createElement("span");
+      collectionEl.className = "status-collection";
+    }
+    collectionEl.textContent = `collection ${state.workingCollection.name}`;
+    if (hintEl) {
+      statusMetaEl.insertBefore(collectionEl, hintEl);
+    } else {
+      statusMetaEl.appendChild(collectionEl);
+    }
+  } else if (collectionEl) {
+    collectionEl.remove();
+  }
+
   let modulesEl = statusMetaEl.querySelector(".status-modules") as HTMLElement | null;
   if (appConfig && appRuntimeFlags) {
     const loaded = effectiveModules(
@@ -1169,7 +1575,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
 
   let note = await getOrCreateNote();
   let [summaries, config, runtimeFlags] = await Promise.all([
-    listNotesMeta(note.id).catch(() => []),
+    listNotesMetaFiltered(currentWorkingCollectionId(), note.id).catch(() => []),
     Promise.resolve(configSource ?? getThemeConfigOrDefault()),
     getRuntimeFlagsOrDefault(),
   ]);

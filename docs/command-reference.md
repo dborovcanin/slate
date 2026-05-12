@@ -141,6 +141,25 @@ Aliases:
 - `export markdown`
 - `export text`
 
+## Collections
+
+| Command | Purpose |
+| --- | --- |
+| `collection create <name>` | Create a collection |
+| `collection delete <name>` | Delete a collection only |
+| `collection purge <name>` | Delete a collection and all associated notes |
+| `collection choose <name>` | Set working collection for this session |
+| `collection choose none` / `collection clear` | Clear working collection |
+| `collection join <name>` | Add current note to collection |
+| `collection leave <name>` | Remove current note from collection |
+| `collection update <name>` | Open collection update dialog (name/description/default tags) |
+
+Common aliases:
+
+- `choose_collection`
+- `add_to_collection`
+- `remove_from_collection`
+
 ## Vim write/quit commands
 
 | Command | Purpose |

@@ -29,6 +29,14 @@ pub enum CommandId {
     ModuleOnStyle,
     ModuleOffStyle,
     ModuleToggleStyle,
+    ChooseCollection,
+    ClearCollection,
+    CreateCollection,
+    DeleteCollection,
+    UpdateCollection,
+    PurgeCollection,
+    AddToCollection,
+    RemoveFromCollection,
     Format,
     Checklist,
     UnorderedList,
@@ -121,6 +129,39 @@ pub struct ParsedExportCommand {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CollectionCommandAction {
+    Choose,
+    Clear,
+    Create,
+    Delete,
+    Update,
+    Purge,
+    Add,
+    Remove,
+}
+
+impl CollectionCommandAction {
+    pub fn command_id(self) -> CommandId {
+        match self {
+            Self::Choose => CommandId::ChooseCollection,
+            Self::Clear => CommandId::ClearCollection,
+            Self::Create => CommandId::CreateCollection,
+            Self::Delete => CommandId::DeleteCollection,
+            Self::Update => CommandId::UpdateCollection,
+            Self::Purge => CommandId::PurgeCollection,
+            Self::Add => CommandId::AddToCollection,
+            Self::Remove => CommandId::RemoveFromCollection,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedCollectionCommand {
+    pub action: CollectionCommandAction,
+    pub collection: Option<String>,
+}
+
 pub fn note_security_action_from_token(token: &str) -> Option<NoteSecurityAction> {
     match token.trim().to_ascii_lowercase().as_str() {
         "lock" | "note-lock" | "lock-note" => Some(NoteSecurityAction::Lock),
@@ -197,6 +238,73 @@ pub fn parse_export_command(input: &str) -> Option<ParsedExportCommand> {
     Some(ParsedExportCommand { format, path })
 }
 
+pub fn parse_collection_command(input: &str) -> Option<ParsedCollectionCommand> {
+    let normalized = input.trim_start().trim_start_matches(':').trim_start();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let mut tokens = normalized.split_whitespace();
+    let head = tokens.next()?.to_ascii_lowercase();
+    let (action, needs_arg, remainder) = if head == "collection" {
+        let sub = tokens.next()?.to_ascii_lowercase();
+        let remainder = tokens.collect::<Vec<_>>().join(" ").trim().to_string();
+        let (action, needs_arg) = match sub.as_str() {
+            "choose" => (CollectionCommandAction::Choose, true),
+            "clear" => (CollectionCommandAction::Clear, false),
+            "create" => (CollectionCommandAction::Create, true),
+            "delete" => (CollectionCommandAction::Delete, true),
+            "update" => (CollectionCommandAction::Update, true),
+            "purge" => (CollectionCommandAction::Purge, true),
+            "join" => (CollectionCommandAction::Add, true),
+            "leave" => (CollectionCommandAction::Remove, true),
+            _ => return None,
+        };
+        (action, needs_arg, remainder)
+    } else {
+        let remainder = tokens.collect::<Vec<_>>().join(" ").trim().to_string();
+        let (action, needs_arg) = match head.as_str() {
+            "choose_collection" | "choose-collection" => {
+                (CollectionCommandAction::Choose, true)
+            }
+            "clear_collection" | "clear-collection" => {
+                (CollectionCommandAction::Clear, false)
+            }
+            "add_to_collection" | "add-to-collection" => {
+                (CollectionCommandAction::Add, true)
+            }
+            "remove_from_collection" | "remove-from-collection" => {
+                (CollectionCommandAction::Remove, true)
+            }
+            _ => return None,
+        };
+        (action, needs_arg, remainder)
+    };
+
+    if action == CollectionCommandAction::Choose && remainder.eq_ignore_ascii_case("none") {
+        return Some(ParsedCollectionCommand {
+            action: CollectionCommandAction::Clear,
+            collection: None,
+        });
+    }
+
+    if needs_arg {
+        return Some(ParsedCollectionCommand {
+            action,
+            collection: if remainder.is_empty() {
+                None
+            } else {
+                Some(remainder)
+            },
+        });
+    }
+
+    Some(ParsedCollectionCommand {
+        action,
+        collection: None,
+    })
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct CommandDefinition {
     pub id: CommandId,
@@ -209,7 +317,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 46] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 54] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -417,6 +525,78 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 46] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::ChooseCollection,
+        value: "collection choose",
+        aliases: &[
+            "choose_collection",
+            "choose-collection",
+            "collection-choose",
+        ],
+        description: "set working collection for new notes",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ClearCollection,
+        value: "collection clear",
+        aliases: &[
+            "clear_collection",
+            "clear-collection",
+            "collection-clear",
+        ],
+        description: "clear working collection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::CreateCollection,
+        value: "collection create",
+        aliases: &["collection-create"],
+        description: "create collection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::DeleteCollection,
+        value: "collection delete",
+        aliases: &["collection-delete"],
+        description: "delete collection only",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::UpdateCollection,
+        value: "collection update",
+        aliases: &["collection-update"],
+        description: "open collection update dialog",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::PurgeCollection,
+        value: "collection purge",
+        aliases: &["collection-purge"],
+        description: "delete collection and associated notes",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::AddToCollection,
+        value: "collection join",
+        aliases: &[
+            "add_to_collection",
+            "add-to-collection",
+            "collection-join",
+        ],
+        description: "add active note to collection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::RemoveFromCollection,
+        value: "collection leave",
+        aliases: &[
+            "remove_from_collection",
+            "remove-from-collection",
+            "collection-leave",
+        ],
+        description: "remove active note from collection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::Format,
         value: "format",
         aliases: &["fmt"],
@@ -593,6 +773,9 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
     }
     if let Some(parsed) = parse_export_command(normalized_input) {
         return parsed.format.command_id() == def.id;
+    }
+    if let Some(parsed) = parse_collection_command(normalized_input) {
+        return parsed.action.command_id() == def.id;
     }
     false
 }
@@ -793,6 +976,42 @@ mod tests {
             resolve_command(CommandMode::Editor, "export txt notes.txt").map(|cmd| cmd.id),
             Some(CommandId::ExportTxt)
         );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "choose_collection Work").map(|cmd| cmd.id),
+            Some(CommandId::ChooseCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "choose_collection none").map(|cmd| cmd.id),
+            Some(CommandId::ClearCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "clear_collection").map(|cmd| cmd.id),
+            Some(CommandId::ClearCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "collection create Work").map(|cmd| cmd.id),
+            Some(CommandId::CreateCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "collection delete Work").map(|cmd| cmd.id),
+            Some(CommandId::DeleteCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "collection update Work").map(|cmd| cmd.id),
+            Some(CommandId::UpdateCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "collection purge Work").map(|cmd| cmd.id),
+            Some(CommandId::PurgeCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "add_to_collection Work").map(|cmd| cmd.id),
+            Some(CommandId::AddToCollection)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "remove_from_collection Work").map(|cmd| cmd.id),
+            Some(CommandId::RemoveFromCollection)
+        );
     }
 
     #[test]
@@ -827,6 +1046,53 @@ mod tests {
         let txt = parse_export_command("export txt notes.txt").expect("parse txt path");
         assert_eq!(txt.format, ExportFormat::Txt);
         assert_eq!(txt.path.as_deref(), Some("notes.txt"));
+    }
+
+    #[test]
+    fn parse_collection_command_supports_collection_subcommands_and_legacy_aliases() {
+        let choose = parse_collection_command("choose_collection Inbox").expect("choose parsed");
+        assert_eq!(choose.action, CollectionCommandAction::Choose);
+        assert_eq!(choose.collection.as_deref(), Some("Inbox"));
+
+        let clear_alias = parse_collection_command("choose_collection none").expect("clear alias");
+        assert_eq!(clear_alias.action, CollectionCommandAction::Clear);
+        assert_eq!(clear_alias.collection, None);
+
+        let clear = parse_collection_command(":clear_collection").expect("clear parsed");
+        assert_eq!(clear.action, CollectionCommandAction::Clear);
+        assert_eq!(clear.collection, None);
+
+        let add = parse_collection_command("add_to_collection Team").expect("add parsed");
+        assert_eq!(add.action, CollectionCommandAction::Add);
+        assert_eq!(add.collection.as_deref(), Some("Team"));
+
+        let remove = parse_collection_command("remove_from_collection Team").expect("remove");
+        assert_eq!(remove.action, CollectionCommandAction::Remove);
+        assert_eq!(remove.collection.as_deref(), Some("Team"));
+
+        let create = parse_collection_command("collection create Team").expect("create parsed");
+        assert_eq!(create.action, CollectionCommandAction::Create);
+        assert_eq!(create.collection.as_deref(), Some("Team"));
+
+        let delete = parse_collection_command("collection delete Team").expect("delete parsed");
+        assert_eq!(delete.action, CollectionCommandAction::Delete);
+        assert_eq!(delete.collection.as_deref(), Some("Team"));
+
+        let update = parse_collection_command("collection update Team").expect("update parsed");
+        assert_eq!(update.action, CollectionCommandAction::Update);
+        assert_eq!(update.collection.as_deref(), Some("Team"));
+
+        let purge = parse_collection_command("collection purge Team").expect("purge parsed");
+        assert_eq!(purge.action, CollectionCommandAction::Purge);
+        assert_eq!(purge.collection.as_deref(), Some("Team"));
+
+        let join = parse_collection_command("collection join Team").expect("join parsed");
+        assert_eq!(join.action, CollectionCommandAction::Add);
+        assert_eq!(join.collection.as_deref(), Some("Team"));
+
+        let leave = parse_collection_command("collection leave Team").expect("leave parsed");
+        assert_eq!(leave.action, CollectionCommandAction::Remove);
+        assert_eq!(leave.collection.as_deref(), Some("Team"));
     }
 
     #[test]

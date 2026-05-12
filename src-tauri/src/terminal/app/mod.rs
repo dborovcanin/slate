@@ -10,7 +10,7 @@ use super::folding_state::FoldingState;
 use super::history::LineHistory;
 use super::input::{self, Key, TerminalGuard};
 use super::render;
-use super::switcher::{self, NoteMeta};
+use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
 
 use crate::config::ThemeConfig;
@@ -18,8 +18,8 @@ use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
-use std::cmp::min;
 use rustc_hash::FxHashMap;
+use std::cmp::min;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
@@ -96,6 +96,7 @@ enum UiMode {
     Visual,
     VisualLine,
     Switcher,
+    CollectionSwitcher,
     ContentSearch,
     CommandBar,
     Search,
@@ -189,6 +190,15 @@ struct SwitcherOpenConfirm {
     note_title: String,
     password: String,
     line_number: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+struct CollectionEditDialogState {
+    collection_id: String,
+    selected_field: usize,
+    name: String,
+    description: String,
+    default_tags: String,
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +332,11 @@ struct TerminalApp {
     switcher_selected: usize,
     switcher_open_confirm: Option<SwitcherOpenConfirm>,
     switcher_delete_confirm: Option<SwitcherDeleteConfirm>,
+    collection_switcher_query: String,
+    collection_switcher_items: Vec<CollectionMeta>,
+    collection_switcher_matches: Vec<usize>,
+    collection_switcher_selected: usize,
+    collection_edit_dialog: Option<CollectionEditDialogState>,
     content_search_query: String,
     content_search_results: Vec<NoteSearchResult>,
     content_search_selected: usize,
@@ -329,6 +344,10 @@ struct TerminalApp {
     content_search_debounce_until: Option<Instant>,
     content_search_rx: Option<std::sync::mpsc::Receiver<ContentSearchResponse>>,
     content_search_detached_rxs: Vec<std::sync::mpsc::Receiver<ContentSearchResponse>>,
+    working_collection_id: Option<String>,
+    working_collection_name: Option<String>,
+    content_search_collection_filter_id: Option<String>,
+    content_search_collection_filter_name: Option<String>,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -435,6 +454,13 @@ use reminder_helpers::*;
 use table_helpers::*;
 
 impl TerminalApp {
+    pub(super) fn working_collection_status_suffix(&self) -> String {
+        match self.working_collection_name.as_deref() {
+            Some(name) if !name.trim().is_empty() => format!("  |  collection:{name}"),
+            _ => "  |  collection:All".to_string(),
+        }
+    }
+
     fn active_note_is_editable(&self) -> bool {
         self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked
     }
@@ -632,7 +658,7 @@ impl TerminalApp {
         };
         let perf_enabled = crate::config::load_perf_config().enabled;
         let initial_status = if vim_mode {
-            "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P switch  Ctrl+Q quit".to_string()
+            "-- NORMAL --  |  :cmd  Ctrl+F find  Ctrl+N new  Ctrl+P notes  Ctrl+G collections  Ctrl+Q quit".to_string()
         } else {
             format!("editing {}", active_note.id)
         };
@@ -653,6 +679,11 @@ impl TerminalApp {
             switcher_selected: 0,
             switcher_open_confirm: None,
             switcher_delete_confirm: None,
+            collection_switcher_query: String::new(),
+            collection_switcher_items: Vec::new(),
+            collection_switcher_matches: Vec::new(),
+            collection_switcher_selected: 0,
+            collection_edit_dialog: None,
             content_search_query: String::new(),
             content_search_results: Vec::new(),
             content_search_selected: 0,
@@ -660,6 +691,10 @@ impl TerminalApp {
             content_search_debounce_until: None,
             content_search_rx: None,
             content_search_detached_rxs: Vec::new(),
+            working_collection_id: None,
+            working_collection_name: None,
+            content_search_collection_filter_id: None,
+            content_search_collection_filter_name: None,
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -967,8 +1002,10 @@ impl TerminalApp {
         self.content_search_debounce_until = None;
         let (tx, rx) = std::sync::mpsc::channel();
         let search_db = db.clone();
+        let collection_filter = self.content_search_collection_filter_id.clone();
         std::thread::spawn(move || {
-            let result = search_db.search_notes_content(&query, 60);
+            let result =
+                search_db.search_notes_content_filtered(&query, 60, collection_filter.as_deref());
             tx.send((query, result)).ok();
         });
         self.content_search_rx = Some(rx);
@@ -1144,6 +1181,14 @@ fn select_note(db: &Db, opts: &TerminalOptions, config: &ThemeConfig) -> Result<
 }
 
 fn new_note(db: &Db, config: &ThemeConfig) -> Result<Note, String> {
+    new_note_with_context(db, config, None)
+}
+
+fn new_note_with_context(
+    db: &Db,
+    config: &ThemeConfig,
+    working_collection_id: Option<&str>,
+) -> Result<Note, String> {
     let id = Ulid::new().to_string();
     let security = crate::config::note_security_config_from_theme(config);
     let default_password = crate::config::resolve_default_note_encryption_password(&security)?;
@@ -1153,5 +1198,10 @@ fn new_note(db: &Db, config: &ThemeConfig) -> Result<Note, String> {
         variables: config.default_modules.variables,
         style: config.default_modules.style,
     };
-    db.create_note_with_defaults(&id, modules, default_password.as_deref())
+    db.create_note_with_context(
+        &id,
+        modules,
+        default_password.as_deref(),
+        working_collection_id,
+    )
 }

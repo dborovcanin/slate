@@ -1,4 +1,4 @@
-use app_core::storage::{Note, NoteModules, NoteSearchResult, NoteSummary};
+use app_core::storage::{Collection, Note, NoteModules, NoteSearchResult, NoteSummary};
 use app_core::AppCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -133,11 +133,39 @@ pub fn create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, Str
 }
 
 #[tauri::command]
+pub fn create_note_with_context(
+    core: State<'_, AppCore>,
+    app: AppHandle,
+    working_collection_id: Option<String>,
+) -> Result<Note, String> {
+    let id = ulid::Ulid::new().to_string();
+    let (modules, default_password) = note_defaults_from_config()?;
+    let note = core.db().create_note_with_context(
+        &id,
+        modules,
+        default_password.as_deref(),
+        working_collection_id.as_deref(),
+    )?;
+    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
+    Ok(note)
+}
+
+#[tauri::command]
 pub fn list_notes_meta(
     core: State<'_, AppCore>,
     active_id: Option<String>,
 ) -> Result<Vec<NoteSummary>, String> {
     core.note_sources().list_notes_meta(active_id.as_deref())
+}
+
+#[tauri::command]
+pub fn list_notes_meta_filtered(
+    core: State<'_, AppCore>,
+    active_id: Option<String>,
+    collection_id: Option<String>,
+) -> Result<Vec<NoteSummary>, String> {
+    core.note_sources()
+        .list_notes_meta_filtered(active_id.as_deref(), collection_id.as_deref())
 }
 
 #[tauri::command]
@@ -151,6 +179,22 @@ pub async fn search_notes_content(
     tauri::async_runtime::spawn_blocking(move || db.search_notes_content(&query, limit))
         .await
         .map_err(|e| format!("content search worker failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn search_notes_content_filtered(
+    core: State<'_, AppCore>,
+    query: String,
+    limit: Option<usize>,
+    collection_id: Option<String>,
+) -> Result<Vec<NoteSearchResult>, String> {
+    let db = core.db().clone();
+    let limit = limit.unwrap_or(DEFAULT_CONTENT_SEARCH_LIMIT);
+    tauri::async_runtime::spawn_blocking(move || {
+        db.search_notes_content_filtered(&query, limit, collection_id.as_deref())
+    })
+    .await
+    .map_err(|e| format!("content search worker failed: {e}"))?
 }
 
 #[tauri::command]
@@ -187,6 +231,114 @@ pub fn delete_note(
         emit_note_changed(&app, &id, None, true);
     }
     Ok(deleted)
+}
+
+#[tauri::command]
+pub fn list_collections(core: State<'_, AppCore>) -> Result<Vec<Collection>, String> {
+    core.db().list_collections()
+}
+
+#[tauri::command]
+pub fn create_collection(
+    core: State<'_, AppCore>,
+    name: String,
+    description: Option<String>,
+) -> Result<Collection, String> {
+    core.db()
+        .create_collection(&name, description.as_deref().unwrap_or(""))
+}
+
+#[tauri::command]
+pub fn rename_collection(
+    core: State<'_, AppCore>,
+    id: String,
+    name: String,
+) -> Result<Collection, String> {
+    core.db().rename_collection(&id, &name)
+}
+
+#[tauri::command]
+pub fn update_collection_description(
+    core: State<'_, AppCore>,
+    id: String,
+    description: String,
+) -> Result<Collection, String> {
+    core.db().update_collection_description(&id, &description)
+}
+
+#[tauri::command]
+pub fn delete_collection(core: State<'_, AppCore>, id: String) -> Result<bool, String> {
+    core.db().delete_collection(&id)
+}
+
+#[tauri::command]
+pub fn purge_collection(core: State<'_, AppCore>, id: String) -> Result<usize, String> {
+    core.db().purge_collection(&id)
+}
+
+#[tauri::command]
+pub fn list_collection_default_tags(
+    core: State<'_, AppCore>,
+    collection_id: String,
+) -> Result<Vec<String>, String> {
+    core.db().list_collection_default_tags(&collection_id)
+}
+
+#[tauri::command]
+pub fn set_collection_default_tags(
+    core: State<'_, AppCore>,
+    collection_id: String,
+    tag_names: Vec<String>,
+) -> Result<Vec<String>, String> {
+    core.db()
+        .set_collection_default_tags(&collection_id, &tag_names)
+}
+
+#[tauri::command]
+pub fn list_note_tags(core: State<'_, AppCore>, note_id: String) -> Result<Vec<String>, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&note_id);
+    if !capabilities.can_module_persist {
+        return Err("note tags are not supported for file-backed notes".to_string());
+    }
+    core.db().list_note_tags(&note_id)
+}
+
+#[tauri::command]
+pub fn set_note_tags(
+    core: State<'_, AppCore>,
+    note_id: String,
+    tag_names: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&note_id);
+    if !capabilities.can_module_persist {
+        return Err("note tags are not supported for file-backed notes".to_string());
+    }
+    core.db().set_note_tags(&note_id, &tag_names)
+}
+
+#[tauri::command]
+pub fn get_note_collection_ids(
+    core: State<'_, AppCore>,
+    note_id: String,
+) -> Result<Vec<String>, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&note_id);
+    if !capabilities.can_module_persist {
+        return Err("collections are not supported for file-backed notes".to_string());
+    }
+    core.db().get_note_collection_ids(&note_id)
+}
+
+#[tauri::command]
+pub fn set_note_collections(
+    core: State<'_, AppCore>,
+    note_id: String,
+    collection_ids: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let capabilities = core.note_sources().capabilities_for_note_id(&note_id);
+    if !capabilities.can_module_persist {
+        return Err("collections are not supported for file-backed notes".to_string());
+    }
+    core.db().set_note_collections(&note_id, &collection_ids)
 }
 
 #[tauri::command]

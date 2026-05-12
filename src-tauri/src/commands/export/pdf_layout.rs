@@ -1,3 +1,9 @@
+use super::pdf_style::{
+    normalize_for_paper, paper_body_color, paper_border_color, paper_code_bg_color,
+    paper_code_border_color, paper_heading_color, paper_unchecked_checkbox_color, FontFace,
+    PdfExportPalette, PdfRgbColor, StyledChar, TextStyle, HELVETICA_BOLD_CHAR_WIDTHS,
+    HELVETICA_CHAR_WIDTHS,
+};
 use app_core::calc::{CalcEngine, NoteEvaluationOptions};
 use editor_core::calc_plan;
 use editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType};
@@ -6,14 +12,6 @@ use regex::Regex;
 use rustc_hash::FxHashMap;
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
-use super::pdf_style::{
-    FontFace, PdfExportPalette, PdfRgbColor,
-    StyledChar, TextStyle,
-    normalize_for_paper, paper_body_color, paper_border_color,
-    paper_code_bg_color, paper_code_border_color, paper_heading_color,
-    paper_unchecked_checkbox_color,
-    HELVETICA_BOLD_CHAR_WIDTHS, HELVETICA_CHAR_WIDTHS,
-};
 
 pub(super) const PDF_PAGE_WIDTH_PT: f32 = 595.0;
 pub(super) const PDF_PAGE_HEIGHT_PT: f32 = 842.0;

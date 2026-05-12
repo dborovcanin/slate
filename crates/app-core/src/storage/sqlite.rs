@@ -13,7 +13,9 @@ use std::sync::{Arc, Condvar, Mutex};
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
-use super::models::{Note, NoteAccessMode, NoteModules, NoteSearchResult, NoteSummary, Reminder};
+use super::models::{
+    Collection, Note, NoteAccessMode, NoteModules, NoteSearchResult, NoteSummary, Reminder,
+};
 use super::note_access::{NoteAccessGrant, NoteAccessService};
 
 const DEFAULT_NOTE_MODULES_JSON: &str =
@@ -241,6 +243,16 @@ impl Db {
         modules: NoteModules,
         default_encryption_password: Option<&str>,
     ) -> Result<Note, String> {
+        self.create_note_with_context(id, modules, default_encryption_password, None)
+    }
+
+    pub fn create_note_with_context(
+        &self,
+        id: &str,
+        modules: NoteModules,
+        default_encryption_password: Option<&str>,
+        working_collection_id: Option<&str>,
+    ) -> Result<Note, String> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
@@ -294,6 +306,36 @@ impl Db {
                 "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at)
                  VALUES (?1, '', ?2, ?3, ?4, ?5)",
                 rusqlite::params![id, note_title, modules_json, now, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+
+        if let Some(collection_id) = working_collection_id {
+            let collection_exists: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM collections WHERE id = ?1",
+                    [collection_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if collection_exists.is_none() {
+                return Err(format!("collection not found: {collection_id}"));
+            }
+
+            tx.execute(
+                "INSERT OR IGNORE INTO note_collections (note_id, collection_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, collection_id, now],
+            )
+            .map_err(|e| e.to_string())?;
+
+            tx.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id, created_at)
+                 SELECT ?1, tag_id, ?2
+                 FROM collection_default_tags
+                 WHERE collection_id = ?3",
+                rusqlite::params![id, now, collection_id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -794,6 +836,440 @@ impl Db {
         }
     }
 
+    pub fn list_notes_meta_filtered(
+        &self,
+        collection_id: Option<&str>,
+    ) -> Result<Vec<NoteSummary>, String> {
+        let rows = {
+            let conn = self.conn.lock().unwrap();
+            if let Some(collection_id) = collection_id {
+                self.load_note_summary_rows_for_collection(&conn, collection_id)?
+            } else {
+                self.load_note_summary_rows(&conn)?
+            }
+        };
+        let mut notes = Vec::with_capacity(rows.len());
+        for row in &rows {
+            notes.push(self.note_summary_from_row(row)?);
+        }
+        Ok(notes)
+    }
+
+    pub fn list_collections(&self) -> Result<Vec<Collection>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, description, created_at, updated_at
+                 FROM collections
+                 ORDER BY name COLLATE NOCASE ASC, created_at ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(Collection {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    pub fn get_collection(&self, id: &str) -> Result<Option<Collection>, String> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, description, created_at, updated_at
+             FROM collections
+             WHERE id = ?1",
+            [id],
+            |row| {
+                Ok(Collection {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn get_collection_by_name(&self, name: &str) -> Result<Option<Collection>, String> {
+        let normalized = normalize_identifier_name(name)?;
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT id, name, description, created_at, updated_at
+             FROM collections
+             WHERE normalized_name = ?1",
+            [normalized],
+            |row| {
+                Ok(Collection {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    created_at: row.get(3)?,
+                    updated_at: row.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
+    pub fn create_collection(&self, name: &str, description: &str) -> Result<Collection, String> {
+        let normalized_name = normalize_identifier_name(name)?;
+        let normalized_display_name = normalize_display_name(name)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let id = ulid::Ulid::new().to_string();
+        let now = now_iso();
+        tx.execute(
+            "INSERT INTO collections (id, name, normalized_name, description, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                id,
+                normalized_display_name,
+                normalized_name,
+                description.trim(),
+                now,
+                now
+            ],
+        )
+        .map_err(map_unique_constraint_error)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.get_collection(&id)?
+            .ok_or_else(|| "collection not found after create".to_string())
+    }
+
+    pub fn rename_collection(&self, id: &str, name: &str) -> Result<Collection, String> {
+        let normalized_name = normalize_identifier_name(name)?;
+        let normalized_display_name = normalize_display_name(name)?;
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+        let changed = conn
+            .execute(
+                "UPDATE collections
+                 SET name = ?2, normalized_name = ?3, updated_at = ?4
+                 WHERE id = ?1",
+                rusqlite::params![id, normalized_display_name, normalized_name, now],
+            )
+            .map_err(map_unique_constraint_error)?;
+        if changed == 0 {
+            return Err("collection not found".to_string());
+        }
+        self.get_collection(id)?
+            .ok_or_else(|| "collection not found after rename".to_string())
+    }
+
+    pub fn update_collection_description(
+        &self,
+        id: &str,
+        description: &str,
+    ) -> Result<Collection, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+        let changed = conn
+            .execute(
+                "UPDATE collections
+                 SET description = ?2, updated_at = ?3
+                 WHERE id = ?1",
+                rusqlite::params![id, description.trim(), now],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("collection not found".to_string());
+        }
+        self.get_collection(id)?
+            .ok_or_else(|| "collection not found after update".to_string())
+    }
+
+    pub fn delete_collection(&self, id: &str) -> Result<bool, String> {
+        let conn = self.conn.lock().unwrap();
+        let changed = conn
+            .execute("DELETE FROM collections WHERE id = ?1", [id])
+            .map_err(|e| e.to_string())?;
+        Ok(changed > 0)
+    }
+
+    pub fn purge_collection(&self, id: &str) -> Result<usize, String> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let exists: Option<String> = tx
+            .query_row("SELECT id FROM collections WHERE id = ?1", [id], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if exists.is_none() {
+            return Err("collection not found".to_string());
+        }
+
+        let mut stmt = tx
+            .prepare(
+                "SELECT DISTINCT note_id
+                 FROM note_collections
+                 WHERE collection_id = ?1",
+            )
+            .map_err(|e| e.to_string())?;
+        let note_ids = stmt
+            .query_map([id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(stmt);
+
+        let mut deleted_notes = 0usize;
+        for note_id in &note_ids {
+            let changed = tx
+                .execute("DELETE FROM notes WHERE id = ?1", [note_id])
+                .map_err(|e| e.to_string())?;
+            deleted_notes += changed as usize;
+        }
+
+        let changed = tx
+            .execute("DELETE FROM collections WHERE id = ?1", [id])
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err("collection not found".to_string());
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(deleted_notes)
+    }
+
+    pub fn list_collection_default_tags(&self, collection_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.name
+                 FROM collection_default_tags cdt
+                 JOIN tags t ON t.id = cdt.tag_id
+                 WHERE cdt.collection_id = ?1
+                 ORDER BY t.name COLLATE NOCASE ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([collection_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    pub fn set_collection_default_tags(
+        &self,
+        collection_id: &str,
+        tag_names: &[String],
+    ) -> Result<Vec<String>, String> {
+        let normalized = normalize_tag_name_list(tag_names)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let collection_exists: Option<String> = tx
+            .query_row(
+                "SELECT id FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if collection_exists.is_none() {
+            return Err("collection not found".to_string());
+        }
+
+        let now = now_iso();
+        let mut tag_ids = Vec::with_capacity(normalized.len());
+        for (display_name, normalized_name) in &normalized {
+            let existing_id: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM tags WHERE normalized_name = ?1",
+                    [normalized_name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            let tag_id = if let Some(id) = existing_id {
+                id
+            } else {
+                let new_id = ulid::Ulid::new().to_string();
+                tx.execute(
+                    "INSERT INTO tags (id, name, normalized_name, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![new_id, display_name, normalized_name, now, now],
+                )
+                .map_err(map_unique_constraint_error)?;
+                new_id
+            };
+            tag_ids.push(tag_id);
+        }
+
+        tx.execute(
+            "DELETE FROM collection_default_tags WHERE collection_id = ?1",
+            [collection_id],
+        )
+        .map_err(|e| e.to_string())?;
+        for tag_id in &tag_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO collection_default_tags (collection_id, tag_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![collection_id, tag_id, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.list_collection_default_tags(collection_id)
+    }
+
+    pub fn list_note_tags(&self, note_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT t.name
+                 FROM note_tags nt
+                 JOIN tags t ON t.id = nt.tag_id
+                 WHERE nt.note_id = ?1
+                 ORDER BY t.name COLLATE NOCASE ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([note_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    pub fn set_note_tags(&self, note_id: &str, tag_names: &[String]) -> Result<Vec<String>, String> {
+        let normalized = normalize_tag_name_list(tag_names)?;
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+
+        let note_exists: Option<String> = tx
+            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if note_exists.is_none() {
+            return Err("note not found".to_string());
+        }
+
+        let now = now_iso();
+        let mut tag_ids = Vec::with_capacity(normalized.len());
+        for (display_name, normalized_name) in &normalized {
+            let existing_id: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM tags WHERE normalized_name = ?1",
+                    [normalized_name],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            let tag_id = if let Some(id) = existing_id {
+                id
+            } else {
+                let new_id = ulid::Ulid::new().to_string();
+                tx.execute(
+                    "INSERT INTO tags (id, name, normalized_name, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![new_id, display_name, normalized_name, now, now],
+                )
+                .map_err(map_unique_constraint_error)?;
+                new_id
+            };
+            tag_ids.push(tag_id);
+        }
+
+        tx.execute("DELETE FROM note_tags WHERE note_id = ?1", [note_id])
+            .map_err(|e| e.to_string())?;
+        for tag_id in &tag_ids {
+            tx.execute(
+                "INSERT OR IGNORE INTO note_tags (note_id, tag_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![note_id, tag_id, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.list_note_tags(note_id)
+    }
+
+    pub fn get_note_collection_ids(&self, note_id: &str) -> Result<Vec<String>, String> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT collection_id
+                 FROM note_collections
+                 WHERE note_id = ?1
+                 ORDER BY collection_id ASC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([note_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
+    pub fn set_note_collections(
+        &self,
+        note_id: &str,
+        collection_ids: &[String],
+    ) -> Result<Vec<String>, String> {
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let note_exists: Option<String> = tx
+            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| row.get(0))
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if note_exists.is_none() {
+            return Err("note not found".to_string());
+        }
+
+        let mut deduped = Vec::<String>::new();
+        for value in collection_ids {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if !deduped.iter().any(|existing| existing == trimmed) {
+                deduped.push(trimmed.to_string());
+            }
+        }
+
+        for collection_id in &deduped {
+            let exists: Option<String> = tx
+                .query_row(
+                    "SELECT id FROM collections WHERE id = ?1",
+                    [collection_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?;
+            if exists.is_none() {
+                return Err(format!("collection not found: {collection_id}"));
+            }
+        }
+
+        let now = now_iso();
+        tx.execute("DELETE FROM note_collections WHERE note_id = ?1", [note_id])
+            .map_err(|e| e.to_string())?;
+        for collection_id in &deduped {
+            tx.execute(
+                "INSERT OR IGNORE INTO note_collections (note_id, collection_id, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![note_id, collection_id, now],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.get_note_collection_ids(note_id)
+    }
+
     pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
@@ -918,6 +1394,15 @@ impl Db {
         query: &str,
         limit: usize,
     ) -> Result<Vec<NoteSearchResult>, String> {
+        self.search_notes_content_filtered(query, limit, None)
+    }
+
+    pub fn search_notes_content_filtered(
+        &self,
+        query: &str,
+        limit: usize,
+        collection_id: Option<&str>,
+    ) -> Result<Vec<NoteSearchResult>, String> {
         let search_terms = parse_search_terms(query);
         let fts_query = build_fts_query_from_terms(&search_terms);
         if fts_query.is_empty() {
@@ -925,22 +1410,56 @@ impl Db {
         }
         let bounded_limit = limit.clamp(1, SEARCH_LIMIT_MAX) as i64;
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn
-            .prepare(
-                "SELECT n.id, n.note_title, n.body,
-                        snippet(notes_fts, 2, '[[', ']]', '…', 16),
-                        bm25(notes_fts, 0.0, 10.0, 1.0),
-                        n.updated_at
-                 FROM notes_fts
-                 JOIN notes n ON n.rowid = notes_fts.rowid
-                 WHERE notes_fts MATCH ?1
-                   AND n.access_mode = 'none'
-                 ORDER BY bm25(notes_fts, 0.0, 10.0, 1.0), n.updated_at DESC
-                 LIMIT ?2",
-            )
-            .map_err(|e| e.to_string())?;
-        let results = stmt
-            .query_map(rusqlite::params![fts_query, bounded_limit], |row| {
+        let results = if let Some(collection_id) = collection_id {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT n.id, n.note_title, n.body,
+                            snippet(notes_fts, 2, '[[', ']]', '…', 16),
+                            bm25(notes_fts, 0.0, 10.0, 1.0),
+                            n.updated_at
+                     FROM notes_fts
+                     JOIN notes n ON n.rowid = notes_fts.rowid
+                     JOIN note_collections nc ON nc.note_id = n.id
+                     WHERE notes_fts MATCH ?1
+                       AND n.access_mode = 'none'
+                       AND nc.collection_id = ?2
+                     ORDER BY bm25(notes_fts, 0.0, 10.0, 1.0), n.updated_at DESC
+                     LIMIT ?3",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows =
+                stmt.query_map(rusqlite::params![fts_query, collection_id, bounded_limit], |row| {
+                    let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+                    let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                    Ok(NoteSearchResult {
+                        id: row.get(0)?,
+                        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        line_number: search_result_line_number(&body, &snippet, &search_terms),
+                        snippet,
+                        rank: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    })
+                })
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        } else {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT n.id, n.note_title, n.body,
+                            snippet(notes_fts, 2, '[[', ']]', '…', 16),
+                            bm25(notes_fts, 0.0, 10.0, 1.0),
+                            n.updated_at
+                     FROM notes_fts
+                     JOIN notes n ON n.rowid = notes_fts.rowid
+                     WHERE notes_fts MATCH ?1
+                       AND n.access_mode = 'none'
+                     ORDER BY bm25(notes_fts, 0.0, 10.0, 1.0), n.updated_at DESC
+                     LIMIT ?2",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt.query_map(rusqlite::params![fts_query, bounded_limit], |row| {
                 let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
                 let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                 Ok(NoteSearchResult {
@@ -955,6 +1474,8 @@ impl Db {
             .map_err(|e| e.to_string())?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())?;
+            rows
+        };
         Ok(results)
     }
 
@@ -1460,6 +1981,29 @@ impl Db {
         Ok(rows)
     }
 
+    fn load_note_summary_rows_for_collection(
+        &self,
+        conn: &Connection,
+        collection_id: &str,
+    ) -> Result<Vec<NoteSummaryRow>, String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT n.id, n.note_title, substr(n.body, 1, 200), n.access_mode, n.updated_at,
+                        n.encryption_salt, n.encryption_nonce, n.encrypted_body
+                 FROM notes n
+                 JOIN note_collections nc ON nc.note_id = n.id
+                 WHERE nc.collection_id = ?1
+                 ORDER BY n.updated_at DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([collection_id], map_note_summary_row)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(rows)
+    }
+
     fn load_note_access_row(
         &self,
         conn: &Connection,
@@ -1853,6 +2397,43 @@ fn normalize_stored_title(value: Option<String>) -> Option<String> {
         .map(str::trim)
         .filter(|v| !v.is_empty())
         .map(ToString::to_string)
+}
+
+fn normalize_display_name(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("name must not be empty".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn normalize_identifier_name(value: &str) -> Result<String, String> {
+    let display = normalize_display_name(value)?;
+    Ok(display.to_ascii_lowercase())
+}
+
+fn normalize_tag_name_list(raw: &[String]) -> Result<Vec<(String, String)>, String> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    for name in raw {
+        let display = normalize_display_name(name)?;
+        let normalized = display.to_ascii_lowercase();
+        if !out.iter().any(|(_, existing)| existing == &normalized) {
+            out.push((display, normalized));
+        }
+    }
+    Ok(out)
+}
+
+fn map_unique_constraint_error(error: rusqlite::Error) -> String {
+    let text = error.to_string();
+    if text.contains("collections.normalized_name") || text.contains("idx_collections_normalized_name")
+    {
+        return "collection name already exists".to_string();
+    }
+    if text.contains("tags.normalized_name") || text.contains("idx_tags_normalized_name") {
+        return "tag name already exists".to_string();
+    }
+    text
 }
 
 fn derive_note_title_from_body(body: &str) -> String {
@@ -2716,6 +3297,250 @@ mod tests {
             .expect("search succeeds");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "legacy-note");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn schema_upgrade_preserves_existing_notes() {
+        let path = temp_db_path();
+        let conn = Connection::open(path.clone()).expect("legacy db opens");
+        conn.execute_batch(
+            "PRAGMA foreign_keys=ON;
+             CREATE TABLE notes (
+                id TEXT PRIMARY KEY,
+                body TEXT NOT NULL DEFAULT '',
+                note_title TEXT NOT NULL DEFAULT '',
+                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
+                access_mode TEXT NOT NULL DEFAULT 'none',
+                password_salt BLOB,
+                password_hash BLOB,
+                encryption_salt BLOB,
+                encryption_nonce BLOB,
+                encrypted_body BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+             );
+             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
+             VALUES ('legacy-note', 'legacy body survives', 'legacy', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
+        )
+        .expect("legacy schema created");
+        drop(conn);
+
+        let db = Db::open(path.clone()).expect("db opens with migration");
+        let legacy = db
+            .get_note("legacy-note")
+            .expect("lookup succeeds")
+            .expect("legacy note exists");
+        assert_eq!(legacy.body, "legacy body survives");
+        assert!(db.list_collections().expect("collections list").is_empty());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn collection_name_is_unique_after_normalization() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let first = db
+            .create_collection("Work", "primary")
+            .expect("first collection");
+        assert_eq!(first.name, "Work");
+        let err = db
+            .create_collection(" work ", "duplicate")
+            .expect_err("normalized duplicate should fail");
+        assert!(
+            err.contains("already exists"),
+            "unexpected error message: {err}"
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn create_note_with_working_collection_applies_membership_and_default_tags() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let collection = db
+            .create_collection("Projects", "project notes")
+            .expect("collection created");
+        db.set_collection_default_tags(
+            &collection.id,
+            &[
+                "alpha".to_string(),
+                "beta".to_string(),
+                "alpha".to_string(),
+            ],
+        )
+        .expect("default tags set");
+
+        db.create_note_with_context(
+            "n-working",
+            NoteModules::default(),
+            None,
+            Some(&collection.id),
+        )
+        .expect("note created with working collection");
+        assert_eq!(
+            db.get_note_collection_ids("n-working")
+                .expect("collection ids lookup"),
+            vec![collection.id.clone()]
+        );
+        assert_eq!(
+            db.list_note_tags("n-working").expect("tags lookup"),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn create_note_without_working_collection_applies_no_membership_or_tags() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let collection = db
+            .create_collection("Projects", "project notes")
+            .expect("collection created");
+        db.set_collection_default_tags(&collection.id, &["alpha".to_string()])
+            .expect("default tags set");
+
+        db.create_note_with_context("n-plain", NoteModules::default(), None, None)
+            .expect("note created without working collection");
+        assert!(
+            db.get_note_collection_ids("n-plain")
+                .expect("collection ids lookup")
+                .is_empty()
+        );
+        assert!(db.list_note_tags("n-plain").expect("tags lookup").is_empty());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn set_note_collections_does_not_apply_collection_default_tags() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let collection = db
+            .create_collection("Projects", "project notes")
+            .expect("collection created");
+        db.set_collection_default_tags(&collection.id, &["alpha".to_string()])
+            .expect("default tags set");
+
+        db.create_note_with_context("n-manual", NoteModules::default(), None, None)
+            .expect("note created");
+        db.set_note_collections("n-manual", &[collection.id.clone()])
+            .expect("manual membership set");
+        assert!(db.list_note_tags("n-manual").expect("tags lookup").is_empty());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn removing_collection_membership_does_not_remove_existing_note_tags() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let collection = db
+            .create_collection("Projects", "project notes")
+            .expect("collection created");
+        db.set_collection_default_tags(&collection.id, &["alpha".to_string()])
+            .expect("default tags set");
+
+        db.create_note_with_context(
+            "n-keep-tags",
+            NoteModules::default(),
+            None,
+            Some(&collection.id),
+        )
+        .expect("note created with context");
+        db.set_note_collections("n-keep-tags", &[])
+            .expect("membership removed");
+        assert!(db
+            .get_note_collection_ids("n-keep-tags")
+            .expect("collection ids lookup")
+            .is_empty());
+        assert_eq!(
+            db.list_note_tags("n-keep-tags").expect("tags lookup"),
+            vec!["alpha".to_string()]
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn filtered_list_and_search_return_only_matching_collection_notes() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let collection_a = db
+            .create_collection("Collection A", "")
+            .expect("collection a created");
+        let collection_b = db
+            .create_collection("Collection B", "")
+            .expect("collection b created");
+
+        db.save_note("n-a", "needle appears in collection a")
+            .expect("save note a");
+        db.save_note("n-b", "needle appears in collection b")
+            .expect("save note b");
+        db.save_note("n-none", "needle appears in no collection")
+            .expect("save note none");
+        db.set_note_collections("n-a", &[collection_a.id.clone()])
+            .expect("set note a collection");
+        db.set_note_collections("n-b", &[collection_b.id.clone()])
+            .expect("set note b collection");
+
+        let list_a = db
+            .list_notes_meta_filtered(Some(&collection_a.id))
+            .expect("list filtered a");
+        let ids_a: Vec<&str> = list_a.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids_a, vec!["n-a"]);
+
+        let search_a = db
+            .search_notes_content_filtered("needle", 20, Some(&collection_a.id))
+            .expect("search filtered a");
+        let search_a_ids: Vec<&str> = search_a.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(search_a_ids, vec!["n-a"]);
+
+        let search_all = db
+            .search_notes_content_filtered("needle", 20, None)
+            .expect("search all");
+        let search_all_ids: Vec<&str> = search_all.iter().map(|n| n.id.as_str()).collect();
+        assert!(search_all_ids.contains(&"n-a"));
+        assert!(search_all_ids.contains(&"n-b"));
+        assert!(search_all_ids.contains(&"n-none"));
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn purge_collection_deletes_associated_notes_and_collection() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let collection = db
+            .create_collection("Projects", "project notes")
+            .expect("collection created");
+        db.save_note("n-a", "note a").expect("save note a");
+        db.save_note("n-b", "note b").expect("save note b");
+        db.set_note_collections("n-a", std::slice::from_ref(&collection.id))
+            .expect("set note a collection");
+        db.set_note_collections("n-b", std::slice::from_ref(&collection.id))
+            .expect("set note b collection");
+
+        let deleted = db
+            .purge_collection(&collection.id)
+            .expect("purge collection succeeds");
+        assert_eq!(deleted, 2);
+        assert!(db.get_collection(&collection.id).expect("collection lookup").is_none());
+        assert!(db.get_note("n-a").expect("note lookup a").is_none());
+        assert!(db.get_note("n-b").expect("note lookup b").is_none());
 
         drop(db);
         let _ = fs::remove_file(path);

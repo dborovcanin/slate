@@ -1751,3 +1751,290 @@ fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn collection_commands_choose_add_and_remove_match_expected_outcomes() {
+    let (db, mut app, path) = app_with_note("base");
+    let collection = db
+        .create_collection("Projects", "project notes")
+        .expect("collection created");
+
+    app.execute_terminal_command(&db, "choose_collection Projects");
+    assert_eq!(app.status, "working collection: Projects");
+    assert_eq!(
+        app.working_collection_id.as_deref(),
+        Some(collection.id.as_str())
+    );
+    assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
+
+    app.execute_terminal_command(&db, "add_to_collection Projects");
+    assert_eq!(app.status, "added to collection Projects");
+    assert_eq!(
+        db.get_note_collection_ids("n1")
+            .expect("membership lookup after add"),
+        vec![collection.id.clone()]
+    );
+
+    app.execute_terminal_command(&db, "remove_from_collection Projects");
+    assert_eq!(app.status, "removed from collection Projects");
+    assert!(db
+        .get_note_collection_ids("n1")
+        .expect("membership lookup after remove")
+        .is_empty());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn clear_collection_command_resets_terminal_working_collection_context() {
+    let (db, mut app, path) = app_with_note("base");
+    db.create_collection("Projects", "project notes")
+        .expect("collection created");
+
+    app.execute_terminal_command(&db, "choose_collection Projects");
+    assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
+
+    app.execute_terminal_command(&db, "clear_collection");
+    assert_eq!(app.status, "working collection cleared");
+    assert!(app.working_collection_id.is_none());
+    assert!(app.working_collection_name.is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn ctrl_n_creates_note_in_working_collection_context() {
+    let (db, mut app, path) = app_with_note("base");
+    let collection = db
+        .create_collection("Projects", "project notes")
+        .expect("collection created");
+
+    app.execute_terminal_command(&db, "choose_collection Projects");
+    let previous_id = app.active_note.id.clone();
+    app.mode = UiMode::Normal;
+    app.handle_editor_key(&db, Key::Ctrl('n'))
+        .expect("ctrl+n creates note");
+
+    let new_id = app.active_note.id.clone();
+    assert_ne!(new_id, previous_id);
+    assert_eq!(
+        db.get_note_collection_ids(&new_id)
+            .expect("new note membership lookup"),
+        vec![collection.id]
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn refresh_switcher_items_clears_stale_working_collection_after_delete() {
+    let (db, mut app, path) = app_with_note("base");
+    let collection = db
+        .create_collection("Projects", "project notes")
+        .expect("collection created");
+
+    app.execute_terminal_command(&db, "choose_collection Projects");
+    assert_eq!(
+        app.working_collection_id.as_deref(),
+        Some(collection.id.as_str())
+    );
+
+    db.delete_collection(&collection.id)
+        .expect("delete collection succeeds");
+    app.refresh_switcher_items(&db)
+        .expect("refresh switcher succeeds");
+
+    assert!(app.working_collection_id.is_none());
+    assert!(app.working_collection_name.is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn collection_create_delete_and_update_commands_behave_as_expected() {
+    let (db, mut app, path) = app_with_note("base");
+
+    app.execute_terminal_command(&db, "collection create Projects");
+    assert_eq!(app.status, "collection created: Projects");
+    let created = db
+        .get_collection_by_name("Projects")
+        .expect("collection lookup")
+        .expect("collection exists");
+
+    app.execute_terminal_command(&db, "collection update Projects");
+    assert_eq!(
+        app.status,
+        "collection update: editing Projects (Enter save, Esc cancel)"
+    );
+    assert_eq!(app.mode, UiMode::CollectionSwitcher);
+    assert!(app.collection_edit_dialog.is_some());
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Tab,
+            Key::Paste("Project notes".to_string()),
+            Key::Tab,
+            Key::Paste("alpha, beta, alpha".to_string()),
+            Key::Enter,
+        ],
+    );
+    assert_eq!(app.status, "collection updated: Projects");
+    let updated = db
+        .get_collection(&created.id)
+        .expect("collection lookup by id")
+        .expect("collection still exists");
+    assert_eq!(updated.description, "Project notes");
+    assert_eq!(
+        db.list_collection_default_tags(&created.id)
+            .expect("default tags lookup"),
+        vec!["alpha".to_string(), "beta".to_string()]
+    );
+
+    app.execute_terminal_command(&db, "collection delete Projects");
+    assert_eq!(app.status, "collection deleted: Projects");
+    assert!(db
+        .get_collection(&created.id)
+        .expect("collection lookup by id")
+        .is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn ctrl_g_opens_collection_switcher_and_enter_sets_working_collection() {
+    let (db, mut app, path) = app_with_note("base");
+    db.create_collection("Projects", "project notes")
+        .expect("projects collection created");
+
+    app.mode = UiMode::Editor;
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Ctrl('g'), Key::Paste("proj".to_string()), Key::Enter],
+    );
+
+    assert_eq!(app.status, "working collection: Projects");
+    assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
+    assert_eq!(app.mode, UiMode::Editor);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn collection_switcher_ctrl_e_opens_edit_dialog_and_saves_updates() {
+    let (db, mut app, path) = app_with_note("base");
+    let collection = db
+        .create_collection("Projects", "")
+        .expect("collection created");
+
+    app.mode = UiMode::Editor;
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Ctrl('g'),
+            Key::Paste("proj".to_string()),
+            Key::Ctrl('e'),
+            Key::Tab,
+            Key::Paste("updated description".to_string()),
+            Key::Tab,
+            Key::Paste("ops, urgent".to_string()),
+            Key::Enter,
+            Key::Esc,
+        ],
+    );
+
+    let updated = db
+        .get_collection(&collection.id)
+        .expect("collection lookup")
+        .expect("collection exists");
+    assert_eq!(updated.description, "updated description");
+    assert_eq!(
+        db.list_collection_default_tags(&collection.id)
+            .expect("default tags lookup"),
+        vec!["ops".to_string(), "urgent".to_string()]
+    );
+    assert_eq!(app.mode, UiMode::Editor);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn collection_purge_replaces_active_note_when_it_is_deleted() {
+    let (db, mut app, path) = app_with_note("base");
+    let collection = db
+        .create_collection("Projects", "project notes")
+        .expect("collection created");
+    db.set_note_collections("n1", std::slice::from_ref(&collection.id))
+        .expect("active note membership set");
+
+    app.execute_terminal_command(&db, "collection purge Projects");
+    assert!(
+        app.status
+            .contains("collection purged: Projects (1 notes deleted)"),
+        "unexpected status: {}",
+        app.status
+    );
+    assert_ne!(app.active_note.id, "n1");
+    assert!(db.get_note("n1").expect("note lookup").is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_reopen_resets_filter_to_working_collection() {
+    let (db, mut app, path) = app_with_note("base");
+    let work = db
+        .create_collection("Work", "work notes")
+        .expect("work collection created");
+    db.create_collection("Personal", "personal notes")
+        .expect("personal collection created");
+
+    app.execute_terminal_command(&db, "collection choose Work");
+    assert_eq!(app.working_collection_id.as_deref(), Some(work.id.as_str()));
+
+    run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Tab]);
+    assert_eq!(app.mode, UiMode::ContentSearch);
+    assert_eq!(
+        app.content_search_collection_filter_id.as_deref(),
+        Some(work.id.as_str())
+    );
+
+    run_keys(&mut app, &db, &[Key::Ctrl('l')]);
+    assert_ne!(
+        app.content_search_collection_filter_id.as_deref(),
+        Some(work.id.as_str())
+    );
+
+    run_keys(&mut app, &db, &[Key::Esc]);
+    assert_eq!(app.mode, UiMode::Editor);
+
+    run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Tab]);
+    assert_eq!(app.mode, UiMode::ContentSearch);
+    assert_eq!(
+        app.content_search_collection_filter_id.as_deref(),
+        Some(work.id.as_str())
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

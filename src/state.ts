@@ -34,9 +34,15 @@ export interface NoteEntry {
   updatedAt: string;
 }
 
+export interface WorkingCollection {
+  id: string;
+  name: string;
+}
+
 export class AppState {
   private _activeNote: Note | null = null;
   private _notes: NoteEntry[] = [];
+  private _workingCollection: WorkingCollection | null = null;
   private listeners: Listener[] = [];
 
   get activeNote(): Note | null {
@@ -45,6 +51,10 @@ export class AppState {
 
   get notes(): NoteEntry[] {
     return this._notes;
+  }
+
+  get workingCollection(): WorkingCollection | null {
+    return this._workingCollection;
   }
 
   setActiveNote(note: Note) {
@@ -148,6 +158,11 @@ export class AppState {
 
   removeNote(id: string) {
     this._notes = this._notes.filter((n) => n.id !== id);
+    this.emit("notes-updated");
+  }
+
+  setWorkingCollection(next: WorkingCollection | null) {
+    this._workingCollection = next;
     this.emit("notes-updated");
   }
 

@@ -1,5 +1,6 @@
 use crate::command_catalog::{
-    self, CommandDefinition, CommandId, ExportFormat, NoteSecurityAction, ParsedNoteSecurityCommand,
+    self, CollectionCommandAction, CommandDefinition, CommandId, ExportFormat, NoteSecurityAction,
+    ParsedNoteSecurityCommand,
 };
 use crate::types::{CommandMode, CommandSuggestion};
 use crate::vim::{self, VimContext, VimKey, VimState, VimStep};
@@ -71,6 +72,7 @@ pub enum CommandDispatchKind {
     HostWrite,
     HostExport,
     HostModule,
+    HostCollection,
     HostFold,
     HostClipWatch,
     HostNoteSecurity,
@@ -92,6 +94,19 @@ pub enum HostClipWatchAction {
     Stop,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostCollectionAction {
+    Choose,
+    Clear,
+    Create,
+    Delete,
+    Update,
+    Purge,
+    Add,
+    Remove,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostCommandPlan {
     Date,
@@ -103,6 +118,10 @@ pub enum HostCommandPlan {
     },
     Module {
         command_id: CommandId,
+    },
+    Collection {
+        action: HostCollectionAction,
+        collection: Option<String>,
     },
     Fold {
         action: HostFoldAction,
@@ -155,6 +174,7 @@ impl EditorEngine {
                 HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
                 HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
+                HostCommandPlan::Collection { .. } => CommandDispatchKind::HostCollection,
                 HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
                 HostCommandPlan::ClipWatch { .. } => CommandDispatchKind::HostClipWatch,
                 HostCommandPlan::NoteSecurity { .. } => CommandDispatchKind::HostNoteSecurity,
@@ -180,6 +200,21 @@ impl EditorEngine {
             return Some(HostCommandPlan::Export {
                 format: parsed.format,
                 path: parsed.path,
+            });
+        }
+        if let Some(parsed) = command_catalog::parse_collection_command(raw_input) {
+            return Some(HostCommandPlan::Collection {
+                action: match parsed.action {
+                    CollectionCommandAction::Choose => HostCollectionAction::Choose,
+                    CollectionCommandAction::Clear => HostCollectionAction::Clear,
+                    CollectionCommandAction::Create => HostCollectionAction::Create,
+                    CollectionCommandAction::Delete => HostCollectionAction::Delete,
+                    CollectionCommandAction::Update => HostCollectionAction::Update,
+                    CollectionCommandAction::Purge => HostCollectionAction::Purge,
+                    CollectionCommandAction::Add => HostCollectionAction::Add,
+                    CollectionCommandAction::Remove => HostCollectionAction::Remove,
+                },
+                collection: parsed.collection,
             });
         }
 
@@ -437,6 +472,13 @@ mod tests {
             Some(CommandDispatchKind::HostModule)
         );
         assert_eq!(
+            EditorEngine::classify_command_dispatch(
+                CommandMode::Editor,
+                "choose_collection Inbox"
+            ),
+            Some(CommandDispatchKind::HostCollection)
+        );
+        assert_eq!(
             EditorEngine::classify_command_dispatch(CommandMode::Editor, "fold"),
             Some(CommandDispatchKind::HostFold)
         );
@@ -566,6 +608,62 @@ mod tests {
             EditorEngine::plan_host_command(CommandMode::Editor, "module table toggle"),
             Some(HostCommandPlan::Module {
                 command_id: CommandId::ModuleToggleTable,
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "choose_collection inbox"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Choose,
+                collection: Some("inbox".to_string()),
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "choose_collection none"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Clear,
+                collection: None,
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "add_to_collection work"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Add,
+                collection: Some("work".to_string()),
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "remove_from_collection work"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Remove,
+                collection: Some("work".to_string()),
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection create work"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Create,
+                collection: Some("work".to_string()),
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection delete work"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Delete,
+                collection: Some("work".to_string()),
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection update work"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Update,
+                collection: Some("work".to_string()),
+            })
+        );
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection purge work"),
+            Some(HostCommandPlan::Collection {
+                action: HostCollectionAction::Purge,
+                collection: Some("work".to_string()),
             })
         );
     }

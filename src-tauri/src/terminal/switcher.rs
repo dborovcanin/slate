@@ -2,7 +2,7 @@ use std::cmp::min;
 
 use super::ansi::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, AnsiStyle};
 use super::render::RenderPalette;
-use app_core::storage::{NoteAccessMode, NoteSearchResult};
+use app_core::storage::{Collection, NoteAccessMode, NoteSearchResult};
 
 const CONTENT_SEARCH_MIN_H: usize = 9;
 const CONTENT_SEARCH_MAX_H: usize = 14;
@@ -33,6 +33,14 @@ pub struct NoteMeta {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct CollectionMeta {
+    pub id: Option<String>,
+    pub name: String,
+    pub description: String,
+    pub is_clear: bool,
+}
+
 fn note_identity_label(note_id: &str) -> String {
     if let Some(path) = crate::markdown_file_path_from_note_id(note_id) {
         path.display().to_string()
@@ -45,9 +53,17 @@ pub fn load_note_meta(
     db: &crate::storage::Db,
     active_note_id: Option<&str>,
 ) -> Result<Vec<NoteMeta>, String> {
+    load_note_meta_filtered(db, active_note_id, None)
+}
+
+pub fn load_note_meta_filtered(
+    db: &crate::storage::Db,
+    active_note_id: Option<&str>,
+    collection_id: Option<&str>,
+) -> Result<Vec<NoteMeta>, String> {
     let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
     Ok(note_sources
-        .list_notes_meta(active_note_id)?
+        .list_notes_meta_filtered(active_note_id, collection_id)?
         .into_iter()
         .map(|n| NoteMeta {
             title: n.title,
@@ -57,6 +73,27 @@ pub fn load_note_meta(
             updated_at: n.updated_at,
         })
         .collect())
+}
+
+pub fn load_collection_meta(db: &crate::storage::Db) -> Result<Vec<CollectionMeta>, String> {
+    let mut items = vec![CollectionMeta {
+        id: None,
+        name: "All collections".to_string(),
+        description: "Clear active session collection".to_string(),
+        is_clear: true,
+    }];
+    let collections = db.list_collections()?;
+    items.extend(collections.into_iter().map(collection_to_meta));
+    Ok(items)
+}
+
+pub fn collection_to_meta(collection: Collection) -> CollectionMeta {
+    CollectionMeta {
+        id: Some(collection.id),
+        name: collection.name,
+        description: collection.description,
+        is_clear: false,
+    }
 }
 
 fn access_badge(note: &NoteMeta) -> Option<&'static str> {
@@ -238,8 +275,226 @@ pub fn draw_switcher(
 
 pub struct ContentSearchView<'a> {
     pub query: &'a str,
+    pub collection_filter_label: &'a str,
     pub results: &'a [NoteSearchResult],
     pub selected: usize,
+}
+
+pub struct CollectionSwitcherView<'a> {
+    pub query: &'a str,
+    pub items: &'a [CollectionMeta],
+    pub matches: &'a [usize],
+    pub selected: usize,
+    pub working_collection_id: Option<&'a str>,
+}
+
+pub fn draw_collection_switcher(
+    view: &CollectionSwitcherView,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    let box_w = min(cols.saturating_sub(4).max(30), 72);
+    let box_h = min(rows.saturating_sub(4).max(8), 14);
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let surface_bg = palette.surface_bg();
+
+    let prompt_style = AnsiStyle {
+        fg: Some(palette.primary()),
+        bg: Some(surface_bg),
+        bold: true,
+        ..Default::default()
+    };
+    let label_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
+        dim: true,
+        ..Default::default()
+    };
+    let row_style = AnsiStyle {
+        fg: Some(palette.variable),
+        bg: Some(surface_bg),
+        ..Default::default()
+    };
+    let selected_bg = palette.primary();
+    let selected_style = AnsiStyle {
+        fg: Some(contrast_fg_for_bg(selected_bg)),
+        bg: Some(selected_bg),
+        bold: true,
+        ..Default::default()
+    };
+
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        false,
+    );
+    fill_box_interior(buf, y, x, box_w, box_h, row_style);
+
+    let prompt = format!(" collections: {}", view.query);
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        &prompt,
+        prompt_style,
+    );
+    draw_row_at_styled(
+        buf,
+        y + 2,
+        x + 1,
+        box_w.saturating_sub(2),
+        " results:",
+        label_style,
+    );
+
+    let max_rows = box_h.saturating_sub(4);
+    let mut start = 0usize;
+    if view.selected >= max_rows {
+        start = view.selected + 1 - max_rows;
+    }
+
+    for i in 0..max_rows {
+        let row = y + 3 + i;
+        if let Some(match_idx) = view.matches.get(start + i).copied() {
+            let item = &view.items[match_idx];
+            let marker = if start + i == view.selected { ">" } else { " " };
+            let badge = if item.is_clear {
+                "[clear]"
+            } else if item.id.as_deref() == view.working_collection_id {
+                "[active]"
+            } else {
+                ""
+            };
+            let text = if item.description.trim().is_empty() {
+                if badge.is_empty() {
+                    format!("{marker} {}", item.name)
+                } else {
+                    format!("{marker} {} {}", item.name, badge)
+                }
+            } else if badge.is_empty() {
+                format!("{marker} {}  {}", item.name, item.description)
+            } else {
+                format!("{marker} {} {}  {}", item.name, badge, item.description)
+            };
+            if start + i == view.selected {
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    x + 1,
+                    box_w.saturating_sub(2),
+                    &text,
+                    selected_style,
+                );
+            } else {
+                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
+            }
+        } else {
+            draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
+        }
+    }
+}
+
+pub struct CollectionEditView<'a> {
+    pub name: &'a str,
+    pub description: &'a str,
+    pub default_tags: &'a str,
+    pub selected_field: usize,
+}
+
+pub fn draw_collection_edit_dialog(
+    view: &CollectionEditView,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    let box_w = min(cols.saturating_sub(4).max(48), 88);
+    let box_h = min(rows.saturating_sub(4).max(10), 12);
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    let surface_bg = palette.surface_bg();
+    let normal_style = AnsiStyle {
+        fg: Some(palette.variable),
+        bg: Some(surface_bg),
+        ..Default::default()
+    };
+    let label_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
+        dim: true,
+        ..Default::default()
+    };
+    let active_bg = palette.primary();
+    let active_style = AnsiStyle {
+        fg: Some(contrast_fg_for_bg(active_bg)),
+        bg: Some(active_bg),
+        bold: true,
+        ..Default::default()
+    };
+
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        false,
+    );
+    fill_box_interior(buf, y, x, box_w, box_h, normal_style);
+
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        " Edit collection",
+        AnsiStyle {
+            fg: Some(palette.primary()),
+            bg: Some(surface_bg),
+            bold: true,
+            ..Default::default()
+        },
+    );
+    draw_row_at_styled(
+        buf,
+        y + 2,
+        x + 1,
+        box_w.saturating_sub(2),
+        " Tab/Shift+Tab move field  Enter save  Esc cancel",
+        label_style,
+    );
+
+    let fields = [
+        format!(" Name: {}", view.name),
+        format!(" Description: {}", view.description),
+        format!(" Default tags: {}", view.default_tags),
+    ];
+    for (idx, text) in fields.iter().enumerate() {
+        let style = if idx == view.selected_field {
+            active_style
+        } else {
+            normal_style
+        };
+        draw_row_at_styled(
+            buf,
+            y + 4 + idx,
+            x + 1,
+            box_w.saturating_sub(2),
+            text,
+            style,
+        );
+    }
 }
 
 pub(crate) fn content_search_box_geometry(
@@ -373,19 +628,30 @@ pub fn draw_content_search(
         y + 2,
         x + 1,
         box_w.saturating_sub(2),
+        &format!(
+            " collection: {} (Ctrl+L cycle)",
+            view.collection_filter_label
+        ),
+        label_style,
+    );
+    draw_row_at_styled(
+        buf,
+        y + 3,
+        x + 1,
+        box_w.saturating_sub(2),
         " results:",
         label_style,
     );
 
     // Reserve preview rows at the bottom; result rows fill the rest.
-    let max_rows = box_h.saturating_sub(4 + CONTENT_SEARCH_PREVIEW_LINES); // prompt + label + preview + borders
+    let max_rows = box_h.saturating_sub(5 + CONTENT_SEARCH_PREVIEW_LINES); // prompt + filter + label + preview + borders
     let mut start = 0usize;
     if view.selected >= max_rows {
         start = view.selected + 1 - max_rows;
     }
 
     for i in 0..max_rows {
-        let row = y + 3 + i;
+        let row = y + 4 + i;
         if let Some(result) = view.results.get(start + i) {
             let marker = if start + i == view.selected { ">" } else { " " };
             let text = format!("{marker} L{}  {}", result.line_number.max(1), result.title);
@@ -705,6 +971,7 @@ mod tests {
         };
         let view = ContentSearchView {
             query: "abc",
+            collection_filter_label: "All",
             results: &[],
             selected: 0,
         };

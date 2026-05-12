@@ -178,14 +178,24 @@ impl NoteSourceService {
         &self,
         active_note_id: Option<&str>,
     ) -> Result<Vec<NoteSummary>, String> {
-        let mut notes = self.db.list_notes_meta()?;
+        self.list_notes_meta_filtered(active_note_id, None)
+    }
+
+    pub fn list_notes_meta_filtered(
+        &self,
+        active_note_id: Option<&str>,
+        collection_id: Option<&str>,
+    ) -> Result<Vec<NoteSummary>, String> {
+        let mut notes = self.db.list_notes_meta_filtered(collection_id)?;
         notes.retain(|note| matches!(note_identity_from_id(&note.id), NoteIdentity::DbNote(_)));
-        if let Some(active_id) = active_note_id {
-            let active_identity = note_identity_from_id(active_id);
-            if let NoteIdentity::FileNote(_) = active_identity {
-                if let Some(summary) = self.get_note_meta(&active_identity)? {
-                    if !notes.iter().any(|note| note.id == summary.id) {
-                        notes.insert(0, summary);
+        if collection_id.is_none() {
+            if let Some(active_id) = active_note_id {
+                let active_identity = note_identity_from_id(active_id);
+                if let NoteIdentity::FileNote(_) = active_identity {
+                    if let Some(summary) = self.get_note_meta(&active_identity)? {
+                        if !notes.iter().any(|note| note.id == summary.id) {
+                            notes.insert(0, summary);
+                        }
                     }
                 }
             }

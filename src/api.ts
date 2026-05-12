@@ -28,6 +28,14 @@ export interface NoteSummary {
   updated_at: string;
 }
 
+export interface Collection {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface ResolvedWikiLink {
   shortId: string;
   summary: NoteSummary | null;
@@ -208,14 +216,99 @@ export function createNote(): Promise<Note> {
   return invoke<Note>("create_note");
 }
 
+export function createNoteWithContext(workingCollectionId?: string | null): Promise<Note> {
+  return invoke<Note>("create_note_with_context", {
+    workingCollectionId: workingCollectionId ?? null,
+  });
+}
+
 export function listNotesMeta(activeId?: string | null): Promise<NoteSummary[]> {
   return invoke<NoteSummary[]>("list_notes_meta", {
     activeId: activeId ?? null,
   });
 }
 
+export function listNotesMetaFiltered(
+  collectionId?: string | null,
+  activeId?: string | null,
+): Promise<NoteSummary[]> {
+  return invoke<NoteSummary[]>("list_notes_meta_filtered", {
+    collectionId: collectionId ?? null,
+    activeId: activeId ?? null,
+  });
+}
+
 export function searchNotesContent(query: string, limit = 60): Promise<NoteSearchResult[]> {
   return invoke<NoteSearchResult[]>("search_notes_content", { query, limit });
+}
+
+export function searchNotesContentFiltered(
+  query: string,
+  limit = 60,
+  collectionId?: string | null,
+): Promise<NoteSearchResult[]> {
+  return invoke<NoteSearchResult[]>("search_notes_content_filtered", {
+    query,
+    limit,
+    collectionId: collectionId ?? null,
+  });
+}
+
+export function listCollections(): Promise<Collection[]> {
+  return invoke<Collection[]>("list_collections");
+}
+
+export function createCollection(
+  name: string,
+  description = "",
+): Promise<Collection> {
+  return invoke<Collection>("create_collection", { name, description });
+}
+
+export function renameCollection(id: string, name: string): Promise<Collection> {
+  return invoke<Collection>("rename_collection", { id, name });
+}
+
+export function updateCollectionDescription(
+  id: string,
+  description: string,
+): Promise<Collection> {
+  return invoke<Collection>("update_collection_description", { id, description });
+}
+
+export function deleteCollection(id: string): Promise<boolean> {
+  return invoke<boolean>("delete_collection", { id });
+}
+
+export function purgeCollection(id: string): Promise<number> {
+  return invoke<number>("purge_collection", { id });
+}
+
+export function listCollectionDefaultTags(collectionId: string): Promise<string[]> {
+  return invoke<string[]>("list_collection_default_tags", { collectionId });
+}
+
+export function setCollectionDefaultTags(
+  collectionId: string,
+  tagNames: string[],
+): Promise<string[]> {
+  return invoke<string[]>("set_collection_default_tags", { collectionId, tagNames });
+}
+
+export function listNoteTags(noteId: string): Promise<string[]> {
+  return invoke<string[]>("list_note_tags", { noteId });
+}
+
+export function setNoteTags(noteId: string, tagNames: string[]): Promise<string[]> {
+  return invoke<string[]>("set_note_tags", { noteId, tagNames });
+}
+
+export function getNoteCollectionIds(noteId: string): Promise<string[]> {
+  return invoke<string[]>("get_note_collection_ids", { noteId });
+}
+
+export function setNoteCollections(noteId: string, collectionIds: string[]): Promise<string[]> {
+  return invoke<string[]>("set_note_collections", { noteId, collectionIds });
 }
 
 export function rebuildNoteSearchIndex(): Promise<void> {

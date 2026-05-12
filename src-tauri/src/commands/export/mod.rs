@@ -1,12 +1,11 @@
-mod pdf_style;
 mod pdf_layout;
+mod pdf_style;
 
-use pdf_style::*;
 use pdf_layout::{
-    collect_image_sources, render_markdown_to_pages,
-    DrawOp, Page, PdfImageObject,
+    collect_image_sources, render_markdown_to_pages, DrawOp, Page, PdfImageObject,
     PDF_PAGE_HEIGHT_PT, PDF_PAGE_WIDTH_PT,
 };
+use pdf_style::*;
 
 use app_core::note_sources::NoteSourceService;
 #[cfg(feature = "gui")]
@@ -804,9 +803,9 @@ fn build_to_unicode_cmap(unicode_cmap: &FxHashMap<u16, char>) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::pdf_layout::*;
     use super::pdf_style::*;
+    use super::*;
     use image::codecs::png::PngEncoder;
     use image::{ColorType, ImageEncoder, Rgb, RgbImage};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1187,8 +1186,12 @@ mod tests {
     #[test]
     fn markdown_pdf_keeps_assignment_lines_separate() {
         let source = "a := 1\nb := 2\nc := 3";
-        let pages =
-            render_markdown_to_pages(source, &PdfExportPalette::default(), &FxHashMap::default(), &[]);
+        let pages = render_markdown_to_pages(
+            source,
+            &PdfExportPalette::default(),
+            &FxHashMap::default(),
+            &[],
+        );
 
         let mut y_by_var = FxHashMap::<String, f32>::default();
         for page in pages {
@@ -1238,8 +1241,12 @@ mod tests {
     #[test]
     fn markdown_pdf_table_does_not_double_stroke_shared_horizontal_borders() {
         let source = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
-        let pages =
-            render_markdown_to_pages(source, &PdfExportPalette::default(), &FxHashMap::default(), &[]);
+        let pages = render_markdown_to_pages(
+            source,
+            &PdfExportPalette::default(),
+            &FxHashMap::default(),
+            &[],
+        );
         let page = pages.first().expect("first page");
         let table_left = PDF_MARGIN_LEFT_PT;
         let table_right = PDF_MARGIN_LEFT_PT + content_width();

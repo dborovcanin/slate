@@ -11,8 +11,8 @@ use crate::command_catalog::CommandId;
 use crate::command_history;
 use crate::context::ResolvedContext;
 use crate::engine::{
-    CommandDispatchKind, EditorEngine, HostClipWatchAction, HostCommandPlan, HostFoldAction,
-    ModuleState,
+    CommandDispatchKind, EditorEngine, HostClipWatchAction, HostCollectionAction, HostCommandPlan,
+    HostFoldAction, ModuleState,
 };
 use crate::folding;
 use crate::format::format_markdown;
@@ -305,6 +305,7 @@ fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
         CommandDispatchKind::HostWrite => "host_write",
         CommandDispatchKind::HostExport => "host_export",
         CommandDispatchKind::HostModule => "host_module",
+        CommandDispatchKind::HostCollection => "host_collection",
         CommandDispatchKind::HostFold => "host_fold",
         CommandDispatchKind::HostClipWatch => "host_clip_watch",
         CommandDispatchKind::HostNoteSecurity => "host_note_security",
@@ -348,6 +349,10 @@ enum HostCommandPlanWire {
     Module {
         command: String,
     },
+    Collection {
+        action: String,
+        collection: Option<String>,
+    },
     Fold {
         action: String,
     },
@@ -375,6 +380,20 @@ fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {
         },
         HostCommandPlan::Module { command_id } => HostCommandPlanWire::Module {
             command: module_command_value(command_id)?.to_string(),
+        },
+        HostCommandPlan::Collection { action, collection } => HostCommandPlanWire::Collection {
+            action: match action {
+                HostCollectionAction::Choose => "choose",
+                HostCollectionAction::Clear => "clear",
+                HostCollectionAction::Create => "create",
+                HostCollectionAction::Delete => "delete",
+                HostCollectionAction::Update => "update",
+                HostCollectionAction::Purge => "purge",
+                HostCollectionAction::Add => "add",
+                HostCollectionAction::Remove => "remove",
+            }
+            .to_string(),
+            collection,
         },
         HostCommandPlan::Fold { action } => HostCommandPlanWire::Fold {
             action: match action {

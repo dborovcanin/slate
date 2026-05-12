@@ -141,6 +141,7 @@ sqrt(144) + 3^2         → 21
 **Multiple notes**
 - Create, switch, and delete notes with keyboard shortcuts
 - Fuzzy search switcher (Ctrl+P) with match highlighting
+- Collection picker (Ctrl+G) with Enter-to-choose and Ctrl+E edit
 - Titles derived from the first non-empty line — no extra fields to fill
 
 **Note protection**
@@ -162,6 +163,7 @@ sqrt(144) + 3^2         → 21
 | ----------------------- | ----------------------------- |
 | Ctrl+N                  | New note                      |
 | Ctrl+P                  | Fuzzy note switcher           |
+| Ctrl+G                  | Collection picker             |
 | Ctrl+↑ / Ctrl+↓         | Previous / next note          |
 | Ctrl+Backspace          | Delete previous word          |
 | Ctrl+Shift+Backspace    | Delete current note (confirm) |
@@ -183,6 +185,7 @@ sqrt(144) + 3^2         → 21
 | Escape                  | Close switcher                |
 
 - In the `Ctrl+P` switcher (GUI and terminal): `Delete` or `Ctrl+Backspace` prompts to delete the selected note.
+- In the collection picker: `Enter` sets the active working collection and `Ctrl+E` opens collection edit (name/description/default tags).
 - In table cells: Arrow keys stay table-aware, `Ctrl+ArrowLeft/Right` jumps cells, and `Shift+Enter` inserts table multiline continuation (`|>` row).
 - In Vim normal mode: `gd` navigates wiki links; in terminal, `Ctrl+]` also navigates wiki links.
 

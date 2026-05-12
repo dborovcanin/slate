@@ -1,9 +1,9 @@
 use super::{
-    line_char_len, load_note_reminder_ghosts, new_note, trim_trailing_word,
-    CommandCompletionMenuState, CommandCompletionOption, DatePickerAction, Db, Key, Note,
-    NoteSearchResult, SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode,
-    CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
-    MAX_COMMAND_HISTORY_ENTRIES,
+    line_char_len, load_note_reminder_ghosts, new_note_with_context, trim_trailing_word,
+    CollectionEditDialogState, CommandCompletionMenuState, CommandCompletionOption,
+    DatePickerAction, Db, Key, Note, NoteSearchResult, SwitcherDeleteConfirm, SwitcherOpenConfirm,
+    TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
+    CONTENT_SEARCH_DEBOUNCE_MS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher};
@@ -74,6 +74,22 @@ fn list_terminal_command_suggestions(
             .filter(|entry| !seen.contains(&entry.value)),
     );
     core
+}
+
+fn parse_collection_default_tags_input(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::<String>::new();
+    for token in raw.split(',') {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let normalized = trimmed.to_lowercase();
+        if seen.insert(normalized) {
+            out.push(trimmed.to_string());
+        }
+    }
+    out
 }
 
 // Ownership: switcher, command bar execution, and search workflows.
@@ -193,6 +209,38 @@ impl TerminalApp {
         };
     }
 
+    fn reset_content_search_filter_to_working_collection(&mut self) {
+        self.content_search_collection_filter_id = self.working_collection_id.clone();
+        self.content_search_collection_filter_name = self.working_collection_name.clone();
+    }
+
+    fn cycle_content_search_collection_filter(
+        &mut self,
+        db: &Db,
+        delta: isize,
+    ) -> Result<(), String> {
+        let collections = db.list_collections()?;
+        let mut ids: Vec<Option<String>> = Vec::with_capacity(collections.len() + 1);
+        let mut names: Vec<String> = Vec::with_capacity(collections.len() + 1);
+        ids.push(None);
+        names.push("All".to_string());
+        for collection in collections {
+            ids.push(Some(collection.id));
+            names.push(collection.name);
+        }
+
+        let current_idx = ids
+            .iter()
+            .position(|id| id.as_deref() == self.content_search_collection_filter_id.as_deref())
+            .unwrap_or(0);
+        let len = ids.len().max(1);
+        let next_idx = (current_idx as isize + delta).rem_euclid(len as isize) as usize;
+        self.content_search_collection_filter_id = ids.get(next_idx).cloned().unwrap_or(None);
+        self.content_search_collection_filter_name = names.get(next_idx).cloned();
+        self.refresh_content_search_preview();
+        Ok(())
+    }
+
     pub(super) fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.switcher_open_confirm.is_some() {
             return self.handle_switcher_open_confirm_key(db, key);
@@ -261,6 +309,9 @@ impl TerminalApp {
             Key::Tab => {
                 self.open_content_search(db)?;
             }
+            Key::Ctrl('g') => {
+                self.open_collection_switcher(db)?;
+            }
             Key::CtrlDelete
             | Key::ShiftEnter
             | Key::BackTab
@@ -273,6 +324,151 @@ impl TerminalApp {
             | Key::PageUp
             | Key::PageDown
             | Key::Ctrl(_) => {}
+        }
+        Ok(())
+    }
+
+    pub(super) fn handle_collection_switcher_key(
+        &mut self,
+        db: &Db,
+        key: Key,
+    ) -> Result<(), String> {
+        if self.collection_edit_dialog.is_some() {
+            match key {
+                Key::Esc => {
+                    self.collection_edit_dialog = None;
+                    self.status = "collection update canceled".to_string();
+                }
+                Key::Enter => {
+                    self.save_collection_edit_dialog(db)?;
+                }
+                Key::Tab => {
+                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                        dialog.selected_field = (dialog.selected_field + 1) % 3;
+                    }
+                }
+                Key::BackTab => {
+                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                        dialog.selected_field = (dialog.selected_field + 2) % 3;
+                    }
+                }
+                Key::Ctrl('w') | Key::CtrlBackspace => {
+                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                        match dialog.selected_field {
+                            0 => trim_trailing_word(&mut dialog.name),
+                            1 => trim_trailing_word(&mut dialog.description),
+                            _ => trim_trailing_word(&mut dialog.default_tags),
+                        }
+                    }
+                }
+                Key::Backspace => {
+                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                        match dialog.selected_field {
+                            0 => {
+                                dialog.name.pop();
+                            }
+                            1 => {
+                                dialog.description.pop();
+                            }
+                            _ => {
+                                dialog.default_tags.pop();
+                            }
+                        }
+                    }
+                }
+                Key::Char(ch) => {
+                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                        match dialog.selected_field {
+                            0 => dialog.name.push(ch),
+                            1 => dialog.description.push(ch),
+                            _ => dialog.default_tags.push(ch),
+                        }
+                    }
+                }
+                Key::Paste(text) => {
+                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                        for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                            match dialog.selected_field {
+                                0 => dialog.name.push(ch),
+                                1 => dialog.description.push(ch),
+                                _ => dialog.default_tags.push(ch),
+                            }
+                        }
+                    }
+                }
+                Key::Ctrl('q') => {
+                    self.quit = true;
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
+
+        match key {
+            Key::Esc | Key::Ctrl('p') | Key::Ctrl('g') => {
+                self.close_collection_switcher();
+            }
+            Key::Ctrl('q') => {
+                self.quit = true;
+            }
+            Key::Ctrl('w') => {
+                trim_trailing_word(&mut self.collection_switcher_query);
+                self.recompute_collection_switcher_matches();
+            }
+            Key::ArrowUp => {
+                if self.collection_switcher_selected > 0 {
+                    self.collection_switcher_selected -= 1;
+                }
+            }
+            Key::ArrowDown => {
+                if self.collection_switcher_selected + 1 < self.collection_switcher_matches.len() {
+                    self.collection_switcher_selected += 1;
+                }
+            }
+            Key::Backspace => {
+                self.collection_switcher_query.pop();
+                self.recompute_collection_switcher_matches();
+            }
+            Key::Enter => {
+                if let Some(idx) = self
+                    .collection_switcher_matches
+                    .get(self.collection_switcher_selected)
+                    .copied()
+                {
+                    if let Some(item) = self.collection_switcher_items.get(idx) {
+                        let is_clear = item.is_clear || item.id.is_none();
+                        let selected_name = item.name.clone();
+                        let selected_id = item.id.clone();
+                        if is_clear {
+                            self.working_collection_id = None;
+                            self.working_collection_name = None;
+                            self.refresh_switcher_items(db)?;
+                            self.close_collection_switcher();
+                            self.status = "working collection cleared".to_string();
+                        } else if let Some(collection_id) = selected_id {
+                            self.working_collection_id = Some(collection_id);
+                            self.working_collection_name = Some(selected_name.clone());
+                            self.refresh_switcher_items(db)?;
+                            self.close_collection_switcher();
+                            self.status = format!("working collection: {}", selected_name);
+                        }
+                    }
+                }
+            }
+            Key::Ctrl('e') => {
+                self.open_collection_edit_dialog_for_selected(db)?;
+            }
+            Key::Char(ch) => {
+                self.collection_switcher_query.push(ch);
+                self.recompute_collection_switcher_matches();
+            }
+            Key::Paste(text) => {
+                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
+                    self.collection_switcher_query.push(ch);
+                }
+                self.recompute_collection_switcher_matches();
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -581,7 +777,11 @@ impl TerminalApp {
             if let Some(note) = db.get_most_recent_note()? {
                 self.set_active_note(db, note)?;
             } else {
-                let note = new_note(db, &crate::config::load_theme_config())?;
+                let note = new_note_with_context(
+                    db,
+                    &crate::config::load_theme_config(),
+                    self.working_collection_id.as_deref(),
+                )?;
                 self.set_active_note(db, note)?;
             }
         } else {
@@ -963,6 +1163,169 @@ impl TerminalApp {
         true
     }
 
+    fn handle_choose_working_collection(
+        &mut self,
+        db: &Db,
+        collection_name: Option<String>,
+    ) -> Result<String, String> {
+        let Some(raw_name) = collection_name.map(|value| value.trim().to_string()) else {
+            return Ok("usage: collection choose <collection|none>".to_string());
+        };
+        if raw_name.is_empty() {
+            return Ok("usage: collection choose <collection|none>".to_string());
+        }
+        if raw_name.eq_ignore_ascii_case("none") {
+            self.working_collection_id = None;
+            self.working_collection_name = None;
+            self.refresh_switcher_items(db)?;
+            return Ok("working collection cleared".to_string());
+        }
+        let Some(collection) = db.get_collection_by_name(&raw_name)? else {
+            return Ok(format!("collection not found: {raw_name}"));
+        };
+        self.working_collection_id = Some(collection.id);
+        self.working_collection_name = Some(collection.name.clone());
+        self.refresh_switcher_items(db)?;
+        Ok(format!("working collection: {}", collection.name))
+    }
+
+    fn handle_add_remove_collection_membership(
+        &mut self,
+        db: &Db,
+        collection_name: Option<String>,
+        add: bool,
+    ) -> Result<String, String> {
+        let capabilities = note_sources(db).capabilities_for_note_id(&self.active_note.id);
+        if !capabilities.can_module_persist {
+            return Ok("collections are not supported for file-backed notes".to_string());
+        }
+        let Some(raw_name) = collection_name.map(|value| value.trim().to_string()) else {
+            return Ok(if add {
+                "usage: collection join <name>".to_string()
+            } else {
+                "usage: collection leave <name>".to_string()
+            });
+        };
+        if raw_name.is_empty() {
+            return Ok(if add {
+                "usage: collection join <name>".to_string()
+            } else {
+                "usage: collection leave <name>".to_string()
+            });
+        }
+        let Some(collection) = db.get_collection_by_name(&raw_name)? else {
+            return Ok(format!("collection not found: {raw_name}"));
+        };
+
+        let mut current = db.get_note_collection_ids(&self.active_note.id)?;
+        let has_membership = current.iter().any(|id| id == &collection.id);
+        if add {
+            if has_membership {
+                return Ok(format!("note already in collection {}", collection.name));
+            }
+            current.push(collection.id.clone());
+            db.set_note_collections(&self.active_note.id, &current)?;
+            self.refresh_switcher_items(db)?;
+            return Ok(format!("added to collection {}", collection.name));
+        }
+
+        if !has_membership {
+            return Ok(format!("note is not in collection {}", collection.name));
+        }
+        current.retain(|id| id != &collection.id);
+        db.set_note_collections(&self.active_note.id, &current)?;
+        self.refresh_switcher_items(db)?;
+        Ok(format!("removed from collection {}", collection.name))
+    }
+
+    fn handle_create_collection(
+        &mut self,
+        db: &Db,
+        collection_name: Option<String>,
+    ) -> Result<String, String> {
+        let Some(raw_name) = collection_name.map(|value| value.trim().to_string()) else {
+            return Ok("usage: collection create <name>".to_string());
+        };
+        if raw_name.is_empty() {
+            return Ok("usage: collection create <name>".to_string());
+        }
+        let created = db.create_collection(&raw_name, "")?;
+        self.refresh_switcher_items(db)?;
+        Ok(format!("collection created: {}", created.name))
+    }
+
+    fn handle_delete_or_purge_collection(
+        &mut self,
+        db: &Db,
+        collection_name: Option<String>,
+        purge: bool,
+    ) -> Result<String, String> {
+        let Some(raw_name) = collection_name.map(|value| value.trim().to_string()) else {
+            return Ok(if purge {
+                "usage: collection purge <name>".to_string()
+            } else {
+                "usage: collection delete <name>".to_string()
+            });
+        };
+        if raw_name.is_empty() {
+            return Ok(if purge {
+                "usage: collection purge <name>".to_string()
+            } else {
+                "usage: collection delete <name>".to_string()
+            });
+        }
+        let Some(collection) = db.get_collection_by_name(&raw_name)? else {
+            return Ok(format!("collection not found: {raw_name}"));
+        };
+
+        let active_note_in_target_collection = if purge {
+            db.get_note_collection_ids(&self.active_note.id)?
+                .iter()
+                .any(|id| id == &collection.id)
+        } else {
+            false
+        };
+        let deleted_notes = if purge {
+            Some(db.purge_collection(&collection.id)?)
+        } else {
+            db.delete_collection(&collection.id)?;
+            None
+        };
+
+        if self.working_collection_id.as_deref() == Some(collection.id.as_str()) {
+            self.working_collection_id = None;
+            self.working_collection_name = None;
+        }
+        if self.content_search_collection_filter_id.as_deref() == Some(collection.id.as_str()) {
+            self.content_search_collection_filter_id = self.working_collection_id.clone();
+            self.content_search_collection_filter_name = self.working_collection_name.clone();
+        }
+        self.refresh_switcher_items(db)?;
+        if active_note_in_target_collection {
+            if let Some(next) = self.switcher_items.first().cloned() {
+                if let Some(note) = db.get_note(&next.id)? {
+                    self.set_active_note(db, note)?;
+                }
+            } else {
+                let created = new_note_with_context(
+                    db,
+                    &crate::config::load_theme_config(),
+                    self.working_collection_id.as_deref(),
+                )?;
+                self.set_active_note(db, created)?;
+                self.refresh_switcher_items(db)?;
+            }
+        }
+        Ok(if let Some(count) = deleted_notes {
+            format!(
+                "collection purged: {} ({} notes deleted)",
+                collection.name, count
+            )
+        } else {
+            format!("collection deleted: {}", collection.name)
+        })
+    }
+
     pub(super) fn execute_terminal_command(&mut self, db: &Db, cmd: &str) {
         if let Some(message) = self.try_execute_terminal_perf_command(cmd) {
             self.status = message;
@@ -1072,6 +1435,36 @@ impl TerminalApp {
                 }
                 crate::editor_core::engine::HostCommandPlan::Module { command_id } => {
                     let _ = self.handle_terminal_module_command(db, command_id);
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::Collection { action, collection } => {
+                    self.status = match action {
+                        crate::editor_core::engine::HostCollectionAction::Choose => {
+                            self.handle_choose_working_collection(db, collection)
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Clear => {
+                            self.handle_choose_working_collection(db, Some("none".to_string()))
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Create => {
+                            self.handle_create_collection(db, collection)
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Delete => {
+                            self.handle_delete_or_purge_collection(db, collection, false)
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Update => {
+                            self.open_collection_edit_dialog_by_name(db, collection)
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Purge => {
+                            self.handle_delete_or_purge_collection(db, collection, true)
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Add => {
+                            self.handle_add_remove_collection_membership(db, collection, true)
+                        }
+                        crate::editor_core::engine::HostCollectionAction::Remove => {
+                            self.handle_add_remove_collection_membership(db, collection, false)
+                        }
+                    }
+                    .unwrap_or_else(|error| format!("collection command failed: {error}"));
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::Date => {
@@ -1459,6 +1852,159 @@ impl TerminalApp {
         )
     }
 
+    pub(super) fn refresh_collection_switcher_items(&mut self, db: &Db) -> Result<(), String> {
+        self.collection_switcher_items = switcher::load_collection_meta(db)?;
+        self.recompute_collection_switcher_matches();
+        Ok(())
+    }
+
+    pub(super) fn recompute_collection_switcher_matches(&mut self) {
+        let query = self.collection_switcher_query.trim();
+        if query.is_empty() {
+            self.collection_switcher_matches = (0..self.collection_switcher_items.len()).collect();
+            self.collection_switcher_selected = 0;
+            return;
+        }
+
+        let mut scored: Vec<(usize, i32)> = Vec::new();
+        for (idx, item) in self.collection_switcher_items.iter().enumerate() {
+            let haystack = if item.description.trim().is_empty() {
+                item.name.clone()
+            } else {
+                format!("{} {}", item.name, item.description)
+            };
+            if let Some(score) = switcher::fuzzy_score(query, &haystack) {
+                scored.push((idx, score));
+            }
+        }
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        self.collection_switcher_matches = scored.into_iter().map(|(idx, _)| idx).collect();
+        self.collection_switcher_selected = 0;
+    }
+
+    pub(super) fn open_collection_switcher(&mut self, db: &Db) -> Result<(), String> {
+        self.dismiss_variable_autocomplete_popup();
+        if self.mode == UiMode::ContentSearch {
+            self.clear_content_search_session();
+        }
+        self.refresh_collection_switcher_items(db)?;
+        self.mode = UiMode::CollectionSwitcher;
+        self.collection_switcher_query.clear();
+        self.recompute_collection_switcher_matches();
+        self.collection_edit_dialog = None;
+        self.status =
+            "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
+        Ok(())
+    }
+
+    pub(super) fn close_collection_switcher(&mut self) {
+        self.dismiss_variable_autocomplete_popup();
+        self.mode = UiMode::Editor;
+        self.collection_switcher_query.clear();
+        self.collection_switcher_matches.clear();
+        self.collection_switcher_selected = 0;
+        self.collection_edit_dialog = None;
+        self.status = format!("editing {}", self.active_note.id);
+    }
+
+    fn open_collection_edit_dialog_for_selected(&mut self, db: &Db) -> Result<(), String> {
+        let Some(match_idx) = self
+            .collection_switcher_matches
+            .get(self.collection_switcher_selected)
+            .copied()
+        else {
+            return Ok(());
+        };
+        let Some(item) = self.collection_switcher_items.get(match_idx) else {
+            return Ok(());
+        };
+        let Some(collection_id) = item.id.clone() else {
+            self.status = "cannot edit All collections".to_string();
+            return Ok(());
+        };
+
+        let default_tags = db.list_collection_default_tags(&collection_id)?;
+        self.collection_edit_dialog = Some(CollectionEditDialogState {
+            collection_id,
+            selected_field: 0,
+            name: item.name.clone(),
+            description: item.description.clone(),
+            default_tags: default_tags.join(", "),
+        });
+        self.status = format!("editing collection {}", item.name);
+        Ok(())
+    }
+
+    fn open_collection_edit_dialog_by_name(
+        &mut self,
+        db: &Db,
+        collection_name: Option<String>,
+    ) -> Result<String, String> {
+        let Some(raw_name) = collection_name.map(|value| value.trim().to_string()) else {
+            return Ok("usage: collection update <name>".to_string());
+        };
+        if raw_name.is_empty() {
+            return Ok("usage: collection update <name>".to_string());
+        }
+        let Some(collection) = db.get_collection_by_name(&raw_name)? else {
+            return Ok(format!("collection not found: {raw_name}"));
+        };
+
+        self.refresh_collection_switcher_items(db)?;
+        self.mode = UiMode::CollectionSwitcher;
+        self.collection_switcher_query.clear();
+        self.recompute_collection_switcher_matches();
+        if let Some(position) = self
+            .collection_switcher_items
+            .iter()
+            .position(|entry| entry.id.as_deref() == Some(collection.id.as_str()))
+        {
+            if let Some(match_position) = self
+                .collection_switcher_matches
+                .iter()
+                .position(|idx| *idx == position)
+            {
+                self.collection_switcher_selected = match_position;
+            }
+        }
+        self.open_collection_edit_dialog_for_selected(db)?;
+        Ok(format!(
+            "collection update: editing {} (Enter save, Esc cancel)",
+            collection.name
+        ))
+    }
+
+    fn save_collection_edit_dialog(&mut self, db: &Db) -> Result<(), String> {
+        let Some(dialog) = self.collection_edit_dialog.clone() else {
+            return Ok(());
+        };
+        let name = dialog.name.trim();
+        if name.is_empty() {
+            self.status = "collection name is required".to_string();
+            return Ok(());
+        }
+        let mut current = db
+            .get_collection(&dialog.collection_id)?
+            .ok_or_else(|| "collection no longer exists".to_string())?;
+        if current.name != name {
+            current = db.rename_collection(&current.id, name)?;
+        }
+        let description = dialog.description.trim();
+        if current.description != description {
+            current = db.update_collection_description(&current.id, description)?;
+        }
+        let tags = parse_collection_default_tags_input(&dialog.default_tags);
+        db.set_collection_default_tags(&current.id, &tags)?;
+        if self.working_collection_id.as_deref() == Some(current.id.as_str()) {
+            self.working_collection_name = Some(current.name.clone());
+        }
+        self.refresh_collection_switcher_items(db)?;
+        self.refresh_switcher_items(db)?;
+        self.collection_edit_dialog = None;
+        self.status = format!("collection updated: {}", current.name);
+        Ok(())
+    }
+
     pub(super) fn open_switcher(&mut self, db: &Db) -> Result<(), String> {
         self.dismiss_variable_autocomplete_popup();
         if self.mode == UiMode::ContentSearch {
@@ -1471,8 +2017,7 @@ impl TerminalApp {
         self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
         self.status =
-            "Switcher: type to filter, Enter open, Delete/Ctrl+Backspace delete, Esc close"
-                .to_string();
+            "Switcher: type to filter, Enter open, Tab content search, Ctrl+G collections, Delete/Ctrl+Backspace delete, Esc close".to_string();
         Ok(())
     }
 
@@ -1634,11 +2179,12 @@ impl TerminalApp {
         }
         self.mode = UiMode::ContentSearch;
         self.clear_content_search_session();
+        self.reset_content_search_filter_to_working_collection();
         self.content_search_results = self.content_search_title_fallback_results("");
         self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
         self.status =
-            "Content search: type to search, Enter open, Tab title search, Esc close".to_string();
+            "Content search: type to search, Ctrl+L cycle collection, Enter open, Tab title search, Esc close".to_string();
         Ok(())
     }
 
@@ -1656,6 +2202,9 @@ impl TerminalApp {
             }
             Key::Ctrl('q') => {
                 self.quit = true;
+            }
+            Key::Ctrl('l') => {
+                self.cycle_content_search_collection_filter(db, 1)?;
             }
             Key::Tab => {
                 self.open_switcher(db)?;
@@ -1733,8 +2282,23 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
+        if let Some(working_id) = self.working_collection_id.clone() {
+            if db.get_collection(&working_id)?.is_none() {
+                self.working_collection_id = None;
+                self.working_collection_name = None;
+                if self.content_search_collection_filter_id.as_deref() == Some(working_id.as_str())
+                {
+                    self.content_search_collection_filter_id = None;
+                    self.content_search_collection_filter_name = None;
+                }
+            }
+        }
         let previous_prefix_index = self.wiki_link_prefix_index.clone();
-        self.switcher_items = switcher::load_note_meta(db, Some(&self.active_note.id))?;
+        self.switcher_items = switcher::load_note_meta_filtered(
+            db,
+            Some(&self.active_note.id),
+            self.working_collection_id.as_deref(),
+        )?;
         self.rebuild_wiki_link_prefix_index();
         self.rebuild_wiki_link_note_suggestions_cache();
         let mut changed_short_ids: Vec<String> = Vec::new();
@@ -1759,6 +2323,8 @@ impl TerminalApp {
         }
         if self.mode == UiMode::Switcher {
             self.recompute_switcher_matches();
+        } else if self.mode == UiMode::CollectionSwitcher {
+            self.refresh_collection_switcher_items(db)?;
         }
         Ok(())
     }

@@ -1,5 +1,11 @@
 import { state, type NoteEntry } from "../state";
-import { searchNotesContent, type NoteSearchResult } from "../api";
+import {
+  listCollections,
+  listNotesMetaFiltered,
+  searchNotesContentFiltered,
+  type Collection,
+  type NoteSearchResult,
+} from "../api";
 import { highlightPositions } from "../ui/escape.ts";
 import { createListOverlay, type ListOverlay } from "../overlays/overlay.ts";
 import { fuzzyFilter, fuzzyMatch } from "./fuzzy";
@@ -21,10 +27,30 @@ let onDeleteCallback: DeleteCallback | null = null;
 let activeMode: SwitcherMode = "title";
 let activeSearchQuery = "";
 let activeSearchItems: NoteSearchResult[] | null = null;
+let activeCollectionFilter: string | null = null;
+let activeCollectionOptions: Collection[] = [];
+let activeCollectionNotes: NoteEntry[] | null = null;
 let activeSearchRequestId = 0;
 let activeSearchTimer: number | null = null;
 let activeSearchInFlight = false;
 let queuedSearchQuery: string | null = null;
+const ALL_COLLECTIONS_TOKEN = "__all_collections__";
+
+function resetContentCollectionFilterFromWorkingCollection() {
+  activeCollectionFilter = state.workingCollection?.id ?? null;
+}
+
+function toNoteEntriesFromSummaries(
+  summaries: Awaited<ReturnType<typeof listNotesMetaFiltered>>,
+): NoteEntry[] {
+  return summaries.map((summary) => ({
+    id: summary.id,
+    title: summary.title,
+    accessMode: summary.access_mode,
+    isUnlocked: summary.is_unlocked,
+    updatedAt: summary.updated_at,
+  }));
+}
 
 function renderSnippet(text: string): DocumentFragment {
   const fragment = document.createDocumentFragment();
@@ -88,7 +114,7 @@ function maybeDispatchQueuedContentSearch() {
 
   const requestId = ++activeSearchRequestId;
   activeSearchInFlight = true;
-  void searchNotesContent(query, 60)
+  void searchNotesContentFiltered(query, 60, activeCollectionFilter)
     .then((results) => {
       if (requestId !== activeSearchRequestId || query !== activeSearchQuery) return;
       activeSearchItems = results;
@@ -118,8 +144,84 @@ function queueContentSearch(query: string) {
   }, CONTENT_SEARCH_DEBOUNCE_MS);
 }
 
+function notesForSwitcherSource(): NoteEntry[] {
+  if (activeMode === "content" && activeCollectionNotes) {
+    return activeCollectionNotes;
+  }
+  return allNotesForSwitcher();
+}
+
+async function refreshCollectionOptionsAndNotes() {
+  if (activeMode !== "content") return;
+  const collections = await listCollections();
+  if (
+    activeCollectionFilter &&
+    !collections.some((entry) => entry.id === activeCollectionFilter)
+  ) {
+    if (state.workingCollection?.id === activeCollectionFilter) {
+      state.setWorkingCollection(null);
+    }
+    activeCollectionFilter = null;
+  }
+  const summaries = await listNotesMetaFiltered(
+    activeCollectionFilter,
+    state.activeNote?.id ?? null,
+  );
+  activeCollectionOptions = collections;
+  activeCollectionNotes = toNoteEntriesFromSummaries(summaries);
+  ensureContentCollectionSelector();
+  refreshSwitcher();
+}
+
+function ensureContentCollectionSelector() {
+  if (activeMode !== "content" || !overlay?.isOpen()) return;
+  const panel = document.querySelector(".switcher-panel");
+  if (!panel) return;
+  let filterRow = panel.querySelector(".switcher-filter-row") as HTMLDivElement | null;
+  let selectEl: HTMLSelectElement | null = null;
+  if (!filterRow) {
+    filterRow = document.createElement("div");
+    filterRow.className = "switcher-filter-row";
+    const label = document.createElement("label");
+    label.className = "switcher-filter-label";
+    label.textContent = "Collection";
+    selectEl = document.createElement("select");
+    selectEl.className = "switcher-filter-select";
+    label.appendChild(selectEl);
+    filterRow.appendChild(label);
+    const listEl = panel.querySelector(".switcher-list");
+    panel.insertBefore(filterRow, listEl ?? null);
+  } else {
+    selectEl = filterRow.querySelector("select");
+  }
+  if (!selectEl) return;
+
+  selectEl.replaceChildren();
+  const allOption = document.createElement("option");
+  allOption.value = ALL_COLLECTIONS_TOKEN;
+  allOption.textContent = "All";
+  selectEl.appendChild(allOption);
+  for (const collection of activeCollectionOptions) {
+    const option = document.createElement("option");
+    option.value = collection.id;
+    option.textContent = collection.name;
+    selectEl.appendChild(option);
+  }
+  selectEl.value = activeCollectionFilter ?? ALL_COLLECTIONS_TOKEN;
+  selectEl.onchange = () => {
+    const value = selectEl!.value;
+    activeCollectionFilter = value === ALL_COLLECTIONS_TOKEN ? null : value;
+    activeSearchQuery = "";
+    activeSearchItems = null;
+    activeCollectionNotes = null;
+    void refreshCollectionOptionsAndNotes().catch(() => {
+      refreshSwitcher();
+    });
+  };
+}
+
 function buildItems(query: string): SwitcherItem[] {
-  const allNotes = allNotesForSwitcher();
+  const allNotes = notesForSwitcherSource();
   const trimmed = query.trim();
   if (trimmed.length === 0) {
     resetContentSearchState();
@@ -240,6 +342,18 @@ export function openSwitcher(
     activeMode = mode;
     resetContentSearchState();
   }
+  if (mode === "content") {
+    resetContentCollectionFilterFromWorkingCollection();
+    activeCollectionOptions = [];
+    activeCollectionNotes = null;
+    void refreshCollectionOptionsAndNotes().catch(() => {
+      refreshSwitcher();
+    });
+  } else {
+    activeCollectionFilter = null;
+    activeCollectionOptions = [];
+    activeCollectionNotes = null;
+  }
 
   if (!overlay) {
     const placeholder = mode === "content" ? "Search note content..." : "Search notes...";
@@ -266,15 +380,33 @@ export function openSwitcher(
   }
 
   overlay.open();
+  if (mode === "content") {
+    ensureContentCollectionSelector();
+  }
 }
 
 export function closeSwitcher() {
   overlay?.close();
   onDeleteCallback = null;
   resetContentSearchState();
+  activeCollectionFilter = null;
+  activeCollectionOptions = [];
+  activeCollectionNotes = null;
 }
 
 export function refreshSwitcher() {
   if (!isSwitcherOpen()) return;
   overlay?.refresh();
 }
+
+export const __switcherInternals = {
+  resetContentCollectionFilterFromWorkingCollectionForTest() {
+    resetContentCollectionFilterFromWorkingCollection();
+  },
+  setActiveCollectionFilterForTest(next: string | null) {
+    activeCollectionFilter = next;
+  },
+  getActiveCollectionFilterForTest() {
+    return activeCollectionFilter;
+  },
+};
