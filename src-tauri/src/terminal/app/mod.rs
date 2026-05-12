@@ -55,6 +55,9 @@ const TABLE_FORMULA_SEGMENT_CACHE_TTL_MS: u64 = 90 * 1000;
 // Checkpoint every N lines for fence-state lookups in draw().
 // Keeps the per-draw scan to at most INTERVAL line advances.
 const FENCE_CHECKPOINT_INTERVAL: usize = 256;
+const LARGE_NOTE_FULL_FEATURE_LINE_LIMIT: usize = 30_000;
+const LARGE_NOTE_REDUCED_UNDO_LINES: usize = LARGE_NOTE_FULL_FEATURE_LINE_LIMIT + 1;
+const LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES: usize = LARGE_NOTE_FULL_FEATURE_LINE_LIMIT + 1;
 
 type ContentSearchResponse = (String, Result<Vec<NoteSearchResult>, String>);
 
@@ -92,6 +95,23 @@ fn file_render_syntax_for_note_id(note_id: &str) -> (bool, Option<String>) {
     (
         true,
         app_core::note_sources::syntax_language_for_path(&path),
+    )
+}
+
+fn history_max_entries_for_line_count(line_count: usize) -> usize {
+    if line_count >= LARGE_NOTE_REDUCED_UNDO_LINES {
+        128
+    } else {
+        MAX_UNDO_ENTRIES
+    }
+}
+
+fn build_history_for_note(lines: &[String], cursor_line: usize, cursor_col: usize) -> LineHistory {
+    LineHistory::new(
+        history_max_entries_for_line_count(lines.len()),
+        lines,
+        cursor_line,
+        cursor_col,
     )
 }
 
@@ -470,6 +490,30 @@ use reminder_helpers::*;
 use table_helpers::*;
 
 impl TerminalApp {
+    fn large_note_reduced_features(&self) -> bool {
+        self.lines.len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
+    }
+
+    fn maybe_compact_buffers_after_note_switch(&mut self) {
+        // Best-effort memory trimming when switching from very large notes.
+        // This doesn't guarantee RSS drops immediately (allocator-dependent),
+        // but it releases large vector capacities held by app structures.
+        self.lines.shrink_to_fit();
+        self.calc.results.shrink_to_fit();
+        self.calc.cell_results.shrink_to_fit();
+        self.calc.variable_names.shrink_to_fit();
+        self.calc.line_metadata.shrink_to_fit();
+        self.calc.prev_line_metadata.shrink_to_fit();
+        self.folds.line_has_structure.shrink_to_fit();
+        self.folds.line_text_snapshot.shrink_to_fit();
+        self.folds.range_by_start.shrink_to_fit();
+        self.folds.visible_to_real.shrink_to_fit();
+        self.folds.real_to_visible.shrink_to_fit();
+        self.folds.hidden_owner.shrink_to_fit();
+        self.folds.placeholder_hidden_lines.shrink_to_fit();
+        self.history.compact();
+    }
+
     pub(super) fn working_collection_status_suffix(&self) -> String {
         match self.working_collection_name.as_deref() {
             Some(name) if !name.trim().is_empty() => format!("  |  collection:{name}"),
@@ -674,7 +718,7 @@ impl TerminalApp {
                 },
             )
         };
-        let history = LineHistory::new(MAX_UNDO_ENTRIES, &lines, 0, 0);
+        let history = build_history_for_note(&lines, 0, 0);
         let initial_mode = if vim_mode {
             UiMode::Normal
         } else {

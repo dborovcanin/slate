@@ -265,6 +265,36 @@ fn apply_text_change_in_place(
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
+    fn prefer_span_history_fast_path(&self) -> bool {
+        self.lines.len() >= super::LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES
+    }
+
+    fn record_history_after_edit(
+        &mut self,
+        coalesce_undo: bool,
+        history_span: Option<(usize, usize, usize)>,
+    ) {
+        if let Some((start_line, old_line_span, new_line_span)) = history_span {
+            if self.prefer_span_history_fast_path() {
+                self.history.record_edit_span(
+                    &self.lines,
+                    self.cursor_line,
+                    self.cursor_col,
+                    start_line,
+                    old_line_span,
+                    new_line_span,
+                );
+                return;
+            }
+        }
+        self.history.record_edit(
+            &self.lines,
+            self.cursor_line,
+            self.cursor_col,
+            coalesce_undo,
+        );
+    }
+
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
         // Keep startup cheap for very large notes: build a plain 1:1 visible
         // map and defer expensive fold structure analysis until needed.
@@ -272,9 +302,9 @@ impl TerminalApp {
         self.folds.range_by_start = vec![None; self.lines.len()];
         self.folds.collapsed_starts.clear();
         self.folds.line_has_structure = vec![false; self.lines.len()];
-        // Preserve length invariants expected by incremental fold remap logic
-        // without cloning full line content at startup.
-        self.folds.line_text_snapshot = vec![String::new(); self.lines.len()];
+        // Keep memory lean at startup; full snapshots are only needed once
+        // fold analysis actually runs.
+        self.folds.line_text_snapshot.clear();
         self.folds.rescan_pending = false;
         self.folds.analysis_ready = false;
         self.rebuild_fold_view_map();
@@ -452,19 +482,19 @@ impl TerminalApp {
     }
 
     pub(super) fn note_math_module_enabled(&self) -> bool {
-        self.active_note.modules.math
+        self.active_note.modules.math && !self.large_note_reduced_features()
     }
 
     pub(super) fn note_table_module_enabled(&self) -> bool {
-        self.active_note.modules.table
+        self.active_note.modules.table && !self.large_note_reduced_features()
     }
 
     pub(super) fn note_variables_module_enabled(&self) -> bool {
-        self.active_note.modules.variables
+        self.active_note.modules.variables && !self.large_note_reduced_features()
     }
 
     pub(super) fn note_style_module_enabled(&self) -> bool {
-        self.active_note.modules.style
+        self.active_note.modules.style && !self.large_note_reduced_features()
     }
 
     pub(super) fn calc_feature_mask(&self) -> crate::editor_core::calc_plan::CalcFeatureMask {
@@ -694,6 +724,31 @@ impl TerminalApp {
     }
 
     pub(super) fn recompute_folding_if_needed(&mut self) {
+        if self.large_note_reduced_features() {
+            if !self.folds.ranges.is_empty() {
+                self.folds.ranges.clear();
+            }
+            if self.folds.range_by_start.len() != self.lines.len() {
+                self.folds.range_by_start = vec![None; self.lines.len()];
+            }
+            if !self.folds.collapsed_starts.is_empty() {
+                self.folds.collapsed_starts.clear();
+            }
+            if self.folds.visible_to_real.len() != self.lines.len()
+                || self.folds.real_to_visible.len() != self.lines.len()
+                || self.folds.hidden_owner.len() != self.lines.len()
+                || self.folds.placeholder_hidden_lines.len() != self.lines.len()
+            {
+                self.rebuild_fold_view_map();
+            }
+            if self.folds.line_has_structure.len() != self.lines.len() {
+                self.folds.line_has_structure = vec![false; self.lines.len()];
+            }
+            self.folds.line_text_snapshot.clear();
+            self.folds.rescan_pending = false;
+            self.folds.analysis_ready = false;
+            return;
+        }
         // Process any pending deferred recompute first.
         if self.folds.rescan_pending {
             self.folds.rescan_pending = false;
@@ -1097,6 +1152,13 @@ impl TerminalApp {
     }
 
     pub(super) fn toggle_fold_at_cursor(&mut self) -> bool {
+        if self.large_note_reduced_features() {
+            self.status = format!(
+                "fold disabled for notes above {} lines",
+                super::LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
+            );
+            return false;
+        }
         self.ensure_fold_analysis_ready_for_command();
         let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
@@ -1108,6 +1170,13 @@ impl TerminalApp {
     }
 
     pub(super) fn set_fold_collapsed_at_cursor(&mut self, collapsed: bool) -> bool {
+        if self.large_note_reduced_features() {
+            self.status = format!(
+                "fold disabled for notes above {} lines",
+                super::LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
+            );
+            return false;
+        }
         self.ensure_fold_analysis_ready_for_command();
         let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
@@ -1166,7 +1235,11 @@ impl TerminalApp {
         true
     }
 
-    pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
+    pub(super) fn mark_edited_from_line_with_span(
+        &mut self,
+        changed_from_line: usize,
+        history_span: Option<(usize, usize, usize)>,
+    ) {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         let line_count_changed = self.lines.len() != self.calc.results.len();
         self.invalidate_joined_text_cache();
@@ -1224,17 +1297,21 @@ impl TerminalApp {
                 self.run_calc_recompute();
             }
         }
-        self.history.record_edit(
-            &self.lines,
-            self.cursor_line,
-            self.cursor_col,
-            coalesce_undo,
-        );
+        self.record_history_after_edit(coalesce_undo, history_span);
         self.last_edit = Instant::now();
     }
 
+    pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {
+        self.mark_edited_from_line_with_span(changed_from_line, None);
+    }
+
     pub(super) fn mark_edited(&mut self) {
-        self.mark_edited_from_line(self.cursor_line);
+        self.mark_edited_from_line_with_span(self.cursor_line, None);
+    }
+
+    pub(super) fn mark_edited_current_line(&mut self) {
+        let changed_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        self.mark_edited_from_line_with_span(changed_line, Some((changed_line, 1, 1)));
     }
 
     pub(super) fn undo(&mut self) {
@@ -1813,7 +1890,7 @@ impl TerminalApp {
                 text.replace_range(start_byte..end_byte, "");
                 self.cursor_col = col;
                 self.refresh_calc_line_metadata_at(self.cursor_line);
-                self.mark_edited();
+                self.mark_edited_current_line();
                 self.prune_empty_table_continuation_row_at_cursor();
                 return true;
             }
@@ -1834,7 +1911,7 @@ impl TerminalApp {
         text.replace_range(start_byte..end_byte, "");
         self.cursor_col = col;
         self.refresh_calc_line_metadata_at(self.cursor_line);
-        self.mark_edited();
+        self.mark_edited_current_line();
         self.prune_empty_table_continuation_row_at_cursor();
         true
     }
@@ -1849,7 +1926,7 @@ impl TerminalApp {
         line.insert(idx, ch);
         self.cursor_col += 1;
         self.refresh_calc_line_metadata_at(self.cursor_line);
-        self.mark_edited();
+        self.mark_edited_current_line();
     }
 
     pub(super) fn should_defer_table_space_autoformat(&self) -> bool {
@@ -1880,7 +1957,7 @@ impl TerminalApp {
         line.insert_str(idx, text);
         self.cursor_col += text.chars().count();
         self.refresh_calc_line_metadata_at(self.cursor_line);
-        self.mark_edited();
+        self.mark_edited_current_line();
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
@@ -2401,7 +2478,7 @@ impl TerminalApp {
                     .count();
                 self.try_autoformat_rules();
                 self.refresh_calc_line_metadata_at(self.cursor_line);
-                self.mark_edited();
+                self.mark_edited_current_line();
                 return true;
             }
         }
@@ -2723,7 +2800,10 @@ impl TerminalApp {
                 self.cursor_col = line[..line_byte.min(line.len())].chars().count();
             }
             self.folds.rescan_pending = true;
-            self.mark_edited_from_line(from_line);
+            self.mark_edited_from_line_with_span(
+                from_line,
+                Some((from_line, old_line_span, new_line_span)),
+            );
             self.adjust_cursor();
             self.adjust_scroll();
             return;
@@ -2791,7 +2871,10 @@ impl TerminalApp {
             self.cursor_col = line[..line_byte.min(line.len())].chars().count();
         }
         self.folds.rescan_pending = true;
-        self.mark_edited_from_line(changed_from_line);
+        self.mark_edited_from_line_with_span(
+            changed_from_line,
+            Some((changed_from_line, old_line_span, new_line_span)),
+        );
         self.adjust_cursor();
         self.adjust_scroll();
     }
@@ -2877,7 +2960,7 @@ impl TerminalApp {
             remove_char_at(&mut self.lines[self.cursor_line], new_col);
             self.cursor_col = new_col;
             self.refresh_calc_line_metadata_at(self.cursor_line);
-            self.mark_edited();
+            self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
@@ -2892,7 +2975,10 @@ impl TerminalApp {
         self.lines[self.cursor_line].push_str(&removed);
         self.cursor_col = prev_len;
         self.splice_calc_line_metadata(self.cursor_line, 2, 1);
-        self.mark_edited();
+        self.mark_edited_from_line_with_span(
+            self.cursor_line,
+            Some((self.cursor_line, 2, 1)),
+        );
     }
 
     pub(super) fn delete_forward(&mut self) {
@@ -2914,7 +3000,7 @@ impl TerminalApp {
                 let col = self.cursor_col;
                 remove_char_at(&mut self.lines[self.cursor_line], col);
                 self.refresh_calc_line_metadata_at(self.cursor_line);
-                self.mark_edited();
+                self.mark_edited_current_line();
                 self.prune_empty_table_continuation_row_at_cursor();
                 return;
             }
@@ -2925,7 +3011,7 @@ impl TerminalApp {
             let col = self.cursor_col;
             remove_char_at(&mut self.lines[self.cursor_line], col);
             self.refresh_calc_line_metadata_at(self.cursor_line);
-            self.mark_edited();
+            self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
@@ -2937,7 +3023,10 @@ impl TerminalApp {
         let next = self.lines.remove(self.cursor_line + 1);
         self.lines[self.cursor_line].push_str(&next);
         self.splice_calc_line_metadata(self.cursor_line, 2, 1);
-        self.mark_edited();
+        self.mark_edited_from_line_with_span(
+            self.cursor_line,
+            Some((self.cursor_line, 2, 1)),
+        );
     }
 
     pub(super) fn move_cursor_left(&mut self) {

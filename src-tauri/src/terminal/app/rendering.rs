@@ -807,9 +807,14 @@ impl TerminalApp {
             UiMode::ContentSearch => " SEARCH",
             UiMode::DatePicker => " DATE",
         };
+        let large_note_label = if self.large_note_reduced_features() {
+            " LARGE-NOTE"
+        } else {
+            ""
+        };
         let title_line = format!(
-            " note  {}  {}{}{}",
-            self.active_note.id, title, dirty_mark, mode_label
+            " note  {}  {}{}{}{}",
+            self.active_note.id, title, dirty_mark, mode_label, large_note_label
         );
         let title_bg = self.render_palette.primary();
         draw_row_at_styled(
@@ -833,7 +838,7 @@ impl TerminalApp {
         let mut ctx = render::RenderContext::with_syntax_mode(
             fence_in_code_block,
             fence_lang,
-            self.render_plain_text_file,
+            self.render_plain_text_file || self.large_note_reduced_features(),
             self.render_file_language.clone(),
             self.render_palette,
         );

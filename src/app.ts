@@ -82,6 +82,7 @@ function moduleIndicatorText(modules: NoteModules): string {
 
 const ACTIVE_NOTE_SYNC_INTERVAL_MS = 2500;
 const NOTE_CHANGED_EVENT = "slate://note-changed";
+const LARGE_NOTE_FULL_FEATURE_LINE_LIMIT = 30_000;
 let activeNoteSyncTimer: number | null = null;
 let activeNoteSyncInFlight = false;
 let stopBackendNoteChangeListener: UnlistenFn | null = null;
@@ -92,6 +93,19 @@ interface BackendNoteChangedEvent {
   id: string;
   updatedAt?: string | null;
   deleted?: boolean;
+}
+
+function noteLineCount(body: string): number {
+  if (body.length === 0) return 1;
+  let count = 1;
+  for (let i = 0; i < body.length; i += 1) {
+    if (body.charCodeAt(i) === 10) count += 1;
+  }
+  return count;
+}
+
+function largeNoteReducedFeatures(note: Note | null): boolean {
+  return !!note && noteLineCount(note.body) > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT;
 }
 
 function autosaveEnabled(): boolean {
@@ -159,6 +173,7 @@ function editorOptionsForNote(note: Note | null) {
   const noteModules = modulesForNote(note, appConfig);
   const loaded = effectiveModules(noteModules, appRuntimeFlags);
   const plainFileNote = !!note && isNonMarkdownFileNoteId(note.id);
+  const largeNoteMode = largeNoteReducedFeatures(note);
   const plainCodeLanguage = plainFileNote
     ? (syntaxLanguageForNoteId(note.id) ?? "text")
     : null;
@@ -166,15 +181,16 @@ function editorOptionsForNote(note: Note | null) {
     plainTextMode: appRuntimeFlags.plain_text_mode,
     plainCodeLanguage,
     detachBackend: appRuntimeFlags.backend_detach,
-    disableCalc: plainFileNote || appRuntimeFlags.calc_disable || !loaded.math,
+    disableCalc: plainFileNote || largeNoteMode || appRuntimeFlags.calc_disable || !loaded.math,
     disableMarkdownDecorations:
-      plainFileNote || appRuntimeFlags.markdown_disable || !loaded.style,
-    disableFolding: plainFileNote || appRuntimeFlags.folding_disable,
-    disableNotify: plainFileNote || appRuntimeFlags.notify_disable,
-    disableAutocomplete: plainFileNote || !loaded.variables,
-    tableEnabled: !plainFileNote && loaded.table,
-    markdownAutoformat: plainFileNote ? false : appConfig.markdown_autoformat,
-    checklistAutoReorder: plainFileNote ? false : appConfig.checklist_auto_reorder,
+      plainFileNote || largeNoteMode || appRuntimeFlags.markdown_disable || !loaded.style,
+    disableFolding: plainFileNote || largeNoteMode || appRuntimeFlags.folding_disable,
+    disableNotify: plainFileNote || largeNoteMode || appRuntimeFlags.notify_disable,
+    disableAutocomplete: plainFileNote || largeNoteMode || !loaded.variables,
+    tableEnabled: !plainFileNote && !largeNoteMode && loaded.table,
+    markdownAutoformat: plainFileNote || largeNoteMode ? false : appConfig.markdown_autoformat,
+    checklistAutoReorder:
+      plainFileNote || largeNoteMode ? false : appConfig.checklist_auto_reorder,
     autosave: appConfig.autosave,
     formatOnSave: appConfig.format_on_save,
     vimMode: !!appConfig.vim_mode,
@@ -188,7 +204,7 @@ function editorOptionsForNote(note: Note | null) {
       }),
     onSaveError: showSaveError,
     onExportCommand: runExportCommand,
-    variablesEnabled: plainFileNote ? false : loaded.variables,
+    variablesEnabled: plainFileNote || largeNoteMode ? false : loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
     onClipWatchStateChange: (active: boolean) => {
@@ -1523,10 +1539,18 @@ function updateStatusBar() {
 
   let modulesEl = statusMetaEl.querySelector(".status-modules") as HTMLElement | null;
   if (appConfig && appRuntimeFlags) {
-    const loaded = effectiveModules(
+    let loaded = effectiveModules(
       modulesForNote(state.activeNote, appConfig),
       appRuntimeFlags,
     );
+    if (largeNoteReducedFeatures(state.activeNote)) {
+      loaded = {
+        math: false,
+        table: false,
+        variables: false,
+        style: false,
+      };
+    }
     const textModules = moduleIndicatorText(loaded);
     if (!modulesEl) {
       modulesEl = document.createElement("span");
@@ -1540,6 +1564,22 @@ function updateStatusBar() {
     }
   } else if (modulesEl) {
     modulesEl.remove();
+  }
+
+  let largeModeEl = statusMetaEl.querySelector(".status-large-note") as HTMLElement | null;
+  if (largeNoteReducedFeatures(state.activeNote)) {
+    if (!largeModeEl) {
+      largeModeEl = document.createElement("span");
+      largeModeEl.className = "status-large-note";
+    }
+    largeModeEl.textContent = `large-note mode >${LARGE_NOTE_FULL_FEATURE_LINE_LIMIT.toLocaleString()} lines`;
+    if (hintEl) {
+      statusMetaEl.insertBefore(largeModeEl, hintEl);
+    } else {
+      statusMetaEl.appendChild(largeModeEl);
+    }
+  } else if (largeModeEl) {
+    largeModeEl.remove();
   }
 
   let watchEl = statusMetaEl.querySelector(".status-clip-watch") as HTMLElement | null;
@@ -1625,6 +1665,10 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   if (runtimeFlags.autocomplete_disable) activeFlags.push("SLATE_AUTOCOMPLETE_DISABLE");
   if (activeFlags.length > 0) {
     showToast(`Runtime flags: ${activeFlags.join(", ")}`);
+  } else if (largeNoteReducedFeatures(note)) {
+    showToast(
+      `Large-note mode: folding, decorations, and calc disabled above ${LARGE_NOTE_FULL_FEATURE_LINE_LIMIT.toLocaleString()} lines`,
+    );
   } else if (config.vim_mode) {
     showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch on, :clip-watch off, :w, :wq, :q");
   }

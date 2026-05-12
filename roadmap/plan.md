@@ -205,6 +205,19 @@ Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, 
 - [x] TUI formula-row rendering now avoids repeated per-segment scans by indexing `cell_results` once per row and reusing precomputed segment char-delta prefixes for cursor/pipe translation.
 - [x] Perf checks are unified under `npm run perf:check` (startup + table), with one global switch in `config.toml` (`[perf].enabled`, default `false`) and OS temp log defaults (`slate-log-ui.log`, `slate-log-tui.log`) unless overridden.
 
+### 2026-05-12 Large-Note Threshold Policy (shipped)
+
+- [x] Introduced a single full-feature cutoff at `30,000` lines.
+- [x] Notes above the cutoff run in reduced-feature mode in UI and TUI:
+  - math/calc disabled
+  - markdown decorations disabled
+  - folding disabled
+  - undo/redo kept enabled
+- [x] TUI undo/redo path now supports span-based history recording for known edit windows, reducing hot-path full-note diff work on large notes.
+- [x] Added large-note mode indicators:
+  - GUI status tag
+  - TUI title bar label
+
 ### Next Sprint Checklist (2026-05-12 to 2026-05-23)
 
 - [ ] Shared vim action snapshot elimination (line-window / line+col API)
@@ -225,6 +238,20 @@ Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, 
 - [ ] `TerminalApp` state decomposition (`EditorModel`, `CalcRuntime`, `OverlayState`, `RenderState`, `FoldRuntime`)
   Owner: TUI adapter
   Expected impact: smaller, safer diffs in terminal rendering/runtime changes and easier targeted performance work.
+- [ ] Adaptive large-note mode (follow-up to threshold policy)
+  Owner: UI + TUI adapters + editor-core
+  Scope:
+  - keep strict `30k` full-feature cutoff as baseline policy
+  - introduce adaptive tiers above the cutoff (viewport-first calc, lazy fold/indexing, bounded decoration caches)
+  - preserve undo/redo semantics with memory-bounded span deltas
+  Expected impact: better UX on medium-large notes while keeping predictable resource usage.
+- [ ] Large-note performance hardening and regression gates
+  Owner: perf/tooling + adapters
+  Scope:
+  - add `30k/100k/200k/400k` fixtures for edit-latency + memory checks
+  - define p95 targets for keypress/render/save and memory ceilings per tier
+  - fail CI/perf checks on sustained regressions
+  Expected impact: prevents silent large-note regressions and makes tuning measurable.
 
 Sprint acceptance criteria:
 
@@ -234,6 +261,11 @@ Sprint acceptance criteria:
 - Partial eval no longer performs full-document variable-definition scans.
 - Parity failures are reproducible against real GUI runtime behavior.
 - TUI runtime state changes are reviewable in subsystem-scoped diffs.
+
+Roadmap ownership:
+
+- `roadmap/plan.md` is the canonical execution backlog for large-note performance and feature-tier policy.
+- `roadmap/performance.md`, `roadmap/perf-tracing.md`, and `roadmap/perf-multirow-table.md` are measurement/operations references and should not carry parallel execution backlogs.
 
 ## Future Updates
 
@@ -245,7 +277,7 @@ Sprint acceptance criteria:
 
 ### Global
 
-- [x] Ability to open markdown files directly and save (export) to them (GUI launch via `slate <file.md>`)
+- [x] Ability to open text/code files directly and save back to source path (GUI/TUI launch via `slate <file>`)
 - [ ] Global quick-capture: `slate capture "thought"` appends to today's inbox note without opening UI.
 - [ ] Clipboard-watch into a named note/section.
 - [ ] Pipe-in mode: `cmd | slate append`.

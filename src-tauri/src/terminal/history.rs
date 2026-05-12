@@ -37,12 +37,13 @@ impl LineHistory {
         cursor_line: usize,
         cursor_col: usize,
     ) -> Self {
+        let disabled = max_entries == 0;
         Self {
             entries: Vec::new(),
             pos: 0,
             max_entries,
             snapshot: HistorySnapshot {
-                lines: lines.to_vec(),
+                lines: if disabled { Vec::new() } else { lines.to_vec() },
                 cursor: HistoryCursor {
                     line: cursor_line,
                     col: cursor_col,
@@ -52,11 +53,20 @@ impl LineHistory {
         }
     }
 
+    fn disabled(&self) -> bool {
+        self.max_entries == 0
+    }
+
+    #[cfg(test)]
     pub fn reset(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
         self.entries.clear();
         self.pos = 0;
         self.snapshot = HistorySnapshot {
-            lines: lines.to_vec(),
+            lines: if self.disabled() {
+                Vec::new()
+            } else {
+                lines.to_vec()
+            },
             cursor: HistoryCursor {
                 line: cursor_line,
                 col: cursor_col,
@@ -66,6 +76,15 @@ impl LineHistory {
     }
 
     pub fn checkpoint(&mut self, lines: &[String], cursor_line: usize, cursor_col: usize) {
+        if self.disabled() {
+            self.snapshot.lines.clear();
+            self.snapshot.cursor = HistoryCursor {
+                line: cursor_line,
+                col: cursor_col,
+            };
+            self.coalesce_anchor = None;
+            return;
+        }
         self.snapshot = HistorySnapshot {
             lines: lines.to_vec(),
             cursor: HistoryCursor {
@@ -83,6 +102,14 @@ impl LineHistory {
         cursor_col: usize,
         coalesce: bool,
     ) -> bool {
+        if self.disabled() {
+            self.snapshot.cursor = HistoryCursor {
+                line: cursor_line,
+                col: cursor_col,
+            };
+            self.coalesce_anchor = None;
+            return false;
+        }
         if coalesce && self.pos == self.entries.len() {
             if let Some(anchor) = self.coalesce_anchor.as_ref() {
                 let merged = build_history_entry(anchor, lines, cursor_line, cursor_col);
@@ -145,6 +172,70 @@ impl LineHistory {
         true
     }
 
+    pub fn record_edit_span(
+        &mut self,
+        lines: &[String],
+        cursor_line: usize,
+        cursor_col: usize,
+        start_line: usize,
+        old_line_span: usize,
+        new_line_span: usize,
+    ) -> bool {
+        if self.disabled() {
+            self.snapshot.cursor = HistoryCursor {
+                line: cursor_line,
+                col: cursor_col,
+            };
+            self.coalesce_anchor = None;
+            return false;
+        }
+        let before_len = self.snapshot.lines.len();
+        let after_len = lines.len();
+        let start = start_line.min(before_len).min(after_len);
+        let old_end = start.saturating_add(old_line_span).min(before_len);
+        let new_end = start.saturating_add(new_line_span).min(after_len);
+        let removed_lines = self.snapshot.lines[start..old_end].to_vec();
+        let inserted_lines = lines[start..new_end].to_vec();
+
+        let cursor_after = HistoryCursor {
+            line: cursor_line,
+            col: cursor_col,
+        };
+        if removed_lines.is_empty()
+            && inserted_lines.is_empty()
+            && self.snapshot.cursor.line == cursor_after.line
+            && self.snapshot.cursor.col == cursor_after.col
+        {
+            self.snapshot.cursor = cursor_after;
+            self.coalesce_anchor = None;
+            return false;
+        }
+
+        if self.pos < self.entries.len() {
+            self.entries.truncate(self.pos);
+        }
+
+        let entry = HistoryEntry {
+            start_line: start,
+            removed_lines,
+            inserted_lines,
+            cursor_before: self.snapshot.cursor,
+            cursor_after,
+        };
+        let snapshot_delta = entry.clone();
+        self.entries.push(entry);
+        self.pos = self.entries.len();
+
+        if self.entries.len() > self.max_entries {
+            self.entries.remove(0);
+            self.pos = self.pos.saturating_sub(1);
+        }
+
+        self.apply_snapshot_delta(Some(snapshot_delta), cursor_line, cursor_col);
+        self.coalesce_anchor = None;
+        true
+    }
+
     fn apply_snapshot_delta(
         &mut self,
         delta: Option<HistoryEntry>,
@@ -166,6 +257,9 @@ impl LineHistory {
     }
 
     pub fn undo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
+        if self.disabled() {
+            return None;
+        }
         if self.pos == 0 {
             return None;
         }
@@ -188,6 +282,9 @@ impl LineHistory {
     }
 
     pub fn redo(&mut self, lines: &mut Vec<String>) -> Option<HistoryCursor> {
+        if self.disabled() {
+            return None;
+        }
         if self.pos >= self.entries.len() {
             return None;
         }
@@ -215,6 +312,14 @@ impl LineHistory {
 
     pub fn redo_depth(&self) -> usize {
         self.entries.len().saturating_sub(self.pos)
+    }
+
+    pub fn compact(&mut self) {
+        self.entries.shrink_to_fit();
+        self.snapshot.lines.shrink_to_fit();
+        if let Some(anchor) = self.coalesce_anchor.as_mut() {
+            anchor.lines.shrink_to_fit();
+        }
     }
 }
 
@@ -310,6 +415,44 @@ mod tests {
         assert_eq!(redo_cursor.line, 1);
         assert_eq!(redo_cursor.col, 3);
         assert_eq!(edited, vec!["one".to_string(), "THREE".to_string()]);
+    }
+
+    #[test]
+    fn history_record_edit_span_roundtrip_replaces_known_span() {
+        let start = vec![
+            "one".to_string(),
+            "two".to_string(),
+            "three".to_string(),
+            "four".to_string(),
+        ];
+        let mut history = LineHistory::new(8, &start, 1, 0);
+
+        let mut edited = vec![
+            "one".to_string(),
+            "TWO".to_string(),
+            "THREE".to_string(),
+            "four".to_string(),
+        ];
+        assert!(history.record_edit_span(&edited, 2, 5, 1, 2, 2));
+        assert_eq!(history.undo_depth(), 1);
+
+        let undo_cursor = history.undo(&mut edited).expect("undo");
+        assert_eq!(undo_cursor.line, 1);
+        assert_eq!(undo_cursor.col, 0);
+        assert_eq!(edited, start);
+
+        let redo_cursor = history.redo(&mut edited).expect("redo");
+        assert_eq!(redo_cursor.line, 2);
+        assert_eq!(redo_cursor.col, 5);
+        assert_eq!(
+            edited,
+            vec![
+                "one".to_string(),
+                "TWO".to_string(),
+                "THREE".to_string(),
+                "four".to_string(),
+            ]
+        );
     }
 
     #[test]

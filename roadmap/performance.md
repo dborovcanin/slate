@@ -1,5 +1,11 @@
 # Performance Baselines
 
+## Scope
+
+This file is an operational/measurement reference.
+Execution backlog ownership for large-note performance lives in `roadmap/plan.md` (Architecture and Performance Review Backlog).
+
+
 This repository stores simple startup performance baselines in:
 
 - `perf/baselines/startup.json`

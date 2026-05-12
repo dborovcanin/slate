@@ -2436,7 +2436,7 @@ impl TerminalApp {
         self.render_plain_text_file = render_plain_text_file;
         self.render_file_language = render_file_language;
         self.lines = split_lines(&self.active_note.body);
-        self.joined_text_cache = Some(join_lines(&self.lines));
+        self.joined_text_cache = None;
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
         self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
@@ -2454,8 +2454,7 @@ impl TerminalApp {
         self.rebuild_wiki_link_note_suggestions_cache();
         self.wiki_link_render_cache.clear();
         self.wiki_link_line_render_cache.clear();
-        self.history
-            .reset(&self.lines, self.cursor_line, self.cursor_col);
+        self.history = super::build_history_for_note(&self.lines, self.cursor_line, self.cursor_col);
         self.fence_checkpoints.truncate(1);
         self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();
@@ -2505,6 +2504,7 @@ impl TerminalApp {
         }
         self.history
             .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+        self.maybe_compact_buffers_after_note_switch();
         Ok(())
     }
 

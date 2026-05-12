@@ -1,5 +1,11 @@
 # Multirow Table Performance Playbook
 
+## Scope
+
+This file is an operational/measurement reference.
+Execution backlog ownership for large-note performance lives in `roadmap/plan.md` (Architecture and Performance Review Backlog).
+
+
 This document defines reusable profiling scenarios and metric names for large-table and multirow-cell work.
 
 ## Goals
