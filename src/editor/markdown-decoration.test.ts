@@ -7,6 +7,7 @@ import {
   classifyMarkdownLine,
   findInlineMarkdownTokens,
   findVariableNameRanges,
+  inlineMarkerRevealSignatureAtCursor,
   tokenizeCodeLine,
 } from "./markdown-decoration.ts";
 import { ensureWasmReady } from "./wasm.ts";
@@ -66,6 +67,34 @@ test("findInlineMarkdownTokens finds rich markdown spans", () => {
   assert.ok(types.has("code"));
   assert.ok(types.has("link-text"));
   assert.ok(types.has("link-url"));
+});
+
+test("inlineMarkerRevealSignatureAtCursor treats code-span right boundary as outside", () => {
+  const lineText = "(`xx`) tail";
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 4),
+    "1-5",
+    "cursor in the inline code component should keep a reveal signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 5),
+    "",
+    "cursor at the code component right boundary should be outside",
+  );
+});
+
+test("inlineMarkerRevealSignatureAtCursor keeps wiki-link right boundary active", () => {
+  const lineText = "[[01HX4VHR]]x";
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 12),
+    "0-12:rb",
+    "wiki-link right boundary should keep edit-mode boundary signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 13),
+    "",
+    "cursor after wiki-link right boundary should clear signature",
+  );
 });
 
 test("tokenizeCodeLine marks keywords, numbers, strings, comments and symbols in fenced code", () => {

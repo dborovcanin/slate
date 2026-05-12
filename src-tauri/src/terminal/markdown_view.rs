@@ -74,7 +74,10 @@ pub fn should_reveal_inline_marker(
     else {
         return false;
     };
-    cursor_col >= from && cursor_col <= to
+    if cursor_col >= from && cursor_col < to {
+        return true;
+    }
+    cursor_col == to && matches!(marker.kind, InlineTokenType::WikiLinkMarker)
 }
 
 fn inline_tokens_for_display(text: &str) -> Vec<InlineToken> {
@@ -196,7 +199,7 @@ pub fn image_hidden_token_ranges(
                     let start = tokens[start_idx].from;
                     let end = token.to;
                     let cursor_inside = active_cursor_col
-                        .map(|col| col >= start && col <= end)
+                        .map(|col| col >= start && col < end)
                         .unwrap_or(false);
                     if !cursor_inside {
                         for image_token in &tokens[start_idx..=index] {
@@ -312,6 +315,13 @@ mod tests {
     }
 
     #[test]
+    fn collapse_markdown_line_for_cursor_treats_inline_code_right_boundary_as_outside() {
+        let (collapsed, mapped_col) = collapse_markdown_line_for_cursor("(`xx`)", 5);
+        assert_eq!(collapsed, "(xx)");
+        assert_eq!(mapped_col, 3);
+    }
+
+    #[test]
     fn wiki_link_alt_hides_source_segments_when_cursor_outside_link() {
         let line = "[[01HX4VHR#Intro|My Alt]]";
         let hidden = hidden_ranges_for_markdown_line(line, None);
@@ -360,5 +370,13 @@ mod tests {
         let line = "![diagram](./assets/plan.png) tail";
         let hidden = hidden_ranges_for_markdown_line(line, Some(12));
         assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn image_hidden_token_ranges_hide_source_at_right_boundary() {
+        let line = "![diagram](./assets/plan.png) tail";
+        let boundary = "![diagram](./assets/plan.png)".chars().count();
+        let hidden = hidden_ranges_for_markdown_line(line, Some(boundary));
+        assert_eq!(hidden, vec![(0, 2), (9, 29)]);
     }
 }

@@ -1412,7 +1412,15 @@ function selectionIntersectsTransparentMarkdownReveal(
   return lineHasTransparentMarkdownSyntax(line.text);
 }
 
-function inlineRevealComponentSignatureForCursor(
+function inlineComponentSupportsRightBoundaryReveal(
+  lineText: string,
+  range: TextRange,
+): boolean {
+  if (range.to - range.from < 4) return false;
+  return lineText.startsWith("[[", range.from) && lineText.slice(range.to - 2, range.to) === "]]";
+}
+
+export function inlineMarkerRevealSignatureAtCursor(
   lineText: string,
   cursorOffsetInLine: number,
 ): string {
@@ -1428,8 +1436,14 @@ function inlineRevealComponentSignatureForCursor(
   const ranges = cachedInlineMarkerComponentRanges(lineText);
   for (const range of ranges) {
     const signature = `${range.from}-${range.to}`;
-    if (cursorOffsetInLine >= range.from && cursorOffsetInLine <= range.to) {
+    if (cursorOffsetInLine >= range.from && cursorOffsetInLine < range.to) {
       return signature;
+    }
+    if (
+      cursorOffsetInLine === range.to
+      && inlineComponentSupportsRightBoundaryReveal(lineText, range)
+    ) {
+      return `${signature}:rb`;
     }
   }
   return "";
@@ -1445,7 +1459,7 @@ function emptySelectionRevealSignature(
     selection.from >= range.from && selection.from <= range.to
   );
   const cursorOffsetInLine = selection.from - line.from;
-  const inlineSignature = inlineRevealComponentSignatureForCursor(
+  const inlineSignature = inlineMarkerRevealSignatureAtCursor(
     line.text,
     cursorOffsetInLine,
   );
