@@ -403,7 +403,7 @@ pub fn markdown_file_path_from_note_id(note_id: &str) -> Option<PathBuf> {
     let decoded = URL_SAFE_NO_PAD.decode(encoded).ok()?;
     let decoded = String::from_utf8(decoded).ok()?;
     let path = PathBuf::from(decoded);
-    if !path.is_absolute() || !is_supported_markdown_path(&path) {
+    if !path.is_absolute() {
         return None;
     }
     Some(path)
@@ -439,9 +439,9 @@ pub fn resolve_markdown_file_path(raw: &str, cwd: &Path) -> Result<PathBuf, Stri
         cwd.join(candidate)
     };
 
-    if !is_supported_markdown_path(&absolute) {
+    if absolute.exists() && absolute.is_dir() {
         return Err(format!(
-            "Unsupported file extension for '{}'; expected markdown (.md/.markdown/.mdown/.mkd)",
+            "Cannot open directory '{}' as a text note",
             absolute.display()
         ));
     }
@@ -449,13 +449,41 @@ pub fn resolve_markdown_file_path(raw: &str, cwd: &Path) -> Result<PathBuf, Stri
     if absolute.exists() {
         std::fs::canonicalize(&absolute).map_err(|e| {
             format!(
-                "Failed to canonicalize markdown file '{}': {e}",
+                "Failed to canonicalize file '{}': {e}",
                 absolute.display()
             )
         })
     } else {
         Ok(absolute)
     }
+}
+
+pub fn syntax_language_for_path(path: &Path) -> Option<String> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let lang = match ext.as_str() {
+        "json" => "json",
+        "yaml" | "yml" => "yaml",
+        "toml" => "toml",
+        "html" | "htm" | "xhtml" => "html",
+        "xml" | "svg" => "xml",
+        "css" | "scss" | "less" => "css",
+        "js" | "mjs" | "cjs" | "jsx" | "javascript" => "js",
+        "ts" | "mts" | "cts" | "tsx" | "typescript" => "ts",
+        "rs" => "rust",
+        "py" => "python",
+        "sh" | "bash" | "zsh" | "fish" => "sh",
+        "go" => "go",
+        "java" => "java",
+        "c" | "h" | "hpp" | "cpp" | "cc" | "cxx" => "c",
+        "ini" | "cfg" | "conf" | "properties" => "toml",
+        _ => return None,
+    };
+    Some(lang.to_string())
+}
+
+pub fn syntax_language_for_note_id(note_id: &str) -> Option<String> {
+    let path = markdown_file_path_from_note_id(note_id)?;
+    syntax_language_for_path(&path)
 }
 
 fn ensure_revision_matches(
@@ -806,13 +834,25 @@ fn derive_note_title_from_body(body: &str) -> String {
     "Untitled".to_string()
 }
 
+fn modules_for_file_path(path: &Path) -> NoteModules {
+    if is_supported_markdown_path(path) {
+        return NoteModules::default();
+    }
+    NoteModules {
+        math: false,
+        table: false,
+        variables: false,
+        style: true,
+    }
+}
+
 fn note_from_markdown_path(path: &Path) -> Result<Note, String> {
     let body = read_markdown_file(path)?;
     let (created_at, updated_at) = markdown_file_timestamps(path)?;
     Ok(Note {
         id: note_id_for_markdown_file(path),
         body,
-        modules: NoteModules::default(),
+        modules: modules_for_file_path(path),
         access_mode: NoteAccessMode::None,
         is_unlocked: true,
         created_at,
@@ -965,6 +1005,43 @@ mod tests {
         let _ = fs::remove_file(markdown_path);
         drop(db);
         cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn file_source_non_markdown_notes_disable_calc_modules_and_report_syntax() {
+        let db_path = temp_db_path();
+        let db = Db::open(db_path.clone()).expect("db opens");
+        let service = NoteSourceService::new(db.clone());
+        let json_path = std::env::temp_dir().join(format!("note-source-file-{}.json", Ulid::new()));
+        fs::write(&json_path, "{\n  \"a\": 1\n}\n").expect("seed file");
+        let note_id = note_id_for_markdown_file(&json_path);
+
+        let opened = service
+            .open_note_by_id(&note_id)
+            .expect("open file note")
+            .expect("note exists");
+        assert!(!opened.modules.math);
+        assert!(!opened.modules.table);
+        assert!(!opened.modules.variables);
+        assert!(opened.modules.style);
+        assert_eq!(syntax_language_for_note_id(&note_id).as_deref(), Some("json"));
+
+        let _ = fs::remove_file(json_path);
+        drop(db);
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn resolve_markdown_file_path_rejects_directories() {
+        let dir = std::env::temp_dir().join(format!("note-source-dir-{}", Ulid::new()));
+        fs::create_dir_all(&dir).expect("mkdir");
+        let err = resolve_markdown_file_path(
+            dir.to_string_lossy().as_ref(),
+            std::env::current_dir().expect("cwd").as_path(),
+        )
+        .expect_err("directory should not resolve");
+        assert!(err.contains("Cannot open directory"));
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -193,7 +193,7 @@ fn write_command_syncs_markdown_file_backed_note() {
     let markdown_path =
         std::env::temp_dir().join(format!("note-terminal-mdfile-{}.md", Ulid::new()));
     fs::write(&markdown_path, "file body").expect("markdown seed");
-    let note_id = crate::note_id_for_markdown_file(&markdown_path);
+    let note_id = crate::note_id_for_file(&markdown_path);
     let opts = TerminalOptions {
         create_new: false,
         note_id: Some(note_id.clone()),
@@ -278,7 +278,7 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
     let markdown_path =
         std::env::temp_dir().join(format!("note-terminal-mdfile-conflict-{}.md", Ulid::new()));
     fs::write(&markdown_path, "initial").expect("markdown seed");
-    let note_id = crate::note_id_for_markdown_file(&markdown_path);
+    let note_id = crate::note_id_for_file(&markdown_path);
     let opts = TerminalOptions {
         create_new: false,
         note_id: Some(note_id),

@@ -19,15 +19,15 @@ mod commands {
     pub use super::export_impl as export;
 }
 
-pub(crate) fn note_id_for_markdown_file(path: &Path) -> String {
+pub(crate) fn note_id_for_file(path: &Path) -> String {
     app_core::note_sources::note_id_for_markdown_file(path)
 }
 
-pub(crate) fn markdown_file_path_from_note_id(note_id: &str) -> Option<PathBuf> {
+pub(crate) fn file_path_from_note_id(note_id: &str) -> Option<PathBuf> {
     app_core::note_sources::markdown_file_path_from_note_id(note_id)
 }
 
-fn resolve_markdown_file_path(raw: &str) -> Result<PathBuf, String> {
+fn resolve_text_file_path(raw: &str) -> Result<PathBuf, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("Failed to resolve current directory: {e}"))?;
     app_core::note_sources::resolve_markdown_file_path(raw, &cwd)
@@ -36,7 +36,7 @@ fn resolve_markdown_file_path(raw: &str) -> Result<PathBuf, String> {
 fn print_help() {
     println!("Slate TUI");
     println!();
-    println!("Usage: slight [OPTIONS] [markdown-file]");
+    println!("Usage: slight [OPTIONS] [file]");
     println!();
     println!("Options:");
     println!("  --new, -n           Create a new note on startup");
@@ -47,7 +47,7 @@ fn print_help() {
 
 fn parse_terminal_args(args: &[String]) -> Result<terminal::TerminalOptions, String> {
     let mut opts = terminal::TerminalOptions::default();
-    let mut startup_markdown_file: Option<PathBuf> = None;
+    let mut startup_file: Option<PathBuf> = None;
     let mut i = 0usize;
     while i < args.len() {
         match args[i].as_str() {
@@ -67,9 +67,9 @@ fn parse_terminal_args(args: &[String]) -> Result<terminal::TerminalOptions, Str
             }
             "--terminal" | "-t" => {}
             candidate => {
-                if !candidate.starts_with('-') && startup_markdown_file.is_none() {
-                    if let Ok(path) = resolve_markdown_file_path(candidate) {
-                        startup_markdown_file = Some(path);
+                if !candidate.starts_with('-') && startup_file.is_none() {
+                    if let Ok(path) = resolve_text_file_path(candidate) {
+                        startup_file = Some(path);
                         i += 1;
                         continue;
                     }
@@ -82,13 +82,13 @@ fn parse_terminal_args(args: &[String]) -> Result<terminal::TerminalOptions, Str
         i += 1;
     }
 
-    if let Some(path) = startup_markdown_file.take() {
+    if let Some(path) = startup_file.take() {
         if opts.create_new || opts.list_only || opts.note_id.is_some() {
             return Err(
-                "Cannot combine markdown file open with --new, --list, or --id".to_string(),
+                "Cannot combine file open with --new, --list, or --id".to_string(),
             );
         }
-        opts.note_id = Some(note_id_for_markdown_file(&path));
+        opts.note_id = Some(note_id_for_file(&path));
     }
 
     if !std::io::stdin().is_terminal() && !opts.list_only {

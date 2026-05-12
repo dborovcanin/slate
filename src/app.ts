@@ -68,6 +68,7 @@ import {
   modulesForNote,
   normalizeModules,
 } from "./editor/module-gating.ts";
+import { isNonMarkdownFileNoteId, syntaxLanguageForNoteId } from "./editor/file-note.ts";
 
 function moduleIndicatorText(modules: NoteModules): string {
   const labels: string[] = [];
@@ -157,17 +158,23 @@ function editorOptionsForNote(note: Note | null) {
   }
   const noteModules = modulesForNote(note, appConfig);
   const loaded = effectiveModules(noteModules, appRuntimeFlags);
+  const plainFileNote = !!note && isNonMarkdownFileNoteId(note.id);
+  const plainCodeLanguage = plainFileNote
+    ? (syntaxLanguageForNoteId(note.id) ?? "text")
+    : null;
   return {
     plainTextMode: appRuntimeFlags.plain_text_mode,
+    plainCodeLanguage,
     detachBackend: appRuntimeFlags.backend_detach,
-    disableCalc: appRuntimeFlags.calc_disable || !loaded.math,
-    disableMarkdownDecorations: appRuntimeFlags.markdown_disable || !loaded.style,
-    disableFolding: appRuntimeFlags.folding_disable,
-    disableNotify: appRuntimeFlags.notify_disable,
-    disableAutocomplete: !loaded.variables,
-    tableEnabled: loaded.table,
-    markdownAutoformat: appConfig.markdown_autoformat,
-    checklistAutoReorder: appConfig.checklist_auto_reorder,
+    disableCalc: plainFileNote || appRuntimeFlags.calc_disable || !loaded.math,
+    disableMarkdownDecorations:
+      plainFileNote || appRuntimeFlags.markdown_disable || !loaded.style,
+    disableFolding: plainFileNote || appRuntimeFlags.folding_disable,
+    disableNotify: plainFileNote || appRuntimeFlags.notify_disable,
+    disableAutocomplete: plainFileNote || !loaded.variables,
+    tableEnabled: !plainFileNote && loaded.table,
+    markdownAutoformat: plainFileNote ? false : appConfig.markdown_autoformat,
+    checklistAutoReorder: plainFileNote ? false : appConfig.checklist_auto_reorder,
     autosave: appConfig.autosave,
     formatOnSave: appConfig.format_on_save,
     vimMode: !!appConfig.vim_mode,
@@ -181,7 +188,7 @@ function editorOptionsForNote(note: Note | null) {
       }),
     onSaveError: showSaveError,
     onExportCommand: runExportCommand,
-    variablesEnabled: loaded.variables,
+    variablesEnabled: plainFileNote ? false : loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
     onClipWatchStateChange: (active: boolean) => {

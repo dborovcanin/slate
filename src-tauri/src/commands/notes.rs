@@ -65,14 +65,14 @@ fn note_defaults_from_config() -> Result<(NoteModules, Option<String>), String> 
 #[tauri::command]
 pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, String> {
     let startup_markdown = app
-        .state::<crate::StartupMarkdownFileState>()
+        .state::<crate::StartupFileState>()
         .take_startup_file();
     if let Some(path) = startup_markdown {
-        let note_id = crate::note_id_for_markdown_file(&path);
+        let note_id = crate::note_id_for_file(&path);
         return core
             .note_sources()
             .open_note_by_id(&note_id)?
-            .ok_or_else(|| "Failed to load markdown file note".to_string());
+            .ok_or_else(|| "Failed to load file note".to_string());
     }
 
     let special = app_core::config::load_special_notes_config();

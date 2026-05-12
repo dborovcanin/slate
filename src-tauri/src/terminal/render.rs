@@ -62,6 +62,8 @@ fn cached_inline_tokens(text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
 pub struct RenderContext {
     in_code_block: bool,
     code_fence_lang: Option<String>,
+    render_as_plain_code: bool,
+    forced_code_lang: Option<String>,
     palette: RenderPalette,
 }
 
@@ -71,6 +73,8 @@ impl RenderContext {
         Self {
             in_code_block: false,
             code_fence_lang: None,
+            render_as_plain_code: false,
+            forced_code_lang: None,
             palette: RenderPalette::default(),
         }
     }
@@ -80,24 +84,43 @@ impl RenderContext {
         Self {
             in_code_block: false,
             code_fence_lang: None,
+            render_as_plain_code: false,
+            forced_code_lang: None,
             palette,
         }
     }
 
+    #[cfg(test)]
+    #[allow(dead_code)]
     pub fn with_fence_state(
         in_code_block: bool,
         code_fence_lang: Option<String>,
         palette: RenderPalette,
     ) -> Self {
+        Self::with_syntax_mode(in_code_block, code_fence_lang, false, None, palette)
+    }
+
+    pub fn with_syntax_mode(
+        in_code_block: bool,
+        code_fence_lang: Option<String>,
+        render_as_plain_code: bool,
+        forced_code_lang: Option<String>,
+        palette: RenderPalette,
+    ) -> Self {
         Self {
             in_code_block,
             code_fence_lang,
+            render_as_plain_code,
+            forced_code_lang,
             palette,
         }
     }
 
     /// Skip ahead through `lines` without rendering — just track code fence state.
     pub fn advance_lines(&mut self, lines: &[String]) {
+        if self.render_as_plain_code {
+            return;
+        }
         let mut state = markdown_tokens::FenceState {
             in_code_block: self.in_code_block,
             code_fence_lang: self.code_fence_lang.clone(),
@@ -111,6 +134,9 @@ impl RenderContext {
 
     #[cfg(test)]
     pub fn advance_line(&mut self, text: &str) {
+        if self.render_as_plain_code {
+            return;
+        }
         let mut state = markdown_tokens::FenceState {
             in_code_block: self.in_code_block,
             code_fence_lang: self.code_fence_lang.clone(),
@@ -339,7 +365,13 @@ impl RenderContext {
         };
         let mut styles = vec![base_style; len];
         let mut hidden_ranges: Vec<(usize, usize)> = Vec::new();
-        if is_table_continuation_line {
+        if self.render_as_plain_code {
+            if let Some(lang) = self.forced_code_lang.as_deref() {
+                let code_tokens = markdown_tokens::tokenize_code_line(text, Some(lang));
+                apply_code_token_styles(&code_tokens, &mut styles, self.palette);
+            }
+            apply_variable_styles(&chars, &mut styles, variable_names, self.palette.variable);
+        } else if is_table_continuation_line {
             // `|>` is a structural continuation marker, not editable cell content.
             if let Some(style) = styles.get_mut(1) {
                 style.dim = true;
@@ -354,10 +386,15 @@ impl RenderContext {
                 }
             }
         }
+        let info = if self.render_as_plain_code {
+            None
+        } else {
+            Some(markdown_tokens::classify_markdown_line(text))
+        };
 
-        let info = markdown_tokens::classify_markdown_line(text);
-
-        if info.is_code_fence {
+        if self.render_as_plain_code {
+            // Skip markdown semantic styling when a file has a fixed syntax mode.
+        } else if info.as_ref().is_some_and(|line| line.is_code_fence) {
             for s in &mut styles {
                 s.dim = true;
             }
@@ -376,9 +413,10 @@ impl RenderContext {
                 markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
             apply_code_token_styles(&code_tokens, &mut styles, self.palette);
         } else {
-            apply_line_styles_from_info(&info, &mut styles);
+            let info = info.as_ref().expect("markdown info present");
+            apply_line_styles_from_info(info, &mut styles);
             hidden_ranges.extend(hidden_line_prefix_marker_ranges(
-                &info,
+                info,
                 len,
                 active_cursor_col.is_some(),
             ));
@@ -420,7 +458,7 @@ impl RenderContext {
                 s.fg = Some(self.palette.code_comment);
             }
         }
-        if is_table_row && text.contains('*') {
+        if !self.render_as_plain_code && is_table_row && text.contains('*') {
             apply_table_formula_marker_styles(&chars, &mut styles, self.palette.code_comment);
         }
 

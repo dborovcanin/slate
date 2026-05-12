@@ -830,9 +830,11 @@ impl TerminalApp {
             .real_line_for_virtual(self.scroll_line)
             .unwrap_or(self.lines.len());
         let (fence_in_code_block, fence_lang) = self.fence_state_before_line(first_real_line);
-        let mut ctx = render::RenderContext::with_fence_state(
+        let mut ctx = render::RenderContext::with_syntax_mode(
             fence_in_code_block,
             fence_lang,
+            self.render_plain_text_file,
+            self.render_file_language.clone(),
             self.render_palette,
         );
         let mut last_rendered_real = if first_real_line > 0 {

@@ -82,6 +82,19 @@ fn trim_trailing_word(text: &mut String) {
     }
 }
 
+fn file_render_syntax_for_note_id(note_id: &str) -> (bool, Option<String>) {
+    let Some(path) = app_core::note_sources::markdown_file_path_from_note_id(note_id) else {
+        return (false, None);
+    };
+    if app_core::note_sources::is_supported_markdown_path(&path) {
+        return (false, None);
+    }
+    (
+        true,
+        app_core::note_sources::syntax_language_for_path(&path),
+    )
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TerminalOptions {
     pub create_new: bool,
@@ -414,6 +427,8 @@ struct TerminalApp {
     table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
     table_format_cache: crate::editor_core::table::TableFormatCache,
     render_palette: render::RenderPalette,
+    render_plain_text_file: bool,
+    render_file_language: Option<String>,
     // Folding (real-line indexed, 0-based)
     folds: FoldingState,
     // Track which mode entered command bar from
@@ -572,6 +587,8 @@ impl TerminalApp {
 
         let note_begin = Instant::now();
         let mut active_note = select_note(db, opts, &crate::config::load_theme_config())?;
+        let (render_plain_text_file, render_file_language) =
+            file_render_syntax_for_note_id(&active_note.id);
         let loading_note = note_begin.elapsed();
 
         let lines = split_lines(&active_note.body);
@@ -777,6 +794,8 @@ impl TerminalApp {
             table_formula_segment_cache: FxHashMap::default(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
             render_palette,
+            render_plain_text_file,
+            render_file_language,
             folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,
             clipboard_watch_enabled: false,

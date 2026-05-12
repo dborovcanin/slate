@@ -45,7 +45,7 @@ pub struct CollectionMeta {
 }
 
 fn note_identity_label(note_id: &str) -> String {
-    if let Some(path) = crate::markdown_file_path_from_note_id(note_id) {
+    if let Some(path) = crate::file_path_from_note_id(note_id) {
         path.display().to_string()
     } else {
         note_id.to_string()
@@ -1073,7 +1073,7 @@ mod tests {
     #[test]
     fn note_identity_label_decodes_markdown_file_note_id_to_path() {
         let path = std::env::temp_dir().join("switcher-mdfile-test.md");
-        let note_id = crate::note_id_for_markdown_file(&path);
+        let note_id = crate::note_id_for_file(&path);
         assert_eq!(note_identity_label(&note_id), path.display().to_string());
         assert_eq!(note_identity_label("n1"), "n1".to_string());
     }

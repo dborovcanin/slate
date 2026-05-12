@@ -2431,6 +2431,10 @@ impl TerminalApp {
 
     pub(super) fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
         self.active_note = note;
+        let (render_plain_text_file, render_file_language) =
+            super::file_render_syntax_for_note_id(&self.active_note.id);
+        self.render_plain_text_file = render_plain_text_file;
+        self.render_file_language = render_file_language;
         self.lines = split_lines(&self.active_note.body);
         self.joined_text_cache = Some(join_lines(&self.lines));
         self.active_note.body = String::new();

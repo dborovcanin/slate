@@ -19,6 +19,7 @@ import {
   markdownRichTextExtensions,
   requestMarkdownDecorationRefresh,
 } from "./markdown-decoration";
+import { plainCodeSyntaxExtensions } from "./plain-code-decoration.ts";
 import {
   markdownEditingExtensions,
   runTableCellNavigationCommand,
@@ -259,6 +260,7 @@ const onUpdate = EditorView.updateListener.of((update) => {
 
 interface EditorMountOptions {
   plainTextMode?: boolean;
+  plainCodeLanguage?: string | null;
   detachBackend?: boolean;
   disableCalc?: boolean;
   disableMarkdownDecorations?: boolean;
@@ -439,12 +441,15 @@ function buildEditorExtensions(options: EditorMountOptions): {
   vimMode: boolean;
 } {
   const plainTextMode = !!options.plainTextMode;
-  const disableCalc = plainTextMode || !!options.disableCalc;
-  const disableMarkdownDecorations = plainTextMode || !!options.disableMarkdownDecorations;
-  const disableFolding = plainTextMode || !!options.disableFolding;
-  const disableNotify = plainTextMode || !!options.disableNotify;
-  const disableAutocomplete = plainTextMode || !!options.disableAutocomplete;
-  const tableEnabled = !plainTextMode && (options.tableEnabled ?? true);
+  const plainCodeLanguage = options.plainCodeLanguage?.trim() || null;
+  const plainCodeMode = !plainTextMode && plainCodeLanguage !== null;
+  const disableCalc = plainTextMode || plainCodeMode || !!options.disableCalc;
+  const disableMarkdownDecorations =
+    plainTextMode || plainCodeMode || !!options.disableMarkdownDecorations;
+  const disableFolding = plainTextMode || plainCodeMode || !!options.disableFolding;
+  const disableNotify = plainTextMode || plainCodeMode || !!options.disableNotify;
+  const disableAutocomplete = plainTextMode || plainCodeMode || !!options.disableAutocomplete;
+  const tableEnabled = !plainTextMode && !plainCodeMode && (options.tableEnabled ?? true);
   const markdownAutoformat = options.markdownAutoformat ?? true;
   const checklistAutoReorder = options.checklistAutoReorder ?? true;
   const vimMode = !!options.vimMode;
@@ -468,13 +473,18 @@ function buildEditorExtensions(options: EditorMountOptions): {
 
   if (!plainTextMode) {
     extensions.push(
+      ...plainCodeSyntaxExtensions(plainCodeLanguage),
       ...(disableMarkdownDecorations ? [] : markdownRichTextExtensions()),
       ...(disableFolding ? [] : foldingExtensions()),
-      markdownEditingExtensions({
-        autoformat: markdownAutoformat,
-        checklistAutoReorder,
-        tableEnabled,
-      }),
+      ...(plainCodeMode
+        ? []
+        : [
+            markdownEditingExtensions({
+              autoformat: markdownAutoformat,
+              checklistAutoReorder,
+              tableEnabled,
+            }),
+          ]),
       ...(() => {
         if (disableAutocomplete) return [];
         const varSource = makeVariableCompletionSource({
@@ -525,8 +535,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
       }),
-      imageImportDomHandlers(),
-      tableCellNavigationDomHandler(),
+      ...(plainCodeMode ? [] : [imageImportDomHandlers(), tableCellNavigationDomHandler()]),
       Prec.highest(keymap.of([
         {
           key: "Ctrl-w",
