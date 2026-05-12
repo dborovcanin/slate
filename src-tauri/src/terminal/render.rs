@@ -956,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn render_variable_highlighting_is_case_sensitive() {
+    fn render_variable_highlighting_is_case_insensitive() {
         let mut ctx = RenderContext::new();
         let palette = RenderPalette::default();
         let vars = vec!["daily".to_string()];
@@ -965,7 +965,7 @@ mod tests {
         assert!(exact.contains(&format!("0;1;38;5;{}", palette.variable)));
 
         let different_case = ctx.render_line("Daily note", 40, None, &[], &[], &vars);
-        assert!(!different_case.contains(&format!("0;1;38;5;{}", palette.variable)));
+        assert!(different_case.contains(&format!("0;1;38;5;{}", palette.variable)));
     }
 
     #[test]

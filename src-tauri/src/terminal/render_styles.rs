@@ -77,6 +77,12 @@ fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, us
     }
 
     let bytes = text.as_bytes();
+    // Keep byte indices stable (for style slicing) while matching variables
+    // case-insensitively, mirroring UI behavior for normalized variable names.
+    let lower_bytes = bytes
+        .iter()
+        .map(|byte| byte.to_ascii_lowercase())
+        .collect::<Vec<_>>();
     let mut matches: Vec<(usize, usize)> = Vec::new();
 
     for raw in variable_names {
@@ -84,7 +90,11 @@ fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, us
         if needle_text.is_empty() {
             continue;
         }
-        let needle = needle_text.as_bytes();
+        let needle = needle_text
+            .as_bytes()
+            .iter()
+            .map(|byte| byte.to_ascii_lowercase())
+            .collect::<Vec<_>>();
         if needle.len() > bytes.len() {
             continue;
         }
@@ -92,7 +102,8 @@ fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, us
         let mut idx = 0usize;
         while idx + needle.len() <= bytes.len() {
             let end = idx + needle.len();
-            if &bytes[idx..end] == needle && has_variable_word_boundaries(bytes, idx, end) {
+            if lower_bytes[idx..end] == needle[..] && has_variable_word_boundaries(bytes, idx, end)
+            {
                 matches.push((idx, end));
             }
             idx += 1;
