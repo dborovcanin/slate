@@ -499,6 +499,48 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
 }
 
 #[test]
+fn large_mixed_calc_note_defers_full_recompute_until_idle() {
+    let mut lines = vec!["plain".to_string(); 2_500];
+    lines[0] = "base := 2".to_string();
+    let table_start = 10usize;
+    lines[table_start] = "| value |".to_string();
+    lines[table_start + 1] = "| --- |".to_string();
+    lines[table_start + 2] = "| 3 |".to_string();
+    lines[table_start + 3] = "| :=sum_col() + base |".to_string();
+    let formula_idx = table_start + 3;
+    let body = lines.join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+
+    assert!(!app.calc_viewport_only);
+    assert!(app.calc.stale);
+    assert!(app.calc_recompute_pending);
+    assert_eq!(
+        app.calc
+            .results
+            .get(formula_idx)
+            .and_then(|value| value.as_deref()),
+        None
+    );
+
+    app.last_edit = std::time::Instant::now() - std::time::Duration::from_millis(200);
+    app.run_calc_recompute();
+
+    assert!(!app.calc.stale);
+    assert!(!app.calc_recompute_pending);
+    assert_eq!(
+        app.calc
+            .results
+            .get(formula_idx)
+            .and_then(|value| value.as_deref()),
+        Some("5")
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn initial_open_without_calc_syntax_keeps_calc_cache_lightweight() {
     let (db, app, path) = app_with_note("plain line\nanother plain line");
 

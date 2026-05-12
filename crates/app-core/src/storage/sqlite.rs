@@ -76,7 +76,6 @@ impl SqlitePool {
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
         seed_note_search_index_if_empty(&first)?;
-        check_and_heal_search_index(&first)?;
 
         let mut connections = Vec::with_capacity(pool_size.max(1));
         connections.push(first);
@@ -143,6 +142,7 @@ impl Drop for SqlitePoolGuard<'_> {
 pub struct Db {
     conn: Arc<SqlitePool>,
     note_access: Arc<NoteAccessService>,
+    search_index_checked: Arc<Mutex<bool>>,
 }
 
 impl Clone for Db {
@@ -150,6 +150,7 @@ impl Clone for Db {
         Self {
             conn: Arc::clone(&self.conn),
             note_access: Arc::clone(&self.note_access),
+            search_index_checked: Arc::clone(&self.search_index_checked),
         }
     }
 }
@@ -161,7 +162,22 @@ impl Db {
         Ok(Self {
             conn: Arc::new(conn),
             note_access: Arc::new(NoteAccessService::new()),
+            search_index_checked: Arc::new(Mutex::new(false)),
         })
+    }
+
+    fn ensure_search_index_checked(&self) -> Result<(), String> {
+        let mut checked = self
+            .search_index_checked
+            .lock()
+            .map_err(|_| "search index check lock poisoned".to_string())?;
+        if *checked {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        check_and_heal_search_index(&conn)?;
+        *checked = true;
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -1408,6 +1424,7 @@ impl Db {
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
+        self.ensure_search_index_checked()?;
         let bounded_limit = limit.clamp(1, SEARCH_LIMIT_MAX) as i64;
         let conn = self.conn.lock().unwrap();
         let results = if let Some(collection_id) = collection_id {

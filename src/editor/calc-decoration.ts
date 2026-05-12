@@ -60,6 +60,8 @@ const MAX_CHANGED_LINES_SCAN_FOR_CALC_RELEVANCE = 512;
 const MAX_VISIBLE_LINES_SCAN_FOR_CALC_RELEVANCE = 2_000;
 const CALC_EVAL_DELAY_MS = 150;
 const CALC_TABLE_EDIT_EVAL_DELAY_MS = CALC_EVAL_DELAY_MS;
+const STARTUP_DEFERRED_CALC_MIN_LINES = 2_000;
+const STARTUP_DEFERRED_CALC_DELAY_MS = 700;
 
 // Pure cache: lineText → TableFormulaSegment[]. Results are deterministic so
 // no invalidation is needed — a changed line produces a different key.
@@ -1881,7 +1883,11 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
 
     // initial evaluation
     if (shouldScheduleEval(view, false)) {
-      scheduleEval();
+      const delayMs =
+        view.state.doc.lines >= STARTUP_DEFERRED_CALC_MIN_LINES
+          ? STARTUP_DEFERRED_CALC_DELAY_MS
+          : CALC_EVAL_DELAY_MS;
+      scheduleEval(delayMs);
     } else {
       deferredEval = true;
     }

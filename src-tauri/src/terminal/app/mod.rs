@@ -609,8 +609,14 @@ impl TerminalApp {
             && !active_has_builtin_formula;
         let skip_initial_calc =
             calc_viewport_only || (!active_has_builtin_formula && !active_has_variable_assignment);
+        // Keep startup responsive for larger notes by deferring full calc
+        // evaluation to the first idle ticks after initial paint.
+        let defer_initial_full_calc = note_math_enabled
+            && lines.len() >= CALC_ASYNC_MIN_LINES
+            && active_has_builtin_formula
+            && active_has_variable_assignment;
         let calc_begin = Instant::now();
-        let calc_data = if skip_initial_calc {
+        let calc_data = if skip_initial_calc || defer_initial_full_calc {
             CalcData {
                 line_results: vec![None; lines.len()],
                 cell_results: vec![Vec::new(); lines.len()],
@@ -627,7 +633,7 @@ impl TerminalApp {
         };
         let loading_calc_engine = calc_begin.elapsed();
 
-        let line_metadata = if skip_initial_calc {
+        let line_metadata = if skip_initial_calc || defer_initial_full_calc {
             Vec::new()
         } else {
             crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(
@@ -639,7 +645,7 @@ impl TerminalApp {
                 },
             )
         };
-        let calc_dependency_index = if skip_initial_calc {
+        let calc_dependency_index = if skip_initial_calc || defer_initial_full_calc {
             None
         } else {
             crate::editor_core::calc_plan::build_calc_dependency_index(
@@ -734,16 +740,16 @@ impl TerminalApp {
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
-                stale: false,
+                stale: defer_initial_full_calc,
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,
                 pathological_window_streak: 0,
                 forced_full_recompute_remaining: 0,
             },
-            calc_recompute_pending: false,
+            calc_recompute_pending: defer_initial_full_calc,
             calc_recompute_due_at: None,
-            calc_pending_viewport_pass: false,
-            calc_pending_full_pass: false,
+            calc_pending_viewport_pass: defer_initial_full_calc,
+            calc_pending_full_pass: defer_initial_full_calc,
             calc_viewport_only,
             calc_last_view_eval_range: None,
             reminder_ghosts,

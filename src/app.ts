@@ -429,7 +429,10 @@ async function switchToNote(id: string, lineNumber?: number | null, heading?: st
     });
 }
 
-async function unlockStartupNoteIfNeeded(note: Note, summaries: NoteSummary[]): Promise<Note> {
+async function unlockStartupNoteIfNeeded(
+  note: Note,
+  summaries: readonly NoteSummary[] = [],
+): Promise<Note> {
   if (note.access_mode === "none" || note.is_unlocked) {
     return note;
   }
@@ -442,7 +445,10 @@ async function unlockStartupNoteIfNeeded(note: Note, summaries: NoteSummary[]): 
   return unlocked;
 }
 
-async function unlockStartupActiveNoteAfterMount(note: Note, summaries: NoteSummary[]) {
+async function unlockStartupActiveNoteAfterMount(
+  note: Note,
+  summaries: readonly NoteSummary[] = [],
+) {
   if (note.access_mode === "none" || note.is_unlocked) {
     return;
   }
@@ -1573,17 +1579,18 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   editorEl.style.overflow = "hidden";
   container.appendChild(editorEl);
 
-  let note = await getOrCreateNote();
-  let [summaries, config, runtimeFlags] = await Promise.all([
-    listNotesMetaFiltered(currentWorkingCollectionId(), note.id).catch(() => []),
-    Promise.resolve(configSource ?? getThemeConfigOrDefault()),
-    getRuntimeFlagsOrDefault(),
+  const notePromise = getOrCreateNote();
+  const configPromise = Promise.resolve(configSource ?? getThemeConfigOrDefault());
+  const runtimeFlagsPromise = getRuntimeFlagsOrDefault();
+  const note = await notePromise;
+  const [config, runtimeFlags] = await Promise.all([
+    configPromise,
+    runtimeFlagsPromise,
   ]);
   appConfig = config;
   appRuntimeFlags = runtimeFlags;
   startupMark("ui_data_loaded");
   state.setActiveNote(note);
-  applyNoteSummaries(summaries);
 
   createStatusBar(container);
   mountEditor(editorEl, editorOptionsForNote(note));
@@ -1625,8 +1632,16 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   });
   startActiveNoteSyncLoop();
 
+  void listNotesMetaFiltered(currentWorkingCollectionId(), note.id)
+    .then((summaries) => {
+      applyNoteSummaries(summaries);
+    })
+    .catch(() => {
+      // Keep startup non-blocking when note metadata fetch fails.
+    });
+
   // Defer unlock prompt until after mount so init can complete and the window can show.
-  void unlockStartupActiveNoteAfterMount(note, summaries).catch((error) => {
+  void unlockStartupActiveNoteAfterMount(note).catch((error) => {
     console.error("Startup unlock follow-up failed:", error);
   });
 }
