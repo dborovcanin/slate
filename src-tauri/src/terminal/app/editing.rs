@@ -467,7 +467,7 @@ impl TerminalApp {
         self.active_note.modules.style
     }
 
-    fn calc_feature_mask(&self) -> crate::editor_core::calc_plan::CalcFeatureMask {
+    pub(super) fn calc_feature_mask(&self) -> crate::editor_core::calc_plan::CalcFeatureMask {
         crate::editor_core::calc_plan::CalcFeatureMask {
             math_enabled: self.note_math_module_enabled(),
             table_enabled: self.note_table_module_enabled(),
@@ -1386,17 +1386,20 @@ impl TerminalApp {
             plan.eval_to,
             calc_mask,
         );
-        let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_cached_calc_dependency_index_and_flags(
-            self.calc.calc_dependency_index.as_ref(),
-            &self.lines,
-            plan.eval_from,
-            plan.eval_to,
-            &prev_changed_assignment_names,
-            prev_changed_had_assignment,
-            prev_changed_had_builtin_formula,
-            has_prev,
-            calc_variables_enabled,
-            calc_table_enabled,
+        let eval_window = crate::editor_core::calc_plan::decide_eval_window(
+            &crate::editor_core::calc_plan::DecideEvalWindowParams {
+                lines: &self.lines,
+                changed_from: plan.eval_from,
+                changed_to: plan.eval_to,
+                has_prev,
+                mask: calc_mask,
+                prev_changed_assignment_names: &prev_changed_assignment_names,
+                prev_changed_had_assignment,
+                prev_changed_had_builtin_formula,
+                variable_graph: None,
+                table_formula_index: None,
+            }
+            .with_calc_dependency_index(self.calc.calc_dependency_index.as_ref()),
         );
         let mut can_use_partial = eval_window.can_use_partial;
         let mut eval_from = eval_window.eval_from;

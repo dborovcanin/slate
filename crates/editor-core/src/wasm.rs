@@ -963,18 +963,29 @@ pub fn wasm_calc_decide_eval_window(
 ) -> Option<JsValue> {
     let lines = js_strings(lines)?;
     let prev_changed_lines = js_strings(prev_changed_lines)?;
-    let decision = calc_plan::decide_eval_window_with_mask(
-        &lines,
+    let mask = calc_plan::CalcFeatureMask {
+        math_enabled: true,
+        table_enabled,
+        variables_enabled,
+    };
+    let prev_changed_assignment_names =
+        calc_plan::collect_assignment_names_with_mask(&prev_changed_lines, mask);
+    let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
+        || calc_plan::contains_variable_assignment_with_mask(&prev_changed_lines, mask);
+    let prev_changed_had_builtin_formula =
+        calc_plan::contains_builtin_formula_with_mask(&prev_changed_lines, mask);
+    let decision = calc_plan::decide_eval_window(&calc_plan::DecideEvalWindowParams {
+        lines: &lines,
         changed_from,
         changed_to,
-        &prev_changed_lines,
         has_prev,
-        calc_plan::CalcFeatureMask {
-            math_enabled: true,
-            table_enabled,
-            variables_enabled,
-        },
-    );
+        mask,
+        prev_changed_assignment_names: &prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        variable_graph: None,
+        table_formula_index: None,
+    });
     calc_eval_window_decision_to_js(&decision)
 }
 

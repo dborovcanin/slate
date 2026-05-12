@@ -1805,15 +1805,6 @@ fn table_range_maybe_impacts_formulas(
         .unwrap_or(false)
 }
 
-fn formula_dependency_window(
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    mask: CalcFeatureMask,
-) -> Option<(usize, usize)> {
-    formula_dependency_window_with_cached_index(None, lines, changed_from, changed_to, mask)
-}
-
 fn formula_dependency_window_with_cached_index(
     table_index: Option<&TableFormulaDependencyIndex>,
     lines: &[String],
@@ -2050,203 +2041,40 @@ fn variable_dependency_window_with_cached_graph(
     )
 }
 
-pub fn decide_eval_window(
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    prev_changed_lines: &[String],
-    has_prev: bool,
-    variables_enabled: bool,
-) -> CalcEvalWindowDecision {
-    decide_eval_window_with_mask(
-        lines,
-        changed_from,
-        changed_to,
-        prev_changed_lines,
-        has_prev,
-        CalcFeatureMask {
-            math_enabled: true,
-            table_enabled: true,
-            variables_enabled,
-        },
-    )
+pub struct DecideEvalWindowParams<'a> {
+    pub lines: &'a [String],
+    pub changed_from: usize,
+    pub changed_to: usize,
+    pub has_prev: bool,
+    pub mask: CalcFeatureMask,
+    pub prev_changed_assignment_names: &'a [String],
+    pub prev_changed_had_assignment: bool,
+    pub prev_changed_had_builtin_formula: bool,
+    pub variable_graph: Option<&'a VariableDependencyGraph>,
+    pub table_formula_index: Option<&'a TableFormulaDependencyIndex>,
 }
 
-pub fn decide_eval_window_with_mask(
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    prev_changed_lines: &[String],
-    has_prev: bool,
-    mask: CalcFeatureMask,
-) -> CalcEvalWindowDecision {
-    let prev_changed_assignment_names =
-        collect_assignment_names_with_mask(prev_changed_lines, mask);
-    let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
-        || contains_variable_assignment_with_mask(prev_changed_lines, mask);
-    let prev_changed_had_builtin_formula =
-        contains_builtin_formula_with_mask(prev_changed_lines, mask);
+impl<'a> DecideEvalWindowParams<'a> {
+    pub fn with_calc_dependency_index(mut self, dep_index: Option<&'a CalcDependencyIndex>) -> Self {
+        self.variable_graph = dep_index.and_then(|d| d.variable_graph.as_ref());
+        self.table_formula_index = dep_index.and_then(|d| d.table_formula_index.as_ref());
+        self
+    }
+}
+
+pub fn decide_eval_window(params: &DecideEvalWindowParams) -> CalcEvalWindowDecision {
+    let lines = params.lines;
+    let mask = params.mask;
+    let has_prev = params.has_prev;
+    let prev_changed_assignment_names = params.prev_changed_assignment_names;
+    let prev_changed_had_assignment = params.prev_changed_had_assignment;
+    let prev_changed_had_builtin_formula = params.prev_changed_had_builtin_formula;
+    let variable_graph = params.variable_graph;
+    let table_formula_index = params.table_formula_index;
 
     let line_count = lines.len();
-    let mut eval_from = changed_from.min(line_count);
-    let mut eval_to = changed_to.min(line_count).max(eval_from);
-
-    let changed_lines: &[String] = lines.get(eval_from..eval_to).unwrap_or(&[]);
-    let touches_any_assignment = mask.variables_active()
-        && (contains_variable_assignment_with_mask(changed_lines, mask)
-            || prev_changed_had_assignment);
-    let touches_builtin_formula =
-        contains_builtin_formula_with_mask(changed_lines, mask) || prev_changed_had_builtin_formula;
-
-    if !has_prev {
-        return CalcEvalWindowDecision {
-            eval_from: 0,
-            eval_to: line_count,
-            touches_any_assignment,
-            touches_builtin_formula,
-            can_use_partial: false,
-        };
-    }
-
-    if touches_any_assignment {
-        if let Some((from, to)) = variable_dependency_window(
-            lines,
-            eval_from,
-            eval_to,
-            &prev_changed_assignment_names,
-            prev_changed_had_assignment,
-            mask,
-        ) {
-            eval_from = eval_from.min(from);
-            eval_to = eval_to.max(to);
-        } else if prev_changed_had_assignment {
-            eval_from = 0;
-            eval_to = line_count;
-        }
-    }
-
-    let maybe_formula_deps = touches_builtin_formula
-        || prev_changed_had_builtin_formula
-        || table_range_maybe_impacts_formulas(lines, eval_from, eval_to, mask);
-    if maybe_formula_deps {
-        if let Some((from, to)) = formula_dependency_window(lines, eval_from, eval_to, mask) {
-            eval_from = eval_from.min(from);
-            eval_to = eval_to.max(to);
-        } else if touches_builtin_formula || prev_changed_had_builtin_formula {
-            eval_from = 0;
-            eval_to = line_count;
-        }
-    }
-
-    CalcEvalWindowDecision {
-        eval_from,
-        eval_to,
-        touches_any_assignment,
-        touches_builtin_formula,
-        can_use_partial: true,
-    }
-}
-
-pub fn decide_eval_window_with_flags(
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    prev_changed_assignment_names: &[String],
-    prev_changed_had_assignment: bool,
-    prev_changed_had_builtin_formula: bool,
-    has_prev: bool,
-    variables_enabled: bool,
-    table_enabled: bool,
-) -> CalcEvalWindowDecision {
-    decide_eval_window_with_cached_variable_graph_and_flags(
-        None,
-        lines,
-        changed_from,
-        changed_to,
-        prev_changed_assignment_names,
-        prev_changed_had_assignment,
-        prev_changed_had_builtin_formula,
-        has_prev,
-        variables_enabled,
-        table_enabled,
-    )
-}
-
-pub fn decide_eval_window_with_cached_variable_graph_and_flags(
-    variable_graph: Option<&VariableDependencyGraph>,
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    prev_changed_assignment_names: &[String],
-    prev_changed_had_assignment: bool,
-    prev_changed_had_builtin_formula: bool,
-    has_prev: bool,
-    variables_enabled: bool,
-    table_enabled: bool,
-) -> CalcEvalWindowDecision {
-    decide_eval_window_with_cached_dependency_indexes_and_flags(
-        variable_graph,
-        None,
-        lines,
-        changed_from,
-        changed_to,
-        prev_changed_assignment_names,
-        prev_changed_had_assignment,
-        prev_changed_had_builtin_formula,
-        has_prev,
-        variables_enabled,
-        table_enabled,
-    )
-}
-
-pub fn decide_eval_window_with_cached_calc_dependency_index_and_flags(
-    calc_dependency_index: Option<&CalcDependencyIndex>,
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    prev_changed_assignment_names: &[String],
-    prev_changed_had_assignment: bool,
-    prev_changed_had_builtin_formula: bool,
-    has_prev: bool,
-    variables_enabled: bool,
-    table_enabled: bool,
-) -> CalcEvalWindowDecision {
-    decide_eval_window_with_cached_dependency_indexes_and_flags(
-        calc_dependency_index.and_then(|cached| cached.variable_graph.as_ref()),
-        calc_dependency_index.and_then(|cached| cached.table_formula_index.as_ref()),
-        lines,
-        changed_from,
-        changed_to,
-        prev_changed_assignment_names,
-        prev_changed_had_assignment,
-        prev_changed_had_builtin_formula,
-        has_prev,
-        variables_enabled,
-        table_enabled,
-    )
-}
-
-pub fn decide_eval_window_with_cached_dependency_indexes_and_flags(
-    variable_graph: Option<&VariableDependencyGraph>,
-    table_formula_index: Option<&TableFormulaDependencyIndex>,
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    prev_changed_assignment_names: &[String],
-    prev_changed_had_assignment: bool,
-    prev_changed_had_builtin_formula: bool,
-    has_prev: bool,
-    variables_enabled: bool,
-    table_enabled: bool,
-) -> CalcEvalWindowDecision {
-    let line_count = lines.len();
-    let mut eval_from = changed_from.min(line_count);
-    let mut eval_to = changed_to.min(line_count).max(eval_from);
-    let mask = CalcFeatureMask {
-        math_enabled: true,
-        table_enabled,
-        variables_enabled,
-    };
+    let mut eval_from = params.changed_from.min(line_count);
+    let mut eval_to = params.changed_to.min(line_count).max(eval_from);
 
     let changed_lines: &[String] = lines.get(eval_from..eval_to).unwrap_or(&[]);
     let touches_any_assignment = mask.variables_active()
@@ -2309,6 +2137,34 @@ pub fn decide_eval_window_with_cached_dependency_indexes_and_flags(
         touches_builtin_formula,
         can_use_partial: true,
     }
+}
+
+/// Convenience wrapper for callers that have raw `prev_changed_lines` rather than precomputed flags.
+pub fn decide_eval_window_with_mask(
+    lines: &[String],
+    changed_from: usize,
+    changed_to: usize,
+    prev_changed_lines: &[String],
+    has_prev: bool,
+    mask: CalcFeatureMask,
+) -> CalcEvalWindowDecision {
+    let prev_changed_assignment_names = collect_assignment_names_with_mask(prev_changed_lines, mask);
+    let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
+        || contains_variable_assignment_with_mask(prev_changed_lines, mask);
+    let prev_changed_had_builtin_formula =
+        contains_builtin_formula_with_mask(prev_changed_lines, mask);
+    decide_eval_window(&DecideEvalWindowParams {
+        lines,
+        changed_from,
+        changed_to,
+        has_prev,
+        mask,
+        prev_changed_assignment_names: &prev_changed_assignment_names,
+        prev_changed_had_assignment,
+        prev_changed_had_builtin_formula,
+        variable_graph: None,
+        table_formula_index: None,
+    })
 }
 
 pub fn should_schedule_calc_eval(
@@ -2894,7 +2750,7 @@ mod tests {
             "x".to_string(),
         ];
         let prev_changed = vec!["a := 0".to_string()];
-        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 4);
@@ -2910,7 +2766,7 @@ mod tests {
             "x".to_string(),
         ];
         let prev_changed = vec!["a := 1".to_string()];
-        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 3);
@@ -2926,7 +2782,7 @@ mod tests {
             "| total |  | :=sum_col() |".to_string(),
             "| grand |  | :=sum_col() |".to_string(),
         ];
-        let decision = decide_eval_window(&lines, 3, 4, &[], true, true);
+        let decision = decide_eval_window_with_mask(&lines, 3, 4, &[], true, CalcFeatureMask::default());
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 3);
         assert_eq!(decision.eval_to, 6);
@@ -2941,7 +2797,7 @@ mod tests {
             "| a | 10 | :=sum_col() * var |".to_string(),
         ];
         let prev_changed = vec!["var := 0.4".to_string()];
-        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 4);
@@ -2957,7 +2813,7 @@ mod tests {
             "| total | :=sum_col() | :=sum_col() * var |".to_string(),
         ];
         let prev_changed = vec!["var := 0.4".to_string()];
-        let decision = decide_eval_window(&lines, 0, 1, &prev_changed, true, true);
+        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 5);
@@ -2999,8 +2855,18 @@ mod tests {
             "| c | 0 | :=(1,2) + (2,2) |".to_string(),
         ];
         // Edit first data row line; formula row should be included in eval window.
-        let decision =
-            decide_eval_window_with_mask(&lines, 2, 3, &[], true, CalcFeatureMask::default());
+        let decision = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 2,
+            changed_to: 3,
+            has_prev: true,
+            mask: CalcFeatureMask::default(),
+            prev_changed_assignment_names: &[],
+            prev_changed_had_assignment: false,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: None,
+            table_formula_index: None,
+        });
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 2);
         assert_eq!(decision.eval_to, 5);
@@ -3016,8 +2882,18 @@ mod tests {
             "| c | 3 | :=(2,3) + 1 |".to_string(),
         ];
         // Change row 1; row 2 depends on row 1, and row 3 depends on row 2.
-        let decision =
-            decide_eval_window_with_mask(&lines, 2, 3, &[], true, CalcFeatureMask::default());
+        let decision = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 2,
+            changed_to: 3,
+            has_prev: true,
+            mask: CalcFeatureMask::default(),
+            prev_changed_assignment_names: &[],
+            prev_changed_had_assignment: false,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: None,
+            table_formula_index: None,
+        });
         assert_eq!(decision.eval_from, 2);
         assert_eq!(decision.eval_to, 5);
     }
@@ -3037,29 +2913,30 @@ mod tests {
         sync_variable_dependency_graph(&mut graph, &lines, 1, 2, mask);
 
         let prev_changed_assignment_names = vec!["b".to_string()];
-        let decision_cached = decide_eval_window_with_cached_variable_graph_and_flags(
-            graph.as_ref(),
-            &lines,
-            1,
-            2,
-            &prev_changed_assignment_names,
-            true,
-            false,
-            true,
-            true,
-            true,
-        );
-        let decision_uncached = decide_eval_window_with_flags(
-            &lines,
-            1,
-            2,
-            &prev_changed_assignment_names,
-            true,
-            false,
-            true,
-            true,
-            true,
-        );
+        let decision_cached = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 1,
+            changed_to: 2,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &prev_changed_assignment_names,
+            prev_changed_had_assignment: true,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: graph.as_ref(),
+            table_formula_index: None,
+        });
+        let decision_uncached = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 1,
+            changed_to: 2,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &prev_changed_assignment_names,
+            prev_changed_had_assignment: true,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: None,
+            table_formula_index: None,
+        });
         assert_eq!(decision_cached, decision_uncached);
     }
 
@@ -3077,29 +2954,30 @@ mod tests {
         sync_variable_dependency_graph(&mut graph, &lines, 1, 2, mask);
 
         let prev_changed_assignment_names = vec!["x".to_string()];
-        let decision_cached = decide_eval_window_with_cached_variable_graph_and_flags(
-            graph.as_ref(),
-            &lines,
-            1,
-            2,
-            &prev_changed_assignment_names,
-            true,
-            false,
-            true,
-            true,
-            true,
-        );
-        let decision_uncached = decide_eval_window_with_flags(
-            &lines,
-            1,
-            2,
-            &prev_changed_assignment_names,
-            true,
-            false,
-            true,
-            true,
-            true,
-        );
+        let decision_cached = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 1,
+            changed_to: 2,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &prev_changed_assignment_names,
+            prev_changed_had_assignment: true,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: graph.as_ref(),
+            table_formula_index: None,
+        });
+        let decision_uncached = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 1,
+            changed_to: 2,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &prev_changed_assignment_names,
+            prev_changed_had_assignment: true,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: None,
+            table_formula_index: None,
+        });
         assert_eq!(decision_cached, decision_uncached);
     }
 
@@ -3115,21 +2993,30 @@ mod tests {
         let mask = CalcFeatureMask::default();
         let table_index = build_table_formula_dependency_index(&lines, mask);
 
-        let decision_cached = decide_eval_window_with_cached_dependency_indexes_and_flags(
-            None,
-            table_index.as_ref(),
-            &lines,
-            2,
-            3,
-            &[],
-            false,
-            false,
-            true,
-            true,
-            true,
-        );
-        let decision_uncached =
-            decide_eval_window_with_flags(&lines, 2, 3, &[], false, false, true, true, true);
+        let decision_cached = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 2,
+            changed_to: 3,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &[],
+            prev_changed_had_assignment: false,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: None,
+            table_formula_index: table_index.as_ref(),
+        });
+        let decision_uncached = decide_eval_window(&DecideEvalWindowParams {
+            lines: &lines,
+            changed_from: 2,
+            changed_to: 3,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &[],
+            prev_changed_had_assignment: false,
+            prev_changed_had_builtin_formula: false,
+            variable_graph: None,
+            table_formula_index: None,
+        });
         assert_eq!(decision_cached, decision_uncached);
     }
 

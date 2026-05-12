@@ -180,18 +180,15 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-12 11:27am GMT+2
+# [slate] recent context, 2026-05-12 12:43pm GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (19,060t read) | 1,667,414t work | 99% savings
+Stats: 50 obs (16,799t read) | 701,091t work | 98% savings
 
-### Apr 30, 2026
-S210 Architecture and performance review of the Slate project — code only, ignoring markdown and tests (Apr 30, 12:23 AM)
 ### May 5, 2026
-S227 Table cursor navigation improvements — implement Obsidian-like behavior for arrow keys in/out of tables with vim insert mode, including cross-cell and table boundary navigation (May 5, 12:19 PM)
 S228 Implement Obsidian-like table cursor navigation for markdown tables in UI and TUI modes, with arrow keys behaving like normal text movement but constrained by table structure (May 5, 10:46 PM)
 S229 Table cursor navigation overhaul — Obsidian-like behavior for UI editor with cross-cell arrow wrapping, shift+arrow cell selection, and scroll/artifact fixes (May 5, 10:55 PM)
 S230 Obsidian-style table cursor navigation in rich table UI — all secondary fixes completed, tests passing (May 5, 11:23 PM)
@@ -199,61 +196,62 @@ S231 Table cursor navigation UX overhaul — Obsidian-style arrow key behavior w
 ### May 6, 2026
 S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:02 AM)
 S233 Review last 40 commits and explore potential improvements in the slate project (May 6, 12:12 AM)
-### May 11, 2026
-285 1:11p 🟣 TableFormatCache Gains Hit/Miss Instrumentation for Parsed Row Cache
-287 1:12p 🔵 Slate Project Architecture: Tauri App with Shared Rust Core
-288 " 🟣 New table-perf Binary: Comprehensive Multi-Scenario Table Performance Benchmark
-290 " 🔵 Table Implementation: UI is Pure WASM Delegation, TUI Has Thread-Local Cache Layer
-291 " 🔵 Table Core: Multi-Level Caching for Parse, Format, and Logical Row Structure
-292 " 🔵 TUI Table Cell Cache Uses Linear Scan on Cache Miss Path
-289 1:13p ✅ serde_json Promoted from dev-dependencies to dependencies in src-tauri
 ### May 12, 2026
-293 8:48a 🔵 Slate Project: Last 40 Commits Overview
-294 8:49a 🔵 Slate Project Architecture: Tauri + Rust Backend + TypeScript Frontend
-295 " 🔵 Slate Hotspot Files: Most Frequently Changed in Last 40 Commits
-296 8:50a 🔄 Table Cell Parsing Refactored: Escaped Pipe Support and Stable Autoformat Deferral
-297 " 🔄 calc_plan.rs: VariableDependencyGraph Replaces Simple Struct with Full Incremental Graph
-298 " 🟣 PDF Export Engine: Custom Rust Implementation with Full UTF-8 and Table Support
-299 " 🔵 Vim Mode: Full CodeMirror Integration with WASM Core and Macro/Undo Support
-300 8:51a 🟣 Vim Core: Change Operator, Macros (qa/@), and C Keymap Added
-301 " 🟣 Macro System Implemented in Both TUI (Rust) and UI (TypeScript) Layers
-302 " 🟣 TUI Calc: Pathological Window Detection Forces Periodic Full Recomputes
-303 " 🔵 PDF Export Color System: Luma-Based Normalization for Print-Safe Palette
-304 " 🔵 Remaining std::collections::HashMap Usage — Potential FxHashMap Migration Opportunity
 S234 Evaluate items 1, 4, and 6 from a task list; user challenged item 1 (macros), leading to code investigation and plan revision (May 12, 8:52 AM)
-305 8:56a 🔵 Macros Behave Better in TUI Than in UI
-306 " 🔵 Vim Macro System Lives Entirely in TUI Layer of Slate
-307 8:57a 🔵 rustc_hash / FxHashMap Not Yet a Dependency in Any Slate Crate
-308 " 🔵 rustc-hash Is a Transitive Dep; std::collections::HashMap Used in 4 TUI Files
-309 " 🔵 FxHashMap Migration Scope: 4 Files in src-tauri, Dependency Only Missing There
-310 8:58a 🔵 FxHashMap Migration Scope Wider Than Expected: app-core and export.rs Also Use HashMap
-311 " 🔵 PDF Glyph Width Uses Font Factor Scaling, Not Real ttf-parser Advance Widths
-312 " 🔵 PDF Export Uses Flat DW=1000 for All Glyphs; No Per-Glyph Width Array Emitted
-313 8:59a 🔵 editor-core/markdown_tokens.rs Uses std::collections::HashSet
-314 " 🔵 engine.rs Explicitly Uses DefaultHasher — Cannot Be Fully Swapped to FxHash
-315 9:00a 🔵 command_search_switcher.rs Uses Inline std::collections::HashSet in collect()
-316 9:01a ✅ Added rustc-hash = "2" to src-tauri/Cargo.toml
-317 " 🟣 folding_state.rs Fully Migrated to FxHashSet; rustc-hash Added to app-core
-318 " 🟣 render.rs InlineTokenCache Migrated to FxHashMap; One ::new() → ::default() Remains
-319 " 🟣 render.rs and imap.rs Fully Migrated to Fx Collections
-320 9:03a 🔄 Migrated calc engine HashMap usage to FxHashMap/FxHasher
-321 9:04a 🔄 Replaced std::collections::HashSet with rustc_hash::FxHashSet in markdown_tokens.rs
-322 " 🔵 FxHashMap lacks ::new() — must use ::default() after rustc_hash migration
-323 " 🔵 Exact compilation errors after FxHashMap migration: export.rs and command_search_switcher.rs
-324 " 🔄 Migrated reminder_helpers.rs imports from std HashMap/HashSet to FxHashMap/FxHashSet
-325 " 🔄 Fully migrated reminder_helpers.rs to FxHashMap/FxHashSet — one HashMap::with_capacity remains
-326 9:05a 🔄 Fixed all FxHashMap::new() calls in export.rs — replaced with ::default()
-327 " 🔴 FxHashMap/FxHashSet migration compiles cleanly across workspace
-328 9:07a 🟣 PDF Export: Accurate Per-Character Width Measurement Using AFM Metrics and Font Advances
-329 " 🔴 Fixed Invalid std::collections::FxHashMap Path in calc/engine.rs Tests
-330 " 🔴 PDF Export Test: FxHashMap::<String, f32>::new() Turbofish Fails at Compile Time
-S235 Review last 40 commits and implement improvements — accurate per-character PDF glyph widths and FxHashMap migration (May 12, 9:10 AM)
-331 9:17a 🔵 Slate Vim Mode: VimPending Enum and State Machine Architecture
-332 " 🔵 Slate Tauri Commands Module Structure
-333 9:18a 🔵 Vim Dispatch in vim.rs: Massive Boilerplate Pattern Identified as Refactor Target
-334 " 🟣 Added ChangeTill, ChangeInner, ChangeAround Pending States to Vim Mode
-335 " 🟣 Completed Change Text Object Dispatch: ciw, ca|, ctX, etc. Now Fully Wired
+S235 Review last 40 commits and implement improvements — accurate per-character PDF glyph widths and FxHashMap migration (May 12, 8:56 AM)
+S236 Investigate and fix pre-existing test failure, then plan export.rs refactor into three files (May 12, 9:10 AM)
+342 11:58a 🔵 Pre-Existing Test Failure in execute_terminal_perf_on_and_status_toggle_runtime_trace_state
+343 " 🔵 Failing Test: app_with_note Initializes perf_trace.enabled as True
+344 11:59a 🔵 Perf Test Failure Root Cause: App Reads Live perf Config from Disk at Init
+345 " 🔵 Perf Test Failure: Developer's Local Config File Has perf.enabled=true
+346 " 🔵 Perf Test Failure Confirmed Pre-Existing Across All Recent Commits
+347 " 🔵 WIP Changes on main Branch: AGENTS.md and vim.rs Modified
+348 " 🔵 app_with_note Test Helper Defined in Parent Test Module via use super::*
+349 12:00p 🔵 Terminal App Test Suite File Structure
+350 " 🔵 app_with_note Helper Calls TerminalApp::new_with_startup_metrics Without Overriding perf_trace
+351 " 🔴 Fixed Perf Trace Test Isolation in app_with_note Helper
+352 " 🔴 Perf Trace Test Isolation Fix Verified — Test Now Passes
+353 12:01p 🔴 Full Test Suite Now Green — 328 Passed, 0 Failed
+354 12:03p 🔵 VimIntent Has ChangeTill, ChangeInner, ChangeAround Already Defined
+355 " 🔵 Vim Change Text-Objects Fully Wired in vim.rs State Machine
+356 12:04p 🔵 decide_eval_window API Family in calc_plan.rs — Incremental Calc Dependency System
+357 " 🔵 decide_eval_window Callers: WASM GUI, Terminal App Editing, and Startup Benchmark
+S237 Code analysis and refactor planning for slate: vim text-objects, export.rs split, and decide_eval_window API consolidation (May 12, 12:04 PM)
+358 12:05p 🔵 PDF Unicode Font Loading: OnceLock Cache with SLATE_PDF_UNICODE_FONT Env Override
+359 12:07p 🔵 serialize_pdf Calls resolve_unicode_pdf_font_asset Directly — Key Cross-Module Dependency
+360 " 🔵 commands/mod.rs: export Module Is Always Compiled (No gui Feature Gate)
+361 " 🔵 render_markdown_to_pages Signature and Internal Dependencies
+362 12:08p 🔵 char_draw_width Calls resolve_unicode_pdf_font_asset — Confirms Cross-Module Dependency in Layout
+363 " 🔵 Test Module in export.rs Spans All Three Planned Split Layers
+364 12:10p 🔵 build_markdown_pdf Is the Orchestrator Between All Three Split Layers
+365 12:11p 🔄 export.rs Split Begun: Converted to export/mod.rs Directory Module
+366 12:12p 🔄 pdf_style.rs Created — First File of export.rs Split
+367 12:19p 🔄 Created pdf_layout.rs — second module of the export.rs split
+368 12:23p 🔵 Serializer section of mod.rs confirmed to remain in mod.rs after split
+369 12:26p 🔄 PDF Export Module Split into pdf_style and pdf_layout Submodules
+370 12:31p 🔵 Build Error: `slight` Binary References Deleted `export.rs`
+371 " 🔵 `slight` Binary Uses Explicit `#[path]` Attribute to Include `commands/export.rs`
+372 " 🔴 Fixed `slight` Binary Build: Updated `#[path]` for Refactored Export Module
+373 " 🔴 Slate Build Now Succeeds After Export Module Refactor
+374 " 🔵 Flagged "Unused" Imports in `export/mod.rs` Are Actually Used in Test Code Only
+375 12:33p 🔵 Top-Level Imports in `export/mod.rs` Are Unused in Production Code — Tests Already Import Via Globs
+376 " 🔵 Confirmed Which `pdf_layout` Imports Are Used in Production vs. Tests Only
+377 12:34p 🔵 Previous Grep Had a Filtering Bug — `PDF_PAGE_WIDTH_PT` and `PDF_PAGE_HEIGHT_PT` ARE Used in Production
+378 " 🔴 Cleaned Up Stale Top-Level Imports in `export/mod.rs` After Module Refactor
+379 " ⚖️ Attempted Workaround for `PdfRgbColor` Unused Import Warning Using Dummy Re-export
+380 12:35p 🔵 `PdfRgbColor` Is Part of the Tauri API Contract Used by the TypeScript Frontend
+381 " 🔵 Three Remaining Compiler Warnings After Import Cleanup
+382 " 🔵 `render_plain_wrapped_text` Is Defined but Never Called Anywhere
+383 " 🔵 `render_plain_wrapped_text` Is a Thin Wrapper Around `render_styled_block` With No Callers
+384 12:41p ✅ Widened visibility of PdfUnicodeFontAsset to pub(crate)
+385 12:42p ✅ PdfUnicodeFontAsset fields widened to pub(crate)
+387 " ✅ glyph_advances field promoted to pub(crate) on PdfUnicodeFontAsset
+386 " ⚖️ Tags and Note Creation: Keep Simple and Backward Compatible
+388 " ✅ PdfUnicodeFontAsset fully promoted to pub(crate) — all fields now crate-visible
+389 " ✅ resolve_unicode_pdf_font_asset promoted to pub(crate) in export/mod.rs
+390 " ✅ Suppressed unused import warning for PdfRgbColor re-export in export/mod.rs
+391 12:43p ✅ slate crate builds cleanly with zero warnings after PDF font visibility refactor
 
-Access 1667k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 701k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 

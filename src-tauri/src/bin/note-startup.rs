@@ -3,9 +3,8 @@ use app_core::config;
 use app_core::storage::Note;
 use app_core::AppCore;
 use editor_core::calc_plan::{
-    build_calc_dependency_index, decide_eval_window_with_cached_calc_dependency_index_and_flags,
-    decide_eval_window_with_flags, line_metadata_with_mask, sync_calc_dependency_index,
-    CalcFeatureMask,
+    build_calc_dependency_index, decide_eval_window, line_metadata_with_mask,
+    sync_calc_dependency_index, CalcFeatureMask, DecideEvalWindowParams,
 };
 use std::fmt::Write as _;
 use std::time::Instant;
@@ -103,17 +102,20 @@ fn collect_note_calc_marks(probe: &mut Probe, note: &Note) {
         .unwrap_or(false);
 
     let cached_started = Instant::now();
-    let _cached = decide_eval_window_with_cached_calc_dependency_index_and_flags(
-        dep_index.as_ref(),
-        &lines,
-        changed_from,
-        changed_to,
-        &prev_assignment_names,
-        prev_had_assignment,
-        prev_had_builtin_formula,
-        true,
-        mask.variables_enabled,
-        mask.table_enabled,
+    let _cached = decide_eval_window(
+        &DecideEvalWindowParams {
+            lines: &lines,
+            changed_from,
+            changed_to,
+            has_prev: true,
+            mask,
+            prev_changed_assignment_names: &prev_assignment_names,
+            prev_changed_had_assignment: prev_had_assignment,
+            prev_changed_had_builtin_formula: prev_had_builtin_formula,
+            variable_graph: None,
+            table_formula_index: None,
+        }
+        .with_calc_dependency_index(dep_index.as_ref()),
     );
     probe.mark_ms(
         "note_calc_eval_window_cached_ms",
@@ -121,17 +123,18 @@ fn collect_note_calc_marks(probe: &mut Probe, note: &Note) {
     );
 
     let uncached_started = Instant::now();
-    let _uncached = decide_eval_window_with_flags(
-        &lines,
+    let _uncached = decide_eval_window(&DecideEvalWindowParams {
+        lines: &lines,
         changed_from,
         changed_to,
-        &prev_assignment_names,
-        prev_had_assignment,
-        prev_had_builtin_formula,
-        true,
-        mask.variables_enabled,
-        mask.table_enabled,
-    );
+        has_prev: true,
+        mask,
+        prev_changed_assignment_names: &prev_assignment_names,
+        prev_changed_had_assignment: prev_had_assignment,
+        prev_changed_had_builtin_formula: prev_had_builtin_formula,
+        variable_graph: None,
+        table_formula_index: None,
+    });
     probe.mark_ms(
         "note_calc_eval_window_uncached_ms",
         uncached_started.elapsed().as_secs_f64() * 1000.0,

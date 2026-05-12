@@ -463,16 +463,19 @@ fn huge_table_formula_note_100k_uses_minimal_incremental_eval_window() {
     let prev_changed_had_builtin_formula = prev_changed_slice
         .iter()
         .any(|meta| meta.has_builtin_formula);
-    let eval_window = crate::editor_core::calc_plan::decide_eval_window_with_flags(
-        &app.lines,
-        plan.eval_from,
-        plan.eval_to,
-        &prev_changed_assignment_names,
-        prev_changed_had_assignment,
-        prev_changed_had_builtin_formula,
-        !app.calc.prev_line_metadata.is_empty(),
-        app.calc_variables_enabled(),
-        app.note_table_module_enabled(),
+    let eval_window = crate::editor_core::calc_plan::decide_eval_window(
+        &crate::editor_core::calc_plan::DecideEvalWindowParams {
+            lines: &app.lines,
+            changed_from: plan.eval_from,
+            changed_to: plan.eval_to,
+            has_prev: !app.calc.prev_line_metadata.is_empty(),
+            mask: app.calc_feature_mask(),
+            prev_changed_assignment_names: &prev_changed_assignment_names,
+            prev_changed_had_assignment,
+            prev_changed_had_builtin_formula,
+            variable_graph: None,
+            table_formula_index: None,
+        },
     );
     assert!(
         eval_window.eval_to.saturating_sub(eval_window.eval_from) <= 12,

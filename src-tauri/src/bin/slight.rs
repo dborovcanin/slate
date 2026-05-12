@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 mod config;
 #[path = "../editor_core/mod.rs"]
 pub mod editor_core;
-#[path = "../commands/export.rs"]
+#[path = "../commands/export/mod.rs"]
 pub mod export_impl;
 #[path = "../startup_log.rs"]
 mod startup_log;
