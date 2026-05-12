@@ -68,7 +68,7 @@ fn list_terminal_command_suggestions(
     let seen = core
         .iter()
         .map(|entry| entry.value.clone())
-        .collect::<std::collections::HashSet<_>>();
+        .collect::<rustc_hash::FxHashSet<_>>();
     core.extend(
         perf.into_iter()
             .filter(|entry| !seen.contains(&entry.value)),

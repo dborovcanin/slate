@@ -2,8 +2,7 @@ use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::cmp::Reverse;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -131,13 +130,13 @@ struct FormulaCallSpan {
 #[derive(Debug, Clone)]
 struct TableBlockInfo {
     data_rows: Vec<Vec<usize>>,
-    row_lookup: HashMap<usize, usize>,
+    row_lookup: FxHashMap<usize, usize>,
 }
 
 #[derive(Default)]
 struct TableEvalCache {
-    split_cells: HashMap<usize, Arc<Vec<String>>>,
-    block_by_line: HashMap<usize, Option<TableBlockInfo>>,
+    split_cells: FxHashMap<usize, Arc<Vec<String>>>,
+    block_by_line: FxHashMap<usize, Option<TableBlockInfo>>,
 }
 
 impl TableEvalCache {
@@ -186,7 +185,7 @@ impl TableEvalCache {
 
         let mut delimiter_row: Option<usize> = None;
         let mut data_rows: Vec<Vec<usize>> = Vec::new();
-        let mut row_lookup: HashMap<usize, usize> = HashMap::new();
+        let mut row_lookup: FxHashMap<usize, usize> = FxHashMap::default();
         for row_idx in start..=end {
             let row_cells = self.cells_for_line(lines, row_idx)?.clone();
             if delimiter_row.is_none() && is_table_delimiter_row(&row_cells) {
@@ -226,15 +225,15 @@ impl TableEvalCache {
 }
 
 struct VariableResolver<'a> {
-    defs: &'a HashMap<String, VariableDefinition>,
+    defs: &'a FxHashMap<String, VariableDefinition>,
     variable_regex: Option<Regex>,
-    states: HashMap<String, ResolveState>,
-    values: HashMap<String, String>,
+    states: FxHashMap<String, ResolveState>,
+    values: FxHashMap<String, String>,
     diagnostics: Vec<NoteEvaluationDiagnostic>,
-    raw_eval_cache: HashMap<String, Option<String>>,
+    raw_eval_cache: FxHashMap<String, Option<String>>,
 }
 
-static VARIABLE_REGEX_CACHE: OnceLock<Mutex<HashMap<u64, Regex>>> = OnceLock::new();
+static VARIABLE_REGEX_CACHE: OnceLock<Mutex<FxHashMap<u64, Regex>>> = OnceLock::new();
 static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
 
 static EVAL_GENERATION: AtomicU64 = AtomicU64::new(1);
@@ -294,7 +293,7 @@ fn table_ref_error_code(value: &str) -> Option<String> {
 }
 
 impl<'a> VariableResolver<'a> {
-    fn new(defs: &'a HashMap<String, VariableDefinition>) -> Self {
+    fn new(defs: &'a FxHashMap<String, VariableDefinition>) -> Self {
         let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
         // Longest-first so leftmost-first regex alternation picks the longest match.
         names_sorted.sort_by_key(|name| (Reverse(name.len()), name.clone()));
@@ -303,10 +302,10 @@ impl<'a> VariableResolver<'a> {
         Self {
             defs,
             variable_regex,
-            states: HashMap::new(),
-            values: HashMap::new(),
+            states: FxHashMap::default(),
+            values: FxHashMap::default(),
             diagnostics: Vec::new(),
-            raw_eval_cache: HashMap::new(),
+            raw_eval_cache: FxHashMap::default(),
         }
     }
 
@@ -472,7 +471,7 @@ impl<'a> VariableResolver<'a> {
 }
 
 fn variable_regex_cache_key(names_sorted: &[String]) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     names_sorted.len().hash(&mut hasher);
     for name in names_sorted {
         name.hash(&mut hasher);
@@ -487,7 +486,7 @@ fn cached_variable_regex(names_sorted: &[String]) -> Option<Regex> {
     }
 
     let key = variable_regex_cache_key(names_sorted);
-    let cache = VARIABLE_REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = VARIABLE_REGEX_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()));
     if let Ok(guard) = cache.lock() {
         if let Some(hit) = guard.get(&key) {
             return Some(hit.clone());
@@ -566,7 +565,7 @@ impl CalcEngine {
         let defs = if options.variables_enabled {
             collect_variable_definitions(lines, options.table_enabled)
         } else {
-            HashMap::new()
+            FxHashMap::default()
         };
         let variables = variable_index_from_definitions(&defs);
 
@@ -592,7 +591,7 @@ impl CalcEngine {
         // — only when a table formula cell actually writes a value back.
         let mut working_lines: Option<Vec<String>> = None;
         // Cache and recursion guard for table-cell formula evaluation by (line, cell).
-        let mut table_formula_cache: HashMap<(usize, usize), String> = HashMap::new();
+        let mut table_formula_cache: FxHashMap<(usize, usize), String> = FxHashMap::default();
         let mut table_formula_stack: Vec<(usize, usize)> = Vec::new();
         let mut table_eval_cache = TableEvalCache::default();
         let mut table_diagnostics: Vec<NoteEvaluationDiagnostic> = Vec::new();
@@ -1165,7 +1164,7 @@ fn resolve_table_coordinate_value(
     variables_enabled: bool,
     mut resolver: Option<&mut VariableResolver<'_>>,
     table_eval_cache: &mut TableEvalCache,
-    table_formula_cache: &mut HashMap<(usize, usize), String>,
+    table_formula_cache: &mut FxHashMap<(usize, usize), String>,
     table_formula_stack: &mut Vec<(usize, usize)>,
     ctx: &mut fend_core::Context,
 ) -> Result<String, &'static str> {
@@ -1255,7 +1254,7 @@ fn substitute_table_coordinate_references(
     variables_enabled: bool,
     mut resolver: Option<&mut VariableResolver<'_>>,
     table_eval_cache: &mut TableEvalCache,
-    table_formula_cache: &mut HashMap<(usize, usize), String>,
+    table_formula_cache: &mut FxHashMap<(usize, usize), String>,
     table_formula_stack: &mut Vec<(usize, usize)>,
     ctx: &mut fend_core::Context,
 ) -> Result<String, &'static str> {
@@ -1564,7 +1563,7 @@ fn evaluate_table_formula(
     variables_enabled: bool,
     mut resolver: Option<&mut VariableResolver<'_>>,
     table_eval_cache: &mut TableEvalCache,
-    table_formula_cache: &mut HashMap<(usize, usize), String>,
+    table_formula_cache: &mut FxHashMap<(usize, usize), String>,
     table_formula_stack: &mut Vec<(usize, usize)>,
     ctx: &mut fend_core::Context,
 ) -> Option<String> {
@@ -1843,8 +1842,8 @@ fn extract_line_expression(line: &str, table_enabled: bool) -> Option<LineExpres
 fn collect_variable_definitions(
     lines: &[String],
     table_enabled: bool,
-) -> HashMap<String, VariableDefinition> {
-    let mut defs = HashMap::new();
+) -> FxHashMap<String, VariableDefinition> {
+    let mut defs = FxHashMap::default();
 
     for (line_idx, line) in lines.iter().enumerate() {
         let Some(line_expr) = extract_line_expression(line, table_enabled) else {
@@ -1871,7 +1870,7 @@ fn collect_variable_definitions(
 }
 
 fn variable_index_from_definitions(
-    defs: &HashMap<String, VariableDefinition>,
+    defs: &FxHashMap<String, VariableDefinition>,
 ) -> Vec<VariableIndexEntry> {
     let mut entries = defs
         .values()
@@ -2692,7 +2691,7 @@ mod tests {
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[4];
-        let by_idx: std::collections::HashMap<usize, String> = cells
+        let by_idx: std::collections::FxHashMap<usize, String> = cells
             .iter()
             .map(|c| (c.cell_index, c.value.clone()))
             .collect();
@@ -2727,7 +2726,7 @@ mod tests {
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         let cells = &res.table_cell_results[4];
-        let by_idx: std::collections::HashMap<usize, String> = cells
+        let by_idx: std::collections::FxHashMap<usize, String> = cells
             .iter()
             .map(|c| (c.cell_index, c.value.clone()))
             .collect();

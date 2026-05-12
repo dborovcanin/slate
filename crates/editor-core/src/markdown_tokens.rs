@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -482,7 +482,7 @@ pub fn classify_markdown_line(text: &str) -> MarkdownLineInfo {
 
 pub fn extract_markdown_headings(text: &str) -> Vec<String> {
     let mut headings = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
 
     for line in text.lines() {
         let trimmed = line.trim_start();

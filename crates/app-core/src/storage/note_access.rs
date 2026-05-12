@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -21,7 +21,7 @@ struct NoteAccessSession {
 
 pub(crate) struct NoteAccessService {
     ttl: Duration,
-    sessions: Mutex<HashMap<String, NoteAccessSession>>,
+    sessions: Mutex<FxHashMap<String, NoteAccessSession>>,
 }
 
 impl NoteAccessService {
@@ -32,7 +32,7 @@ impl NoteAccessService {
     fn with_ttl(ttl: Duration) -> Self {
         Self {
             ttl,
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(FxHashMap::default()),
         }
     }
 

@@ -33,6 +33,7 @@ serde_json = "1"
 unicode-width = "0.2"
 url = "2"
 ttf-parser = "0.25"
+rustc-hash = "2"
 
 [features]
 default = ["imap", "gui"]

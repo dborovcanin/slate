@@ -11,7 +11,8 @@ use flate2::{write::ZlibEncoder, Compression};
 use image::GenericImageView as _;
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::{BTreeSet, HashMap};
+use rustc_hash::FxHashMap;
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -640,7 +641,7 @@ fn build_markdown_pdf(
     mut resolve_image: impl FnMut(&str) -> Option<Vec<u8>>,
 ) -> Result<Vec<u8>, String> {
     let image_sources = collect_image_sources(content);
-    let mut image_name_by_src: HashMap<String, String> = HashMap::new();
+    let mut image_name_by_src: FxHashMap<String, String> = FxHashMap::default();
     let mut image_assets: Vec<(String, PdfImageObject)> = Vec::new();
     let mut total_image_bytes: u64 = 0;
 
@@ -694,7 +695,7 @@ fn decode_pdf_image(bytes: &[u8]) -> Result<PdfImageObject, String> {
 fn render_markdown_to_pages(
     content: &str,
     palette: &PdfExportPalette,
-    image_name_by_src: &HashMap<String, String>,
+    image_name_by_src: &FxHashMap<String, String>,
     image_assets: &[(String, PdfImageObject)],
 ) -> Vec<Page> {
     let mut pages = vec![Page::default()];
@@ -1655,7 +1656,7 @@ fn render_table_block(
     table_start_line_idx: usize,
     palette: &PdfExportPalette,
     variable_names: &[String],
-    table_formula_values: &HashMap<(usize, usize), String>,
+    table_formula_values: &FxHashMap<(usize, usize), String>,
 ) {
     if table_lines.len() < 2 {
         render_paragraph_block(
@@ -1787,14 +1788,14 @@ fn render_table_block(
     *y_top += PARAGRAPH_GAP_PT;
 }
 
-fn collect_table_formula_display_values(lines: &[String]) -> HashMap<(usize, usize), String> {
+fn collect_table_formula_display_values(lines: &[String]) -> FxHashMap<(usize, usize), String> {
     let options = NoteEvaluationOptions {
         variables_enabled: true,
         table_enabled: true,
         eval_range: None,
     };
     let result = CalcEngine::new().evaluate_note_context(lines, options);
-    let mut out = HashMap::new();
+    let mut out = FxHashMap::default();
     for (line_idx, row) in result.table_cell_results.iter().enumerate() {
         for cell in row {
             let value = calc_plan::format_formula_display_value(&cell.value);
@@ -2106,7 +2107,7 @@ fn serialize_pdf(
     let image_first_id = next_object_id;
     let page_first_id = image_first_id + image_count;
 
-    let mut image_obj_id_by_name: HashMap<String, usize> = HashMap::new();
+    let mut image_obj_id_by_name: FxHashMap<String, usize> = FxHashMap::default();
     for (idx, (name, _)) in image_assets.iter().enumerate() {
         image_obj_id_by_name.insert(name.clone(), image_first_id + idx);
     }
@@ -2134,7 +2135,7 @@ fn serialize_pdf(
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique >>\n".to_vec());
     objects.push(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique >>\n".to_vec());
 
-    let mut unicode_cmap: HashMap<u16, char> = HashMap::new();
+    let mut unicode_cmap: FxHashMap<u16, char> = FxHashMap::default();
     let streams: Vec<String> = actual_pages
         .iter()
         .map(|page| page_stream(page, unicode_font.as_ref(), &mut unicode_cmap))
@@ -2259,7 +2260,7 @@ fn serialize_pdf(
 fn page_stream(
     page: &Page,
     unicode_font: Option<&PdfUnicodeFontAsset>,
-    unicode_cmap: &mut HashMap<u16, char>,
+    unicode_cmap: &mut FxHashMap<u16, char>,
 ) -> String {
     let mut out = String::new();
     for op in &page.ops {
@@ -2455,7 +2456,7 @@ fn text_requires_unicode_font(text: &str) -> bool {
 fn encode_pdf_unicode_text_bytes(
     input: &str,
     font: &PdfUnicodeFontAsset,
-    unicode_cmap: &mut HashMap<u16, char>,
+    unicode_cmap: &mut FxHashMap<u16, char>,
 ) -> Vec<u8> {
     let Ok(face) = Face::parse(&font.bytes, 0) else {
         return Vec::new();
@@ -2530,7 +2531,7 @@ fn utf16be_hex_for_char(ch: char) -> String {
     out
 }
 
-fn build_to_unicode_cmap(unicode_cmap: &HashMap<u16, char>) -> Vec<u8> {
+fn build_to_unicode_cmap(unicode_cmap: &FxHashMap<u16, char>) -> Vec<u8> {
     let mut entries: Vec<(u16, char)> = unicode_cmap.iter().map(|(k, v)| (*k, *v)).collect();
     entries.sort_by_key(|(gid, _)| *gid);
     let mut out = String::new();
@@ -2942,9 +2943,9 @@ mod tests {
     fn markdown_pdf_keeps_assignment_lines_separate() {
         let source = "a := 1\nb := 2\nc := 3";
         let pages =
-            render_markdown_to_pages(source, &PdfExportPalette::default(), &HashMap::new(), &[]);
+            render_markdown_to_pages(source, &PdfExportPalette::default(), &FxHashMap::default(), &[]);
 
-        let mut y_by_var = HashMap::<String, f32>::new();
+        let mut y_by_var = FxHashMap::<String, f32>::new();
         for page in pages {
             for op in page.ops {
                 if let DrawOp::Text { y, text, .. } = op {
@@ -2993,7 +2994,7 @@ mod tests {
     fn markdown_pdf_table_does_not_double_stroke_shared_horizontal_borders() {
         let source = "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |";
         let pages =
-            render_markdown_to_pages(source, &PdfExportPalette::default(), &HashMap::new(), &[]);
+            render_markdown_to_pages(source, &PdfExportPalette::default(), &FxHashMap::default(), &[]);
         let page = pages.first().expect("first page");
         let table_left = PDF_MARGIN_LEFT_PT;
         let table_right = PDF_MARGIN_LEFT_PT + content_width();

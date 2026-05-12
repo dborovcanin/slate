@@ -5,7 +5,7 @@ use base64::Engine as _;
 use pbkdf2::pbkdf2_hmac;
 use rusqlite::{Connection, OptionalExtension};
 use sha2::Sha256;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::path::PathBuf;
@@ -847,7 +847,7 @@ impl Db {
             )
             .map_err(|e| e.to_string())?;
 
-        let mut memo: HashMap<String, Option<NoteSummary>> = HashMap::new();
+        let mut memo: FxHashMap<String, Option<NoteSummary>> = FxHashMap::default();
         let mut out = Vec::with_capacity(short_ids.len());
         for short_id in short_ids {
             if let Some(cached) = memo.get(short_id) {

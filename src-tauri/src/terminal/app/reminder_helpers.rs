@@ -1,12 +1,12 @@
 use super::LineReminderGhost;
 use crate::storage::Db;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub(super) fn load_note_reminder_ghosts(
     db: &Db,
     note_id: &str,
     lines: &[String],
-) -> Result<HashMap<usize, LineReminderGhost>, String> {
+) -> Result<FxHashMap<usize, LineReminderGhost>, String> {
     #[derive(Debug, Clone)]
     struct PlannedReminder {
         source_line: i64,
@@ -21,7 +21,7 @@ pub(super) fn load_note_reminder_ghosts(
     fn nearest_available_line(
         candidates: &[usize],
         preferred: usize,
-        used_lines: &HashSet<usize>,
+        used_lines: &FxHashSet<usize>,
     ) -> Option<usize> {
         let mut best: Option<usize> = None;
         let mut best_distance = usize::MAX;
@@ -44,7 +44,7 @@ pub(super) fn load_note_reminder_ghosts(
     fn nearest_free_line(
         preferred: usize,
         line_count: usize,
-        used_lines: &HashSet<usize>,
+        used_lines: &FxHashSet<usize>,
     ) -> Option<usize> {
         if line_count == 0 {
             return None;
@@ -72,12 +72,12 @@ pub(super) fn load_note_reminder_ghosts(
     // Fast path for large notes: avoid building line-text indexes when there
     // are no reminders at all.
     if reminders.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(FxHashMap::default());
     }
 
-    let mut text_to_lines: Option<HashMap<String, Vec<usize>>> = None;
+    let mut text_to_lines: Option<FxHashMap<String, Vec<usize>>> = None;
 
-    let mut used_lines: HashSet<usize> = HashSet::new();
+    let mut used_lines: FxHashSet<usize> = FxHashSet::default();
     let mut planned = Vec::with_capacity(reminders.len());
 
     for reminder in reminders {
@@ -104,7 +104,7 @@ pub(super) fn load_note_reminder_ghosts(
 
         if target_line.is_none() {
             if text_to_lines.is_none() {
-                let mut index: HashMap<String, Vec<usize>> = HashMap::new();
+                let mut index: FxHashMap<String, Vec<usize>> = FxHashMap::default();
                 for (idx, line) in lines.iter().enumerate() {
                     index.entry(line.clone()).or_default().push(idx + 1);
                 }
@@ -191,7 +191,7 @@ pub(super) fn load_note_reminder_ghosts(
         }
     }
 
-    let mut by_line = HashMap::with_capacity(planned.len());
+    let mut by_line = FxHashMap::with_capacity_and_hasher(planned.len(), Default::default());
     for entry in planned {
         let Some(line_idx) = entry
             .target_line

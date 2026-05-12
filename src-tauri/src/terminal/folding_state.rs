@@ -1,12 +1,12 @@
 use super::folding::FoldRange;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::time::Instant;
 
 /// All folding index state, kept separate from the editor cursor/content state.
 pub struct FoldingState {
     pub ranges: Vec<FoldRange>,
     pub range_by_start: Vec<Option<FoldRange>>,
-    pub collapsed_starts: HashSet<usize>,
+    pub collapsed_starts: FxHashSet<usize>,
     pub visible_to_real: Vec<usize>,
     pub real_to_visible: Vec<usize>,
     pub hidden_owner: Vec<Option<usize>>,
@@ -23,7 +23,7 @@ impl FoldingState {
         Self {
             ranges: Vec::new(),
             range_by_start: Vec::new(),
-            collapsed_starts: HashSet::new(),
+            collapsed_starts: FxHashSet::default(),
             visible_to_real: Vec::new(),
             real_to_visible: Vec::new(),
             hidden_owner: Vec::new(),

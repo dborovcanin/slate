@@ -19,7 +19,7 @@ use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
 use std::cmp::min;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
@@ -237,7 +237,7 @@ struct WikiLinkAutocompletePopupState {
     query: String,
     pending_heading_short_id: Option<String>,
     note_suggestions: Vec<WikiLinkSuggestion>,
-    heading_cache: HashMap<String, Vec<WikiLinkSuggestion>>,
+    heading_cache: FxHashMap<String, Vec<WikiLinkSuggestion>>,
     suggestions: Vec<WikiLinkSuggestion>,
     selected_index: usize,
     cursor_line: usize,
@@ -293,7 +293,7 @@ struct PerfBucket {
 struct PerfTraceState {
     enabled: bool,
     capacity: usize,
-    buckets: HashMap<(String, String), PerfBucket>,
+    buckets: FxHashMap<(String, String), PerfBucket>,
 }
 
 impl Default for PerfTraceState {
@@ -301,7 +301,7 @@ impl Default for PerfTraceState {
         Self {
             enabled: false,
             capacity: 256,
-            buckets: HashMap::new(),
+            buckets: FxHashMap::default(),
         }
     }
 }
@@ -353,7 +353,7 @@ struct TerminalApp {
     // Vim state
     vim_state: crate::editor_core::vim::VimState,
     vim_macro_recording: Option<char>,
-    vim_macro_registers: HashMap<char, Vec<VimMacroStep>>,
+    vim_macro_registers: FxHashMap<char, Vec<VimMacroStep>>,
     vim_macro_replaying: bool,
     clipboard: VimRegister,
     last_clipboard_backend: Option<ClipboardWriteBackend>,
@@ -368,7 +368,7 @@ struct TerminalApp {
     calc_pending_full_pass: bool,
     calc_viewport_only: bool,
     calc_last_view_eval_range: Option<(usize, usize)>,
-    reminder_ghosts: HashMap<usize, LineReminderGhost>, // 0-based line index
+    reminder_ghosts: FxHashMap<usize, LineReminderGhost>, // 0-based line index
     reminders_dirty: bool,
     last_reminder_check: Instant,
     // Search state
@@ -388,10 +388,10 @@ struct TerminalApp {
     variable_autocomplete_popup: VariableAutocompletePopupState,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
-    wiki_link_prefix_index: HashMap<String, WikiLinkPrefixIndexEntry>,
-    wiki_link_render_cache: HashMap<String, WikiLinkRenderCacheEntry>,
-    wiki_link_line_render_cache: HashMap<String, WikiLinkLineRenderCacheEntry>,
-    table_formula_segment_cache: HashMap<String, TableFormulaSegmentCacheEntry>,
+    wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
+    wiki_link_render_cache: FxHashMap<String, WikiLinkRenderCacheEntry>,
+    wiki_link_line_render_cache: FxHashMap<String, WikiLinkLineRenderCacheEntry>,
+    table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
     table_format_cache: crate::editor_core::table::TableFormatCache,
     render_palette: render::RenderPalette,
     // Folding (real-line indexed, 0-based)
@@ -682,7 +682,7 @@ impl TerminalApp {
             date_time_format,
             vim_state: crate::editor_core::vim::VimState::default(),
             vim_macro_recording: None,
-            vim_macro_registers: HashMap::new(),
+            vim_macro_registers: FxHashMap::default(),
             vim_macro_replaying: false,
             clipboard: VimRegister::default(),
             last_clipboard_backend: None,
@@ -728,10 +728,10 @@ impl TerminalApp {
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
-            wiki_link_prefix_index: HashMap::new(),
-            wiki_link_render_cache: HashMap::new(),
-            wiki_link_line_render_cache: HashMap::new(),
-            table_formula_segment_cache: HashMap::new(),
+            wiki_link_prefix_index: FxHashMap::default(),
+            wiki_link_render_cache: FxHashMap::default(),
+            wiki_link_line_render_cache: FxHashMap::default(),
+            table_formula_segment_cache: FxHashMap::default(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
             render_palette,
             folds: FoldingState::empty(Vec::new(), Vec::new()),

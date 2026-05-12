@@ -5,7 +5,7 @@ use mailparse::MailHeaderMap;
 use regex::Regex;
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
@@ -606,7 +606,7 @@ fn normalize_message_id(raw: Option<String>) -> Option<String> {
 
 fn extract_emails(raw: &str) -> Vec<String> {
     let re = Regex::new(r"(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}").expect("email regex");
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut out = Vec::new();
     for capture in re.find_iter(raw) {
         let value = capture.as_str().to_lowercase();
@@ -706,7 +706,7 @@ fn strip_html_tags(html: &str) -> String {
 }
 
 fn dedup_preserve_order(values: Vec<String>) -> Vec<String> {
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     let mut out = Vec::new();
     for value in values {
         if seen.insert(value.clone()) {

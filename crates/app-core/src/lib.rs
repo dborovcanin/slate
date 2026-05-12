@@ -6,7 +6,7 @@ pub mod storage;
 use calc::CalcEngine;
 use directories::ProjectDirs;
 use note_sources::NoteSourceService;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -18,7 +18,7 @@ pub struct AppCore {
     calc_engine: CalcEngine,
     /// Server-side line cache for the delta calc IPC protocol.
     /// Key: note_id. Value: current lines of that note as known to the server.
-    pub note_line_cache: Mutex<HashMap<String, Arc<Vec<String>>>>,
+    pub note_line_cache: Mutex<FxHashMap<String, Arc<Vec<String>>>>,
 }
 
 impl AppCore {
@@ -30,7 +30,7 @@ impl AppCore {
             db,
             note_sources,
             calc_engine: CalcEngine::new(),
-            note_line_cache: Mutex::new(HashMap::new()),
+            note_line_cache: Mutex::new(FxHashMap::default()),
         })
     }
 
