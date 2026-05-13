@@ -795,26 +795,14 @@ impl TerminalApp {
 
         let title = derive_title_from_lines(&self.lines);
         let dirty_mark = if self.dirty { " [+]" } else { "" };
-        let mode_label = match self.mode {
-            UiMode::Normal => "",
-            UiMode::Editor => " INSERT",
-            UiMode::Visual => " VISUAL",
-            UiMode::VisualLine => " V-LINE",
-            UiMode::CommandBar => " CMD",
-            UiMode::Search => " SEARCH",
-            UiMode::Switcher => " SWITCH",
-            UiMode::CollectionSwitcher => " COLLS",
-            UiMode::ContentSearch => " SEARCH",
-            UiMode::DatePicker => " DATE",
-        };
         let large_note_label = if self.large_note_reduced_features() {
             " LARGE-NOTE"
         } else {
             ""
         };
         let title_line = format!(
-            " note  {}  {}{}{}{}",
-            self.active_note.id, title, dirty_mark, mode_label, large_note_label
+            " note  {}  {}{}{}",
+            self.active_note.id, title, dirty_mark, large_note_label
         );
         let title_bg = self.render_palette.primary();
         draw_row_at_styled(
