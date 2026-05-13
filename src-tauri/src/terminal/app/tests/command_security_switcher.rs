@@ -1711,6 +1711,57 @@ fn wiki_link_heading_autocomplete_reopens_when_hash_is_typed_again() {
 }
 
 #[test]
+fn wiki_link_autocomplete_respects_working_collection_filter() {
+    let (db, mut app, path) = app_with_note("");
+    let work = db
+        .create_collection("Work", "work notes")
+        .expect("work collection created");
+    let personal = db
+        .create_collection("Personal", "personal notes")
+        .expect("personal collection created");
+    db.save_note("01HXWORK9ABCDEFGHJKMNPQRS", "Alpha Work")
+        .expect("work note saved");
+    db.save_note("01HXPERS9ABCDEFGHJKMNPQRS", "Alpha Personal")
+        .expect("personal note saved");
+    db.set_note_collections("01HXWORK9ABCDEFGHJKMNPQRS", std::slice::from_ref(&work.id))
+        .expect("work note collection set");
+    db.set_note_collections(
+        "01HXPERS9ABCDEFGHJKMNPQRS",
+        std::slice::from_ref(&personal.id),
+    )
+    .expect("personal note collection set");
+
+    app.execute_terminal_command(&db, "collection choose Work");
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('['), Key::Char('['), Key::Char('a'), Key::Char('l')],
+    );
+
+    assert!(app.wiki_link_autocomplete_popup.visible);
+    let titles = app
+        .wiki_link_autocomplete_popup
+        .suggestions
+        .iter()
+        .map(|entry| entry.title.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        titles.iter().any(|title| title == "Alpha Work"),
+        "expected work note in suggestions, got: {:?}",
+        titles
+    );
+    assert!(
+        !titles.iter().any(|title| title == "Alpha Personal"),
+        "personal note should be filtered out, got: {:?}",
+        titles
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn wiki_link_autocomplete_selection_can_move_and_apply_beyond_first_sixteen_results() {
     let (db, mut app, path) = app_with_note("");
     run_keys(&mut app, &db, &[Key::Char('['), Key::Char('[')]);

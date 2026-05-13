@@ -770,6 +770,14 @@ impl TerminalApp {
         if line_count_changed {
             let next_len = self.lines.len();
             let prev_len = self.folds.line_has_structure.len();
+            // Safety guard: incremental insert/remove remap assumes snapshot and
+            // structure vectors are aligned. If a prior mode change/reset left
+            // them out of sync, use full recompute instead of risking panic on
+            // Vec::insert/remove indexes during Enter/Delete edits.
+            if self.folds.line_text_snapshot.len() != prev_len {
+                self.recompute_folding();
+                return;
+            }
             let mut remap_edits: Vec<crate::editor_core::folding::FoldLineEdit> = Vec::new();
             if next_len == prev_len + 1 {
                 // One line inserted near cursor.
@@ -3416,7 +3424,11 @@ impl TerminalApp {
         if !self.switcher_items.is_empty() {
             return;
         }
-        if let Ok(items) = crate::terminal::switcher::load_note_meta(db, Some(&self.active_note.id))
+        if let Ok(items) = crate::terminal::switcher::load_note_meta_filtered(
+            db,
+            Some(&self.active_note.id),
+            self.working_collection_id.as_deref(),
+        )
         {
             self.switcher_items = items;
             self.rebuild_wiki_link_prefix_index();

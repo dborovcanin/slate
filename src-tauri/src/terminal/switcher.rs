@@ -52,13 +52,6 @@ fn note_identity_label(note_id: &str) -> String {
     }
 }
 
-pub fn load_note_meta(
-    db: &crate::storage::Db,
-    active_note_id: Option<&str>,
-) -> Result<Vec<NoteMeta>, String> {
-    load_note_meta_filtered(db, active_note_id, None)
-}
-
 pub fn load_note_meta_filtered(
     db: &crate::storage::Db,
     active_note_id: Option<&str>,
