@@ -63,7 +63,7 @@ const FOLD_OPTIONS_TERMINAL: FoldBuildOptions = FoldBuildOptions {
     include_list: true,
     include_table: true,
     include_paragraph: true,
-    trim_heading_trailing_blank: false,
+    trim_heading_trailing_blank: true,
 };
 
 fn is_table_fold_line(line: &str) -> bool {
@@ -75,31 +75,59 @@ fn is_list_fold_line(line: &str) -> bool {
     markdown_tokens::list_marker_end(line).is_some()
 }
 
-fn fold_structural_signature(line_text: &str) -> &'static str {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FoldStructuralSignature {
+    Empty,
+    Fence,
+    Table,
+    List,
+    Heading(usize),
+    Rule,
+    Paragraph,
+}
+
+fn fold_heading_level_signature(trimmed: &str) -> Option<usize> {
+    let mut level = 0usize;
+    for ch in trimmed.chars() {
+        if ch == '#' && level < 6 {
+            level += 1;
+        } else {
+            break;
+        }
+    }
+    if level == 0 {
+        return None;
+    }
+    let rest = &trimmed[level..];
+    rest.chars().next().filter(|ch| ch.is_whitespace())?;
+    Some(level)
+}
+
+fn fold_structural_signature(line_text: &str) -> FoldStructuralSignature {
     let trimmed = line_text.trim();
     if trimmed.is_empty() {
-        return "empty";
+        return FoldStructuralSignature::Empty;
     }
     if trimmed.starts_with("```") {
-        return "fence";
+        return FoldStructuralSignature::Fence;
     }
     if trimmed.starts_with('|') && trimmed.ends_with('|') {
-        return "table";
+        return FoldStructuralSignature::Table;
     }
     if markdown_tokens::list_marker_end(line_text).is_some() {
-        return "list";
+        return FoldStructuralSignature::List;
     }
-    if trimmed.starts_with('#') {
-        return "heading";
+    if let Some(level) = fold_heading_level_signature(trimmed) {
+        return FoldStructuralSignature::Heading(level);
     }
     if trimmed
         .chars()
         .all(|ch| matches!(ch, '-' | '_' | '*' | ' '))
         && trimmed.chars().any(|ch| matches!(ch, '-' | '_' | '*'))
     {
-        return "rule";
+        return FoldStructuralSignature::Rule;
     }
-    "paragraph"
+    FoldStructuralSignature::Paragraph
 }
 
 pub fn edits_require_rebuild(edits: &[FoldLineEdit]) -> bool {
@@ -414,6 +442,13 @@ mod tests {
     }
 
     #[test]
+    fn terminal_heading_ranges_trim_trailing_blank_lines() {
+        let lines = as_lines(&["# One", "alpha", "", "", "# Two", "beta", ""]);
+        let described = describe(&build_fold_ranges_terminal(&lines));
+        assert_eq!(described, vec![(0, 1, "heading"), (4, 5, "heading")]);
+    }
+
+    #[test]
     fn terminal_ranges_include_list_table_and_paragraph_blocks() {
         let lines = as_lines(&[
             "# One",
@@ -476,6 +511,15 @@ mod tests {
             new_line_text: "- list item".to_string(),
         };
         assert!(edits_require_rebuild(&[structural]));
+
+        let heading_level_change = FoldLineEdit {
+            old_start_line: 1,
+            old_line_span: 1,
+            new_line_span: 1,
+            old_line_text: "# Top".to_string(),
+            new_line_text: "## Top".to_string(),
+        };
+        assert!(edits_require_rebuild(&[heading_level_change]));
 
         let multiline = FoldLineEdit {
             old_start_line: 3,

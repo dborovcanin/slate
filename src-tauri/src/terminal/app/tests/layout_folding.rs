@@ -1,5 +1,33 @@
 use super::*;
 
+fn strip_ansi_control_sequences(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if b == 0x1b {
+            idx += 1;
+            if idx < bytes.len() && bytes[idx] == b'[' {
+                idx += 1;
+                while idx < bytes.len() {
+                    let c = bytes[idx];
+                    idx += 1;
+                    if (0x40..=0x7e).contains(&c) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if b != b'\r' {
+            out.push(b as char);
+        }
+        idx += 1;
+    }
+    out
+}
+
 #[test]
 fn load_note_reminder_ghosts_reconciles_shift_without_dropping_adjacent_reminders() {
     let path = temp_db_path();
@@ -390,8 +418,8 @@ fn fold_range_builder_detects_heading_fence_list_table_and_paragraph_blocks() {
         "",
     ]);
 
-    assert!(ranges.contains(&(0, 14, "heading")));
-    assert!(ranges.contains(&(3, 14, "heading")));
+    assert!(ranges.contains(&(0, 13, "heading")));
+    assert!(ranges.contains(&(3, 13, "heading")));
     assert!(ranges.contains(&(4, 6, "fence")));
     assert!(ranges.contains(&(7, 8, "list")));
     assert!(ranges.contains(&(9, 11, "table")));
@@ -430,6 +458,30 @@ fn normal_mode_za_toggles_fold_and_vertical_navigation_uses_virtual_lines() {
 
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
     assert!(!app.folds.collapsed_starts.contains(&0));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn heading_fold_keeps_title_and_preserves_separator_blank_line() {
+    let (db, mut app, path) =
+        app_with_note("## 13.05.2026.\nentry\n\n## 14.05.2026.\nnext line");
+    app.mode = UiMode::Normal;
+    app.cursor_line = 0;
+
+    run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
+
+    assert!(app.folds.collapsed_starts.contains(&0));
+    assert_eq!(app.folds.placeholder_hidden_lines[0], Some(1));
+    assert_eq!(app.folds.visible_to_real, vec![0, 2, 3, 4]);
+
+    let mut out = Vec::new();
+    app.draw(&mut out).expect("draw folded heading");
+    let rendered = strip_ansi_control_sequences(&String::from_utf8_lossy(&out));
+    assert!(rendered.contains("## 13.05.2026."));
+    assert!(rendered.contains("1 line folded"));
 
     drop(app);
     drop(db);
