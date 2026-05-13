@@ -618,6 +618,37 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
 }
 
 #[test]
+fn non_cursor_image_line_stays_collapsed_when_cursor_line_has_override_mapping() {
+    let body = [
+        "| a | :=sum_col() |",
+        "| --- | --- |",
+        "| 2 | 3 |",
+        "![slate full](./assets/slate-full.png)",
+    ]
+    .join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+
+    // Keep cursor on the formula line so cursor-line mapping is populated.
+    app.cursor_line = 0;
+    app.cursor_col = app.lines[0].find("sum_col").expect("formula label");
+    app.adjust_cursor();
+    app.adjust_scroll();
+
+    let mut out = Vec::new();
+    app.draw(&mut out).expect("draw with formula + image");
+    let rendered = strip_ansi_control_sequences(&String::from_utf8_lossy(&out));
+
+    assert!(
+        rendered.contains("[image: slate full]"),
+        "non-cursor image line should render collapsed placeholder, got:\n{rendered}"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn large_note_structural_edit_recomputes_calc_without_idle_delay() {
     let mut lines = Vec::new();
     lines.push("title".to_string());

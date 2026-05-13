@@ -83,8 +83,11 @@ pub fn collapse_media_sources_for_display(
             &mut rendered_char_count,
         );
 
+        // Treat media span as half-open [from, to): at the right boundary we
+        // are already outside, which avoids source/preview flicker while
+        // vertical-scrolling across media lines.
         let cursor_inside = active_cursor_col
-            .map(|col| col >= media.from && col <= media.to)
+            .map(|col| col >= media.from && col < media.to)
             .unwrap_or(false);
 
         if cursor_inside {
@@ -316,6 +319,16 @@ mod tests {
         assert!(!transformed.changed);
         assert_eq!(transformed.rendered_line, line);
         assert_eq!(transformed.mapped_cursor_col, Some(10));
+    }
+
+    #[test]
+    fn collapse_media_sources_for_display_hides_image_source_at_right_boundary() {
+        let line = "![diagram](./assets/plan.png)";
+        let boundary = line.chars().count();
+        let transformed = collapse_media_sources_for_display(line, Some(boundary));
+        assert!(transformed.changed);
+        assert_eq!(transformed.rendered_line, "[image: diagram]");
+        assert_eq!(transformed.mapped_cursor_col, Some("[image: diagram]".chars().count()));
     }
 
     #[test]

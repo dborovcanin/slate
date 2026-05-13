@@ -1041,7 +1041,7 @@ impl TerminalApp {
                     }
                 }
 
-                if !is_fold_placeholder && cursor_line_override.is_none() {
+                if !is_fold_placeholder && (!is_cursor_line || cursor_line_override.is_none()) {
                     let media_transform = media_sources::collapse_media_sources_for_display(
                         rendered_line.as_ref(),
                         line_cursor_col,
