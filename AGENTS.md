@@ -180,19 +180,14 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-12 12:43pm GMT+2
+# [slate] recent context, 2026-05-13 10:05am GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (16,799t read) | 701,091t work | 98% savings
+Stats: 50 obs (17,508t read) | 871,518t work | 98% savings
 
-### May 5, 2026
-S228 Implement Obsidian-like table cursor navigation for markdown tables in UI and TUI modes, with arrow keys behaving like normal text movement but constrained by table structure (May 5, 10:46 PM)
-S229 Table cursor navigation overhaul — Obsidian-like behavior for UI editor with cross-cell arrow wrapping, shift+arrow cell selection, and scroll/artifact fixes (May 5, 10:55 PM)
-S230 Obsidian-style table cursor navigation in rich table UI — all secondary fixes completed, tests passing (May 5, 11:23 PM)
-S231 Table cursor navigation UX overhaul — Obsidian-style arrow key behavior with character-level movement and cell/table boundary wrapping (May 5, 11:41 PM)
 ### May 6, 2026
 S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:02 AM)
 S233 Review last 40 commits and explore potential improvements in the slate project (May 6, 12:12 AM)
@@ -200,23 +195,9 @@ S233 Review last 40 commits and explore potential improvements in the slate proj
 S234 Evaluate items 1, 4, and 6 from a task list; user challenged item 1 (macros), leading to code investigation and plan revision (May 12, 8:52 AM)
 S235 Review last 40 commits and implement improvements — accurate per-character PDF glyph widths and FxHashMap migration (May 12, 8:56 AM)
 S236 Investigate and fix pre-existing test failure, then plan export.rs refactor into three files (May 12, 9:10 AM)
-342 11:58a 🔵 Pre-Existing Test Failure in execute_terminal_perf_on_and_status_toggle_runtime_trace_state
-343 " 🔵 Failing Test: app_with_note Initializes perf_trace.enabled as True
-344 11:59a 🔵 Perf Test Failure Root Cause: App Reads Live perf Config from Disk at Init
-345 " 🔵 Perf Test Failure: Developer's Local Config File Has perf.enabled=true
-346 " 🔵 Perf Test Failure Confirmed Pre-Existing Across All Recent Commits
-347 " 🔵 WIP Changes on main Branch: AGENTS.md and vim.rs Modified
-348 " 🔵 app_with_note Test Helper Defined in Parent Test Module via use super::*
-349 12:00p 🔵 Terminal App Test Suite File Structure
-350 " 🔵 app_with_note Helper Calls TerminalApp::new_with_startup_metrics Without Overriding perf_trace
-351 " 🔴 Fixed Perf Trace Test Isolation in app_with_note Helper
-352 " 🔴 Perf Trace Test Isolation Fix Verified — Test Now Passes
-353 12:01p 🔴 Full Test Suite Now Green — 328 Passed, 0 Failed
-354 12:03p 🔵 VimIntent Has ChangeTill, ChangeInner, ChangeAround Already Defined
-355 " 🔵 Vim Change Text-Objects Fully Wired in vim.rs State Machine
-356 12:04p 🔵 decide_eval_window API Family in calc_plan.rs — Incremental Calc Dependency System
-357 " 🔵 decide_eval_window Callers: WASM GUI, Terminal App Editing, and Startup Benchmark
-S237 Code analysis and refactor planning for slate: vim text-objects, export.rs split, and decide_eval_window API consolidation (May 12, 12:04 PM)
+S237 Code analysis and refactor planning for slate: vim text-objects, export.rs split, and decide_eval_window API consolidation (May 12, 12:02 PM)
+357 12:04p 🔵 decide_eval_window Callers: WASM GUI, Terminal App Editing, and Startup Benchmark
+S238 Refactor PDF unicode font visibility (pub(super)→pub(crate)) and plan consolidation of the 6-variant decide_eval_window API into a single params-struct function (May 12, 12:04 PM)
 358 12:05p 🔵 PDF Unicode Font Loading: OnceLock Cache with SLATE_PDF_UNICODE_FONT Env Override
 359 12:07p 🔵 serialize_pdf Calls resolve_unicode_pdf_font_asset Directly — Key Cross-Module Dependency
 360 " 🔵 commands/mod.rs: export Module Is Always Compiled (No gui Feature Gate)
@@ -251,7 +232,40 @@ S237 Code analysis and refactor planning for slate: vim text-objects, export.rs 
 389 " ✅ resolve_unicode_pdf_font_asset promoted to pub(crate) in export/mod.rs
 390 " ✅ Suppressed unused import warning for PdfRgbColor re-export in export/mod.rs
 391 12:43p ✅ slate crate builds cleanly with zero warnings after PDF font visibility refactor
+392 " ✅ Full slate test suite passes after PDF font visibility refactor
+393 " 🔵 decide_eval_window function family in editor-core calc_plan.rs
+394 12:44p 🔵 decide_eval_window callers across the Slate codebase
+395 " 🔵 note-startup.rs benchmarks cached vs uncached eval window performance
+396 " 🔵 Terminal editor eval window pipeline: sync index then decide window with cached index
+397 12:45p 🔵 WASM eval window API uses decide_eval_window_with_mask without dependency index caching
+398 12:46p 🔵 calc_plan.rs flag-computation helpers are already pub
+S239 Fix Rust test compilation failures in the `slate` project caused by production API refactor not reflected in tests (May 12, 12:46 PM)
+399 12:48p 🔵 decide_eval_window used in calc_plan.rs internal tests — additional call sites to update
+400 " 🔄 Replaced 6 decide_eval_window variants with DecideEvalWindowParams struct + single function
+401 1:43p 🔵 Test Suite Compilation Failures in editor-core and slate Crates
+402 1:44p 🔵 Detailed Compiler Errors: decide_eval_window Signature Mismatch and Missing Function
+403 " 🔵 Old Test API: decide_eval_window_with_mask Called with 8 Arguments Including CalcFeatureMask
+404 " 🔴 Re-added decide_eval_window_with_mask Convenience Wrapper to Fix Test Compilation
+405 " 🔴 Updated 5 Test Call Sites from Old decide_eval_window Signature to decide_eval_window_with_mask
+406 1:45p 🔴 Made calc_feature_mask pub(super) to Fix E0624 Visibility Error in Tests
+S240 Complete a 6-item refactor/improvement plan for the `slate` Rust project — all items now finished (May 12, 1:45 PM)
+S241 Dead code cleanup in `calc_plan.rs` — remove `formula_dependency_window` thin wrapper, verify clean build (May 12, 1:48 PM)
+**Investigated**: - `formula_dependency_window` at line 1808 in `crates/editor-core/src/calc_plan.rs` — confirmed it was a pure thin wrapper: `formula_dependency_window_with_cached_index(None, lines, changed_from, changed_to, mask)`
+    - Whether any callers referenced `formula_dependency_window` directly (none found — both functions were private `fn`)
+    - `cargo build -p editor-core` output after deletion
 
-Access 701k tokens of past work via get_observations([IDs]) or mem-search skill.
+**Learned**: - `formula_dependency_window` had no external callers; it was a private convenience wrapper that simply passed `None` as the cached index
+    - Deleting it and routing all callers directly to `formula_dependency_window_with_cached_index` is safe and leaves the build clean
+    - The edit was applied three times (read+edit pairs repeated), but each application was idempotent after the first success — subsequent attempts matched and re-deleted the already-absent text, resulting in the same final state
+    - `cargo build -p editor-core` produces zero warnings and zero errors after the deletion
+
+**Completed**: - Deleted `fn formula_dependency_window` (9-line thin wrapper) from `crates/editor-core/src/calc_plan.rs`
+    - Confirmed `cargo build -p editor-core` is clean (empty stdout/stderr from warning/error grep)
+    - All previously completed work remains intact: `decide_eval_window` struct API, `decide_eval_window_with_mask` wrapper, test call-site updates, `calc_feature_mask` visibility fix, `export.rs` split
+
+**Next Steps**: No active work in progress. Dead code removal is complete and the build is clean. Awaiting new tasks.
+
+
+Access 872k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 

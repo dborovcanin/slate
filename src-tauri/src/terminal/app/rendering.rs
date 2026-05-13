@@ -1251,21 +1251,21 @@ impl TerminalApp {
                         "Confirm delete: Enter/Y confirm, Esc/N cancel"
                     }
                 } else {
-                    "Switcher: type to filter, Enter open, Tab content search, Ctrl+G collections, Delete/Ctrl+Backspace delete, Esc close"
+                    &self.status
                 }
             }
             UiMode::CollectionSwitcher => {
                 if self.collection_edit_dialog.is_some() {
                     "Collection edit: Tab/Shift+Tab field, Enter save, Esc cancel"
                 } else {
-                    "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close"
+                    &self.status
                 }
             }
             UiMode::ContentSearch => {
                 if self.switcher_open_confirm.is_some() {
                     "Open note: type password, Enter confirm, Esc cancel"
                 } else {
-                    "Content search: type to search, Ctrl+L cycle collection, Enter open, Tab title search, Esc close"
+                    &self.status
                 }
             }
             UiMode::DatePicker => {

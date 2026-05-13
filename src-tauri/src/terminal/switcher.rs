@@ -725,7 +725,7 @@ pub fn draw_content_search(
             x + 1,
             box_w.saturating_sub(2),
             &format!(
-                " collection: {} (Ctrl+L cycle)",
+                " collection: {} (Ctrl+L toggle)",
                 view.collection_filter_label
             ),
             label_style,

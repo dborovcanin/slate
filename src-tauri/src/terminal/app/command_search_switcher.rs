@@ -260,30 +260,82 @@ impl TerminalApp {
         self.content_search_collection_filter_name = self.working_collection_name.clone();
     }
 
-    fn cycle_content_search_collection_filter(
-        &mut self,
-        db: &Db,
-        delta: isize,
-    ) -> Result<(), String> {
-        let collections = db.list_collections()?;
-        let mut ids: Vec<Option<String>> = Vec::with_capacity(collections.len() + 1);
-        let mut names: Vec<String> = Vec::with_capacity(collections.len() + 1);
-        ids.push(None);
-        names.push("All".to_string());
-        for collection in collections {
-            ids.push(Some(collection.id));
-            names.push(collection.name);
+    fn toggle_content_search_collection_filter(&mut self) {
+        let Some(working_id) = self.working_collection_id.clone() else {
+            return;
+        };
+        let use_working = self.content_search_collection_filter_id.as_deref() != Some(working_id.as_str());
+        if use_working {
+            self.content_search_collection_filter_id = Some(working_id);
+            self.content_search_collection_filter_name = self.working_collection_name.clone();
+        } else {
+            self.content_search_collection_filter_id = None;
+            self.content_search_collection_filter_name = None;
         }
-
-        let current_idx = ids
-            .iter()
-            .position(|id| id.as_deref() == self.content_search_collection_filter_id.as_deref())
-            .unwrap_or(0);
-        let len = ids.len().max(1);
-        let next_idx = (current_idx as isize + delta).rem_euclid(len as isize) as usize;
-        self.content_search_collection_filter_id = ids.get(next_idx).cloned().unwrap_or(None);
-        self.content_search_collection_filter_name = names.get(next_idx).cloned();
         self.refresh_content_search_preview();
+    }
+
+    fn reset_switcher_filter_to_working_collection(&mut self) {
+        self.switcher_collection_filter_id = self.working_collection_id.clone();
+        self.switcher_collection_filter_name = self.working_collection_name.clone();
+    }
+
+    fn toggle_switcher_collection_filter(&mut self) {
+        let Some(working_id) = self.working_collection_id.clone() else {
+            return;
+        };
+        let use_working = self.switcher_collection_filter_id.as_deref() != Some(working_id.as_str());
+        if use_working {
+            self.switcher_collection_filter_id = Some(working_id);
+            self.switcher_collection_filter_name = self.working_collection_name.clone();
+        } else {
+            self.switcher_collection_filter_id = None;
+            self.switcher_collection_filter_name = None;
+        }
+    }
+
+    fn switcher_collection_filter_label(&self) -> &str {
+        self.switcher_collection_filter_name.as_deref().unwrap_or("All")
+    }
+
+    fn content_search_collection_filter_label(&self) -> &str {
+        self.content_search_collection_filter_name.as_deref().unwrap_or("All")
+    }
+
+    fn update_switcher_status_hint(&mut self) {
+        self.status = format!(
+            "Switcher: type to filter, Enter open, Tab content search, Ctrl+G collections, Ctrl+L toggle collection ({}), Delete/Ctrl+Backspace delete, Esc close",
+            self.switcher_collection_filter_label()
+        );
+    }
+
+    fn update_content_search_status_hint(&mut self) {
+        self.status = format!(
+            "Content search: type to search, Ctrl+L toggle collection ({}), Enter open, Tab title search, Esc close",
+            self.content_search_collection_filter_label()
+        );
+    }
+
+    fn refresh_switcher_items_for_filter(&mut self, db: &Db) -> Result<(), String> {
+        self.refresh_switcher_items(db)?;
+        if self.mode == UiMode::Switcher {
+            self.update_switcher_status_hint();
+        }
+        if self.mode == UiMode::ContentSearch {
+            self.update_content_search_status_hint();
+        }
+        Ok(())
+    }
+
+    fn toggle_switcher_collection_filter_and_refresh(&mut self, db: &Db) -> Result<(), String> {
+        self.toggle_switcher_collection_filter();
+        self.refresh_switcher_items_for_filter(db)?;
+        Ok(())
+    }
+
+    fn toggle_content_search_collection_filter_and_refresh(&mut self, db: &Db) -> Result<(), String> {
+        self.toggle_content_search_collection_filter();
+        self.refresh_switcher_items_for_filter(db)?;
         Ok(())
     }
 
@@ -301,6 +353,11 @@ impl TerminalApp {
             }
             Key::Ctrl('q') => {
                 self.quit = true;
+            }
+            Key::Ctrl('l') => {
+                if self.working_collection_id.is_some() {
+                    self.toggle_switcher_collection_filter_and_refresh(db)?;
+                }
             }
             Key::Ctrl('w') => {
                 trim_trailing_word(&mut self.switcher_query);
@@ -1342,6 +1399,10 @@ impl TerminalApp {
             self.working_collection_id = None;
             self.working_collection_name = None;
         }
+        if self.switcher_collection_filter_id.as_deref() == Some(collection.id.as_str()) {
+            self.switcher_collection_filter_id = self.working_collection_id.clone();
+            self.switcher_collection_filter_name = self.working_collection_name.clone();
+        }
         if self.content_search_collection_filter_id.as_deref() == Some(collection.id.as_str()) {
             self.content_search_collection_filter_id = self.working_collection_id.clone();
             self.content_search_collection_filter_name = self.working_collection_name.clone();
@@ -1938,8 +1999,7 @@ impl TerminalApp {
         self.collection_switcher_query.clear();
         self.recompute_collection_switcher_matches();
         self.collection_edit_dialog = None;
-        self.status =
-            "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
+        self.status = "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
         Ok(())
     }
 
@@ -2056,14 +2116,14 @@ impl TerminalApp {
         if self.mode == UiMode::ContentSearch {
             self.clear_content_search_session();
         }
+        self.reset_switcher_filter_to_working_collection();
         self.refresh_switcher_items(db)?;
         self.mode = UiMode::Switcher;
         self.switcher_query.clear();
         self.recompute_switcher_matches();
         self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
-        self.status =
-            "Switcher: type to filter, Enter open, Tab content search, Ctrl+G collections, Delete/Ctrl+Backspace delete, Esc close".to_string();
+        self.update_switcher_status_hint();
         Ok(())
     }
 
@@ -2229,8 +2289,7 @@ impl TerminalApp {
         self.content_search_results = self.content_search_title_fallback_results("");
         self.switcher_open_confirm = None;
         self.switcher_delete_confirm = None;
-        self.status =
-            "Content search: type to search, Ctrl+L cycle collection, Enter open, Tab title search, Esc close".to_string();
+        self.update_content_search_status_hint();
         Ok(())
     }
 
@@ -2250,7 +2309,7 @@ impl TerminalApp {
                 self.quit = true;
             }
             Key::Ctrl('l') => {
-                self.cycle_content_search_collection_filter(db, 1)?;
+                self.toggle_content_search_collection_filter_and_refresh(db)?;
             }
             Key::Tab => {
                 self.open_switcher(db)?;
@@ -2386,6 +2445,10 @@ impl TerminalApp {
             if db.get_collection(&working_id)?.is_none() {
                 self.working_collection_id = None;
                 self.working_collection_name = None;
+                if self.switcher_collection_filter_id.as_deref() == Some(working_id.as_str()) {
+                    self.switcher_collection_filter_id = None;
+                    self.switcher_collection_filter_name = None;
+                }
                 if self.content_search_collection_filter_id.as_deref() == Some(working_id.as_str())
                 {
                     self.content_search_collection_filter_id = None;
@@ -2394,10 +2457,15 @@ impl TerminalApp {
             }
         }
         let previous_prefix_index = self.wiki_link_prefix_index.clone();
+        let switcher_collection_filter = if self.mode == UiMode::Switcher {
+            self.switcher_collection_filter_id.as_deref()
+        } else {
+            self.working_collection_id.as_deref()
+        };
         self.switcher_items = switcher::load_note_meta_filtered(
             db,
             Some(&self.active_note.id),
-            self.working_collection_id.as_deref(),
+            switcher_collection_filter,
         )?;
         self.rebuild_wiki_link_prefix_index();
         self.rebuild_wiki_link_note_suggestions_cache();

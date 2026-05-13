@@ -2047,6 +2047,55 @@ fn ctrl_g_opens_collection_switcher_and_enter_sets_working_collection() {
 }
 
 #[test]
+fn ctrl_l_toggles_note_search_collection_limit_with_working_collection() {
+    let (db, mut app, path) = app_with_note("base");
+    db.create_collection("Projects", "project notes")
+        .expect("projects collection created");
+    app.execute_terminal_command(&db, "collection choose Projects");
+    assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
+
+    run_keys(&mut app, &db, &[Key::Ctrl('p')]);
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert_eq!(
+        app.switcher_collection_filter_name.as_deref(),
+        Some("Projects")
+    );
+
+    run_keys(&mut app, &db, &[Key::Ctrl('l')]);
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert_eq!(app.switcher_collection_filter_id, None);
+
+    run_keys(&mut app, &db, &[Key::Ctrl('l')]);
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert_eq!(
+        app.switcher_collection_filter_name.as_deref(),
+        Some("Projects")
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn ctrl_l_does_not_change_note_search_filter_without_working_collection() {
+    let (db, mut app, path) = app_with_note("base");
+    assert!(app.working_collection_id.is_none());
+
+    run_keys(&mut app, &db, &[Key::Ctrl('p')]);
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.switcher_collection_filter_id.is_none());
+
+    run_keys(&mut app, &db, &[Key::Ctrl('l')]);
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.switcher_collection_filter_id.is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn collection_switcher_ctrl_e_opens_edit_dialog_and_saves_updates() {
     let (db, mut app, path) = app_with_note("base");
     let collection = db

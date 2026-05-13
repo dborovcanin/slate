@@ -39,8 +39,18 @@ function nextSwitcherMode(mode: SwitcherMode): SwitcherMode {
   return mode === "title" ? "content" : "title";
 }
 
-function resetContentCollectionFilterFromWorkingCollection() {
+function resetCollectionFilterFromWorkingCollection() {
   activeCollectionFilter = state.workingCollection?.id ?? null;
+}
+
+function toggleCollectionFilterFromWorkingCollection(): boolean {
+  const workingId = state.workingCollection?.id ?? null;
+  if (!workingId) return false;
+  activeCollectionFilter = activeCollectionFilter === workingId ? null : workingId;
+  activeSearchQuery = "";
+  activeSearchItems = null;
+  activeCollectionNotes = null;
+  return true;
 }
 
 function toNoteEntriesFromSummaries(
@@ -142,14 +152,13 @@ function queueContentSearch(query: string) {
 }
 
 function notesForSwitcherSource(): NoteEntry[] {
-  if (activeMode === "content" && activeCollectionNotes) {
+  if (activeCollectionFilter && activeCollectionNotes) {
     return activeCollectionNotes;
   }
   return allNotesForSwitcher();
 }
 
 async function refreshCollectionOptionsAndNotes() {
-  if (activeMode !== "content") return;
   const collections = await listCollections();
   if (
     activeCollectionFilter &&
@@ -160,12 +169,11 @@ async function refreshCollectionOptionsAndNotes() {
     }
     activeCollectionFilter = null;
   }
-  const summaries = await listNotesMetaFiltered(
-    activeCollectionFilter,
-    state.activeNote?.id ?? null,
-  );
+  const summaries = activeCollectionFilter
+    ? await listNotesMetaFiltered(activeCollectionFilter, state.activeNote?.id ?? null)
+    : null;
   activeCollectionOptions = collections;
-  activeCollectionNotes = toNoteEntriesFromSummaries(summaries);
+  activeCollectionNotes = summaries ? toNoteEntriesFromSummaries(summaries) : null;
   ensureContentCollectionSelector();
   refreshSwitcher();
 }
@@ -215,6 +223,34 @@ function ensureContentCollectionSelector() {
       refreshSwitcher();
     });
   };
+}
+
+function ensureSwitcherShortcutFootnote() {
+  if (!overlay?.isOpen()) return;
+  const panel = document.querySelector(".switcher-panel");
+  if (!panel) return;
+  let footnoteEl = panel.querySelector(".switcher-shortcuts") as HTMLDivElement | null;
+  if (!footnoteEl) {
+    footnoteEl = document.createElement("div");
+    footnoteEl.className = "switcher-shortcuts";
+    panel.appendChild(footnoteEl);
+  }
+  const workingId = state.workingCollection?.id ?? null;
+  const activeLimitLabel =
+    workingId && activeCollectionFilter === workingId
+      ? (state.workingCollection?.name ?? "Working collection")
+      : "All";
+
+  if (activeMode === "content") {
+    footnoteEl.textContent = `Ctrl+L toggle collection (${activeLimitLabel}) | Tab title search | Enter open | Esc close`;
+    return;
+  }
+  if (state.workingCollection?.id) {
+    footnoteEl.textContent = `Ctrl+L toggle collection (${activeLimitLabel}) | Tab content search | Enter open | Esc close`;
+  } else {
+    footnoteEl.textContent =
+      "Tab content search | Ctrl+L toggle collection (requires active collection) | Enter open | Esc close";
+  }
 }
 
 function buildItems(query: string): SwitcherItem[] {
@@ -339,18 +375,12 @@ export function openSwitcher(
     activeMode = mode;
     resetContentSearchState();
   }
-  if (mode === "content") {
-    resetContentCollectionFilterFromWorkingCollection();
-    activeCollectionOptions = [];
-    activeCollectionNotes = null;
-    void refreshCollectionOptionsAndNotes().catch(() => {
-      refreshSwitcher();
-    });
-  } else {
-    activeCollectionFilter = null;
-    activeCollectionOptions = [];
-    activeCollectionNotes = null;
-  }
+  resetCollectionFilterFromWorkingCollection();
+  activeCollectionOptions = [];
+  activeCollectionNotes = null;
+  void refreshCollectionOptionsAndNotes().catch(() => {
+    refreshSwitcher();
+  });
 
   if (!overlay) {
     const placeholder = mode === "content" ? "Search note content..." : "Search notes...";
@@ -362,6 +392,26 @@ export function openSwitcher(
       renderItem: renderSwitcherItem,
       onSelect: ({ item, lineNumber }) => onSelectCallback?.(item.id, lineNumber ?? null),
       onKeydown: (event, state) => {
+        if (
+          event.ctrlKey &&
+          !event.shiftKey &&
+          !event.metaKey &&
+          !event.altKey &&
+          event.key.toLowerCase() === "l"
+        ) {
+          if (!toggleCollectionFilterFromWorkingCollection()) {
+            return false;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          ensureContentCollectionSelector();
+          ensureSwitcherShortcutFootnote();
+          refreshSwitcher();
+          void refreshCollectionOptionsAndNotes().catch(() => {
+            refreshSwitcher();
+          });
+          return true;
+        }
         if (event.key === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
           event.preventDefault();
           event.stopPropagation();
@@ -388,6 +438,7 @@ export function openSwitcher(
   if (mode === "content") {
     ensureContentCollectionSelector();
   }
+  ensureSwitcherShortcutFootnote();
 }
 
 export function closeSwitcher() {
@@ -408,13 +459,16 @@ export const __switcherInternals = {
   nextSwitcherModeForTest(mode: SwitcherMode) {
     return nextSwitcherMode(mode);
   },
-  resetContentCollectionFilterFromWorkingCollectionForTest() {
-    resetContentCollectionFilterFromWorkingCollection();
+  resetCollectionFilterFromWorkingCollectionForTest() {
+    resetCollectionFilterFromWorkingCollection();
   },
   setActiveCollectionFilterForTest(next: string | null) {
     activeCollectionFilter = next;
   },
   getActiveCollectionFilterForTest() {
     return activeCollectionFilter;
+  },
+  toggleCollectionFilterFromWorkingCollectionForTest() {
+    return toggleCollectionFilterFromWorkingCollection();
   },
 };

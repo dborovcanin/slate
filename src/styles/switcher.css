@@ -89,6 +89,15 @@
   flex: 1;
 }
 
+.switcher-shortcuts {
+  padding: 7px 14px 8px;
+  border-top: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--bg-surface) 90%, var(--accent) 10%);
+}
+
 .switcher-item {
   display: flex;
   align-items: center;
