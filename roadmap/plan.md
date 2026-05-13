@@ -667,3 +667,5 @@ Add markdown image support with correct architecture boundaries:
 - [ ] Add TUI open-image-at-cursor action
 - [ ] Add UI/TUI tests for image syntax parity and editing transitions
 - [ ] Add perf checks for notes containing many image references
+- [ ] Enable folded saving
+- [ ] Enable db export and import
