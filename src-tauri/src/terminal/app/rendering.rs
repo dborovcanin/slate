@@ -375,6 +375,7 @@ impl TerminalApp {
         row: usize,
         cols: usize,
         status_bg: u8,
+        right_sticky_text: &str,
     ) -> bool {
         if self.mode != UiMode::CommandBar || !self.command_completion.visible {
             return false;
@@ -402,28 +403,64 @@ impl TerminalApp {
 
         draw_row_at_styled(buf, row, 1, cols, "", base_style);
 
+        let sticky_width = right_sticky_text.chars().count().min(cols);
+        let sticky_start_col = cols.saturating_sub(sticky_width).saturating_add(1);
+        let left_budget_cols = if sticky_width > 0 {
+            sticky_start_col.saturating_sub(1)
+        } else {
+            cols
+        };
+
         let mut col = 1usize;
         Self::draw_status_segment(
             buf,
             row,
             &mut col,
-            cols,
+            left_budget_cols,
             &format!(":{}  [", self.command_input),
             base_style,
         );
         for (idx, option) in self.command_completion.options.iter().enumerate() {
             if idx > 0 {
-                Self::draw_status_segment(buf, row, &mut col, cols, "  ", base_style);
+                Self::draw_status_segment(buf, row, &mut col, left_budget_cols, "  ", base_style);
             }
             let style = if idx == selected_idx {
                 selected_style
             } else {
                 base_style
             };
-            Self::draw_status_segment(buf, row, &mut col, cols, &option.token, style);
+            Self::draw_status_segment(buf, row, &mut col, left_budget_cols, &option.token, style);
         }
-        Self::draw_status_segment(buf, row, &mut col, cols, "]", base_style);
+        Self::draw_status_segment(buf, row, &mut col, left_budget_cols, "]", base_style);
+        if sticky_width > 0 {
+            let mut sticky_col = sticky_start_col;
+            Self::draw_status_segment(buf, row, &mut sticky_col, cols, right_sticky_text, base_style);
+        }
         true
+    }
+
+    fn draw_status_row_with_right_sticky(
+        &self,
+        buf: &mut String,
+        row: usize,
+        cols: usize,
+        left_text: &str,
+        right_sticky_text: &str,
+        style: AnsiStyle,
+    ) {
+        draw_row_at_styled(buf, row, 1, cols, "", style);
+        let sticky_width = right_sticky_text.chars().count().min(cols);
+        if sticky_width == 0 {
+            draw_row_at_styled(buf, row, 1, cols, left_text, style);
+            return;
+        }
+        let sticky_start_col = cols.saturating_sub(sticky_width).saturating_add(1);
+        let left_budget_cols = sticky_start_col.saturating_sub(1);
+        if left_budget_cols > 0 {
+            draw_row_at_styled(buf, row, 1, left_budget_cols, left_text, style);
+        }
+        let mut sticky_col = sticky_start_col;
+        Self::draw_status_segment(buf, row, &mut sticky_col, cols, right_sticky_text, style);
     }
 
     pub(super) fn search_highlights_for_line(
@@ -1260,20 +1297,27 @@ impl TerminalApp {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
         };
-        let status_text = format!("{status_base}{}", self.working_collection_status_suffix());
+        let collection_sticky = self.working_collection_status_suffix();
         let status_bg = self.render_palette.primary();
-        if !self.draw_command_completion_status_row(&mut buf, rows, cols, status_bg) {
-            draw_row_at_styled(
+        let status_style = AnsiStyle {
+            fg: Some(contrast_fg_for_bg(status_bg)),
+            bg: Some(status_bg),
+            ..Default::default()
+        };
+        if !self.draw_command_completion_status_row(
+            &mut buf,
+            rows,
+            cols,
+            status_bg,
+            &collection_sticky,
+        ) {
+            self.draw_status_row_with_right_sticky(
                 &mut buf,
                 rows,
-                1,
                 cols,
-                &status_text,
-                AnsiStyle {
-                    fg: Some(contrast_fg_for_bg(status_bg)),
-                    bg: Some(status_bg),
-                    ..Default::default()
-                },
+                status_base,
+                &collection_sticky,
+                status_style,
             );
         }
 

@@ -1503,6 +1503,7 @@ function showToast(message: string) {
 
 let statusTitleEl: HTMLElement;
 let statusMetaEl: HTMLElement;
+let statusCollectionEl: HTMLElement;
 let clipWatchActive = false;
 let macroRecordingRegister: string | null = null;
 
@@ -1516,6 +1517,10 @@ function createStatusBar(container: HTMLElement) {
   statusMetaEl = document.createElement("span");
   statusMetaEl.className = "status-bar-meta";
 
+  statusCollectionEl = document.createElement("span");
+  statusCollectionEl.className = "status-collection status-collection-fixed";
+  statusCollectionEl.hidden = true;
+
   const hint = document.createElement("span");
   hint.className = "status-bar-hint";
   hint.textContent = "Ctrl+P notes | Ctrl+G collections";
@@ -1523,6 +1528,7 @@ function createStatusBar(container: HTMLElement) {
   statusMetaEl.appendChild(hint);
   bar.appendChild(statusTitleEl);
   bar.appendChild(statusMetaEl);
+  bar.appendChild(statusCollectionEl);
   container.appendChild(bar);
 
   updateStatusBar();
@@ -1546,20 +1552,12 @@ function updateStatusBar() {
   }
 
   const hintEl = statusMetaEl.querySelector(".status-bar-hint");
-  let collectionEl = statusMetaEl.querySelector(".status-collection") as HTMLElement | null;
   if (state.workingCollection) {
-    if (!collectionEl) {
-      collectionEl = document.createElement("span");
-      collectionEl.className = "status-collection";
-    }
-    collectionEl.textContent = `collection ${state.workingCollection.name}`;
-    if (hintEl) {
-      statusMetaEl.insertBefore(collectionEl, hintEl);
-    } else {
-      statusMetaEl.appendChild(collectionEl);
-    }
-  } else if (collectionEl) {
-    collectionEl.remove();
+    statusCollectionEl.textContent = `| ${state.workingCollection.name}`;
+    statusCollectionEl.hidden = false;
+  } else {
+    statusCollectionEl.textContent = "";
+    statusCollectionEl.hidden = true;
   }
 
   let modulesEl = statusMetaEl.querySelector(".status-modules") as HTMLElement | null;

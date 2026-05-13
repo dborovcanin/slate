@@ -47,10 +47,13 @@ html, body {
 }
 
 .status-bar-meta {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  min-width: 0;
   margin-left: 16px;
   display: flex;
   gap: 12px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .status-bar-hint {
@@ -103,6 +106,15 @@ html, body {
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-overlay));
   font-size: 11px;
   letter-spacing: 0.02em;
+}
+
+.status-collection-fixed {
+  flex-shrink: 0;
+  margin-left: 12px;
+  max-width: 42%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toast {
