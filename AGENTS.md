@@ -180,16 +180,15 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-13 10:09am GMT+2
+# [slate] recent context, 2026-05-13 11:53am GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (17,711t read) | 896,292t work | 98% savings
+Stats: 50 obs (17,318t read) | 703,815t work | 98% savings
 
 ### May 6, 2026
-S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:02 AM)
 S233 Review last 40 commits and explore potential improvements in the slate project (May 6, 12:12 AM)
 ### May 12, 2026
 S234 Evaluate items 1, 4, and 6 from a task list; user challenged item 1 (macros), leading to code investigation and plan revision (May 12, 8:52 AM)
@@ -197,11 +196,6 @@ S235 Review last 40 commits and implement improvements — accurate per-characte
 S236 Investigate and fix pre-existing test failure, then plan export.rs refactor into three files (May 12, 9:10 AM)
 S237 Code analysis and refactor planning for slate: vim text-objects, export.rs split, and decide_eval_window API consolidation (May 12, 12:02 PM)
 S238 Refactor PDF unicode font visibility (pub(super)→pub(crate)) and plan consolidation of the 6-variant decide_eval_window API into a single params-struct function (May 12, 12:04 PM)
-365 12:11p 🔄 export.rs Split Begun: Converted to export/mod.rs Directory Module
-366 12:12p 🔄 pdf_style.rs Created — First File of export.rs Split
-367 12:19p 🔄 Created pdf_layout.rs — second module of the export.rs split
-368 12:23p 🔵 Serializer section of mod.rs confirmed to remain in mod.rs after split
-369 12:26p 🔄 PDF Export Module Split into pdf_style and pdf_layout Submodules
 370 12:31p 🔵 Build Error: `slight` Binary References Deleted `export.rs`
 371 " 🔵 `slight` Binary Uses Explicit `#[path]` Attribute to Include `commands/export.rs`
 372 " 🔴 Fixed `slight` Binary Build: Updated `#[path]` for Refactored Export Module
@@ -241,7 +235,7 @@ S239 Fix Rust test compilation failures in the `slate` project caused by product
 405 " 🔴 Updated 5 Test Call Sites from Old decide_eval_window Signature to decide_eval_window_with_mask
 406 1:45p 🔴 Made calc_feature_mask pub(super) to Fix E0624 Visibility Error in Tests
 S240 Complete a 6-item refactor/improvement plan for the `slate` Rust project — all items now finished (May 12, 1:45 PM)
-S241 Dead code cleanup in `calc_plan.rs` — remove `formula_dependency_window` thin wrapper, verify clean build (May 12, 1:48 PM)
+S241 Dead code cleanup in `calc_plan.rs` — remove `formula_dependency_window` thin wrapper, verify clean build (May 12, 1:47 PM)
 ### May 13, 2026
 439 10:05a 🔵 Variable Color Inconsistency Between UI and TUI in Default Dark Theme
 440 " 🔵 Root Cause: UI `.md-variable` Uses `--code-token-type` Instead of a Dedicated Variable Color
@@ -251,7 +245,13 @@ S241 Dead code cleanup in `calc_plan.rs` — remove `formula_dependency_window` 
 444 " 🔵 `theme.css` Default `:root` Block Has No `--code-token-variable`; Dynamic Derivation Is Sole Source
 445 " 🔴 Added `--code-token-variable: #d7af5f` Static Default to `theme.css`
 446 " 🔴 Variable Color UI/TUI Consistency Fix Verified: TypeScript Compiles Clean, Tests Pass
+447 10:09a 🔵 `src/app.ts` `buildPdfExportPalette` Still Reads `--code-token-type` for `variable` Field — Not Yet Updated
+448 10:10a 🔵 Variable Color Fix Changes Committed — Working Tree Clean
+S255 Add right-boundary cursor reveal for regular markdown [text](url) links — same behavior already supported for wiki-links [[...]] (May 13, 10:11 AM)
+449 10:13a 🟣 Right-boundary cursor reveal extended to all link types (UI + TUI)
+450 10:22a 🔵 Primary session in idempotent patch loop due to stale chunk cache
+451 " 🔴 Image right-boundary test used wrong cursor position (14 vs 15)
 
-Access 896k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 704k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 

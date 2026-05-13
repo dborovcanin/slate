@@ -97,6 +97,44 @@ test("inlineMarkerRevealSignatureAtCursor keeps wiki-link right boundary active"
   );
 });
 
+test("inlineMarkerRevealSignatureAtCursor keeps markdown link right boundary active", () => {
+  const lineText = "[txt](url)x";
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 0),
+    "0-10",
+    "markdown link left boundary should keep edit-mode signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 10),
+    "0-10:rb",
+    "markdown link right boundary should keep edit-mode boundary signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 11),
+    "",
+    "cursor after markdown link right boundary should clear signature",
+  );
+});
+
+test("inlineMarkerRevealSignatureAtCursor keeps markdown image right boundary active", () => {
+  const lineText = "![img](./a.png)x";
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 0),
+    "0-15",
+    "markdown image left boundary should keep edit-mode signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 15),
+    "0-15:rb",
+    "markdown image right boundary should keep edit-mode boundary signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 16),
+    "",
+    "cursor after markdown image right boundary should clear signature",
+  );
+});
+
 test("tokenizeCodeLine marks keywords, numbers, strings, comments and symbols in fenced code", () => {
   const rust = tokenizeCodeLine('let total: Result = parse_value(42); let s = "ok" // note', "rust");
   const rustTypes = new Set(rust.map((token) => token.type));
@@ -616,7 +654,7 @@ test("buildMarkdownDecorationsForSpans reveals raw image markdown when caret is 
   );
 });
 
-test("buildMarkdownDecorationsForSpans shows image widget at right boundary of image token", () => {
+test("buildMarkdownDecorationsForSpans reveals image source at right boundary of image token", () => {
   const doc = Text.of(["![Diagram](./assets/plan.png) tail"]);
   const line = doc.line(1);
   const rightBoundary = line.from + "![Diagram](./assets/plan.png)".length;
@@ -627,9 +665,38 @@ test("buildMarkdownDecorationsForSpans shows image widget at right boundary of i
     { from: rightBoundary, to: rightBoundary, empty: true },
   );
   const flat = collectDecorations(decos);
-  assert.ok(
+  assert.equal(
     flat.some((d) => d.widget === "MarkdownImageDisplayWidget"),
-    "image display widget should render when cursor is at right boundary",
+    false,
+    "image display widget should hide when cursor is at right boundary",
+  );
+  assert.equal(
+    flat.some(
+      (d) => d.widget === "HiddenMarkdownTokenWidget" && d.from >= line.from && d.to <= line.to,
+    ),
+    false,
+    "image source should be editable from right boundary position",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals markdown link source from right boundary cursor", () => {
+  const doc = Text.of(["[guide](./docs/guide.md) tail"]);
+  const line = doc.line(1);
+  const linkEnd = line.from + "[guide](./docs/guide.md)".length;
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: linkEnd, to: linkEnd, empty: true },
+  );
+  const flat = collectDecorations(decos);
+
+  assert.equal(
+    flat.some(
+      (d) => d.widget === "HiddenMarkdownTokenWidget" && d.from >= line.from && d.to <= linkEnd,
+    ),
+    false,
+    "markdown link markers should be revealed when cursor is at right boundary",
   );
 });
 
@@ -775,6 +842,37 @@ test("buildMarkdownDecorationsForSpans allows entering edit mode for wiki-link w
   );
 });
 
+test("buildMarkdownDecorationsForSpans reveals wiki-link without alt text from left boundary cursor", () => {
+  const doc = Text.of(["[[01KP0YY1#Test 1]] tail"]);
+  const line = doc.line(1);
+  const linkStart = line.from;
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: linkStart, to: linkStart, empty: true },
+    {
+      wikiLinkResolver: () => ({ exists: true, title: "Note Title" }),
+    },
+  );
+  const flat = collectDecorations(decos);
+  assert.equal(
+    flat.some((d) => d.from === line.from && d.to === line.from && d.widget === "WikiLinkDisplayWidget"),
+    false,
+    "display widget should hide when cursor is at link left boundary",
+  );
+  assert.equal(
+    flat.some(
+      (d) =>
+        d.from === line.from + 2 &&
+        d.to === line.from + 10 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    false,
+    "wiki-link id should be editable from the left boundary position",
+  );
+});
+
 test("buildMarkdownDecorationsForSpans reveals wiki-link source from right boundary cursor", () => {
   const doc = Text.of(["[[01HX4VHR#Intro]] tail"]);
   const line = doc.line(1);
@@ -805,6 +903,88 @@ test("buildMarkdownDecorationsForSpans reveals wiki-link source from right bound
     ),
     false,
     "source should be editable from the right boundary position",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals wiki-link alt source from left boundary cursor", () => {
+  const doc = Text.of(["[[01KP0YY1#testing|tst]] tail"]);
+  const line = doc.line(1);
+  const linkStart = line.from;
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: linkStart, to: linkStart, empty: true },
+  );
+  const flat = collectDecorations(decos);
+  assert.equal(
+    flat.some(
+      (d) => d.widget === "HiddenMarkdownTokenWidget" && d.from >= line.from && d.to <= line.from + 24,
+    ),
+    false,
+    "all wiki-link source segments should be editable from left boundary",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals wiki-link-only line when cursor is previous line end with assoc=1", () => {
+  const doc = Text.of(["before", "[[01KP0YY1#Test 1]]"]);
+  const firstLine = doc.line(1);
+  const secondLine = doc.line(2);
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 2 }],
+    [],
+    { from: firstLine.to, to: firstLine.to, empty: true, assoc: 1 },
+    {
+      wikiLinkResolver: () => ({ exists: true, title: "Note Title" }),
+    },
+  );
+  const flat = collectDecorations(decos);
+  assert.equal(
+    flat.some((d) => d.from === secondLine.from && d.to === secondLine.from && d.widget === "WikiLinkDisplayWidget"),
+    false,
+    "display widget should hide when cursor is visually at start of wiki-link-only line",
+  );
+  assert.equal(
+    flat.some(
+      (d) =>
+        d.widget === "HiddenMarkdownTokenWidget"
+        && d.from >= secondLine.from
+        && d.to <= secondLine.to,
+    ),
+    false,
+    "wiki-link source should be editable when entering line via vertical motion",
+  );
+});
+
+test("buildMarkdownDecorationsForSpans reveals wiki-link-only line when cursor is previous line end with assoc=0", () => {
+  const doc = Text.of(["before", "[[01KP0YY1#Test 1]]"]);
+  const firstLine = doc.line(1);
+  const secondLine = doc.line(2);
+  const decos = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 2 }],
+    [],
+    { from: firstLine.to, to: firstLine.to, empty: true, assoc: 0 },
+    {
+      wikiLinkResolver: () => ({ exists: true, title: "Note Title" }),
+    },
+  );
+  const flat = collectDecorations(decos);
+  assert.equal(
+    flat.some((d) => d.from === secondLine.from && d.to === secondLine.from && d.widget === "WikiLinkDisplayWidget"),
+    false,
+    "display widget should hide when cursor is visually at start of wiki-link-only line",
+  );
+  assert.equal(
+    flat.some(
+      (d) =>
+        d.widget === "HiddenMarkdownTokenWidget"
+        && d.from >= secondLine.from
+        && d.to <= secondLine.to,
+    ),
+    false,
+    "wiki-link source should be editable when entering line via vertical motion",
   );
 });
 

@@ -94,21 +94,51 @@ class WikiLinkDisplayWidget extends WidgetType {
   constructor(
     private readonly displayText: string,
     private readonly broken: boolean,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
   ) {
     super();
   }
 
   eq(other: WikiLinkDisplayWidget): boolean {
-    return other.displayText === this.displayText && other.broken === this.broken;
+    return (
+      other.displayText === this.displayText
+      && other.broken === this.broken
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo
+    );
   }
 
-  toDOM(): HTMLElement {
+  private placeCaretForSourceEdit(view: EditorView) {
+    const from = Math.max(0, Math.min(this.sourceFrom, this.sourceTo));
+    const to = Math.max(from, this.sourceTo);
+    const anchor = Math.min(to, from + 2);
+    view.dispatch({
+      selection: { anchor },
+      scrollIntoView: true,
+    });
+    view.focus();
+  }
+
+  private bindEditModeClick(target: HTMLElement, view: EditorView) {
+    target.addEventListener("mousedown", (event) => {
+      if (event.button !== 0) return;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.placeCaretForSourceEdit(view);
+    });
+  }
+
+  toDOM(view: EditorView): HTMLElement {
     const span = document.createElement("span");
     span.className = this.broken
       ? "md-wiki-link-title md-wiki-link-broken"
       : "md-wiki-link-title";
     span.textContent = this.displayText;
     span.contentEditable = "false";
+    span.setAttribute("draggable", "false");
+    this.bindEditModeClick(span, view);
     return span;
   }
 }
@@ -741,7 +771,12 @@ function emitWikiLinkDecorations(
     from: wl.firstMarkerFrom,
     to: wl.firstMarkerFrom,
     decoration: Decoration.widget({
-      widget: new WikiLinkDisplayWidget(displayText, !resolved.exists),
+      widget: new WikiLinkDisplayWidget(
+        displayText,
+        !resolved.exists,
+        wl.firstMarkerFrom,
+        closingMarkerTo,
+      ),
       side: 1,
     }),
   });
@@ -836,7 +871,7 @@ function collectInlineDecorations(
           }
           const fullFrom = lineFrom + currentImage.sourceFrom;
           const fullTo = lineFrom + currentImage.sourceTo;
-          currentImage.cursorInside = selectionTouchesInlineRange(activeSelection, fullFrom, fullTo);
+          currentImage.cursorInside = selectionTouchesRange(activeSelection, fullFrom, fullTo);
           emitImageDecorations(currentImage, from, to, imageIndex, imagePreviewResolver, pending);
           imageAccum = null;
         }
@@ -865,7 +900,7 @@ function collectInlineDecorations(
         pending.push({
           from,
           to,
-          decoration: shouldRevealInlineMarker(
+          decoration: shouldRevealInlineMarkerAtBoundary(
             tokens,
             componentRanges,
             index,
@@ -1011,6 +1046,7 @@ interface ActiveSelection {
   from: number;
   to: number;
   empty: boolean;
+  assoc?: -1 | 0 | 1;
 }
 
 interface MarkdownBuildProfiling {
@@ -1293,6 +1329,7 @@ function buildMarkdownDecorations(
     from: selection.from,
     to: selection.to,
     empty: selection.empty,
+    assoc: selection.assoc,
   }, {
     getFenceStateBeforeLine: (lineNumber) =>
       fenceCache.getStateBeforeLine(doc, lineNumber),
@@ -1340,10 +1377,11 @@ function selectionIntersectsChecklistReveal(
   selection: ActiveSelection,
 ): boolean {
   if (!selection.empty) return true;
-  const line = doc.lineAt(selection.from);
+  const cursorPos = selectionCursorPosForReveal(doc, selection);
+  const line = doc.lineAt(cursorPos);
   const ranges = lineChecklistRevealRanges(line);
   for (const range of ranges) {
-    if (selection.from >= range.from && selection.from <= range.to) return true;
+    if (cursorPos >= range.from && cursorPos <= range.to) return true;
   }
   return false;
 }
@@ -1355,7 +1393,12 @@ function selectionTouchesRange(
 ): boolean {
   if (!selection) return false;
   if (selection.empty) {
-    return selection.from >= from && selection.from <= to;
+    const pos = selection.from;
+    if (pos >= from && pos <= to) return true;
+    // A cursor at a line break can be visually at the next line start.
+    // `assoc=0` is also used by some vertical motions in our Vim/UI adapter path.
+    if (selection.assoc !== -1 && pos + 1 === from) return true;
+    return selection.assoc === -1 && pos - 1 === to;
   }
   return selection.from < to && from < selection.to;
 }
@@ -1367,7 +1410,10 @@ function selectionTouchesInlineRange(
 ): boolean {
   if (!selection) return false;
   if (selection.empty) {
-    return selection.from >= from && selection.from < to;
+    const pos = selection.from;
+    if (pos >= from && pos < to) return true;
+    if (selection.assoc !== -1 && pos + 1 === from) return true;
+    return false;
   }
   return selection.from < to && from < selection.to;
 }
@@ -1408,8 +1454,18 @@ function selectionIntersectsTransparentMarkdownReveal(
   selection: ActiveSelection,
 ): boolean {
   if (!selection.empty) return true;
-  const line = doc.lineAt(selection.from);
+  const cursorPos = selectionCursorPosForReveal(doc, selection);
+  const line = doc.lineAt(cursorPos);
   return lineHasTransparentMarkdownSyntax(line.text);
+}
+
+function selectionCursorPosForReveal(doc: Text, selection: ActiveSelection): number {
+  if (!selection.empty) return selection.from;
+  if (selection.assoc === -1) return selection.from;
+  if (selection.from < 0 || selection.from >= doc.length) return selection.from;
+  return doc.sliceString(selection.from, selection.from + 1) === "\n"
+    ? selection.from + 1
+    : selection.from;
 }
 
 function inlineComponentSupportsRightBoundaryReveal(
@@ -1417,7 +1473,16 @@ function inlineComponentSupportsRightBoundaryReveal(
   range: TextRange,
 ): boolean {
   if (range.to - range.from < 4) return false;
-  return lineText.startsWith("[[", range.from) && lineText.slice(range.to - 2, range.to) === "]]";
+  if (lineText.startsWith("[[", range.from) && lineText.slice(range.to - 2, range.to) === "]]") {
+    return true;
+  }
+  const startsLink = lineText.charCodeAt(range.from) === 91;
+  const startsImage = lineText.slice(range.from, range.from + 2) === "![";
+  if ((!startsLink && !startsImage) || lineText.charCodeAt(range.to - 1) !== 41) {
+    return false;
+  }
+  const component = lineText.slice(range.from, range.to);
+  return component.includes("](");
 }
 
 export function inlineMarkerRevealSignatureAtCursor(
@@ -1454,16 +1519,18 @@ function emptySelectionRevealSignature(
   selection: ActiveSelection,
 ): string | null {
   if (!selection.empty) return null;
-  const line = doc.lineAt(selection.from);
+  const cursorPos = selectionCursorPosForReveal(doc, selection);
+  const line = doc.lineAt(cursorPos);
   const checklistReveal = lineChecklistRevealRanges(line).some((range) =>
-    selection.from >= range.from && selection.from <= range.to
+    cursorPos >= range.from && cursorPos <= range.to
   );
-  const cursorOffsetInLine = selection.from - line.from;
+  const cursorOffsetInLine = cursorPos - line.from;
   const inlineSignature = inlineMarkerRevealSignatureAtCursor(
     line.text,
     cursorOffsetInLine,
   );
-  return `${line.number}:${checklistReveal ? "1" : "0"}:${inlineSignature}`;
+  const assoc = selection.assoc ?? 0;
+  return `${line.number}:${checklistReveal ? "1" : "0"}:${inlineSignature}:${assoc}`;
 }
 
 function decorateContentLine(
@@ -2061,14 +2128,18 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           from: update.startState.selection.main.from,
           to: update.startState.selection.main.to,
           empty: update.startState.selection.main.empty,
+          assoc: update.startState.selection.main.assoc,
         };
         const nextSelection: ActiveSelection = {
           from: update.state.selection.main.from,
           to: update.state.selection.main.to,
           empty: update.state.selection.main.empty,
+          assoc: update.state.selection.main.assoc,
         };
-        const prevLineNo = update.startState.doc.lineAt(prevSelection.from).number;
-        const nextLineNo = update.state.doc.lineAt(nextSelection.from).number;
+        const prevRevealPos = selectionCursorPosForReveal(update.startState.doc, prevSelection);
+        const nextRevealPos = selectionCursorPosForReveal(update.state.doc, nextSelection);
+        const prevLineNo = update.startState.doc.lineAt(prevRevealPos).number;
+        const nextLineNo = update.state.doc.lineAt(nextRevealPos).number;
         if (prevLineNo === nextLineNo) {
           const prevSig = emptySelectionRevealSignature(update.startState.doc, prevSelection);
           const nextSig = emptySelectionRevealSignature(update.state.doc, nextSelection);

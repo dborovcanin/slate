@@ -83,11 +83,11 @@ pub fn collapse_media_sources_for_display(
             &mut rendered_char_count,
         );
 
-        // Treat media span as half-open [from, to): at the right boundary we
-        // are already outside, which avoids source/preview flicker while
-        // vertical-scrolling across media lines.
+        // Treat media span as closed [from, to]: at the right boundary we
+        // still reveal source so keyboard entry from the right remains
+        // symmetric with other markdown links.
         let cursor_inside = active_cursor_col
-            .map(|col| col >= media.from && col < media.to)
+            .map(|col| col >= media.from && col <= media.to)
             .unwrap_or(false);
 
         if cursor_inside {
@@ -322,13 +322,13 @@ mod tests {
     }
 
     #[test]
-    fn collapse_media_sources_for_display_hides_image_source_at_right_boundary() {
+    fn collapse_media_sources_for_display_reveals_image_source_at_right_boundary() {
         let line = "![diagram](./assets/plan.png)";
         let boundary = line.chars().count();
         let transformed = collapse_media_sources_for_display(line, Some(boundary));
-        assert!(transformed.changed);
-        assert_eq!(transformed.rendered_line, "[image: diagram]");
-        assert_eq!(transformed.mapped_cursor_col, Some("[image: diagram]".chars().count()));
+        assert!(!transformed.changed);
+        assert_eq!(transformed.rendered_line, line);
+        assert_eq!(transformed.mapped_cursor_col, Some(boundary));
     }
 
     #[test]
@@ -355,6 +355,16 @@ mod tests {
         let transformed = collapse_media_sources_for_display(line, None);
         assert!(transformed.changed);
         assert_eq!(transformed.rendered_line, "listen [audio: theme]");
+    }
+
+    #[test]
+    fn collapse_media_sources_for_display_reveals_audio_source_at_right_boundary() {
+        let line = "[theme](./audio/theme.mp3)";
+        let boundary = line.chars().count();
+        let transformed = collapse_media_sources_for_display(line, Some(boundary));
+        assert!(!transformed.changed);
+        assert_eq!(transformed.rendered_line, line);
+        assert_eq!(transformed.mapped_cursor_col, Some(boundary));
     }
 
     #[test]

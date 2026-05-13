@@ -77,7 +77,13 @@ pub fn should_reveal_inline_marker(
     if cursor_col >= from && cursor_col < to {
         return true;
     }
-    cursor_col == to && matches!(marker.kind, InlineTokenType::WikiLinkMarker)
+    cursor_col == to
+        && matches!(
+            marker.kind,
+            InlineTokenType::LinkMarker
+                | InlineTokenType::WikiLinkMarker
+                | InlineTokenType::ImageMarker
+        )
 }
 
 fn inline_tokens_for_display(text: &str) -> Vec<InlineToken> {
@@ -199,7 +205,7 @@ pub fn image_hidden_token_ranges(
                     let start = tokens[start_idx].from;
                     let end = token.to;
                     let cursor_inside = active_cursor_col
-                        .map(|col| col >= start && col < end)
+                        .map(|col| col >= start && col <= end)
                         .unwrap_or(false);
                     if !cursor_inside {
                         for image_token in &tokens[start_idx..=index] {
@@ -343,6 +349,20 @@ mod tests {
     }
 
     #[test]
+    fn markdown_link_reveals_source_at_right_boundary() {
+        let line = "[guide](./docs/guide.md)";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(line.chars().count()));
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn markdown_link_reveals_source_at_left_boundary() {
+        let line = "[guide](./docs/guide.md)";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(0));
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
     fn wiki_link_hidden_token_ranges_only_hide_non_title_segments_for_alt_text() {
         let line = "[[01HX4VHR#Intro|My Alt]] tail";
         let tokens = markdown_tokens::tokenize_inline_markdown(line);
@@ -373,10 +393,17 @@ mod tests {
     }
 
     #[test]
-    fn image_hidden_token_ranges_hide_source_at_right_boundary() {
+    fn image_hidden_token_ranges_reveal_source_at_right_boundary() {
         let line = "![diagram](./assets/plan.png) tail";
         let boundary = "![diagram](./assets/plan.png)".chars().count();
         let hidden = hidden_ranges_for_markdown_line(line, Some(boundary));
-        assert_eq!(hidden, vec![(0, 2), (9, 29)]);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn image_hidden_token_ranges_reveal_source_at_left_boundary() {
+        let line = "![diagram](./assets/plan.png) tail";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(0));
+        assert!(hidden.is_empty());
     }
 }
