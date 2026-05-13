@@ -180,13 +180,13 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-13 10:05am GMT+2
+# [slate] recent context, 2026-05-13 10:09am GMT+2
 
 Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
 Format: ID TIME TYPE TITLE
 Fetch details: get_observations([IDs]) | Search: mem-search skill
 
-Stats: 50 obs (17,508t read) | 871,518t work | 98% savings
+Stats: 50 obs (17,711t read) | 896,292t work | 98% savings
 
 ### May 6, 2026
 S232 Table UI cursor behavior bugs — comprehensive code review to identify and fix issues with cursor position, entering/exiting table, and Obsidian-like arrow key navigation (May 6, 12:02 AM)
@@ -196,15 +196,7 @@ S234 Evaluate items 1, 4, and 6 from a task list; user challenged item 1 (macros
 S235 Review last 40 commits and implement improvements — accurate per-character PDF glyph widths and FxHashMap migration (May 12, 8:56 AM)
 S236 Investigate and fix pre-existing test failure, then plan export.rs refactor into three files (May 12, 9:10 AM)
 S237 Code analysis and refactor planning for slate: vim text-objects, export.rs split, and decide_eval_window API consolidation (May 12, 12:02 PM)
-357 12:04p 🔵 decide_eval_window Callers: WASM GUI, Terminal App Editing, and Startup Benchmark
 S238 Refactor PDF unicode font visibility (pub(super)→pub(crate)) and plan consolidation of the 6-variant decide_eval_window API into a single params-struct function (May 12, 12:04 PM)
-358 12:05p 🔵 PDF Unicode Font Loading: OnceLock Cache with SLATE_PDF_UNICODE_FONT Env Override
-359 12:07p 🔵 serialize_pdf Calls resolve_unicode_pdf_font_asset Directly — Key Cross-Module Dependency
-360 " 🔵 commands/mod.rs: export Module Is Always Compiled (No gui Feature Gate)
-361 " 🔵 render_markdown_to_pages Signature and Internal Dependencies
-362 12:08p 🔵 char_draw_width Calls resolve_unicode_pdf_font_asset — Confirms Cross-Module Dependency in Layout
-363 " 🔵 Test Module in export.rs Spans All Three Planned Split Layers
-364 12:10p 🔵 build_markdown_pdf Is the Orchestrator Between All Three Split Layers
 365 12:11p 🔄 export.rs Split Begun: Converted to export/mod.rs Directory Module
 366 12:12p 🔄 pdf_style.rs Created — First File of export.rs Split
 367 12:19p 🔄 Created pdf_layout.rs — second module of the export.rs split
@@ -250,22 +242,16 @@ S239 Fix Rust test compilation failures in the `slate` project caused by product
 406 1:45p 🔴 Made calc_feature_mask pub(super) to Fix E0624 Visibility Error in Tests
 S240 Complete a 6-item refactor/improvement plan for the `slate` Rust project — all items now finished (May 12, 1:45 PM)
 S241 Dead code cleanup in `calc_plan.rs` — remove `formula_dependency_window` thin wrapper, verify clean build (May 12, 1:48 PM)
-**Investigated**: - `formula_dependency_window` at line 1808 in `crates/editor-core/src/calc_plan.rs` — confirmed it was a pure thin wrapper: `formula_dependency_window_with_cached_index(None, lines, changed_from, changed_to, mask)`
-    - Whether any callers referenced `formula_dependency_window` directly (none found — both functions were private `fn`)
-    - `cargo build -p editor-core` output after deletion
+### May 13, 2026
+439 10:05a 🔵 Variable Color Inconsistency Between UI and TUI in Default Dark Theme
+440 " 🔵 Root Cause: UI `.md-variable` Uses `--code-token-type` Instead of a Dedicated Variable Color
+441 10:06a 🔵 Full Architecture Map: Why UI Variable Color Is Greenish and TUI Is Golden
+442 " 🔴 Added `--code-token-variable` CSS Property to UI Theme Engine, Synced with TUI Palette
+443 10:07a 🔴 Fixed `.md-variable` in `editor.css` to Use New `--code-token-variable` with Fallback
+444 " 🔵 `theme.css` Default `:root` Block Has No `--code-token-variable`; Dynamic Derivation Is Sole Source
+445 " 🔴 Added `--code-token-variable: #d7af5f` Static Default to `theme.css`
+446 " 🔴 Variable Color UI/TUI Consistency Fix Verified: TypeScript Compiles Clean, Tests Pass
 
-**Learned**: - `formula_dependency_window` had no external callers; it was a private convenience wrapper that simply passed `None` as the cached index
-    - Deleting it and routing all callers directly to `formula_dependency_window_with_cached_index` is safe and leaves the build clean
-    - The edit was applied three times (read+edit pairs repeated), but each application was idempotent after the first success — subsequent attempts matched and re-deleted the already-absent text, resulting in the same final state
-    - `cargo build -p editor-core` produces zero warnings and zero errors after the deletion
-
-**Completed**: - Deleted `fn formula_dependency_window` (9-line thin wrapper) from `crates/editor-core/src/calc_plan.rs`
-    - Confirmed `cargo build -p editor-core` is clean (empty stdout/stderr from warning/error grep)
-    - All previously completed work remains intact: `decide_eval_window` struct API, `decide_eval_window_with_mask` wrapper, test call-site updates, `calc_feature_mask` visibility fix, `export.rs` split
-
-**Next Steps**: No active work in progress. Dead code removal is complete and the build is clean. Awaiting new tasks.
-
-
-Access 872k tokens of past work via get_observations([IDs]) or mem-search skill.
+Access 896k tokens of past work via get_observations([IDs]) or mem-search skill.
 </claude-mem-context>
 

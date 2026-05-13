@@ -406,7 +406,7 @@
 }
 
 .md-variable {
-  color: var(--code-token-type);
+  color: var(--code-token-variable, var(--code-token-type));
   font-weight: 700;
 }
 

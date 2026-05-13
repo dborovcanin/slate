@@ -38,6 +38,22 @@ const FALLBACK_FG_DIM: Rgb = { r: 127, g: 132, b: 156 };
 const BASE_LINE_HEIGHT_RATIO = 1.65;
 const DEFAULT_ANIMATION_MODE = "fast";
 const DEFAULT_ANIMATION_STYLE = "pop-up";
+const DEFAULT_VARIABLE_ANSI = 179;
+const ANSI_COLOR_CUBE_LEVELS = [0, 95, 135, 175, 215, 255] as const;
+const SCHEME_VARIABLE_ANSI: Record<string, number> = {
+  "catppuccin-mocha": 180,
+  "catppuccin-latte": 130,
+  "gruvbox-dark": 172,
+  "gruvbox-light": 94,
+  dracula: 222,
+  dark: 152,
+  white: 24,
+  "solarized-dark": 109,
+  "solarized-light": 65,
+  nord: 152,
+  "tokyo-night": 153,
+  "one-dark": 152,
+};
 
 interface MotionPreset {
   durationInMs: number;
@@ -233,7 +249,49 @@ function shiftHue(rgb: Rgb, degrees: number): Rgb {
   return hslToRgb(hsl.h + degrees, hsl.s, hsl.l);
 }
 
-function deriveCodePalette(vars: Record<string, string>): Record<string, string> {
+function ansi256ToRgb(index: number): Rgb {
+  if (index < 16) {
+    const base: Rgb[] = [
+      { r: 0, g: 0, b: 0 },
+      { r: 128, g: 0, b: 0 },
+      { r: 0, g: 128, b: 0 },
+      { r: 128, g: 128, b: 0 },
+      { r: 0, g: 0, b: 128 },
+      { r: 128, g: 0, b: 128 },
+      { r: 0, g: 128, b: 128 },
+      { r: 192, g: 192, b: 192 },
+      { r: 128, g: 128, b: 128 },
+      { r: 255, g: 0, b: 0 },
+      { r: 0, g: 255, b: 0 },
+      { r: 255, g: 255, b: 0 },
+      { r: 0, g: 0, b: 255 },
+      { r: 255, g: 0, b: 255 },
+      { r: 0, g: 255, b: 255 },
+      { r: 255, g: 255, b: 255 },
+    ];
+    return base[Math.max(0, Math.min(base.length - 1, index))] ?? base[0];
+  }
+
+  if (index >= 16 && index <= 231) {
+    const cubeIndex = index - 16;
+    const rIdx = Math.floor(cubeIndex / 36) % 6;
+    const gIdx = Math.floor(cubeIndex / 6) % 6;
+    const bIdx = cubeIndex % 6;
+    return {
+      r: ANSI_COLOR_CUBE_LEVELS[rIdx] ?? 0,
+      g: ANSI_COLOR_CUBE_LEVELS[gIdx] ?? 0,
+      b: ANSI_COLOR_CUBE_LEVELS[bIdx] ?? 0,
+    };
+  }
+
+  const gray = 8 + (Math.max(232, Math.min(255, index)) - 232) * 10;
+  return { r: gray, g: gray, b: gray };
+}
+
+function deriveCodePalette(
+  vars: Record<string, string>,
+  colorSchemeId: string,
+): Record<string, string> {
   const bg = parseCssColor(vars["--bg"]) ?? FALLBACK_BG;
   const bgSurface = parseCssColor(vars["--bg-surface"]) ?? mix(bg, FALLBACK_FG, 0.06);
   const fg = parseCssColor(vars["--fg"]) ?? FALLBACK_FG;
@@ -248,6 +306,8 @@ function deriveCodePalette(vars: Record<string, string>): Record<string, string>
   const number = adapt(shiftHue(accent, dark ? -84 : -72), dark ? 0.05 : 0.28);
   const func = adapt(shiftHue(accent, dark ? 42 : 30), dark ? 0.08 : 0.25);
   const type = adapt(shiftHue(accent, dark ? -38 : -25), dark ? 0.08 : 0.26);
+  const variableAnsi = SCHEME_VARIABLE_ANSI[colorSchemeId] ?? DEFAULT_VARIABLE_ANSI;
+  const variable = ansi256ToRgb(variableAnsi);
   const comment = mix(fgDim, bg, dark ? 0.12 : 0.04);
   const codeBg = mix(bgSurface, bg, dark ? 0.4 : 0.12);
   const codeBorder = mix(accent, bg, dark ? 0.7 : 0.58);
@@ -258,6 +318,7 @@ function deriveCodePalette(vars: Record<string, string>): Record<string, string>
     "--code-token-number": vars["--code-token-number"] ?? toHex(number),
     "--code-token-function": vars["--code-token-function"] ?? toHex(func),
     "--code-token-type": vars["--code-token-type"] ?? toHex(type),
+    "--code-token-variable": vars["--code-token-variable"] ?? toHex(variable),
     "--code-token-comment": vars["--code-token-comment"] ?? toHex(comment),
     "--code-bg": vars["--code-bg"] ?? toHex(codeBg),
     "--code-border": vars["--code-border"] ?? toHex(codeBorder),
@@ -415,7 +476,7 @@ export function applyTheme(selection: ThemeSelection) {
     root.style.setProperty(name, value);
   }
 
-  const codePalette = deriveCodePalette(vars);
+  const codePalette = deriveCodePalette(vars, scheme.id);
   for (const [name, value] of Object.entries(codePalette)) {
     root.style.setProperty(name, value);
   }
