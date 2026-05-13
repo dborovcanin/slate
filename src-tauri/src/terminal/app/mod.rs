@@ -46,6 +46,7 @@ const WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE: usize = 16;
 const COMMAND_COMPLETION_MAX_OPTIONS: usize = 16;
 const CONTENT_SEARCH_DEBOUNCE_MS: u64 = 120;
 const CONTENT_SEARCH_MAX_DETACHED_WORKERS: usize = 2;
+const SEARCH_PREWARM_QUERY: &str = "slatewarmup";
 const WIKI_LINK_RENDER_CACHE_MAX_ENTRIES: usize = 2048;
 const WIKI_LINK_RENDER_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
 const WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES: usize = 1024;
@@ -384,6 +385,8 @@ struct TerminalApp {
     switcher_collection_filter_name: Option<String>,
     content_search_collection_filter_id: Option<String>,
     content_search_collection_filter_name: Option<String>,
+    switcher_prewarm_pending: bool,
+    search_index_prewarm_pending: bool,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -768,6 +771,8 @@ impl TerminalApp {
             switcher_collection_filter_name: None,
             content_search_collection_filter_id: None,
             content_search_collection_filter_name: None,
+            switcher_prewarm_pending: true,
+            search_index_prewarm_pending: true,
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -937,6 +942,7 @@ impl TerminalApp {
         }
         self.maybe_recompute_calc_after_idle();
         self.maybe_dispatch_content_search(db);
+        self.maybe_prewarm_search_surfaces(db);
         if !self.autosave_enabled {
             return Ok(());
         }
@@ -955,6 +961,37 @@ impl TerminalApp {
             }
         }
         Ok(())
+    }
+
+    fn maybe_prewarm_search_surfaces(&mut self, db: &Db) {
+        if self.switcher_prewarm_pending {
+            if self.switcher_items.is_empty() {
+                let started = Instant::now();
+                if self.refresh_switcher_items(db).is_ok() {
+                    self.record_perf_duration(
+                        "tui.idle.dispatch",
+                        "switcher_prewarm",
+                        started.elapsed(),
+                    );
+                }
+            }
+            self.switcher_prewarm_pending = false;
+        }
+
+        if self.search_index_prewarm_pending {
+            let started = Instant::now();
+            if db
+                .search_notes_content_filtered(SEARCH_PREWARM_QUERY, 1, None)
+                .is_ok()
+            {
+                self.record_perf_duration(
+                    "tui.idle.dispatch",
+                    "content_search_index_prewarm",
+                    started.elapsed(),
+                );
+            }
+            self.search_index_prewarm_pending = false;
+        }
     }
 
     pub(super) fn record_perf_duration(&mut self, name: &str, reason: &str, duration: Duration) {

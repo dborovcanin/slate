@@ -49,6 +49,7 @@ import {
   closeSwitcher,
   isSwitcherOpen,
   refreshSwitcher,
+  prewarmSwitcherResources,
 } from "./switcher/switcher";
 import {
   openCollectionSwitcher,
@@ -1690,6 +1691,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     .catch(() => {
       // Keep startup non-blocking when note metadata fetch fails.
     });
+  prewarmSwitcherResources();
 
   // Defer unlock prompt until after mount so init can complete and the window can show.
   void unlockStartupActiveNoteAfterMount(note).catch((error) => {

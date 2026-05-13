@@ -20,6 +20,8 @@ type SwitcherItem = {
 type DeleteCallback = (id: string) => void;
 type SwitcherMode = "title" | "content";
 const CONTENT_SEARCH_DEBOUNCE_MS = 120;
+const PREWARM_QUERY = "slatewarmup";
+const COLLECTION_PREFETCH_TTL_MS = 30_000;
 
 let overlay: ListOverlay | null = null;
 let onSelectCallback: ((id: string, lineNumber?: number | null) => void) | null = null;
@@ -33,6 +35,8 @@ let activeCollectionNotes: NoteEntry[] | null = null;
 let activeSearchRequestId = 0;
 let activeSearchTimer: number | null = null;
 let queuedSearchQuery: string | null = null;
+let prewarmedCollections: { fetchedAtMs: number; entries: Collection[] } | null = null;
+let prewarmInFlight: Promise<void> | null = null;
 const ALL_COLLECTIONS_TOKEN = "__all_collections__";
 
 function nextSwitcherMode(mode: SwitcherMode): SwitcherMode {
@@ -158,8 +162,28 @@ function notesForSwitcherSource(): NoteEntry[] {
   return allNotesForSwitcher();
 }
 
+function cacheCollections(entries: Collection[]) {
+  prewarmedCollections = {
+    fetchedAtMs: Date.now(),
+    entries: entries.slice(),
+  };
+}
+
+function cachedCollectionsIfFresh(): Collection[] | null {
+  if (!prewarmedCollections) return null;
+  if (Date.now() - prewarmedCollections.fetchedAtMs > COLLECTION_PREFETCH_TTL_MS) {
+    prewarmedCollections = null;
+    return null;
+  }
+  return prewarmedCollections.entries.slice();
+}
+
 async function refreshCollectionOptionsAndNotes() {
-  const collections = await listCollections();
+  const cachedCollections = cachedCollectionsIfFresh();
+  const collections = cachedCollections ?? (await listCollections());
+  if (!cachedCollections) {
+    cacheCollections(collections);
+  }
   if (
     activeCollectionFilter &&
     !collections.some((entry) => entry.id === activeCollectionFilter)
@@ -453,6 +477,20 @@ export function closeSwitcher() {
 export function refreshSwitcher() {
   if (!isSwitcherOpen()) return;
   overlay?.refresh();
+}
+
+export function prewarmSwitcherResources() {
+  if (prewarmInFlight) return;
+  prewarmInFlight = Promise.allSettled([
+    listCollections().then((collections) => {
+      cacheCollections(collections);
+    }),
+    searchNotesContentFiltered(PREWARM_QUERY, 1, null).then(() => {}),
+  ])
+    .then(() => {})
+    .finally(() => {
+      prewarmInFlight = null;
+    });
 }
 
 export const __switcherInternals = {
