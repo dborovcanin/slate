@@ -24,9 +24,9 @@ export interface AccentPreset {
 }
 
 export const COLOR_SCHEMES: Record<string, ColorScheme> = {
-  slate: {
-    id: "slate",
-    label: "Slate",
+  "slate-light": {
+    id: "slate-light",
+    label: "Slate Light",
     vars: {
       "--bg": "#efe7d9",
       "--bg-surface": "#f8f1e6",
@@ -34,7 +34,7 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       "--fg": "#1f1b16",
       "--fg-dim": "#716457",
       "--fg-muted": "#948679",
-      "--accent": "#7a5a3a",
+      "--accent": "#4f7bd9",
       "--border": "#d5c4b2",
       "--selection-bg": "rgba(122, 90, 58, 0.18)",
       "--active-line-bg": "rgba(31, 27, 22, 0.05)",
@@ -312,7 +312,7 @@ export const BACKGROUND_PRESETS: Record<string, BackgroundPreset> = {
   },
 };
 
-export const DEFAULT_COLOR_SCHEME = "slate";
+export const DEFAULT_COLOR_SCHEME = "slate-light";
 export const DEFAULT_BACKGROUND = "plain";
 export const DEFAULT_FONT = "jetbrains-mono";
 export const DEFAULT_FONT_SIZE = 14;

@@ -399,7 +399,7 @@ max_body_bytes = 524288
 ```
 
 Available `color_scheme` values:
-- `slate`
+- `slate-light`
 - `slate-dark`
 - `catppuccin-mocha`
 - `catppuccin-latte`

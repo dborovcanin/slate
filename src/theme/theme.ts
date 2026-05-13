@@ -272,6 +272,12 @@ function normalizeName(value: string | null | undefined): string {
     .replace(/[_\s]+/g, "-");
 }
 
+function normalizeColorSchemeKey(value: string | null | undefined): string {
+  const normalized = normalizeName(value);
+  // Backward compatibility for older configs that used `slate`.
+  return normalized === "slate" ? "slate-light" : normalized;
+}
+
 function normalizeAnimationMode(value: string | null | undefined): string {
   const mode = normalizeName(value);
   if (mode === "sping") return "spring";
@@ -361,7 +367,7 @@ function resolveAccentColor(
 }
 
 export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelection {
-  const colorSchemeKey = normalizeName(input.color_scheme);
+  const colorSchemeKey = normalizeColorSchemeKey(input.color_scheme);
   const accent = resolveAccentToken(input.accent);
   const backgroundKey = normalizeName(input.background);
   const fontKey = normalizeName(input.font);
@@ -381,7 +387,8 @@ export function resolveThemeSelection(input: Partial<ThemeConfig>): ThemeSelecti
 }
 
 export function applyTheme(selection: ThemeSelection) {
-  const scheme = COLOR_SCHEMES[selection.colorScheme] ?? COLOR_SCHEMES[DEFAULT_COLOR_SCHEME];
+  const colorSchemeKey = normalizeColorSchemeKey(selection.colorScheme);
+  const scheme = COLOR_SCHEMES[colorSchemeKey] ?? COLOR_SCHEMES[DEFAULT_COLOR_SCHEME];
   const accent = resolveAccentColor(selection.accent, scheme.vars["--accent"] ?? "#4aa8ff");
   const background =
     BACKGROUND_PRESETS[selection.background] ?? BACKGROUND_PRESETS[DEFAULT_BACKGROUND];

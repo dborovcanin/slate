@@ -132,7 +132,7 @@ fn accent_rgb(accent: &str) -> Option<(u8, u8, u8)> {
 
 fn scheme_accent_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
     let hex = match normalize_color_scheme(color_scheme).as_str() {
-        "slate" => "#7a5a3a",
+        "slate" | "slate-light" => "#4f7bd9",
         "slate-dark" => "#3e5266",
         "catppuccin-mocha" => "#89b4fa",
         "catppuccin-latte" => "#1e66f5",
@@ -153,7 +153,7 @@ fn scheme_accent_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
 
 fn scheme_surface_bg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
     let hex = match normalize_color_scheme(color_scheme).as_str() {
-        "slate" => "#f8f1e6",
+        "slate" | "slate-light" => "#f8f1e6",
         "slate-dark" => "#1d1c20",
         "catppuccin-mocha" => "#252536",
         "catppuccin-latte" => "#e6e9ef",
@@ -174,7 +174,7 @@ fn scheme_surface_bg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
 
 fn scheme_text_fg_rgb(color_scheme: &str) -> Option<(u8, u8, u8)> {
     let hex = match normalize_color_scheme(color_scheme).as_str() {
-        "slate" => "#1f1b16",
+        "slate" | "slate-light" => "#1f1b16",
         "slate-dark" => "#ece8e0",
         "catppuccin-mocha" => "#cdd6f4",
         "catppuccin-latte" => "#4c4f69",

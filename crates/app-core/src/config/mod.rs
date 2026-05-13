@@ -60,7 +60,7 @@ const DEFAULT_CONFIG: &str = r#"# Slate configuration
 # Update only values you want to override.
 #
 # Color schemes:
-#   slate, slate-dark,
+#   slate-light, slate-dark,
 #   catppuccin-mocha, catppuccin-latte, gruvbox-dark, gruvbox-light,
 #   dracula, dark, white, solarized-dark, solarized-light,
 #   nord, tokyo-night, one-dark
