@@ -271,7 +271,6 @@ pub fn draw_switcher(
 
 pub struct ContentSearchView<'a> {
     pub query: &'a str,
-    pub collection_filter_label: &'a str,
     pub results: &'a [NoteSearchResult],
     pub selected: usize,
 }
@@ -717,21 +716,7 @@ pub fn draw_content_search(
         &prompt,
         prompt_style,
     );
-    let has_collection_line = !view.collection_filter_label.trim().is_empty();
-    if has_collection_line {
-        draw_row_at_styled(
-            buf,
-            y + 2,
-            x + 1,
-            box_w.saturating_sub(2),
-            &format!(
-                " collection: {} (Ctrl+L toggle)",
-                view.collection_filter_label
-            ),
-            label_style,
-        );
-    }
-    let results_label_row = if has_collection_line { y + 3 } else { y + 2 };
+    let results_label_row = y + 2;
     draw_row_at_styled(
         buf,
         results_label_row,
@@ -742,7 +727,7 @@ pub fn draw_content_search(
     );
 
     // Reserve preview rows at the bottom; result rows fill the rest.
-    let layout_rows = if has_collection_line { 5 } else { 4 }; // prompt + (optional filter) + label + preview + borders
+    let layout_rows = 4; // prompt + label + preview + borders
     let max_rows = box_h.saturating_sub(layout_rows + CONTENT_SEARCH_PREVIEW_LINES);
     let mut start = 0usize;
     if view.selected >= max_rows {
@@ -1080,7 +1065,6 @@ mod tests {
         };
         let view = ContentSearchView {
             query: "abc",
-            collection_filter_label: "All",
             results: &[],
             selected: 0,
         };

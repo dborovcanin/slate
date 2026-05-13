@@ -2208,3 +2208,61 @@ fn content_search_reopen_resets_filter_to_working_collection() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn content_search_ctrl_l_toggles_fallback_results_between_working_collection_and_all_notes() {
+    let (db, mut app, path) = app_with_note("base");
+    let work = db
+        .create_collection("Work", "work notes")
+        .expect("work collection created");
+    let personal = db
+        .create_collection("Personal", "personal notes")
+        .expect("personal collection created");
+
+    db.save_note("n2", "work note")
+        .expect("work note saved");
+    db.save_note("n3", "personal note")
+        .expect("personal note saved");
+
+    db.set_note_collections("n1", std::slice::from_ref(&work.id))
+        .expect("active note membership set");
+    db.set_note_collections("n2", std::slice::from_ref(&work.id))
+        .expect("work note membership set");
+    db.set_note_collections("n3", std::slice::from_ref(&personal.id))
+        .expect("personal note membership set");
+
+    app.execute_terminal_command(&db, "collection choose Work");
+    assert_eq!(app.working_collection_id.as_deref(), Some(work.id.as_str()));
+
+    run_keys(&mut app, &db, &[Key::Ctrl('p'), Key::Tab]);
+    assert_eq!(app.mode, UiMode::ContentSearch);
+
+    let scoped_ids = app
+        .content_search_results
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        scoped_ids.contains(&"n1") && scoped_ids.contains(&"n2"),
+        "working-collection fallback should include work notes"
+    );
+    assert!(
+        !scoped_ids.contains(&"n3"),
+        "working-collection fallback should exclude non-work notes"
+    );
+
+    run_keys(&mut app, &db, &[Key::Ctrl('l')]);
+    let unscoped_ids = app
+        .content_search_results
+        .iter()
+        .map(|entry| entry.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(
+        unscoped_ids.contains(&"n3"),
+        "toggled-all fallback should include notes outside working collection"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

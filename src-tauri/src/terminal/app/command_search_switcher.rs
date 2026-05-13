@@ -273,7 +273,6 @@ impl TerminalApp {
             self.content_search_collection_filter_id = None;
             self.content_search_collection_filter_name = None;
         }
-        self.refresh_content_search_preview();
     }
 
     fn reset_switcher_filter_to_working_collection(&mut self) {
@@ -345,6 +344,7 @@ impl TerminalApp {
     ) -> Result<(), String> {
         self.toggle_content_search_collection_filter();
         self.refresh_switcher_items_for_filter(db)?;
+        self.refresh_content_search_preview();
         Ok(())
     }
 
@@ -2468,10 +2468,10 @@ impl TerminalApp {
             }
         }
         let previous_prefix_index = self.wiki_link_prefix_index.clone();
-        let switcher_collection_filter = if self.mode == UiMode::Switcher {
-            self.switcher_collection_filter_id.as_deref()
-        } else {
-            self.working_collection_id.as_deref()
+        let switcher_collection_filter = match self.mode {
+            UiMode::Switcher => self.switcher_collection_filter_id.as_deref(),
+            UiMode::ContentSearch => self.content_search_collection_filter_id.as_deref(),
+            _ => self.working_collection_id.as_deref(),
         };
         self.switcher_items = switcher::load_note_meta_filtered(
             db,

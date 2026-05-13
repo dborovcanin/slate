@@ -1347,10 +1347,6 @@ impl TerminalApp {
             switcher::draw_content_search(
                 &ContentSearchView {
                     query: &self.content_search_query,
-                    collection_filter_label: self
-                        .content_search_collection_filter_name
-                        .as_deref()
-                        .unwrap_or(""),
                     results: &self.content_search_results,
                     selected: self.content_search_selected,
                 },
