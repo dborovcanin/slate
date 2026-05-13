@@ -1,8 +1,8 @@
 use regex::{Regex, RegexBuilder};
+use rustc_hash::{FxHashMap, FxHasher};
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::cmp::Reverse;
-use rustc_hash::{FxHashMap, FxHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};

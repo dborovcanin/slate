@@ -172,8 +172,27 @@ fn probe_gui() -> Result<StartupReport, String> {
     let _cfg = config::load_theme_config();
     probe.mark("config_loaded");
 
-    let core = AppCore::open_default()?;
+    let (core, core_metrics) = AppCore::open_default_with_metrics()?;
     probe.mark("app_core_opened");
+    probe.mark_ms("app_core_data_dir_ms", core_metrics.data_dir_ms);
+    probe.mark_ms("app_core_db_open_ms", core_metrics.db_open_ms);
+    probe.mark_ms(
+        "app_core_note_sources_init_ms",
+        core_metrics.note_sources_init_ms,
+    );
+    probe.mark_ms(
+        "app_core_calc_engine_init_ms",
+        core_metrics.calc_engine_init_ms,
+    );
+    probe.mark_ms("app_core_total_ms", core_metrics.total_ms);
+    probe.mark_ms("db_primary_open_ms", core_metrics.db.primary_open_ms);
+    probe.mark_ms(
+        "db_primary_configure_ms",
+        core_metrics.db.primary_configure_ms,
+    );
+    probe.mark_ms("db_schema_init_ms", core_metrics.db.schema_init_ms);
+    probe.mark_ms("db_fts_seed_ms", core_metrics.db.fts_seed_ms);
+    probe.mark_ms("db_open_total_ms", core_metrics.db.total_ms);
 
     let note = core.db().get_most_recent_note()?;
     probe.mark("note_fetch_complete");
@@ -194,8 +213,27 @@ fn probe_tui() -> Result<StartupReport, String> {
     let _cfg = config::load_theme_config();
     probe.mark("config_loaded");
 
-    let core = AppCore::open_default()?;
+    let (core, core_metrics) = AppCore::open_default_with_metrics()?;
     probe.mark("app_core_opened");
+    probe.mark_ms("app_core_data_dir_ms", core_metrics.data_dir_ms);
+    probe.mark_ms("app_core_db_open_ms", core_metrics.db_open_ms);
+    probe.mark_ms(
+        "app_core_note_sources_init_ms",
+        core_metrics.note_sources_init_ms,
+    );
+    probe.mark_ms(
+        "app_core_calc_engine_init_ms",
+        core_metrics.calc_engine_init_ms,
+    );
+    probe.mark_ms("app_core_total_ms", core_metrics.total_ms);
+    probe.mark_ms("db_primary_open_ms", core_metrics.db.primary_open_ms);
+    probe.mark_ms(
+        "db_primary_configure_ms",
+        core_metrics.db.primary_configure_ms,
+    );
+    probe.mark_ms("db_schema_init_ms", core_metrics.db.schema_init_ms);
+    probe.mark_ms("db_fts_seed_ms", core_metrics.db.fts_seed_ms);
+    probe.mark_ms("db_open_total_ms", core_metrics.db.total_ms);
 
     let note = core.db().get_most_recent_note()?;
     probe.mark("note_fetch_complete");

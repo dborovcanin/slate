@@ -84,12 +84,12 @@ struct TerminalOptions {
 }
 
 #[cfg(feature = "gui")]
-fn run_gui(startup_file: Option<PathBuf>) -> Result<(), String> {
+fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result<(), String> {
     let core = AppCore::open_default()?;
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
-    maybe_start_background_imap_sync();
+    maybe_start_background_imap_sync(theme.background_tasks_enabled);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -166,7 +166,7 @@ fn run_gui(startup_file: Option<PathBuf>) -> Result<(), String> {
 }
 
 #[cfg(not(feature = "gui"))]
-fn run_gui(_startup_file: Option<PathBuf>) -> Result<(), String> {
+fn run_gui(_startup_file: Option<PathBuf>, _theme: &config::ThemeConfig) -> Result<(), String> {
     Err("GUI mode is not compiled in (missing 'gui' feature)".to_string())
 }
 
@@ -267,14 +267,10 @@ fn parse_args(
     }
     if startup_file.is_some() {
         if force_append || force_imap {
-            return Err(
-                "Cannot combine file open with append or imap-sync flags".to_string(),
-            );
+            return Err("Cannot combine file open with append or imap-sync flags".to_string());
         }
         if opts.create_new || opts.list_only || saw_id_flag {
-            return Err(
-                "Cannot combine file open with terminal note selection flags".to_string(),
-            );
+            return Err("Cannot combine file open with terminal note selection flags".to_string());
         }
         if !force_terminal {
             force_gui = true;
@@ -375,9 +371,7 @@ fn parse_args(
         i += 1;
     }
     if startup_file.is_some() && (append || imap || opts.note_id.is_some()) {
-        return Err(
-            "Cannot combine file open with append, imap-sync, or --id".to_string(),
-        );
+        return Err("Cannot combine file open with append, imap-sync, or --id".to_string());
     }
     if append && imap {
         return Err("Cannot combine append with imap-sync".to_string());
@@ -443,7 +437,7 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
-    maybe_start_background_imap_sync();
+    maybe_start_background_imap_sync(theme.background_tasks_enabled);
     let core = AppCore::open_default()?;
     terminal::run_terminal_session(core.db(), theme, opts)
 }
@@ -484,7 +478,10 @@ fn notify_imap_new_mail(
 }
 
 #[cfg(feature = "imap")]
-fn maybe_start_background_imap_sync() {
+fn maybe_start_background_imap_sync(background_tasks_enabled: bool) {
+    if !background_tasks_enabled {
+        return;
+    }
     let imap_cfg = config::load_imap_config();
     if !imap_cfg.auto_sync_on_startup {
         return;
@@ -505,7 +502,7 @@ fn maybe_start_background_imap_sync() {
 }
 
 #[cfg(not(feature = "imap"))]
-fn maybe_start_background_imap_sync() {}
+fn maybe_start_background_imap_sync(_background_tasks_enabled: bool) {}
 
 #[cfg(not(feature = "imap"))]
 fn run_imap_sync() -> Result<(), String> {
@@ -517,7 +514,7 @@ pub fn run() {
     let cfg = config::load_theme_config();
     match parse_args(&args, cfg.terminal_mode, stdin_is_tty()) {
         Ok((Mode::Gui, _, startup_file)) => {
-            if let Err(err) = run_gui(startup_file) {
+            if let Err(err) = run_gui(startup_file, &cfg) {
                 eprintln!("{err}");
                 std::process::exit(1);
             }

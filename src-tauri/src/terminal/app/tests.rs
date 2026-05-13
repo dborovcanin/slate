@@ -40,6 +40,7 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        crate::config::ThemeConfig::default(),
         true,
         true,
         false,
@@ -74,6 +75,7 @@ fn app_with_note_and_modules(
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        crate::config::ThemeConfig::default(),
         true,
         true,
         false,

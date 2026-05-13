@@ -10,7 +10,18 @@ use rustc_hash::FxHashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use storage::Db;
+use std::time::Instant;
+use storage::{Db, DbOpenMetrics};
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AppCoreOpenMetrics {
+    pub data_dir_ms: f64,
+    pub db_open_ms: f64,
+    pub note_sources_init_ms: f64,
+    pub calc_engine_init_ms: f64,
+    pub total_ms: f64,
+    pub db: DbOpenMetrics,
+}
 
 pub struct AppCore {
     db: Db,
@@ -23,15 +34,45 @@ pub struct AppCore {
 
 impl AppCore {
     pub fn open_default() -> Result<Self, String> {
+        let (core, _) = Self::open_default_with_metrics()?;
+        Ok(core)
+    }
+
+    pub fn open_default_with_metrics() -> Result<(Self, AppCoreOpenMetrics), String> {
+        let total_started = Instant::now();
+
+        let data_dir_started = Instant::now();
         let dir = data_dir()?;
-        let db = Db::open(dir.join("notes.db"))?;
+        let data_dir_ms = data_dir_started.elapsed().as_secs_f64() * 1000.0;
+
+        let db_open_started = Instant::now();
+        let (db, db_metrics) = Db::open_with_metrics(dir.join("notes.db"))?;
+        let db_open_ms = db_open_started.elapsed().as_secs_f64() * 1000.0;
+
+        let note_sources_started = Instant::now();
         let note_sources = NoteSourceService::new(db.clone());
-        Ok(Self {
-            db,
-            note_sources,
-            calc_engine: CalcEngine::new(),
-            note_line_cache: Mutex::new(FxHashMap::default()),
-        })
+        let note_sources_init_ms = note_sources_started.elapsed().as_secs_f64() * 1000.0;
+
+        let calc_engine_started = Instant::now();
+        let calc_engine = CalcEngine::new();
+        let calc_engine_init_ms = calc_engine_started.elapsed().as_secs_f64() * 1000.0;
+
+        Ok((
+            Self {
+                db,
+                note_sources,
+                calc_engine,
+                note_line_cache: Mutex::new(FxHashMap::default()),
+            },
+            AppCoreOpenMetrics {
+                data_dir_ms,
+                db_open_ms,
+                note_sources_init_ms,
+                calc_engine_init_ms,
+                total_ms: total_started.elapsed().as_secs_f64() * 1000.0,
+                db: db_metrics,
+            },
+        ))
     }
 
     pub fn db(&self) -> &Db {

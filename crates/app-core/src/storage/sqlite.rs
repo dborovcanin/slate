@@ -4,8 +4,8 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use pbkdf2::pbkdf2_hmac;
 use rusqlite::{Connection, OptionalExtension};
-use sha2::Sha256;
 use rustc_hash::FxHashMap;
+use sha2::Sha256;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::path::PathBuf;
@@ -47,9 +47,25 @@ struct UnlockedEncryptedNote {
 
 const SQLITE_POOL_SIZE: usize = 4;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DbOpenMetrics {
+    pub primary_open_ms: f64,
+    pub primary_configure_ms: f64,
+    pub schema_init_ms: f64,
+    pub fts_seed_ms: f64,
+    pub total_ms: f64,
+}
+
+struct SqlitePoolState {
+    connections: Vec<Connection>,
+    created: usize,
+}
+
 struct SqlitePool {
-    connections: Mutex<Vec<Connection>>,
+    state: Mutex<SqlitePoolState>,
     available: Condvar,
+    db_path: PathBuf,
+    max_size: usize,
 }
 
 struct SqlitePoolGuard<'a> {
@@ -67,41 +83,93 @@ impl SqlitePool {
         .map_err(|e| format!("Failed to set pragmas: {e}"))
     }
 
-    fn new(path: &Path, pool_size: usize) -> Result<Self, String> {
+    fn open_configured_connection(path: &Path) -> Result<Connection, String> {
+        let conn = Connection::open(path).map_err(|e| format!("Failed to open DB: {e}"))?;
+        Self::configure_connection(&conn)?;
+        Ok(conn)
+    }
+
+    fn new(path: &Path, pool_size: usize) -> Result<(Self, DbOpenMetrics), String> {
+        let total_started = std::time::Instant::now();
+
+        let open_started = std::time::Instant::now();
         let first = Connection::open(path).map_err(|e| format!("Failed to open DB: {e}"))?;
+        let primary_open_ms = open_started.elapsed().as_secs_f64() * 1000.0;
+
+        let configure_started = std::time::Instant::now();
         Self::configure_connection(&first)?;
+        let primary_configure_ms = configure_started.elapsed().as_secs_f64() * 1000.0;
 
         let schema = include_str!("../../migrations/0001_init.sql");
+        let schema_started = std::time::Instant::now();
         first
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
-        seed_note_search_index_if_empty(&first)?;
+        let schema_init_ms = schema_started.elapsed().as_secs_f64() * 1000.0;
+
+        // Keep first-edit startup lean; FTS consistency/repair runs lazily on
+        // the first search request via `ensure_search_index_checked`.
+        let fts_seed_ms = 0.0;
 
         let mut connections = Vec::with_capacity(pool_size.max(1));
         connections.push(first);
-        for _ in 1..pool_size.max(1) {
-            let conn = Connection::open(path).map_err(|e| format!("Failed to open DB: {e}"))?;
-            Self::configure_connection(&conn)?;
-            connections.push(conn);
-        }
-        Ok(Self {
-            connections: Mutex::new(connections),
-            available: Condvar::new(),
-        })
+        let total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
+        Ok((
+            Self {
+                state: Mutex::new(SqlitePoolState {
+                    connections,
+                    created: 1,
+                }),
+                available: Condvar::new(),
+                db_path: path.to_path_buf(),
+                max_size: pool_size.max(1),
+            },
+            DbOpenMetrics {
+                primary_open_ms,
+                primary_configure_ms,
+                schema_init_ms,
+                fts_seed_ms,
+                total_ms,
+            },
+        ))
     }
 
     fn lock(&self) -> Result<SqlitePoolGuard<'_>, String> {
         let mut guard = self
-            .connections
+            .state
             .lock()
             .map_err(|_| "db pool lock poisoned".to_string())?;
         loop {
-            if let Some(connection) = guard.pop() {
+            if let Some(connection) = guard.connections.pop() {
                 return Ok(SqlitePoolGuard {
                     pool: self,
                     connection: Some(connection),
                 });
             }
+
+            if guard.created < self.max_size {
+                guard.created += 1;
+                drop(guard);
+
+                match Self::open_configured_connection(self.db_path.as_path()) {
+                    Ok(connection) => {
+                        return Ok(SqlitePoolGuard {
+                            pool: self,
+                            connection: Some(connection),
+                        });
+                    }
+                    Err(error) => {
+                        let mut retry_guard = self
+                            .state
+                            .lock()
+                            .map_err(|_| "db pool lock poisoned".to_string())?;
+                        retry_guard.created = retry_guard.created.saturating_sub(1);
+                        self.available.notify_one();
+                        return Err(error);
+                    }
+                }
+            }
+
             guard = self
                 .available
                 .wait(guard)
@@ -131,8 +199,8 @@ impl DerefMut for SqlitePoolGuard<'_> {
 impl Drop for SqlitePoolGuard<'_> {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
-            if let Ok(mut guard) = self.pool.connections.lock() {
-                guard.push(connection);
+            if let Ok(mut guard) = self.pool.state.lock() {
+                guard.connections.push(connection);
                 self.pool.available.notify_one();
             }
         }
@@ -157,13 +225,26 @@ impl Clone for Db {
 
 impl Db {
     pub fn open(path: PathBuf) -> Result<Self, String> {
-        let conn = SqlitePool::new(&path, SQLITE_POOL_SIZE)?;
+        let (conn, _) = SqlitePool::new(&path, SQLITE_POOL_SIZE)?;
 
         Ok(Self {
             conn: Arc::new(conn),
             note_access: Arc::new(NoteAccessService::new()),
             search_index_checked: Arc::new(Mutex::new(false)),
         })
+    }
+
+    pub fn open_with_metrics(path: PathBuf) -> Result<(Self, DbOpenMetrics), String> {
+        let (conn, metrics) = SqlitePool::new(&path, SQLITE_POOL_SIZE)?;
+
+        Ok((
+            Self {
+                conn: Arc::new(conn),
+                note_access: Arc::new(NoteAccessService::new()),
+                search_index_checked: Arc::new(Mutex::new(false)),
+            },
+            metrics,
+        ))
     }
 
     fn ensure_search_index_checked(&self) -> Result<(), String> {
@@ -1019,7 +1100,9 @@ impl Db {
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let exists: Option<String> = tx
-            .query_row("SELECT id FROM collections WHERE id = ?1", [id], |row| row.get(0))
+            .query_row("SELECT id FROM collections WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(|e| e.to_string())?;
         if exists.is_none() {
@@ -1160,13 +1243,19 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn set_note_tags(&self, note_id: &str, tag_names: &[String]) -> Result<Vec<String>, String> {
+    pub fn set_note_tags(
+        &self,
+        note_id: &str,
+        tag_names: &[String],
+    ) -> Result<Vec<String>, String> {
         let normalized = normalize_tag_name_list(tag_names)?;
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let note_exists: Option<String> = tx
-            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| row.get(0))
+            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(|e| e.to_string())?;
         if note_exists.is_none() {
@@ -1239,7 +1328,9 @@ impl Db {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let note_exists: Option<String> = tx
-            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| row.get(0))
+            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(|e| e.to_string())?;
         if note_exists.is_none() {
@@ -1444,19 +1535,22 @@ impl Db {
                      LIMIT ?3",
                 )
                 .map_err(|e| e.to_string())?;
-            let rows =
-                stmt.query_map(rusqlite::params![fts_query, collection_id, bounded_limit], |row| {
-                    let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
-                    let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
-                    Ok(NoteSearchResult {
-                        id: row.get(0)?,
-                        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                        line_number: search_result_line_number(&body, &snippet, &search_terms),
-                        snippet,
-                        rank: row.get(4)?,
-                        updated_at: row.get(5)?,
-                    })
-                })
+            let rows = stmt
+                .query_map(
+                    rusqlite::params![fts_query, collection_id, bounded_limit],
+                    |row| {
+                        let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+                        let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                        Ok(NoteSearchResult {
+                            id: row.get(0)?,
+                            title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                            line_number: search_result_line_number(&body, &snippet, &search_terms),
+                            snippet,
+                            rank: row.get(4)?,
+                            updated_at: row.get(5)?,
+                        })
+                    },
+                )
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
@@ -1476,21 +1570,22 @@ impl Db {
                      LIMIT ?2",
                 )
                 .map_err(|e| e.to_string())?;
-            let rows = stmt.query_map(rusqlite::params![fts_query, bounded_limit], |row| {
-                let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
-                let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
-                Ok(NoteSearchResult {
-                    id: row.get(0)?,
-                    title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                    line_number: search_result_line_number(&body, &snippet, &search_terms),
-                    snippet,
-                    rank: row.get(4)?,
-                    updated_at: row.get(5)?,
+            let rows = stmt
+                .query_map(rusqlite::params![fts_query, bounded_limit], |row| {
+                    let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+                    let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                    Ok(NoteSearchResult {
+                        id: row.get(0)?,
+                        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                        line_number: search_result_line_number(&body, &snippet, &search_terms),
+                        snippet,
+                        rank: row.get(4)?,
+                        updated_at: row.get(5)?,
+                    })
                 })
-            })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
             rows
         };
         Ok(results)
@@ -2443,7 +2538,8 @@ fn normalize_tag_name_list(raw: &[String]) -> Result<Vec<(String, String)>, Stri
 
 fn map_unique_constraint_error(error: rusqlite::Error) -> String {
     let text = error.to_string();
-    if text.contains("collections.normalized_name") || text.contains("idx_collections_normalized_name")
+    if text.contains("collections.normalized_name")
+        || text.contains("idx_collections_normalized_name")
     {
         return "collection name already exists".to_string();
     }
@@ -2655,25 +2751,6 @@ fn check_and_heal_search_index(conn: &Connection) -> Result<(), String> {
         );
         rebuild_note_search_index_inner(conn)?;
     }
-    Ok(())
-}
-
-fn seed_note_search_index_if_empty(conn: &Connection) -> Result<(), String> {
-    let indexed_rows: i64 = conn
-        .query_row("SELECT COUNT(1) FROM notes_fts", [], |row| row.get(0))
-        .map_err(|e| format!("Failed to inspect note search index: {e}"))?;
-    if indexed_rows > 0 {
-        return Ok(());
-    }
-
-    conn.execute(
-        "INSERT INTO notes_fts(rowid, note_id, note_title, body)
-         SELECT rowid, id, note_title, body
-         FROM notes
-         WHERE access_mode = 'none'",
-        [],
-    )
-    .map_err(|e| format!("Failed to seed note search index: {e}"))?;
     Ok(())
 }
 
@@ -3393,11 +3470,7 @@ mod tests {
             .expect("collection created");
         db.set_collection_default_tags(
             &collection.id,
-            &[
-                "alpha".to_string(),
-                "beta".to_string(),
-                "alpha".to_string(),
-            ],
+            &["alpha".to_string(), "beta".to_string(), "alpha".to_string()],
         )
         .expect("default tags set");
 
@@ -3434,12 +3507,14 @@ mod tests {
 
         db.create_note_with_context("n-plain", NoteModules::default(), None, None)
             .expect("note created without working collection");
-        assert!(
-            db.get_note_collection_ids("n-plain")
-                .expect("collection ids lookup")
-                .is_empty()
-        );
-        assert!(db.list_note_tags("n-plain").expect("tags lookup").is_empty());
+        assert!(db
+            .get_note_collection_ids("n-plain")
+            .expect("collection ids lookup")
+            .is_empty());
+        assert!(db
+            .list_note_tags("n-plain")
+            .expect("tags lookup")
+            .is_empty());
 
         drop(db);
         let _ = fs::remove_file(path);
@@ -3459,7 +3534,10 @@ mod tests {
             .expect("note created");
         db.set_note_collections("n-manual", &[collection.id.clone()])
             .expect("manual membership set");
-        assert!(db.list_note_tags("n-manual").expect("tags lookup").is_empty());
+        assert!(db
+            .list_note_tags("n-manual")
+            .expect("tags lookup")
+            .is_empty());
 
         drop(db);
         let _ = fs::remove_file(path);
@@ -3561,7 +3639,10 @@ mod tests {
             .purge_collection(&collection.id)
             .expect("purge collection succeeds");
         assert_eq!(deleted, 2);
-        assert!(db.get_collection(&collection.id).expect("collection lookup").is_none());
+        assert!(db
+            .get_collection(&collection.id)
+            .expect("collection lookup")
+            .is_none());
         assert!(db.get_note("n-a").expect("note lookup a").is_none());
         assert!(db.get_note("n-b").expect("note lookup b").is_none());
 

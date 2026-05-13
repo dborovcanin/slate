@@ -1595,9 +1595,8 @@ impl TerminalApp {
             UiMode::ContentSearch => {
                 let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);
                 let prompt = " content: ";
-                let col =
-                    (x + 1 + prompt.chars().count() + self.content_search_cursor_col)
-                        .min(cols.max(1));
+                let col = (x + 1 + prompt.chars().count() + self.content_search_cursor_col)
+                    .min(cols.max(1));
                 (y + 1, col.max(1))
             }
         }

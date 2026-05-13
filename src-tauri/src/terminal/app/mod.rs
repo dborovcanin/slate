@@ -47,6 +47,7 @@ const COMMAND_COMPLETION_MAX_OPTIONS: usize = 16;
 const CONTENT_SEARCH_DEBOUNCE_MS: u64 = 120;
 const CONTENT_SEARCH_MAX_DETACHED_WORKERS: usize = 2;
 const SEARCH_PREWARM_QUERY: &str = "slatewarmup";
+const STARTUP_PREWARM_IDLE_BUDGET_MS: u64 = 4;
 const WIKI_LINK_RENDER_CACHE_MAX_ENTRIES: usize = 2048;
 const WIKI_LINK_RENDER_CACHE_TTL_MS: u64 = 5 * 60 * 1000;
 const WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES: usize = 1024;
@@ -387,6 +388,14 @@ struct TerminalApp {
     content_search_collection_filter_name: Option<String>,
     switcher_prewarm_pending: bool,
     search_index_prewarm_pending: bool,
+    search_index_prewarm_rx: Option<std::sync::mpsc::Receiver<bool>>,
+    search_index_prewarm_started_at: Option<Instant>,
+    startup_fold_hydration_pending: bool,
+    startup_reminder_hydration_pending: bool,
+    startup_reminder_hydration_retry_at: Option<Instant>,
+    startup_reminder_hydration_retry_count: u32,
+    background_tasks_enabled: bool,
+    note_creation_theme: ThemeConfig,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -622,6 +631,7 @@ impl TerminalApp {
     fn new_with_startup_metrics(
         db: &Db,
         opts: &TerminalOptions,
+        note_creation_theme: ThemeConfig,
         vim_mode: bool,
         autosave_enabled: bool,
         format_on_save: bool,
@@ -635,7 +645,7 @@ impl TerminalApp {
         let startup_begin = Instant::now();
 
         let note_begin = Instant::now();
-        let mut active_note = select_note(db, opts, &crate::config::load_theme_config())?;
+        let mut active_note = select_note(db, opts, &note_creation_theme)?;
         let (render_plain_text_file, render_file_language) =
             file_render_syntax_for_note_id(&active_note.id);
         let loading_note = note_begin.elapsed();
@@ -644,7 +654,14 @@ impl TerminalApp {
         // The body has been split into `lines`; release the contiguous copy
         // to avoid carrying ~N bytes twice for large documents.
         active_note.body = String::new();
-        let reminder_ghosts = load_note_reminder_ghosts(db, &active_note.id, &lines)?;
+        let background_tasks_enabled = note_creation_theme.background_tasks_enabled;
+        // Keep first frame/edit available quickly; reminders are hydrated on
+        // the first idle ticks after initial paint.
+        let reminder_ghosts = if background_tasks_enabled {
+            FxHashMap::default()
+        } else {
+            load_note_reminder_ghosts(db, &active_note.id, &lines)?
+        };
 
         // Keep startup memory lean: load switcher/wiki metadata lazily on
         // first explicit switcher/wiki-autocomplete use.
@@ -771,8 +788,16 @@ impl TerminalApp {
             switcher_collection_filter_name: None,
             content_search_collection_filter_id: None,
             content_search_collection_filter_name: None,
-            switcher_prewarm_pending: true,
-            search_index_prewarm_pending: true,
+            switcher_prewarm_pending: background_tasks_enabled,
+            search_index_prewarm_pending: background_tasks_enabled,
+            search_index_prewarm_rx: None,
+            search_index_prewarm_started_at: None,
+            startup_fold_hydration_pending: background_tasks_enabled,
+            startup_reminder_hydration_pending: background_tasks_enabled,
+            startup_reminder_hydration_retry_at: None,
+            startup_reminder_hydration_retry_count: 0,
+            background_tasks_enabled,
+            note_creation_theme,
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -935,6 +960,10 @@ impl TerminalApp {
     }
 
     fn maybe_autosave(&mut self, db: &Db) -> Result<(), String> {
+        if self.background_tasks_enabled {
+            self.maybe_hydrate_startup_state(db);
+        }
+
         // Process any deferred fold recompute while the user is not typing.
         if self.folds.rescan_pending {
             self.folds.rescan_pending = false;
@@ -963,8 +992,88 @@ impl TerminalApp {
         Ok(())
     }
 
+    fn maybe_hydrate_startup_state(&mut self, db: &Db) {
+        if self.startup_fold_hydration_pending {
+            let started = Instant::now();
+            self.recompute_folding();
+            self.record_perf_duration(
+                "tui.idle.dispatch",
+                "startup_fold_hydration",
+                started.elapsed(),
+            );
+            self.startup_fold_hydration_pending = false;
+        }
+
+        if self.startup_reminder_hydration_pending {
+            if let Some(retry_at) = self.startup_reminder_hydration_retry_at {
+                if Instant::now() < retry_at {
+                    return;
+                }
+            }
+            let started = Instant::now();
+            match load_note_reminder_ghosts(db, &self.active_note.id, &self.lines) {
+                Ok(ghosts) => {
+                    self.reminder_ghosts = ghosts;
+                    self.reminders_dirty = false;
+                    self.record_perf_duration(
+                        "tui.idle.dispatch",
+                        "startup_reminder_hydration",
+                        started.elapsed(),
+                    );
+                    self.startup_reminder_hydration_pending = false;
+                    self.startup_reminder_hydration_retry_at = None;
+                    self.startup_reminder_hydration_retry_count = 0;
+                }
+                Err(error) => {
+                    self.startup_reminder_hydration_retry_count = self
+                        .startup_reminder_hydration_retry_count
+                        .saturating_add(1);
+                    self.startup_reminder_hydration_retry_at =
+                        Some(Instant::now() + Duration::from_secs(2));
+                    eprintln!(
+                        "startup reminder hydration retry #{} failed: {}",
+                        self.startup_reminder_hydration_retry_count, error
+                    );
+                }
+            }
+        }
+    }
+
     fn maybe_prewarm_search_surfaces(&mut self, db: &Db) {
+        if !self.background_tasks_enabled {
+            return;
+        }
+        let tick_started = Instant::now();
+        let tick_budget = Duration::from_millis(STARTUP_PREWARM_IDLE_BUDGET_MS);
+
+        if let Some(rx) = self.search_index_prewarm_rx.take() {
+            match rx.try_recv() {
+                Ok(ok) => {
+                    if ok {
+                        if let Some(started) = self.search_index_prewarm_started_at.take() {
+                            self.record_perf_duration(
+                                "tui.idle.dispatch",
+                                "content_search_index_prewarm",
+                                started.elapsed(),
+                            );
+                        }
+                    } else {
+                        self.search_index_prewarm_started_at = None;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.search_index_prewarm_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.search_index_prewarm_started_at = None;
+                }
+            }
+        }
+
         if self.switcher_prewarm_pending {
+            if tick_started.elapsed() >= tick_budget {
+                return;
+            }
             if self.switcher_items.is_empty() {
                 let started = Instant::now();
                 if self.refresh_switcher_items(db).is_ok() {
@@ -978,18 +1087,20 @@ impl TerminalApp {
             self.switcher_prewarm_pending = false;
         }
 
-        if self.search_index_prewarm_pending {
-            let started = Instant::now();
-            if db
-                .search_notes_content_filtered(SEARCH_PREWARM_QUERY, 1, None)
-                .is_ok()
-            {
-                self.record_perf_duration(
-                    "tui.idle.dispatch",
-                    "content_search_index_prewarm",
-                    started.elapsed(),
-                );
+        if self.search_index_prewarm_pending && self.search_index_prewarm_rx.is_none() {
+            if tick_started.elapsed() >= tick_budget {
+                return;
             }
+            let db_clone = db.clone();
+            let (tx, rx) = std::sync::mpsc::channel::<bool>();
+            std::thread::spawn(move || {
+                let ok = db_clone
+                    .search_notes_content_filtered(SEARCH_PREWARM_QUERY, 1, None)
+                    .is_ok();
+                let _ = tx.send(ok);
+            });
+            self.search_index_prewarm_rx = Some(rx);
+            self.search_index_prewarm_started_at = Some(Instant::now());
             self.search_index_prewarm_pending = false;
         }
     }
@@ -1224,6 +1335,7 @@ pub fn run_terminal_session(
     let (mut app, metrics) = TerminalApp::new_with_startup_metrics(
         db,
         opts,
+        config.clone(),
         config.vim_mode,
         config.autosave,
         config.format_on_save,

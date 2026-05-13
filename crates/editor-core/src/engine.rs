@@ -472,10 +472,7 @@ mod tests {
             Some(CommandDispatchKind::HostModule)
         );
         assert_eq!(
-            EditorEngine::classify_command_dispatch(
-                CommandMode::Editor,
-                "choose_collection Inbox"
-            ),
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "choose_collection Inbox"),
             Some(CommandDispatchKind::HostCollection)
         );
         assert_eq!(

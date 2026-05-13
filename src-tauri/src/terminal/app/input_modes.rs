@@ -99,7 +99,7 @@ impl TerminalApp {
                 }
                 let note = new_note_with_context(
                     db,
-                    &crate::config::load_theme_config(),
+                    &self.note_creation_theme,
                     self.working_collection_id.as_deref(),
                 )?;
                 self.set_active_note(db, note)?;

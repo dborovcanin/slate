@@ -1663,11 +1663,17 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   appRuntimeFlags = runtimeFlags;
   startupMark("ui_data_loaded");
   state.setActiveNote(note);
+  const backgroundTasksEnabled = config.background_tasks_enabled;
 
   createStatusBar(container);
-  mountEditor(editorEl, startupEditorOptionsForNote(note));
+  mountEditor(
+    editorEl,
+    backgroundTasksEnabled ? startupEditorOptionsForNote(note) : editorOptionsForNote(note),
+  );
   startupMark("ui_editor_mounted");
-  scheduleEditorHydrationForStartup(note.id);
+  if (backgroundTasksEnabled) {
+    scheduleEditorHydrationForStartup(note.id);
+  }
   const win = getCurrentWindow();
   void win.onDragDropEvent((event) => {
     if (event.payload.type !== "drop") return;
@@ -1704,10 +1710,12 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     refreshSwitcher();
   });
 
-  void startBackendNoteChangeListener().catch((error) => {
-    console.error("Backend note-change listener failed:", error);
-  });
-  startActiveNoteSyncLoop();
+  if (backgroundTasksEnabled) {
+    void startBackendNoteChangeListener().catch((error) => {
+      console.error("Backend note-change listener failed:", error);
+    });
+    startActiveNoteSyncLoop();
+  }
 
   void listNotesMetaFiltered(currentWorkingCollectionId(), note.id)
     .then((summaries) => {
@@ -1716,7 +1724,9 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     .catch(() => {
       // Keep startup non-blocking when note metadata fetch fails.
     });
-  prewarmSwitcherResources();
+  if (backgroundTasksEnabled) {
+    prewarmSwitcherResources();
+  }
 
   // Defer unlock prompt until after mount so init can complete and the window can show.
   void unlockStartupActiveNoteAfterMount(note).catch((error) => {

@@ -436,8 +436,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             if matches!(
                 next.pending,
                 Some(VimPending::Delete | VimPending::Yank | VimPending::Change)
-            )
-                && !(digit == '0' && !has_count(&next))
+            ) && !(digit == '0' && !has_count(&next))
             {
                 next.count_buffer.push(digit);
                 handled = true;

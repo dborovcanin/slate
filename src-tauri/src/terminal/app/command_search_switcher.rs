@@ -1,10 +1,10 @@
 use super::{
     line_char_len, load_note_reminder_ghosts, new_note_with_context, trim_trailing_word,
     CollectionEditDialogState, CommandCompletionMenuState, CommandCompletionOption,
-    DatePickerAction, Db, Key, Note, NoteSearchResult, SwitcherDeleteConfirm, SwitcherOpenConfirm,
-    TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
-    CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, ContentSearchResponse,
-    MAX_COMMAND_HISTORY_ENTRIES,
+    ContentSearchResponse, DatePickerAction, Db, Key, Note, NoteSearchResult,
+    SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES,
+    COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
+    CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher};
@@ -264,7 +264,8 @@ impl TerminalApp {
         let Some(working_id) = self.working_collection_id.clone() else {
             return;
         };
-        let use_working = self.content_search_collection_filter_id.as_deref() != Some(working_id.as_str());
+        let use_working =
+            self.content_search_collection_filter_id.as_deref() != Some(working_id.as_str());
         if use_working {
             self.content_search_collection_filter_id = Some(working_id);
             self.content_search_collection_filter_name = self.working_collection_name.clone();
@@ -284,7 +285,8 @@ impl TerminalApp {
         let Some(working_id) = self.working_collection_id.clone() else {
             return;
         };
-        let use_working = self.switcher_collection_filter_id.as_deref() != Some(working_id.as_str());
+        let use_working =
+            self.switcher_collection_filter_id.as_deref() != Some(working_id.as_str());
         if use_working {
             self.switcher_collection_filter_id = Some(working_id);
             self.switcher_collection_filter_name = self.working_collection_name.clone();
@@ -295,11 +297,15 @@ impl TerminalApp {
     }
 
     fn switcher_collection_filter_label(&self) -> &str {
-        self.switcher_collection_filter_name.as_deref().unwrap_or("All")
+        self.switcher_collection_filter_name
+            .as_deref()
+            .unwrap_or("All")
     }
 
     fn content_search_collection_filter_label(&self) -> &str {
-        self.content_search_collection_filter_name.as_deref().unwrap_or("All")
+        self.content_search_collection_filter_name
+            .as_deref()
+            .unwrap_or("All")
     }
 
     fn update_switcher_status_hint(&mut self) {
@@ -333,7 +339,10 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn toggle_content_search_collection_filter_and_refresh(&mut self, db: &Db) -> Result<(), String> {
+    fn toggle_content_search_collection_filter_and_refresh(
+        &mut self,
+        db: &Db,
+    ) -> Result<(), String> {
         self.toggle_content_search_collection_filter();
         self.refresh_switcher_items_for_filter(db)?;
         Ok(())
@@ -882,7 +891,7 @@ impl TerminalApp {
             } else {
                 let note = new_note_with_context(
                     db,
-                    &crate::config::load_theme_config(),
+                    &self.note_creation_theme,
                     self.working_collection_id.as_deref(),
                 )?;
                 self.set_active_note(db, note)?;
@@ -1416,7 +1425,7 @@ impl TerminalApp {
             } else {
                 let created = new_note_with_context(
                     db,
-                    &crate::config::load_theme_config(),
+                    &self.note_creation_theme,
                     self.working_collection_id.as_deref(),
                 )?;
                 self.set_active_note(db, created)?;
@@ -1999,7 +2008,8 @@ impl TerminalApp {
         self.collection_switcher_query.clear();
         self.recompute_collection_switcher_matches();
         self.collection_edit_dialog = None;
-        self.status = "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
+        self.status =
+            "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
         Ok(())
     }
 
@@ -2344,8 +2354,8 @@ impl TerminalApp {
                 self.content_search_cursor_col = self.content_search_cursor_col.saturating_sub(1);
             }
             Key::ArrowRight => {
-                self.content_search_cursor_col = (self.content_search_cursor_col + 1)
-                    .min(char_len(&self.content_search_query));
+                self.content_search_cursor_col =
+                    (self.content_search_cursor_col + 1).min(char_len(&self.content_search_query));
             }
             Key::Home => {
                 self.content_search_cursor_col = 0;
@@ -2358,7 +2368,8 @@ impl TerminalApp {
                     &mut self.content_search_query,
                     self.content_search_cursor_col,
                 ) {
-                    self.content_search_cursor_col = self.content_search_cursor_col.saturating_sub(1);
+                    self.content_search_cursor_col =
+                        self.content_search_cursor_col.saturating_sub(1);
                     self.refresh_content_search_preview();
                 }
             }
@@ -2522,7 +2533,8 @@ impl TerminalApp {
         self.rebuild_wiki_link_note_suggestions_cache();
         self.wiki_link_render_cache.clear();
         self.wiki_link_line_render_cache.clear();
-        self.history = super::build_history_for_note(&self.lines, self.cursor_line, self.cursor_col);
+        self.history =
+            super::build_history_for_note(&self.lines, self.cursor_line, self.cursor_col);
         self.fence_checkpoints.truncate(1);
         self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();

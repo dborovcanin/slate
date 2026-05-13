@@ -5,4 +5,4 @@ mod sqlite;
 pub use models::{
     Collection, Note, NoteAccessMode, NoteModules, NoteSearchResult, NoteSummary, Reminder, Tag,
 };
-pub use sqlite::Db;
+pub use sqlite::{Db, DbOpenMetrics};

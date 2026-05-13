@@ -85,6 +85,7 @@ export interface ThemeConfig {
   format_on_save?: boolean;
   terminal_mode: boolean;
   vim_mode: boolean;
+  background_tasks_enabled: boolean;
   date_format: string;
   date_time_format: string;
   variables_autocomplete_min_chars: number;
@@ -136,6 +137,7 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   format_on_save: false,
   terminal_mode: false,
   vim_mode: false,
+  background_tasks_enabled: true,
   date_format: "%Y-%m-%d",
   date_time_format: "%Y-%m-%d %H:%M",
   variables_autocomplete_min_chars: 3,

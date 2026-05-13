@@ -84,9 +84,7 @@ fn parse_terminal_args(args: &[String]) -> Result<terminal::TerminalOptions, Str
 
     if let Some(path) = startup_file.take() {
         if opts.create_new || opts.list_only || opts.note_id.is_some() {
-            return Err(
-                "Cannot combine file open with --new, --list, or --id".to_string(),
-            );
+            return Err("Cannot combine file open with --new, --list, or --id".to_string());
         }
         opts.note_id = Some(note_id_for_file(&path));
     }

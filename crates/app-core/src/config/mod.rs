@@ -46,6 +46,7 @@ const DEFAULT_IMAP_MAX_BODY_BYTES: usize = 512 * 1024;
 const DEFAULT_PERF_ENABLED: bool = false;
 const DEFAULT_PERF_UI_LOG_PATH: &str = "";
 const DEFAULT_PERF_TUI_LOG_PATH: &str = "";
+const DEFAULT_BACKGROUND_TASKS_ENABLED: bool = true;
 const MIN_IMAP_MAX_BYTES: usize = 1024;
 const MAX_IMAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const MIN_IMAP_POLL_SECONDS: u64 = 10;
@@ -172,6 +173,13 @@ enabled = false
 # Linux -> /tmp/slate-log-ui.log and /tmp/slate-log-tui.log
 ui_log_path = ""
 tui_log_path = ""
+
+[startup]
+# Enable non-critical startup work asynchronously after first paint/edit
+# (prewarm/hydration/background sync loops).
+background_tasks_enabled = true
+# Alias for the same behavior:
+# async_enabled = true
 "#;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -208,6 +216,7 @@ pub struct ThemeConfig {
     pub format_on_save: bool,
     pub terminal_mode: bool,
     pub vim_mode: bool,
+    pub background_tasks_enabled: bool,
     pub date_format: String,
     pub date_time_format: String,
     pub variables_autocomplete_min_chars: u8,
@@ -363,6 +372,7 @@ impl Default for ThemeConfig {
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
             terminal_mode: DEFAULT_TERMINAL_MODE,
             vim_mode: DEFAULT_VIM_MODE,
+            background_tasks_enabled: DEFAULT_BACKGROUND_TASKS_ENABLED,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
@@ -385,6 +395,8 @@ struct FileConfig {
     imap: ImapSection,
     #[serde(default)]
     perf: PerfSection,
+    #[serde(default)]
+    startup: StartupSection,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -455,6 +467,12 @@ struct PerfSection {
     enabled: Option<bool>,
     ui_log_path: Option<String>,
     tui_log_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct StartupSection {
+    async_enabled: Option<bool>,
+    background_tasks_enabled: Option<bool>,
 }
 
 pub fn ensure_config_file() -> Result<PathBuf, String> {
@@ -632,6 +650,11 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         terminal_mode: raw.editor.terminal_mode.unwrap_or(DEFAULT_TERMINAL_MODE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
+        background_tasks_enabled: raw
+            .startup
+            .async_enabled
+            .or(raw.startup.background_tasks_enabled)
+            .unwrap_or(DEFAULT_BACKGROUND_TASKS_ENABLED),
         date_time_format: normalize_date_time_format(raw.editor.date_time_format, &date_format),
         date_format,
         variables_autocomplete_min_chars: normalize_variable_autocomplete_min_chars(
@@ -977,6 +1000,7 @@ mod tests {
         assert!(cfg.format_on_save);
         assert!(cfg.terminal_mode);
         assert!(cfg.vim_mode);
+        assert!(cfg.background_tasks_enabled);
         assert_eq!(cfg.date_format, "%d.%m.%Y");
         assert_eq!(cfg.date_time_format, "%d.%m.%Y. %H:%M");
         assert_eq!(cfg.variables_autocomplete_min_chars, 5);
@@ -1075,6 +1099,7 @@ mod tests {
         assert!(!cfg.format_on_save);
         assert!(!cfg.terminal_mode);
         assert!(!cfg.vim_mode);
+        assert!(cfg.background_tasks_enabled);
         assert_eq!(cfg.animation_mode, "fast");
         assert_eq!(cfg.animation_style, "pop-up");
         assert_eq!(cfg.date_format, "%Y-%m-%d");
@@ -1111,6 +1136,43 @@ mod tests {
     fn parses_terminal_mode_override() {
         let cfg = parse_theme_config("[editor]\nterminal_mode = true").expect("config");
         assert!(cfg.terminal_mode);
+    }
+
+    #[test]
+    fn parses_background_tasks_enabled_override() {
+        let cfg = parse_theme_config(
+            r#"
+            [startup]
+            background_tasks_enabled = false
+            "#,
+        )
+        .expect("config");
+        assert!(!cfg.background_tasks_enabled);
+    }
+
+    #[test]
+    fn parses_async_enabled_override() {
+        let cfg = parse_theme_config(
+            r#"
+            [startup]
+            async_enabled = false
+            "#,
+        )
+        .expect("config");
+        assert!(!cfg.background_tasks_enabled);
+    }
+
+    #[test]
+    fn startup_async_enabled_takes_precedence_when_both_set() {
+        let cfg = parse_theme_config(
+            r#"
+            [startup]
+            background_tasks_enabled = true
+            async_enabled = false
+            "#,
+        )
+        .expect("config");
+        assert!(!cfg.background_tasks_enabled);
     }
 
     #[test]

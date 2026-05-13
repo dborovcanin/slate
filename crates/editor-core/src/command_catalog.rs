@@ -264,15 +264,9 @@ pub fn parse_collection_command(input: &str) -> Option<ParsedCollectionCommand> 
     } else {
         let remainder = tokens.collect::<Vec<_>>().join(" ").trim().to_string();
         let (action, needs_arg) = match head.as_str() {
-            "choose_collection" | "choose-collection" => {
-                (CollectionCommandAction::Choose, true)
-            }
-            "clear_collection" | "clear-collection" => {
-                (CollectionCommandAction::Clear, false)
-            }
-            "add_to_collection" | "add-to-collection" => {
-                (CollectionCommandAction::Add, true)
-            }
+            "choose_collection" | "choose-collection" => (CollectionCommandAction::Choose, true),
+            "clear_collection" | "clear-collection" => (CollectionCommandAction::Clear, false),
+            "add_to_collection" | "add-to-collection" => (CollectionCommandAction::Add, true),
             "remove_from_collection" | "remove-from-collection" => {
                 (CollectionCommandAction::Remove, true)
             }
@@ -538,11 +532,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 54] = [
     CommandDefinition {
         id: CommandId::ClearCollection,
         value: "collection clear",
-        aliases: &[
-            "clear_collection",
-            "clear-collection",
-            "collection-clear",
-        ],
+        aliases: &["clear_collection", "clear-collection", "collection-clear"],
         description: "clear working collection",
         modes: &MODES_BOTH,
     },
@@ -577,11 +567,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 54] = [
     CommandDefinition {
         id: CommandId::AddToCollection,
         value: "collection join",
-        aliases: &[
-            "add_to_collection",
-            "add-to-collection",
-            "collection-join",
-        ],
+        aliases: &["add_to_collection", "add-to-collection", "collection-join"],
         description: "add active note to collection",
         modes: &MODES_BOTH,
     },

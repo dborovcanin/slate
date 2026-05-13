@@ -64,9 +64,7 @@ fn note_defaults_from_config() -> Result<(NoteModules, Option<String>), String> 
 
 #[tauri::command]
 pub fn get_or_create_note(core: State<'_, AppCore>, app: AppHandle) -> Result<Note, String> {
-    let startup_markdown = app
-        .state::<crate::StartupFileState>()
-        .take_startup_file();
+    let startup_markdown = app.state::<crate::StartupFileState>().take_startup_file();
     if let Some(path) = startup_markdown {
         let note_id = crate::note_id_for_file(&path);
         return core

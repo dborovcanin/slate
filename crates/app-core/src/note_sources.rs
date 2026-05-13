@@ -447,12 +447,8 @@ pub fn resolve_markdown_file_path(raw: &str, cwd: &Path) -> Result<PathBuf, Stri
     }
 
     if absolute.exists() {
-        std::fs::canonicalize(&absolute).map_err(|e| {
-            format!(
-                "Failed to canonicalize file '{}': {e}",
-                absolute.display()
-            )
-        })
+        std::fs::canonicalize(&absolute)
+            .map_err(|e| format!("Failed to canonicalize file '{}': {e}", absolute.display()))
     } else {
         Ok(absolute)
     }
@@ -1024,7 +1020,10 @@ mod tests {
         assert!(!opened.modules.table);
         assert!(!opened.modules.variables);
         assert!(opened.modules.style);
-        assert_eq!(syntax_language_for_note_id(&note_id).as_deref(), Some("json"));
+        assert_eq!(
+            syntax_language_for_note_id(&note_id).as_deref(),
+            Some("json")
+        );
 
         let _ = fs::remove_file(json_path);
         drop(db);

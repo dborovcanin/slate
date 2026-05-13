@@ -2983,10 +2983,7 @@ impl TerminalApp {
         self.lines[self.cursor_line].push_str(&removed);
         self.cursor_col = prev_len;
         self.splice_calc_line_metadata(self.cursor_line, 2, 1);
-        self.mark_edited_from_line_with_span(
-            self.cursor_line,
-            Some((self.cursor_line, 2, 1)),
-        );
+        self.mark_edited_from_line_with_span(self.cursor_line, Some((self.cursor_line, 2, 1)));
     }
 
     pub(super) fn delete_forward(&mut self) {
@@ -3031,10 +3028,7 @@ impl TerminalApp {
         let next = self.lines.remove(self.cursor_line + 1);
         self.lines[self.cursor_line].push_str(&next);
         self.splice_calc_line_metadata(self.cursor_line, 2, 1);
-        self.mark_edited_from_line_with_span(
-            self.cursor_line,
-            Some((self.cursor_line, 2, 1)),
-        );
+        self.mark_edited_from_line_with_span(self.cursor_line, Some((self.cursor_line, 2, 1)));
     }
 
     pub(super) fn move_cursor_left(&mut self) {
@@ -3428,8 +3422,7 @@ impl TerminalApp {
             db,
             Some(&self.active_note.id),
             self.working_collection_id.as_deref(),
-        )
-        {
+        ) {
             self.switcher_items = items;
             self.rebuild_wiki_link_prefix_index();
             self.rebuild_wiki_link_note_suggestions_cache();

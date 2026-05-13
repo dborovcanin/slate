@@ -2055,7 +2055,10 @@ pub struct DecideEvalWindowParams<'a> {
 }
 
 impl<'a> DecideEvalWindowParams<'a> {
-    pub fn with_calc_dependency_index(mut self, dep_index: Option<&'a CalcDependencyIndex>) -> Self {
+    pub fn with_calc_dependency_index(
+        mut self,
+        dep_index: Option<&'a CalcDependencyIndex>,
+    ) -> Self {
         self.variable_graph = dep_index.and_then(|d| d.variable_graph.as_ref());
         self.table_formula_index = dep_index.and_then(|d| d.table_formula_index.as_ref());
         self
@@ -2148,7 +2151,8 @@ pub fn decide_eval_window_with_mask(
     has_prev: bool,
     mask: CalcFeatureMask,
 ) -> CalcEvalWindowDecision {
-    let prev_changed_assignment_names = collect_assignment_names_with_mask(prev_changed_lines, mask);
+    let prev_changed_assignment_names =
+        collect_assignment_names_with_mask(prev_changed_lines, mask);
     let prev_changed_had_assignment = !prev_changed_assignment_names.is_empty()
         || contains_variable_assignment_with_mask(prev_changed_lines, mask);
     let prev_changed_had_builtin_formula =
@@ -2750,7 +2754,14 @@ mod tests {
             "x".to_string(),
         ];
         let prev_changed = vec!["a := 0".to_string()];
-        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
+        let decision = decide_eval_window_with_mask(
+            &lines,
+            0,
+            1,
+            &prev_changed,
+            true,
+            CalcFeatureMask::default(),
+        );
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 4);
@@ -2766,7 +2777,14 @@ mod tests {
             "x".to_string(),
         ];
         let prev_changed = vec!["a := 1".to_string()];
-        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
+        let decision = decide_eval_window_with_mask(
+            &lines,
+            0,
+            1,
+            &prev_changed,
+            true,
+            CalcFeatureMask::default(),
+        );
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 3);
@@ -2782,7 +2800,8 @@ mod tests {
             "| total |  | :=sum_col() |".to_string(),
             "| grand |  | :=sum_col() |".to_string(),
         ];
-        let decision = decide_eval_window_with_mask(&lines, 3, 4, &[], true, CalcFeatureMask::default());
+        let decision =
+            decide_eval_window_with_mask(&lines, 3, 4, &[], true, CalcFeatureMask::default());
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 3);
         assert_eq!(decision.eval_to, 6);
@@ -2797,7 +2816,14 @@ mod tests {
             "| a | 10 | :=sum_col() * var |".to_string(),
         ];
         let prev_changed = vec!["var := 0.4".to_string()];
-        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
+        let decision = decide_eval_window_with_mask(
+            &lines,
+            0,
+            1,
+            &prev_changed,
+            true,
+            CalcFeatureMask::default(),
+        );
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 4);
@@ -2813,7 +2839,14 @@ mod tests {
             "| total | :=sum_col() | :=sum_col() * var |".to_string(),
         ];
         let prev_changed = vec!["var := 0.4".to_string()];
-        let decision = decide_eval_window_with_mask(&lines, 0, 1, &prev_changed, true, CalcFeatureMask::default());
+        let decision = decide_eval_window_with_mask(
+            &lines,
+            0,
+            1,
+            &prev_changed,
+            true,
+            CalcFeatureMask::default(),
+        );
         assert!(decision.can_use_partial);
         assert_eq!(decision.eval_from, 0);
         assert_eq!(decision.eval_to, 5);

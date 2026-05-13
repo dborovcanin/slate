@@ -202,6 +202,7 @@ fn write_command_syncs_markdown_file_backed_note() {
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        crate::config::ThemeConfig::default(),
         true,
         true,
         false,
@@ -287,6 +288,7 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        crate::config::ThemeConfig::default(),
         true,
         true,
         false,
@@ -1295,6 +1297,7 @@ fn startup_with_locked_recent_note_prompts_for_password() {
     let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        crate::config::ThemeConfig::default(),
         true,
         true,
         false,
@@ -1735,7 +1738,12 @@ fn wiki_link_autocomplete_respects_working_collection_filter() {
     run_keys(
         &mut app,
         &db,
-        &[Key::Char('['), Key::Char('['), Key::Char('a'), Key::Char('l')],
+        &[
+            Key::Char('['),
+            Key::Char('['),
+            Key::Char('a'),
+            Key::Char('l'),
+        ],
     );
 
     assert!(app.wiki_link_autocomplete_popup.visible);
@@ -1844,6 +1852,7 @@ fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
     let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,
         &opts,
+        crate::config::ThemeConfig::default(),
         true,
         true,
         false,
