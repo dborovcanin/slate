@@ -18,6 +18,7 @@ const markAlias: Record<string, string> = {
   ui_data_loaded: "loading_data",
   ui_editor_mounted: "loading_editor",
   ui_codemirror_ready: "loading_editor_ready",
+  ui_editor_hydrated: "loading_editor_hydrated",
   ui_wasm_ready: "loading_calc_engine",
   ui_app_ready: "ready",
 };

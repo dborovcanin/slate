@@ -241,6 +241,30 @@ function reconfigureEditorForNote(note: Note | null) {
   reconfigureEditor(editorOptionsForNote(note));
 }
 
+function startupEditorOptionsForNote(note: Note | null) {
+  const options = editorOptionsForNote(note);
+  return {
+    ...options,
+    disableCalc: true,
+    disableMarkdownDecorations: true,
+    disableFolding: true,
+    disableNotify: true,
+    disableAutocomplete: true,
+  };
+}
+
+function scheduleEditorHydrationForStartup(noteId: string) {
+  window.setTimeout(() => {
+    if (state.activeNote?.id !== noteId) {
+      reconfigureEditorForNote(state.activeNote);
+      startupMark("ui_editor_hydrated");
+      return;
+    }
+    reconfigureEditorForNote(state.activeNote);
+    startupMark("ui_editor_hydrated");
+  }, 0);
+}
+
 async function persistActiveNoteModules(modules: NoteModules) {
   const active = state.activeNote;
   if (!active) throw new Error("No active note");
@@ -1641,8 +1665,9 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   state.setActiveNote(note);
 
   createStatusBar(container);
-  mountEditor(editorEl, editorOptionsForNote(note));
+  mountEditor(editorEl, startupEditorOptionsForNote(note));
   startupMark("ui_editor_mounted");
+  scheduleEditorHydrationForStartup(note.id);
   const win = getCurrentWindow();
   void win.onDragDropEvent((event) => {
     if (event.payload.type !== "drop") return;
