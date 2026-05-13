@@ -402,37 +402,97 @@ impl TerminalApp {
         };
 
         draw_row_at_styled(buf, row, 1, cols, "", base_style);
-
         let sticky_width = right_sticky_text.chars().count().min(cols);
-        let sticky_start_col = cols.saturating_sub(sticky_width).saturating_add(1);
-        let left_budget_cols = if sticky_width > 0 {
-            sticky_start_col.saturating_sub(1)
-        } else {
-            cols
-        };
+        let viewport_width = cols.saturating_sub(sticky_width);
+        if viewport_width > 0 {
+            let suffix_text = "]";
+            let mut spans: Vec<(&str, AnsiStyle)> = Vec::with_capacity(
+                self.command_completion.options.len().saturating_mul(2) + 2,
+            );
+            let prefix_text = format!(":{}  [", self.command_input);
+            spans.push((prefix_text.as_str(), base_style));
 
-        let mut col = 1usize;
-        Self::draw_status_segment(
-            buf,
-            row,
-            &mut col,
-            left_budget_cols,
-            &format!(":{}  [", self.command_input),
-            base_style,
-        );
-        for (idx, option) in self.command_completion.options.iter().enumerate() {
-            if idx > 0 {
-                Self::draw_status_segment(buf, row, &mut col, left_budget_cols, "  ", base_style);
+            let selected_token = self
+                .command_completion
+                .options
+                .get(selected_idx)
+                .map(|option| option.token.as_str())
+                .unwrap_or("");
+
+            let mut selected_from = 0usize;
+            let mut selected_to = 0usize;
+            let mut virtual_col = prefix_text.chars().count();
+            for (idx, option) in self.command_completion.options.iter().enumerate() {
+                if idx > 0 {
+                    spans.push(("  ", base_style));
+                    virtual_col += 2;
+                }
+                let style = if idx == selected_idx {
+                    selected_from = virtual_col;
+                    selected_to = virtual_col + selected_token.chars().count();
+                    selected_style
+                } else {
+                    base_style
+                };
+                spans.push((option.token.as_str(), style));
+                virtual_col += option.token.chars().count();
             }
-            let style = if idx == selected_idx {
-                selected_style
-            } else {
-                base_style
-            };
-            Self::draw_status_segment(buf, row, &mut col, left_budget_cols, &option.token, style);
+            spans.push((suffix_text, base_style));
+            virtual_col += suffix_text.chars().count();
+
+            let total_width = virtual_col;
+            let mut viewport_from = 0usize;
+            if total_width > viewport_width {
+                // Keep selected token visible with breathing room on both sides.
+                let side_padding = 3usize;
+                let viewport_to = viewport_from + viewport_width;
+                if selected_to.saturating_add(side_padding) > viewport_to {
+                    viewport_from =
+                        selected_to
+                            .saturating_add(side_padding)
+                            .saturating_sub(viewport_width);
+                }
+                let desired_left = selected_from.saturating_sub(side_padding);
+                if desired_left < viewport_from {
+                    viewport_from = desired_left;
+                }
+                let max_from = total_width.saturating_sub(viewport_width);
+                viewport_from = viewport_from.min(max_from);
+            }
+            let viewport_to = viewport_from + viewport_width;
+
+            let mut draw_col = 1usize;
+            let mut span_from = 0usize;
+            for (text, style) in spans {
+                let span_to = span_from + text.chars().count();
+                let clip_from = span_from.max(viewport_from);
+                let clip_to = span_to.min(viewport_to);
+                if clip_to > clip_from {
+                    let local_from = clip_from - span_from;
+                    let local_to = clip_to - span_from;
+                    let clipped: String = text
+                        .chars()
+                        .skip(local_from)
+                        .take(local_to - local_from)
+                        .collect();
+                    Self::draw_status_segment(
+                        buf,
+                        row,
+                        &mut draw_col,
+                        viewport_width,
+                        &clipped,
+                        style,
+                    );
+                }
+                span_from = span_to;
+                if draw_col > viewport_width {
+                    break;
+                }
+            }
         }
-        Self::draw_status_segment(buf, row, &mut col, left_budget_cols, "]", base_style);
+
         if sticky_width > 0 {
+            let sticky_start_col = cols.saturating_sub(sticky_width).saturating_add(1);
             let mut sticky_col = sticky_start_col;
             Self::draw_status_segment(buf, row, &mut sticky_col, cols, right_sticky_text, base_style);
         }

@@ -530,7 +530,7 @@ impl TerminalApp {
 
     pub(super) fn working_collection_status_suffix(&self) -> String {
         match self.working_collection_name.as_deref() {
-            Some(name) if !name.trim().is_empty() => format!(" | {name}"),
+            Some(name) if !name.trim().is_empty() => format!(" | {name} "),
             _ => String::new(),
         }
     }
