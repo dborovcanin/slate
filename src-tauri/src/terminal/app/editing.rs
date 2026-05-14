@@ -3797,6 +3797,34 @@ impl TerminalApp {
         true
     }
 
+    pub(super) fn open_wiki_link_preview(&mut self, db: &crate::storage::Db) {
+        let line = self.current_line().to_string();
+        let Some(link) =
+            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.cursor_col)
+        else {
+            self.status = "no wiki-link at cursor".to_string();
+            return;
+        };
+        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+        match note_sources.resolve_wiki_link(&link.short_id) {
+            Ok(Some(summary)) => {
+                self.wiki_link_preview.title = summary.title;
+                self.wiki_link_preview.body = summary.body_prefix;
+                self.wiki_link_preview.visible = true;
+            }
+            Ok(None) => {
+                self.status = "wiki-link: note not found".to_string();
+            }
+            Err(e) => {
+                self.status = format!("wiki-link error: {e}");
+            }
+        }
+    }
+
+    pub(super) fn close_wiki_link_preview(&mut self) {
+        self.wiki_link_preview.visible = false;
+    }
+
     fn jump_to_heading(&mut self, heading: &str) {
         let normalize = |value: &str| {
             value

@@ -55,6 +55,9 @@ impl TerminalApp {
     }
 
     pub(super) fn handle_editor_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.wiki_link_preview.visible {
+            self.close_wiki_link_preview();
+        }
         self.maybe_record_vim_insert_macro_key(&key);
         let mut should_autoformat = false;
         let mut clamp_table_padding = true;
@@ -397,6 +400,19 @@ impl TerminalApp {
         if key == Key::Ctrl(']') {
             self.navigate_wiki_link_at_cursor(db);
             return Ok(());
+        }
+
+        if key == Key::Char('K') {
+            if self.wiki_link_preview.visible {
+                self.close_wiki_link_preview();
+            } else {
+                self.open_wiki_link_preview(db);
+            }
+            return Ok(());
+        }
+
+        if self.wiki_link_preview.visible {
+            self.close_wiki_link_preview();
         }
 
         let now = Instant::now();

@@ -9,7 +9,13 @@ import {
   StateField,
   type Extension,
 } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import {
+  EditorView,
+  hoverTooltip,
+  showTooltip,
+  type Tooltip,
+  type TooltipView,
+} from "@codemirror/view";
 import { listNotesMeta, resolveWikiLink, resolveWikiLinkHeadings, type NoteSummary } from "../api.ts";
 import { markdownWikiLinkAtCursor } from "./wasm.ts";
 
@@ -296,6 +302,108 @@ export function tryNavigateWikiLinkFromMouseEvent(
   return true;
 }
 
+function wikiLinkAtPos(view: EditorView, pos: number) {
+  const line = view.state.doc.lineAt(pos);
+  return markdownWikiLinkAtCursor(line.text, pos - line.from);
+}
+
+function buildPreviewDom(summary: NoteSummary): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "wiki-link-preview";
+  const title = document.createElement("div");
+  title.className = "wiki-link-preview-title";
+  title.textContent = summary.title || "Untitled";
+  wrap.appendChild(title);
+  const body = summary.body_prefix.trim();
+  if (body) {
+    const content = document.createElement("div");
+    content.className = "wiki-link-preview-body";
+    content.textContent = body;
+    wrap.appendChild(content);
+  }
+  return wrap;
+}
+
+function makePreviewTooltipView(summary: NoteSummary): TooltipView {
+  const dom = buildPreviewDom(summary);
+  return {
+    dom,
+    mount() {
+      dom.parentElement?.classList.add("wiki-link-preview-tooltip");
+    },
+  };
+}
+
+function wikiLinkHoverTooltip(api: WikiLinkApi): Extension {
+  return hoverTooltip(
+    async (view, pos) => {
+      const link = wikiLinkAtPos(view, pos);
+      if (!link) return null;
+      const summary = await api.resolveWikiLink(link.shortId);
+      if (!summary) return null;
+      const line = view.state.doc.lineAt(pos);
+      return {
+        pos: line.from + link.from,
+        end: line.from + link.to,
+        above: true,
+        create: () => makePreviewTooltipView(summary),
+      };
+    },
+    { hoverTime: 400 },
+  );
+}
+
+const setKeyboardPreview = StateEffect.define<Tooltip | null>();
+
+const keyboardPreviewField = StateField.define<Tooltip | null>({
+  create: () => null,
+  update(value, tr) {
+    if (tr.selection || tr.docChanged) return null;
+    for (const e of tr.effects) {
+      if (e.is(setKeyboardPreview)) return e.value;
+    }
+    return value;
+  },
+  provide: (f) => showTooltip.from(f),
+});
+
+function wikiLinkKeyboardPreviewExtension(api: WikiLinkApi): Extension {
+  return [
+    keyboardPreviewField,
+    Prec.highest(
+      EditorView.domEventHandlers({
+        keydown(event, view) {
+          if (event.key !== "K") return false;
+          const vimMode = view.dom.dataset.vimMode;
+          if (!vimMode || vimMode === "insert") return false;
+          const current = view.state.field(keyboardPreviewField, false);
+          if (current !== null) {
+            view.dispatch({ effects: setKeyboardPreview.of(null) });
+            event.preventDefault();
+            return true;
+          }
+          const sel = view.state.selection.main;
+          const link = wikiLinkAtPos(view, sel.head);
+          if (!link) return false;
+          event.preventDefault();
+          api.resolveWikiLink(link.shortId).then((summary) => {
+            if (!summary) return;
+            const line = view.state.doc.lineAt(sel.head);
+            const tooltip: Tooltip = {
+              pos: line.from + link.from,
+              end: line.from + link.to,
+              above: true,
+              create: () => makePreviewTooltipView(summary),
+            };
+            view.dispatch({ effects: setKeyboardPreview.of(tooltip) });
+          }).catch(() => {});
+          return true;
+        },
+      }),
+    ),
+  ];
+}
+
 function wikiLinkClickHandler(
   onNavigate: (noteId: string, heading?: string) => void,
   api: WikiLinkApi,
@@ -329,6 +437,8 @@ export function wikiLinkExtensions(
     pendingAutoHeadingPromptField,
     autoHeadingPromptLifecycle,
     wikiLinkInputHandler,
+    wikiLinkHoverTooltip(api),
+    wikiLinkKeyboardPreviewExtension(api),
   ];
 
   if (onNavigate) {

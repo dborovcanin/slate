@@ -56,6 +56,7 @@ This document summarizes GUI, terminal, and vim key mappings.
 | `Ctrl+Q` | Quit |
 | `Ctrl+W` | Quit |
 | `Ctrl+]` | Navigate wiki link at cursor |
+| hover wiki link | Preview linked note (popup) |
 | `Tab` | Accept variable completion or apply calc result |
 
 ## Table editing keys (GUI + TUI editor input)
@@ -89,6 +90,7 @@ Supported and tested core motions/actions include:
 - undo/redo semantics: in vim mode use `u` / `Ctrl+r` (TUI-style status + cursor behavior); outside vim, `Ctrl+z`/`Ctrl+y` remains native editor behavior
 - fold toggle: `za`
 - wiki-link navigation: `gd`
+- wiki-link preview (peek linked note): `K` (toggle; dismissed on cursor move)
 
 ## Vim command bar entry
 

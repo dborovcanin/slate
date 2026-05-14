@@ -810,6 +810,77 @@ impl TerminalApp {
         }
     }
 
+    pub(super) fn draw_wiki_link_preview_popup(
+        &self,
+        buf: &mut String,
+        rows: usize,
+        cols: usize,
+    ) {
+        let preview = &self.wiki_link_preview;
+        if !preview.visible
+            || !matches!(
+                self.mode,
+                UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+            )
+            || cols < 10
+            || rows <= EDITOR_TOP_ROW
+        {
+            return;
+        }
+        let max_editor_row = rows.saturating_sub(1);
+        let inner_width = 58usize.min(cols.saturating_sub(4));
+        if inner_width < 4 {
+            return;
+        }
+        let box_width = inner_width + 2;
+
+        let body_lines = preview_wrap_text(&preview.body, inner_width);
+        let shown_body = body_lines.len().min(6);
+        // height = top border + title row + body rows + bottom border
+        let box_height = 3 + shown_body;
+
+        let cursor_screen_row =
+            self.cursor_line.saturating_sub(self.scroll_line) + EDITOR_TOP_ROW;
+        let y = if cursor_screen_row >= EDITOR_TOP_ROW + box_height {
+            cursor_screen_row.saturating_sub(box_height)
+        } else {
+            cursor_screen_row
+                .saturating_add(1)
+                .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)))
+        }
+        .max(EDITOR_TOP_ROW);
+
+        let cursor_screen_col = self.cursor_col.saturating_sub(self.scroll_col) + 1;
+        let x = if cursor_screen_col + box_width <= cols + 1 {
+            cursor_screen_col
+        } else {
+            cols.saturating_sub(box_width).saturating_add(1).max(1)
+        };
+
+        let bg = self.render_palette.surface_bg();
+        let border_fg = self.render_palette.primary();
+        draw_framed_surface(buf, y, x, box_width, box_height, bg, border_fg, false);
+
+        let title_style = AnsiStyle {
+            fg: Some(self.render_palette.text_fg()),
+            bg: Some(bg),
+            bold: true,
+            ..Default::default()
+        };
+        let title_text = format!(" {}", preview_truncate(&preview.title, inner_width));
+        draw_row_at_styled(buf, y + 1, x + 1, inner_width, &title_text, title_style);
+
+        let body_style = AnsiStyle {
+            fg: Some(self.render_palette.variable),
+            bg: Some(bg),
+            ..Default::default()
+        };
+        for (i, line) in body_lines[..shown_body].iter().enumerate() {
+            let text = format!(" {line}");
+            draw_row_at_styled(buf, y + 2 + i, x + 1, inner_width, &text, body_style);
+        }
+    }
+
     fn parse_goto_sequence(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
         if bytes.get(start).copied()? != 0x1b || bytes.get(start + 1).copied()? != b'[' {
             return None;
@@ -1493,6 +1564,7 @@ impl TerminalApp {
         }
         self.draw_variable_autocomplete_popup(&mut buf, rows, cols);
         self.draw_wiki_link_autocomplete_popup(&mut buf, rows, cols);
+        self.draw_wiki_link_preview_popup(&mut buf, rows, cols);
 
         let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
         if let Some((line_text, mapped_col)) = cursor_line_override {
@@ -1700,5 +1772,46 @@ impl TerminalApp {
                 (y + 1, col.max(1))
             }
         }
+    }
+}
+
+fn preview_wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![];
+    }
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        if paragraph.is_empty() {
+            if !lines.is_empty() {
+                break;
+            }
+            continue;
+        }
+        let mut current = String::new();
+        for word in paragraph.split_whitespace() {
+            if current.is_empty() {
+                current.push_str(word);
+            } else if current.chars().count() + 1 + word.chars().count() <= width {
+                current.push(' ');
+                current.push_str(word);
+            } else {
+                lines.push(current.clone());
+                current = word.to_string();
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+    }
+    lines
+}
+
+fn preview_truncate(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else {
+        let truncated: String = chars[..max_chars.saturating_sub(1)].iter().collect();
+        format!("{truncated}…")
     }
 }

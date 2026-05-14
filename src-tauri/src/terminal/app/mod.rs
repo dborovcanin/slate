@@ -273,6 +273,13 @@ pub(super) struct WikiLinkSuggestion {
     pub heading: Option<String>,
 }
 
+#[derive(Debug, Default)]
+struct WikiLinkPreviewState {
+    visible: bool,
+    title: String,
+    body: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct WikiLinkAutocompletePopupState {
     visible: bool,
@@ -453,6 +460,7 @@ struct TerminalApp {
     // Calc/variables behavior
     variable_autocomplete_min_chars: usize,
     variable_autocomplete_popup: VariableAutocompletePopupState,
+    wiki_link_preview: WikiLinkPreviewState,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
     wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
@@ -864,6 +872,7 @@ impl TerminalApp {
                 variable_autocomplete_min_chars.clamp(1, 64),
             ),
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
+            wiki_link_preview: WikiLinkPreviewState::default(),
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
             wiki_link_prefix_index: FxHashMap::default(),
