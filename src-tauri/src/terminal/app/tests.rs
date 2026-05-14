@@ -378,17 +378,14 @@ fn gui_try_apply_shared_vim_action(
 ) -> bool {
     let text = super::join_lines(&state.lines);
     let cursor = gui_byte_offset_for_line_col(state, state.cursor_line, state.cursor_col);
-    let snapshot = crate::editor_core::types::EditorContextSnapshot {
-        text,
-        selection: crate::editor_core::types::SelectionSnapshot {
-            anchor: cursor,
-            head: cursor,
-        },
-        changed_range: None,
+    let selection = crate::editor_core::types::SelectionSnapshot {
+        anchor: cursor,
+        head: cursor,
     };
     let register = gui_shared_vim_register(state);
     let Some(result) = crate::editor_core::vim_actions::execute_vim_action_with_target(
-        &snapshot,
+        &text,
+        selection,
         action.intent,
         action.count.max(1),
         register.as_ref(),

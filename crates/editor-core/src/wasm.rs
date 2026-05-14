@@ -543,13 +543,9 @@ pub fn wasm_execute_vim_action(
     target_char: &str,
 ) -> Option<JsValue> {
     let intent: VimIntent = from_js_value(intent)?;
-    let snapshot = EditorContextSnapshot {
-        text: text.to_string(),
-        selection: SelectionSnapshot {
-            anchor: selection_anchor,
-            head: selection_head,
-        },
-        changed_range: None,
+    let selection = SelectionSnapshot {
+        anchor: selection_anchor,
+        head: selection_head,
     };
     let register_mode = parse_vim_register_mode(register_mode);
     let register = register_mode.map(|mode| VimRegisterValue {
@@ -558,7 +554,8 @@ pub fn wasm_execute_vim_action(
     });
     let target_char = target_char.chars().next();
     let result = vim_actions::execute_vim_action_with_target(
-        &snapshot,
+        text,
+        selection,
         intent,
         count,
         register.as_ref(),

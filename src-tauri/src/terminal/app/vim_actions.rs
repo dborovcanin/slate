@@ -10,8 +10,17 @@ const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
 fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bool {
     matches!(
         intent,
-        crate::editor_core::vim::VimIntent::DeleteToLineStart
+        crate::editor_core::vim::VimIntent::DeleteLine
+            | crate::editor_core::vim::VimIntent::YankLine
+            | crate::editor_core::vim::VimIntent::DeleteToLineStart
             | crate::editor_core::vim::VimIntent::DeleteToLineEnd
+            | crate::editor_core::vim::VimIntent::YankToLineStart
+            | crate::editor_core::vim::VimIntent::YankToLineEnd
+            | crate::editor_core::vim::VimIntent::DeleteWordForward
+            | crate::editor_core::vim::VimIntent::DeleteWordBackward
+            | crate::editor_core::vim::VimIntent::DeleteWordEnd
+            | crate::editor_core::vim::VimIntent::YankWordForward
+            | crate::editor_core::vim::VimIntent::YankWordBackward
             | crate::editor_core::vim::VimIntent::DeleteChar
             | crate::editor_core::vim::VimIntent::DeleteInsideWord
             | crate::editor_core::vim::VimIntent::DeleteAroundWord
@@ -21,6 +30,7 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
             | crate::editor_core::vim::VimIntent::DeleteAroundPipe
             | crate::editor_core::vim::VimIntent::YankInsidePipe
             | crate::editor_core::vim::VimIntent::YankAroundPipe
+            | crate::editor_core::vim::VimIntent::PasteAfter
             | crate::editor_core::vim::VimIntent::DeleteTillChar
     )
 }
@@ -148,26 +158,47 @@ impl TerminalApp {
         if !crate::editor_core::vim_actions::supports_intent(intent) {
             return None;
         }
-        let (snapshot, scope_start_offset) =
-            if self.lines.len() >= 2048 && can_scope_shared_vim_intent(intent) {
-                let center = self.cursor_line.min(self.lines.len().saturating_sub(1));
-                let start = center.saturating_sub(96);
-                let end = center
-                    .saturating_add(96)
-                    .min(self.lines.len().saturating_sub(1));
-                self.build_scoped_snapshot_for_line_span(start, end, None)
-            } else {
-                (self.build_snapshot(), 0)
-            };
-        let register = self.shared_vim_register();
-        let result = crate::editor_core::vim_actions::execute_vim_action_with_target(
-            &snapshot,
-            intent,
-            count.max(1),
-            register.as_ref(),
-            target_char,
-        )?;
-        Some((result, scope_start_offset))
+        if self.lines.len() >= 2048 && can_scope_shared_vim_intent(intent) {
+            let center = self.cursor_line.min(self.lines.len().saturating_sub(1));
+            let start = center.saturating_sub(96);
+            let end = center
+                .saturating_add(96)
+                .min(self.lines.len().saturating_sub(1));
+            let (snapshot, scope_start_offset) =
+                self.build_scoped_snapshot_for_line_span(start, end, None);
+            let register = self.shared_vim_register();
+            let result = crate::editor_core::vim_actions::execute_vim_action_with_target(
+                &snapshot.text,
+                snapshot.selection,
+                intent,
+                count.max(1),
+                register.as_ref(),
+                target_char,
+            )?;
+            Some((result, scope_start_offset))
+        } else {
+            if self.joined_text_cache.is_none() {
+                self.joined_text_cache = Some(join_lines(&self.lines));
+            }
+            let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+            let selection = self.command_selection.unwrap_or(
+                crate::editor_core::types::SelectionSnapshot {
+                    anchor: fallback_cursor,
+                    head: fallback_cursor,
+                },
+            );
+            let register = self.shared_vim_register();
+            let text: &str = self.joined_text_cache.as_deref().unwrap();
+            let result = crate::editor_core::vim_actions::execute_vim_action_with_target(
+                text,
+                selection,
+                intent,
+                count.max(1),
+                register.as_ref(),
+                target_char,
+            )?;
+            Some((result, 0))
+        }
     }
 
     pub(super) fn apply_shared_vim_action_result(

@@ -220,18 +220,22 @@ Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, 
 
 ### Next Sprint Checklist (2026-05-12 to 2026-05-23)
 
-- [ ] Shared vim action snapshot elimination (line-window / line+col API)
+- [x] Shared vim action snapshot elimination (line-window / line+col API)
   Owner: editor-core + UI adapter
   Expected impact: removes O(document size) string snapshots on intent execution and reduces UI/TUI latency spikes on large notes.
-- [ ] TUI localized edit application (`apply_edit_operation` without full `join -> replace -> split` for local edits)
+  Done: `execute_vim_action` API decoupled from `EditorContextSnapshot` — takes `&str` + `SelectionSnapshot` directly. TUI full-doc branch borrows from `joined_text_cache` without cloning. All 23 intents now covered by the 192-line scoped window on notes ≥2048 lines.
+- [x] TUI localized edit application (`apply_edit_operation` without full `join -> replace -> split` for local edits)
   Owner: TUI adapter
   Expected impact: lower per-edit allocation churn and smoother terminal typing on large files.
-- [ ] Calc note-line cache mutation hardening (`sync_note_lines` path)
+  Done: both single-change (hot path) and multi-change paths in `apply_edit_operation` work directly on `Vec<String>` via `lines.splice()` and `apply_text_change_in_place`. No join/replace/split cycle anywhere.
+- [x] Calc note-line cache mutation hardening (`sync_note_lines` path)
   Owner: calc runtime + editor-core
   Expected impact: avoids accidental full `Vec<String>` clones during eval overlap, reducing jitter during rapid edits.
-- [ ] Partial calc variable-definition indexing (incremental index for changed windows)
+  Done (no change needed): UI always `await`s `syncNoteLines` before `evaluateNoteContextDelta`. By the time the next sync runs, the eval's Arc clones are dropped and the cache Arc is at refcount 1, so `Arc::make_mut` always mutates in-place. The CoW clone scenario requires concurrent callers on the same note, which the current architecture does not have.
+- [x] Partial calc variable-definition indexing (incremental index for changed windows)
   Owner: calc runtime + editor-core
   Expected impact: makes partial eval truly partial and cuts needless full-note scans after localized edits.
+  Done: `sync_calc_dependency_index` incrementally updates via `sync_variable_dependency_graph` and `sync_table_formula_dependency_index` on the changed line range. Full rebuild only on mask change or cold start.
 - [ ] Live GUI parity runner for markdown/calc/folding (CodeMirror-backed)
   Owner: UI adapter + test infrastructure
   Expected impact: catches simulator-vs-runtime parity drift earlier and protects cross-frontend behavior consistency.

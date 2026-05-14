@@ -1,5 +1,5 @@
 use crate::operations::replace_range;
-use crate::types::{EditOperation, EditorContextSnapshot, OperationSelection};
+use crate::types::{EditOperation, OperationSelection, SelectionSnapshot};
 use crate::vim::VimIntent;
 use serde::{Deserialize, Serialize};
 
@@ -31,16 +31,18 @@ impl VimRegisterValue {
 }
 
 pub fn execute_vim_action(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     intent: VimIntent,
     count: usize,
     register: Option<&VimRegisterValue>,
 ) -> Option<VimActionExecutionResult> {
-    execute_vim_action_with_target(snapshot, intent, count, register, None)
+    execute_vim_action_with_target(text, selection, intent, count, register, None)
 }
 
 pub fn execute_vim_action_with_target(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     intent: VimIntent,
     count: usize,
     register: Option<&VimRegisterValue>,
@@ -52,40 +54,48 @@ pub fn execute_vim_action_with_target(
 
     let repeats = count.max(1);
     match intent {
-        VimIntent::DeleteLine => Some(execute_delete_line(snapshot, repeats)),
-        VimIntent::YankLine => Some(execute_yank_line(snapshot, repeats)),
-        VimIntent::DeleteToLineStart => Some(execute_delete_to_line_start(snapshot)),
-        VimIntent::DeleteToLineEnd => Some(execute_delete_to_line_end(snapshot)),
-        VimIntent::YankToLineStart => Some(execute_yank_to_line_start(snapshot)),
-        VimIntent::YankToLineEnd => Some(execute_yank_to_line_end(snapshot)),
-        VimIntent::DeleteWordForward => Some(execute_delete_word_forward(snapshot, repeats)),
-        VimIntent::DeleteWordBackward => Some(execute_delete_word_backward(snapshot, repeats)),
-        VimIntent::DeleteWordEnd => Some(execute_delete_word_end(snapshot, repeats)),
+        VimIntent::DeleteLine => Some(execute_delete_line(text, selection, repeats)),
+        VimIntent::YankLine => Some(execute_yank_line(text, selection, repeats)),
+        VimIntent::DeleteToLineStart => Some(execute_delete_to_line_start(text, selection)),
+        VimIntent::DeleteToLineEnd => Some(execute_delete_to_line_end(text, selection)),
+        VimIntent::YankToLineStart => Some(execute_yank_to_line_start(text, selection)),
+        VimIntent::YankToLineEnd => Some(execute_yank_to_line_end(text, selection)),
+        VimIntent::DeleteWordForward => Some(execute_delete_word_forward(text, selection, repeats)),
+        VimIntent::DeleteWordBackward => {
+            Some(execute_delete_word_backward(text, selection, repeats))
+        }
+        VimIntent::DeleteWordEnd => Some(execute_delete_word_end(text, selection, repeats)),
         VimIntent::DeleteInsideWord => {
-            Some(execute_word_text_object(snapshot, false, true, repeats))
+            Some(execute_word_text_object(text, selection, false, true, repeats))
         }
         VimIntent::DeleteAroundWord => {
-            Some(execute_word_text_object(snapshot, true, true, repeats))
+            Some(execute_word_text_object(text, selection, true, true, repeats))
         }
         VimIntent::YankInsideWord => {
-            Some(execute_word_text_object(snapshot, false, false, repeats))
+            Some(execute_word_text_object(text, selection, false, false, repeats))
         }
-        VimIntent::YankAroundWord => Some(execute_word_text_object(snapshot, true, false, repeats)),
+        VimIntent::YankAroundWord => {
+            Some(execute_word_text_object(text, selection, true, false, repeats))
+        }
         VimIntent::DeleteInsidePipe => {
-            Some(execute_pipe_text_object(snapshot, false, true, repeats))
+            Some(execute_pipe_text_object(text, selection, false, true, repeats))
         }
         VimIntent::DeleteAroundPipe => {
-            Some(execute_pipe_text_object(snapshot, true, true, repeats))
+            Some(execute_pipe_text_object(text, selection, true, true, repeats))
         }
         VimIntent::YankInsidePipe => {
-            Some(execute_pipe_text_object(snapshot, false, false, repeats))
+            Some(execute_pipe_text_object(text, selection, false, false, repeats))
         }
-        VimIntent::YankAroundPipe => Some(execute_pipe_text_object(snapshot, true, false, repeats)),
-        VimIntent::YankWordForward => Some(execute_yank_word_forward(snapshot, repeats)),
-        VimIntent::YankWordBackward => Some(execute_yank_word_backward(snapshot, repeats)),
-        VimIntent::PasteAfter => execute_paste_after(snapshot, repeats, register),
-        VimIntent::DeleteChar => Some(execute_delete_char(snapshot, repeats)),
-        VimIntent::DeleteTillChar => Some(execute_delete_till_char(snapshot, repeats, target_char)),
+        VimIntent::YankAroundPipe => {
+            Some(execute_pipe_text_object(text, selection, true, false, repeats))
+        }
+        VimIntent::YankWordForward => Some(execute_yank_word_forward(text, selection, repeats)),
+        VimIntent::YankWordBackward => Some(execute_yank_word_backward(text, selection, repeats)),
+        VimIntent::PasteAfter => execute_paste_after(text, selection, repeats, register),
+        VimIntent::DeleteChar => Some(execute_delete_char(text, selection, repeats)),
+        VimIntent::DeleteTillChar => {
+            Some(execute_delete_till_char(text, selection, repeats, target_char))
+        }
         _ => None,
     }
 }
@@ -118,10 +128,13 @@ pub fn supports_intent(intent: VimIntent) -> bool {
     )
 }
 
-fn execute_delete_line(snapshot: &EditorContextSnapshot, count: usize) -> VimActionExecutionResult {
-    let text = &snapshot.text;
+fn execute_delete_line(
+    text: &str,
+    selection: SelectionSnapshot,
+    count: usize,
+) -> VimActionExecutionResult {
     let spans = line_spans(text);
-    let cursor = clamp_offset(text, snapshot.selection.head);
+    let cursor = clamp_offset(text, selection.head);
     let start_idx = line_index_for_offset(&spans, cursor);
     let end_idx = (start_idx + count.saturating_sub(1)).min(spans.len().saturating_sub(1));
 
@@ -166,10 +179,13 @@ fn execute_delete_line(snapshot: &EditorContextSnapshot, count: usize) -> VimAct
     }
 }
 
-fn execute_yank_line(snapshot: &EditorContextSnapshot, count: usize) -> VimActionExecutionResult {
-    let text = &snapshot.text;
+fn execute_yank_line(
+    text: &str,
+    selection: SelectionSnapshot,
+    count: usize,
+) -> VimActionExecutionResult {
     let spans = line_spans(text);
-    let cursor = clamp_offset(text, snapshot.selection.head);
+    let cursor = clamp_offset(text, selection.head);
     let start_idx = line_index_for_offset(&spans, cursor);
     let end_idx = (start_idx + count.saturating_sub(1)).min(spans.len().saturating_sub(1));
 
@@ -192,9 +208,11 @@ fn execute_yank_line(snapshot: &EditorContextSnapshot, count: usize) -> VimActio
     }
 }
 
-fn execute_delete_to_line_start(snapshot: &EditorContextSnapshot) -> VimActionExecutionResult {
-    let text = &snapshot.text;
-    let cursor = clamp_offset(text, snapshot.selection.head);
+fn execute_delete_to_line_start(
+    text: &str,
+    selection: SelectionSnapshot,
+) -> VimActionExecutionResult {
+    let cursor = clamp_offset(text, selection.head);
     let spans = line_spans(text);
     let idx = line_index_for_offset(&spans, cursor);
     let line_from = spans[idx].0;
@@ -220,9 +238,11 @@ fn execute_delete_to_line_start(snapshot: &EditorContextSnapshot) -> VimActionEx
     }
 }
 
-fn execute_delete_to_line_end(snapshot: &EditorContextSnapshot) -> VimActionExecutionResult {
-    let text = &snapshot.text;
-    let cursor = clamp_offset(text, snapshot.selection.head);
+fn execute_delete_to_line_end(
+    text: &str,
+    selection: SelectionSnapshot,
+) -> VimActionExecutionResult {
+    let cursor = clamp_offset(text, selection.head);
     let spans = line_spans(text);
     let idx = line_index_for_offset(&spans, cursor);
     let line_to = spans[idx].1;
@@ -248,9 +268,11 @@ fn execute_delete_to_line_end(snapshot: &EditorContextSnapshot) -> VimActionExec
     }
 }
 
-fn execute_yank_to_line_start(snapshot: &EditorContextSnapshot) -> VimActionExecutionResult {
-    let text = &snapshot.text;
-    let cursor = clamp_offset(text, snapshot.selection.head);
+fn execute_yank_to_line_start(
+    text: &str,
+    selection: SelectionSnapshot,
+) -> VimActionExecutionResult {
+    let cursor = clamp_offset(text, selection.head);
     let spans = line_spans(text);
     let idx = line_index_for_offset(&spans, cursor);
     let line_from = spans[idx].0;
@@ -267,9 +289,11 @@ fn execute_yank_to_line_start(snapshot: &EditorContextSnapshot) -> VimActionExec
     }
 }
 
-fn execute_yank_to_line_end(snapshot: &EditorContextSnapshot) -> VimActionExecutionResult {
-    let text = &snapshot.text;
-    let cursor = clamp_offset(text, snapshot.selection.head);
+fn execute_yank_to_line_end(
+    text: &str,
+    selection: SelectionSnapshot,
+) -> VimActionExecutionResult {
+    let cursor = clamp_offset(text, selection.head);
     let spans = line_spans(text);
     let idx = line_index_for_offset(&spans, cursor);
     let line_to = spans[idx].1;
@@ -287,12 +311,12 @@ fn execute_yank_to_line_end(snapshot: &EditorContextSnapshot) -> VimActionExecut
 }
 
 fn execute_yank_word_forward(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
 ) -> VimActionExecutionResult {
-    let text = &snapshot.text;
     let spans = line_spans(text);
-    let origin = clamp_offset(text, snapshot.selection.head);
+    let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     let mut yanked = Vec::new();
     for _ in 0..count {
@@ -320,12 +344,12 @@ fn execute_yank_word_forward(
 }
 
 fn execute_yank_word_backward(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
 ) -> VimActionExecutionResult {
-    let text = &snapshot.text;
     let spans = line_spans(text);
-    let origin = clamp_offset(text, snapshot.selection.head);
+    let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
         let next = move_word_backward(text, &spans, cursor);
@@ -351,12 +375,12 @@ fn execute_yank_word_backward(
 }
 
 fn execute_delete_word_forward(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
 ) -> VimActionExecutionResult {
-    let text = &snapshot.text;
     let spans = line_spans(text);
-    let origin = clamp_offset(text, snapshot.selection.head);
+    let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
         let next = move_word_forward(text, &spans, cursor);
@@ -391,12 +415,12 @@ fn execute_delete_word_forward(
 }
 
 fn execute_delete_word_backward(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
 ) -> VimActionExecutionResult {
-    let text = &snapshot.text;
     let spans = line_spans(text);
-    let origin = clamp_offset(text, snapshot.selection.head);
+    let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
         let next = move_word_backward(text, &spans, cursor);
@@ -431,11 +455,11 @@ fn execute_delete_word_backward(
 }
 
 fn execute_delete_word_end(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
 ) -> VimActionExecutionResult {
-    let text = &snapshot.text;
-    let origin = clamp_offset(text, snapshot.selection.head);
+    let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     let mut resolved = false;
     for _ in 0..count {
@@ -474,15 +498,15 @@ fn execute_delete_word_end(
 }
 
 fn execute_delete_till_char(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
     target_char: Option<char>,
 ) -> VimActionExecutionResult {
     let Some(target_char) = target_char else {
         return VimActionExecutionResult::default();
     };
-    let text = &snapshot.text;
-    let cursor = clamp_offset(text, snapshot.selection.head);
+    let cursor = clamp_offset(text, selection.head);
     let spans = line_spans(text);
     let idx = line_index_for_offset(&spans, cursor);
     let (_line_from, line_to) = spans[idx];
@@ -527,29 +551,32 @@ fn execute_delete_till_char(
 }
 
 fn execute_word_text_object(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     around: bool,
     delete: bool,
     count: usize,
 ) -> VimActionExecutionResult {
-    execute_text_object(snapshot, count, delete, |line, cursor_col| {
+    execute_text_object(text, selection, count, delete, |line, cursor_col| {
         find_word_object_bounds(line, cursor_col, around)
     })
 }
 
 fn execute_pipe_text_object(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     around: bool,
     delete: bool,
     count: usize,
 ) -> VimActionExecutionResult {
-    execute_text_object(snapshot, count, delete, |line, cursor_col| {
+    execute_text_object(text, selection, count, delete, |line, cursor_col| {
         find_pipe_object_bounds(line, cursor_col, around)
     })
 }
 
 fn execute_text_object<F>(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
     delete: bool,
     mut resolve_bounds: F,
@@ -557,8 +584,8 @@ fn execute_text_object<F>(
 where
     F: FnMut(&str, usize) -> Option<(usize, usize)>,
 {
-    let mut text = snapshot.text.clone();
-    let mut cursor = clamp_offset(&text, snapshot.selection.head);
+    let mut text = text.to_string();
+    let mut cursor = clamp_offset(&text, selection.head);
     let mut chunks = Vec::new();
     let mut operations = Vec::new();
 
@@ -616,7 +643,8 @@ where
 }
 
 fn execute_paste_after(
-    snapshot: &EditorContextSnapshot,
+    text: &str,
+    selection: SelectionSnapshot,
     count: usize,
     register: Option<&VimRegisterValue>,
 ) -> Option<VimActionExecutionResult> {
@@ -627,9 +655,8 @@ fn execute_paste_after(
 
     match register.mode {
         VimRegisterMode::Linewise => {
-            let text = &snapshot.text;
             let spans = line_spans(text);
-            let cursor = clamp_offset(text, snapshot.selection.head);
+            let cursor = clamp_offset(text, selection.head);
             let idx = line_index_for_offset(&spans, cursor);
             let insert_at = spans[idx].1;
             let normalized = register
@@ -666,8 +693,8 @@ fn execute_paste_after(
             })
         }
         VimRegisterMode::Charwise => {
-            let mut text = snapshot.text.clone();
-            let mut cursor = clamp_offset(&text, snapshot.selection.head);
+            let mut text = text.to_string();
+            let mut cursor = clamp_offset(&text, selection.head);
             let mut operations = Vec::new();
             for _ in 0..count {
                 let spans = line_spans(&text);
@@ -697,9 +724,13 @@ fn execute_paste_after(
     }
 }
 
-fn execute_delete_char(snapshot: &EditorContextSnapshot, count: usize) -> VimActionExecutionResult {
-    let mut text = snapshot.text.clone();
-    let mut cursor = clamp_offset(&text, snapshot.selection.head);
+fn execute_delete_char(
+    text: &str,
+    selection: SelectionSnapshot,
+    count: usize,
+) -> VimActionExecutionResult {
+    let mut text = text.to_string();
+    let mut cursor = clamp_offset(&text, selection.head);
     let mut operations = Vec::new();
 
     for _ in 0..count {
@@ -1109,14 +1140,10 @@ mod tests {
     use crate::types::SelectionSnapshot;
     use crate::vim::VimIntent;
 
-    fn snapshot(text: &str, cursor: usize) -> EditorContextSnapshot {
-        EditorContextSnapshot {
-            text: text.to_string(),
-            selection: SelectionSnapshot {
-                anchor: cursor,
-                head: cursor,
-            },
-            changed_range: None,
+    fn sel(cursor: usize) -> SelectionSnapshot {
+        SelectionSnapshot {
+            anchor: cursor,
+            head: cursor,
         }
     }
 
@@ -1159,17 +1186,19 @@ mod tests {
     #[test]
     fn delete_line_removes_selected_line_and_sets_linewise_register() {
         let text = "alpha\nbeta\ngamma";
-        let doc = snapshot(text, text.find("beta").expect("beta"));
-        let result = execute_vim_action(&doc, VimIntent::DeleteLine, 1, None).expect("handled");
+        let cursor = text.find("beta").expect("beta");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteLine, 1, None).expect("handled");
         assert_eq!(linewise_register(&result), Some("beta"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "alpha\ngamma");
     }
 
     #[test]
     fn yank_line_sets_linewise_register_without_edit() {
-        let doc = snapshot("alpha\nbeta\ngamma", 0);
-        let result = execute_vim_action(&doc, VimIntent::YankLine, 2, None).expect("handled");
+        let result =
+            execute_vim_action("alpha\nbeta\ngamma", sel(0), VimIntent::YankLine, 2, None)
+                .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(linewise_register(&result), Some("alpha\nbeta"));
     }
@@ -1178,11 +1207,10 @@ mod tests {
     fn delete_to_line_end_sets_register_and_deletes_text() {
         let text = "hello world";
         let cursor = text.find("world").expect("cursor");
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteToLineEnd, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteToLineEnd, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("world"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "hello ");
     }
 
@@ -1190,9 +1218,8 @@ mod tests {
     fn yank_to_line_start_sets_register_without_edit() {
         let text = "hello world";
         let cursor = text.find("world").expect("cursor");
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::YankToLineStart, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::YankToLineStart, 1, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("hello "));
     }
@@ -1201,8 +1228,8 @@ mod tests {
     fn yank_to_line_end_sets_register_without_edit() {
         let text = "hello world";
         let cursor = text.find("world").expect("cursor");
-        let doc = snapshot(text, cursor);
-        let result = execute_vim_action(&doc, VimIntent::YankToLineEnd, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::YankToLineEnd, 1, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("world"));
     }
@@ -1211,54 +1238,51 @@ mod tests {
     fn yank_word_forward_collects_next_word_chunk() {
         let text = "alpha   beta";
         let cursor = text.find("alpha").expect("cursor");
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::YankWordForward, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::YankWordForward, 1, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("alpha   "));
     }
 
     #[test]
     fn paste_after_charwise_inserts_after_cursor() {
-        let doc = snapshot("abc", 0);
         let register = VimRegisterValue {
             text: "Z".to_string(),
             mode: VimRegisterMode::Charwise,
         };
-        let result =
-            execute_vim_action(&doc, VimIntent::PasteAfter, 1, Some(&register)).expect("handled");
-        let next = apply_operations(doc.text, &result.operations);
+        let result = execute_vim_action("abc", sel(0), VimIntent::PasteAfter, 1, Some(&register))
+            .expect("handled");
+        let next = apply_operations("abc".to_string(), &result.operations);
         assert_eq!(next, "aZbc");
     }
 
     #[test]
     fn paste_after_linewise_inserts_lines_below_current_line() {
-        let doc = snapshot("one\ntwo", 0);
         let register = VimRegisterValue {
             text: "A\nB".to_string(),
             mode: VimRegisterMode::Linewise,
         };
         let result =
-            execute_vim_action(&doc, VimIntent::PasteAfter, 1, Some(&register)).expect("handled");
-        let next = apply_operations(doc.text, &result.operations);
+            execute_vim_action("one\ntwo", sel(0), VimIntent::PasteAfter, 1, Some(&register))
+                .expect("handled");
+        let next = apply_operations("one\ntwo".to_string(), &result.operations);
         assert_eq!(next, "one\nA\nB\ntwo");
     }
 
     #[test]
     fn delete_char_removes_char_or_joins_next_line() {
-        let doc = snapshot("ab\ncd", 1);
-        let result = execute_vim_action(&doc, VimIntent::DeleteChar, 2, None).expect("handled");
-        let next = apply_operations(doc.text, &result.operations);
+        let result =
+            execute_vim_action("ab\ncd", sel(1), VimIntent::DeleteChar, 2, None).expect("handled");
+        let next = apply_operations("ab\ncd".to_string(), &result.operations);
         assert_eq!(next, "acd");
     }
 
     #[test]
     fn delete_word_forward_matches_vim_spacing() {
-        let doc = snapshot("foo bar baz", 0);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteWordForward, 1, None).expect("handled");
+        let result = execute_vim_action("foo bar baz", sel(0), VimIntent::DeleteWordForward, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("foo "));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations("foo bar baz".to_string(), &result.operations);
         assert_eq!(next, "bar baz");
     }
 
@@ -1266,38 +1290,37 @@ mod tests {
     fn delete_word_backward_with_count_deletes_previous_words() {
         let text = "foo bar baz";
         let cursor = text.find("baz").expect("baz");
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteWordBackward, 2, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteWordBackward, 2, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("foo bar "));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "baz");
     }
 
     #[test]
     fn delete_word_end_is_distinct_from_delete_word_forward() {
-        let doc = snapshot("foo bar baz", 0);
-        let result = execute_vim_action(&doc, VimIntent::DeleteWordEnd, 1, None).expect("handled");
+        let result = execute_vim_action("foo bar baz", sel(0), VimIntent::DeleteWordEnd, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("foo"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations("foo bar baz".to_string(), &result.operations);
         assert_eq!(next, " bar baz");
     }
 
     #[test]
     fn delete_word_end_from_word_end_crosses_to_next_word_end() {
-        let doc = snapshot("foo bar baz", 2);
-        let result = execute_vim_action(&doc, VimIntent::DeleteWordEnd, 1, None).expect("handled");
+        let result = execute_vim_action("foo bar baz", sel(2), VimIntent::DeleteWordEnd, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("o bar"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations("foo bar baz".to_string(), &result.operations);
         assert_eq!(next, "fo baz");
     }
 
     #[test]
     fn delete_word_end_deletes_trailing_whitespace_when_no_next_word() {
-        let doc = snapshot("foo   ", 3);
-        let result = execute_vim_action(&doc, VimIntent::DeleteWordEnd, 1, None).expect("handled");
+        let result = execute_vim_action("foo   ", sel(3), VimIntent::DeleteWordEnd, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("   "));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations("foo   ".to_string(), &result.operations);
         assert_eq!(next, "foo");
     }
 
@@ -1305,32 +1328,29 @@ mod tests {
     fn delete_till_char_deletes_up_to_but_not_including_target() {
         let text = "alpha beta gamma";
         let cursor = text.find("alpha").expect("alpha");
-        let doc = snapshot(text, cursor);
         let result =
-            execute_vim_action_with_target(&doc, VimIntent::DeleteTillChar, 1, None, Some('b'))
+            execute_vim_action_with_target(text, sel(cursor), VimIntent::DeleteTillChar, 1, None, Some('b'))
                 .expect("handled");
         assert_eq!(charwise_register(&result), Some("alpha "));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "beta gamma");
     }
 
     #[test]
     fn delete_till_char_count_targets_nth_match() {
         let text = "a x b x c";
-        let doc = snapshot(text, 0);
         let result =
-            execute_vim_action_with_target(&doc, VimIntent::DeleteTillChar, 2, None, Some('x'))
+            execute_vim_action_with_target(text, sel(0), VimIntent::DeleteTillChar, 2, None, Some('x'))
                 .expect("handled");
         assert_eq!(charwise_register(&result), Some("a x b "));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "x c");
     }
 
     #[test]
     fn delete_till_char_noops_when_target_missing() {
-        let doc = snapshot("alpha beta", 0);
         let result =
-            execute_vim_action_with_target(&doc, VimIntent::DeleteTillChar, 1, None, Some('z'))
+            execute_vim_action_with_target("alpha beta", sel(0), VimIntent::DeleteTillChar, 1, None, Some('z'))
                 .expect("handled");
         assert!(result.operations.is_empty());
         assert!(result.register.is_none());
@@ -1340,9 +1360,8 @@ mod tests {
     fn yank_word_backward_collects_previous_word_chunk() {
         let text = "foo bar baz";
         let cursor = text.find("baz").expect("baz");
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::YankWordBackward, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::YankWordBackward, 1, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("bar "));
     }
@@ -1351,11 +1370,10 @@ mod tests {
     fn delete_inside_word_removes_word_without_padding() {
         let text = "foo bar baz";
         let cursor = text.find("bar").expect("bar") + 1;
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteInsideWord, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideWord, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("bar"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "foo  baz");
     }
 
@@ -1363,11 +1381,10 @@ mod tests {
     fn delete_around_word_removes_word_with_trailing_space() {
         let text = "foo bar baz";
         let cursor = text.find("bar").expect("bar");
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteAroundWord, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundWord, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("bar "));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "foo baz");
     }
 
@@ -1375,8 +1392,8 @@ mod tests {
     fn yank_inside_word_updates_register_without_edit() {
         let text = "foo bar baz";
         let cursor = text.find("bar").expect("bar") + 2;
-        let doc = snapshot(text, cursor);
-        let result = execute_vim_action(&doc, VimIntent::YankInsideWord, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::YankInsideWord, 1, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("bar"));
     }
@@ -1385,11 +1402,10 @@ mod tests {
     fn delete_inside_pipe_removes_pipe_cell_contents_only() {
         let text = "| left | right |";
         let cursor = text.find("left").expect("left") + 1;
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteInsidePipe, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsidePipe, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("left"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "|  | right |");
     }
 
@@ -1397,11 +1413,10 @@ mod tests {
     fn delete_around_pipe_removes_wrapping_pipes_too() {
         let text = "| left | right |";
         let cursor = text.find("left").expect("left") + 1;
-        let doc = snapshot(text, cursor);
-        let result =
-            execute_vim_action(&doc, VimIntent::DeleteAroundPipe, 1, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundPipe, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("| left |"));
-        let next = apply_operations(doc.text, &result.operations);
+        let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, " right |");
     }
 
@@ -1409,8 +1424,8 @@ mod tests {
     fn counted_yank_around_word_walks_forward_by_object_end() {
         let text = "foo bar baz";
         let cursor = text.find("foo").expect("foo");
-        let doc = snapshot(text, cursor);
-        let result = execute_vim_action(&doc, VimIntent::YankAroundWord, 2, None).expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::YankAroundWord, 2, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(charwise_register(&result), Some("foo \nbar "));
     }
