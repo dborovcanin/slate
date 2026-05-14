@@ -107,6 +107,7 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
             commands::notes::search_notes_content_filtered,
             commands::notes::rebuild_note_search_index,
             commands::notes::get_note_meta,
+            commands::notes::get_note_body_preview,
             commands::notes::get_note_revision,
             commands::notes::delete_note,
             commands::notes::list_collections,

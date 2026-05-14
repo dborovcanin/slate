@@ -321,6 +321,10 @@ export function getNoteMeta(id: string): Promise<NoteSummary | null> {
   return invoke<NoteSummary | null>("get_note_meta", { id });
 }
 
+export function getNoteBodyPreview(id: string, heading?: string | null): Promise<string | null> {
+  return invoke<string | null>("get_note_body_preview", { id, heading: heading ?? null });
+}
+
 export function getNoteRevision(id: string): Promise<string | null> {
   return invoke<string | null>("get_note_revision", { id });
 }

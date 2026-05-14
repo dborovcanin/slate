@@ -3808,8 +3808,12 @@ impl TerminalApp {
         let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
         match note_sources.resolve_wiki_link(&link.short_id) {
             Ok(Some(summary)) => {
+                let body = db
+                    .get_note_body_preview(&summary.id, link.heading.as_deref())
+                    .unwrap_or_default()
+                    .unwrap_or_default();
                 self.wiki_link_preview.title = summary.title;
-                self.wiki_link_preview.body = summary.body_prefix;
+                self.wiki_link_preview.body = extract_preview_content(&body, 5);
                 self.wiki_link_preview.visible = true;
             }
             Ok(None) => {
@@ -3870,4 +3874,24 @@ impl TerminalApp {
         self.calc_last_view_eval_range = Some(eval_range);
         self.record_perf_duration("tui.calc.viewport_eval", "eval", started.elapsed());
     }
+}
+
+fn extract_preview_content(body: &str, max_lines: usize) -> String {
+    let mut result = Vec::new();
+    let mut skipped_title = false;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !skipped_title && trimmed.starts_with('#') {
+            skipped_title = true;
+            continue;
+        }
+        result.push(trimmed.to_string());
+        if result.len() >= max_lines {
+            break;
+        }
+    }
+    result.join("\n")
 }

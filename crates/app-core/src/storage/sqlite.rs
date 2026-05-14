@@ -933,6 +933,47 @@ impl Db {
         }
     }
 
+    pub fn get_note_body_preview(
+        &self,
+        id: &str,
+        heading: Option<&str>,
+    ) -> Result<Option<String>, String> {
+        struct Row {
+            access_mode: NoteAccessMode,
+            body: String,
+        }
+        let row = {
+            let conn = self.conn.lock().unwrap();
+            let query = if heading.is_some() {
+                "SELECT access_mode, body FROM notes WHERE id = ?1"
+            } else {
+                "SELECT access_mode, substr(body, 1, 600) FROM notes WHERE id = ?1"
+            };
+            conn.query_row(query, [id], |r| {
+                Ok(Row {
+                    access_mode: parse_note_access_mode(r.get::<_, Option<String>>(0)?),
+                    body: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                })
+            })
+            .optional()
+            .map_err(|e| e.to_string())?
+        };
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        if matches!(row.access_mode, NoteAccessMode::Encrypted)
+            || (is_note_protected(row.access_mode) && !self.is_note_unlocked(id))
+        {
+            return Ok(Some("[locked]".to_string()));
+        }
+        if let Some(heading) = heading {
+            if let Some(section) = extract_heading_section(&row.body, heading) {
+                return Ok(Some(section));
+            }
+        }
+        Ok(Some(row.body[..row.body.len().min(600)].to_string()))
+    }
+
     pub fn list_notes_meta_filtered(
         &self,
         collection_id: Option<&str>,
@@ -2447,6 +2488,29 @@ fn map_note_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary
         encryption_nonce: row.get(6)?,
         encrypted_body: row.get(7)?,
     })
+}
+
+fn extract_heading_section(body: &str, heading: &str) -> Option<String> {
+    let heading_lower = heading.to_lowercase();
+    let mut in_section = false;
+    let mut lines = Vec::new();
+    for line in body.lines() {
+        if line.starts_with('#') {
+            if in_section {
+                break;
+            }
+            let title = line.trim_start_matches('#').trim();
+            if title.to_lowercase().contains(&heading_lower) {
+                in_section = true;
+            }
+        } else if in_section {
+            lines.push(line);
+            if lines.len() >= 15 {
+                break;
+            }
+        }
+    }
+    in_section.then(|| lines.join("\n"))
 }
 
 fn parse_note_access_mode(value: Option<String>) -> NoteAccessMode {

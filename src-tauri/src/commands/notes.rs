@@ -209,6 +209,15 @@ pub fn get_note_meta(core: State<'_, AppCore>, id: String) -> Result<Option<Note
 }
 
 #[tauri::command]
+pub fn get_note_body_preview(
+    core: State<'_, AppCore>,
+    id: String,
+    heading: Option<String>,
+) -> Result<Option<String>, String> {
+    core.db().get_note_body_preview(&id, heading.as_deref())
+}
+
+#[tauri::command]
 pub fn get_note_revision(core: State<'_, AppCore>, id: String) -> Result<Option<String>, String> {
     core.note_sources().get_note_revision_by_id(&id)
 }

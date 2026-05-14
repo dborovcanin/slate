@@ -16,7 +16,7 @@ import {
   type Tooltip,
   type TooltipView,
 } from "@codemirror/view";
-import { listNotesMeta, resolveWikiLink, resolveWikiLinkHeadings, type NoteSummary } from "../api.ts";
+import { getNoteBodyPreview, listNotesMeta, resolveWikiLink, resolveWikiLinkHeadings, type NoteSummary } from "../api.ts";
 import { markdownWikiLinkAtCursor } from "./wasm.ts";
 
 // Regex: match [[ followed by anything that isn't ] up to cursor position.
@@ -31,12 +31,14 @@ type WikiLinkApi = {
   listNotesMeta(activeId?: string | null): Promise<NoteSummary[]>;
   resolveWikiLink(shortId: string): Promise<NoteSummary | null>;
   resolveWikiLinkHeadings(shortId: string): Promise<string[]>;
+  getNoteBodyPreview?: (id: string, heading?: string | null) => Promise<string | null>;
 };
 
 const defaultWikiLinkApi: WikiLinkApi = {
   listNotesMeta,
   resolveWikiLink,
   resolveWikiLinkHeadings,
+  getNoteBodyPreview,
 };
 
 async function loadWikiLinkNoteCandidates(api: WikiLinkApi): Promise<NoteSummary[]> {
@@ -302,19 +304,49 @@ export function tryNavigateWikiLinkFromMouseEvent(
   return true;
 }
 
+function extractPreviewContent(body: string, maxLines = 4): string {
+  const result: string[] = [];
+  let skippedTitle = false;
+  for (const raw of body.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (!skippedTitle && line.startsWith("#")) {
+      skippedTitle = true;
+      continue;
+    }
+    result.push(line);
+    if (result.length >= maxLines) break;
+  }
+  return result.join("\n");
+}
+
+async function resolvePreviewContent(
+  shortId: string,
+  api: WikiLinkApi,
+  heading?: string | null,
+): Promise<{ title: string; body: string } | null> {
+  const summary = await api.resolveWikiLink(shortId);
+  if (!summary) return null;
+  let body = "";
+  if (api.getNoteBodyPreview) {
+    const raw = await api.getNoteBodyPreview(summary.id, heading);
+    if (raw) body = extractPreviewContent(raw);
+  }
+  return { title: summary.title || "Untitled", body };
+}
+
 function wikiLinkAtPos(view: EditorView, pos: number) {
   const line = view.state.doc.lineAt(pos);
   return markdownWikiLinkAtCursor(line.text, pos - line.from);
 }
 
-function buildPreviewDom(summary: NoteSummary): HTMLElement {
+function buildPreviewDom(title: string, body: string): HTMLElement {
   const wrap = document.createElement("div");
   wrap.className = "wiki-link-preview";
-  const title = document.createElement("div");
-  title.className = "wiki-link-preview-title";
-  title.textContent = summary.title || "Untitled";
-  wrap.appendChild(title);
-  const body = summary.body_prefix.trim();
+  const titleEl = document.createElement("div");
+  titleEl.className = "wiki-link-preview-title";
+  titleEl.textContent = title;
+  wrap.appendChild(titleEl);
   if (body) {
     const content = document.createElement("div");
     content.className = "wiki-link-preview-body";
@@ -324,8 +356,8 @@ function buildPreviewDom(summary: NoteSummary): HTMLElement {
   return wrap;
 }
 
-function makePreviewTooltipView(summary: NoteSummary): TooltipView {
-  const dom = buildPreviewDom(summary);
+function makePreviewTooltipView(title: string, body: string): TooltipView {
+  const dom = buildPreviewDom(title, body);
   return {
     dom,
     mount() {
@@ -339,14 +371,14 @@ function wikiLinkHoverTooltip(api: WikiLinkApi): Extension {
     async (view, pos) => {
       const link = wikiLinkAtPos(view, pos);
       if (!link) return null;
-      const summary = await api.resolveWikiLink(link.shortId);
-      if (!summary) return null;
+      const preview = await resolvePreviewContent(link.shortId, api, link.heading);
+      if (!preview) return null;
       const line = view.state.doc.lineAt(pos);
       return {
         pos: line.from + link.from,
         end: line.from + link.to,
         above: true,
-        create: () => makePreviewTooltipView(summary),
+        create: () => makePreviewTooltipView(preview.title, preview.body),
       };
     },
     { hoverTime: 400 },
@@ -386,14 +418,14 @@ function wikiLinkKeyboardPreviewExtension(api: WikiLinkApi): Extension {
           const link = wikiLinkAtPos(view, sel.head);
           if (!link) return false;
           event.preventDefault();
-          api.resolveWikiLink(link.shortId).then((summary) => {
-            if (!summary) return;
+          resolvePreviewContent(link.shortId, api, link.heading).then((preview) => {
+            if (!preview) return;
             const line = view.state.doc.lineAt(sel.head);
             const tooltip: Tooltip = {
               pos: line.from + link.from,
               end: line.from + link.to,
               above: true,
-              create: () => makePreviewTooltipView(summary),
+              create: () => makePreviewTooltipView(preview.title, preview.body),
             };
             view.dispatch({ effects: setKeyboardPreview.of(tooltip) });
           }).catch(() => {});
