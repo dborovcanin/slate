@@ -945,7 +945,7 @@ impl Db {
         let row = {
             let conn = self.conn.lock().unwrap();
             let query = if heading.is_some() {
-                "SELECT access_mode, body FROM notes WHERE id = ?1"
+                "SELECT access_mode, substr(body, 1, 51200) FROM notes WHERE id = ?1"
             } else {
                 "SELECT access_mode, substr(body, 1, 600) FROM notes WHERE id = ?1"
             };
@@ -2510,7 +2510,11 @@ fn extract_heading_section(body: &str, heading: &str) -> Option<String> {
             }
         }
     }
-    in_section.then(|| lines.join("\n"))
+    if in_section && !lines.is_empty() {
+        Some(lines.join("\n"))
+    } else {
+        None
+    }
 }
 
 fn parse_note_access_mode(value: Option<String>) -> NoteAccessMode {

@@ -310,7 +310,7 @@ function extractPreviewContent(body: string, maxLines = 4): string {
   for (const raw of body.split("\n")) {
     const line = raw.trim();
     if (!line) continue;
-    if (!skippedTitle && line.startsWith("#")) {
+    if (!skippedTitle && line.startsWith("#") && !line.startsWith("##")) {
       skippedTitle = true;
       continue;
     }
