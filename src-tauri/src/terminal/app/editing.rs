@@ -3884,7 +3884,7 @@ fn extract_preview_content(body: &str, max_lines: usize) -> String {
         if trimmed.is_empty() {
             continue;
         }
-        if !skipped_title && trimmed.starts_with('#') {
+        if !skipped_title && trimmed.starts_with('#') && !trimmed.starts_with("##") {
             skipped_title = true;
             continue;
         }

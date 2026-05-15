@@ -942,19 +942,32 @@ impl Db {
             access_mode: NoteAccessMode,
             body: String,
         }
+        let parse_row = |r: &rusqlite::Row<'_>| {
+            Ok(Row {
+                access_mode: parse_note_access_mode(r.get::<_, Option<String>>(0)?),
+                body: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            })
+        };
         let row = {
             let conn = self.conn.lock().unwrap();
-            let query = if heading.is_some() {
-                "SELECT access_mode, substr(body, 1, 51200) FROM notes WHERE id = ?1"
+            if let Some(heading) = heading {
+                conn.query_row(
+                    "SELECT access_mode, \
+                     CASE WHEN INSTR(lower(body), lower(?2)) = 0 \
+                     THEN substr(body, 1, 600) \
+                     ELSE substr(body, MAX(1, INSTR(lower(body), lower(?2)) - 50), 2000) \
+                     END \
+                     FROM notes WHERE id = ?1",
+                    rusqlite::params![id, heading],
+                    parse_row,
+                )
             } else {
-                "SELECT access_mode, substr(body, 1, 600) FROM notes WHERE id = ?1"
-            };
-            conn.query_row(query, [id], |r| {
-                Ok(Row {
-                    access_mode: parse_note_access_mode(r.get::<_, Option<String>>(0)?),
-                    body: r.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                })
-            })
+                conn.query_row(
+                    "SELECT access_mode, substr(body, 1, 600) FROM notes WHERE id = ?1",
+                    [id],
+                    parse_row,
+                )
+            }
             .optional()
             .map_err(|e| e.to_string())?
         };
@@ -971,7 +984,7 @@ impl Db {
                 return Ok(Some(section));
             }
         }
-        Ok(Some(row.body[..row.body.len().min(600)].to_string()))
+        Ok(Some(row.body))
     }
 
     pub fn list_notes_meta_filtered(
@@ -2493,18 +2506,30 @@ fn map_note_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary
 fn extract_heading_section(body: &str, heading: &str) -> Option<String> {
     let heading_lower = heading.to_lowercase();
     let mut in_section = false;
+    let mut section_level = 0usize;
     let mut lines = Vec::new();
     for line in body.lines() {
         if line.starts_with('#') {
+            let level = line.chars().take_while(|&c| c == '#').count();
             if in_section {
-                break;
-            }
-            let title = line.trim_start_matches('#').trim();
-            if title.to_lowercase().contains(&heading_lower) {
-                in_section = true;
+                if level <= section_level {
+                    break;
+                }
+                // Sub-heading within the section — include stripped text
+                lines.push(line.trim_start_matches('#').trim().to_string());
+                if lines.len() >= 15 {
+                    break;
+                }
+            } else {
+                let title = line.trim_start_matches('#').trim();
+                if title.to_lowercase().contains(&heading_lower) {
+                    in_section = true;
+                    section_level = level;
+                    lines.push(title.to_string());
+                }
             }
         } else if in_section {
-            lines.push(line);
+            lines.push(line.to_string());
             if lines.len() >= 15 {
                 break;
             }
