@@ -668,7 +668,7 @@ impl TerminalApp {
             y = self
                 .variable_autocomplete_popup
                 .anchor_row
-                .saturating_sub(box_height.saturating_sub(1));
+                .saturating_sub(box_height);
         }
         y = y
             .max(EDITOR_TOP_ROW)
@@ -771,7 +771,7 @@ impl TerminalApp {
         if y + box_height > max_editor_row + 1 {
             y = popup
                 .anchor_row
-                .saturating_sub(box_height.saturating_sub(1));
+                .saturating_sub(box_height);
         }
         y = y
             .max(EDITOR_TOP_ROW)
