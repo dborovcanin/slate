@@ -1231,7 +1231,7 @@ impl TerminalApp {
         let collection_filter = self.content_search_collection_filter_id.clone();
         std::thread::spawn(move || {
             let result =
-                search_db.search_notes_content_filtered(&query, 60, collection_filter.as_deref());
+                search_db.search_notes_content_filtered(&query, 100, collection_filter.as_deref());
             tx.send((query, result)).ok();
         });
         self.content_search_rx = Some(rx);

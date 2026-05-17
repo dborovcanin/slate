@@ -28,6 +28,10 @@ const PBKDF2_ITERATIONS: u32 = 200_000;
 const NOTE_TITLE_MAX_CHARS: usize = 60;
 const SEARCH_QUERY_MAX_TERMS: usize = 8;
 const SEARCH_LIMIT_MAX: usize = 100;
+// Body prefix fetched per search result for line-number detection. Caps the
+// data pulled across the rusqlite FFI and the Rust allocation overhead when
+// searching massive notes. Matches beyond this prefix return line 1.
+const SEARCH_BODY_PREFIX_CHARS: i64 = 8192;
 
 #[derive(Debug, Clone)]
 struct NoteSecurityRow {
@@ -1575,9 +1579,9 @@ impl Db {
         let results = if let Some(collection_id) = collection_id {
             let mut stmt = conn
                 .prepare(
-                    "SELECT n.id, n.note_title, n.body,
+                    "SELECT n.id, n.note_title, substr(n.body, 1, ?4),
                             snippet(notes_fts, 2, '[[', ']]', '…', 16),
-                            bm25(notes_fts, 0.0, 10.0, 1.0),
+                            bm25(notes_fts, 0.0, 3.0, 1.0),
                             n.updated_at
                      FROM notes_fts
                      JOIN notes n ON n.rowid = notes_fts.rowid
@@ -1585,13 +1589,18 @@ impl Db {
                      WHERE notes_fts MATCH ?1
                        AND n.access_mode = 'none'
                        AND nc.collection_id = ?2
-                     ORDER BY bm25(notes_fts, 0.0, 10.0, 1.0), n.updated_at DESC
+                     ORDER BY bm25(notes_fts, 0.0, 3.0, 1.0), n.updated_at DESC
                      LIMIT ?3",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(
-                    rusqlite::params![fts_query, collection_id, bounded_limit],
+                    rusqlite::params![
+                        fts_query,
+                        collection_id,
+                        bounded_limit,
+                        SEARCH_BODY_PREFIX_CHARS
+                    ],
                     |row| {
                         let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
                         let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
@@ -1612,22 +1621,24 @@ impl Db {
         } else {
             let mut stmt = conn
                 .prepare(
-                    "SELECT n.id, n.note_title, n.body,
+                    "SELECT n.id, n.note_title, substr(n.body, 1, ?3),
                             snippet(notes_fts, 2, '[[', ']]', '…', 16),
-                            bm25(notes_fts, 0.0, 10.0, 1.0),
+                            bm25(notes_fts, 0.0, 3.0, 1.0),
                             n.updated_at
                      FROM notes_fts
                      JOIN notes n ON n.rowid = notes_fts.rowid
                      WHERE notes_fts MATCH ?1
                        AND n.access_mode = 'none'
-                     ORDER BY bm25(notes_fts, 0.0, 10.0, 1.0), n.updated_at DESC
+                     ORDER BY bm25(notes_fts, 0.0, 3.0, 1.0), n.updated_at DESC
                      LIMIT ?2",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map(rusqlite::params![fts_query, bounded_limit], |row| {
-                    let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
-                    let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
+                .query_map(
+                    rusqlite::params![fts_query, bounded_limit, SEARCH_BODY_PREFIX_CHARS],
+                    |row| {
+                        let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
+                        let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
                     Ok(NoteSearchResult {
                         id: row.get(0)?,
                         title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
