@@ -28,10 +28,13 @@ const PBKDF2_ITERATIONS: u32 = 200_000;
 const NOTE_TITLE_MAX_CHARS: usize = 60;
 const SEARCH_QUERY_MAX_TERMS: usize = 8;
 const SEARCH_LIMIT_MAX: usize = 100;
-// Body prefix fetched per search result for line-number detection. Caps the
+// Body prefix fetched per search result for per-line match expansion. Caps the
 // data pulled across the rusqlite FFI and the Rust allocation overhead when
-// searching massive notes. Matches beyond this prefix return line 1.
+// searching massive notes. Matches beyond this prefix are not reported.
 const SEARCH_BODY_PREFIX_CHARS: i64 = 8192;
+// Maximum results emitted per matching note. Prevents a single dense note
+// (e.g. generated lorem-ipsum) from dominating the result list.
+const SEARCH_MAX_RESULTS_PER_NOTE: usize = 5;
 
 #[derive(Debug, Clone)]
 struct NoteSecurityRow {
@@ -1593,7 +1596,7 @@ impl Db {
                      LIMIT ?3",
                 )
                 .map_err(|e| e.to_string())?;
-            let rows = stmt
+            let raw_rows = stmt
                 .query_map(
                     rusqlite::params![
                         fts_query,
@@ -1602,13 +1605,11 @@ impl Db {
                         SEARCH_BODY_PREFIX_CHARS
                     ],
                     |row| {
-                        let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
-                        let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
-                        Ok(NoteSearchResult {
+                        Ok(RawSearchRow {
                             id: row.get(0)?,
                             title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                            line_number: search_result_line_number(&body, &snippet, &search_terms),
-                            snippet,
+                            body: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            fts_snippet: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
                             rank: row.get(4)?,
                             updated_at: row.get(5)?,
                         })
@@ -1617,7 +1618,10 @@ impl Db {
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            rows
+            raw_rows
+                .into_iter()
+                .flat_map(|row| expand_search_row(row, &search_terms))
+                .collect()
         } else {
             let mut stmt = conn
                 .prepare(
@@ -1633,25 +1637,27 @@ impl Db {
                      LIMIT ?2",
                 )
                 .map_err(|e| e.to_string())?;
-            let rows = stmt
+            let raw_rows = stmt
                 .query_map(
                     rusqlite::params![fts_query, bounded_limit, SEARCH_BODY_PREFIX_CHARS],
                     |row| {
-                        let body = row.get::<_, Option<String>>(2)?.unwrap_or_default();
-                        let snippet = row.get::<_, Option<String>>(3)?.unwrap_or_default();
-                    Ok(NoteSearchResult {
-                        id: row.get(0)?,
-                        title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                        line_number: search_result_line_number(&body, &snippet, &search_terms),
-                        snippet,
-                        rank: row.get(4)?,
-                        updated_at: row.get(5)?,
-                    })
-                })
+                        Ok(RawSearchRow {
+                            id: row.get(0)?,
+                            title: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                            body: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                            fts_snippet: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                            rank: row.get(4)?,
+                            updated_at: row.get(5)?,
+                        })
+                    },
+                )
                 .map_err(|e| e.to_string())?
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| e.to_string())?;
-            rows
+            raw_rows
+                .into_iter()
+                .flat_map(|row| expand_search_row(row, &search_terms))
+                .collect()
         };
         Ok(results)
     }
@@ -2939,20 +2945,7 @@ fn build_fts_query(raw: &str) -> String {
     build_fts_query_from_terms(&parse_search_terms(raw))
 }
 
-fn snippet_fragments(snippet: &str) -> Vec<String> {
-    let cleaned = snippet
-        .replace("[[", "")
-        .replace("]]", "")
-        .replace('\n', " ");
-    let mut parts = cleaned
-        .split('…')
-        .map(str::trim)
-        .filter(|part| !part.is_empty())
-        .map(|part| part.to_lowercase())
-        .collect::<Vec<_>>();
-    parts.sort_by_key(|part| std::cmp::Reverse(part.len()));
-    parts
-}
+
 
 fn line_matches_term(line: &str, term: &SearchTerm) -> bool {
     match term {
@@ -2961,42 +2954,50 @@ fn line_matches_term(line: &str, term: &SearchTerm) -> bool {
     }
 }
 
-fn search_result_line_number(body: &str, snippet: &str, terms: &[SearchTerm]) -> usize {
-    if body.is_empty() {
-        return 1;
-    }
+// Raw SQL row before per-line expansion.
+struct RawSearchRow {
+    id: String,
+    title: String,
+    body: String,
+    fts_snippet: String,
+    rank: f64,
+    updated_at: String,
+}
 
-    let lines = body.lines().collect::<Vec<_>>();
-    if lines.is_empty() {
-        return 1;
-    }
-
-    let snippet_parts = snippet_fragments(snippet);
-    if !snippet_parts.is_empty() {
-        if let Some((idx, _)) = lines.iter().enumerate().find(|(_, line)| {
-            let lower = line.to_lowercase();
-            snippet_parts.iter().any(|part| lower.contains(part))
-        }) {
-            return idx + 1;
-        }
-    }
-
+// Expand one SQL row (one note) into up to SEARCH_MAX_RESULTS_PER_NOTE results,
+// one per matching line. Falls back to the FTS5 snippet at line 1 when no
+// per-line match is found in the body prefix (e.g. title-only hit).
+fn expand_search_row(row: RawSearchRow, terms: &[SearchTerm]) -> Vec<NoteSearchResult> {
+    let mut results = Vec::new();
     if !terms.is_empty() {
-        if let Some((idx, _)) = lines.iter().enumerate().find(|(_, line)| {
+        for (idx, line) in row.body.lines().enumerate() {
+            if results.len() >= SEARCH_MAX_RESULTS_PER_NOTE {
+                break;
+            }
             let lower = line.to_lowercase();
-            terms.iter().all(|term| line_matches_term(&lower, term))
-        }) {
-            return idx + 1;
-        }
-        if let Some((idx, _)) = lines.iter().enumerate().find(|(_, line)| {
-            let lower = line.to_lowercase();
-            terms.iter().any(|term| line_matches_term(&lower, term))
-        }) {
-            return idx + 1;
+            if terms.iter().all(|term| line_matches_term(&lower, term)) {
+                results.push(NoteSearchResult {
+                    id: row.id.clone(),
+                    title: row.title.clone(),
+                    snippet: line.to_string(),
+                    line_number: idx + 1,
+                    rank: row.rank,
+                    updated_at: row.updated_at.clone(),
+                });
+            }
         }
     }
-
-    1
+    if results.is_empty() {
+        results.push(NoteSearchResult {
+            id: row.id,
+            title: row.title,
+            snippet: row.fts_snippet,
+            line_number: 1,
+            rank: row.rank,
+            updated_at: row.updated_at,
+        });
+    }
+    results
 }
 
 #[cfg(test)]
@@ -3799,7 +3800,7 @@ mod tests {
     }
 
     #[test]
-    fn search_notes_content_returns_snippet_with_highlight_markers() {
+    fn search_notes_content_returns_snippet_with_matched_term() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
 
@@ -3815,13 +3816,9 @@ mod tests {
             "single-line match should resolve to line 1"
         );
         assert!(
-            hits[0].snippet.contains("[[") && hits[0].snippet.contains("]]"),
-            "snippet should contain highlight markers, got: {:?}",
+            hits[0].snippet.contains("budget"),
+            "snippet should include the matched term, got: {:?}",
             hits[0].snippet
-        );
-        assert!(
-            hits[0].snippet.contains("budget") || hits[0].snippet.contains("[[budget]]"),
-            "snippet should include the matched term"
         );
 
         drop(db);
