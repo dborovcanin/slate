@@ -436,12 +436,16 @@ pub fn rewrite_line_with_checklist_toggle_suffix(line_text: &str) -> Option<Stri
     }
 
     let next_content = strip_checklist_toggle_suffix(rest)?;
-    Some(format!("{prefix}[x] {next_content}"))
+    if next_content.is_empty() {
+        Some(prefix.to_string())
+    } else {
+        Some(format!("{prefix}~~{next_content}~~"))
+    }
 }
 
 fn checklist_toggle_from_suffix(
     ctx: &ResolvedContext<'_>,
-) -> Option<(usize, usize, usize, String, bool)> {
+) -> Option<(usize, usize, usize, String, Option<bool>)> {
     let selection = ctx.selection();
     if !selection.empty {
         return None;
@@ -453,13 +457,13 @@ fn checklist_toggle_from_suffix(
     }
 
     let replacement = rewrite_line_with_checklist_toggle_suffix(&line.text)?;
-    let checked = parse_checklist_line_meta(&replacement)?.checked;
+    let checked = parse_checklist_line_meta(&replacement).map(|m| m.checked);
     Some((line.number, line.from, line.to, replacement, checked))
 }
 
 fn checklist_toggle_from_marker_change(
     ctx: &ResolvedContext<'_>,
-) -> Option<(usize, usize, usize, String, bool)> {
+) -> Option<(usize, usize, usize, String, Option<bool>)> {
     let changed = ctx.changed_range()?;
     if changed.to <= changed.from {
         return None;
@@ -478,7 +482,7 @@ fn checklist_toggle_from_marker_change(
     }
 
     let checked = parse_checklist_line_meta(&line.text)?.checked;
-    Some((line.number, line.from, line.to, line.text.clone(), checked))
+    Some((line.number, line.from, line.to, line.text.clone(), Some(checked)))
 }
 
 fn reorder_checklist_toggle(
@@ -560,12 +564,14 @@ fn checklist_toggle_rule(
     ctx: &ResolvedContext<'_>,
     options: TextRuleOptions,
 ) -> Option<EditOperation> {
-    let (line_number, line_from, line_to, replacement, checked) =
+    let (line_number, line_from, line_to, replacement, checked_opt) =
         checklist_toggle_from_suffix(ctx).or_else(|| checklist_toggle_from_marker_change(ctx))?;
 
-    if options.checklist_auto_reorder {
-        if let Some(op) = reorder_checklist_toggle(ctx, line_number, &replacement, checked) {
-            return Some(op);
+    if let Some(checked) = checked_opt {
+        if options.checklist_auto_reorder {
+            if let Some(op) = reorder_checklist_toggle(ctx, line_number, &replacement, checked) {
+                return Some(op);
+            }
         }
     }
 
@@ -1849,8 +1855,12 @@ mod tests {
             Some("- [ ] task".to_string())
         );
         assert_eq!(
+            rewrite_line_with_checklist_toggle_suffix("- task /x"),
+            Some("- ~~task~~".to_string())
+        );
+        assert_eq!(
             rewrite_line_with_checklist_toggle_suffix("1.1 task /x"),
-            Some("1.1 [x] task".to_string())
+            Some("1.1 ~~task~~".to_string())
         );
         assert_eq!(rewrite_line_with_checklist_toggle_suffix("- path/x"), None);
     }

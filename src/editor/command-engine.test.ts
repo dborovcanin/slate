@@ -48,9 +48,9 @@ test("editor mode exposes only editing commands", async () => {
     "fold",
     "unfold",
     "fold-toggle",
-    "clist",
-    "ulist",
-    "olist",
+    "format clist",
+    "format ulist",
+    "format olist",
     "note lock",
     "note unlock",
     "note encrypt",
@@ -87,7 +87,7 @@ test("vim mode exposes vim-specific commands", async () => {
 
 test("command suggestions filter by query", async () => {
   const values = listCommandSuggestions("editor", "fo").map((entry) => entry.value);
-  assert.deepEqual(values, ["fold", "fold-toggle", "format", "unfold"]);
+  assert.deepEqual(values, ["fold", "fold-toggle", "format", "format clist", "format olist", "format ulist", "unfold"]);
 });
 
 test("vim write surfaces host save errors", async () => {

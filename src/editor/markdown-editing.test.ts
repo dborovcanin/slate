@@ -86,9 +86,9 @@ test("rewriteLineWithChecklistToggleSuffix toggles checklist checked state", () 
   );
 });
 
-test("rewriteLineWithChecklistToggleSuffix converts list items to checked checklist", () => {
-  assert.equal(rewriteLineWithChecklistToggleSuffix("- ship docs /x"), "- [x] ship docs");
-  assert.equal(rewriteLineWithChecklistToggleSuffix("1. ship docs /x"), "1. [x] ship docs");
+test("rewriteLineWithChecklistToggleSuffix applies strikethrough to non-checklist list items", () => {
+  assert.equal(rewriteLineWithChecklistToggleSuffix("- ship docs /x"), "- ~~ship docs~~");
+  assert.equal(rewriteLineWithChecklistToggleSuffix("1. ship docs /x"), "1. ~~ship docs~~");
 });
 
 test("rewriteLineWithChecklistToggleSuffix ignores non-suffix /x usage", () => {
