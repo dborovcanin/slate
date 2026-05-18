@@ -497,17 +497,38 @@ impl TerminalApp {
         }
 
         let normalized_key = if key == Key::Ctrl('c') { Key::Esc } else { key };
-        if matches!(
-            self.run_vim_pipeline(db, &normalized_key),
-            VimPipelineResult::NoIntent
-        ) {
-            self.adjust_cursor();
-            self.adjust_scroll();
-            return Ok(());
-        }
+        let doc_mutated = match self.run_vim_pipeline(db, &normalized_key) {
+            VimPipelineResult::NoIntent => {
+                self.adjust_cursor();
+                self.adjust_scroll();
+                return Ok(());
+            }
+            VimPipelineResult::Unhandled => false,
+            VimPipelineResult::Applied { doc_mutated } => doc_mutated,
+        };
 
         self.adjust_cursor();
         self.adjust_scroll();
+
+        if doc_mutated && Self::line_might_trigger_doc_change_rules(self.current_line()) {
+            let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+            let (ctx, scope_start_offset) =
+                self.build_scoped_context_for_line_span(start_line, end_line, None);
+            let options = crate::editor_core::text_rules::TextRuleOptions {
+                markdown_autoformat: self.markdown_autoformat_enabled(),
+                checklist_auto_reorder: self.checklist_auto_reorder_enabled(),
+                table_enabled: self.note_table_module_enabled(),
+            };
+            if let Some(op) = crate::editor_core::text_rules::run_doc_change_rules_with_table_cache(
+                &ctx,
+                options,
+                &mut self.table_format_cache,
+            ) {
+                let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+                self.apply_edit_operation(&mapped);
+            }
+        }
+
         Ok(())
     }
 
