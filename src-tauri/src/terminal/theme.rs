@@ -12,6 +12,7 @@ pub struct RenderPalette {
     pub primary: u8,
     pub surface_bg: u8,
     pub text_fg: u8,
+    pub code_block_bg: u8,
 }
 
 impl Default for RenderPalette {
@@ -218,6 +219,7 @@ impl RenderPalette {
             primary: code_keyword,
             surface_bg: 236,
             text_fg: 231,
+            code_block_bg: 237,
         }
     }
 
@@ -247,6 +249,12 @@ impl RenderPalette {
         if let Some(text_fg) = scheme_text_fg_rgb(&normalized) {
             palette.text_fg = rgb_to_ansi_256(text_fg);
         }
+        let is_light = matches!(
+            normalized.as_str(),
+            "slate" | "slate-light" | "catppuccin-latte" | "gruvbox-light" | "white"
+                | "solarized-light"
+        );
+        palette.code_block_bg = if is_light { 252 } else { 237 };
         palette
     }
 

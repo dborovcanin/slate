@@ -358,9 +358,20 @@ impl RenderContext {
         let is_table_row = text.trim_start().starts_with('|');
         let is_table_continuation_line =
             crate::editor_core::table::is_table_continuation_line(text);
+        let info = if self.render_as_plain_code {
+            None
+        } else {
+            Some(markdown_tokens::classify_markdown_line(text))
+        };
+        let is_code_block_line = !self.render_as_plain_code
+            && (self.in_code_block || info.as_ref().is_some_and(|i| i.is_code_fence));
         let base_style = CharStyle {
             fg: Some(self.palette.text_fg()),
-            bg: Some(self.palette.surface_bg()),
+            bg: Some(if is_code_block_line {
+                self.palette.code_block_bg
+            } else {
+                self.palette.surface_bg()
+            }),
             ..Default::default()
         };
         let mut styles = vec![base_style; len];
@@ -386,11 +397,6 @@ impl RenderContext {
                 }
             }
         }
-        let info = if self.render_as_plain_code {
-            None
-        } else {
-            Some(markdown_tokens::classify_markdown_line(text))
-        };
 
         if self.render_as_plain_code {
             // Skip markdown semantic styling when a file has a fixed syntax mode.
@@ -406,9 +412,6 @@ impl RenderContext {
             self.in_code_block = state.in_code_block;
             self.code_fence_lang = state.code_fence_lang;
         } else if self.in_code_block {
-            for style in &mut styles {
-                style.dim = true;
-            }
             let code_tokens =
                 markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
             apply_code_token_styles(&code_tokens, &mut styles, self.palette);
@@ -965,14 +968,14 @@ mod tests {
     }
 
     #[test]
-    fn render_code_block_adds_syntax_color_sequences() {
+    fn render_code_block_uses_gray_background_with_syntax_colors() {
         let mut ctx = RenderContext::new();
         let palette = RenderPalette::default();
         let _ = ctx.render_line("```rust", 60, None, &[], &[], &[]);
         let out = ctx.render_line("let total = 42 // note", 60, None, &[], &[], &[]);
+        assert!(out.contains(&format!("48;5;{}", palette.code_block_bg)));
         assert!(out.contains(&format!("38;5;{}", palette.code_keyword)));
         assert!(out.contains(&format!("38;5;{}", palette.code_number)));
-        assert!(out.contains(&format!("38;5;{}", palette.code_comment)));
     }
 
     #[test]
