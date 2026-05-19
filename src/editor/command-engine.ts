@@ -49,6 +49,9 @@ export interface CommandExecutionOptions {
     format: ExportCommandFormat;
     path: string | null;
   }) => Promise<string | void> | string | void;
+  onBackupCommand?: (options: {
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   onCollectionCommand?: (options: {
     action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
     collection: string | null;
@@ -276,6 +279,32 @@ export async function executeCommand(
             ? error
             : String(error);
       return `export failed: ${message}`;
+    }
+  }
+  if (hostPlan?.kind === "backup") {
+    const path = hostPlan.path && hostPlan.path.trim().length > 0
+      ? hostPlan.path.trim()
+      : null;
+    if (!path) {
+      return "usage: backup <path.zip>";
+    }
+    if (!options.onBackupCommand) {
+      return "backup unavailable";
+    }
+    try {
+      const message = await options.onBackupCommand({ path });
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message;
+      }
+      return "backup complete";
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error);
+      return `backup failed: ${message}`;
     }
   }
   if (hostPlan?.kind === "collection") {

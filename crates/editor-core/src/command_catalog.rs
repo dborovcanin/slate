@@ -60,6 +60,7 @@ pub enum CommandId {
     ExportPdf,
     ExportMd,
     ExportTxt,
+    Backup,
     Write,
     WriteQuit,
     Quit,
@@ -132,6 +133,11 @@ impl ExportFormat {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedExportCommand {
     pub format: ExportFormat,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedBackupCommand {
     pub path: Option<String>,
 }
 
@@ -244,6 +250,39 @@ pub fn parse_export_command(input: &str) -> Option<ParsedExportCommand> {
     Some(ParsedExportCommand { format, path })
 }
 
+pub fn parse_backup_command(input: &str) -> Option<ParsedBackupCommand> {
+    let normalized = input.trim_start().trim_start_matches(':').trim_start();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let head_end = normalized.find(char::is_whitespace).unwrap_or(normalized.len());
+    if !normalized[..head_end].eq_ignore_ascii_case("backup") {
+        return None;
+    }
+
+    let after_backup = normalized[head_end..].trim_start();
+    if after_backup.is_empty() {
+        return Some(ParsedBackupCommand { path: None });
+    }
+
+    let first_token_end = after_backup
+        .find(char::is_whitespace)
+        .unwrap_or(after_backup.len());
+    let path = if after_backup[..first_token_end].eq_ignore_ascii_case("notes") {
+        let after_notes = after_backup[first_token_end..].trim_start();
+        if after_notes.is_empty() {
+            None
+        } else {
+            Some(after_notes.to_string())
+        }
+    } else {
+        Some(after_backup.to_string())
+    };
+
+    Some(ParsedBackupCommand { path })
+}
+
 pub fn parse_collection_command(input: &str) -> Option<ParsedCollectionCommand> {
     let normalized = input.trim_start().trim_start_matches(':').trim_start();
     if normalized.is_empty() {
@@ -317,7 +356,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 60] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 61] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -790,6 +829,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 60] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::Backup,
+        value: "backup",
+        aliases: &["backup notes"],
+        description: "backup all notes to a zip file",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::Quit,
         value: "q",
         aliases: &["q!"],
@@ -830,6 +876,9 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
     }
     if let Some(parsed) = parse_export_command(normalized_input) {
         return parsed.format.command_id() == def.id;
+    }
+    if parse_backup_command(normalized_input).is_some() {
+        return def.id == CommandId::Backup;
     }
     if let Some(parsed) = parse_collection_command(normalized_input) {
         return parsed.action.command_id() == def.id;
@@ -1051,6 +1100,14 @@ mod tests {
             Some(CommandId::ExportTxt)
         );
         assert_eq!(
+            resolve_command(CommandMode::Editor, "backup /tmp/slate.zip").map(|cmd| cmd.id),
+            Some(CommandId::Backup)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "backup notes /tmp/slate.zip").map(|cmd| cmd.id),
+            Some(CommandId::Backup)
+        );
+        assert_eq!(
             resolve_command(CommandMode::Editor, "choose_collection Work").map(|cmd| cmd.id),
             Some(CommandId::ChooseCollection)
         );
@@ -1120,6 +1177,27 @@ mod tests {
         let txt = parse_export_command("export txt notes.txt").expect("parse txt path");
         assert_eq!(txt.format, ExportFormat::Txt);
         assert_eq!(txt.path.as_deref(), Some("notes.txt"));
+    }
+
+    #[test]
+    fn parse_backup_command_supports_direct_and_notes_prefixed_paths() {
+        let direct = parse_backup_command("backup /tmp/slate.zip").expect("parse backup path");
+        assert_eq!(direct.path.as_deref(), Some("/tmp/slate.zip"));
+
+        let prefixed =
+            parse_backup_command(":backup notes ~/backups/slate.zip").expect("parse backup notes");
+        assert_eq!(prefixed.path.as_deref(), Some("~/backups/slate.zip"));
+
+        let missing = parse_backup_command("backup").expect("parse backup missing path");
+        assert_eq!(missing.path, None);
+
+        let multi_space =
+            parse_backup_command("backup  notes  /tmp/slate.zip").expect("parse with extra spaces");
+        assert_eq!(multi_space.path.as_deref(), Some("/tmp/slate.zip"));
+
+        let spaced_path =
+            parse_backup_command("backup /tmp/my backup.zip").expect("parse path with space");
+        assert_eq!(spaced_path.path.as_deref(), Some("/tmp/my backup.zip"));
     }
 
     #[test]

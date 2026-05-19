@@ -311,6 +311,7 @@ fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
         CommandDispatchKind::HostRemindToggle => "host_remind_toggle",
         CommandDispatchKind::HostWrite => "host_write",
         CommandDispatchKind::HostExport => "host_export",
+        CommandDispatchKind::HostBackup => "host_backup",
         CommandDispatchKind::HostModule => "host_module",
         CommandDispatchKind::HostCollection => "host_collection",
         CommandDispatchKind::HostFold => "host_fold",
@@ -353,6 +354,9 @@ enum HostCommandPlanWire {
         format: String,
         path: Option<String>,
     },
+    Backup {
+        path: Option<String>,
+    },
     Module {
         command: String,
     },
@@ -385,6 +389,7 @@ fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {
             format: format.as_str().to_string(),
             path,
         },
+        HostCommandPlan::Backup { path } => HostCommandPlanWire::Backup { path },
         HostCommandPlan::Module { command_id } => HostCommandPlanWire::Module {
             command: module_command_value(command_id)?.to_string(),
         },

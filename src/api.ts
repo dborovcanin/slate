@@ -123,6 +123,11 @@ export interface PdfExportPalette {
   code_type: PdfRgbColor;
 }
 
+export interface BackupResult {
+  path: string;
+  bytes: number;
+}
+
 export const DEFAULT_THEME_CONFIG: ThemeConfig = {
   color_scheme: "gruvbox-light",
   accent: "auto",
@@ -567,6 +572,10 @@ export function exportToPdf(
   palette: PdfExportPalette,
 ): Promise<void> {
   return invoke<void>("export_to_pdf", { noteId, path, content, palette });
+}
+
+export function backupNotesDatabase(path: string): Promise<BackupResult> {
+  return invoke<BackupResult>("backup_notes_database", { path });
 }
 
 export async function readSystemClipboardText(): Promise<string | null> {

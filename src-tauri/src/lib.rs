@@ -151,6 +151,7 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
             commands::perf::append_startup_log,
             commands::config::get_theme_config,
             commands::config::get_runtime_flags,
+            commands::backup::backup_notes_database,
             commands::export::export_to_file,
             commands::export::export_to_pdf,
             commands::clipboard::read_clipboard_text,

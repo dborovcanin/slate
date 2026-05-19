@@ -2,6 +2,8 @@ use app_core::AppCore;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};
 
+#[path = "../commands/backup.rs"]
+pub mod backup_impl;
 #[path = "../config/mod.rs"]
 mod config;
 #[path = "../editor_core/mod.rs"]
@@ -16,6 +18,7 @@ mod storage;
 mod terminal;
 
 mod commands {
+    pub use super::backup_impl as backup;
     pub use super::export_impl as export;
 }
 

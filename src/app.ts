@@ -17,6 +17,7 @@ import {
   setCollectionDefaultTags,
   setNoteCollections,
   deleteNote,
+  backupNotesDatabase,
   exportToFile,
   exportToPdf,
   getThemeConfigOrDefault,
@@ -205,6 +206,7 @@ function editorOptionsForNote(note: Note | null) {
       }),
     onSaveError: showSaveError,
     onExportCommand: runExportCommand,
+    onBackupCommand: runBackupCommand,
     variablesEnabled: plainFileNote || largeNoteMode ? false : loaded.variables,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
@@ -875,6 +877,21 @@ async function runExportCommand(options: {
     await exportToFile(path, latest.body);
   }
   return `exported ${options.format} to ${path}`;
+}
+
+async function runBackupCommand(options: {
+  path: string | null;
+}): Promise<string> {
+  await flushSave(true, false, {
+    throwOnError: true,
+    suppressErrorCallback: true,
+  });
+  const path = options.path?.trim() ?? "";
+  if (path.length === 0) {
+    return "usage: backup <path.zip>";
+  }
+  const result = await backupNotesDatabase(path);
+  return `backed up notes to ${result.path}`;
 }
 
 async function handleExportClipboard() {

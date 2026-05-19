@@ -500,6 +500,7 @@ export type CommandDispatchKind =
   | "host_remind_toggle"
   | "host_write"
   | "host_export"
+  | "host_backup"
   | "host_module"
   | "host_collection"
   | "host_fold"
@@ -516,6 +517,7 @@ export type HostCommandPlan =
   | { kind: "remind_toggle" }
   | { kind: "write"; quit: boolean; force: boolean }
   | { kind: "export"; format: "pdf" | "md" | "txt"; path?: string | null }
+  | { kind: "backup"; path?: string | null }
   | { kind: "module"; command: string }
   | {
     kind: "collection";
@@ -1015,6 +1017,7 @@ export function classifyCommandDispatchFromWasm(
     raw === "host_remind_toggle" ||
     raw === "host_write" ||
     raw === "host_export" ||
+    raw === "host_backup" ||
     raw === "host_module" ||
     raw === "host_collection" ||
     raw === "host_fold" ||

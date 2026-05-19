@@ -135,6 +135,8 @@ Alias examples:
 | `export pdf <path>` | Export note to PDF file |
 | `export md [path]` | Export markdown to file, or clipboard if path omitted |
 | `export txt [path]` | Export plain text to file, or clipboard if path omitted |
+| `backup <path.zip>` | Backup the full notes database to a portable zip |
+| `backup notes <path.zip>` | Same as `backup <path.zip>` |
 
 Aliases:
 

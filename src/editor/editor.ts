@@ -284,6 +284,9 @@ interface EditorMountOptions {
     format: "pdf" | "md" | "txt";
     path: string | null;
   }) => Promise<string | void> | string | void;
+  onBackupCommand?: (options: {
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
@@ -526,6 +529,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         onWriteCommand: options.onWriteCommand,
         onExitCommand: options.onExitCommand,
         onExportCommand: options.onExportCommand,
+        onBackupCommand: options.onBackupCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
         getNoteModules: options.getNoteModules,
@@ -573,6 +577,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
           onWriteCommand: options.onWriteCommand,
           onExitCommand: options.onExitCommand,
           onExportCommand: options.onExportCommand,
+          onBackupCommand: options.onBackupCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,

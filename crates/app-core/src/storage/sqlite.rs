@@ -254,6 +254,25 @@ impl Db {
         ))
     }
 
+    pub fn backup_to_sqlite_file(&self, target: &Path) -> Result<(), String> {
+        if target.exists() {
+            return Err(format!(
+                "backup sqlite target already exists: {}",
+                target.display()
+            ));
+        }
+        let Some(target_text) = target.to_str() else {
+            return Err(format!(
+                "backup sqlite target is not valid UTF-8: {}",
+                target.display()
+            ));
+        };
+        let conn = self.conn.lock().unwrap();
+        conn.execute("VACUUM INTO ?1", [target_text])
+            .map_err(|e| format!("Failed to snapshot database '{}': {e}", target.display()))?;
+        Ok(())
+    }
+
     fn ensure_search_index_checked(&self) -> Result<(), String> {
         let mut checked = self
             .search_index_checked

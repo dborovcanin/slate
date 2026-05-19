@@ -1655,6 +1655,24 @@ impl TerminalApp {
                     };
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::Backup { path } => {
+                    let Some(path) = path else {
+                        self.status = "usage: backup <path.zip>".to_string();
+                        return;
+                    };
+                    if self.dirty {
+                        if let Err(error) = self.save(db) {
+                            self.status = format!("backup failed: save failed: {error}");
+                            return;
+                        }
+                    }
+                    self.status =
+                        match crate::commands::backup::backup_notes_database_blocking(db, &path) {
+                            Ok(result) => format!("backed up notes to {}", result.path),
+                            Err(error) => format!("backup failed: {error}"),
+                        };
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::ClipWatch { action } => {
                     match action {
                         crate::editor_core::engine::HostClipWatchAction::Start => {

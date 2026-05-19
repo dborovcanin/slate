@@ -20,6 +20,9 @@ interface CommandPickerOptions {
     format: ExportCommandFormat;
     path: string | null;
   }) => Promise<string | void> | string | void;
+  onBackupCommand?: (options: {
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   source?: "vim-colon" | "shortcut";
   onCancel?: () => void;
   selectionOverride?: {
@@ -40,6 +43,9 @@ interface CommandModeExtensionOptions {
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
   onExportCommand?: (options: {
     format: ExportCommandFormat;
+    path: string | null;
+  }) => Promise<string | void> | string | void;
+  onBackupCommand?: (options: {
     path: string | null;
   }) => Promise<string | void> | string | void;
 }
@@ -224,6 +230,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         getNoteModules: options.getNoteModules,
         setNoteModules: options.setNoteModules,
         onExportCommand: options.onExportCommand,
+        onBackupCommand: options.onBackupCommand,
         selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
@@ -314,6 +321,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         getNoteModules: options.getNoteModules,
         setNoteModules: options.setNoteModules,
         onExportCommand: options.onExportCommand,
+        onBackupCommand: options.onBackupCommand,
         source: "shortcut",
       });
       return true;

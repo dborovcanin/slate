@@ -155,6 +155,7 @@ sqrt(144) + 3^2         → 21
 - PDF export renders markdown-aware output with support for headings/lists/code blocks, markdown tables, markdown images (`![alt](src)`), themed inline styling (bold/italic/variables/code tokens), and rendered checklist boxes
 - Command bar export supports `export pdf <path>`, `export md [path]`, and `export txt [path]` (`md/txt` without a path export to clipboard)
 - Command export paths support `~` home expansion (example: `export pdf ~/Downloads/test.pdf`)
+- Full database backup supports `backup <path.zip>` / `backup notes <path.zip>` and writes a portable zip containing `notes.db`
 - Toast feedback on export
 
 **Keyboard shortcuts**

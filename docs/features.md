@@ -93,6 +93,7 @@ Per-note module state is persisted and controls runtime behavior.
 - quick clipboard export
 - file export to `.md`, `.txt`, `.pdf`
 - command-based export with optional path for md/txt clipboard fallback
+- full notes database backup to portable `.zip`
 - markdown-aware PDF rendering with:
   - headings/lists/code blocks
   - markdown tables

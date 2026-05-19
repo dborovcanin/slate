@@ -1,6 +1,7 @@
 # Export Reference
 
 Slate supports clipboard and file export from GUI and TUI.
+It also supports a full database backup command for moving all notes together.
 
 ## Export formats
 
@@ -13,6 +14,8 @@ Slate supports clipboard and file export from GUI and TUI.
 - `export pdf <path>`
 - `export md [path]`
 - `export txt [path]`
+- `backup <path.zip>`
+- `backup notes <path.zip>`
 
 If path is omitted:
 
@@ -67,3 +70,14 @@ Typical export error classes:
 - clipboard write failure for clipboard exports
 
 Host command status messages are returned to the status bar/toast layer.
+
+## Database Backup
+
+`backup <path.zip>` writes a portable zip containing:
+
+- `notes.db`: a consistent SQLite snapshot of the full Slate notes database
+- `manifest.json`: backup metadata
+- `README.txt`: manual restore notes
+
+Close Slate before manually restoring. Unzip the backup and replace the active
+Slate `notes.db` with the extracted `notes.db`.

@@ -65,6 +65,7 @@ test("editor mode exposes only editing commands", async () => {
     "export pdf",
     "export md",
     "export txt",
+    "backup",
   ]);
   assert.equal(values.includes("q"), false);
 });
@@ -139,6 +140,26 @@ test("export host command routes format/path and clipboard fallback", async () =
     onExportCommand: async () => "should-not-run",
   });
   assert.equal(pdfMissingPath, "usage: export pdf <path>");
+});
+
+test("backup host command routes path and requires a zip path", async () => {
+  let called: { path: string | null } | null = null;
+
+  const message = await executeCommand({} as any, "backup notes /tmp/slate.zip", {
+    mode: "editor",
+    onBackupCommand: async (options) => {
+      called = options;
+      return "ok-backup";
+    },
+  });
+  assert.equal(message, "ok-backup");
+  assert.deepEqual(called, { path: "/tmp/slate.zip" });
+
+  const missing = await executeCommand({} as any, "backup", {
+    mode: "editor",
+    onBackupCommand: async () => "should-not-run",
+  });
+  assert.equal(missing, "usage: backup <path.zip>");
 });
 
 test("collection host command routes choose/create/delete/update/purge/join/leave/clear", async () => {

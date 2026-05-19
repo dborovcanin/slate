@@ -1,3 +1,4 @@
+pub mod backup;
 #[cfg(feature = "gui")]
 pub mod calc;
 #[cfg(feature = "gui")]

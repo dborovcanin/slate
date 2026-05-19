@@ -58,6 +58,9 @@ interface VimOptions {
     format: "pdf" | "md" | "txt";
     path: string | null;
   }) => Promise<string | void> | string | void;
+  onBackupCommand?: (options: {
+    path: string | null;
+  }) => Promise<string | void> | string | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
@@ -1519,6 +1522,7 @@ export function vimModeExtension(options: VimOptions = {}) {
           onWriteCommand: options.onWriteCommand,
           onExitCommand: options.onExitCommand,
           onExportCommand: options.onExportCommand,
+          onBackupCommand: options.onBackupCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,

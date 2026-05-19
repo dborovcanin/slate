@@ -153,6 +153,7 @@ test("core command suggestions are mode-aware", async () => {
     "export pdf",
     "export md",
     "export txt",
+    "backup",
   ]);
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);

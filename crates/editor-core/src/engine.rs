@@ -71,6 +71,7 @@ pub enum CommandDispatchKind {
     HostRemindToggle,
     HostWrite,
     HostExport,
+    HostBackup,
     HostModule,
     HostCollection,
     HostFold,
@@ -114,6 +115,9 @@ pub enum HostCommandPlan {
     RemindToggle,
     Export {
         format: ExportFormat,
+        path: Option<String>,
+    },
+    Backup {
         path: Option<String>,
     },
     Module {
@@ -173,6 +177,7 @@ impl EditorEngine {
                 HostCommandPlan::RemindToggle => CommandDispatchKind::HostRemindToggle,
                 HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
                 HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
+                HostCommandPlan::Backup { .. } => CommandDispatchKind::HostBackup,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
                 HostCommandPlan::Collection { .. } => CommandDispatchKind::HostCollection,
                 HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
@@ -201,6 +206,9 @@ impl EditorEngine {
                 format: parsed.format,
                 path: parsed.path,
             });
+        }
+        if let Some(parsed) = command_catalog::parse_backup_command(raw_input) {
+            return Some(HostCommandPlan::Backup { path: parsed.path });
         }
         if let Some(parsed) = command_catalog::parse_collection_command(raw_input) {
             return Some(HostCommandPlan::Collection {
@@ -254,6 +262,7 @@ impl EditorEngine {
             CommandId::ClipWatchStop => Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             }),
+            CommandId::Backup => Some(HostCommandPlan::Backup { path: None }),
             CommandId::Write => Some(HostCommandPlan::Write {
                 quit: false,
                 force: normalized == "w!",
@@ -470,6 +479,10 @@ mod tests {
                 "export txt /tmp/note.txt"
             ),
             Some(CommandDispatchKind::HostExport)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "backup /tmp/slate.zip"),
+            Some(CommandDispatchKind::HostBackup)
         );
         assert_eq!(
             EditorEngine::classify_command_dispatch(CommandMode::Editor, "module math on"),
