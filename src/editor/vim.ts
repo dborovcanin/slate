@@ -132,6 +132,11 @@ function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
     case VIM_INTENT.DELETE_AROUND_PIPE:
     case VIM_INTENT.YANK_INSIDE_PIPE:
     case VIM_INTENT.YANK_AROUND_PIPE:
+    case VIM_INTENT.DELETE_INSIDE_PAREN:
+    case VIM_INTENT.DELETE_INSIDE_BRACKET:
+    case VIM_INTENT.DELETE_INSIDE_BRACE:
+    case VIM_INTENT.DELETE_INSIDE_DOUBLE_QUOTE:
+    case VIM_INTENT.DELETE_INSIDE_BACKTICK:
       return true;
     default:
       return false;

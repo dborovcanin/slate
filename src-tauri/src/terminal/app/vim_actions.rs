@@ -30,6 +30,11 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
             | crate::editor_core::vim::VimIntent::DeleteAroundPipe
             | crate::editor_core::vim::VimIntent::YankInsidePipe
             | crate::editor_core::vim::VimIntent::YankAroundPipe
+            | crate::editor_core::vim::VimIntent::DeleteInsideParen
+            | crate::editor_core::vim::VimIntent::DeleteInsideBracket
+            | crate::editor_core::vim::VimIntent::DeleteInsideBrace
+            | crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote
+            | crate::editor_core::vim::VimIntent::DeleteInsideBacktick
             | crate::editor_core::vim::VimIntent::PasteAfter
             | crate::editor_core::vim::VimIntent::DeleteTillChar
     )
@@ -857,6 +862,21 @@ impl TerminalApp {
                         crate::editor_core::vim::VimIntent::YankAroundPipe => {
                             Some(self.with_clipboard_status("yanked around | |"))
                         }
+                        crate::editor_core::vim::VimIntent::DeleteInsideParen => {
+                            Some(self.with_clipboard_status("deleted inside ( )"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideBracket => {
+                            Some(self.with_clipboard_status("deleted inside [ ]"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideBrace => {
+                            Some(self.with_clipboard_status("deleted inside { }"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote => {
+                            Some(self.with_clipboard_status("deleted inside \" \""))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideBacktick => {
+                            Some(self.with_clipboard_status("deleted inside ` `"))
+                        }
                         _ => None,
                     };
                     if let Some(status) = status {
@@ -1354,6 +1374,11 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::PlayMacro => {}
                 crate::editor_core::vim::VimIntent::DeleteWordEnd => {}
                 crate::editor_core::vim::VimIntent::DeleteTillChar => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideParen => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideBracket => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideBrace => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideBacktick => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
         }

@@ -594,6 +594,11 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::DeleteAroundWord
                 | crate::editor_core::vim::VimIntent::DeleteInsidePipe
                 | crate::editor_core::vim::VimIntent::DeleteAroundPipe
+                | crate::editor_core::vim::VimIntent::DeleteInsideParen
+                | crate::editor_core::vim::VimIntent::DeleteInsideBracket
+                | crate::editor_core::vim::VimIntent::DeleteInsideBrace
+                | crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote
+                | crate::editor_core::vim::VimIntent::DeleteInsideBacktick
                 | crate::editor_core::vim::VimIntent::DeleteWordForward
                 | crate::editor_core::vim::VimIntent::DeleteWordBackward
                 | crate::editor_core::vim::VimIntent::DeleteWordEnd
