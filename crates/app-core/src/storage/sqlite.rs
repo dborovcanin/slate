@@ -81,26 +81,6 @@ struct SqlitePoolGuard<'a> {
 }
 
 impl SqlitePool {
-    fn migrate_reminder_reminded_column(conn: &Connection) -> Result<(), String> {
-        let mut stmt = conn
-            .prepare("PRAGMA table_info(reminders)")
-            .map_err(|e| format!("Failed to inspect reminders schema: {e}"))?;
-        let column_names = stmt
-            .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|e| format!("Failed to read reminders schema columns: {e}"))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| format!("Failed to collect reminders schema columns: {e}"))?;
-        let has_notified = column_names.iter().any(|name| name == "notified_at_ms");
-        let has_reminded = column_names.iter().any(|name| name == "reminded_at_ms");
-        if has_notified && !has_reminded {
-            conn.execute_batch(
-                "ALTER TABLE reminders RENAME COLUMN notified_at_ms TO reminded_at_ms;",
-            )
-            .map_err(|e| format!("Failed to migrate reminders column rename: {e}"))?;
-        }
-        Ok(())
-    }
-
     fn configure_connection(conn: &Connection) -> Result<(), String> {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -132,7 +112,6 @@ impl SqlitePool {
         first
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
-        Self::migrate_reminder_reminded_column(&first)?;
         let schema_init_ms = schema_started.elapsed().as_secs_f64() * 1000.0;
 
         // Keep first-edit startup lean; FTS consistency/repair runs lazily on
