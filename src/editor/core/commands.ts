@@ -1,7 +1,9 @@
 import { ResolvedContext } from "./context.ts";
 import { replaceRange } from "./operations.ts";
+import type { TextChange } from "./types.ts";
 import {
   convertLineToList,
+  convertLineToTitle,
   executeMathCommandFromWasm,
   isWasmReady,
   listCommandSuggestionsFromWasm,
@@ -393,14 +395,17 @@ async function runModuleCommand(
   return { message: plan.message, operations: [] };
 }
 
-function listConversionLabel(kind: ListKind): string {
+type ParagraphConversionKind = "title" | ListKind;
+
+function listConversionLabel(kind: ParagraphConversionKind): string {
+  if (kind === "title") return "title";
   if (kind === "checklist") return "checklist";
   if (kind === "unordered") return "unordered list";
   return "ordered list";
 }
 
 async function runListConvertCommand(
-  kind: ListKind,
+  kind: ParagraphConversionKind,
   _normalizedInput: string,
   ctx: ResolvedContext,
   runtime: CommandRuntime,
@@ -425,7 +430,9 @@ async function runListConvertCommand(
   let orderedIndex = 1;
   for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
     const source = ctx.lineText(lineNo);
-    const { text } = convertLineToList(source, kind, orderedIndex);
+    const text = kind === "title"
+      ? convertLineToTitle(source).text
+      : convertLineToList(source, kind, orderedIndex).text;
     converted.push(text);
     if (kind === "ordered" && source.trim().length > 0) orderedIndex += 1;
     if (text !== source) changed += 1;
@@ -444,6 +451,14 @@ async function runListConvertCommand(
     message: summary,
     operations: [replaceRange(from, to, insert, { anchor: from + insert.length })],
   };
+}
+
+async function runTitleCommand(
+  normalizedInput: string,
+  ctx: ResolvedContext,
+  runtime: CommandRuntime,
+): Promise<CommandExecutionResult> {
+  return runListConvertCommand("title", normalizedInput, ctx, runtime);
 }
 
 async function runChecklistCommand(
@@ -468,6 +483,76 @@ async function runOrderedListCommand(
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
   return runListConvertCommand("ordered", normalizedInput, ctx, runtime);
+}
+
+function makeInlineWrapExecutor(
+  left: string,
+  right: string,
+  label: string,
+): ExecuteFn {
+  return async (_normalizedInput, ctx) => {
+    const text = ctx.text();
+    const sel = ctx.selection();
+    const { from, to } = sel;
+
+    if (sel.empty) {
+      return {
+        message: `${label} markers inserted`,
+        operations: [{ changes: [{ from, to, insert: left + right }], selection: { anchor: from + left.length } }],
+      };
+    }
+
+    const isWrapped =
+      from >= left.length &&
+      text.slice(from - left.length, from) === left &&
+      to + right.length <= text.length &&
+      text.slice(to, to + right.length) === right;
+
+    if (isWrapped) {
+      return {
+        message: `${label} removed`,
+        operations: [{
+          changes: [
+            { from: from - left.length, to: from, insert: "" },
+            { from: to, to: to + right.length, insert: "" },
+          ] as TextChange[],
+          selection: { anchor: from - left.length, head: to - left.length },
+        }],
+      };
+    }
+
+    return {
+      message: `${label} applied`,
+      operations: [{
+        changes: [
+          { from, to: from, insert: left },
+          { from: to, to, insert: right },
+        ] as TextChange[],
+        selection: { anchor: from + left.length, head: to + left.length },
+      }],
+    };
+  };
+}
+
+const INLINE_FORMAT_MARKERS = ["**", "~~", "*", "`"];
+
+async function runFormatClearCommand(
+  _normalizedInput: string,
+  ctx: ResolvedContext,
+): Promise<CommandExecutionResult> {
+  const sel = ctx.selection();
+  const { from, to } = sel;
+  if (sel.empty) return { message: "no selection", operations: [] };
+  const selected = ctx.text().slice(from, to);
+  let stripped = selected;
+  for (const marker of INLINE_FORMAT_MARKERS) {
+    stripped = stripped.split(marker).join("");
+  }
+  if (stripped === selected) return { message: "no inline formatting found", operations: [] };
+  return {
+    message: "inline formatting cleared",
+    operations: [{ changes: [{ from, to, insert: stripped }], selection: { anchor: from, head: from + stripped.length } }],
+  };
 }
 
 // Executor map: canonical command value (from command_catalog.rs) → execute fn.
@@ -505,9 +590,15 @@ const EXECUTOR_MAP: Record<string, ExecuteFn> = {
   "fold-toggle": runFoldCommand,
   "clip-watch on": runClipWatchCommand,
   "clip-watch off": runClipWatchStopCommand,
-  "format clist": runChecklistCommand,
-  "format ulist": runUnorderedListCommand,
-  "format olist": runOrderedListCommand,
+  "paragraph title": runTitleCommand,
+  "format clear": runFormatClearCommand,
+  "paragraph clist": runChecklistCommand,
+  "paragraph ulist": runUnorderedListCommand,
+  "paragraph olist": runOrderedListCommand,
+  "format bold": makeInlineWrapExecutor("**", "**", "bold"),
+  "format italic": makeInlineWrapExecutor("*", "*", "italic"),
+  "format strike": makeInlineWrapExecutor("~~", "~~", "strikethrough"),
+  "format code": makeInlineWrapExecutor("`", "`", "inline code"),
   "w": runWriteCommand,
   "wq": runWriteQuitCommand,
   "q": runQuitCommand,

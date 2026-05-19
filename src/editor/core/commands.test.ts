@@ -136,9 +136,15 @@ test("core command suggestions are mode-aware", async () => {
     "fold",
     "unfold",
     "fold-toggle",
-    "format clist",
-    "format ulist",
-    "format olist",
+    "format clear",
+    "paragraph title",
+    "paragraph clist",
+    "paragraph olist",
+    "paragraph ulist",
+    "format bold",
+    "format code",
+    "format italic",
+    "format strike",
     "note lock",
     "note unlock",
     "note encrypt",
@@ -629,6 +635,22 @@ test("core executeCommand clist in vim mode treats endpoint lines as selected", 
     from: 0,
     to: betaStart + "beta".length,
     insert: "- [ ] alpha\n- [ ] beta",
+  });
+});
+
+test("core executeCommand title converts selected lines to headings", async () => {
+  const text = ["- task", "## follow-up", "tail"].join("\n");
+  const tailStart = text.indexOf("\ntail");
+  const result = await executeCommand(snapshot(text, tailStart, 0), "title", {
+    mode: "editor",
+  });
+
+  assert.equal(result.message, "converted 2 lines to title");
+  assert.equal(result.operations.length, 1);
+  assert.deepEqual(result.operations[0]?.changes[0], {
+    from: 0,
+    to: tailStart,
+    insert: "# task\n# follow-up",
   });
 });
 

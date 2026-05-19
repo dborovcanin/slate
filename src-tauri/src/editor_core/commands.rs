@@ -3,10 +3,10 @@ use super::context::ResolvedContext;
 use super::engine::EditorEngine;
 use super::format::format_markdown;
 use super::operations::replace_range;
-use super::text_rules::{convert_line_to_list, ListKind};
+use super::text_rules::{convert_line_to_list, convert_line_to_title, ListKind};
 use super::types::{
     CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation, EditorContextSnapshot,
-    OperationSelection,
+    OperationSelection, TextChange,
 };
 
 fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
@@ -20,6 +20,7 @@ fn result_with_message(message: impl Into<String>) -> CommandExecutionResult {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ListConversionKind {
+    Title,
     Checklist,
     Unordered,
     Ordered,
@@ -27,6 +28,7 @@ enum ListConversionKind {
 
 fn list_conversion_label(kind: ListConversionKind) -> &'static str {
     match kind {
+        ListConversionKind::Title => "title",
         ListConversionKind::Checklist => "checklist",
         ListConversionKind::Unordered => "unordered list",
         ListConversionKind::Ordered => "ordered list",
@@ -34,7 +36,11 @@ fn list_conversion_label(kind: ListConversionKind) -> &'static str {
 }
 
 fn convert_line(line: &str, kind: ListConversionKind, ordered_index: usize) -> (String, bool) {
+    if kind == ListConversionKind::Title {
+        return convert_line_to_title(line);
+    }
     let list_kind = match kind {
+        ListConversionKind::Title => unreachable!("title conversion is handled before list mapping"),
         ListConversionKind::Checklist => ListKind::Checklist,
         ListConversionKind::Unordered => ListKind::Unordered,
         ListConversionKind::Ordered => ListKind::Ordered,
@@ -68,8 +74,8 @@ fn run_list_convert_command(
     let mut ordered_index = 1usize;
     for line_no in start_line..=end_line {
         let source = ctx.line_text(line_no);
-        let (next, converted_line) = convert_line(source, kind, ordered_index);
-        if kind == ListConversionKind::Ordered && converted_line {
+        let (next, _changed_line) = convert_line(source, kind, ordered_index);
+        if kind == ListConversionKind::Ordered && !source.trim().is_empty() {
             ordered_index += 1;
         }
         if next != source {
@@ -99,6 +105,105 @@ fn run_list_convert_command(
         format!("converted {changed} lines to {label}")
     };
     let mut result = result_with_message(message);
+    result.operations.push(op);
+    result
+}
+
+fn toggle_inline_wrap(
+    snapshot: &EditorContextSnapshot,
+    left: &str,
+    right: &str,
+    label: &str,
+) -> CommandExecutionResult {
+    let text = &snapshot.text;
+    let max = text.len();
+    let anchor = snapshot.selection.anchor.min(max);
+    let head = snapshot.selection.head.min(max);
+    let from = anchor.min(head);
+    let to = anchor.max(head);
+
+    if from == to {
+        let insert = format!("{}{}", left, right);
+        let new_pos = from + left.len();
+        let op = EditOperation {
+            changes: vec![TextChange { from, to, insert }],
+            selection: Some(OperationSelection { anchor: new_pos, head: None }),
+        };
+        let mut result = result_with_message(format!("{} markers inserted", label));
+        result.operations.push(op);
+        return result;
+    }
+
+    let is_wrapped = from >= left.len()
+        && text.get(from - left.len()..from) == Some(left)
+        && to + right.len() <= max
+        && text.get(to..to + right.len()) == Some(right);
+
+    if is_wrapped {
+        let op = EditOperation {
+            changes: vec![
+                TextChange { from: from - left.len(), to: from, insert: String::new() },
+                TextChange { from: to, to: to + right.len(), insert: String::new() },
+            ],
+            selection: Some(OperationSelection {
+                anchor: from - left.len(),
+                head: Some(to - left.len()),
+            }),
+        };
+        let mut result = result_with_message(format!("{} removed", label));
+        result.operations.push(op);
+        return result;
+    }
+
+    let op = EditOperation {
+        changes: vec![
+            TextChange { from, to: from, insert: left.to_string() },
+            TextChange { from: to, to, insert: right.to_string() },
+        ],
+        selection: Some(OperationSelection {
+            anchor: from + left.len(),
+            head: Some(to + left.len()),
+        }),
+    };
+    let mut result = result_with_message(format!("{} applied", label));
+    result.operations.push(op);
+    result
+}
+
+fn strip_inline_formatting(text: &str) -> String {
+    // Strip markers in order: longest first to avoid partial matches (** before *)
+    let markers = ["**", "~~", "*", "`"];
+    let mut result = text.to_string();
+    for marker in markers {
+        result = result.replace(marker, "");
+    }
+    result
+}
+
+fn run_format_clear(snapshot: &EditorContextSnapshot) -> CommandExecutionResult {
+    let text = &snapshot.text;
+    let max = text.len();
+    let anchor = snapshot.selection.anchor.min(max);
+    let head = snapshot.selection.head.min(max);
+    let from = anchor.min(head);
+    let to = anchor.max(head);
+
+    if from == to {
+        return result_with_message("no selection");
+    }
+
+    let selected = &text[from..to];
+    let stripped = strip_inline_formatting(selected);
+    if stripped == selected {
+        return result_with_message("no inline formatting found");
+    }
+
+    let new_len = from + stripped.len();
+    let op = EditOperation {
+        changes: vec![TextChange { from, to, insert: stripped }],
+        selection: Some(OperationSelection { anchor: from, head: Some(new_len) }),
+    };
+    let mut result = result_with_message("inline formatting cleared");
     result.operations.push(op);
     result
 }
@@ -235,8 +340,12 @@ pub fn execute_command(
             result.operations.push(op);
             result
         }
-        CommandId::Checklist | CommandId::UnorderedList | CommandId::OrderedList => {
+        CommandId::ParagraphTitle
+        | CommandId::Checklist
+        | CommandId::UnorderedList
+        | CommandId::OrderedList => {
             let kind = match command.id {
+                CommandId::ParagraphTitle => ListConversionKind::Title,
                 CommandId::Checklist => ListConversionKind::Checklist,
                 CommandId::UnorderedList => ListConversionKind::Unordered,
                 CommandId::OrderedList => ListConversionKind::Ordered,
@@ -244,6 +353,11 @@ pub fn execute_command(
             };
             run_list_convert_command(snapshot, kind, mode)
         }
+        CommandId::FormatClear => run_format_clear(snapshot),
+        CommandId::FormatBold => toggle_inline_wrap(snapshot, "**", "**", "bold"),
+        CommandId::FormatItalic => toggle_inline_wrap(snapshot, "*", "*", "italic"),
+        CommandId::FormatStrike => toggle_inline_wrap(snapshot, "~~", "~~", "strikethrough"),
+        CommandId::FormatCode => toggle_inline_wrap(snapshot, "`", "`", "inline code"),
     }
 }
 
@@ -295,15 +409,29 @@ mod tests {
                 "module style on",
                 "module style off",
                 "module style toggle",
+                "collection choose",
+                "collection clear",
+                "collection create",
+                "collection delete",
+                "collection update",
+                "collection purge",
+                "collection join",
+                "collection leave",
                 "format",
                 "clip-watch on",
                 "clip-watch off",
                 "fold",
                 "unfold",
                 "fold-toggle",
-                "clist",
-                "ulist",
-                "olist",
+                "format clear",
+                "paragraph title",
+                "paragraph clist",
+                "paragraph olist",
+                "paragraph ulist",
+                "format bold",
+                "format code",
+                "format italic",
+                "format strike",
                 "note lock",
                 "note unlock",
                 "note encrypt",
@@ -631,5 +759,121 @@ mod tests {
         assert_eq!(change.from, 0);
         assert_eq!(change.to, beta_start + "beta".len());
         assert_eq!(change.insert, "- [ ] alpha\n- [ ] beta");
+    }
+
+    #[test]
+    fn title_converts_selected_lines_to_headings() {
+        let text = "- task\n## follow-up\ntail";
+        let tail_start = text.find("\ntail").expect("tail marker");
+        let doc = snapshot(text, tail_start, 0);
+        let result = execute_command(&doc, "title", CommandMode::Editor);
+        assert_eq!(result.message, "converted 2 lines to title");
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        assert_eq!(change.from, 0);
+        assert_eq!(change.to, tail_start);
+        assert_eq!(change.insert, "# task\n# follow-up");
+    }
+
+    #[test]
+    fn format_clear_strips_inline_markers_from_selection() {
+        let text = "**bold** and ~~strike~~ and `code`";
+        let doc = snapshot(text, text.len(), 0);
+        let result = execute_command(&doc, "format clear", CommandMode::Editor);
+        assert_eq!(result.message, "inline formatting cleared");
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].changes[0].insert, "bold and strike and code");
+    }
+
+    #[test]
+    fn format_clear_reports_no_selection_when_cursor_empty() {
+        let text = "**bold**";
+        let doc = snapshot(text, 0, 0);
+        let result = execute_command(&doc, "format clear", CommandMode::Editor);
+        assert_eq!(result.message, "no selection");
+        assert!(result.operations.is_empty());
+    }
+
+    #[test]
+    fn format_bold_wraps_selection() {
+        let text = "hello world";
+        let from = text.find("world").unwrap();
+        let to = from + "world".len();
+        let doc = snapshot(text, to, from);
+        let result = execute_command(&doc, "bold", CommandMode::Editor);
+        assert_eq!(result.message, "bold applied");
+        assert_eq!(result.operations.len(), 1);
+        let op = &result.operations[0];
+        assert_eq!(op.changes.len(), 2);
+        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "**".to_string() });
+        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "**".to_string() });
+    }
+
+    #[test]
+    fn format_bold_unwraps_already_wrapped_selection() {
+        let text = "hello **world**";
+        let from = text.find("world").unwrap();
+        let to = from + "world".len();
+        let doc = snapshot(text, to, from);
+        let result = execute_command(&doc, "bold", CommandMode::Editor);
+        assert_eq!(result.message, "bold removed");
+        assert_eq!(result.operations.len(), 1);
+        let op = &result.operations[0];
+        assert_eq!(op.changes.len(), 2);
+        assert_eq!(op.changes[0], TextChange { from: from - 2, to: from, insert: String::new() });
+        assert_eq!(op.changes[1], TextChange { from: to, to: to + 2, insert: String::new() });
+    }
+
+    #[test]
+    fn format_bold_empty_selection_inserts_markers_and_positions_cursor() {
+        let text = "hello ";
+        let cursor = text.len();
+        let doc = snapshot(text, cursor, cursor);
+        let result = execute_command(&doc, "bold", CommandMode::Editor);
+        assert_eq!(result.message, "bold markers inserted");
+        assert_eq!(result.operations.len(), 1);
+        let op = &result.operations[0];
+        assert_eq!(op.changes.len(), 1);
+        assert_eq!(op.changes[0].insert, "****");
+        assert_eq!(op.selection.unwrap().anchor, cursor + 2);
+    }
+
+    #[test]
+    fn format_italic_wraps_selection() {
+        let text = "hello world";
+        let from = text.find("world").unwrap();
+        let to = from + "world".len();
+        let doc = snapshot(text, to, from);
+        let result = execute_command(&doc, "italic", CommandMode::Editor);
+        assert_eq!(result.message, "italic applied");
+        let op = &result.operations[0];
+        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "*".to_string() });
+        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "*".to_string() });
+    }
+
+    #[test]
+    fn format_strike_wraps_selection() {
+        let text = "hello world";
+        let from = text.find("world").unwrap();
+        let to = from + "world".len();
+        let doc = snapshot(text, to, from);
+        let result = execute_command(&doc, "strike", CommandMode::Editor);
+        assert_eq!(result.message, "strikethrough applied");
+        let op = &result.operations[0];
+        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "~~".to_string() });
+        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "~~".to_string() });
+    }
+
+    #[test]
+    fn format_code_wraps_selection() {
+        let text = "hello world";
+        let from = text.find("world").unwrap();
+        let to = from + "world".len();
+        let doc = snapshot(text, to, from);
+        let result = execute_command(&doc, "format code", CommandMode::Editor);
+        assert_eq!(result.message, "inline code applied");
+        let op = &result.operations[0];
+        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "`".to_string() });
+        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "`".to_string() });
     }
 }

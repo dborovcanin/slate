@@ -24,11 +24,11 @@ use crate::math_commands;
 use crate::substitute;
 use crate::table;
 use crate::text_rules::{
-    convert_line_to_list, rewrite_line_with_checklist_toggle_suffix, run_doc_change_rules,
-    run_enter_rules, run_tab_rules, run_table_boundary_edit_rules, run_table_cell_navigation_rules,
-    run_table_header_delete_column_rule, run_table_multiline_break_rule,
-    run_table_pipe_insert_column_rule, ListKind, TabRuleOptions, TableBoundaryEditOptions,
-    TextRuleOptions,
+    convert_line_to_list, convert_line_to_title, rewrite_line_with_checklist_toggle_suffix,
+    run_doc_change_rules, run_enter_rules, run_tab_rules, run_table_boundary_edit_rules,
+    run_table_cell_navigation_rules, run_table_header_delete_column_rule,
+    run_table_multiline_break_rule, run_table_pipe_insert_column_rule, ListKind, TabRuleOptions,
+    TableBoundaryEditOptions, TextRuleOptions,
 };
 use crate::types::{
     CommandExecutionResult, CommandMode, EditorContextSnapshot, SelectionSnapshot, TextRange,
@@ -234,6 +234,13 @@ pub fn wasm_convert_line_to_list(line: &str, kind: &str, ordered_index: usize) -
         _ => return None,
     };
     let (text, _changed) = convert_line_to_list(line, list_kind, ordered_index);
+    Some(text)
+}
+
+/// Convert a single line to a level-1 markdown heading (`#`).
+#[wasm_bindgen]
+pub fn wasm_convert_line_to_title(line: &str) -> Option<String> {
+    let (text, _changed) = convert_line_to_title(line);
     Some(text)
 }
 

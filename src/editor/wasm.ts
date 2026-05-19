@@ -2,6 +2,7 @@ import init, {
   WasmVimSession,
   initSync,
   wasm_convert_line_to_list,
+  wasm_convert_line_to_title,
   wasm_calc_builtin_formula_label,
   wasm_calc_builtin_formula_labels,
   wasm_calc_compute_refresh,
@@ -921,6 +922,15 @@ export function convertLineToList(
 ): { text: string; changed: boolean } {
   if (!ensureWasmReadyNonBlocking()) return { text: line, changed: false };
   const result = wasm_convert_line_to_list(line, kind, orderedIndex);
+  if (result === null || result === undefined) return { text: line, changed: false };
+  return { text: result, changed: result !== line };
+}
+
+export function convertLineToTitle(
+  line: string,
+): { text: string; changed: boolean } {
+  if (!ensureWasmReadyNonBlocking()) return { text: line, changed: false };
+  const result = wasm_convert_line_to_title(line);
   if (result === null || result === undefined) return { text: line, changed: false };
   return { text: result, changed: result !== line };
 }

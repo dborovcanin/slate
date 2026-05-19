@@ -180,78 +180,8 @@ A task is not done unless:
 <claude-mem-context>
 # Memory Context
 
-# [slate] recent context, 2026-05-13 12:18pm GMT+2
+# [slate] recent context, 2026-05-19 10:25am GMT+2
 
-Legend: 🎯session 🔴bugfix 🟣feature 🔄refactor ✅change 🔵discovery ⚖️decision 🚨security_alert 🔐security_note
-Format: ID TIME TYPE TITLE
-Fetch details: get_observations([IDs]) | Search: mem-search skill
-
-Stats: 50 obs (17,318t read) | 703,815t work | 98% savings
-
-### May 6, 2026
-S233 Review last 40 commits and explore potential improvements in the slate project (May 6, 12:12 AM)
-### May 12, 2026
-S234 Evaluate items 1, 4, and 6 from a task list; user challenged item 1 (macros), leading to code investigation and plan revision (May 12, 8:52 AM)
-S235 Review last 40 commits and implement improvements — accurate per-character PDF glyph widths and FxHashMap migration (May 12, 8:56 AM)
-S236 Investigate and fix pre-existing test failure, then plan export.rs refactor into three files (May 12, 9:10 AM)
-S237 Code analysis and refactor planning for slate: vim text-objects, export.rs split, and decide_eval_window API consolidation (May 12, 12:02 PM)
-S238 Refactor PDF unicode font visibility (pub(super)→pub(crate)) and plan consolidation of the 6-variant decide_eval_window API into a single params-struct function (May 12, 12:04 PM)
-370 12:31p 🔵 Build Error: `slight` Binary References Deleted `export.rs`
-371 " 🔵 `slight` Binary Uses Explicit `#[path]` Attribute to Include `commands/export.rs`
-372 " 🔴 Fixed `slight` Binary Build: Updated `#[path]` for Refactored Export Module
-373 " 🔴 Slate Build Now Succeeds After Export Module Refactor
-374 " 🔵 Flagged "Unused" Imports in `export/mod.rs` Are Actually Used in Test Code Only
-375 12:33p 🔵 Top-Level Imports in `export/mod.rs` Are Unused in Production Code — Tests Already Import Via Globs
-376 " 🔵 Confirmed Which `pdf_layout` Imports Are Used in Production vs. Tests Only
-377 12:34p 🔵 Previous Grep Had a Filtering Bug — `PDF_PAGE_WIDTH_PT` and `PDF_PAGE_HEIGHT_PT` ARE Used in Production
-378 " 🔴 Cleaned Up Stale Top-Level Imports in `export/mod.rs` After Module Refactor
-379 " ⚖️ Attempted Workaround for `PdfRgbColor` Unused Import Warning Using Dummy Re-export
-380 12:35p 🔵 `PdfRgbColor` Is Part of the Tauri API Contract Used by the TypeScript Frontend
-381 " 🔵 Three Remaining Compiler Warnings After Import Cleanup
-382 " 🔵 `render_plain_wrapped_text` Is Defined but Never Called Anywhere
-383 " 🔵 `render_plain_wrapped_text` Is a Thin Wrapper Around `render_styled_block` With No Callers
-384 12:41p ✅ Widened visibility of PdfUnicodeFontAsset to pub(crate)
-385 12:42p ✅ PdfUnicodeFontAsset fields widened to pub(crate)
-387 " ✅ glyph_advances field promoted to pub(crate) on PdfUnicodeFontAsset
-386 " ⚖️ Tags and Note Creation: Keep Simple and Backward Compatible
-388 " ✅ PdfUnicodeFontAsset fully promoted to pub(crate) — all fields now crate-visible
-389 " ✅ resolve_unicode_pdf_font_asset promoted to pub(crate) in export/mod.rs
-390 " ✅ Suppressed unused import warning for PdfRgbColor re-export in export/mod.rs
-391 12:43p ✅ slate crate builds cleanly with zero warnings after PDF font visibility refactor
-392 " ✅ Full slate test suite passes after PDF font visibility refactor
-393 " 🔵 decide_eval_window function family in editor-core calc_plan.rs
-394 12:44p 🔵 decide_eval_window callers across the Slate codebase
-395 " 🔵 note-startup.rs benchmarks cached vs uncached eval window performance
-396 " 🔵 Terminal editor eval window pipeline: sync index then decide window with cached index
-397 12:45p 🔵 WASM eval window API uses decide_eval_window_with_mask without dependency index caching
-398 12:46p 🔵 calc_plan.rs flag-computation helpers are already pub
-S239 Fix Rust test compilation failures in the `slate` project caused by production API refactor not reflected in tests (May 12, 12:46 PM)
-399 12:48p 🔵 decide_eval_window used in calc_plan.rs internal tests — additional call sites to update
-400 " 🔄 Replaced 6 decide_eval_window variants with DecideEvalWindowParams struct + single function
-401 1:43p 🔵 Test Suite Compilation Failures in editor-core and slate Crates
-402 1:44p 🔵 Detailed Compiler Errors: decide_eval_window Signature Mismatch and Missing Function
-403 " 🔵 Old Test API: decide_eval_window_with_mask Called with 8 Arguments Including CalcFeatureMask
-404 " 🔴 Re-added decide_eval_window_with_mask Convenience Wrapper to Fix Test Compilation
-405 " 🔴 Updated 5 Test Call Sites from Old decide_eval_window Signature to decide_eval_window_with_mask
-406 1:45p 🔴 Made calc_feature_mask pub(super) to Fix E0624 Visibility Error in Tests
-S240 Complete a 6-item refactor/improvement plan for the `slate` Rust project — all items now finished (May 12, 1:45 PM)
-S241 Dead code cleanup in `calc_plan.rs` — remove `formula_dependency_window` thin wrapper, verify clean build (May 12, 1:47 PM)
-### May 13, 2026
-439 10:05a 🔵 Variable Color Inconsistency Between UI and TUI in Default Dark Theme
-440 " 🔵 Root Cause: UI `.md-variable` Uses `--code-token-type` Instead of a Dedicated Variable Color
-441 10:06a 🔵 Full Architecture Map: Why UI Variable Color Is Greenish and TUI Is Golden
-442 " 🔴 Added `--code-token-variable` CSS Property to UI Theme Engine, Synced with TUI Palette
-443 10:07a 🔴 Fixed `.md-variable` in `editor.css` to Use New `--code-token-variable` with Fallback
-444 " 🔵 `theme.css` Default `:root` Block Has No `--code-token-variable`; Dynamic Derivation Is Sole Source
-445 " 🔴 Added `--code-token-variable: #d7af5f` Static Default to `theme.css`
-446 " 🔴 Variable Color UI/TUI Consistency Fix Verified: TypeScript Compiles Clean, Tests Pass
-447 10:09a 🔵 `src/app.ts` `buildPdfExportPalette` Still Reads `--code-token-type` for `variable` Field — Not Yet Updated
-448 10:10a 🔵 Variable Color Fix Changes Committed — Working Tree Clean
-S255 Add right-boundary cursor reveal for regular markdown [text](url) links — same behavior already supported for wiki-links [[...]] (May 13, 10:11 AM)
-449 10:13a 🟣 Right-boundary cursor reveal extended to all link types (UI + TUI)
-450 10:22a 🔵 Primary session in idempotent patch loop due to stale chunk cache
-451 " 🔴 Image right-boundary test used wrong cursor position (14 vs 15)
-
-Access 704k tokens of past work via get_observations([IDs]) or mem-search skill.
+No previous sessions found.
 </claude-mem-context>
 

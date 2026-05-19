@@ -38,9 +38,15 @@ pub enum CommandId {
     AddToCollection,
     RemoveFromCollection,
     Format,
+    ParagraphTitle,
+    FormatClear,
     Checklist,
     UnorderedList,
     OrderedList,
+    FormatBold,
+    FormatItalic,
+    FormatStrike,
+    FormatCode,
     ClipWatch,
     ClipWatchStop,
     Fold,
@@ -311,7 +317,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 54] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 60] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -635,24 +641,89 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 54] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::FormatClear,
+        value: "format clear",
+        aliases: &["clear-format", "unformat", "plain"],
+        description: "strip inline formatting (* ** ~~ `) from selection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ParagraphTitle,
+        value: "paragraph title",
+        aliases: &["title", "paragraph heading", "paragraph-title"],
+        description: "convert selected lines to heading title",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::Checklist,
-        value: "format clist",
-        aliases: &["clist", "checklist", "checkbox", "checkboxes", "todo", "format checklist"],
+        value: "paragraph clist",
+        aliases: &[
+            "clist",
+            "checklist",
+            "checkbox",
+            "checkboxes",
+            "todo",
+            "format checklist",
+            "format clist",
+            "paragraph checklist",
+        ],
         description: "convert selected lines to checklist",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::OrderedList,
+        value: "paragraph olist",
+        aliases: &[
+            "olist",
+            "ordered-list",
+            "ordered",
+            "format ordered",
+            "format olist",
+            "paragraph ordered",
+        ],
+        description: "convert selected lines to ordered list",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::UnorderedList,
-        value: "format ulist",
-        aliases: &["ulist", "unordered-list", "unordered", "format unordered"],
+        value: "paragraph ulist",
+        aliases: &[
+            "ulist",
+            "unordered-list",
+            "unordered",
+            "format unordered",
+            "format ulist",
+            "paragraph unordered",
+        ],
         description: "convert selected lines to unordered list",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
-        id: CommandId::OrderedList,
-        value: "format olist",
-        aliases: &["olist", "ordered-list", "ordered", "format ordered"],
-        description: "convert selected lines to ordered list",
+        id: CommandId::FormatBold,
+        value: "format bold",
+        aliases: &["bold"],
+        description: "toggle bold (**) around selection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::FormatCode,
+        value: "format code",
+        aliases: &["icode", "inline-code"],
+        description: "toggle inline code (`) around selection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::FormatItalic,
+        value: "format italic",
+        aliases: &["italic"],
+        description: "toggle italic (*) around selection",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::FormatStrike,
+        value: "format strike",
+        aliases: &["strike", "strikethrough"],
+        description: "toggle strikethrough (~~) around selection",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -799,7 +870,8 @@ pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<Comma
 
     let mut matches = available
         .into_iter()
-        .filter_map(|command| {
+        .enumerate()
+        .filter_map(|(index, command)| {
             let lower_value = command.value.to_lowercase();
             let score = if lower_value.starts_with(&query) {
                 0
@@ -810,22 +882,33 @@ pub fn list_command_suggestions(mode: CommandMode, raw_input: &str) -> Vec<Comma
             };
 
             if score < 2 {
-                Some((score, command))
+                Some((score, index, command))
             } else {
                 None
             }
         })
         .collect::<Vec<_>>();
 
+    let namespace_prefix = format!("{query} ");
     matches.sort_by(|left, right| {
+        let left_value = left.2.value;
+        let right_value = right.2.value;
+        let left_in_namespace =
+            left_value == query || left_value.starts_with(namespace_prefix.as_str());
+        let right_in_namespace =
+            right_value == query || right_value.starts_with(namespace_prefix.as_str());
+
         left.0
             .cmp(&right.0)
-            .then_with(|| left.1.value.cmp(right.1.value))
+            .then_with(|| match (left_in_namespace, right_in_namespace) {
+                (true, true) => left.1.cmp(&right.1),
+                _ => left_value.cmp(right_value),
+            })
     });
 
     matches
         .into_iter()
-        .map(|(_, command)| CommandSuggestion {
+        .map(|(_, _, command)| CommandSuggestion {
             value: command.value.to_string(),
             description: command.description.to_string(),
         })
@@ -1091,5 +1174,38 @@ mod tests {
         assert_eq!(values.first().map(|value| value.as_str()), Some("sum"));
         assert!(values.contains(&"sum row".to_string()));
         assert!(values.contains(&"sum column".to_string()));
+    }
+
+    #[test]
+    fn suggestions_keep_namespace_order_for_paragraph_and_format() {
+        let paragraph_values = list_command_suggestions(CommandMode::Editor, "paragraph")
+            .into_iter()
+            .map(|entry| entry.value)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paragraph_values,
+            vec![
+                "paragraph title",
+                "paragraph clist",
+                "paragraph olist",
+                "paragraph ulist",
+            ]
+        );
+
+        let format_values = list_command_suggestions(CommandMode::Editor, "format")
+            .into_iter()
+            .map(|entry| entry.value)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            format_values,
+            vec![
+                "format",
+                "format clear",
+                "format bold",
+                "format code",
+                "format italic",
+                "format strike",
+            ]
+        );
     }
 }

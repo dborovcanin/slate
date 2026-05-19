@@ -354,6 +354,27 @@ pub enum ListKind {
     Ordered,
 }
 
+fn strip_atx_heading_prefix(text: &str) -> &str {
+    let trimmed = text.trim_start();
+    let mut marker_len = 0usize;
+    for ch in trimmed.chars() {
+        if ch == '#' {
+            marker_len += ch.len_utf8();
+            continue;
+        }
+        break;
+    }
+    if marker_len == 0 {
+        return trimmed;
+    }
+    let rest = &trimmed[marker_len..];
+    if rest.is_empty() || rest.starts_with(char::is_whitespace) {
+        rest.trim_start()
+    } else {
+        trimmed
+    }
+}
+
 /// Convert `line` to the target `kind`, using `ordered_index` (1-based) for
 /// `Ordered`. Returns `(new_text, changed)`. When the line is empty the
 /// input is returned unchanged with `changed = false`.
@@ -419,6 +440,45 @@ pub fn convert_line_to_list(line: &str, kind: ListKind, ordered_index: usize) ->
         }
     };
 
+    let changed = converted != line;
+    (converted, changed)
+}
+
+/// Convert `line` to a level-1 markdown heading (`#`), preserving indentation.
+/// Existing list/checklist markers and heading markers are stripped first.
+pub fn convert_line_to_title(line: &str) -> (String, bool) {
+    if line.trim().is_empty() {
+        return (line.to_string(), false);
+    }
+
+    let fallback_indent_end = line
+        .char_indices()
+        .find(|(_, ch)| !matches!(*ch, ' ' | '\t'))
+        .map(|(idx, _)| idx)
+        .unwrap_or(line.len());
+    let fallback_indent = &line[..fallback_indent_end];
+    let fallback_content = line[fallback_indent_end..].trim();
+
+    let parts = parse_list_line_parts(line);
+    let indent = parts.as_ref().map(|p| p.indent).unwrap_or(fallback_indent);
+
+    let raw_content = if let Some(ref p) = parts {
+        let after_marker = p.content;
+        if let Some((_checked, content_start)) = parse_checklist_after_prefix(after_marker) {
+            &after_marker[content_start..]
+        } else {
+            after_marker
+        }
+    } else {
+        fallback_content
+    };
+
+    let heading_content = strip_atx_heading_prefix(raw_content).trim();
+    let converted = if heading_content.is_empty() {
+        format!("{indent}#")
+    } else {
+        format!("{indent}# {heading_content}")
+    };
     let changed = converted != line;
     (converted, changed)
 }
@@ -2478,6 +2538,20 @@ mod tests {
 
         let (ordered, changed) = convert_line_to_list("\t  task", ListKind::Ordered, 4);
         assert_eq!(ordered, "\t  4. task");
+        assert!(changed);
+    }
+
+    #[test]
+    fn convert_line_to_title_strips_existing_markers() {
+        let (title, changed) = convert_line_to_title("- [x] ## Task");
+        assert_eq!(title, "# Task");
+        assert!(changed);
+    }
+
+    #[test]
+    fn convert_line_to_title_preserves_indent_for_plain_lines() {
+        let (title, changed) = convert_line_to_title("  task");
+        assert_eq!(title, "  # task");
         assert!(changed);
     }
 
