@@ -269,6 +269,28 @@ fn visual_line_mode_supports_counted_gg_and_g() {
 }
 
 #[test]
+fn visual_render_ranges_fill_linewise_and_middle_rows() {
+    let (db, mut app, path) = app_with_note("alpha\n\nomega");
+    app.mode = UiMode::Visual;
+    app.selection_anchor = Some((0, 1));
+    app.cursor_line = 2;
+    app.cursor_col = 2;
+
+    let mut middle_ranges = Vec::new();
+    app.append_visual_highlights(1, &mut middle_ranges);
+    assert_eq!(middle_ranges, vec![(0, usize::MAX)]);
+
+    app.mode = UiMode::VisualLine;
+    let mut linewise_ranges = Vec::new();
+    app.append_visual_highlights(0, &mut linewise_ranges);
+    assert_eq!(linewise_ranges, vec![(0, usize::MAX)]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn vim_di_pipe_deletes_cell_contents() {
     let (db, mut app, path) = app_with_note("| one | two |");
     app.mode = UiMode::Normal;

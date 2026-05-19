@@ -583,8 +583,7 @@ impl TerminalApp {
         let linewise = self.mode == UiMode::VisualLine
             || (self.mode == UiMode::CommandBar && self.command_selection_linewise);
         if linewise {
-            let line_len = self.lines[line_idx].chars().count();
-            ranges.push((0, line_len.max(1)));
+            ranges.push((0, usize::MAX));
             return;
         }
 
@@ -607,8 +606,7 @@ impl TerminalApp {
         } else if line_idx == end_line {
             ranges.push((0, end_col + 1));
         } else {
-            let line_len = self.lines[line_idx].chars().count();
-            ranges.push((0, line_len.max(1)));
+            ranges.push((0, usize::MAX));
         }
     }
 

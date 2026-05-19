@@ -1,4 +1,5 @@
 use crate::editor_core::markdown_tokens;
+use crate::terminal::ansi::contrast_fg_for_bg;
 pub use crate::terminal::markdown_view::collapse_markdown_line_for_cursor;
 use crate::terminal::markdown_view::{hidden_line_prefix_marker_ranges, normalize_hidden_ranges};
 use crate::terminal::render_styles::{
@@ -478,12 +479,6 @@ impl RenderContext {
             }
         }
 
-        for &(start, end) in reverse_ranges {
-            for s in styles.iter_mut().take(end.min(len)).skip(start) {
-                s.reverse = true;
-            }
-        }
-
         for &(start, end) in red_ranges {
             for s in styles.iter_mut().take(end.min(len)).skip(start.min(len)) {
                 s.fg = Some(self.palette.primary);
@@ -499,6 +494,13 @@ impl RenderContext {
         }
 
         hidden_ranges = normalize_hidden_ranges(hidden_ranges, len);
+        let selection_bg = selection_bg_for_surface(self.palette.surface_bg());
+        let selection_fg = contrast_fg_for_bg(selection_bg);
+        let selection_style = (!reverse_ranges.is_empty()).then_some(SelectionStyle {
+            bg: selection_bg,
+            fg: selection_fg,
+            plain_fg: self.palette.text_fg(),
+        });
 
         let calc_prefix = if calc_ghost
             .map(|ghost| ghost.trim_start().starts_with('*'))
@@ -521,9 +523,19 @@ impl RenderContext {
             reminder_ghost,
             reminder_strikethrough,
             &hidden_ranges,
+            reverse_ranges,
+            selection_style,
             base_style,
             self.palette.code_comment,
         )
+    }
+}
+
+fn selection_bg_for_surface(surface_bg: u8) -> u8 {
+    if contrast_fg_for_bg(surface_bg) == 16 {
+        236
+    } else {
+        252
     }
 }
 
@@ -631,9 +643,32 @@ fn build_ansi_output(
         None,
         false,
         &[],
+        &[],
+        None,
         CharStyle::default(),
         244,
     )
+}
+
+#[derive(Clone, Copy)]
+struct SelectionStyle {
+    bg: u8,
+    fg: u8,
+    plain_fg: u8,
+}
+
+fn selection_intersects_cell(ranges: &[(usize, usize)], start: usize, end: usize) -> bool {
+    ranges
+        .iter()
+        .any(|&(range_start, range_end)| range_start < end && start < range_end)
+}
+
+fn apply_selection_overlay(style: &mut CharStyle, selection: SelectionStyle) {
+    style.bg = Some(selection.bg);
+    style.reverse = false;
+    if style.fg.is_none() || style.fg == Some(selection.plain_fg) {
+        style.fg = Some(selection.fg);
+    }
 }
 
 fn emit_window_cell(
@@ -646,10 +681,18 @@ fn emit_window_cell(
     window_col: usize,
     window_end: usize,
     width: usize,
+    selection_ranges: &[(usize, usize)],
+    selection_style: Option<SelectionStyle>,
 ) {
     use unicode_width::UnicodeWidthChar;
     let ch_width = ch.width().unwrap_or(0).max(1);
     let ch_end = *stream_col + ch_width;
+    let mut style = style;
+    if let Some(selection) = selection_style {
+        if selection_intersects_cell(selection_ranges, *stream_col, ch_end) {
+            apply_selection_overlay(&mut style, selection);
+        }
+    }
 
     // Compute which portion of this char's columns fall inside [window_col, window_end).
     let visible_start = (*stream_col).max(window_col);
@@ -686,6 +729,8 @@ fn build_ansi_output_window(
     reminder_ghost: Option<&str>,
     reminder_strikethrough: bool,
     hidden_ranges: &[(usize, usize)],
+    selection_ranges: &[(usize, usize)],
+    selection_style: Option<SelectionStyle>,
     base_style: CharStyle,
     ghost_fg: u8,
 ) -> String {
@@ -726,6 +771,8 @@ fn build_ansi_output_window(
                     window_col,
                     window_end,
                     width,
+                    selection_ranges,
+                    selection_style,
                 );
             }
         } else {
@@ -739,6 +786,8 @@ fn build_ansi_output_window(
                 window_col,
                 window_end,
                 width,
+                selection_ranges,
+                selection_style,
             );
         }
     }
@@ -762,6 +811,8 @@ fn build_ansi_output_window(
                 window_col,
                 window_end,
                 width,
+                selection_ranges,
+                selection_style,
             );
         }
     }
@@ -787,17 +838,25 @@ fn build_ansi_output_window(
                 window_col,
                 window_end,
                 width,
+                selection_ranges,
+                selection_style,
             );
         }
     }
 
-    let filler_style = base_style;
-    if current != filler_style {
-        filler_style.write_ansi(&mut buf);
-        current = filler_style;
-    }
     while emitted < width {
+        let mut filler_style = base_style;
+        if let Some(selection) = selection_style {
+            if selection_intersects_cell(selection_ranges, stream_col, stream_col + 1) {
+                apply_selection_overlay(&mut filler_style, selection);
+            }
+        }
+        if current != filler_style {
+            filler_style.write_ansi(&mut buf);
+            current = filler_style;
+        }
         buf.push(' ');
+        stream_col += 1;
         emitted += 1;
     }
     if !current.is_plain() {
@@ -953,6 +1012,52 @@ mod tests {
         let out = ctx.render_line_with_dim_ranges("abc*", 12, None, &[], &[], &[], &[(3, 4)], &[]);
         assert!(out.contains(";2;"));
         assert!(strip_ansi(&out).starts_with("abc*"));
+    }
+
+    #[test]
+    fn render_visual_selection_uses_background_without_reverse_video() {
+        let palette = RenderPalette {
+            surface_bg: 252,
+            text_fg: 16,
+            ..RenderPalette::default()
+        };
+        let mut ctx = RenderContext::new_with_palette(palette);
+        let out =
+            ctx.render_line_with_dim_ranges("alpha beta", 16, None, &[], &[], &[], &[], &[(0, 5)]);
+
+        assert!(out.contains("48;5;236"));
+        assert!(out.contains("38;5;231"));
+        assert!(!out.contains(";7"));
+        assert!(strip_ansi(&out).starts_with("alpha beta"));
+    }
+
+    #[test]
+    fn render_visual_selection_paints_selected_filler_cells() {
+        let mut ctx = RenderContext::new();
+        let out =
+            ctx.render_line_with_dim_ranges("", 4, None, &[], &[], &[], &[], &[(0, usize::MAX)]);
+
+        assert_eq!(strip_ansi(&out), "    ");
+        assert!(out.contains("48;5;252"));
+    }
+
+    #[test]
+    fn render_full_row_visual_selection_keeps_calc_ghost_visible() {
+        let mut ctx = RenderContext::new();
+        let out = ctx.render_line_with_dim_ranges(
+            "subtotal := 155",
+            40,
+            Some("155"),
+            &[],
+            &[],
+            &[],
+            &[],
+            &[(0, usize::MAX)],
+        );
+
+        let visible = strip_ansi(&out);
+        assert!(visible.contains("subtotal := 155 = 155"));
+        assert!(out.contains("48;5;252"));
     }
 
     #[test]
