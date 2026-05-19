@@ -1587,26 +1587,27 @@ impl TerminalApp {
                     self.open_date_picker(DatePickerAction::InsertDate, false);
                     return;
                 }
-                crate::editor_core::engine::HostCommandPlan::Notify => {
-                    self.open_date_picker(DatePickerAction::SetNotify, true);
+                crate::editor_core::engine::HostCommandPlan::Remind => {
+                    self.open_date_picker(DatePickerAction::SetRemind, true);
                     return;
                 }
-                crate::editor_core::engine::HostCommandPlan::NotifyDelete => {
+                crate::editor_core::engine::HostCommandPlan::RemindToggle => {
                     let line_number = (self.cursor_line + 1) as i64;
+                    let before_reminder = self.reminder_ghosts.get(&self.cursor_line).cloned();
                     match db.delete_reminder(&self.active_note.id, line_number) {
                         Ok(true) => {
                             self.reminder_ghosts.remove(&self.cursor_line);
+                            if before_reminder.is_some() {
+                                self.push_reminder_undo_entry(self.cursor_line, before_reminder, None);
+                            }
                             self.status =
-                                format!("notify deleted on line {}", self.cursor_line + 1);
+                                format!("remind removed on line {}", self.cursor_line + 1);
                         }
                         Ok(false) => {
-                            self.status = format!(
-                                "notify-delete: no reminder on line {}",
-                                self.cursor_line + 1
-                            );
+                            self.open_date_picker(DatePickerAction::SetRemind, true);
                         }
                         Err(error) => {
-                            self.status = format!("notify-delete failed: {error}");
+                            self.status = format!("remind toggle failed: {error}");
                         }
                     }
                     return;
@@ -2231,7 +2232,7 @@ impl TerminalApp {
             .reminder_ghosts
             .iter()
             .filter_map(|(line_idx, reminder)| {
-                if reminder.notified_at_ms.is_none() && reminder.remind_at_ms <= now_ms {
+                if reminder.reminded_at_ms.is_none() && reminder.remind_at_ms <= now_ms {
                     Some(*line_idx)
                 } else {
                     None
@@ -2266,13 +2267,13 @@ impl TerminalApp {
             }
 
             let line_number = i64::try_from(line_idx + 1).unwrap_or(i64::MAX);
-            match db.mark_reminder_notified(&self.active_note.id, line_number, now_ms) {
+            match db.mark_reminder_reminded(&self.active_note.id, line_number, now_ms) {
                 Ok(updated) => {
-                    let notified_at = updated
-                        .and_then(|entry| entry.notified_at_ms)
+                    let reminded_at = updated
+                        .and_then(|entry| entry.reminded_at_ms)
                         .unwrap_or(now_ms);
                     if let Some(entry) = self.reminder_ghosts.get_mut(&line_idx) {
-                        entry.notified_at_ms = Some(notified_at);
+                        entry.reminded_at_ms = Some(reminded_at);
                         entry.line_text = self
                             .lines
                             .get(line_idx)
@@ -2535,6 +2536,8 @@ impl TerminalApp {
         self.wiki_link_line_render_cache.clear();
         self.history =
             super::build_history_for_note(&self.lines, self.cursor_line, self.cursor_col);
+        self.undo_actions.clear();
+        self.undo_action_pos = 0;
         self.fence_checkpoints.truncate(1);
         self.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();

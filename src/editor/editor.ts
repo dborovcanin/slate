@@ -26,7 +26,7 @@ import {
   runTableHeaderDeleteColumnCommand,
 } from "./markdown-editing";
 import { foldingExtensions } from "./folding.ts";
-import { notifyExtensions } from "./notify-decoration";
+import { reminderExtensions } from "./notify-decoration";
 import { makeVariableCompletionSource } from "./variable-autocomplete";
 import {
   invalidateWikiLinkCompletionCaches,
@@ -265,7 +265,7 @@ interface EditorMountOptions {
   disableCalc?: boolean;
   disableMarkdownDecorations?: boolean;
   disableFolding?: boolean;
-  disableNotify?: boolean;
+  disableRemind?: boolean;
   disableAutocomplete?: boolean;
   tableEnabled?: boolean;
   markdownAutoformat?: boolean;
@@ -447,7 +447,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
   const disableMarkdownDecorations =
     plainTextMode || plainCodeMode || !!options.disableMarkdownDecorations;
   const disableFolding = plainTextMode || plainCodeMode || !!options.disableFolding;
-  const disableNotify = plainTextMode || plainCodeMode || !!options.disableNotify;
+  const disableRemind = plainTextMode || plainCodeMode || !!options.disableRemind;
   const disableAutocomplete = plainTextMode || plainCodeMode || !!options.disableAutocomplete;
   const tableEnabled = !plainTextMode && !plainCodeMode && (options.tableEnabled ?? true);
   const markdownAutoformat = options.markdownAutoformat ?? true;
@@ -513,9 +513,9 @@ function buildEditorExtensions(options: EditorMountOptions): {
             tableEnabled,
             getActiveNoteId: () => state.activeNote?.id ?? null,
           })),
-      ...(disableNotify
+      ...(disableRemind
         ? []
-        : notifyExtensions({
+        : reminderExtensions({
             getActiveNoteId: () => state.activeNote?.id ?? null,
           })),
       ...editorSearchExtensions(),

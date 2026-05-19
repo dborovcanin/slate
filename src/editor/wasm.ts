@@ -496,8 +496,8 @@ export interface VimActionExecutionResult {
 export type CommandDispatchKind =
   | "core"
   | "host_date"
-  | "host_notify"
-  | "host_notify_delete"
+  | "host_remind"
+  | "host_remind_toggle"
   | "host_write"
   | "host_export"
   | "host_module"
@@ -512,8 +512,8 @@ export type HostClipWatchAction = "start" | "stop";
 
 export type HostCommandPlan =
   | { kind: "date" }
-  | { kind: "notify" }
-  | { kind: "notify_delete" }
+  | { kind: "remind" }
+  | { kind: "remind_toggle" }
   | { kind: "write"; quit: boolean; force: boolean }
   | { kind: "export"; format: "pdf" | "md" | "txt"; path?: string | null }
   | { kind: "module"; command: string }
@@ -1011,8 +1011,8 @@ export function classifyCommandDispatchFromWasm(
   if (
     raw === "core" ||
     raw === "host_date" ||
-    raw === "host_notify" ||
-    raw === "host_notify_delete" ||
+    raw === "host_remind" ||
+    raw === "host_remind_toggle" ||
     raw === "host_write" ||
     raw === "host_export" ||
     raw === "host_module" ||

@@ -203,12 +203,25 @@ struct TerminalStartupMetrics {
 const MAX_UNDO_ENTRIES: usize = 500;
 const MAX_COMMAND_HISTORY_ENTRIES: usize = 100;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct LineReminderGhost {
     remind_at_ms: i64,
     display_at: String,
     line_text: String,
-    notified_at_ms: Option<i64>,
+    reminded_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct ReminderUndoEntry {
+    line_idx: usize,
+    before: Option<LineReminderGhost>,
+    after: Option<LineReminderGhost>,
+}
+
+#[derive(Debug, Clone)]
+enum UndoAction {
+    Text,
+    Reminder(ReminderUndoEntry),
 }
 
 #[derive(Debug, Clone)]
@@ -481,6 +494,8 @@ struct TerminalApp {
     clipboard_watch_last_poll: Instant,
     // Undo/redo
     history: LineHistory,
+    undo_actions: Vec<UndoAction>,
+    undo_action_pos: usize,
     // Fence state checkpoints for draw(). Entry k = fence state BEFORE line
     // k * FENCE_CHECKPOINT_INTERVAL. fence_checkpoints_valid_through is the
     // highest index whose entry is current; all higher indices are stale.
@@ -894,6 +909,8 @@ impl TerminalApp {
             clipboard_watch_last_text: None,
             clipboard_watch_last_poll: Instant::now(),
             history,
+            undo_actions: Vec::new(),
+            undo_action_pos: 0,
             fence_checkpoints: vec![(false, None)],
             fence_checkpoints_valid_through: 0,
             draw_buf: String::new(),

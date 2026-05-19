@@ -186,7 +186,7 @@ function editorOptionsForNote(note: Note | null) {
     disableMarkdownDecorations:
       plainFileNote || largeNoteMode || appRuntimeFlags.markdown_disable || !loaded.style,
     disableFolding: plainFileNote || largeNoteMode || appRuntimeFlags.folding_disable,
-    disableNotify: plainFileNote || largeNoteMode || appRuntimeFlags.notify_disable,
+    disableRemind: plainFileNote || largeNoteMode || appRuntimeFlags.remind_disable,
     disableAutocomplete: plainFileNote || largeNoteMode || !loaded.variables,
     tableEnabled: !plainFileNote && !largeNoteMode && loaded.table,
     markdownAutoformat: plainFileNote || largeNoteMode ? false : appConfig.markdown_autoformat,
@@ -1691,7 +1691,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   if (runtimeFlags.calc_disable) activeFlags.push("SLATE_CALC_DISABLE");
   if (runtimeFlags.markdown_disable) activeFlags.push("SLATE_MARKDOWN_DISABLE");
   if (runtimeFlags.folding_disable) activeFlags.push("SLATE_FOLDING_DISABLE");
-  if (runtimeFlags.notify_disable) activeFlags.push("SLATE_NOTIFY_DISABLE");
+  if (runtimeFlags.remind_disable) activeFlags.push("SLATE_REMIND_DISABLE");
   if (runtimeFlags.autocomplete_disable) activeFlags.push("SLATE_AUTOCOMPLETE_DISABLE");
   if (activeFlags.length > 0) {
     showToast(`Runtime flags: ${activeFlags.join(", ")}`);

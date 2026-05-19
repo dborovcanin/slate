@@ -115,7 +115,7 @@ terminal_mode = false
 vim_mode = false
 # Date format used by :date and date picker insert.
 date_format = "%Y-%m-%d"
-# Date+time format used by :date (with time) and :notify.
+# Date+time format used by :date (with time) and :remind.
 date_time_format = "%Y-%m-%d %H:%M"
 # Minimum typed chars before variable autocomplete suggestions appear.
 # Range: 1..8

@@ -12,7 +12,7 @@ pub struct RuntimeFlags {
     pub calc_disable: bool,
     pub markdown_disable: bool,
     pub folding_disable: bool,
-    pub notify_disable: bool,
+    pub remind_disable: bool,
     pub autocomplete_disable: bool,
 }
 
@@ -36,7 +36,7 @@ pub fn get_runtime_flags() -> RuntimeFlags {
         calc_disable: env_flag("SLATE_CALC_DISABLE"),
         markdown_disable: env_flag("SLATE_MARKDOWN_DISABLE"),
         folding_disable: env_flag("SLATE_FOLDING_DISABLE"),
-        notify_disable: env_flag("SLATE_NOTIFY_DISABLE"),
+        remind_disable: env_flag("SLATE_REMIND_DISABLE"),
         autocomplete_disable: env_flag("SLATE_AUTOCOMPLETE_DISABLE"),
     }
 }

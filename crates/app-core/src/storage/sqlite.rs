@@ -81,6 +81,26 @@ struct SqlitePoolGuard<'a> {
 }
 
 impl SqlitePool {
+    fn migrate_reminder_reminded_column(conn: &Connection) -> Result<(), String> {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(reminders)")
+            .map_err(|e| format!("Failed to inspect reminders schema: {e}"))?;
+        let column_names = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| format!("Failed to read reminders schema columns: {e}"))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect reminders schema columns: {e}"))?;
+        let has_notified = column_names.iter().any(|name| name == "notified_at_ms");
+        let has_reminded = column_names.iter().any(|name| name == "reminded_at_ms");
+        if has_notified && !has_reminded {
+            conn.execute_batch(
+                "ALTER TABLE reminders RENAME COLUMN notified_at_ms TO reminded_at_ms;",
+            )
+            .map_err(|e| format!("Failed to migrate reminders column rename: {e}"))?;
+        }
+        Ok(())
+    }
+
     fn configure_connection(conn: &Connection) -> Result<(), String> {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -112,6 +132,7 @@ impl SqlitePool {
         first
             .execute_batch(schema)
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
+        Self::migrate_reminder_reminded_column(&first)?;
         let schema_init_ms = schema_started.elapsed().as_secs_f64() * 1000.0;
 
         // Keep first-edit startup lean; FTS consistency/repair runs lazily on
@@ -1691,7 +1712,7 @@ impl Db {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn
             .prepare(
-                "SELECT note_id, line_number, remind_at_ms, display_at, line_text, notified_at_ms, created_at, updated_at
+                "SELECT note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
                  FROM reminders
                  WHERE note_id = ?1
                  ORDER BY line_number ASC",
@@ -1706,7 +1727,7 @@ impl Db {
                     remind_at_ms: row.get(2)?,
                     display_at: row.get(3)?,
                     line_text: row.get(4)?,
-                    notified_at_ms: row.get(5)?,
+                    reminded_at_ms: row.get(5)?,
                     created_at: row.get(6)?,
                     updated_at: row.get(7)?,
                 })
@@ -1731,13 +1752,13 @@ impl Db {
 
         conn.execute(
             "INSERT INTO reminders (
-                note_id, line_number, remind_at_ms, display_at, line_text, notified_at_ms, created_at, updated_at
+                note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
             ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)
             ON CONFLICT(note_id, line_number) DO UPDATE SET
                 remind_at_ms = excluded.remind_at_ms,
                 display_at = excluded.display_at,
                 line_text = excluded.line_text,
-                notified_at_ms = NULL,
+                reminded_at_ms = NULL,
                 updated_at = excluded.updated_at",
             rusqlite::params![
                 note_id,
@@ -1755,19 +1776,19 @@ impl Db {
             .ok_or_else(|| "Reminder not found after upsert".to_string())
     }
 
-    pub fn mark_reminder_notified(
+    pub fn mark_reminder_reminded(
         &self,
         note_id: &str,
         line_number: i64,
-        notified_at_ms: i64,
+        reminded_at_ms: i64,
     ) -> Result<Option<Reminder>, String> {
         let conn = self.conn.lock().unwrap();
         let now = now_iso();
         conn.execute(
             "UPDATE reminders
-             SET notified_at_ms = ?3, updated_at = ?4
+             SET reminded_at_ms = ?3, updated_at = ?4
              WHERE note_id = ?1 AND line_number = ?2",
-            rusqlite::params![note_id, line_number, notified_at_ms, now],
+            rusqlite::params![note_id, line_number, reminded_at_ms, now],
         )
         .map_err(|e| e.to_string())?;
 
@@ -2789,7 +2810,7 @@ fn load_reminder(
 ) -> Result<Option<Reminder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT note_id, line_number, remind_at_ms, display_at, line_text, notified_at_ms, created_at, updated_at
+            "SELECT note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
              FROM reminders
              WHERE note_id = ?1 AND line_number = ?2",
         )
@@ -2803,7 +2824,7 @@ fn load_reminder(
                 remind_at_ms: row.get(2)?,
                 display_at: row.get(3)?,
                 line_text: row.get(4)?,
-                notified_at_ms: row.get(5)?,
+                reminded_at_ms: row.get(5)?,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
             })
@@ -4100,7 +4121,7 @@ mod tests {
     }
 
     #[test]
-    fn reminders_are_upserted_notified_and_deleted_with_note() {
+    fn reminders_are_upserted_reminded_and_deleted_with_note() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
 
@@ -4111,7 +4132,7 @@ mod tests {
             .expect("upsert reminder");
         assert_eq!(first.line_number, 3);
         assert_eq!(first.remind_at_ms, 1_800_000_000_000);
-        assert!(first.notified_at_ms.is_none());
+        assert!(first.reminded_at_ms.is_none());
 
         let updated = db
             .upsert_reminder(
@@ -4126,17 +4147,17 @@ mod tests {
         assert_eq!(updated.remind_at_ms, 1_900_000_000_000);
         assert_eq!(updated.display_at, "13.03.2030. 10:00");
         assert_eq!(updated.line_text, "line 3 changed");
-        assert!(updated.notified_at_ms.is_none());
+        assert!(updated.reminded_at_ms.is_none());
 
         let list = db.list_reminders("n1").expect("list reminders");
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].line_number, 3);
 
-        let notified = db
-            .mark_reminder_notified("n1", 3, 1_900_000_100_000)
-            .expect("mark notified")
+        let reminded = db
+            .mark_reminder_reminded("n1", 3, 1_900_000_100_000)
+            .expect("mark reminded")
             .expect("reminder exists");
-        assert_eq!(notified.notified_at_ms, Some(1_900_000_100_000));
+        assert_eq!(reminded.reminded_at_ms, Some(1_900_000_100_000));
 
         assert!(db
             .move_reminder_line("n1", 3, 5, "line 5 changed")
@@ -4145,7 +4166,7 @@ mod tests {
         assert_eq!(after_move.len(), 1);
         assert_eq!(after_move[0].line_number, 5);
         assert_eq!(after_move[0].line_text, "line 5 changed");
-        assert_eq!(after_move[0].notified_at_ms, Some(1_900_000_100_000));
+        assert_eq!(after_move[0].reminded_at_ms, Some(1_900_000_100_000));
 
         assert!(!db
             .move_reminder_line("n1", 3, 9, "missing")

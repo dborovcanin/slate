@@ -104,7 +104,7 @@ function startDayOfWeek(year: number, month: number): number {
 export interface DateTimePickerOptions {
   dateFormat: string;
   dateTimeFormat: string;
-  mode?: "date" | "notify";
+  mode?: "date" | "remind";
   requireTime?: boolean;
 }
 
@@ -119,7 +119,7 @@ export function openDateTimePicker(
   options: DateTimePickerOptions,
 ): Promise<DateTimePickerResult | null> {
   const mode = options.mode ?? "date";
-  const requireTime = options.requireTime ?? mode === "notify";
+  const requireTime = options.requireTime ?? mode === "remind";
   const now = new Date();
   let year = now.getFullYear();
   let month = now.getMonth(); // 0-based
@@ -139,7 +139,7 @@ export function openDateTimePicker(
     panel.tabIndex = -1;
     panel.setAttribute("role", "dialog");
     panel.setAttribute("aria-modal", "true");
-    panel.setAttribute("aria-label", mode === "notify" ? "Reminder picker" : "Date picker");
+    panel.setAttribute("aria-label", mode === "remind" ? "Reminder picker" : "Date picker");
 
     const header = document.createElement("div");
     header.className = "date-picker-header";
@@ -244,7 +244,7 @@ export function openDateTimePicker(
 
     const insertBtn = document.createElement("button");
     insertBtn.className = "date-picker-btn date-picker-btn-primary";
-    insertBtn.textContent = mode === "notify" ? "Set" : "Insert";
+    insertBtn.textContent = mode === "remind" ? "Set" : "Insert";
 
     actions.appendChild(cancelBtn);
     actions.appendChild(insertBtn);

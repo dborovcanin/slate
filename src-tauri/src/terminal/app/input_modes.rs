@@ -637,6 +637,7 @@ impl TerminalApp {
                 );
                 let line_number = (self.cursor_line + 1) as i64;
                 let line_text = self.current_line().to_string();
+                let before_reminder = self.reminder_ghosts.get(&self.cursor_line).cloned();
                 db.upsert_reminder(
                     &self.active_note.id,
                     line_number,
@@ -648,18 +649,20 @@ impl TerminalApp {
                     .checked_sub(1)
                     .and_then(|line| usize::try_from(line).ok())
                 {
+                    let entry = LineReminderGhost {
+                        remind_at_ms,
+                        display_at: display_at.clone(),
+                        line_text: line_text.clone(),
+                        reminded_at_ms: None,
+                    };
                     self.reminder_ghosts.insert(
                         line_idx,
-                        LineReminderGhost {
-                            remind_at_ms,
-                            display_at: display_at.clone(),
-                            line_text: line_text.clone(),
-                            notified_at_ms: None,
-                        },
+                        entry.clone(),
                     );
+                    self.push_reminder_undo_entry(line_idx, before_reminder, Some(entry));
                 }
                 self.close_date_picker();
-                self.status = format!("notify set ⏰ {display_at}");
+                self.status = format!("remind set ⏰ {display_at}");
             }
             Key::ArrowLeft => {
                 if self.date_day > 1 {

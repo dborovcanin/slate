@@ -281,8 +281,8 @@ pub fn execute_command(
                 .push(insert_value_at_selection(snapshot, &date_str));
             result
         }
-        CommandId::Notify => result_with_message("notify handled by host"),
-        CommandId::NotifyDelete => result_with_message("notify-delete handled by host"),
+        CommandId::Remind => result_with_message("remind handled by host"),
+        CommandId::RemindToggle => result_with_message("remind toggle handled by host"),
         CommandId::ModuleStatus
         | CommandId::ModuleOnMath
         | CommandId::ModuleOffMath
@@ -394,8 +394,8 @@ mod tests {
                 "avg column",
                 "avg doc",
                 "date",
-                "notify",
-                "notify-delete",
+                "remind",
+                "remind toggle",
                 "module status",
                 "module math on",
                 "module math off",

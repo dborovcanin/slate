@@ -6,7 +6,7 @@ use super::render::{self, RenderPalette};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatePickerAction {
     InsertDate,
-    SetNotify,
+    SetRemind,
 }
 
 pub const MONTH_NAMES: [&str; 12] = [
@@ -183,7 +183,7 @@ pub struct DatePickerView<'a> {
     pub minute: u32,
     pub include_time: bool,
     pub require_time: bool,
-    pub is_notify: bool,
+    pub is_remind: bool,
     pub date_format: &'a str,
     pub date_time_format: &'a str,
 }
@@ -321,7 +321,7 @@ pub fn draw_date_picker(
         }
     }
 
-    let action = if view.is_notify { "notify" } else { "date" };
+    let action = if view.is_remind { "remind" } else { "date" };
     let time_label = if view.require_time {
         format!("Time {:02}:{:02} (required)", view.hour, view.minute)
     } else {
@@ -394,7 +394,7 @@ mod tests {
             minute: 30,
             include_time: true,
             require_time: false,
-            is_notify: false,
+            is_remind: false,
             date_format: "YYYY-MM-DD",
             date_time_format: "YYYY-MM-DD HH:mm",
         };

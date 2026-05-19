@@ -14,8 +14,8 @@ pub enum CommandId {
     AvgColumn,
     AvgDoc,
     Date,
-    Notify,
-    NotifyDelete,
+    Remind,
+    RemindToggle,
     ModuleStatus,
     ModuleOnMath,
     ModuleOffMath,
@@ -396,17 +396,17 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 60] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
-        id: CommandId::Notify,
-        value: "notify",
-        aliases: &["alarm", "remind"],
+        id: CommandId::Remind,
+        value: "remind",
+        aliases: &["alarm"],
         description: "set reminder for current line",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
-        id: CommandId::NotifyDelete,
-        value: "notify-delete",
-        aliases: &["notify_delete", "notify-delte"],
-        description: "delete reminder for current line",
+        id: CommandId::RemindToggle,
+        value: "remind toggle",
+        aliases: &["remind-toggle", "remind_toggle"],
+        description: "toggle reminder for current line",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -958,8 +958,13 @@ mod tests {
             Some(CommandId::AvgDoc)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "notify-delte").map(|cmd| cmd.id),
-            Some(CommandId::NotifyDelete)
+            resolve_command(CommandMode::Editor, "remind").map(|cmd| cmd.id),
+            Some(CommandId::Remind)
+        );
+        assert!(resolve_command(CommandMode::Editor, "notify").is_none());
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "remind-toggle").map(|cmd| cmd.id),
+            Some(CommandId::RemindToggle)
         );
         assert_eq!(
             resolve_command(CommandMode::Editor, "checklist").map(|cmd| cmd.id),

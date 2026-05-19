@@ -67,8 +67,8 @@ pub struct EditorEngine;
 pub enum CommandDispatchKind {
     Core,
     HostDate,
-    HostNotify,
-    HostNotifyDelete,
+    HostRemind,
+    HostRemindToggle,
     HostWrite,
     HostExport,
     HostModule,
@@ -110,8 +110,8 @@ pub enum HostCollectionAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostCommandPlan {
     Date,
-    Notify,
-    NotifyDelete,
+    Remind,
+    RemindToggle,
     Export {
         format: ExportFormat,
         path: Option<String>,
@@ -169,8 +169,8 @@ impl EditorEngine {
         if let Some(host) = Self::plan_host_command(mode, raw_input) {
             return Some(match host {
                 HostCommandPlan::Date => CommandDispatchKind::HostDate,
-                HostCommandPlan::Notify => CommandDispatchKind::HostNotify,
-                HostCommandPlan::NotifyDelete => CommandDispatchKind::HostNotifyDelete,
+                HostCommandPlan::Remind => CommandDispatchKind::HostRemind,
+                HostCommandPlan::RemindToggle => CommandDispatchKind::HostRemindToggle,
                 HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
                 HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
@@ -222,8 +222,8 @@ impl EditorEngine {
         let command = command_catalog::resolve_command(mode, raw_input)?;
         match command.id {
             CommandId::Date => Some(HostCommandPlan::Date),
-            CommandId::Notify => Some(HostCommandPlan::Notify),
-            CommandId::NotifyDelete => Some(HostCommandPlan::NotifyDelete),
+            CommandId::Remind => Some(HostCommandPlan::Remind),
+            CommandId::RemindToggle => Some(HostCommandPlan::RemindToggle),
             CommandId::ModuleStatus
             | CommandId::ModuleOnMath
             | CommandId::ModuleOffMath
@@ -457,8 +457,12 @@ mod tests {
             Some(CommandDispatchKind::Core)
         );
         assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "notify"),
-            Some(CommandDispatchKind::HostNotify)
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "remind"),
+            Some(CommandDispatchKind::HostRemind)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "remind toggle"),
+            Some(CommandDispatchKind::HostRemindToggle)
         );
         assert_eq!(
             EditorEngine::classify_command_dispatch(

@@ -132,7 +132,7 @@ impl TerminalGuard {
         }
 
         let mut out = io::stdout();
-        out.write_all(b"\x1b[?1049h\x1b[?2004h\x1b[?25l\x1b[H\x1b[2J")
+        out.write_all(b"\x1b[?1049h\x1b[?2004h\x1b[?7l\x1b[?25l\x1b[H\x1b[2J")
             .and_then(|_| out.flush())
             .map_err(|e| format!("Failed to initialize terminal screen: {e}"))?;
 
@@ -144,7 +144,7 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original) };
         let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[0m\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0 q");
+        let _ = out.write_all(b"\x1b[0m\x1b[?7h\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0 q");
         let _ = out.flush();
     }
 }

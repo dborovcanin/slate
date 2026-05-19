@@ -1,12 +1,13 @@
 use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
-    contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
-    find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
-    is_markdown_table_line, line_char_len, line_display_cols, table_cell_edit_start,
-    table_cell_info_at_char, table_cell_is_empty, table_cell_navigation_anchor, FoldKind,
-    TerminalApp, UiMode, VariableAutocompletePopupState, VariableAutocompleteState,
-    WikiLinkAutocompletePopupState, WikiLinkSuggestion, CALC_ASYNC_MIN_LINES,
-    CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS, CALC_RECOMPUTE_PENDING_RETRY_MS,
+    contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix, Db,
+    LineReminderGhost, ReminderUndoEntry, UndoAction, find_calc_segment_range,
+    find_table_formula_segments, gutter_width_for_visible_lines, is_markdown_table_line,
+    line_char_len, line_display_cols, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_is_empty, table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode,
+    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
+    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS,
+    CALC_RECOMPUTE_DEBOUNCE_MS, CALC_RECOMPUTE_PENDING_RETRY_MS,
     CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
     HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
     VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
@@ -265,6 +266,30 @@ fn apply_text_change_in_place(
 
 // Ownership: editor mutations, cursor movement, folding, and calc state updates.
 impl TerminalApp {
+    pub(super) fn push_undo_action(&mut self, action: UndoAction) {
+        if self.undo_action_pos < self.undo_actions.len() {
+            self.undo_actions.truncate(self.undo_action_pos);
+        }
+        self.undo_actions.push(action);
+        self.undo_action_pos = self.undo_actions.len();
+    }
+
+    pub(super) fn push_reminder_undo_entry(
+        &mut self,
+        line_idx: usize,
+        before: Option<LineReminderGhost>,
+        after: Option<LineReminderGhost>,
+    ) {
+        if before == after {
+            return;
+        }
+        self.push_undo_action(UndoAction::Reminder(ReminderUndoEntry {
+            line_idx,
+            before,
+            after,
+        }));
+    }
+
     fn prefer_span_history_fast_path(&self) -> bool {
         self.lines.len() >= super::LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES
     }
@@ -274,9 +299,11 @@ impl TerminalApp {
         coalesce_undo: bool,
         history_span: Option<(usize, usize, usize)>,
     ) {
-        if let Some((start_line, old_line_span, new_line_span)) = history_span {
+        let undo_depth_before = self.history.undo_depth();
+        let history_changed = if let Some((start_line, old_line_span, new_line_span)) = history_span
+        {
             if self.prefer_span_history_fast_path() {
-                self.history.record_edit_span(
+                let history_changed = self.history.record_edit_span(
                     &self.lines,
                     self.cursor_line,
                     self.cursor_col,
@@ -284,15 +311,34 @@ impl TerminalApp {
                     old_line_span,
                     new_line_span,
                 );
+                if history_changed {
+                    let undo_depth_after = self.history.undo_depth();
+                    if !coalesce_undo || undo_depth_after > undo_depth_before {
+                        self.push_undo_action(UndoAction::Text);
+                    }
+                }
                 return;
             }
+            self.history.record_edit(
+                &self.lines,
+                self.cursor_line,
+                self.cursor_col,
+                coalesce_undo,
+            )
+        } else {
+            self.history.record_edit(
+                &self.lines,
+                self.cursor_line,
+                self.cursor_col,
+                coalesce_undo,
+            )
+        };
+        if history_changed {
+            let undo_depth_after = self.history.undo_depth();
+            if !coalesce_undo || undo_depth_after > undo_depth_before {
+                self.push_undo_action(UndoAction::Text);
+            }
         }
-        self.history.record_edit(
-            &self.lines,
-            self.cursor_line,
-            self.cursor_col,
-            coalesce_undo,
-        );
     }
 
     pub(super) fn bootstrap_folding_for_startup(&mut self) {
@@ -1322,7 +1368,37 @@ impl TerminalApp {
         self.mark_edited_from_line_with_span(changed_line, Some((changed_line, 1, 1)));
     }
 
-    pub(super) fn undo(&mut self) {
+    fn apply_reminder_state(
+        &mut self,
+        db: &Db,
+        line_idx: usize,
+        state: Option<LineReminderGhost>,
+    ) -> Result<(), String> {
+        let line_number = (line_idx + 1) as i64;
+        match state {
+            Some(reminder) => {
+                db.upsert_reminder(
+                    &self.active_note.id,
+                    line_number,
+                    reminder.remind_at_ms,
+                    &reminder.display_at,
+                    &reminder.line_text,
+                )?;
+                if let Some(reminded_at_ms) = reminder.reminded_at_ms {
+                    let _ =
+                        db.mark_reminder_reminded(&self.active_note.id, line_number, reminded_at_ms);
+                }
+                self.reminder_ghosts.insert(line_idx, reminder);
+            }
+            None => {
+                db.delete_reminder(&self.active_note.id, line_number)?;
+                self.reminder_ghosts.remove(&line_idx);
+            }
+        }
+        Ok(())
+    }
+
+    fn undo_text_action(&mut self) {
         let keep_cursor_on_exhaust = self.history.undo_depth() == 1;
         let cursor_before_undo = (self.cursor_line, self.cursor_col);
         if let Some(cursor) = self.history.undo(&mut self.lines) {
@@ -1348,13 +1424,13 @@ impl TerminalApp {
             self.adjust_scroll();
             self.history
                 .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
-            self.status = format!("undo ({} left)", self.history.undo_depth());
+            self.status = format!("undo ({} left)", self.undo_action_pos.saturating_sub(1));
         } else {
             self.status = "already at oldest change".to_string();
         }
     }
 
-    pub(super) fn redo(&mut self) {
+    fn redo_text_action(&mut self) {
         if let Some(cursor) = self.history.redo(&mut self.lines) {
             self.invalidate_joined_text_cache();
             self.cursor_line = cursor.line.min(self.lines.len().saturating_sub(1));
@@ -1376,6 +1452,44 @@ impl TerminalApp {
         } else {
             self.status = "already at newest change".to_string();
         }
+    }
+
+    pub(super) fn undo(&mut self, db: &Db) {
+        if self.undo_action_pos == 0 {
+            self.status = "already at oldest change".to_string();
+            return;
+        }
+        let action = self.undo_actions[self.undo_action_pos - 1].clone();
+        match action {
+            UndoAction::Text => self.undo_text_action(),
+            UndoAction::Reminder(entry) => {
+                if let Err(error) = self.apply_reminder_state(db, entry.line_idx, entry.before) {
+                    self.status = format!("undo reminder failed: {error}");
+                    return;
+                }
+                self.status = format!("undo reminder on line {}", entry.line_idx + 1);
+            }
+        }
+        self.undo_action_pos = self.undo_action_pos.saturating_sub(1);
+    }
+
+    pub(super) fn redo(&mut self, db: &Db) {
+        if self.undo_action_pos >= self.undo_actions.len() {
+            self.status = "already at newest change".to_string();
+            return;
+        }
+        let action = self.undo_actions[self.undo_action_pos].clone();
+        match action {
+            UndoAction::Text => self.redo_text_action(),
+            UndoAction::Reminder(entry) => {
+                if let Err(error) = self.apply_reminder_state(db, entry.line_idx, entry.after) {
+                    self.status = format!("redo reminder failed: {error}");
+                    return;
+                }
+                self.status = format!("redo reminder on line {}", entry.line_idx + 1);
+            }
+        }
+        self.undo_action_pos += 1;
     }
 
     pub(super) fn run_calc_recompute(&mut self) {

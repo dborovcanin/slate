@@ -142,7 +142,7 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
             commands::reminders::upsert_note_reminder,
             commands::reminders::delete_note_reminder,
             commands::reminders::move_note_reminder_line,
-            commands::reminders::mark_note_reminder_notified,
+            commands::reminders::mark_note_reminder_reminded,
             commands::reminders::send_system_notification,
             commands::calc::evaluate_lines,
             commands::calc::evaluate_note_context,

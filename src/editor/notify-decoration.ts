@@ -8,7 +8,7 @@ import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view
 import type { NoteReminder } from "../api.ts";
 import {
   listNoteReminders,
-  markNoteReminderNotified,
+  markNoteReminderReminded,
   moveNoteReminderLine,
   sendSystemNotification,
 } from "../api.ts";
@@ -36,10 +36,10 @@ const deleteReminderEffect = StateEffect.define<{
   noteId: string;
   lineNumber: number;
 }>();
-const markReminderNotifiedEffect = StateEffect.define<{
+const markReminderRemindedEffect = StateEffect.define<{
   noteId: string;
   lineNumber: number;
-  notifiedAtMs: number;
+  remindedAtMs: number;
 }>();
 const tickReminderNowEffect = StateEffect.define<number>();
 const reminderReloadAnnotation = Annotation.define<boolean>();
@@ -51,7 +51,7 @@ function reminderRecordEqual(left: NoteReminder, right: NoteReminder): boolean {
     left.remind_at_ms === right.remind_at_ms &&
     left.display_at === right.display_at &&
     left.line_text === right.line_text &&
-    (left.notified_at_ms ?? null) === (right.notified_at_ms ?? null) &&
+    (left.reminded_at_ms ?? null) === (right.reminded_at_ms ?? null) &&
     left.created_at === right.created_at &&
     left.updated_at === right.updated_at
   );
@@ -78,7 +78,7 @@ function reminderPersistenceKey(reminder: NoteReminder): string {
     String(reminder.remind_at_ms),
     reminder.display_at,
     reminder.line_text,
-    String(reminder.notified_at_ms ?? ""),
+    String(reminder.reminded_at_ms ?? ""),
   ].join("\u0000");
 }
 
@@ -174,14 +174,14 @@ const reminderStateField = StateField.define<ReminderState>({
         };
         continue;
       }
-      if (effect.is(markReminderNotifiedEffect)) {
+      if (effect.is(markReminderRemindedEffect)) {
         if (next.noteId !== effect.value.noteId) continue;
         const current = next.remindersByLine.get(effect.value.lineNumber);
         if (!current) continue;
         const remindersByLine = new Map(next.remindersByLine);
         remindersByLine.set(effect.value.lineNumber, {
           ...current,
-          notified_at_ms: effect.value.notifiedAtMs,
+          reminded_at_ms: effect.value.remindedAtMs,
         });
         next = {
           ...next,
@@ -333,11 +333,11 @@ async function dispatchReminderNotification(reminder: NoteReminder): Promise<boo
   return shown;
 }
 
-interface NotifyExtensionOptions {
+interface ReminderExtensionOptions {
   getActiveNoteId: () => string | null;
 }
 
-function buildReminderPlugin(options: NotifyExtensionOptions) {
+function buildReminderPlugin(options: ReminderExtensionOptions) {
   return ViewPlugin.define((view) => {
     let destroyed = false;
     let inFlight = false;
@@ -361,28 +361,28 @@ function buildReminderPlugin(options: NotifyExtensionOptions) {
       if (!state || state.noteId !== noteId) return;
       const now = Date.now();
       const due = [...state.remindersByLine.values()].filter(
-        (reminder) => (reminder.notified_at_ms ?? null) === null && reminder.remind_at_ms <= now,
+        (reminder) => (reminder.reminded_at_ms ?? null) === null && reminder.remind_at_ms <= now,
       );
       if (due.length === 0) return;
 
       for (const reminder of due) {
         const shown = await dispatchReminderNotification(reminder);
         if (!shown) continue;
-        let persistedNotifiedAtMs: number | null = null;
+        let persistedRemindedAtMs: number | null = null;
         try {
-          const updated = await markNoteReminderNotified(noteId, reminder.line_number, now);
-          persistedNotifiedAtMs = updated?.notified_at_ms ?? now;
+          const updated = await markNoteReminderReminded(noteId, reminder.line_number, now);
+          persistedRemindedAtMs = updated?.reminded_at_ms ?? now;
         } catch (error) {
-          console.error("Failed to mark reminder notified:", error);
+          console.error("Failed to mark reminder reminded:", error);
           continue;
         }
         if (destroyed) return;
         view.dispatch({
           effects: [
-            markReminderNotifiedEffect.of({
+            markReminderRemindedEffect.of({
               noteId,
               lineNumber: reminder.line_number,
-              notifiedAtMs: persistedNotifiedAtMs ?? now,
+              remindedAtMs: persistedRemindedAtMs ?? now,
             }),
             tickReminderNowEffect.of(now),
           ],
@@ -519,7 +519,7 @@ function buildReminderPlugin(options: NotifyExtensionOptions) {
   });
 }
 
-export function notifyExtensions(options: NotifyExtensionOptions) {
+export function reminderExtensions(options: ReminderExtensionOptions) {
   return [
     reminderStateField,
     reminderDecorations,

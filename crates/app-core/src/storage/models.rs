@@ -71,7 +71,7 @@ pub struct Reminder {
     pub remind_at_ms: i64,
     pub display_at: String,
     pub line_text: String,
-    pub notified_at_ms: Option<i64>,
+    pub reminded_at_ms: Option<i64>,
     pub created_at: String,
     pub updated_at: String,
 }

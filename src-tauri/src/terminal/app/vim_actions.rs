@@ -1349,12 +1349,12 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::Undo => {
                     for _ in 0..count {
-                        self.undo();
+                        self.undo(db);
                     }
                 }
                 crate::editor_core::vim::VimIntent::Redo => {
                     for _ in 0..count {
-                        self.redo();
+                        self.redo(db);
                     }
                 }
                 crate::editor_core::vim::VimIntent::OpenCommandBar => {

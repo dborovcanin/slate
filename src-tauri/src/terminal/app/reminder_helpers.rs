@@ -15,7 +15,7 @@ pub(super) fn load_note_reminder_ghosts(
         target_text: String,
         remind_at_ms: i64,
         display_at: String,
-        notified_at_ms: Option<i64>,
+        reminded_at_ms: Option<i64>,
     }
 
     fn nearest_available_line(
@@ -149,7 +149,7 @@ pub(super) fn load_note_reminder_ghosts(
             target_text,
             remind_at_ms: reminder.remind_at_ms,
             display_at: reminder.display_at,
-            notified_at_ms: reminder.notified_at_ms,
+            reminded_at_ms: reminder.reminded_at_ms,
         });
     }
 
@@ -206,7 +206,7 @@ pub(super) fn load_note_reminder_ghosts(
                 remind_at_ms: entry.remind_at_ms,
                 display_at: entry.display_at,
                 line_text: entry.target_text,
-                notified_at_ms: entry.notified_at_ms,
+                reminded_at_ms: entry.reminded_at_ms,
             },
         );
     }

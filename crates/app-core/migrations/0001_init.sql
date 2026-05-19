@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS reminders (
     remind_at_ms INTEGER NOT NULL,
     display_at TEXT NOT NULL,
     line_text TEXT NOT NULL DEFAULT '',
-    notified_at_ms INTEGER,
+    reminded_at_ms INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     PRIMARY KEY (note_id, line_number),

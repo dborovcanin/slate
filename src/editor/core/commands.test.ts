@@ -107,8 +107,8 @@ test("core command suggestions are mode-aware", async () => {
     "avg column",
     "avg doc",
     "date",
-    "notify",
-    "notify-delete",
+    "remind",
+    "remind toggle",
     "module status",
     "module math on",
     "module math off",
@@ -295,7 +295,7 @@ test("core executeCommand handles vim write and write+quit", async () => {
   assert.equal(quitCalls, 1);
 });
 
-test("core executeCommand handles notify with one-line reminder payload", async () => {
+test("core executeCommand handles remind with one-line reminder payload", async () => {
   let payload:
     | {
       noteId: string;
@@ -306,7 +306,7 @@ test("core executeCommand handles notify with one-line reminder payload", async 
     }
     | null = null;
 
-  const result = await executeCommand(snapshot("alpha\nbeta", 6), "notify", {
+  const result = await executeCommand(snapshot("alpha\nbeta", 6), "remind", {
     mode: "editor",
     activeNoteId: "note-1",
     pickDateTime: async () => ({
@@ -321,7 +321,7 @@ test("core executeCommand handles notify with one-line reminder payload", async 
   });
 
   assert.equal(result.operations.length, 0);
-  assert.equal(result.message, "notify set ⏰ 15.04.2026. 14:34");
+  assert.equal(result.message, "remind set ⏰ 15.04.2026. 14:34");
   assert.deepEqual(payload, {
     noteId: "note-1",
     lineNumber: 2,
@@ -331,8 +331,8 @@ test("core executeCommand handles notify with one-line reminder payload", async 
   });
 });
 
-test("core executeCommand surfaces notify persistence errors from non-Error rejects", async () => {
-  const result = await executeCommand(snapshot("alpha", 0), "notify", {
+test("core executeCommand surfaces remind persistence errors from non-Error rejects", async () => {
+  const result = await executeCommand(snapshot("alpha", 0), "remind", {
     mode: "editor",
     activeNoteId: "note-1",
     pickDateTime: async () => ({
@@ -348,12 +348,12 @@ test("core executeCommand surfaces notify persistence errors from non-Error reje
 
   assert.equal(
     result.message,
-    "notify failed: table reminders has no column named line_text",
+    "remind failed: table reminders has no column named line_text",
   );
   assert.equal(result.operations.length, 0);
 });
 
-test("core executeCommand handles notify-delete for current line", async () => {
+test("core executeCommand handles remind toggle for current line", async () => {
   let payload:
     | {
       noteId: string;
@@ -361,7 +361,7 @@ test("core executeCommand handles notify-delete for current line", async () => {
     }
     | null = null;
 
-  const result = await executeCommand(snapshot("alpha\nbeta", 6), "notify-delete", {
+  const result = await executeCommand(snapshot("alpha\nbeta", 6), "remind toggle", {
     mode: "editor",
     activeNoteId: "note-1",
     deleteReminder: async (reminder) => {
@@ -371,22 +371,39 @@ test("core executeCommand handles notify-delete for current line", async () => {
   });
 
   assert.equal(result.operations.length, 0);
-  assert.equal(result.message, "notify deleted on line 2");
+  assert.equal(result.message, "remind removed on line 2");
   assert.deepEqual(payload, {
     noteId: "note-1",
     lineNumber: 2,
   });
 });
 
-test("core executeCommand handles notify-delete miss", async () => {
-  const result = await executeCommand(snapshot("alpha", 0), "notify-delete", {
+test("core executeCommand handles remind toggle miss by setting reminder", async () => {
+  const payloads: Array<{
+    noteId: string;
+    lineNumber: number;
+    remindAtMs: number;
+    displayAt: string;
+    lineText: string;
+  }> = [];
+  const result = await executeCommand(snapshot("alpha", 0), "remind toggle", {
     mode: "editor",
     activeNoteId: "note-1",
     deleteReminder: async () => false,
+    pickDateTime: async () => ({
+      insertText: "2026-04-15 14:34",
+      remindAtMs: 1_776_000_000_000,
+      displayAt: "15.04.2026. 14:34",
+      hasTime: true,
+    }),
+    upsertReminder: async (reminder) => {
+      payloads.push(reminder);
+    },
   });
 
   assert.equal(result.operations.length, 0);
-  assert.equal(result.message, "notify-delete: no reminder on line 1");
+  assert.equal(result.message, "remind set ⏰ 15.04.2026. 14:34");
+  assert.equal(payloads.length, 1);
 });
 
 test("core executeCommand handles clip-watch start/stop", async () => {

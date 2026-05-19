@@ -66,7 +66,7 @@ export interface NoteReminder {
   remind_at_ms: number;
   display_at: string;
   line_text: string;
-  notified_at_ms?: number | null;
+  reminded_at_ms?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -100,7 +100,7 @@ export interface RuntimeFlags {
   calc_disable: boolean;
   markdown_disable: boolean;
   folding_disable: boolean;
-  notify_disable: boolean;
+  remind_disable: boolean;
   autocomplete_disable: boolean;
 }
 
@@ -157,7 +157,7 @@ export const DEFAULT_RUNTIME_FLAGS: RuntimeFlags = {
   calc_disable: false,
   markdown_disable: false,
   folding_disable: false,
-  notify_disable: false,
+  remind_disable: false,
   autocomplete_disable: false,
 };
 
@@ -492,15 +492,15 @@ export function moveNoteReminderLine(
   });
 }
 
-export function markNoteReminderNotified(
+export function markNoteReminderReminded(
   noteId: string,
   lineNumber: number,
-  notifiedAtMs?: number,
+  remindedAtMs?: number,
 ): Promise<NoteReminder | null> {
-  return invoke<NoteReminder | null>("mark_note_reminder_notified", {
+  return invoke<NoteReminder | null>("mark_note_reminder_reminded", {
     noteId,
     lineNumber,
-    notifiedAtMs,
+    remindedAtMs,
   });
 }
 

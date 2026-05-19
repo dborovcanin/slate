@@ -36,7 +36,7 @@ export interface CommandRuntime {
   pickDateTime?: (options: {
     dateFormat: string;
     dateTimeFormat: string;
-    mode: "date" | "notify";
+    mode: "date" | "remind";
     requireTime: boolean;
   }) => Promise<{
     insertText: string;
@@ -140,23 +140,23 @@ async function runDateCommand(
   };
 }
 
-async function runNotifyCommand(
+async function runRemindCommand(
   _normalizedInput: string,
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
   if (!runtime.pickDateTime || !runtime.upsertReminder || !runtime.activeNoteId) {
-    return { message: "notify unavailable", operations: [] };
+    return { message: "remind unavailable", operations: [] };
   }
 
   const picked = await runtime.pickDateTime({
     dateFormat: runtime.dateFormat ?? "%Y-%m-%d",
     dateTimeFormat:
       runtime.dateTimeFormat ?? `${runtime.dateFormat ?? "%Y-%m-%d"} %H:%M`,
-    mode: "notify",
+    mode: "remind",
     requireTime: true,
   });
-  if (!picked) return { message: "notify cancelled", operations: [] };
+  if (!picked) return { message: "remind cancelled", operations: [] };
 
   const line = ctx.currentLine();
   try {
@@ -169,21 +169,24 @@ async function runNotifyCommand(
     });
   } catch (error) {
     const message = errorToMessage(error, "failed to persist reminder");
-    return { message: `notify failed: ${message}`, operations: [] };
+    return { message: `remind failed: ${message}`, operations: [] };
   }
   return {
-    message: `notify set ${String.fromCodePoint(0x23f0)} ${picked.displayAt}`,
+    message: `remind set ${String.fromCodePoint(0x23f0)} ${picked.displayAt}`,
     operations: [],
   };
 }
 
-async function runNotifyDeleteCommand(
-  _normalizedInput: string,
+async function runRemindToggleCommand(
+  normalizedInput: string,
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
-  if (!runtime.deleteReminder || !runtime.activeNoteId) {
-    return { message: "notify-delete unavailable", operations: [] };
+  if (!runtime.activeNoteId) {
+    return { message: "remind toggle unavailable", operations: [] };
+  }
+  if (!runtime.deleteReminder) {
+    return runRemindCommand(normalizedInput, ctx, runtime);
   }
 
   const line = ctx.currentLine();
@@ -192,17 +195,17 @@ async function runNotifyDeleteCommand(
       noteId: runtime.activeNoteId,
       lineNumber: line.number,
     });
-    if (!deleted) {
-      return { message: `notify-delete: no reminder on line ${line.number}`, operations: [] };
+    if (deleted) {
+      return {
+        message: `remind removed on line ${line.number}`,
+        operations: [],
+      };
     }
+    return runRemindCommand(normalizedInput, ctx, runtime);
   } catch (error) {
     const message = errorToMessage(error, "failed to delete reminder");
-    return { message: `notify-delete failed: ${message}`, operations: [] };
+    return { message: `remind toggle failed: ${message}`, operations: [] };
   }
-  return {
-    message: `notify deleted on line ${line.number}`,
-    operations: [],
-  };
 }
 
 async function runSumCommand(
@@ -569,8 +572,8 @@ const EXECUTOR_MAP: Record<string, ExecuteFn> = {
   "avg column": runAvgCommand,
   "avg doc": runAvgCommand,
   "date": runDateCommand,
-  "notify": runNotifyCommand,
-  "notify-delete": runNotifyDeleteCommand,
+  "remind": runRemindCommand,
+  "remind toggle": runRemindToggleCommand,
   "module status": runModuleCommand,
   "module math on": runModuleCommand,
   "module math off": runModuleCommand,

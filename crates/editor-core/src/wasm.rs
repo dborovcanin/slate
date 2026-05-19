@@ -307,8 +307,8 @@ fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
     match kind {
         CommandDispatchKind::Core => "core",
         CommandDispatchKind::HostDate => "host_date",
-        CommandDispatchKind::HostNotify => "host_notify",
-        CommandDispatchKind::HostNotifyDelete => "host_notify_delete",
+        CommandDispatchKind::HostRemind => "host_remind",
+        CommandDispatchKind::HostRemindToggle => "host_remind_toggle",
         CommandDispatchKind::HostWrite => "host_write",
         CommandDispatchKind::HostExport => "host_export",
         CommandDispatchKind::HostModule => "host_module",
@@ -343,8 +343,8 @@ fn module_command_value(command_id: CommandId) -> Option<&'static str> {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum HostCommandPlanWire {
     Date,
-    Notify,
-    NotifyDelete,
+    Remind,
+    RemindToggle,
     Write {
         quit: bool,
         force: bool,
@@ -378,8 +378,8 @@ enum HostCommandPlanWire {
 fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {
     let wire = match plan {
         HostCommandPlan::Date => HostCommandPlanWire::Date,
-        HostCommandPlan::Notify => HostCommandPlanWire::Notify,
-        HostCommandPlan::NotifyDelete => HostCommandPlanWire::NotifyDelete,
+        HostCommandPlan::Remind => HostCommandPlanWire::Remind,
+        HostCommandPlan::RemindToggle => HostCommandPlanWire::RemindToggle,
         HostCommandPlan::Write { quit, force } => HostCommandPlanWire::Write { quit, force },
         HostCommandPlan::Export { format, path } => HostCommandPlanWire::Export {
             format: format.as_str().to_string(),

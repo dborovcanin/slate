@@ -739,11 +739,62 @@ fn undo_exhaustion_keeps_latest_cursor_location() {
     assert_eq!(app.cursor_line, 1);
     assert_eq!(app.cursor_col, 2);
 
-    app.undo();
+    app.undo(&db);
 
     assert_eq!(app.lines, vec!["one".to_string(), "two".to_string()]);
     assert_eq!(app.cursor_line, 1);
     assert_eq!(app.cursor_col, 2);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vim_remind_set_is_undoable_and_redoable() {
+    let (db, mut app, path) = app_with_note("task");
+    app.mode = UiMode::Normal;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char(':'),
+            Key::Char('r'),
+            Key::Char('e'),
+            Key::Char('m'),
+            Key::Char('i'),
+            Key::Char('n'),
+            Key::Char('d'),
+            Key::Enter,
+        ],
+    );
+    assert_eq!(app.mode, UiMode::DatePicker);
+
+    run_keys(&mut app, &db, &[Key::Enter]);
+    assert!(!app.reminder_ghosts.is_empty());
+    assert_eq!(
+        db.list_reminders(&app.active_note.id)
+            .expect("list reminders after remind set")
+            .len(),
+        1
+    );
+
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert!(app.reminder_ghosts.is_empty());
+    assert!(
+        db.list_reminders(&app.active_note.id)
+            .expect("list reminders after undo")
+            .is_empty()
+    );
+
+    run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+    assert_eq!(
+        db.list_reminders(&app.active_note.id)
+            .expect("list reminders after redo")
+            .len(),
+        1
+    );
 
     drop(app);
     drop(db);

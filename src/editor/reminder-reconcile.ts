@@ -63,7 +63,7 @@ export function remindersEqual(left: NoteReminder[], right: NoteReminder[]): boo
       a.remind_at_ms !== b.remind_at_ms ||
       a.display_at !== b.display_at ||
       a.line_text !== b.line_text ||
-      (a.notified_at_ms ?? null) !== (b.notified_at_ms ?? null)
+      (a.reminded_at_ms ?? null) !== (b.reminded_at_ms ?? null)
     ) {
       return false;
     }

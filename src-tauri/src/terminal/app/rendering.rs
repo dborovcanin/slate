@@ -1552,7 +1552,7 @@ impl TerminalApp {
                     minute: self.date_minute,
                     include_time: self.date_include_time,
                     require_time: self.date_require_time,
-                    is_notify: self.date_picker_action == DatePickerAction::SetNotify,
+                    is_remind: self.date_picker_action == DatePickerAction::SetRemind,
                     date_format: &self.date_format,
                     date_time_format: &self.date_time_format,
                 },
@@ -1592,8 +1592,6 @@ impl TerminalApp {
                 cursor_col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
             }
         }
-        buf.push_str(&goto(cursor_row, cursor_col));
-
         let cursor_block = matches!(
             self.mode,
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine

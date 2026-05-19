@@ -55,14 +55,14 @@ pub fn move_note_reminder_line(
 }
 
 #[tauri::command]
-pub fn mark_note_reminder_notified(
+pub fn mark_note_reminder_reminded(
     core: State<'_, AppCore>,
     note_id: String,
     line_number: i64,
-    notified_at_ms: Option<i64>,
+    reminded_at_ms: Option<i64>,
 ) -> Result<Option<Reminder>, String> {
     core.db()
-        .mark_reminder_notified(&note_id, line_number, notified_at_ms.unwrap_or_else(now_ms))
+        .mark_reminder_reminded(&note_id, line_number, reminded_at_ms.unwrap_or_else(now_ms))
 }
 
 #[cfg(target_os = "macos")]
