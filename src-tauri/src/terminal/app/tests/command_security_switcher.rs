@@ -1492,7 +1492,7 @@ fn command_bar_perf_prefix_exposes_terminal_perf_completion_options() {
             .iter()
             .map(|entry| entry.token.as_str())
             .collect::<Vec<_>>(),
-        vec!["status", "where", "dump", "on", "off", "clear", "toggle", "cap"]
+        vec!["cap", "clear", "dump", "off", "on", "status", "toggle", "where"]
     );
 
     drop(app);

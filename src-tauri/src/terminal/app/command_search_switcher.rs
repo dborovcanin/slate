@@ -988,6 +988,7 @@ impl TerminalApp {
         if options.is_empty() {
             return None;
         }
+        options.sort_by(|a, b| a.token.cmp(&b.token));
         if options.len() > COMMAND_COMPLETION_MAX_OPTIONS {
             options.truncate(COMMAND_COMPLETION_MAX_OPTIONS);
         }

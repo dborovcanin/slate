@@ -469,6 +469,7 @@ mod tests {
                 "export pdf",
                 "export md",
                 "export txt",
+                "backup",
             ]
         );
 

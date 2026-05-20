@@ -527,15 +527,15 @@ impl TerminalApp {
     }
 
     pub(super) fn note_math_module_enabled(&self) -> bool {
-        self.active_note.modules.math && !self.large_note_reduced_features()
+        self.active_note.modules.math
     }
 
     pub(super) fn note_table_module_enabled(&self) -> bool {
-        self.active_note.modules.table && !self.large_note_reduced_features()
+        self.active_note.modules.table
     }
 
     pub(super) fn note_variables_module_enabled(&self) -> bool {
-        self.active_note.modules.variables && !self.large_note_reduced_features()
+        self.active_note.modules.variables
     }
 
     pub(super) fn note_style_module_enabled(&self) -> bool {
