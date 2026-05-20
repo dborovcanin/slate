@@ -273,6 +273,54 @@ impl Db {
         Ok(())
     }
 
+    /// Replace the live database in-place with a staged SQLite file.
+    ///
+    /// Closes all pooled connections, atomically renames `staged_file` over the
+    /// current database path, removes any orphaned WAL/SHM files that belonged to
+    /// the old database, then reopens the pool against the new file.
+    ///
+    /// Must only be called when no `SqlitePoolGuard`s are active (i.e. no db
+    /// operations are in flight). In practice this is safe to call from the TUI
+    /// event loop between key dispatches.
+    pub fn restore_from_sqlite_file(&self, staged_file: &Path) -> Result<(), String> {
+        let mut state = self
+            .conn
+            .state
+            .lock()
+            .map_err(|_| "db pool mutex poisoned".to_string())?;
+
+        // Drop all existing connections so the file handle is released.
+        state.connections.clear();
+        state.created = 0;
+
+        // Atomically replace the live db file with the staged restore.
+        std::fs::rename(staged_file, &self.conn.db_path)
+            .map_err(|e| format!("failed to swap database file during restore: {e}"))?;
+
+        // Remove stale WAL/SHM files from the previous database.  SQLite uses
+        // the same base path so the old files would be misinterpreted on open.
+        let wal = self.conn.db_path.with_extension("db-wal");
+        let shm = self.conn.db_path.with_extension("db-shm");
+        let _ = std::fs::remove_file(&wal);
+        let _ = std::fs::remove_file(&shm);
+
+        // Reopen connections against the new file.
+        for _ in 0..self.conn.max_size {
+            let conn = SqlitePool::open_configured_connection(&self.conn.db_path)
+                .map_err(|e| format!("failed to reopen db after restore: {e}"))?;
+            state.connections.push(conn);
+            state.created += 1;
+        }
+
+        // Reset search-index-checked flag so the new db is validated on first use.
+        if let Ok(mut checked) = self.search_index_checked.lock() {
+            *checked = false;
+        }
+
+        self.conn.available.notify_all();
+        Ok(())
+    }
+
     fn ensure_search_index_checked(&self) -> Result<(), String> {
         let mut checked = self
             .search_index_checked

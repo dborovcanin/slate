@@ -36,6 +36,7 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
         create_new: false,
         note_id: Some(note_id.to_string()),
         list_only: false,
+        open_switcher: false,
     };
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
@@ -71,6 +72,7 @@ fn app_with_note_and_modules(
         create_new: false,
         note_id: Some(note_id.to_string()),
         list_only: false,
+        open_switcher: false,
     };
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,

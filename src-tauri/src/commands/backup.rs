@@ -377,6 +377,21 @@ pub fn stage_restore_from_zip(zip_path: &str) -> Result<String, String> {
     Ok(resolved.display().to_string())
 }
 
+/// Apply a staged restore in-session without restarting the process.
+///
+/// If a staged restore file is present, calls `db.restore_from_sqlite_file` to
+/// close all pool connections, swap the file, and reopen — all while the TUI
+/// session is still running.  Returns `true` if a restore was applied.
+pub fn apply_restore_in_session(db: &Db) -> Result<bool, String> {
+    let data_dir = app_core::data_dir()?;
+    let staged = data_dir.join(STAGED_RESTORE_FILENAME);
+    if !staged.exists() {
+        return Ok(false);
+    }
+    db.restore_from_sqlite_file(&staged)?;
+    Ok(true)
+}
+
 /// If a staged restore file exists, atomically swap it in as the live `notes.db`.
 /// Returns `true` if a restore was applied, `false` if nothing was pending.
 /// Must be called after all Db connections are closed.

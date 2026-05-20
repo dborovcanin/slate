@@ -198,6 +198,7 @@ fn write_command_syncs_markdown_file_backed_note() {
         create_new: false,
         note_id: Some(note_id.clone()),
         list_only: false,
+        open_switcher: false,
     };
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
@@ -284,6 +285,7 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
         create_new: false,
         note_id: Some(note_id),
         list_only: false,
+        open_switcher: false,
     };
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
@@ -1292,6 +1294,7 @@ fn startup_with_locked_recent_note_prompts_for_password() {
         create_new: false,
         note_id: None,
         list_only: false,
+        open_switcher: false,
     };
 
     let (app, _) = TerminalApp::new_with_startup_metrics(
@@ -1848,6 +1851,7 @@ fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
         create_new: false,
         note_id: Some("n-active".to_string()),
         list_only: false,
+        open_switcher: false,
     };
     let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,

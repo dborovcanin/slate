@@ -22,10 +22,22 @@ use rustc_hash::FxHashMap;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::io;
+use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
+
+#[derive(Debug, Clone, Copy)]
+enum BackupAnimOp {
+    Export,
+    Load,
+}
+
+enum BackupThreadResult {
+    ExportDone(Result<String, String>),
+    LoadStageDone(Result<(), String>),
+}
 const CALC_RECOMPUTE_DEBOUNCE_MS: u64 = 90;
 const CALC_RECOMPUTE_PENDING_RETRY_MS: u64 = 35;
 const CALC_IDLE_EVAL_BUDGET_MS: u64 = 6;
@@ -123,6 +135,8 @@ pub struct TerminalOptions {
     pub create_new: bool,
     pub note_id: Option<String>,
     pub list_only: bool,
+    /// Open the note switcher immediately on startup instead of the last-used note.
+    pub open_switcher: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -427,6 +441,10 @@ struct TerminalApp {
     command_history_index: Option<usize>,
     quit: bool,
     force_quit: bool,
+    backup_rx: Option<mpsc::Receiver<BackupThreadResult>>,
+    backup_anim_op: BackupAnimOp,
+    backup_anim_dots: u8,
+    backup_anim_last_tick: Option<Instant>,
     // Date picker state
     date_year: i32,
     date_month: u32, // 1-12
@@ -843,6 +861,10 @@ impl TerminalApp {
             command_history_index: None,
             quit: false,
             force_quit: false,
+            backup_rx: None,
+            backup_anim_op: BackupAnimOp::Export,
+            backup_anim_dots: 0,
+            backup_anim_last_tick: None,
             date_year: 0,
             date_month: 0,
             date_day: 0,
@@ -988,8 +1010,30 @@ impl TerminalApp {
                         "autosave_tick",
                         idle_start.elapsed(),
                     );
+                    // Advance the dot animation (~1s per step) while a backup op is running.
+                    if self.backup_rx.is_some() {
+                        let now = Instant::now();
+                        let elapsed = self
+                            .backup_anim_last_tick
+                            .map(|t| now.duration_since(t))
+                            .unwrap_or(Duration::from_secs(1));
+                        if elapsed >= Duration::from_millis(1000) {
+                            self.backup_anim_dots = self.backup_anim_dots % 3 + 1;
+                            self.backup_anim_last_tick = Some(now);
+                            let label = match self.backup_anim_op {
+                                BackupAnimOp::Export => "exporting backup",
+                                BackupAnimOp::Load => "loading backup",
+                            };
+                            self.status =
+                                format!("{label}{}", ".".repeat(self.backup_anim_dots as usize));
+                            self.render_dirty = true;
+                        }
+                    }
                 }
             }
+            // Poll for backup thread completion on every iteration so the result
+            // is applied promptly whether or not the user is pressing keys.
+            self.maybe_finish_backup_op(db);
 
             self.maybe_clipboard_watch();
             self.maybe_collect_search_results(db);
@@ -1005,6 +1049,53 @@ impl TerminalApp {
             }
         }
         Ok(())
+    }
+
+    fn maybe_finish_backup_op(&mut self, db: &Db) {
+        let result = match &self.backup_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(result) => result,
+                Err(mpsc::TryRecvError::Empty) => return,
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.backup_rx = None;
+                    self.status = "backup operation failed unexpectedly".to_string();
+                    self.render_dirty = true;
+                    return;
+                }
+            },
+            None => return,
+        };
+        self.backup_rx = None;
+        match result {
+            BackupThreadResult::ExportDone(Ok(msg)) => {
+                self.status = msg;
+            }
+            BackupThreadResult::ExportDone(Err(e)) => {
+                self.status = format!("backup failed: {e}");
+            }
+            BackupThreadResult::LoadStageDone(Ok(())) => {
+                match crate::commands::backup::apply_restore_in_session(db) {
+                    Ok(true) => {
+                        self.dirty = false;
+                        self.joined_text_cache = None;
+                        match self.open_switcher(db) {
+                            Ok(()) => self.status = "backup loaded — select a note".to_string(),
+                            Err(e) => self.status = format!("backup loaded (open notes: {e})"),
+                        }
+                    }
+                    Ok(false) => {
+                        self.status = "backup load failed: staged file missing".to_string();
+                    }
+                    Err(e) => {
+                        self.status = format!("backup load failed: {e}");
+                    }
+                }
+            }
+            BackupThreadResult::LoadStageDone(Err(e)) => {
+                self.status = format!("backup load failed: {e}");
+            }
+        }
+        self.render_dirty = true;
     }
 
     fn maybe_autosave(&mut self, db: &Db) -> Result<(), String> {
@@ -1411,6 +1502,9 @@ pub fn run_terminal_session(
         eprintln!("Startup diagnostics: {err}");
     }
 
+    if opts.open_switcher {
+        app.open_switcher(db)?;
+    }
     app.run(db)
 }
 

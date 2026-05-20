@@ -1671,11 +1671,22 @@ impl TerminalApp {
                             return;
                         }
                     }
-                    self.status =
-                        match crate::commands::backup::backup_notes_database_blocking(db, &path) {
-                            Ok(result) => format!("backed up notes to {}", result.path),
-                            Err(error) => format!("backup failed: {error}"),
-                        };
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let db_for_thread = db.clone();
+                    std::thread::spawn(move || {
+                        let result =
+                            crate::commands::backup::backup_notes_database_blocking(
+                                &db_for_thread,
+                                &path,
+                            )
+                            .map(|r| format!("backed up notes to {}", r.path));
+                        let _ = tx.send(super::BackupThreadResult::ExportDone(result));
+                    });
+                    self.backup_rx = Some(rx);
+                    self.backup_anim_op = super::BackupAnimOp::Export;
+                    self.backup_anim_dots = 1;
+                    self.backup_anim_last_tick = Some(std::time::Instant::now());
+                    self.status = "exporting backup.".to_string();
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::BackupLoad { path } => {
@@ -1683,16 +1694,23 @@ impl TerminalApp {
                         self.status = "usage: backup load <path.zip>".to_string();
                         return;
                     };
-                    match crate::commands::backup::stage_restore_from_zip(&path) {
-                        Ok(_) => {
-                            self.status =
-                                "restore staged — slate will restart to apply".to_string();
-                            self.quit = true;
-                        }
-                        Err(error) => {
-                            self.status = format!("backup load failed: {error}");
+                    if self.dirty {
+                        if let Err(error) = self.save(db) {
+                            self.status = format!("backup load failed: save failed: {error}");
+                            return;
                         }
                     }
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let result = crate::commands::backup::stage_restore_from_zip(&path)
+                            .map(|_| ());
+                        let _ = tx.send(super::BackupThreadResult::LoadStageDone(result));
+                    });
+                    self.backup_rx = Some(rx);
+                    self.backup_anim_op = super::BackupAnimOp::Load;
+                    self.backup_anim_dots = 1;
+                    self.backup_anim_last_tick = Some(std::time::Instant::now());
+                    self.status = "loading backup.".to_string();
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::ClipWatch { action } => {
