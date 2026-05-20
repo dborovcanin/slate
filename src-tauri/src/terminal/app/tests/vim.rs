@@ -804,11 +804,10 @@ fn vim_remind_set_is_undoable_and_redoable() {
 
     run_keys(&mut app, &db, &[Key::Char('u')]);
     assert!(app.reminder_ghosts.is_empty());
-    assert!(
-        db.list_reminders(&app.active_note.id)
-            .expect("list reminders after undo")
-            .is_empty()
-    );
+    assert!(db
+        .list_reminders(&app.active_note.id)
+        .expect("list reminders after undo")
+        .is_empty());
 
     run_keys(&mut app, &db, &[Key::Ctrl('r')]);
     assert_eq!(

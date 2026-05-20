@@ -1598,7 +1598,11 @@ impl TerminalApp {
                         Ok(true) => {
                             self.reminder_ghosts.remove(&self.cursor_line);
                             if before_reminder.is_some() {
-                                self.push_reminder_undo_entry(self.cursor_line, before_reminder, None);
+                                self.push_reminder_undo_entry(
+                                    self.cursor_line,
+                                    before_reminder,
+                                    None,
+                                );
                             }
                             self.status =
                                 format!("remind removed on line {}", self.cursor_line + 1);
@@ -2217,7 +2221,14 @@ impl TerminalApp {
         self.dirty = false;
         self.history
             .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
-        self.refresh_switcher_items(db)?;
+        self.render_dirty = true;
+        // Only do a full DB scan when the first line (note title) changed.
+        // Body-only saves don't affect the prefix index or wiki link caches.
+        if self.switcher_needs_title_refresh {
+            self.refresh_switcher_items(db)?;
+        } else {
+            self.update_switcher_item_after_body_save();
+        }
         self.record_perf_duration(
             "tui.save",
             if force { "forced" } else { "normal" },
@@ -2226,11 +2237,24 @@ impl TerminalApp {
         Ok(())
     }
 
+    fn update_switcher_item_after_body_save(&mut self) {
+        let note_id = &self.active_note.id;
+        let updated_at = self.active_note.updated_at.clone();
+        if let Some(item) = self.switcher_items.iter_mut().find(|i| &i.id == note_id) {
+            item.updated_at = updated_at;
+        }
+        // Keep the list sorted by updated_at DESC (DB order); the saved note
+        // just became the most-recently-modified so it floats to the top.
+        self.switcher_items
+            .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    }
+
     pub(super) fn sync_reminder_ghosts_if_dirty(&mut self, db: &Db) -> Result<(), String> {
         if !self.reminders_dirty {
             return Ok(());
         }
         self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
+        self.render_dirty = true;
         self.reminders_dirty = false;
         Ok(())
     }
@@ -2258,6 +2282,9 @@ impl TerminalApp {
             })
             .collect::<Vec<_>>();
         due_lines.sort_unstable();
+        if !due_lines.is_empty() {
+            self.render_dirty = true;
+        }
 
         for line_idx in due_lines {
             let Some(reminder) = self.reminder_ghosts.get(&line_idx).cloned() else {
@@ -2471,6 +2498,7 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
+        self.switcher_needs_title_refresh = false;
         if let Some(working_id) = self.working_collection_id.clone() {
             if db.get_collection(&working_id)?.is_none() {
                 self.working_collection_id = None;

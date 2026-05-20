@@ -2964,8 +2964,6 @@ fn build_fts_query(raw: &str) -> String {
     build_fts_query_from_terms(&parse_search_terms(raw))
 }
 
-
-
 fn line_matches_term(line: &str, term: &SearchTerm) -> bool {
     match term {
         SearchTerm::Phrase(phrase) => line.contains(&phrase.to_lowercase()),

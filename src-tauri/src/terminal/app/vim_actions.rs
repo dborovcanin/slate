@@ -186,12 +186,12 @@ impl TerminalApp {
                 self.joined_text_cache = Some(join_lines(&self.lines));
             }
             let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
-            let selection = self.command_selection.unwrap_or(
-                crate::editor_core::types::SelectionSnapshot {
-                    anchor: fallback_cursor,
-                    head: fallback_cursor,
-                },
-            );
+            let selection =
+                self.command_selection
+                    .unwrap_or(crate::editor_core::types::SelectionSnapshot {
+                        anchor: fallback_cursor,
+                        head: fallback_cursor,
+                    });
             let register = self.shared_vim_register();
             let text: &str = self.joined_text_cache.as_deref().unwrap();
             let result = crate::editor_core::vim_actions::execute_vim_action_with_target(

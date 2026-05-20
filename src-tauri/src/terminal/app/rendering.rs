@@ -182,9 +182,11 @@ impl TerminalApp {
             return;
         }
         self.wiki_link_render_cache.remove(short_id);
-        let needle = format!("[[{short_id}");
-        self.wiki_link_line_render_cache
-            .retain(|line, _| !line.contains(&needle));
+        // The line-level cache keys are full line text strings; scanning them
+        // for the changed short_id would be O(entries). Clearing the whole
+        // cache is O(1) and correct — entries are cheap to rebuild on the
+        // next draw using the still-warm short_id cache above.
+        self.wiki_link_line_render_cache.clear();
     }
 
     fn insert_wiki_link_line_cache(
@@ -406,9 +408,8 @@ impl TerminalApp {
         let viewport_width = cols.saturating_sub(sticky_width);
         if viewport_width > 0 {
             let suffix_text = "]";
-            let mut spans: Vec<(&str, AnsiStyle)> = Vec::with_capacity(
-                self.command_completion.options.len().saturating_mul(2) + 2,
-            );
+            let mut spans: Vec<(&str, AnsiStyle)> =
+                Vec::with_capacity(self.command_completion.options.len().saturating_mul(2) + 2);
             let prefix_text = format!(":{}  [", self.command_input);
             spans.push((prefix_text.as_str(), base_style));
 
@@ -447,10 +448,9 @@ impl TerminalApp {
                 let side_padding = 3usize;
                 let viewport_to = viewport_from + viewport_width;
                 if selected_to.saturating_add(side_padding) > viewport_to {
-                    viewport_from =
-                        selected_to
-                            .saturating_add(side_padding)
-                            .saturating_sub(viewport_width);
+                    viewport_from = selected_to
+                        .saturating_add(side_padding)
+                        .saturating_sub(viewport_width);
                 }
                 let desired_left = selected_from.saturating_sub(side_padding);
                 if desired_left < viewport_from {
@@ -494,7 +494,14 @@ impl TerminalApp {
         if sticky_width > 0 {
             let sticky_start_col = cols.saturating_sub(sticky_width).saturating_add(1);
             let mut sticky_col = sticky_start_col;
-            Self::draw_status_segment(buf, row, &mut sticky_col, cols, right_sticky_text, base_style);
+            Self::draw_status_segment(
+                buf,
+                row,
+                &mut sticky_col,
+                cols,
+                right_sticky_text,
+                base_style,
+            );
         }
         true
     }
@@ -527,16 +534,22 @@ impl TerminalApp {
         &self,
         line_idx: usize,
     ) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+        // Matches are always ordered by line (recompute_search iterates lines in order),
+        // so partition_point gives us the first match on this line in O(log n).
+        let start = self
+            .search_matches
+            .partition_point(|&(l, _, _)| l < line_idx);
         let mut matches = Vec::new();
         let mut current = Vec::new();
-        for (idx, &(line, start, end)) in self.search_matches.iter().enumerate() {
+        for (offset, &(line, col_start, col_end)) in self.search_matches[start..].iter().enumerate()
+        {
             if line != line_idx {
-                continue;
+                break;
             }
-            if idx == self.search_current {
-                current.push((start, end));
+            if start + offset == self.search_current {
+                current.push((col_start, col_end));
             } else {
-                matches.push((start, end));
+                matches.push((col_start, col_end));
             }
         }
         (matches, current)
@@ -767,9 +780,7 @@ impl TerminalApp {
         let preferred_top = popup.anchor_row.saturating_add(1);
         let mut y = preferred_top;
         if y + box_height > max_editor_row + 1 {
-            y = popup
-                .anchor_row
-                .saturating_sub(box_height);
+            y = popup.anchor_row.saturating_sub(box_height);
         }
         y = y
             .max(EDITOR_TOP_ROW)
@@ -808,12 +819,7 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn draw_wiki_link_preview_popup(
-        &self,
-        buf: &mut String,
-        rows: usize,
-        cols: usize,
-    ) {
+    pub(super) fn draw_wiki_link_preview_popup(&self, buf: &mut String, rows: usize, cols: usize) {
         let preview = &self.wiki_link_preview;
         if !preview.visible
             || !matches!(
@@ -837,8 +843,7 @@ impl TerminalApp {
         // height = top border + title row + body rows + bottom border
         let box_height = 3 + shown_body;
 
-        let cursor_screen_row =
-            self.cursor_line.saturating_sub(self.scroll_line) + EDITOR_TOP_ROW;
+        let cursor_screen_row = self.cursor_line.saturating_sub(self.scroll_line) + EDITOR_TOP_ROW;
         let y = if cursor_screen_row >= EDITOR_TOP_ROW + box_height {
             cursor_screen_row.saturating_sub(box_height)
         } else {

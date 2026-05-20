@@ -466,8 +466,7 @@ fn normal_mode_za_toggles_fold_and_vertical_navigation_uses_virtual_lines() {
 
 #[test]
 fn heading_fold_keeps_title_and_preserves_separator_blank_line() {
-    let (db, mut app, path) =
-        app_with_note("## 13.05.2026.\nentry\n\n## 14.05.2026.\nnext line");
+    let (db, mut app, path) = app_with_note("## 13.05.2026.\nentry\n\n## 14.05.2026.\nnext line");
     app.mode = UiMode::Normal;
     app.cursor_line = 0;
 

@@ -1,16 +1,15 @@
 use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
-    contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix, Db,
-    LineReminderGhost, ReminderUndoEntry, UndoAction, find_calc_segment_range,
-    find_table_formula_segments, gutter_width_for_visible_lines, is_markdown_table_line,
-    line_char_len, line_display_cols, table_cell_edit_start, table_cell_info_at_char,
-    table_cell_is_empty, table_cell_navigation_anchor, FoldKind, TerminalApp, UiMode,
+    contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
+    find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
+    is_markdown_table_line, line_char_len, line_display_cols, table_cell_edit_start,
+    table_cell_info_at_char, table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind,
+    LineReminderGhost, ReminderUndoEntry, TerminalApp, UiMode, UndoAction,
     VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
-    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS,
-    CALC_RECOMPUTE_DEBOUNCE_MS, CALC_RECOMPUTE_PENDING_RETRY_MS,
-    CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW, FENCE_CHECKPOINT_INTERVAL,
-    HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES, UNDO_DEBOUNCE_MS,
-    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
+    CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
+    FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
+    UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
@@ -1297,7 +1296,11 @@ impl TerminalApp {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         let line_count_changed = self.lines.len() != self.calc.results.len();
         self.invalidate_joined_text_cache();
+        self.table_formula_segment_cache.clear();
         self.dirty = true;
+        if changed_from_line == 0 {
+            self.switcher_needs_title_refresh = true;
+        }
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
         }
@@ -1385,8 +1388,11 @@ impl TerminalApp {
                     &reminder.line_text,
                 )?;
                 if let Some(reminded_at_ms) = reminder.reminded_at_ms {
-                    let _ =
-                        db.mark_reminder_reminded(&self.active_note.id, line_number, reminded_at_ms);
+                    let _ = db.mark_reminder_reminded(
+                        &self.active_note.id,
+                        line_number,
+                        reminded_at_ms,
+                    );
                 }
                 self.reminder_ghosts.insert(line_idx, reminder);
             }
@@ -1842,6 +1848,7 @@ impl TerminalApp {
         if self.last_edit.elapsed() < self.calc_recompute_debounce_duration() {
             return;
         }
+        self.render_dirty = true;
         if self.calc_viewport_only {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);

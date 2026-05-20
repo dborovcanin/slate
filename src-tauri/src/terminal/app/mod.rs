@@ -509,6 +509,8 @@ struct TerminalApp {
     last_cursor_block: bool,
     last_draw_had_overlay: bool,
     perf_trace: PerfTraceState,
+    render_dirty: bool,
+    switcher_needs_title_refresh: bool,
 }
 
 mod calc_helpers;
@@ -924,6 +926,8 @@ impl TerminalApp {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()
             },
+            render_dirty: true,
+            switcher_needs_title_refresh: false,
         };
 
         app.bootstrap_folding_for_startup();
@@ -950,9 +954,12 @@ impl TerminalApp {
         let mut stdout = io::stdout();
 
         loop {
-            let draw_start = Instant::now();
-            self.draw(&mut stdout)?;
-            self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
+            if self.render_dirty {
+                let draw_start = Instant::now();
+                self.render_dirty = false;
+                self.draw(&mut stdout)?;
+                self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
+            }
             if self.quit {
                 break;
             }
@@ -961,6 +968,7 @@ impl TerminalApp {
                 Some(key) => {
                     let handle_start = Instant::now();
                     self.handle_key(db, key)?;
+                    self.render_dirty = true;
                     self.record_perf_duration("tui.key.dispatch", "input", handle_start.elapsed());
                 }
                 None => {
@@ -999,6 +1007,7 @@ impl TerminalApp {
         if self.folds.rescan_pending {
             self.folds.rescan_pending = false;
             self.recompute_folding();
+            self.render_dirty = true;
         }
         self.maybe_recompute_calc_after_idle();
         self.maybe_dispatch_content_search(db);
@@ -1033,6 +1042,7 @@ impl TerminalApp {
                 started.elapsed(),
             );
             self.startup_fold_hydration_pending = false;
+            self.render_dirty = true;
         }
 
         if self.startup_reminder_hydration_pending {
@@ -1054,6 +1064,7 @@ impl TerminalApp {
                     self.startup_reminder_hydration_pending = false;
                     self.startup_reminder_hydration_retry_at = None;
                     self.startup_reminder_hydration_retry_count = 0;
+                    self.render_dirty = true;
                 }
                 Err(error) => {
                     self.startup_reminder_hydration_retry_count = self
@@ -1287,11 +1298,13 @@ impl TerminalApp {
                         self.content_search_selected = 0;
                     }
                     self.content_search_rx = None;
+                    self.render_dirty = true;
                 }
                 Ok((_, Err(error))) => {
                     self.status = format!("content search failed: {error}");
                     self.content_search_results.clear();
                     self.content_search_rx = None;
+                    self.render_dirty = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -1341,6 +1354,7 @@ impl TerminalApp {
         self.adjust_cursor();
         self.adjust_scroll();
         self.status = "clip-watch pasted".to_string();
+        self.render_dirty = true;
     }
 }
 

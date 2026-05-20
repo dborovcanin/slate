@@ -65,30 +65,30 @@ pub fn execute_vim_action_with_target(
             Some(execute_delete_word_backward(text, selection, repeats))
         }
         VimIntent::DeleteWordEnd => Some(execute_delete_word_end(text, selection, repeats)),
-        VimIntent::DeleteInsideWord => {
-            Some(execute_word_text_object(text, selection, false, true, repeats))
-        }
-        VimIntent::DeleteAroundWord => {
-            Some(execute_word_text_object(text, selection, true, true, repeats))
-        }
-        VimIntent::YankInsideWord => {
-            Some(execute_word_text_object(text, selection, false, false, repeats))
-        }
-        VimIntent::YankAroundWord => {
-            Some(execute_word_text_object(text, selection, true, false, repeats))
-        }
-        VimIntent::DeleteInsidePipe => {
-            Some(execute_pipe_text_object(text, selection, false, true, repeats))
-        }
-        VimIntent::DeleteAroundPipe => {
-            Some(execute_pipe_text_object(text, selection, true, true, repeats))
-        }
-        VimIntent::YankInsidePipe => {
-            Some(execute_pipe_text_object(text, selection, false, false, repeats))
-        }
-        VimIntent::YankAroundPipe => {
-            Some(execute_pipe_text_object(text, selection, true, false, repeats))
-        }
+        VimIntent::DeleteInsideWord => Some(execute_word_text_object(
+            text, selection, false, true, repeats,
+        )),
+        VimIntent::DeleteAroundWord => Some(execute_word_text_object(
+            text, selection, true, true, repeats,
+        )),
+        VimIntent::YankInsideWord => Some(execute_word_text_object(
+            text, selection, false, false, repeats,
+        )),
+        VimIntent::YankAroundWord => Some(execute_word_text_object(
+            text, selection, true, false, repeats,
+        )),
+        VimIntent::DeleteInsidePipe => Some(execute_pipe_text_object(
+            text, selection, false, true, repeats,
+        )),
+        VimIntent::DeleteAroundPipe => Some(execute_pipe_text_object(
+            text, selection, true, true, repeats,
+        )),
+        VimIntent::YankInsidePipe => Some(execute_pipe_text_object(
+            text, selection, false, false, repeats,
+        )),
+        VimIntent::YankAroundPipe => Some(execute_pipe_text_object(
+            text, selection, true, false, repeats,
+        )),
         VimIntent::DeleteInsideParen => Some(execute_delimited_inside_text_object(
             text,
             selection,
@@ -123,9 +123,12 @@ pub fn execute_vim_action_with_target(
         VimIntent::YankWordBackward => Some(execute_yank_word_backward(text, selection, repeats)),
         VimIntent::PasteAfter => execute_paste_after(text, selection, repeats, register),
         VimIntent::DeleteChar => Some(execute_delete_char(text, selection, repeats)),
-        VimIntent::DeleteTillChar => {
-            Some(execute_delete_till_char(text, selection, repeats, target_char))
-        }
+        VimIntent::DeleteTillChar => Some(execute_delete_till_char(
+            text,
+            selection,
+            repeats,
+            target_char,
+        )),
         _ => None,
     }
 }
@@ -324,10 +327,7 @@ fn execute_yank_to_line_start(
     }
 }
 
-fn execute_yank_to_line_end(
-    text: &str,
-    selection: SelectionSnapshot,
-) -> VimActionExecutionResult {
+fn execute_yank_to_line_end(text: &str, selection: SelectionSnapshot) -> VimActionExecutionResult {
     let cursor = clamp_offset(text, selection.head);
     let spans = line_spans(text);
     let idx = line_index_for_offset(&spans, cursor);
@@ -1201,15 +1201,11 @@ fn find_delimited_inside_object_bounds(
     let cursor = cursor_col.min(chars.len().saturating_sub(1));
 
     let pair = match kind {
-        DelimitedInsideObject::Paren => {
-            find_balanced_pair_around_cursor(&chars, cursor, '(', ')')
-        }
+        DelimitedInsideObject::Paren => find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
         DelimitedInsideObject::Bracket => {
             find_balanced_pair_around_cursor(&chars, cursor, '[', ']')
         }
-        DelimitedInsideObject::Brace => {
-            find_balanced_pair_around_cursor(&chars, cursor, '{', '}')
-        }
+        DelimitedInsideObject::Brace => find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
         DelimitedInsideObject::DoubleQuote => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '"')
         }
@@ -1345,9 +1341,8 @@ mod tests {
 
     #[test]
     fn yank_line_sets_linewise_register_without_edit() {
-        let result =
-            execute_vim_action("alpha\nbeta\ngamma", sel(0), VimIntent::YankLine, 2, None)
-                .expect("handled");
+        let result = execute_vim_action("alpha\nbeta\ngamma", sel(0), VimIntent::YankLine, 2, None)
+            .expect("handled");
         assert!(result.operations.is_empty());
         assert_eq!(linewise_register(&result), Some("alpha\nbeta"));
     }
@@ -1411,9 +1406,14 @@ mod tests {
             text: "A\nB".to_string(),
             mode: VimRegisterMode::Linewise,
         };
-        let result =
-            execute_vim_action("one\ntwo", sel(0), VimIntent::PasteAfter, 1, Some(&register))
-                .expect("handled");
+        let result = execute_vim_action(
+            "one\ntwo",
+            sel(0),
+            VimIntent::PasteAfter,
+            1,
+            Some(&register),
+        )
+        .expect("handled");
         let next = apply_operations("one\ntwo".to_string(), &result.operations);
         assert_eq!(next, "one\nA\nB\ntwo");
     }
@@ -1428,8 +1428,9 @@ mod tests {
 
     #[test]
     fn delete_word_forward_matches_vim_spacing() {
-        let result = execute_vim_action("foo bar baz", sel(0), VimIntent::DeleteWordForward, 1, None)
-            .expect("handled");
+        let result =
+            execute_vim_action("foo bar baz", sel(0), VimIntent::DeleteWordForward, 1, None)
+                .expect("handled");
         assert_eq!(charwise_register(&result), Some("foo "));
         let next = apply_operations("foo bar baz".to_string(), &result.operations);
         assert_eq!(next, "bar baz");
@@ -1477,9 +1478,15 @@ mod tests {
     fn delete_till_char_deletes_up_to_but_not_including_target() {
         let text = "alpha beta gamma";
         let cursor = text.find("alpha").expect("alpha");
-        let result =
-            execute_vim_action_with_target(text, sel(cursor), VimIntent::DeleteTillChar, 1, None, Some('b'))
-                .expect("handled");
+        let result = execute_vim_action_with_target(
+            text,
+            sel(cursor),
+            VimIntent::DeleteTillChar,
+            1,
+            None,
+            Some('b'),
+        )
+        .expect("handled");
         assert_eq!(charwise_register(&result), Some("alpha "));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "beta gamma");
@@ -1488,9 +1495,15 @@ mod tests {
     #[test]
     fn delete_till_char_count_targets_nth_match() {
         let text = "a x b x c";
-        let result =
-            execute_vim_action_with_target(text, sel(0), VimIntent::DeleteTillChar, 2, None, Some('x'))
-                .expect("handled");
+        let result = execute_vim_action_with_target(
+            text,
+            sel(0),
+            VimIntent::DeleteTillChar,
+            2,
+            None,
+            Some('x'),
+        )
+        .expect("handled");
         assert_eq!(charwise_register(&result), Some("a x b "));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "x c");
@@ -1498,9 +1511,15 @@ mod tests {
 
     #[test]
     fn delete_till_char_noops_when_target_missing() {
-        let result =
-            execute_vim_action_with_target("alpha beta", sel(0), VimIntent::DeleteTillChar, 1, None, Some('z'))
-                .expect("handled");
+        let result = execute_vim_action_with_target(
+            "alpha beta",
+            sel(0),
+            VimIntent::DeleteTillChar,
+            1,
+            None,
+            Some('z'),
+        )
+        .expect("handled");
         assert!(result.operations.is_empty());
         assert!(result.register.is_none());
     }
@@ -1584,9 +1603,8 @@ mod tests {
     fn delete_inside_bracket_removes_text_between_brackets() {
         let text = "list[keep, remove]";
         let cursor = text.find("keep").expect("keep");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideBracket, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideBracket, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("keep, remove"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "list[]");
@@ -1596,9 +1614,8 @@ mod tests {
     fn delete_inside_brace_removes_text_between_braces() {
         let text = "obj{keep: value}";
         let cursor = text.find("keep").expect("keep");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideBrace, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideBrace, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("keep: value"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "obj{}");

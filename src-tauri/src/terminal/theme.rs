@@ -251,7 +251,11 @@ impl RenderPalette {
         }
         let is_light = matches!(
             normalized.as_str(),
-            "slate" | "slate-light" | "catppuccin-latte" | "gruvbox-light" | "white"
+            "slate"
+                | "slate-light"
+                | "catppuccin-latte"
+                | "gruvbox-light"
+                | "white"
                 | "solarized-light"
         );
         palette.code_block_bg = if is_light { 252 } else { 237 };

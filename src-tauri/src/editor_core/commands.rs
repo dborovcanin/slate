@@ -40,7 +40,9 @@ fn convert_line(line: &str, kind: ListConversionKind, ordered_index: usize) -> (
         return convert_line_to_title(line);
     }
     let list_kind = match kind {
-        ListConversionKind::Title => unreachable!("title conversion is handled before list mapping"),
+        ListConversionKind::Title => {
+            unreachable!("title conversion is handled before list mapping")
+        }
         ListConversionKind::Checklist => ListKind::Checklist,
         ListConversionKind::Unordered => ListKind::Unordered,
         ListConversionKind::Ordered => ListKind::Ordered,
@@ -127,7 +129,10 @@ fn toggle_inline_wrap(
         let new_pos = from + left.len();
         let op = EditOperation {
             changes: vec![TextChange { from, to, insert }],
-            selection: Some(OperationSelection { anchor: new_pos, head: None }),
+            selection: Some(OperationSelection {
+                anchor: new_pos,
+                head: None,
+            }),
         };
         let mut result = result_with_message(format!("{} markers inserted", label));
         result.operations.push(op);
@@ -142,8 +147,16 @@ fn toggle_inline_wrap(
     if is_wrapped {
         let op = EditOperation {
             changes: vec![
-                TextChange { from: from - left.len(), to: from, insert: String::new() },
-                TextChange { from: to, to: to + right.len(), insert: String::new() },
+                TextChange {
+                    from: from - left.len(),
+                    to: from,
+                    insert: String::new(),
+                },
+                TextChange {
+                    from: to,
+                    to: to + right.len(),
+                    insert: String::new(),
+                },
             ],
             selection: Some(OperationSelection {
                 anchor: from - left.len(),
@@ -157,8 +170,16 @@ fn toggle_inline_wrap(
 
     let op = EditOperation {
         changes: vec![
-            TextChange { from, to: from, insert: left.to_string() },
-            TextChange { from: to, to, insert: right.to_string() },
+            TextChange {
+                from,
+                to: from,
+                insert: left.to_string(),
+            },
+            TextChange {
+                from: to,
+                to,
+                insert: right.to_string(),
+            },
         ],
         selection: Some(OperationSelection {
             anchor: from + left.len(),
@@ -200,8 +221,15 @@ fn run_format_clear(snapshot: &EditorContextSnapshot) -> CommandExecutionResult 
 
     let new_len = from + stripped.len();
     let op = EditOperation {
-        changes: vec![TextChange { from, to, insert: stripped }],
-        selection: Some(OperationSelection { anchor: from, head: Some(new_len) }),
+        changes: vec![TextChange {
+            from,
+            to,
+            insert: stripped,
+        }],
+        selection: Some(OperationSelection {
+            anchor: from,
+            head: Some(new_len),
+        }),
     };
     let mut result = result_with_message("inline formatting cleared");
     result.operations.push(op);
@@ -783,7 +811,10 @@ mod tests {
         let result = execute_command(&doc, "format clear", CommandMode::Editor);
         assert_eq!(result.message, "inline formatting cleared");
         assert_eq!(result.operations.len(), 1);
-        assert_eq!(result.operations[0].changes[0].insert, "bold and strike and code");
+        assert_eq!(
+            result.operations[0].changes[0].insert,
+            "bold and strike and code"
+        );
     }
 
     #[test]
@@ -806,8 +837,22 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         let op = &result.operations[0];
         assert_eq!(op.changes.len(), 2);
-        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "**".to_string() });
-        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "**".to_string() });
+        assert_eq!(
+            op.changes[0],
+            TextChange {
+                from,
+                to: from,
+                insert: "**".to_string()
+            }
+        );
+        assert_eq!(
+            op.changes[1],
+            TextChange {
+                from: to,
+                to,
+                insert: "**".to_string()
+            }
+        );
     }
 
     #[test]
@@ -821,8 +866,22 @@ mod tests {
         assert_eq!(result.operations.len(), 1);
         let op = &result.operations[0];
         assert_eq!(op.changes.len(), 2);
-        assert_eq!(op.changes[0], TextChange { from: from - 2, to: from, insert: String::new() });
-        assert_eq!(op.changes[1], TextChange { from: to, to: to + 2, insert: String::new() });
+        assert_eq!(
+            op.changes[0],
+            TextChange {
+                from: from - 2,
+                to: from,
+                insert: String::new()
+            }
+        );
+        assert_eq!(
+            op.changes[1],
+            TextChange {
+                from: to,
+                to: to + 2,
+                insert: String::new()
+            }
+        );
     }
 
     #[test]
@@ -848,8 +907,22 @@ mod tests {
         let result = execute_command(&doc, "italic", CommandMode::Editor);
         assert_eq!(result.message, "italic applied");
         let op = &result.operations[0];
-        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "*".to_string() });
-        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "*".to_string() });
+        assert_eq!(
+            op.changes[0],
+            TextChange {
+                from,
+                to: from,
+                insert: "*".to_string()
+            }
+        );
+        assert_eq!(
+            op.changes[1],
+            TextChange {
+                from: to,
+                to,
+                insert: "*".to_string()
+            }
+        );
     }
 
     #[test]
@@ -861,8 +934,22 @@ mod tests {
         let result = execute_command(&doc, "strike", CommandMode::Editor);
         assert_eq!(result.message, "strikethrough applied");
         let op = &result.operations[0];
-        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "~~".to_string() });
-        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "~~".to_string() });
+        assert_eq!(
+            op.changes[0],
+            TextChange {
+                from,
+                to: from,
+                insert: "~~".to_string()
+            }
+        );
+        assert_eq!(
+            op.changes[1],
+            TextChange {
+                from: to,
+                to,
+                insert: "~~".to_string()
+            }
+        );
     }
 
     #[test]
@@ -874,7 +961,21 @@ mod tests {
         let result = execute_command(&doc, "format code", CommandMode::Editor);
         assert_eq!(result.message, "inline code applied");
         let op = &result.operations[0];
-        assert_eq!(op.changes[0], TextChange { from, to: from, insert: "`".to_string() });
-        assert_eq!(op.changes[1], TextChange { from: to, to, insert: "`".to_string() });
+        assert_eq!(
+            op.changes[0],
+            TextChange {
+                from,
+                to: from,
+                insert: "`".to_string()
+            }
+        );
+        assert_eq!(
+            op.changes[1],
+            TextChange {
+                from: to,
+                to,
+                insert: "`".to_string()
+            }
+        );
     }
 }

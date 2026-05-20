@@ -256,7 +256,9 @@ pub fn parse_backup_command(input: &str) -> Option<ParsedBackupCommand> {
         return None;
     }
 
-    let head_end = normalized.find(char::is_whitespace).unwrap_or(normalized.len());
+    let head_end = normalized
+        .find(char::is_whitespace)
+        .unwrap_or(normalized.len());
     if !normalized[..head_end].eq_ignore_ascii_case("backup") {
         return None;
     }

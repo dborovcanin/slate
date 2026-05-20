@@ -542,7 +542,13 @@ fn checklist_toggle_from_marker_change(
     }
 
     let checked = parse_checklist_line_meta(&line.text)?.checked;
-    Some((line.number, line.from, line.to, line.text.clone(), Some(checked)))
+    Some((
+        line.number,
+        line.from,
+        line.to,
+        line.text.clone(),
+        Some(checked),
+    ))
 }
 
 fn reorder_checklist_toggle(

@@ -1510,7 +1510,10 @@ mod tests {
         let one = step_token(&VimState::default(), "char:d");
         let two = step_token(&one.state, "char:i");
         let bracket_close = step_token(&two.state, "char:]");
-        assert_eq!(bracket_close.actions[0].intent, VimIntent::DeleteInsideBracket);
+        assert_eq!(
+            bracket_close.actions[0].intent,
+            VimIntent::DeleteInsideBracket
+        );
 
         let one = step_token(&VimState::default(), "char:d");
         let two = step_token(&one.state, "char:i");
@@ -1731,7 +1734,10 @@ mod tests {
         let two = step_token(&one.state, "char:i");
         let bracket_close = step_token(&two.state, "char:]");
         assert_eq!(bracket_close.state.mode, VimMode::Insert);
-        assert_eq!(bracket_close.actions[0].intent, VimIntent::DeleteInsideBracket);
+        assert_eq!(
+            bracket_close.actions[0].intent,
+            VimIntent::DeleteInsideBracket
+        );
         assert_eq!(bracket_close.actions[1].intent, VimIntent::EnterInsert);
 
         let one = step_token(&VimState::default(), "char:c");

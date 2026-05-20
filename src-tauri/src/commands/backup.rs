@@ -89,7 +89,10 @@ pub fn backup_notes_database_blocking(db: &Db, path: &str) -> Result<BackupResul
         // failed rename cannot leave the user with no backup at all.
         if resolved.exists() {
             fs::rename(&resolved, &temp_old).map_err(|e| {
-                format!("Failed to stage existing backup '{}': {e}", resolved.display())
+                format!(
+                    "Failed to stage existing backup '{}': {e}",
+                    resolved.display()
+                )
             })?;
         }
         if let Err(e) = fs::rename(&temp_zip, &resolved) {
@@ -289,8 +292,7 @@ fn entry_crc32_and_size(entry: &ZipEntry) -> Result<(u32, u32), String> {
 }
 
 fn stream_crc32_and_size(path: &Path, entry_name: &str) -> Result<(u32, u32), String> {
-    let file =
-        File::open(path).map_err(|e| format!("Failed to read '{}': {e}", path.display()))?;
+    let file = File::open(path).map_err(|e| format!("Failed to read '{}': {e}", path.display()))?;
     let mut reader = BufReader::new(file);
     let mut crc = 0xffff_ffffu32;
     let mut size = 0u64;
@@ -369,8 +371,7 @@ mod tests {
     #[test]
     fn backup_notes_database_writes_portable_zip() {
         let db_path = temp_path("source.db");
-        let zip_path =
-            std::env::temp_dir().join(format!("slate-backup-test-{}.zip", Ulid::new()));
+        let zip_path = std::env::temp_dir().join(format!("slate-backup-test-{}.zip", Ulid::new()));
         let db = Db::open(db_path.clone()).expect("db opens");
         db.save_note("n1", "hello backup").expect("note saved");
 
@@ -395,8 +396,7 @@ mod tests {
     #[test]
     fn backup_overwrites_existing_zip_safely() {
         let db_path = temp_path("source.db");
-        let zip_path =
-            std::env::temp_dir().join(format!("slate-backup-test-{}.zip", Ulid::new()));
+        let zip_path = std::env::temp_dir().join(format!("slate-backup-test-{}.zip", Ulid::new()));
         let db = Db::open(db_path.clone()).expect("db opens");
         db.save_note("n1", "first backup").expect("note saved");
 

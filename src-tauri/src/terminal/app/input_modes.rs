@@ -655,10 +655,7 @@ impl TerminalApp {
                         line_text: line_text.clone(),
                         reminded_at_ms: None,
                     };
-                    self.reminder_ghosts.insert(
-                        line_idx,
-                        entry.clone(),
-                    );
+                    self.reminder_ghosts.insert(line_idx, entry.clone());
                     self.push_reminder_undo_entry(line_idx, before_reminder, Some(entry));
                 }
                 self.close_date_picker();

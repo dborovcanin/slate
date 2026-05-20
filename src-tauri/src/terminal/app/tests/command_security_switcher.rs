@@ -2219,8 +2219,7 @@ fn content_search_ctrl_l_toggles_fallback_results_between_working_collection_and
         .create_collection("Personal", "personal notes")
         .expect("personal collection created");
 
-    db.save_note("n2", "work note")
-        .expect("work note saved");
+    db.save_note("n2", "work note").expect("work note saved");
     db.save_note("n3", "personal note")
         .expect("personal note saved");
 
