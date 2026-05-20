@@ -2180,14 +2180,14 @@ impl TerminalApp {
             return;
         }
 
-        let mut scored: Vec<(usize, i32)> = Vec::new();
+        self.switcher_score_scratch.clear();
         for (idx, item) in self.switcher_items.iter().enumerate() {
             if let Some(score) = switcher::fuzzy_score(query, &item.title) {
-                scored.push((idx, score));
+                self.switcher_score_scratch.push((idx, score));
             }
         }
-        scored.sort_by(|a, b| b.1.cmp(&a.1));
-        self.switcher_matches = scored.into_iter().map(|(idx, _)| idx).collect();
+        self.switcher_score_scratch.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        self.switcher_matches = self.switcher_score_scratch.iter().map(|(idx, _)| *idx).collect();
         self.switcher_selected = 0;
     }
 
@@ -2205,7 +2205,7 @@ impl TerminalApp {
             return Ok(());
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
-        let body = self.joined_text_cached();
+        let body = self.joined_text_cache.take().unwrap_or_else(|| join_lines(&self.lines));
         let mut saved = note_sources(db).save_note_by_id(
             &self.active_note.id,
             &body,

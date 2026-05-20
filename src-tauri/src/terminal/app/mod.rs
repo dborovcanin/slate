@@ -20,6 +20,7 @@ use app_core::calc::CalcEngine;
 use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
 use rustc_hash::FxHashMap;
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::io;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
@@ -384,6 +385,7 @@ struct TerminalApp {
     switcher_query: String,
     switcher_items: Vec<NoteMeta>,
     switcher_matches: Vec<usize>,
+    switcher_score_scratch: Vec<(usize, i32)>,
     switcher_selected: usize,
     switcher_open_confirm: Option<SwitcherOpenConfirm>,
     switcher_delete_confirm: Option<SwitcherDeleteConfirm>,
@@ -478,7 +480,9 @@ struct TerminalApp {
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
     wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
     wiki_link_render_cache: FxHashMap<String, WikiLinkRenderCacheEntry>,
+    wiki_link_render_cache_order: VecDeque<String>,
     wiki_link_line_render_cache: FxHashMap<String, WikiLinkLineRenderCacheEntry>,
+    wiki_link_line_render_cache_order: VecDeque<String>,
     table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
     table_format_cache: crate::editor_core::table::TableFormatCache,
     render_palette: render::RenderPalette,
@@ -796,6 +800,7 @@ impl TerminalApp {
             switcher_query: String::new(),
             switcher_items,
             switcher_matches: Vec::new(),
+            switcher_score_scratch: Vec::new(),
             switcher_selected: 0,
             switcher_open_confirm: None,
             switcher_delete_confirm: None,
@@ -899,7 +904,9 @@ impl TerminalApp {
             wiki_link_note_suggestions_cache: Vec::new(),
             wiki_link_prefix_index: FxHashMap::default(),
             wiki_link_render_cache: FxHashMap::default(),
+            wiki_link_render_cache_order: VecDeque::new(),
             wiki_link_line_render_cache: FxHashMap::default(),
+            wiki_link_line_render_cache_order: VecDeque::new(),
             table_formula_segment_cache: FxHashMap::default(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
             render_palette,

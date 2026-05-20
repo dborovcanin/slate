@@ -138,6 +138,7 @@ impl TerminalApp {
             ("?".to_string(), true)
         };
 
+        let is_new = !self.wiki_link_render_cache.contains_key(short_id);
         self.wiki_link_render_cache.insert(
             short_id.to_string(),
             super::WikiLinkRenderCacheEntry {
@@ -146,17 +147,15 @@ impl TerminalApp {
                 cached_at: std::time::Instant::now(),
             },
         );
-
+        if is_new {
+            self.wiki_link_render_cache_order
+                .push_back(short_id.to_string());
+        }
         while self.wiki_link_render_cache.len() > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES {
-            let Some(oldest_key) = self
-                .wiki_link_render_cache
-                .iter()
-                .min_by_key(|(_, entry)| entry.cached_at)
-                .map(|(key, _)| key.clone())
-            else {
+            let Some(evict_key) = self.wiki_link_render_cache_order.pop_front() else {
                 break;
             };
-            self.wiki_link_render_cache.remove(oldest_key.as_str());
+            self.wiki_link_render_cache.remove(&evict_key);
         }
 
         (display, broken)
@@ -187,6 +186,7 @@ impl TerminalApp {
         // cache is O(1) and correct — entries are cheap to rebuild on the
         // next draw using the still-warm short_id cache above.
         self.wiki_link_line_render_cache.clear();
+        self.wiki_link_line_render_cache_order.clear();
     }
 
     fn insert_wiki_link_line_cache(
@@ -195,6 +195,7 @@ impl TerminalApp {
         rendered_line: &str,
         underline_ranges: &[(usize, usize)],
     ) {
+        let is_new = !self.wiki_link_line_render_cache.contains_key(line_text);
         self.wiki_link_line_render_cache.insert(
             line_text.to_string(),
             super::WikiLinkLineRenderCacheEntry {
@@ -203,18 +204,16 @@ impl TerminalApp {
                 cached_at: std::time::Instant::now(),
             },
         );
+        if is_new {
+            self.wiki_link_line_render_cache_order.push_back(line_text.to_string());
+        }
         while self.wiki_link_line_render_cache.len()
             > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES
         {
-            let Some(oldest_key) = self
-                .wiki_link_line_render_cache
-                .iter()
-                .min_by_key(|(_, entry)| entry.cached_at)
-                .map(|(key, _)| key.clone())
-            else {
+            let Some(evict_key) = self.wiki_link_line_render_cache_order.pop_front() else {
                 break;
             };
-            self.wiki_link_line_render_cache.remove(oldest_key.as_str());
+            self.wiki_link_line_render_cache.remove(evict_key.as_str());
         }
     }
 
