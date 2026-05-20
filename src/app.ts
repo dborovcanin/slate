@@ -85,8 +85,10 @@ function moduleIndicatorText(modules: NoteModules): string {
 const ACTIVE_NOTE_SYNC_INTERVAL_MS = 2500;
 const NOTE_CHANGED_EVENT = "slate://note-changed";
 const LARGE_NOTE_FULL_FEATURE_LINE_LIMIT = 30_000;
+const BACKEND_CONTENT_RESET_DEBOUNCE_MS = 2000;
 let activeNoteSyncTimer: number | null = null;
 let activeNoteSyncInFlight = false;
+let pendingBackendReset: { body: string; noteId: string; timer: number } | null = null;
 let stopBackendNoteChangeListener: UnlistenFn | null = null;
 let appConfig: ThemeConfig | null = null;
 let appRuntimeFlags: RuntimeFlags | null = null;
@@ -289,6 +291,24 @@ async function persistActiveNoteModules(modules: NoteModules) {
   reconfigureEditorForNote(saved);
 }
 
+function applyPendingBackendReset(noteId: string, body: string) {
+  pendingBackendReset = null;
+  if (state.activeNote?.id !== noteId || hasPendingLocalChanges()) return;
+  setEditorContent(body, { forceStateReset: true });
+  focusEditor();
+}
+
+function schedulePendingBackendReset(noteId: string, body: string) {
+  if (pendingBackendReset !== null) {
+    clearTimeout(pendingBackendReset.timer);
+  }
+  const timer = window.setTimeout(
+    () => applyPendingBackendReset(noteId, body),
+    BACKEND_CONTENT_RESET_DEBOUNCE_MS,
+  );
+  pendingBackendReset = { body, noteId, timer };
+}
+
 async function syncActiveNoteIfBackendChanged() {
   if (activeNoteSyncInFlight) return;
   const active = state.activeNote;
@@ -316,8 +336,10 @@ async function syncActiveNoteIfBackendChanged() {
     state.setActiveNote(latest);
     reconfigureEditorForNote(latest);
     if (!sameBody) {
-      setEditorContent(latest.body, { forceStateReset: true });
-      focusEditor();
+      // Debounce editor resets so rapid external changes (e.g. IMAP initial
+      // sync prepending many emails) coalesce into a single reset instead of
+      // continuously interrupting the editor.
+      schedulePendingBackendReset(activeId, latest.body);
     }
 
     void refreshNoteSummaries(state.activeNote?.id)
@@ -436,6 +458,10 @@ async function unlockProtectedNoteWithRetry(noteId: string, title: string): Prom
 }
 
 async function switchToNote(id: string, lineNumber?: number | null, heading?: string | null) {
+  if (pendingBackendReset !== null) {
+    clearTimeout(pendingBackendReset.timer);
+    pendingBackendReset = null;
+  }
   const saved = await flushSave();
   if (!saved) {
     return;

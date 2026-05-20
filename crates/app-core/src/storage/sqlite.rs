@@ -86,7 +86,8 @@ impl SqlitePool {
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA cache_size = -1024;",
+             PRAGMA cache_size = -1024;
+             PRAGMA busy_timeout = 5000;",
         )
         .map_err(|e| format!("Failed to set pragmas: {e}"))
     }

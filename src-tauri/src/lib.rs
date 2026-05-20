@@ -11,6 +11,8 @@ mod storage;
 mod terminal;
 
 use app_core::AppCore;
+#[cfg(feature = "imap")]
+use app_core::storage::Db;
 #[cfg(feature = "gui")]
 use ipc::server;
 use std::io::IsTerminal as _;
@@ -90,7 +92,7 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
-    maybe_start_background_imap_sync(theme.background_tasks_enabled);
+    maybe_start_background_imap_sync(theme.background_tasks_enabled, core.db().clone());
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -440,8 +442,8 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
-    maybe_start_background_imap_sync(theme.background_tasks_enabled);
     let core = AppCore::open_default()?;
+    maybe_start_background_imap_sync(theme.background_tasks_enabled, core.db().clone());
     terminal::run_terminal_session(core.db(), theme, opts)?;
     // Apply any staged restore that was not handled in-session (e.g. after a crash).
     drop(core);
@@ -487,7 +489,7 @@ fn notify_imap_new_mail(
 }
 
 #[cfg(feature = "imap")]
-fn maybe_start_background_imap_sync(background_tasks_enabled: bool) {
+fn maybe_start_background_imap_sync(background_tasks_enabled: bool, db: Db) {
     if !background_tasks_enabled {
         return;
     }
@@ -503,7 +505,7 @@ fn maybe_start_background_imap_sync(background_tasks_enabled: bool) {
     let poll_seconds = imap_cfg.poll_seconds.max(10);
 
     thread::spawn(move || loop {
-        if let Ok(summary) = imap::run_imap_sync_silent(imap_cfg.clone(), special.clone()) {
+        if let Ok(summary) = imap::run_imap_sync_silent(imap_cfg.clone(), special.clone(), &db) {
             notify_imap_new_mail(summary.appended, &imap_cfg, &special);
         }
         thread::sleep(Duration::from_secs(poll_seconds));
@@ -511,7 +513,7 @@ fn maybe_start_background_imap_sync(background_tasks_enabled: bool) {
 }
 
 #[cfg(not(feature = "imap"))]
-fn maybe_start_background_imap_sync(_background_tasks_enabled: bool) {}
+fn maybe_start_background_imap_sync(_background_tasks_enabled: bool, _db: app_core::storage::Db) {}
 
 #[cfg(not(feature = "imap"))]
 fn run_imap_sync() -> Result<(), String> {

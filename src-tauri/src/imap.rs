@@ -23,19 +23,21 @@ pub struct SyncSummary {
 }
 
 pub fn run_imap_sync(imap: ImapConfig, special: SpecialNotesConfig) -> Result<SyncSummary, String> {
-    run_imap_sync_with_verbosity(imap, special, true)
+    run_imap_sync_with_verbosity(imap, special, None, true)
 }
 
 pub fn run_imap_sync_silent(
     imap: ImapConfig,
     special: SpecialNotesConfig,
+    db: &Db,
 ) -> Result<SyncSummary, String> {
-    run_imap_sync_with_verbosity(imap, special, false)
+    run_imap_sync_with_verbosity(imap, special, Some(db), false)
 }
 
 fn run_imap_sync_with_verbosity(
     imap: ImapConfig,
     special: SpecialNotesConfig,
+    shared_db: Option<&Db>,
     verbose: bool,
 ) -> Result<SyncSummary, String> {
     imap.validate_runtime()?;
@@ -49,11 +51,18 @@ fn run_imap_sync_with_verbosity(
         ));
     }
 
-    let db_path = data_dir()?.join("notes.db");
-    let db = Db::open(db_path)?;
+    let owned_db;
+    let db = match shared_db {
+        Some(db) => db,
+        None => {
+            let db_path = data_dir()?.join("notes.db");
+            owned_db = Db::open(db_path)?;
+            &owned_db
+        }
+    };
     let source_key = build_source_key(&imap);
 
-    let summary = sync_once(&db, &imap, &special, &source_key, &password, verbose)?;
+    let summary = sync_once(db, &imap, &special, &source_key, &password, verbose)?;
     if verbose {
         println!(
             "IMAP sync done: fetched={} appended={} duplicates={} body_truncated={} message_truncated={}",
