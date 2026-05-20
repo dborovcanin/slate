@@ -218,6 +218,15 @@ Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, 
   - GUI status tag
   - TUI title bar label
 
+### 2026-05-20 TUI Cache and Save Performance Pass (shipped)
+
+- [x] TUI autosave clone eliminated: `save_with_options` now uses `joined_text_cache.take().unwrap_or_else(join_lines)` (take-and-restore); zero document copies on a warm cache.
+- [x] TUI switcher fuzzy-match recomputation reuses a `switcher_score_scratch: Vec<(usize, i32)>` field (no per-keystroke allocation) and switches to `sort_unstable_by`.
+- [x] TUI wiki-link cache O(n) LRU eviction replaced with O(1): both `wiki_link_render_cache` (2048-entry cap) and `wiki_link_line_render_cache` (1024-entry cap) now use a parallel `VecDeque<String>` insertion-order queue for O(1) FIFO eviction.
+- [x] TUI inline-token and table-formula-segment cache O(n) LRU eviction replaced with O(1): `InlineTokenCache` (`terminal/render.rs`, 4096-entry cap) and `table_formula_segment_cache` (`terminal/app/rendering.rs`, 2048-entry cap) now use the same VecDeque insertion-order eviction. Dropped the unused `tick`-based LRU bookkeeping from `InlineTokenCache`.
+- [x] Command completion options now sorted alphabetically before truncation so the menu is stable regardless of `COMMAND_DEFINITIONS` insertion order.
+- [x] Calc module gating for large notes corrected: `note_math_module_enabled` / `note_table_module_enabled` / `note_variables_module_enabled` no longer AND with `!large_note_reduced_features()`. Only the style gate retains the cutoff. 100k-line notes with explicit calc syntax now produce results.
+
 ### Next Sprint Checklist (2026-05-12 to 2026-05-23)
 
 - [x] Shared vim action snapshot elimination (line-window / line+col API)

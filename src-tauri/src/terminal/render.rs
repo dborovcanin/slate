@@ -9,6 +9,7 @@ use crate::terminal::render_styles::{
 pub use crate::terminal::theme::RenderPalette;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 pub const RESET: &str = "\x1b[0m";
@@ -16,34 +17,27 @@ pub const TAB_WIDTH: usize = 4;
 const INLINE_TOKEN_CACHE_MAX_ENTRIES: usize = 4096;
 
 struct InlineTokenCache {
-    entries: FxHashMap<String, (Arc<Vec<markdown_tokens::InlineToken>>, u64)>,
-    tick: u64,
+    entries: FxHashMap<String, Arc<Vec<markdown_tokens::InlineToken>>>,
+    order: VecDeque<String>,
 }
 
 impl InlineTokenCache {
     fn new() -> Self {
         Self {
             entries: FxHashMap::default(),
-            tick: 0,
+            order: VecDeque::new(),
         }
     }
 
     fn get(&mut self, text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
-        self.tick = self.tick.wrapping_add(1);
-        if let Some((tokens, last_used)) = self.entries.get_mut(text) {
-            *last_used = self.tick;
+        if let Some(tokens) = self.entries.get(text) {
             return Arc::clone(tokens);
         }
         let tokens = Arc::new(markdown_tokens::tokenize_inline_markdown(text));
-        self.entries
-            .insert(text.to_string(), (Arc::clone(&tokens), self.tick));
+        self.entries.insert(text.to_string(), Arc::clone(&tokens));
+        self.order.push_back(text.to_string());
         while self.entries.len() > INLINE_TOKEN_CACHE_MAX_ENTRIES {
-            let Some(evict_key) = self
-                .entries
-                .iter()
-                .min_by_key(|(_, (_, last_used))| *last_used)
-                .map(|(key, _)| key.clone())
-            else {
+            let Some(evict_key) = self.order.pop_front() else {
                 break;
             };
             self.entries.remove(evict_key.as_str());

@@ -237,6 +237,7 @@ impl TerminalApp {
             return cached;
         }
         let segments = find_table_formula_segments(line_text);
+        let is_new = !self.table_formula_segment_cache.contains_key(line_text);
         self.table_formula_segment_cache.insert(
             line_text.to_string(),
             super::TableFormulaSegmentCacheEntry {
@@ -244,18 +245,16 @@ impl TerminalApp {
                 cached_at: std::time::Instant::now(),
             },
         );
+        if is_new {
+            self.table_formula_segment_cache_order.push_back(line_text.to_string());
+        }
         while self.table_formula_segment_cache.len()
             > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES
         {
-            let Some(oldest_key) = self
-                .table_formula_segment_cache
-                .iter()
-                .min_by_key(|(_, entry)| entry.cached_at)
-                .map(|(key, _)| key.clone())
-            else {
+            let Some(evict_key) = self.table_formula_segment_cache_order.pop_front() else {
                 break;
             };
-            self.table_formula_segment_cache.remove(oldest_key.as_str());
+            self.table_formula_segment_cache.remove(evict_key.as_str());
         }
         segments
     }

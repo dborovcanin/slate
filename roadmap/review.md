@@ -5,6 +5,7 @@ Working list of architecture/performance items that survived the most recent rev
 Recently shipped (this pass) and dropped from the table:
 
 - TUI wiki-link cache eviction was O(n) `min_by_key` on every insert past the cap. Both `wiki_link_render_cache` (2048 cap) and `wiki_link_line_render_cache` (1024 cap) now use a parallel `VecDeque<String>` insertion-order queue for O(1) FIFO eviction.
+- `InlineTokenCache` (`terminal/render.rs`, 4096-entry cap) and `table_formula_segment_cache` (`terminal/app/rendering.rs`, 2048-entry cap) converted to the same VecDeque eviction pattern. Dropped the now-unused `tick`-based LRU bookkeeping from `InlineTokenCache`.
 - TUI autosave path used to clone the entire document via `joined_text_cached()` on every save. `save_with_options` now uses `joined_text_cache.take().unwrap_or_else(...)` to move the owned String into the save call and reinsert it after; zero copies on a warm cache.
 - TUI switcher fuzzy-match recomputation allocated a fresh `Vec<(usize, i32)>` and called `sort_by` on every keystroke. It now reuses a `switcher_score_scratch` field and uses `sort_unstable_by`.
 - TUI command completion options were emitted in `COMMAND_DEFINITIONS` insertion order; they are now sorted alphabetically before truncation so the menu doesn't reorder by registration history.
@@ -62,23 +63,7 @@ Keystroke decoration latency on large documents (>5k lines) drops from O(viewpor
 
 ---
 
-## 3. Remaining O(n) LRU evictions in TUI render-time caches (new)
-
-**Problem**
-Two more thread-local / per-app caches still use the `min_by_key` linear-scan eviction pattern that was just fixed for the wiki-link caches. Both sit on per-draw-line paths:
-
-- `src-tauri/src/terminal/render.rs:31-52` — `InlineTokenCache::get` caches tokenized inline markdown by line text. Cap is `INLINE_TOKEN_CACHE_MAX_ENTRIES = 4096`. On insert past the cap it does `self.entries.iter().min_by_key(|(_, (_, last_used))| ...)` — a full O(4096) scan to find the LRU key, then a clone of that key, then a remove. Triggered when scrolling through a long note past 4k distinct lines.
-- `src-tauri/src/terminal/app/rendering.rs:235-261` — `table_formula_segments_cached` does the same `min_by_key` scan with a 2048-entry cap whenever a table line passes the cap.
-
-**Approach**
-Apply the same VecDeque pattern used for the wiki-link caches: keep a parallel `VecDeque<String>` insertion-order queue, push back on insert when the key is new, pop front to evict. For `InlineTokenCache` the queue lives inside the thread-local struct; for `table_formula_segment_cache` it becomes a sibling field on `TerminalApp`.
-
-**Expected gain**
-Removes an O(N) scan per eviction in two more hot-path caches. Effect is small on small notes, larger on long notes with rapid scroll where the caches turn over frequently.
-
----
-
-## 4. `TerminalApp` state decomposition (carry-over from `plan.md`)
+## 3. `TerminalApp` state decomposition (carry-over from `plan.md`)
 
 **Problem**
 `src-tauri/src/terminal/app/mod.rs:375` declares `TerminalApp` with ~120+ flat fields covering: editor model, switcher, collection switcher, content search, wiki-link autocomplete, variable autocomplete, vim register/macros, calc cache + scheduling, search, undo history, folding, clipboard watch, render palette, date picker, command bar, perf trace state. Any per-subsystem change touches the same monolith, blocking subsystem-scoped diffs and making lifetime/borrow constraints conflate unrelated state.
@@ -93,7 +78,7 @@ Borrow checker friction — many call sites hold `&mut self` across multiple sub
 
 ---
 
-## 5. `joined_text_cached()` still clones in non-autosave callers (new, lower-priority follow-up)
+## 4. `joined_text_cached()` still clones in non-autosave callers (lower-priority follow-up)
 
 **Problem**
 `command_search_switcher.rs:1876-1883` — `joined_text_cached()` always returns an owned `String` and seeds `joined_text_cache` with a clone. The autosave path was rewritten to use `joined_text_cache.take().unwrap_or_else(...)` (take-and-restore) and no longer pays the clone. Two callers still do: `build_snapshot` (line 1886) and the `Export` HostCommandPlan branch (line 1621). Both allocate a full document copy each invocation.
@@ -113,7 +98,7 @@ Removes one O(doc) clone per command dispatch on notes where the scoped-window s
 
 ## Notes
 
-- Items 1, 2, 4 are carried over from prior reviews and remain accurate; line numbers updated to current files.
-- Items 3 and 5 are new findings surfaced by following the same patterns we fixed during the most recent performance pass.
+- Items 1, 2, 3 are carried over from prior reviews and remain accurate; line numbers updated to current files.
+- Item 4 is a new finding surfaced by following the same clone pattern fixed in the autosave path.
 - Large-note tier policy (`adaptive large-note mode`, regression gates at `30k/100k/200k/400k`) lives in `roadmap/plan.md` Next Sprint Checklist and is not duplicated here.
 - All execution backlog for measurement/operations references stays in `roadmap/performance.md`, `roadmap/perf-tracing.md`, `roadmap/perf-multirow-table.md` per the ownership note in `plan.md`.
