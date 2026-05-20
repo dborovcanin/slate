@@ -85,7 +85,8 @@ impl SqlitePool {
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;",
+             PRAGMA foreign_keys=ON;
+             PRAGMA cache_size = -1024;",
         )
         .map_err(|e| format!("Failed to set pragmas: {e}"))
     }

@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 pub const RESET: &str = "\x1b[0m";
 pub const TAB_WIDTH: usize = 4;
-const INLINE_TOKEN_CACHE_MAX_ENTRIES: usize = 4096;
+const INLINE_TOKEN_CACHE_MAX_ENTRIES: usize = 512;
 
 struct InlineTokenCache {
     entries: FxHashMap<String, Arc<Vec<markdown_tokens::InlineToken>>>,

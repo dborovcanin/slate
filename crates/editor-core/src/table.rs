@@ -2,7 +2,7 @@ use std::hash::{Hash, Hasher};
 
 use rustc_hash::{FxHashMap, FxHasher};
 
-const TABLE_PARSE_CACHE_MAX_ENTRIES: usize = 2048;
+const TABLE_PARSE_CACHE_MAX_ENTRIES: usize = 512;
 
 #[derive(Debug, Clone, Default)]
 pub struct TableFormatCache {
