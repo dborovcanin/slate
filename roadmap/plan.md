@@ -218,6 +218,13 @@ Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, 
   - GUI status tag
   - TUI title bar label
 
+### 2026-05-20 Backup Load / Export Command (shipped)
+
+- [x] `backup export <path.zip>` — renamed from bare `backup`; legacy aliases `backup <path>` and `backup notes <path>` still accepted for backward compatibility.
+- [x] `backup load <path.zip>` — new command: reads `notes.db` from a Slate backup ZIP, stages it to `<data_dir>/notes.db.staged-restore`, sets `quit = true`. After the TUI session exits (all Db connections closed), `apply_staged_restore_if_pending` in `lib.rs` atomically replaces the live `notes.db`. The ZIP reader is minimal, stored-only (method=0), no external crate.
+- [x] `BackupAction` enum and `BackupLoad` `CommandId` added to `editor-core/command_catalog.rs`. `engine.rs` branches on `parsed.action` to produce `HostCommandPlan::Backup` or `HostCommandPlan::BackupLoad`.
+- [x] `wasm.rs` extended: `BackupLoad { path }` variant added to `HostCommandPlanWire`, match arm added, and `CommandDispatchKind::HostBackupLoad => "host_backup_load"` added to the dispatch-kind string table. Required for the GUI path to serialize the plan over the wasm boundary.
+
 ### 2026-05-20 TUI Cache and Save Performance Pass (shipped)
 
 - [x] TUI autosave clone eliminated: `save_with_options` now uses `joined_text_cache.take().unwrap_or_else(join_lines)` (take-and-restore); zero document copies on a warm cache.

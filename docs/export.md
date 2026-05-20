@@ -1,7 +1,7 @@
 # Export Reference
 
 Slate supports clipboard and file export from GUI and TUI.
-It also supports a full database backup command for moving all notes together.
+It also supports full database backup and restore commands for moving all notes together.
 
 ## Export formats
 
@@ -14,8 +14,10 @@ It also supports a full database backup command for moving all notes together.
 - `export pdf <path>`
 - `export md [path]`
 - `export txt [path]`
-- `backup <path.zip>`
-- `backup notes <path.zip>`
+- `backup export <path.zip>`
+- `backup load <path.zip>`
+- `backup <path.zip>` (legacy alias for `backup export`)
+- `backup notes <path.zip>` (legacy alias for `backup export`)
 
 If path is omitted:
 
@@ -73,11 +75,23 @@ Host command status messages are returned to the status bar/toast layer.
 
 ## Database Backup
 
-`backup <path.zip>` writes a portable zip containing:
+`backup export <path.zip>` writes a portable zip containing:
 
 - `notes.db`: a consistent SQLite snapshot of the full Slate notes database
 - `manifest.json`: backup metadata
 - `README.txt`: manual restore notes
 
-Close Slate before manually restoring. Unzip the backup and replace the active
-Slate `notes.db` with the extracted `notes.db`.
+The zip uses stored (uncompressed) entries so the file can be opened by any standard zip tool.
+
+## Database Restore
+
+`backup load <path.zip>` restores notes from a Slate backup zip without requiring any manual file operations:
+
+1. Slate reads `notes.db` out of the zip and stages it at `<data_dir>/notes.db.staged-restore`.
+2. The TUI session exits.
+3. On exit, Slate atomically replaces the live `notes.db` with the staged file.
+4. Re-open Slate to use the restored notes.
+
+The original `notes.db` is moved aside during the swap and removed once the restore succeeds, so a failed rename cannot leave the database in a broken state.
+
+Manual restore is still possible: close Slate, unzip the backup, and replace the active `notes.db` with the extracted one.

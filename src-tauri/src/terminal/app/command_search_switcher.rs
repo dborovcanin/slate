@@ -1662,7 +1662,7 @@ impl TerminalApp {
                 }
                 crate::editor_core::engine::HostCommandPlan::Backup { path } => {
                     let Some(path) = path else {
-                        self.status = "usage: backup <path.zip>".to_string();
+                        self.status = "usage: backup export <path.zip>".to_string();
                         return;
                     };
                     if self.dirty {
@@ -1676,6 +1676,23 @@ impl TerminalApp {
                             Ok(result) => format!("backed up notes to {}", result.path),
                             Err(error) => format!("backup failed: {error}"),
                         };
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::BackupLoad { path } => {
+                    let Some(path) = path else {
+                        self.status = "usage: backup load <path.zip>".to_string();
+                        return;
+                    };
+                    match crate::commands::backup::stage_restore_from_zip(&path) {
+                        Ok(_) => {
+                            self.status =
+                                "restore staged — slate will restart to apply".to_string();
+                            self.quit = true;
+                        }
+                        Err(error) => {
+                            self.status = format!("backup load failed: {error}");
+                        }
+                    }
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::ClipWatch { action } => {
@@ -2184,8 +2201,13 @@ impl TerminalApp {
                 self.switcher_score_scratch.push((idx, score));
             }
         }
-        self.switcher_score_scratch.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-        self.switcher_matches = self.switcher_score_scratch.iter().map(|(idx, _)| *idx).collect();
+        self.switcher_score_scratch
+            .sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        self.switcher_matches = self
+            .switcher_score_scratch
+            .iter()
+            .map(|(idx, _)| *idx)
+            .collect();
         self.switcher_selected = 0;
     }
 
@@ -2203,7 +2225,10 @@ impl TerminalApp {
             return Ok(());
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
-        let body = self.joined_text_cache.take().unwrap_or_else(|| join_lines(&self.lines));
+        let body = self
+            .joined_text_cache
+            .take()
+            .unwrap_or_else(|| join_lines(&self.lines));
         let mut saved = note_sources(db).save_note_by_id(
             &self.active_note.id,
             &body,

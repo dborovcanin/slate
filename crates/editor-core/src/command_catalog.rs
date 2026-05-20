@@ -61,6 +61,7 @@ pub enum CommandId {
     ExportMd,
     ExportTxt,
     Backup,
+    BackupLoad,
     Write,
     WriteQuit,
     Quit,
@@ -136,8 +137,15 @@ pub struct ParsedExportCommand {
     pub path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackupAction {
+    Export,
+    Load,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedBackupCommand {
+    pub action: BackupAction,
     pub path: Option<String>,
 }
 
@@ -265,13 +273,45 @@ pub fn parse_backup_command(input: &str) -> Option<ParsedBackupCommand> {
 
     let after_backup = normalized[head_end..].trim_start();
     if after_backup.is_empty() {
-        return Some(ParsedBackupCommand { path: None });
+        return Some(ParsedBackupCommand {
+            action: BackupAction::Export,
+            path: None,
+        });
     }
 
     let first_token_end = after_backup
         .find(char::is_whitespace)
         .unwrap_or(after_backup.len());
-    let path = if after_backup[..first_token_end].eq_ignore_ascii_case("notes") {
+    let first_token = &after_backup[..first_token_end];
+
+    // `backup load <path>` — restore from a backup zip
+    if first_token.eq_ignore_ascii_case("load") {
+        let path_str = after_backup[first_token_end..].trim_start();
+        return Some(ParsedBackupCommand {
+            action: BackupAction::Load,
+            path: if path_str.is_empty() {
+                None
+            } else {
+                Some(path_str.to_string())
+            },
+        });
+    }
+
+    // `backup export <path>` — explicit export subcommand
+    if first_token.eq_ignore_ascii_case("export") {
+        let path_str = after_backup[first_token_end..].trim_start();
+        return Some(ParsedBackupCommand {
+            action: BackupAction::Export,
+            path: if path_str.is_empty() {
+                None
+            } else {
+                Some(path_str.to_string())
+            },
+        });
+    }
+
+    // Legacy: `backup notes <path>` and `backup <path>`
+    let path = if first_token.eq_ignore_ascii_case("notes") {
         let after_notes = after_backup[first_token_end..].trim_start();
         if after_notes.is_empty() {
             None
@@ -282,7 +322,10 @@ pub fn parse_backup_command(input: &str) -> Option<ParsedBackupCommand> {
         Some(after_backup.to_string())
     };
 
-    Some(ParsedBackupCommand { path })
+    Some(ParsedBackupCommand {
+        action: BackupAction::Export,
+        path,
+    })
 }
 
 pub fn parse_collection_command(input: &str) -> Option<ParsedCollectionCommand> {
@@ -358,7 +401,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 61] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 62] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -832,9 +875,16 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 61] = [
     },
     CommandDefinition {
         id: CommandId::Backup,
-        value: "backup",
-        aliases: &["backup notes"],
-        description: "backup all notes to a zip file",
+        value: "backup export",
+        aliases: &["backup", "backup notes"],
+        description: "export all notes to a backup zip file",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::BackupLoad,
+        value: "backup load",
+        aliases: &[],
+        description: "load notes from a backup zip file (restarts after confirmation)",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -879,8 +929,11 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
     if let Some(parsed) = parse_export_command(normalized_input) {
         return parsed.format.command_id() == def.id;
     }
-    if parse_backup_command(normalized_input).is_some() {
-        return def.id == CommandId::Backup;
+    if let Some(parsed) = parse_backup_command(normalized_input) {
+        return match parsed.action {
+            BackupAction::Export => def.id == CommandId::Backup,
+            BackupAction::Load => def.id == CommandId::BackupLoad,
+        };
     }
     if let Some(parsed) = parse_collection_command(normalized_input) {
         return parsed.action.command_id() == def.id;
@@ -1185,13 +1238,16 @@ mod tests {
     fn parse_backup_command_supports_direct_and_notes_prefixed_paths() {
         let direct = parse_backup_command("backup /tmp/slate.zip").expect("parse backup path");
         assert_eq!(direct.path.as_deref(), Some("/tmp/slate.zip"));
+        assert_eq!(direct.action, BackupAction::Export);
 
         let prefixed =
             parse_backup_command(":backup notes ~/backups/slate.zip").expect("parse backup notes");
         assert_eq!(prefixed.path.as_deref(), Some("~/backups/slate.zip"));
+        assert_eq!(prefixed.action, BackupAction::Export);
 
         let missing = parse_backup_command("backup").expect("parse backup missing path");
         assert_eq!(missing.path, None);
+        assert_eq!(missing.action, BackupAction::Export);
 
         let multi_space =
             parse_backup_command("backup  notes  /tmp/slate.zip").expect("parse with extra spaces");
@@ -1200,6 +1256,22 @@ mod tests {
         let spaced_path =
             parse_backup_command("backup /tmp/my backup.zip").expect("parse path with space");
         assert_eq!(spaced_path.path.as_deref(), Some("/tmp/my backup.zip"));
+    }
+
+    #[test]
+    fn parse_backup_command_supports_export_and_load_subcommands() {
+        let export =
+            parse_backup_command("backup export /tmp/slate.zip").expect("parse backup export");
+        assert_eq!(export.action, BackupAction::Export);
+        assert_eq!(export.path.as_deref(), Some("/tmp/slate.zip"));
+
+        let load = parse_backup_command("backup load /tmp/slate.zip").expect("parse backup load");
+        assert_eq!(load.action, BackupAction::Load);
+        assert_eq!(load.path.as_deref(), Some("/tmp/slate.zip"));
+
+        let load_no_path = parse_backup_command("backup load").expect("parse backup load no path");
+        assert_eq!(load_no_path.action, BackupAction::Load);
+        assert_eq!(load_no_path.path, None);
     }
 
     #[test]

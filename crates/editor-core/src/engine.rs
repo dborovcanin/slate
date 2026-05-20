@@ -1,6 +1,6 @@
 use crate::command_catalog::{
-    self, CollectionCommandAction, CommandDefinition, CommandId, ExportFormat, NoteSecurityAction,
-    ParsedNoteSecurityCommand,
+    self, BackupAction, CollectionCommandAction, CommandDefinition, CommandId, ExportFormat,
+    NoteSecurityAction, ParsedNoteSecurityCommand,
 };
 use crate::types::{CommandMode, CommandSuggestion};
 use crate::vim::{self, VimContext, VimKey, VimState, VimStep};
@@ -72,6 +72,7 @@ pub enum CommandDispatchKind {
     HostWrite,
     HostExport,
     HostBackup,
+    HostBackupLoad,
     HostModule,
     HostCollection,
     HostFold,
@@ -118,6 +119,9 @@ pub enum HostCommandPlan {
         path: Option<String>,
     },
     Backup {
+        path: Option<String>,
+    },
+    BackupLoad {
         path: Option<String>,
     },
     Module {
@@ -178,6 +182,7 @@ impl EditorEngine {
                 HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
                 HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
                 HostCommandPlan::Backup { .. } => CommandDispatchKind::HostBackup,
+                HostCommandPlan::BackupLoad { .. } => CommandDispatchKind::HostBackupLoad,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
                 HostCommandPlan::Collection { .. } => CommandDispatchKind::HostCollection,
                 HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
@@ -208,7 +213,10 @@ impl EditorEngine {
             });
         }
         if let Some(parsed) = command_catalog::parse_backup_command(raw_input) {
-            return Some(HostCommandPlan::Backup { path: parsed.path });
+            return match parsed.action {
+                BackupAction::Export => Some(HostCommandPlan::Backup { path: parsed.path }),
+                BackupAction::Load => Some(HostCommandPlan::BackupLoad { path: parsed.path }),
+            };
         }
         if let Some(parsed) = command_catalog::parse_collection_command(raw_input) {
             return Some(HostCommandPlan::Collection {
@@ -263,6 +271,7 @@ impl EditorEngine {
                 action: HostClipWatchAction::Stop,
             }),
             CommandId::Backup => Some(HostCommandPlan::Backup { path: None }),
+            CommandId::BackupLoad => Some(HostCommandPlan::BackupLoad { path: None }),
             CommandId::Write => Some(HostCommandPlan::Write {
                 quit: false,
                 force: normalized == "w!",

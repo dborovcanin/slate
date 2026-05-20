@@ -3,7 +3,7 @@ use app_core::storage::Db;
 use app_core::AppCore;
 use serde::Serialize;
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 #[cfg(feature = "gui")]
 use tauri::State;
@@ -11,6 +11,8 @@ use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use ulid::Ulid;
 use url::Url;
+
+const STAGED_RESTORE_FILENAME: &str = "notes.db.staged-restore";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BackupResult {
@@ -346,6 +348,134 @@ fn write_u32<W: Write>(writer: &mut W, value: u32) -> Result<(), String> {
         .map_err(|e| format!("Failed to write zip data: {e}"))
 }
 
+/// Extract `notes.db` from a Slate backup ZIP and stage it for restore.
+/// The staged file is written to `<data_dir>/notes.db.staged-restore`.
+/// The actual swap is deferred to `apply_staged_restore_if_pending`, which must
+/// be called after all Db connections are closed (i.e. after the TUI session exits).
+pub fn stage_restore_from_zip(zip_path: &str) -> Result<String, String> {
+    let resolved = resolve_backup_path(zip_path)?;
+    let data_dir = app_core::data_dir()?;
+    let staged = data_dir.join(STAGED_RESTORE_FILENAME);
+
+    let db_bytes = extract_notes_db_from_zip(&resolved)?;
+
+    let tmp = data_dir.join(format!(".slate-staged-restore-{}.tmp", Ulid::new()));
+    (|| {
+        let mut f =
+            File::create(&tmp).map_err(|e| format!("failed to write staged restore: {e}"))?;
+        f.write_all(&db_bytes)
+            .map_err(|e| format!("failed to write staged restore: {e}"))?;
+        f.flush()
+            .map_err(|e| format!("failed to flush staged restore: {e}"))?;
+        fs::rename(&tmp, &staged).map_err(|e| format!("failed to stage restore file: {e}"))?;
+        Ok(())
+    })()
+    .inspect_err(|_: &String| {
+        let _ = fs::remove_file(&tmp);
+    })?;
+
+    Ok(resolved.display().to_string())
+}
+
+/// If a staged restore file exists, atomically swap it in as the live `notes.db`.
+/// Returns `true` if a restore was applied, `false` if nothing was pending.
+/// Must be called after all Db connections are closed.
+pub fn apply_staged_restore_if_pending() -> Result<bool, String> {
+    let data_dir = app_core::data_dir()?;
+    let staged = data_dir.join(STAGED_RESTORE_FILENAME);
+    if !staged.exists() {
+        return Ok(false);
+    }
+    let live = data_dir.join("notes.db");
+    let old = data_dir.join(format!(".slate-notes-prerestore-{}.db", Ulid::new()));
+    if live.exists() {
+        fs::rename(&live, &old)
+            .map_err(|e| format!("failed to move existing notes.db aside: {e}"))?;
+    }
+    if let Err(e) = fs::rename(&staged, &live) {
+        let _ = fs::rename(&old, &live);
+        return Err(format!("failed to apply staged restore: {e}"));
+    }
+    let _ = fs::remove_file(&old);
+    Ok(true)
+}
+
+/// Read a Slate backup ZIP (stored, method=0) and extract the raw bytes of `notes.db`.
+fn extract_notes_db_from_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
+    let mut file = File::open(zip_path)
+        .map_err(|e| format!("cannot open backup '{}': {e}", zip_path.display()))?;
+
+    // Scan local file headers sequentially; all entries are stored (method=0).
+    // Local header layout (ZIP32):
+    //   4  signature  0x04034b50
+    //   2  version needed
+    //   2  general flags
+    //   2  compression method
+    //   2  last mod time
+    //   2  last mod date
+    //   4  crc-32
+    //   4  compressed size
+    //   4  uncompressed size
+    //   2  file name length
+    //   2  extra field length
+    //   n  file name
+    //   m  extra field
+    //  ... data (compressed size bytes)
+    loop {
+        let mut sig = [0u8; 4];
+        if file.read_exact(&mut sig).is_err() {
+            break;
+        }
+        if u32::from_le_bytes(sig) != 0x0403_4b50 {
+            break;
+        }
+        let mut header = [0u8; 26];
+        file.read_exact(&mut header)
+            .map_err(|e| format!("truncated ZIP header in '{}': {e}", zip_path.display()))?;
+        // header[0..2]   = version needed
+        // header[2..4]   = general flags
+        // header[4..6]   = compression method
+        // header[6..8]   = last mod time
+        // header[8..10]  = last mod date
+        // header[10..14] = crc-32
+        // header[14..18] = compressed size
+        // header[18..22] = uncompressed size
+        // header[22..24] = file name length
+        // header[24..26] = extra field length
+        let method = u16::from_le_bytes([header[4], header[5]]);
+        let compressed_size = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
+        let name_len = u16::from_le_bytes([header[22], header[23]]) as usize;
+        let extra_len = u16::from_le_bytes([header[24], header[25]]) as usize;
+
+        let mut name_bytes = vec![0u8; name_len];
+        file.read_exact(&mut name_bytes)
+            .map_err(|e| format!("truncated ZIP entry name in '{}': {e}", zip_path.display()))?;
+        file.seek(SeekFrom::Current(extra_len as i64))
+            .map_err(|e| format!("seek failed in '{}': {e}", zip_path.display()))?;
+
+        let entry_name = String::from_utf8_lossy(&name_bytes);
+        if entry_name == "notes.db" {
+            if method != 0 {
+                return Err(format!(
+                    "notes.db in backup is compressed (method={method}); only stored backups are supported"
+                ));
+            }
+            let mut data = vec![0u8; compressed_size as usize];
+            file.read_exact(&mut data)
+                .map_err(|e| format!("failed to read notes.db from backup: {e}"))?;
+            return Ok(data);
+        }
+
+        file.seek(SeekFrom::Current(compressed_size as i64))
+            .map_err(|e| format!("seek failed in '{}': {e}", zip_path.display()))?;
+    }
+
+    Err(format!(
+        "no notes.db entry found in backup '{}'",
+        zip_path.display()
+    ))
+}
+
 fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for &byte in bytes {
@@ -448,5 +578,23 @@ mod tests {
     #[test]
     fn crc32_matches_standard_check_value() {
         assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+    }
+
+    #[test]
+    fn extract_notes_db_from_zip_round_trips_backup() {
+        let db_path = temp_path("source.db");
+        let zip_path = std::env::temp_dir().join(format!("slate-backup-test-{}.zip", Ulid::new()));
+        let db = Db::open(db_path.clone()).expect("db opens");
+        db.save_note("n1", "round trip content")
+            .expect("note saved");
+
+        backup_notes_database_blocking(&db, zip_path.to_str().unwrap()).expect("backup succeeds");
+
+        let extracted = extract_notes_db_from_zip(&zip_path).expect("extract succeeds");
+        // SQLite files start with the header string
+        assert!(extracted.starts_with(b"SQLite format 3\0"));
+
+        let _ = fs::remove_file(db_path);
+        let _ = fs::remove_file(zip_path);
     }
 }

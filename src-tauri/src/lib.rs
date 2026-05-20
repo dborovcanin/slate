@@ -441,7 +441,19 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     }
     maybe_start_background_imap_sync(theme.background_tasks_enabled);
     let core = AppCore::open_default()?;
-    terminal::run_terminal_session(core.db(), theme, opts)
+    terminal::run_terminal_session(core.db(), theme, opts)?;
+    // All Db connections are closed when `core` drops; apply any pending restore now.
+    drop(core);
+    match crate::commands::backup::apply_staged_restore_if_pending() {
+        Ok(true) => {
+            eprintln!("slate: backup restore applied — re-open slate to use restored notes");
+        }
+        Ok(false) => {}
+        Err(e) => {
+            eprintln!("slate: staged restore failed: {e}");
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "imap")]

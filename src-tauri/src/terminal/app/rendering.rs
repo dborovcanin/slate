@@ -205,7 +205,8 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.wiki_link_line_render_cache_order.push_back(line_text.to_string());
+            self.wiki_link_line_render_cache_order
+                .push_back(line_text.to_string());
         }
         while self.wiki_link_line_render_cache.len()
             > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES
@@ -246,7 +247,8 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.table_formula_segment_cache_order.push_back(line_text.to_string());
+            self.table_formula_segment_cache_order
+                .push_back(line_text.to_string());
         }
         while self.table_formula_segment_cache.len()
             > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES
