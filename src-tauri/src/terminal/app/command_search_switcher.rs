@@ -1873,17 +1873,15 @@ impl TerminalApp {
         self.joined_text_cache = None;
     }
 
-    fn joined_text_cached(&mut self) -> String {
-        if let Some(cached) = &self.joined_text_cache {
-            return cached.clone();
+    fn joined_text_cached_ref(&mut self) -> &str {
+        if self.joined_text_cache.is_none() {
+            self.joined_text_cache = Some(join_lines(&self.lines));
         }
-        let joined = join_lines(&self.lines);
-        self.joined_text_cache = Some(joined.clone());
-        joined
+        self.joined_text_cache.as_deref().unwrap()
     }
 
     pub(super) fn build_snapshot(&mut self) -> crate::editor_core::types::EditorContextSnapshot {
-        let text = self.joined_text_cached();
+        let text = self.joined_text_cached_ref().to_owned();
         let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
         let selection =
             self.command_selection
