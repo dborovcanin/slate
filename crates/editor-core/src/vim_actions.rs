@@ -698,12 +698,6 @@ enum DelimitedObject {
     Underscore,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DelimiterPairMode {
-    SingleChar,
-    Run,
-}
-
 fn execute_delimited_inside_text_object(
     text: &str,
     selection: SelectionSnapshot,
@@ -1298,69 +1292,47 @@ fn find_delimited_object_bounds(
     }
     let cursor = cursor_col.min(chars.len().saturating_sub(1));
 
-    let (pair_opt, pair_mode) = match kind {
-        DelimitedObject::Paren => (
-            find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
-            DelimiterPairMode::SingleChar,
-        ),
-        DelimitedObject::Bracket => (
-            find_balanced_pair_around_cursor(&chars, cursor, '[', ']'),
-            DelimiterPairMode::SingleChar,
-        ),
-        DelimitedObject::Brace => (
-            find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
-            DelimiterPairMode::SingleChar,
-        ),
-        DelimitedObject::DoubleQuote => (
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '"'),
-            DelimiterPairMode::SingleChar,
-        ),
-        DelimitedObject::Backtick => (
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '`'),
-            DelimiterPairMode::SingleChar,
-        ),
-        DelimitedObject::Asterisk => (
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '*'),
-            DelimiterPairMode::Run,
-        ),
-        DelimitedObject::Tilde => (
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '~'),
-            DelimiterPairMode::Run,
-        ),
-        DelimitedObject::Underscore => (
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '_'),
-            DelimiterPairMode::Run,
-        ),
-    };
-    let pair = pair_opt?;
-    let (start, end) = pair;
-    let (open_start, open_end_exclusive, close_start, close_end_exclusive) = match pair_mode {
-        DelimiterPairMode::SingleChar => (start, start + 1, end, end + 1),
-        DelimiterPairMode::Run => {
-            let (open_run_start, open_run_end_exclusive) =
-                delimiter_run_bounds(chars.as_slice(), start);
-            let (close_run_start, close_run_end_exclusive) =
-                delimiter_run_bounds(chars.as_slice(), end);
-            (
-                open_run_start,
-                open_run_end_exclusive,
-                close_run_start,
-                close_run_end_exclusive,
-            )
+    let pair_opt = match kind {
+        DelimitedObject::Paren => find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
+        DelimitedObject::Bracket => find_balanced_pair_around_cursor(&chars, cursor, '[', ']'),
+        DelimitedObject::Brace => find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
+        DelimitedObject::DoubleQuote => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '"')
         }
+        DelimitedObject::Backtick => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '`')
+        }
+        DelimitedObject::Asterisk => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '*')
+        }
+        DelimitedObject::Tilde => find_same_delimiter_pair_around_cursor(&chars, cursor, '~'),
+        DelimitedObject::Underscore => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '_')
+        }
+    };
+    let (start, end) = pair_opt?;
+    let is_run = matches!(
+        kind,
+        DelimitedObject::Asterisk | DelimitedObject::Tilde | DelimitedObject::Underscore
+    );
+    let (open_start, open_end_exclusive, close_start, close_end_exclusive) = if is_run {
+        let (open_run_start, open_run_end_exclusive) =
+            delimiter_run_bounds(chars.as_slice(), start);
+        let (close_run_start, close_run_end_exclusive) =
+            delimiter_run_bounds(chars.as_slice(), end);
+        (
+            open_run_start,
+            open_run_end_exclusive,
+            close_run_start,
+            close_run_end_exclusive,
+        )
+    } else {
+        (start, start + 1, end, end + 1)
     };
     if around {
-        if open_start >= close_end_exclusive {
-            None
-        } else {
-            Some((open_start, close_end_exclusive))
-        }
+        (open_start < close_end_exclusive).then_some((open_start, close_end_exclusive))
     } else {
-        if open_end_exclusive >= close_start {
-            None
-        } else {
-            Some((open_end_exclusive, close_start))
-        }
+        (open_end_exclusive < close_start).then_some((open_end_exclusive, close_start))
     }
 }
 

@@ -208,6 +208,36 @@ fn consume_pending_effective_count(state: &mut VimState) -> usize {
     operator_count.saturating_mul(motion_count).max(1)
 }
 
+fn char_to_delete_inner_intent(ch: char) -> Option<VimIntent> {
+    match ch {
+        '|' => Some(VimIntent::DeleteInsidePipe),
+        '(' | ')' => Some(VimIntent::DeleteInsideParen),
+        '[' | ']' => Some(VimIntent::DeleteInsideBracket),
+        '{' | '}' => Some(VimIntent::DeleteInsideBrace),
+        '"' => Some(VimIntent::DeleteInsideDoubleQuote),
+        '`' => Some(VimIntent::DeleteInsideBacktick),
+        '*' => Some(VimIntent::DeleteInsideAsterisk),
+        '~' => Some(VimIntent::DeleteInsideTilde),
+        '_' => Some(VimIntent::DeleteInsideUnderscore),
+        _ => None,
+    }
+}
+
+fn char_to_delete_around_intent(ch: char) -> Option<VimIntent> {
+    match ch {
+        '|' => Some(VimIntent::DeleteAroundPipe),
+        '(' | ')' => Some(VimIntent::DeleteAroundParen),
+        '[' | ']' => Some(VimIntent::DeleteAroundBracket),
+        '{' | '}' => Some(VimIntent::DeleteAroundBrace),
+        '"' => Some(VimIntent::DeleteAroundDoubleQuote),
+        '`' => Some(VimIntent::DeleteAroundBacktick),
+        '*' => Some(VimIntent::DeleteAroundAsterisk),
+        '~' => Some(VimIntent::DeleteAroundTilde),
+        '_' => Some(VimIntent::DeleteAroundUnderscore),
+        _ => None,
+    }
+}
+
 fn is_macro_register_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric()
 }
@@ -799,245 +829,29 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
-            (VimPending::DeleteInner, VimKey::Char('|')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsidePipe, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
+            (VimPending::DeleteInner, VimKey::Char(ch)) => {
+                if let Some(intent) = char_to_delete_inner_intent(ch) {
+                    let count = consume_pending_effective_count(&mut next);
+                    actions.push(make_action(intent, count));
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
             }
-            (VimPending::DeleteInner, VimKey::Char('(')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideParen, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char(')')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideParen, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('[')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideBracket, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char(']')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideBracket, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('{')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideBrace, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('}')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideBrace, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('"')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideDoubleQuote, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('`')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideBacktick, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('*')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideAsterisk, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('~')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideTilde, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteInner, VimKey::Char('_')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteInsideUnderscore, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('|')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundPipe, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('(')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundParen, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char(')')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundParen, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('[')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char(']')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('{')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('}')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('"')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundDoubleQuote, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('`')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundBacktick, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('*')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundAsterisk, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('~')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundTilde, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::DeleteAround, VimKey::Char('_')) => {
-                let count = consume_pending_effective_count(&mut next);
-                actions.push(make_action(VimIntent::DeleteAroundUnderscore, count));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
+            (VimPending::DeleteAround, VimKey::Char(ch)) => {
+                if let Some(intent) = char_to_delete_around_intent(ch) {
+                    let count = consume_pending_effective_count(&mut next);
+                    actions.push(make_action(intent, count));
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
             }
             (VimPending::YankInner, VimKey::Char('|')) => {
                 let count = consume_pending_effective_count(&mut next);
@@ -1085,149 +899,19 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
-            (VimPending::ChangeInner, VimKey::Char('|')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsidePipe, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('(')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideParen, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char(')')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideParen, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('[')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideBracket, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char(']')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideBracket, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('{')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideBrace, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('}')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideBrace, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('"')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideDoubleQuote, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('`')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideBacktick, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('*')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideAsterisk, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('~')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideTilde, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeInner, VimKey::Char('_')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteInsideUnderscore, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
+            (VimPending::ChangeInner, VimKey::Char(ch)) => {
+                if let Some(intent) = char_to_delete_inner_intent(ch) {
+                    let count = consume_pending_effective_count(&mut next);
+                    next.mode = VimMode::Insert;
+                    actions.push(make_action(intent, count));
+                    actions.push(make_action(VimIntent::EnterInsert, 1));
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
             }
             (VimPending::ChangeAround, VimKey::Char('w')) => {
                 let count = consume_pending_effective_count(&mut next);
@@ -1241,149 +925,19 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
-            (VimPending::ChangeAround, VimKey::Char('|')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundPipe, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('(')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundParen, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char(')')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundParen, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('[')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char(']')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('{')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('}')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('"')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundDoubleQuote, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('`')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundBacktick, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('*')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundAsterisk, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('~')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundTilde, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
-            }
-            (VimPending::ChangeAround, VimKey::Char('_')) => {
-                let count = consume_pending_effective_count(&mut next);
-                next.mode = VimMode::Insert;
-                actions.push(make_action(VimIntent::DeleteAroundUnderscore, count));
-                actions.push(make_action(VimIntent::EnterInsert, 1));
-                handled = true;
-                return VimStep {
-                    state: next,
-                    actions,
-                    handled,
-                };
+            (VimPending::ChangeAround, VimKey::Char(ch)) => {
+                if let Some(intent) = char_to_delete_around_intent(ch) {
+                    let count = consume_pending_effective_count(&mut next);
+                    next.mode = VimMode::Insert;
+                    actions.push(make_action(intent, count));
+                    actions.push(make_action(VimIntent::EnterInsert, 1));
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
             }
             (VimPending::ChangeTill, VimKey::Char(target)) => {
                 let count = consume_pending_effective_count(&mut next);
