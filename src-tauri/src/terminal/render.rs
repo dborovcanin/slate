@@ -1,6 +1,6 @@
 use crate::editor_core::markdown_tokens;
 use crate::terminal::ansi::contrast_fg_for_bg;
-pub use crate::terminal::markdown_view::collapse_markdown_line_for_cursor;
+pub use crate::terminal::markdown_view::collapse_markdown_line_for_cursor_with_formatting_boundary_exit;
 use crate::terminal::markdown_view::{hidden_line_prefix_marker_ranges, normalize_hidden_ranges};
 use crate::terminal::render_styles::{
     apply_code_token_styles, apply_inline_token_styles, apply_line_styles_from_info,

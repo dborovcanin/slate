@@ -1228,12 +1228,16 @@ impl TerminalApp {
 
                 if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
                     let source_cursor_col = line_cursor_col.unwrap_or(self.cursor_col);
-                    let (collapsed_line, mapped_col) = render::collapse_markdown_line_for_cursor(
-                        rendered_line.as_ref(),
-                        source_cursor_col,
-                    );
+                    let force_formatting_boundary_exit = self
+                        .markdown_formatting_right_boundary_exit
+                        .is_some_and(|(line, _)| line == line_idx);
+                    let (collapsed_line, mapped_col) =
+                        render::collapse_markdown_line_for_cursor_with_formatting_boundary_exit(
+                            rendered_line.as_ref(),
+                            source_cursor_col,
+                            force_formatting_boundary_exit,
+                        );
                     if collapsed_line != rendered_line.as_ref() || mapped_col != source_cursor_col {
-                        line_cursor_col = Some(mapped_col);
                         cursor_line_override = Some((collapsed_line, mapped_col));
                     }
                 }

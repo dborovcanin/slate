@@ -58,6 +58,154 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
     (db, app, path)
 }
 
+fn strip_ansi_control_sequences(raw: &str) -> String {
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut idx = 0usize;
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if b == 0x1b {
+            idx += 1;
+            if idx < bytes.len() && bytes[idx] == b'[' {
+                idx += 1;
+                while idx < bytes.len() {
+                    let c = bytes[idx];
+                    idx += 1;
+                    if (0x40..=0x7e).contains(&c) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if b != b'\r' {
+            out.push(b as char);
+        }
+        idx += 1;
+    }
+    out
+}
+
+fn frame_rows_without_ansi(app: &TerminalApp) -> Vec<String> {
+    let text = strip_ansi_control_sequences(&app.draw_buf);
+    let (_, cols) = super::input::terminal_size();
+    if cols == 0 {
+        return vec![text];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .chunks(cols)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect()
+}
+
+fn first_editor_row_for(rows: &[String], line_no: usize) -> String {
+    let prefix = format!("{line_no}  ");
+    rows.iter()
+        .find(|row| row.trim_start().starts_with(&prefix))
+        .cloned()
+        .unwrap_or_default()
+}
+
+#[test]
+fn editor_right_arrow_exits_inline_formatting_boundary_before_advancing() {
+    let (db, mut app, path) = app_with_note("**bold** tail");
+    app.cursor_col = 8;
+
+    app.handle_editor_key(&db, Key::ArrowRight)
+        .expect("right advances while exiting boundary");
+    assert_eq!(app.cursor_col, 9);
+    assert_eq!(app.markdown_formatting_right_boundary_exit, Some((0, 8)));
+
+    app.handle_editor_key(&db, Key::ArrowRight)
+        .expect("second right advances normally");
+    assert_eq!(app.cursor_col, 10);
+    assert_eq!(app.markdown_formatting_right_boundary_exit, None);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn editor_right_arrow_snaps_at_formatting_boundary_when_no_forward_motion_exists() {
+    let (db, mut app, path) = app_with_note("**bold**");
+    app.cursor_col = 8;
+
+    app.handle_editor_key(&db, Key::ArrowRight)
+        .expect("right snaps boundary in no-move edge case");
+    assert_eq!(app.cursor_col, 8);
+    assert_eq!(app.markdown_formatting_right_boundary_exit, Some((0, 8)));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
+    let line = "Capability is **an action** linked to the entity type or resource type";
+    let (db, mut app, path) = app_with_note(line);
+    app.cursor_col = "Capability is **an action**".chars().count();
+
+    let mut frame = Vec::new();
+    app.draw(&mut frame).expect("initial draw at right boundary");
+    let revealed = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
+    assert!(
+        revealed.contains("**an action**"),
+        "expected right boundary reveal before exit, got:\n{revealed}"
+    );
+
+    app.handle_editor_key(&db, Key::ArrowRight)
+        .expect("right exits boundary");
+    frame.clear();
+    app.draw(&mut frame).expect("draw after first right");
+    let snapped_after_first = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
+    assert!(
+        snapped_after_first.contains("an action linked"),
+        "expected markers snapped after first right, got:\n{snapped_after_first}"
+    );
+    assert!(
+        !snapped_after_first.contains("**an action**"),
+        "closing strong markers stayed revealed after first right:\n{snapped_after_first}"
+    );
+
+    let col_after_first = app.cursor_col;
+    app.handle_editor_key(&db, Key::ArrowRight)
+        .expect("second right continues forward");
+    assert!(
+        app.cursor_col > col_after_first,
+        "second right should advance source cursor forward"
+    );
+    frame.clear();
+    app.draw(&mut frame).expect("draw after second right");
+    let snapped_after_second = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
+    assert!(
+        snapped_after_second.contains("an action linked"),
+        "markers should stay snapped after second right, got:\n{snapped_after_second}"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn editor_left_arrow_restores_inline_formatting_boundary_reveal() {
+    let (db, mut app, path) = app_with_note("**bold**");
+    app.cursor_col = 8;
+    app.handle_editor_key(&db, Key::ArrowRight)
+        .expect("right snaps boundary in no-move edge case");
+    app.handle_editor_key(&db, Key::ArrowLeft)
+        .expect("left restores boundary reveal");
+    assert_eq!(app.cursor_col, 8);
+    assert_eq!(app.markdown_formatting_right_boundary_exit, None);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
 fn app_with_note_and_modules(
     body: &str,
     modules: app_core::storage::NoteModules,

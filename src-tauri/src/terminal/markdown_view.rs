@@ -77,13 +77,24 @@ pub fn should_reveal_inline_marker(
     if cursor_col >= from && cursor_col < to {
         return true;
     }
+    let has_formatting_body = tokens.iter().any(|token| {
+        token.from >= from
+            && token.to <= to
+            && matches!(
+                token.kind,
+                InlineTokenType::Strong
+                    | InlineTokenType::Emphasis
+                    | InlineTokenType::Strikethrough
+            )
+    });
     cursor_col == to
-        && matches!(
-            marker.kind,
-            InlineTokenType::LinkMarker
-                | InlineTokenType::WikiLinkMarker
-                | InlineTokenType::ImageMarker
-        )
+        && (has_formatting_body
+            || matches!(
+                marker.kind,
+                InlineTokenType::LinkMarker
+                    | InlineTokenType::WikiLinkMarker
+                    | InlineTokenType::ImageMarker
+            ))
 }
 
 fn inline_tokens_for_display(text: &str) -> Vec<InlineToken> {
@@ -106,6 +117,7 @@ fn hidden_inline_marker_ranges(
     tokens: &[InlineToken],
     len: usize,
     active_cursor_col: Option<usize>,
+    force_formatting_right_boundary_exit: bool,
 ) -> Vec<(usize, usize)> {
     let component_ranges = markdown_tokens::inline_marker_component_ranges_from_tokens(tokens);
     let mut hidden_ranges = Vec::new();
@@ -115,8 +127,22 @@ fn hidden_inline_marker_ranges(
         if to <= from {
             continue;
         }
-        if markdown_tokens::is_inline_marker_token_kind(token.kind)
-            && !should_reveal_inline_marker(tokens, &component_ranges, index, active_cursor_col)
+        if !markdown_tokens::is_inline_marker_token_kind(token.kind) {
+            continue;
+        }
+        let component_range = component_ranges
+            .iter()
+            .find(|range| token.from >= range.from && token.to <= range.to);
+        if force_formatting_right_boundary_exit
+            && active_cursor_col.is_some_and(|cursor_col| {
+                component_range.is_some_and(|range| {
+                    cursor_col == range.to
+                        && component_has_formatting_body(tokens, range.from, range.to)
+                })
+            })
+        {
+            hidden_ranges.push((from, to));
+        } else if !should_reveal_inline_marker(tokens, &component_ranges, index, active_cursor_col)
         {
             hidden_ranges.push((from, to));
         }
@@ -224,9 +250,18 @@ pub fn image_hidden_token_ranges(
     hidden
 }
 
+#[allow(dead_code)]
 pub fn hidden_ranges_for_markdown_line(
     text: &str,
     active_cursor_col: Option<usize>,
+) -> Vec<(usize, usize)> {
+    hidden_ranges_for_markdown_line_with_formatting_boundary_exit(text, active_cursor_col, false)
+}
+
+fn hidden_ranges_for_markdown_line_with_formatting_boundary_exit(
+    text: &str,
+    active_cursor_col: Option<usize>,
+    force_formatting_right_boundary_exit: bool,
 ) -> Vec<(usize, usize)> {
     let len = text.chars().count();
     if len == 0 {
@@ -240,11 +275,21 @@ pub fn hidden_ranges_for_markdown_line(
         &inline_tokens,
         len,
         active_cursor_col,
+        force_formatting_right_boundary_exit,
     ));
     normalize_hidden_ranges(hidden_ranges, len)
 }
 
+#[allow(dead_code)]
 pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (String, usize) {
+    collapse_markdown_line_for_cursor_with_formatting_boundary_exit(text, cursor_col, false)
+}
+
+pub fn collapse_markdown_line_for_cursor_with_formatting_boundary_exit(
+    text: &str,
+    cursor_col: usize,
+    force_formatting_right_boundary_exit: bool,
+) -> (String, usize) {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     if len == 0 {
@@ -258,7 +303,11 @@ pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (Stri
         return (text.to_string(), clamped_cursor);
     }
     let clamped_cursor = cursor_col.min(len);
-    let hidden_ranges = hidden_ranges_for_markdown_line(text, Some(clamped_cursor));
+    let hidden_ranges = hidden_ranges_for_markdown_line_with_formatting_boundary_exit(
+        text,
+        Some(clamped_cursor),
+        force_formatting_right_boundary_exit,
+    );
     if hidden_ranges.is_empty() {
         return (text.to_string(), clamped_cursor);
     }
@@ -297,12 +346,39 @@ pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (Stri
     (out, mapped_cursor.min(out_len))
 }
 
+pub fn formatting_component_right_boundary_at(text: &str, cursor_col: usize) -> bool {
+    let tokens = inline_tokens_for_display(text);
+    if tokens.is_empty() {
+        return false;
+    }
+    markdown_tokens::inline_marker_component_ranges_from_tokens(&tokens)
+        .into_iter()
+        .any(|range| {
+            cursor_col == range.to && component_has_formatting_body(&tokens, range.from, range.to)
+        })
+}
+
+fn component_has_formatting_body(tokens: &[InlineToken], from: usize, to: usize) -> bool {
+    tokens.iter().any(|token| {
+        token.from >= from
+            && token.to <= to
+            && matches!(
+                token.kind,
+                InlineTokenType::Strong
+                    | InlineTokenType::Emphasis
+                    | InlineTokenType::Strikethrough
+            )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use crate::editor_core::markdown_tokens::{self, InlineTokenType};
 
     use super::{
-        collapse_markdown_line_for_cursor, hidden_ranges_for_markdown_line,
+        collapse_markdown_line_for_cursor,
+        collapse_markdown_line_for_cursor_with_formatting_boundary_exit,
+        formatting_component_right_boundary_at, hidden_ranges_for_markdown_line,
         wiki_link_hidden_token_ranges,
     };
 
@@ -325,6 +401,32 @@ mod tests {
         let (collapsed, mapped_col) = collapse_markdown_line_for_cursor("(`xx`)", 5);
         assert_eq!(collapsed, "(xx)");
         assert_eq!(mapped_col, 3);
+    }
+
+    #[test]
+    fn collapse_markdown_line_for_cursor_reveals_formatting_at_right_boundary() {
+        let (collapsed, mapped_col) = collapse_markdown_line_for_cursor("**bold**", 8);
+        assert_eq!(collapsed, "**bold**");
+        assert_eq!(mapped_col, 8);
+    }
+
+    #[test]
+    fn collapse_markdown_line_for_cursor_can_force_exit_at_formatting_right_boundary() {
+        let (collapsed, mapped_col) =
+            collapse_markdown_line_for_cursor_with_formatting_boundary_exit(
+                "**bold** tail",
+                8,
+                true,
+            );
+        assert_eq!(collapsed, "bold tail");
+        assert_eq!(mapped_col, 4);
+    }
+
+    #[test]
+    fn formatting_component_right_boundary_detects_inline_formatting_exit_point() {
+        assert!(formatting_component_right_boundary_at("**bold** tail", 8));
+        assert!(!formatting_component_right_boundary_at("**bold** tail", 9));
+        assert!(!formatting_component_right_boundary_at("`code` tail", 6));
     }
 
     #[test]

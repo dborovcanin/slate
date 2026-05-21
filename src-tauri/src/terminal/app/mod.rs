@@ -392,6 +392,7 @@ struct TerminalApp {
     joined_text_cache: Option<String>,
     cursor_line: usize,
     cursor_col: usize, // char index
+    markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
     scroll_line: usize,
     scroll_col: usize,
     mode: UiMode,
@@ -812,6 +813,7 @@ impl TerminalApp {
             joined_text_cache: None,
             cursor_line: 0,
             cursor_col: 0,
+            markdown_formatting_right_boundary_exit: None,
             scroll_line: 0,
             scroll_col: 0,
             mode: initial_mode,

@@ -3153,6 +3153,13 @@ impl TerminalApp {
     }
 
     pub(super) fn move_cursor_left(&mut self) {
+        if self.markdown_formatting_right_boundary_exit == Some((self.cursor_line, self.cursor_col))
+        {
+            self.markdown_formatting_right_boundary_exit = None;
+            return;
+        }
+        self.markdown_formatting_right_boundary_exit = None;
+
         let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(current_cell) =
@@ -3196,6 +3203,22 @@ impl TerminalApp {
     }
 
     pub(super) fn move_cursor_right(&mut self) {
+        let consumed_boundary_exit = self.markdown_formatting_right_boundary_exit
+            == Some((self.cursor_line, self.cursor_col));
+        if consumed_boundary_exit {
+            self.markdown_formatting_right_boundary_exit = None;
+        }
+
+        let boundary_exit_anchor = if !consumed_boundary_exit
+            && crate::terminal::markdown_view::formatting_component_right_boundary_at(
+                self.current_line(),
+                self.cursor_col,
+            ) {
+            Some((self.cursor_line, self.cursor_col))
+        } else {
+            None
+        };
+
         let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(current_cell) =
@@ -3224,12 +3247,14 @@ impl TerminalApp {
         };
         if let Some(target_col) = table_target_col {
             self.cursor_col = target_col;
+            self.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
             return;
         }
 
         let line_len = line_char_len(self.current_line());
         if self.cursor_col < line_len {
             self.cursor_col += 1;
+            self.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
             return;
         }
         let current_virtual = self.current_virtual_line();
@@ -3237,14 +3262,19 @@ impl TerminalApp {
             if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
                 self.cursor_line = next_real;
                 self.cursor_col = 0;
+                self.markdown_formatting_right_boundary_exit = None;
+                return;
             }
         }
+
+        self.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
     }
 
     pub(super) fn move_cursor_up(&mut self, count: usize) {
         if count == 0 {
             return;
         }
+        self.markdown_formatting_right_boundary_exit = None;
         let current_virtual = self.current_virtual_line();
         let target_virtual = current_virtual.saturating_sub(count);
         self.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
@@ -3261,6 +3291,7 @@ impl TerminalApp {
         if count == 0 {
             return;
         }
+        self.markdown_formatting_right_boundary_exit = None;
         let current_virtual = self.current_virtual_line();
         let target_virtual = min(
             current_virtual.saturating_add(count),
