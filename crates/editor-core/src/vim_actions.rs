@@ -92,49 +92,97 @@ pub fn execute_vim_action_with_target(
         VimIntent::DeleteInsideParen => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Paren,
+            DelimitedObject::Paren,
             repeats,
         )),
         VimIntent::DeleteInsideBracket => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Bracket,
+            DelimitedObject::Bracket,
             repeats,
         )),
         VimIntent::DeleteInsideBrace => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Brace,
+            DelimitedObject::Brace,
             repeats,
         )),
         VimIntent::DeleteInsideDoubleQuote => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::DoubleQuote,
+            DelimitedObject::DoubleQuote,
             repeats,
         )),
         VimIntent::DeleteInsideBacktick => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Backtick,
+            DelimitedObject::Backtick,
             repeats,
         )),
         VimIntent::DeleteInsideAsterisk => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Asterisk,
+            DelimitedObject::Asterisk,
             repeats,
         )),
         VimIntent::DeleteInsideTilde => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Tilde,
+            DelimitedObject::Tilde,
             repeats,
         )),
         VimIntent::DeleteInsideUnderscore => Some(execute_delimited_inside_text_object(
             text,
             selection,
-            DelimitedInsideObject::Underscore,
+            DelimitedObject::Underscore,
+            repeats,
+        )),
+        VimIntent::DeleteAroundParen => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Paren,
+            repeats,
+        )),
+        VimIntent::DeleteAroundBracket => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Bracket,
+            repeats,
+        )),
+        VimIntent::DeleteAroundBrace => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Brace,
+            repeats,
+        )),
+        VimIntent::DeleteAroundDoubleQuote => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::DoubleQuote,
+            repeats,
+        )),
+        VimIntent::DeleteAroundBacktick => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Backtick,
+            repeats,
+        )),
+        VimIntent::DeleteAroundAsterisk => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Asterisk,
+            repeats,
+        )),
+        VimIntent::DeleteAroundTilde => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Tilde,
+            repeats,
+        )),
+        VimIntent::DeleteAroundUnderscore => Some(execute_delimited_around_text_object(
+            text,
+            selection,
+            DelimitedObject::Underscore,
             repeats,
         )),
         VimIntent::YankWordForward => Some(execute_yank_word_forward(text, selection, repeats)),
@@ -179,6 +227,14 @@ pub fn supports_intent(intent: VimIntent) -> bool {
             | VimIntent::DeleteInsideAsterisk
             | VimIntent::DeleteInsideTilde
             | VimIntent::DeleteInsideUnderscore
+            | VimIntent::DeleteAroundParen
+            | VimIntent::DeleteAroundBracket
+            | VimIntent::DeleteAroundBrace
+            | VimIntent::DeleteAroundDoubleQuote
+            | VimIntent::DeleteAroundBacktick
+            | VimIntent::DeleteAroundAsterisk
+            | VimIntent::DeleteAroundTilde
+            | VimIntent::DeleteAroundUnderscore
             | VimIntent::YankWordForward
             | VimIntent::YankWordBackward
             | VimIntent::PasteAfter
@@ -631,7 +687,7 @@ fn execute_pipe_text_object(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DelimitedInsideObject {
+enum DelimitedObject {
     Paren,
     Bracket,
     Brace,
@@ -645,11 +701,22 @@ enum DelimitedInsideObject {
 fn execute_delimited_inside_text_object(
     text: &str,
     selection: SelectionSnapshot,
-    kind: DelimitedInsideObject,
+    kind: DelimitedObject,
     count: usize,
 ) -> VimActionExecutionResult {
     execute_text_object(text, selection, count, true, |line, cursor_col| {
-        find_delimited_inside_object_bounds(line, cursor_col, kind)
+        find_delimited_object_bounds(line, cursor_col, kind, false)
+    })
+}
+
+fn execute_delimited_around_text_object(
+    text: &str,
+    selection: SelectionSnapshot,
+    kind: DelimitedObject,
+    count: usize,
+) -> VimActionExecutionResult {
+    execute_text_object(text, selection, count, true, |line, cursor_col| {
+        find_delimited_object_bounds(line, cursor_col, kind, true)
     })
 }
 
@@ -1213,10 +1280,11 @@ fn find_pipe_object_bounds(line: &str, cursor_col: usize, around: bool) -> Optio
     }
 }
 
-fn find_delimited_inside_object_bounds(
+fn find_delimited_object_bounds(
     line: &str,
     cursor_col: usize,
-    kind: DelimitedInsideObject,
+    kind: DelimitedObject,
+    around: bool,
 ) -> Option<(usize, usize)> {
     let chars: Vec<char> = line.chars().collect();
     if chars.len() < 2 {
@@ -1225,33 +1293,42 @@ fn find_delimited_inside_object_bounds(
     let cursor = cursor_col.min(chars.len().saturating_sub(1));
 
     let pair = match kind {
-        DelimitedInsideObject::Paren => find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
-        DelimitedInsideObject::Bracket => {
+        DelimitedObject::Paren => find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
+        DelimitedObject::Bracket => {
             find_balanced_pair_around_cursor(&chars, cursor, '[', ']')
         }
-        DelimitedInsideObject::Brace => find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
-        DelimitedInsideObject::DoubleQuote => {
+        DelimitedObject::Brace => find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
+        DelimitedObject::DoubleQuote => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '"')
         }
-        DelimitedInsideObject::Backtick => {
+        DelimitedObject::Backtick => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '`')
         }
-        DelimitedInsideObject::Asterisk => {
+        DelimitedObject::Asterisk => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '*')
         }
-        DelimitedInsideObject::Tilde => {
+        DelimitedObject::Tilde => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '~')
         }
-        DelimitedInsideObject::Underscore => {
+        DelimitedObject::Underscore => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '_')
         }
     }?;
     let (start, end) = pair;
-    let inner_start = (start + 1).min(end);
-    if inner_start >= end {
-        None
+    if around {
+        let outer_end = end + 1;
+        if start >= outer_end {
+            None
+        } else {
+            Some((start, outer_end))
+        }
     } else {
-        Some((inner_start, end))
+        let inner_start = (start + 1).min(end);
+        if inner_start >= end {
+            None
+        } else {
+            Some((inner_start, end))
+        }
     }
 }
 
@@ -1716,6 +1793,102 @@ mod tests {
         assert_eq!(charwise_register(&result), Some("inside"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "prefix __ suffix");
+    }
+
+    #[test]
+    fn delete_around_paren_removes_delimiters_too() {
+        let text = "fn call(alpha + beta)";
+        let cursor = text.find("alpha").expect("alpha");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundParen, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("(alpha + beta)"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "fn call");
+    }
+
+    #[test]
+    fn delete_around_bracket_removes_delimiters_too() {
+        let text = "list[keep, remove]";
+        let cursor = text.find("keep").expect("keep");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBracket, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("[keep, remove]"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "list");
+    }
+
+    #[test]
+    fn delete_around_brace_removes_delimiters_too() {
+        let text = "obj{keep: value}";
+        let cursor = text.find("keep").expect("keep");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBrace, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("{keep: value}"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "obj");
+    }
+
+    #[test]
+    fn delete_around_double_quote_removes_delimiters_too() {
+        let text = "say \"hello world\" now";
+        let cursor = text.find("hello").expect("hello");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundDoubleQuote, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("\"hello world\""));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "say  now");
+    }
+
+    #[test]
+    fn delete_around_backtick_removes_delimiters_too() {
+        let text = "run `cargo test` soon";
+        let cursor = text.find("cargo").expect("cargo");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBacktick, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("`cargo test`"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "run  soon");
+    }
+
+    #[test]
+    fn delete_around_asterisk_removes_delimiters_too() {
+        let text = "prefix *inside* suffix";
+        let cursor = text.find("inside").expect("inside");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundAsterisk, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("*inside*"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "prefix  suffix");
+    }
+
+    #[test]
+    fn delete_around_tilde_removes_delimiters_too() {
+        let text = "prefix ~inside~ suffix";
+        let cursor = text.find("inside").expect("inside");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundTilde, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("~inside~"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "prefix  suffix");
+    }
+
+    #[test]
+    fn delete_around_underscore_removes_delimiters_too() {
+        let text = "prefix _inside_ suffix";
+        let cursor = text.find("inside").expect("inside");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundUnderscore, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("_inside_"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "prefix  suffix");
     }
 
     #[test]

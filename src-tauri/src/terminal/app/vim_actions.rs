@@ -38,6 +38,14 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
             | crate::editor_core::vim::VimIntent::DeleteInsideAsterisk
             | crate::editor_core::vim::VimIntent::DeleteInsideTilde
             | crate::editor_core::vim::VimIntent::DeleteInsideUnderscore
+            | crate::editor_core::vim::VimIntent::DeleteAroundParen
+            | crate::editor_core::vim::VimIntent::DeleteAroundBracket
+            | crate::editor_core::vim::VimIntent::DeleteAroundBrace
+            | crate::editor_core::vim::VimIntent::DeleteAroundDoubleQuote
+            | crate::editor_core::vim::VimIntent::DeleteAroundBacktick
+            | crate::editor_core::vim::VimIntent::DeleteAroundAsterisk
+            | crate::editor_core::vim::VimIntent::DeleteAroundTilde
+            | crate::editor_core::vim::VimIntent::DeleteAroundUnderscore
             | crate::editor_core::vim::VimIntent::PasteAfter
             | crate::editor_core::vim::VimIntent::DeleteTillChar
     )
@@ -889,6 +897,30 @@ impl TerminalApp {
                         crate::editor_core::vim::VimIntent::DeleteInsideUnderscore => {
                             Some(self.with_clipboard_status("deleted inside _ _"))
                         }
+                        crate::editor_core::vim::VimIntent::DeleteAroundParen => {
+                            Some(self.with_clipboard_status("deleted around ( )"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundBracket => {
+                            Some(self.with_clipboard_status("deleted around [ ]"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundBrace => {
+                            Some(self.with_clipboard_status("deleted around { }"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundDoubleQuote => {
+                            Some(self.with_clipboard_status("deleted around \" \""))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundBacktick => {
+                            Some(self.with_clipboard_status("deleted around ` `"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundAsterisk => {
+                            Some(self.with_clipboard_status("deleted around * *"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundTilde => {
+                            Some(self.with_clipboard_status("deleted around ~ ~"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteAroundUnderscore => {
+                            Some(self.with_clipboard_status("deleted around _ _"))
+                        }
                         _ => None,
                     };
                     if let Some(status) = status {
@@ -1394,6 +1426,14 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::DeleteInsideAsterisk => {}
                 crate::editor_core::vim::VimIntent::DeleteInsideTilde => {}
                 crate::editor_core::vim::VimIntent::DeleteInsideUnderscore => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundParen => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundBracket => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundBrace => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundDoubleQuote => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundBacktick => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundAsterisk => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundTilde => {}
+                crate::editor_core::vim::VimIntent::DeleteAroundUnderscore => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
         }

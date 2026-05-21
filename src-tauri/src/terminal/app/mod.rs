@@ -643,6 +643,14 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::DeleteInsideAsterisk
                 | crate::editor_core::vim::VimIntent::DeleteInsideTilde
                 | crate::editor_core::vim::VimIntent::DeleteInsideUnderscore
+                | crate::editor_core::vim::VimIntent::DeleteAroundParen
+                | crate::editor_core::vim::VimIntent::DeleteAroundBracket
+                | crate::editor_core::vim::VimIntent::DeleteAroundBrace
+                | crate::editor_core::vim::VimIntent::DeleteAroundDoubleQuote
+                | crate::editor_core::vim::VimIntent::DeleteAroundBacktick
+                | crate::editor_core::vim::VimIntent::DeleteAroundAsterisk
+                | crate::editor_core::vim::VimIntent::DeleteAroundTilde
+                | crate::editor_core::vim::VimIntent::DeleteAroundUnderscore
                 | crate::editor_core::vim::VimIntent::DeleteWordForward
                 | crate::editor_core::vim::VimIntent::DeleteWordBackward
                 | crate::editor_core::vim::VimIntent::DeleteWordEnd

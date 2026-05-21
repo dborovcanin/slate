@@ -130,6 +130,14 @@ pub enum VimIntent {
     DeleteInsideAsterisk,
     DeleteInsideTilde,
     DeleteInsideUnderscore,
+    DeleteAroundParen,
+    DeleteAroundBracket,
+    DeleteAroundBrace,
+    DeleteAroundDoubleQuote,
+    DeleteAroundBacktick,
+    DeleteAroundAsterisk,
+    DeleteAroundTilde,
+    DeleteAroundUnderscore,
     YankVisualSelection,
     DeleteVisualSelection,
     StartMacroRecord,
@@ -921,6 +929,116 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::DeleteAround, VimKey::Char('(')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundParen, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char(')')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundParen, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('[')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char(']')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('{')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('}')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('"')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundDoubleQuote, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('`')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundBacktick, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('*')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundAsterisk, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('~')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundTilde, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteAround, VimKey::Char('_')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteAroundUnderscore, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::YankInner, VimKey::Char('|')) => {
                 let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::YankInsidePipe, count));
@@ -1127,6 +1245,138 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 let count = consume_pending_effective_count(&mut next);
                 next.mode = VimMode::Insert;
                 actions.push(make_action(VimIntent::DeleteAroundPipe, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('(')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundParen, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char(')')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundParen, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('[')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char(']')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundBracket, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('{')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('}')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundBrace, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('"')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundDoubleQuote, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('`')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundBacktick, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('*')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundAsterisk, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('~')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundTilde, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeAround, VimKey::Char('_')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteAroundUnderscore, count));
                 actions.push(make_action(VimIntent::EnterInsert, 1));
                 handled = true;
                 return VimStep {
@@ -1783,6 +2033,64 @@ mod tests {
     }
 
     #[test]
+    fn da_delimiters_emit_delete_around_intents() {
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let paren = step_token(&two.state, "char:(");
+        assert_eq!(paren.actions[0].intent, VimIntent::DeleteAroundParen);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let paren_close = step_token(&two.state, "char:)");
+        assert_eq!(paren_close.actions[0].intent, VimIntent::DeleteAroundParen);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let bracket = step_token(&two.state, "char:[");
+        assert_eq!(bracket.actions[0].intent, VimIntent::DeleteAroundBracket);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let bracket_close = step_token(&two.state, "char:]");
+        assert_eq!(bracket_close.actions[0].intent, VimIntent::DeleteAroundBracket);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let brace = step_token(&two.state, "char:{");
+        assert_eq!(brace.actions[0].intent, VimIntent::DeleteAroundBrace);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let brace_close = step_token(&two.state, "char:}");
+        assert_eq!(brace_close.actions[0].intent, VimIntent::DeleteAroundBrace);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let quote = step_token(&two.state, "char:\"");
+        assert_eq!(quote.actions[0].intent, VimIntent::DeleteAroundDoubleQuote);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let backtick = step_token(&two.state, "char:`");
+        assert_eq!(backtick.actions[0].intent, VimIntent::DeleteAroundBacktick);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let asterisk = step_token(&two.state, "char:*");
+        assert_eq!(asterisk.actions[0].intent, VimIntent::DeleteAroundAsterisk);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let tilde = step_token(&two.state, "char:~");
+        assert_eq!(tilde.actions[0].intent, VimIntent::DeleteAroundTilde);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:a");
+        let underscore = step_token(&two.state, "char:_");
+        assert_eq!(underscore.actions[0].intent, VimIntent::DeleteAroundUnderscore);
+    }
+
+    #[test]
     fn ci_pipe_emits_delete_inside_pipe_and_enter_insert() {
         let one = step_token(&VimState::default(), "char:c");
         let two = step_token(&one.state, "char:i");
@@ -1887,6 +2195,86 @@ mod tests {
         assert_eq!(three.actions.len(), 2);
         assert_eq!(three.actions[0].intent, VimIntent::DeleteAroundPipe);
         assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
+    }
+
+    #[test]
+    fn ca_delimiters_emit_delete_around_and_enter_insert() {
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let paren = step_token(&two.state, "char:(");
+        assert_eq!(paren.state.mode, VimMode::Insert);
+        assert_eq!(paren.actions[0].intent, VimIntent::DeleteAroundParen);
+        assert_eq!(paren.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let paren_close = step_token(&two.state, "char:)");
+        assert_eq!(paren_close.state.mode, VimMode::Insert);
+        assert_eq!(paren_close.actions[0].intent, VimIntent::DeleteAroundParen);
+        assert_eq!(paren_close.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let bracket = step_token(&two.state, "char:[");
+        assert_eq!(bracket.state.mode, VimMode::Insert);
+        assert_eq!(bracket.actions[0].intent, VimIntent::DeleteAroundBracket);
+        assert_eq!(bracket.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let bracket_close = step_token(&two.state, "char:]");
+        assert_eq!(bracket_close.state.mode, VimMode::Insert);
+        assert_eq!(bracket_close.actions[0].intent, VimIntent::DeleteAroundBracket);
+        assert_eq!(bracket_close.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let brace = step_token(&two.state, "char:{");
+        assert_eq!(brace.state.mode, VimMode::Insert);
+        assert_eq!(brace.actions[0].intent, VimIntent::DeleteAroundBrace);
+        assert_eq!(brace.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let brace_close = step_token(&two.state, "char:}");
+        assert_eq!(brace_close.state.mode, VimMode::Insert);
+        assert_eq!(brace_close.actions[0].intent, VimIntent::DeleteAroundBrace);
+        assert_eq!(brace_close.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let quote = step_token(&two.state, "char:\"");
+        assert_eq!(quote.state.mode, VimMode::Insert);
+        assert_eq!(quote.actions[0].intent, VimIntent::DeleteAroundDoubleQuote);
+        assert_eq!(quote.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let backtick = step_token(&two.state, "char:`");
+        assert_eq!(backtick.state.mode, VimMode::Insert);
+        assert_eq!(backtick.actions[0].intent, VimIntent::DeleteAroundBacktick);
+        assert_eq!(backtick.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let asterisk = step_token(&two.state, "char:*");
+        assert_eq!(asterisk.state.mode, VimMode::Insert);
+        assert_eq!(asterisk.actions[0].intent, VimIntent::DeleteAroundAsterisk);
+        assert_eq!(asterisk.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let tilde = step_token(&two.state, "char:~");
+        assert_eq!(tilde.state.mode, VimMode::Insert);
+        assert_eq!(tilde.actions[0].intent, VimIntent::DeleteAroundTilde);
+        assert_eq!(tilde.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:a");
+        let underscore = step_token(&two.state, "char:_");
+        assert_eq!(underscore.state.mode, VimMode::Insert);
+        assert_eq!(underscore.actions[0].intent, VimIntent::DeleteAroundUnderscore);
+        assert_eq!(underscore.actions[1].intent, VimIntent::EnterInsert);
     }
 
     #[test]
