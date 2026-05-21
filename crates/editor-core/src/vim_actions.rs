@@ -698,6 +698,12 @@ enum DelimitedObject {
     Underscore,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DelimiterPairMode {
+    SingleChar,
+    Run,
+}
+
 fn execute_delimited_inside_text_object(
     text: &str,
     selection: SelectionSnapshot,
@@ -1292,42 +1298,68 @@ fn find_delimited_object_bounds(
     }
     let cursor = cursor_col.min(chars.len().saturating_sub(1));
 
-    let pair = match kind {
-        DelimitedObject::Paren => find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
-        DelimitedObject::Bracket => {
-            find_balanced_pair_around_cursor(&chars, cursor, '[', ']')
-        }
-        DelimitedObject::Brace => find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
-        DelimitedObject::DoubleQuote => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '"')
-        }
-        DelimitedObject::Backtick => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '`')
-        }
-        DelimitedObject::Asterisk => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '*')
-        }
-        DelimitedObject::Tilde => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '~')
-        }
-        DelimitedObject::Underscore => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '_')
-        }
-    }?;
+    let (pair_opt, pair_mode) = match kind {
+        DelimitedObject::Paren => (
+            find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
+            DelimiterPairMode::SingleChar,
+        ),
+        DelimitedObject::Bracket => (
+            find_balanced_pair_around_cursor(&chars, cursor, '[', ']'),
+            DelimiterPairMode::SingleChar,
+        ),
+        DelimitedObject::Brace => (
+            find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
+            DelimiterPairMode::SingleChar,
+        ),
+        DelimitedObject::DoubleQuote => (
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '"'),
+            DelimiterPairMode::SingleChar,
+        ),
+        DelimitedObject::Backtick => (
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '`'),
+            DelimiterPairMode::SingleChar,
+        ),
+        DelimitedObject::Asterisk => (
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '*'),
+            DelimiterPairMode::Run,
+        ),
+        DelimitedObject::Tilde => (
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '~'),
+            DelimiterPairMode::Run,
+        ),
+        DelimitedObject::Underscore => (
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '_'),
+            DelimiterPairMode::Run,
+        ),
+    };
+    let pair = pair_opt?;
     let (start, end) = pair;
+    let (open_start, open_end_exclusive, close_start, close_end_exclusive) = match pair_mode {
+        DelimiterPairMode::SingleChar => (start, start + 1, end, end + 1),
+        DelimiterPairMode::Run => {
+            let (open_run_start, open_run_end_exclusive) =
+                delimiter_run_bounds(chars.as_slice(), start);
+            let (close_run_start, close_run_end_exclusive) =
+                delimiter_run_bounds(chars.as_slice(), end);
+            (
+                open_run_start,
+                open_run_end_exclusive,
+                close_run_start,
+                close_run_end_exclusive,
+            )
+        }
+    };
     if around {
-        let outer_end = end + 1;
-        if start >= outer_end {
+        if open_start >= close_end_exclusive {
             None
         } else {
-            Some((start, outer_end))
+            Some((open_start, close_end_exclusive))
         }
     } else {
-        let inner_start = (start + 1).min(end);
-        if inner_start >= end {
+        if open_end_exclusive >= close_start {
             None
         } else {
-            Some((inner_start, end))
+            Some((open_end_exclusive, close_start))
         }
     }
 }
@@ -1373,15 +1405,17 @@ fn find_same_delimiter_pair_around_cursor(
         if chars[start] != delimiter {
             continue;
         }
+        let (_, start_run_end_exclusive) = delimiter_run_bounds(chars, start);
         let mut end = None;
-        for (idx, ch) in chars.iter().enumerate().skip(start + 1) {
-            if *ch == delimiter {
+        for idx in start_run_end_exclusive..chars.len() {
+            if chars[idx] == delimiter {
                 end = Some(idx);
                 break;
             }
         }
         if let Some(end) = end {
-            if cursor == start || (cursor > start && cursor <= end) {
+            let (_, end_run_end_exclusive) = delimiter_run_bounds(chars, end);
+            if cursor == start || (cursor > start && cursor < end_run_end_exclusive) {
                 return Some((start, end));
             }
         }
@@ -1389,11 +1423,24 @@ fn find_same_delimiter_pair_around_cursor(
     None
 }
 
+fn delimiter_run_bounds(chars: &[char], idx: usize) -> (usize, usize) {
+    let delimiter = chars[idx];
+    let mut start = idx;
+    while start > 0 && chars[start - 1] == delimiter {
+        start -= 1;
+    }
+    let mut end_exclusive = idx + 1;
+    while end_exclusive < chars.len() && chars[end_exclusive] == delimiter {
+        end_exclusive += 1;
+    }
+    (start, end_exclusive)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::SelectionSnapshot;
-    use crate::vim::VimIntent;
+    use crate::vim::{self, VimIntent, VimMode, VimState};
 
     fn sel(cursor: usize) -> SelectionSnapshot {
         SelectionSnapshot {
@@ -1889,6 +1936,113 @@ mod tests {
         assert_eq!(charwise_register(&result), Some("_inside_"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "prefix  suffix");
+    }
+
+    #[test]
+    fn delete_inside_asterisk_handles_double_markers() {
+        let text = "Capability is **an action** linked";
+        let cursor = text.find("action").expect("action");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideAsterisk, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("an action"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "Capability is **** linked");
+    }
+
+    #[test]
+    fn delete_inside_asterisk_handles_double_marker_boundary_cursor() {
+        let text = "Capability is **an action** linked";
+        let cursor = text.find("** linked").expect("closing marker boundary");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideAsterisk, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("an action"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "Capability is **** linked");
+    }
+
+    #[test]
+    fn delete_around_asterisk_handles_double_markers() {
+        let text = "Capability is **an action** linked";
+        let cursor = text.find("action").expect("action");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundAsterisk, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("**an action**"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "Capability is  linked");
+    }
+
+    #[test]
+    fn delete_inside_underscore_handles_double_markers() {
+        let text = "Capability is __an action__ linked";
+        let cursor = text.find("action").expect("action");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideUnderscore, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("an action"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "Capability is ____ linked");
+    }
+
+    #[test]
+    fn delete_inside_tilde_handles_double_markers() {
+        let text = "Capability is ~~an action~~ linked";
+        let cursor = text.find("action").expect("action");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideTilde, 1, None)
+            .expect("handled");
+        assert_eq!(charwise_register(&result), Some("an action"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "Capability is ~~~~ linked");
+    }
+
+    #[test]
+    fn delete_inside_tilde_keeps_boundaries_for_all_boundary_and_inner_cursor_positions() {
+        let text = "~~test~~";
+        for cursor in 0..text.len() {
+            let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideTilde, 1, None)
+                .expect("handled");
+            assert_eq!(
+                charwise_register(&result),
+                Some("test"),
+                "unexpected register at cursor {}",
+                cursor
+            );
+            let next = apply_operations(text.to_string(), &result.operations);
+            assert_eq!(next, "~~~~", "unexpected result at cursor {}", cursor);
+        }
+    }
+
+    #[test]
+    fn ci_tilde_on_double_marker_text_deletes_only_inner_content() {
+        let one = vim::step(
+            &VimState::default(),
+            vim::parse_key_token("char:c").expect("c"),
+            &vim::VimContext::default(),
+        );
+        let two = vim::step(
+            &one.state,
+            vim::parse_key_token("char:i").expect("i"),
+            &vim::VimContext::default(),
+        );
+        let three = vim::step(
+            &two.state,
+            vim::parse_key_token("char:~").expect("~"),
+            &vim::VimContext::default(),
+        );
+        assert_eq!(three.state.mode, VimMode::Insert);
+        assert_eq!(three.actions.len(), 2);
+        assert_eq!(three.actions[0].intent, VimIntent::DeleteInsideTilde);
+        assert_eq!(three.actions[1].intent, VimIntent::EnterInsert);
+
+        let text = "~~test~~";
+        let cursor = text.find("test").expect("test");
+        let result = execute_vim_action(text, sel(cursor), three.actions[0].intent, 1, None)
+            .expect("handled");
+        assert_eq!(charwise_register(&result), Some("test"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "~~~~");
     }
 
     #[test]

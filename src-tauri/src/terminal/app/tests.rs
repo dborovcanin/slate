@@ -1521,6 +1521,85 @@ fn run_tui_markdown_parity_case(case: &MarkdownParityReplayCase) -> MarkdownPari
     snapshot
 }
 
+#[test]
+fn vim_ci_tilde_preserves_double_tilde_boundaries_in_ui_and_tui_replay() {
+    let case = VimParityReplayCase {
+        name: "ci-tilde-double-marker".to_string(),
+        initial_text: "~~test~~".to_string(),
+        initial_state: crate::editor_core::vim::VimState::default(),
+        initial_cursor_line: 0,
+        initial_cursor_col: 3,
+        keys: vec!["char:c".to_string(), "char:i".to_string(), "char:~".to_string()],
+    };
+
+    let gui = run_gui_parity_case(&case);
+    let tui = run_tui_parity_case(&case);
+
+    assert_eq!(gui.lines, vec!["~~~~".to_string()]);
+    assert_eq!(tui.lines, vec!["~~~~".to_string()]);
+    assert_eq!(gui.mode, UiMode::Editor);
+    assert_eq!(tui.mode, UiMode::Editor);
+}
+
+#[test]
+fn vim_ci_tilde_on_mixed_line_never_deletes_tilde_boundaries() {
+    let text = "~~test~~ dsd";
+    for cursor_col in 0..=text.chars().count() {
+        let case = VimParityReplayCase {
+            name: format!("ci-tilde-mixed-col-{cursor_col}"),
+            initial_text: text.to_string(),
+            initial_state: crate::editor_core::vim::VimState::default(),
+            initial_cursor_line: 0,
+            initial_cursor_col: cursor_col,
+            keys: vec!["char:c".to_string(), "char:i".to_string(), "char:~".to_string()],
+        };
+
+        let gui = run_gui_parity_case(&case);
+        let tui = run_tui_parity_case(&case);
+
+        let inside_tilde_span = cursor_col <= 7;
+        let expected = if inside_tilde_span {
+            "~~~~ dsd".to_string()
+        } else {
+            text.to_string()
+        };
+        assert_eq!(gui.lines, vec![expected.clone()], "gui cursor_col={cursor_col}");
+        assert_eq!(tui.lines, vec![expected], "tui cursor_col={cursor_col}");
+    }
+}
+
+#[test]
+fn vim_left_then_ci_tilde_on_mixed_line_keeps_boundaries() {
+    let text = "~~test~~ dsd";
+    for cursor_col in 0..=text.chars().count() {
+        let case = VimParityReplayCase {
+            name: format!("left-ci-tilde-mixed-col-{cursor_col}"),
+            initial_text: text.to_string(),
+            initial_state: crate::editor_core::vim::VimState::default(),
+            initial_cursor_line: 0,
+            initial_cursor_col: cursor_col,
+            keys: vec![
+                "arrow_left".to_string(),
+                "char:c".to_string(),
+                "char:i".to_string(),
+                "char:~".to_string(),
+            ],
+        };
+
+        let gui = run_gui_parity_case(&case);
+        let tui = run_tui_parity_case(&case);
+        let moved_col = cursor_col.saturating_sub(1);
+        let inside_tilde_span = moved_col <= 7;
+        let expected = if inside_tilde_span {
+            "~~~~ dsd".to_string()
+        } else {
+            text.to_string()
+        };
+        assert_eq!(gui.lines, vec![expected.clone()], "gui cursor_col={cursor_col}");
+        assert_eq!(tui.lines, vec![expected], "tui cursor_col={cursor_col}");
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/calc_table.rs"]
 mod calc_table;

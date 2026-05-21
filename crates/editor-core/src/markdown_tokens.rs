@@ -877,6 +877,10 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
                 pos += 1;
                 continue;
             };
+            if close <= after {
+                pos += 1;
+                continue;
+            }
 
             push_inline_token(&mut tokens, pos, pos + 2, InlineTokenType::CodeMarker);
             push_inline_token(&mut tokens, after, close, InlineTokenType::Strong);
@@ -906,6 +910,10 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
             i += 1;
             continue;
         };
+        if close <= after {
+            i += 1;
+            continue;
+        }
 
         push_inline_token(&mut tokens, i, i + 2, InlineTokenType::CodeMarker);
         push_inline_token(&mut tokens, after, close, InlineTokenType::Strikethrough);
@@ -1580,6 +1588,15 @@ mod tests {
     fn inline_marker_component_ranges_skip_marker_only_runs() {
         let ranges = inline_marker_component_ranges("****");
         assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn inline_tokenizer_rejects_empty_double_marker_spans() {
+        let strong = tokenize_inline_markdown("****");
+        assert!(!strong.iter().any(|t| t.kind == InlineTokenType::Strong));
+
+        let strike = tokenize_inline_markdown("~~~~");
+        assert!(!strike.iter().any(|t| t.kind == InlineTokenType::Strikethrough));
     }
 
     #[test]
