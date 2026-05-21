@@ -1379,8 +1379,8 @@ export function markdownFindImageMatches(lineText: string): MarkdownImageMatch[]
 
 export function markdownInlineMarkerComponentRanges(
   lineText: string,
-): MarkdownInlineMarkerComponentRange[] {
-  if (!ensureWasmReadyNonBlocking()) return [];
+): MarkdownInlineMarkerComponentRange[] | null {
+  if (!ensureWasmReadyNonBlocking()) return null;
   const profiling = isEditorProfilerEnabled();
   const startedAt = profiling ? editorProfilerNowMs() : 0;
   const result = asMarkdownInlineMarkerComponentRanges(

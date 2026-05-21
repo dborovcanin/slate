@@ -438,17 +438,19 @@ function cachedInlineMarkerComponentRanges(
   }
 
   const computed = markdownInlineMarkerComponentRanges(lineText);
-  inlineMarkerRangeCache.set(lineText, computed);
-  if (inlineMarkerRangeCache.size > INLINE_MARKER_RANGE_CACHE_LIMIT) {
-    const oldest = inlineMarkerRangeCache.keys().next().value;
-    if (typeof oldest === "string") {
-      inlineMarkerRangeCache.delete(oldest);
+  if (computed !== null) {
+    inlineMarkerRangeCache.set(lineText, computed);
+    if (inlineMarkerRangeCache.size > INLINE_MARKER_RANGE_CACHE_LIMIT) {
+      const oldest = inlineMarkerRangeCache.keys().next().value;
+      if (typeof oldest === "string") {
+        inlineMarkerRangeCache.delete(oldest);
+      }
     }
   }
   if (profiling) {
     profiling.inlineMarkerRangeMs += editorProfilerNowMs() - startedAt;
   }
-  return computed;
+  return computed ?? [];
 }
 
 function addCodeSyntaxDecorations(
