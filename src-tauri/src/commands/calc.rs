@@ -1,9 +1,18 @@
 use app_core::calc::{
     start_eval_generation, CalcEngine, NoteEvaluationOptions, NoteEvaluationResult,
+    VariableIndexEntry,
 };
 use app_core::AppCore;
 use std::sync::Arc;
 use tauri::State;
+
+/// Returns the 8-char wiki-link short ID for a DB note, or `""` for file notes.
+fn note_short_id(note_id: &str) -> &str {
+    if note_id.starts_with("mdfile:") || note_id.len() < 8 {
+        return "";
+    }
+    &note_id[..8]
+}
 
 fn resolve_eval_range(
     line_count: usize,
@@ -89,6 +98,8 @@ pub fn sync_note_lines(
 
 /// Evaluate the cached lines for a note, sending only a partial range.
 /// Requires a prior `sync_note_lines` call that seeded the cache.
+/// Automatically injects cross-note variable values from the shared index and
+/// updates the index with this note's latest exports after evaluation.
 #[tauri::command]
 pub async fn evaluate_note_context_delta(
     core: State<'_, AppCore>,
@@ -111,26 +122,62 @@ pub async fn evaluate_note_context_delta(
             .cloned()
             .ok_or_else(|| format!("no cached lines for note '{note_id}'"))?
     };
+
+    let short_id = note_short_id(&note_id).to_string();
+
+    // Snapshot extern vars from the cross-note index before entering spawn_blocking.
+    let vars_enabled = variables_enabled.unwrap_or(true);
+    let extern_vars = if vars_enabled && !short_id.is_empty() {
+        if let Ok(mut index) = core.cross_note_var_index.lock() {
+            index.register_note(&note_id, &short_id);
+            index.extern_vars_for(&note_id)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
     let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let options = NoteEvaluationOptions {
-        variables_enabled: variables_enabled.unwrap_or(true),
+        variables_enabled: vars_enabled,
         table_enabled: table_enabled.unwrap_or(true),
         eval_range,
-        ..Default::default()
+        extern_vars,
     };
     let generation = start_eval_generation();
     let fallback_lines = Arc::clone(&lines);
     let fallback_options = options.clone();
-    match tauri::async_runtime::spawn_blocking(move || {
+    let result = match tauri::async_runtime::spawn_blocking(move || {
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
     })
     .await
     {
-        Ok(result) => Ok(result),
-        Err(_) => Ok(CalcEngine::new().evaluate_note_context_with_generation(
+        Ok(result) => result,
+        Err(_) => CalcEngine::new().evaluate_note_context_with_generation(
             &fallback_lines,
             fallback_options,
             generation,
-        )),
+        ),
+    };
+
+    // Update the cross-note index with this note's latest exports and deps.
+    if vars_enabled && !short_id.is_empty() {
+        if let Ok(mut index) = core.cross_note_var_index.lock() {
+            index.update_exports(&short_id, &result.variables, &result.variable_values);
+            index.update_deps(&note_id, &result.cross_note_refs);
+        }
     }
+
+    Ok(result)
+}
+
+/// Return exported variable entries for a note identified by its 8-char short ID.
+/// Used to populate cross-note variable autocomplete suggestions in the editor.
+#[tauri::command]
+pub fn get_cross_note_vars(
+    core: State<'_, AppCore>,
+    short_id: String,
+) -> Vec<VariableIndexEntry> {
+    core.cross_note_exports_for_autocomplete(&short_id)
 }

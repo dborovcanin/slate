@@ -561,6 +561,10 @@ export function evaluateNoteContextDelta(
   });
 }
 
+export function getCrossNoteVars(shortId: string): Promise<VariableIndexEntry[]> {
+  return invoke<VariableIndexEntry[]>("get_cross_note_vars", { shortId });
+}
+
 export function exportToFile(path: string, content: string): Promise<void> {
   return invoke<void>("export_to_file", { path, content });
 }

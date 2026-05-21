@@ -6,7 +6,11 @@ import {
   type CompletionSource,
 } from "@codemirror/autocomplete";
 import { variableIndexField } from "./calc-decoration.ts";
+import { getCrossNoteVars } from "../api.ts";
 import type { VariableIndexEntry } from "../api.ts";
+
+// Matches [[SHORTID]]. optionally followed by a partial variable name.
+const CROSS_NOTE_PREFIX_RE = /\[\[([A-Za-z0-9]{8})\]\]\.([A-Za-z0-9_][A-Za-z0-9_ ]*)?$/;
 
 export interface VariableAutocompleteOptions {
   enabled?: boolean;
@@ -128,16 +132,71 @@ export function makeVariableCompletionSource(
   return variableCompletionSource(minChars, maxSuggestions);
 }
 
+function crossNoteCompletionSource(maxSuggestions: number): CompletionSource {
+  return async (context: CompletionContext): Promise<CompletionResult | null> => {
+    const selection = context.state.selection.main;
+    if (!selection.empty || selection.head !== context.pos) return null;
+
+    const line = context.state.doc.lineAt(context.pos);
+    const textBefore = line.text.slice(0, context.pos - line.from);
+    const match = CROSS_NOTE_PREFIX_RE.exec(textBefore);
+    if (!match) return null;
+
+    const shortId = match[1]!;
+    const partialRaw = match[2] ?? "";
+    const partial = partialRaw.trim().toLowerCase();
+
+    // from = position right after the dot
+    const dotOffset = textBefore.lastIndexOf(`[[${shortId}]].`);
+    const varStart = line.from + dotOffset + `[[${shortId}]].`.length;
+
+    const snapshotDoc = context.state.doc;
+    let vars: VariableIndexEntry[];
+    try {
+      vars = await getCrossNoteVars(shortId);
+    } catch {
+      return null;
+    }
+
+    if (context.state.doc !== snapshotDoc) return null;
+
+    const filtered = vars
+      .filter((v) => v.normalized.startsWith(partial) && v.normalized !== partial)
+      .sort((a, b) => a.normalized.length - b.normalized.length || a.normalized.localeCompare(b.normalized))
+      .slice(0, maxSuggestions);
+
+    if (filtered.length === 0) return null;
+
+    return {
+      from: varStart,
+      to: context.pos,
+      options: filtered.map((v): Completion => ({
+        label: v.name,
+        type: "variable",
+        detail: `[[${shortId}]]`,
+        apply: v.name,
+      })),
+      filter: false,
+    };
+  };
+}
+
 export function variableAutocompleteExtensions(
   options: VariableAutocompleteOptions = {},
 ) {
-  const source = makeVariableCompletionSource(options);
-  if (!source) return [];
-
+  const enabled = options.enabled ?? true;
   const maxSuggestions = Math.max(1, Math.min(32, options.maxSuggestions ?? 8));
+
+  const sources: CompletionSource[] = [crossNoteCompletionSource(maxSuggestions)];
+
+  if (enabled) {
+    const minChars = Math.max(1, Math.min(64, options.minChars ?? 3));
+    sources.unshift(variableCompletionSource(minChars, maxSuggestions));
+  }
+
   return [
     autocompletion({
-      override: [source],
+      override: sources,
       activateOnTyping: true,
       closeOnBlur: true,
       defaultKeymap: true,

@@ -50,36 +50,28 @@ monthly_income := 5000
 - `evaluate_note_with_cross_refs(note_id, short_id, lines, options)` — drop-in replacement for `calc_engine.evaluate_note_context` that handles extern var injection and index updates in one call
 - `cross_note_exports_for_autocomplete(short_id)` — returns exported variable entries for a given note short_id; ready for an IPC command to serve the UI autocomplete
 
-### What remains (hard phase — frontend wiring)
+**`src-tauri/src/commands/calc.rs`**
+- `note_short_id(note_id)` helper — extracts 8-char short ID from DB note IDs, returns `""` for `mdfile:` notes
+- `evaluate_note_context_delta` now goes through `CrossNoteVarIndex`: registers note, snapshots extern vars before `spawn_blocking`, updates exports and deps after
+- `get_cross_note_vars(short_id)` Tauri command — returns exported variable entries for a note; backed by `cross_note_exports_for_autocomplete`
 
-**Propagation loop** (`src-tauri/src/`)
-- After `evaluate_note_with_cross_refs` returns with `variable_values` changed, call `cross_note_var_index.dependents_of(short_id)` to get dependent note_ids
-- For each dependent: re-evaluate using `evaluate_note_with_cross_refs` and push the updated results to the relevant frontend
-- Must handle topological order to avoid stale intermediate values; detect cycles and break them (no output for cycle participants, consistent with existing intra-note behavior)
-- Throttle: only propagate when `update_exports` returns `true` (value-level gating already implemented)
+**`src/api.ts`**
+- `getCrossNoteVars(shortId)` IPC wrapper
 
-**IPC command for autocomplete**
-- Add a Tauri command `get_cross_note_vars(short_id: String) -> Vec<VariableIndexEntry>` backed by `cross_note_exports_for_autocomplete`
-- UI: detect `[[<8-char>]].` prefix in variable autocomplete source, call the new command, present results
+**`src/editor/variable-autocomplete.ts`**
+- `crossNoteCompletionSource` — async CodeMirror completion source; detects `[[SHORTID]].partial` before the cursor, calls `getCrossNoteVars`, suggests variable names with `[[SHORTID]]` as the detail label; stale-doc guard after await
+- `variableAutocompleteExtensions` updated to include both sources in the `override` array; cross-note source always active (even when local variable autocomplete is disabled)
 
-**UI autocomplete (CodeMirror)**
-- Extend `variable-autocomplete.ts` with a second completion source that triggers on the `[[SHORTID]].` prefix
-- Fetch `get_cross_note_vars` on trigger; suggest exported variable names with `[[SHORTID]].var_name` as the `apply` value
-- Needs: `variableIndexField` equivalent for cross-note entries, or an async IPC call in the completion source
-
-**TUI autocomplete**
-- Extend TUI variable popup (`src-tauri/src/terminal/`) with the same trigger pattern
-- `calc_cache.rs`: on `[[SHORTID]].` prefix, look up `AppCore.cross_note_exports_for_autocomplete(short_id)` and render the popup
+### What remains (TUI)
 
 **TUI reactive updates**
-- `calc_cache.rs` and TUI event loop need to handle incoming "note stale" signals when a dependency note changes
-- Current TUI re-evaluates on keypress; cross-note staleness requires a background signal path
+- `calc_cache.rs`: call `AppCore.evaluate_note_with_cross_refs` instead of `CalcEngine::evaluate_note_context` so the shared index is updated on TUI edits too
+- Cross-note staleness on TUI is lazy: next keypress on a dependent note picks up fresh values automatically (same model as UI)
 
-**Note short_id resolution**
-- `evaluate_note_with_cross_refs` currently takes `short_id` as a caller-supplied parameter
-- For DB notes the short_id is the first 8 chars of the ULID note_id; callers need to extract and pass it
-- For markdown file notes (no ULID), cross-note refs pointing at them are not supported in this design; pass empty string to skip export indexing
+**TUI autocomplete**
+- TUI variable popup (`src-tauri/src/terminal/`): detect `[[SHORTID]].` prefix on the current line
+- On match: call `AppCore.cross_note_exports_for_autocomplete(short_id)` and render the existing popup with those entries
 
 **Module gating**
 - Cross-note refs are currently gated implicitly by `variables_enabled`
-- A dedicated `cross_note` module flag (in `EditorModulesConfig` + TOML config + UI settings) would let users opt out per note; defer until feature is stable
+- A dedicated `cross_note` module flag is deferred until the feature is stable
