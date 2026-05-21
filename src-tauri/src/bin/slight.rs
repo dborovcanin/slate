@@ -126,7 +126,7 @@ fn main() {
         }
     };
 
-    if let Err(err) = terminal::run_terminal_session(core.db(), &theme, &opts) {
+    if let Err(err) = terminal::run_terminal_session(core.db(), &theme, &opts, core.cross_note_var_index_arc()) {
         eprintln!("{err}");
         std::process::exit(1);
     }

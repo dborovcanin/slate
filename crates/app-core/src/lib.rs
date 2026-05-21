@@ -33,7 +33,8 @@ pub struct AppCore {
     /// Key: note_id. Value: current lines of that note as known to the server.
     pub note_line_cache: Mutex<FxHashMap<String, Arc<Vec<String>>>>,
     /// Cross-note variable index: tracks exports and inter-note dependencies.
-    pub cross_note_var_index: Mutex<CrossNoteVarIndex>,
+    /// Wrapped in Arc so it can be shared with the TUI session.
+    pub cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>,
 }
 
 impl AppCore {
@@ -67,7 +68,7 @@ impl AppCore {
                 note_sources,
                 calc_engine,
                 note_line_cache: Mutex::new(FxHashMap::default()),
-                cross_note_var_index: Mutex::new(CrossNoteVarIndex::default()),
+                cross_note_var_index: Arc::new(Mutex::new(CrossNoteVarIndex::default())),
             },
             AppCoreOpenMetrics {
                 data_dir_ms,
@@ -82,6 +83,10 @@ impl AppCore {
 
     pub fn db(&self) -> &Db {
         &self.db
+    }
+
+    pub fn cross_note_var_index_arc(&self) -> Arc<Mutex<CrossNoteVarIndex>> {
+        Arc::clone(&self.cross_note_var_index)
     }
 
     pub fn note_sources(&self) -> &NoteSourceService {

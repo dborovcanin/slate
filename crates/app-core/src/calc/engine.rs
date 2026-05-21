@@ -1986,6 +1986,28 @@ fn cross_note_ref_regex() -> &'static Regex {
 }
 
 /// Scan lines for all `[[SHORTID]].var_name` references (1-based line numbers).
+/// Fast variable-assignment scan: finds `name :=` lines without evaluating
+/// expressions. Returns one `VariableIndexEntry` per unique normalized name
+/// (last definition wins, matching runtime precedence). Much cheaper than a
+/// full `CalcEngine::evaluate_note_context` call; use for autocomplete where
+/// only names are needed, not values.
+pub fn scan_variable_assignments(lines: &[String]) -> Vec<VariableIndexEntry> {
+    let mut seen: FxHashMap<String, VariableIndexEntry> = FxHashMap::default();
+    for (line_idx, line) in lines.iter().enumerate() {
+        if let Some((name, normalized, _rhs)) = parse_variable_assignment(line.trim()) {
+            seen.insert(
+                normalized.clone(),
+                VariableIndexEntry {
+                    name,
+                    normalized,
+                    line: line_idx + 1,
+                },
+            );
+        }
+    }
+    seen.into_values().collect()
+}
+
 pub fn scan_cross_note_refs(lines: &[String]) -> Vec<CrossNoteRef> {
     let re = cross_note_ref_regex();
     let mut refs = Vec::new();

@@ -15,6 +15,12 @@ pub struct CrossNoteVarIndex {
     deps: FxHashMap<String, FxHashSet<String>>,
     /// short_id (lowercase) → full note_id (for dependency propagation)
     short_id_to_note_id: FxHashMap<String, String>,
+    /// short_ids for which a fast name-scan has been done this session.
+    /// Prevents re-hitting the DB for autocomplete on notes with zero variables.
+    name_scan_attempted_ids: FxHashSet<String>,
+    /// short_ids for which a full CalcEngine eval has been done this session.
+    /// Prevents re-evaluating a dep note when building extern_vars for ghost eval.
+    full_eval_attempted_ids: FxHashSet<String>,
 }
 
 impl CrossNoteVarIndex {
@@ -96,5 +102,36 @@ impl CrossNoteVarIndex {
             .get(&short_id.to_ascii_lowercase())
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Update autocomplete entries without touching the f64 value map.
+    /// Use after a fast name-only scan when values aren't available yet.
+    pub fn update_entries_only(&mut self, short_id: &str, entries: &[VariableIndexEntry]) {
+        self.export_entries
+            .insert(short_id.to_ascii_lowercase(), entries.to_vec());
+    }
+
+    // --- Name-scan tracking (fast path for autocomplete) ---
+
+    pub fn mark_name_scan_attempted(&mut self, short_id: &str) {
+        self.name_scan_attempted_ids
+            .insert(short_id.to_ascii_lowercase());
+    }
+
+    pub fn was_name_scan_attempted(&self, short_id: &str) -> bool {
+        self.name_scan_attempted_ids
+            .contains(&short_id.to_ascii_lowercase())
+    }
+
+    // --- Full-eval tracking (fast path for ghost-eval preload) ---
+
+    pub fn mark_full_eval_attempted(&mut self, short_id: &str) {
+        self.full_eval_attempted_ids
+            .insert(short_id.to_ascii_lowercase());
+    }
+
+    pub fn was_full_eval_attempted(&self, short_id: &str) -> bool {
+        self.full_eval_attempted_ids
+            .contains(&short_id.to_ascii_lowercase())
     }
 }

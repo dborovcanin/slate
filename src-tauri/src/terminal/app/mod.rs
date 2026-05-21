@@ -17,7 +17,9 @@ use crate::config::ThemeConfig;
 use crate::startup_log::append_startup_log_line;
 use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
+use app_core::cross_note::CrossNoteVarIndex;
 use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
+use std::sync::{Arc, Mutex};
 use rustc_hash::FxHashMap;
 use std::cmp::min;
 use std::collections::VecDeque;
@@ -468,6 +470,10 @@ struct TerminalApp {
     selection_anchor: Option<(usize, usize)>, // (line, col)
     command_selection: Option<crate::editor_core::types::SelectionSnapshot>,
     command_selection_linewise: bool,
+    // Shared cross-note variable index (also held by AppCore / Tauri commands).
+    cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>,
+    // DB handle for on-demand cross-note export loading (cheap Arc clone).
+    cross_note_db: Db,
     // Calc ghost cache
     calc: CalcCache,
     calc_recompute_pending: bool,
@@ -706,6 +712,7 @@ impl TerminalApp {
         render_palette: render::RenderPalette,
         date_format: String,
         date_time_format: String,
+        cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>,
     ) -> Result<(Self, TerminalStartupMetrics), String> {
         let startup_begin = Instant::now();
 
@@ -777,6 +784,7 @@ impl TerminalApp {
                 active_has_variable_assignment,
                 note_table_enabled,
                 None,
+                Vec::new(),
             )
         };
         let loading_calc_engine = calc_begin.elapsed();
@@ -898,6 +906,8 @@ impl TerminalApp {
             selection_anchor: None,
             command_selection: None,
             command_selection_linewise: false,
+            cross_note_var_index,
+            cross_note_db: db.clone(),
             calc: CalcCache {
                 engine: calc_engine,
                 results: calc_data.line_results,
@@ -1478,6 +1488,7 @@ pub fn run_terminal_session(
     db: &Db,
     config: &ThemeConfig,
     opts: &TerminalOptions,
+    cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>,
 ) -> Result<(), String> {
     let startup_ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1506,6 +1517,7 @@ pub fn run_terminal_session(
         render::RenderPalette::for_theme(&config.color_scheme, &config.accent),
         config.date_format.clone(),
         config.date_time_format.clone(),
+        cross_note_var_index,
     )?;
     let line = format!(
         "time:{startup_ts_ms} loading_screen:{} loading_note:{} loading_switcher:{} loading_calc_engine:{}",

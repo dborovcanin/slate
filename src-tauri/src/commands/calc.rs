@@ -128,6 +128,42 @@ pub async fn evaluate_note_context_delta(
     // Snapshot extern vars from the cross-note index before entering spawn_blocking.
     let vars_enabled = variables_enabled.unwrap_or(true);
     let extern_vars = if vars_enabled && !short_id.is_empty() {
+        // Pre-load any referenced notes not yet in the index so ghost eval
+        // works without requiring the user to visit the source note first.
+        let refs = app_core::calc::scan_cross_note_refs(&lines);
+        for r in &refs {
+            let already = core
+                .cross_note_var_index
+                .lock()
+                .ok()
+                .map(|index| index.was_full_eval_attempted(&r.note_short_id))
+                .unwrap_or(true);
+            if !already {
+                if let Ok(Some(dep)) = core
+                    .note_sources()
+                    .resolve_wiki_link_note(&r.note_short_id)
+                {
+                    let dep_lines: Vec<String> =
+                        dep.body.split('\n').map(|l| l.to_string()).collect();
+                    let dep_options = NoteEvaluationOptions {
+                        variables_enabled: true,
+                        table_enabled: false,
+                        ..Default::default()
+                    };
+                    core.evaluate_note_with_cross_refs(
+                        &dep.id,
+                        &r.note_short_id,
+                        &dep_lines,
+                        dep_options,
+                    );
+                }
+                if let Ok(mut index) = core.cross_note_var_index.lock() {
+                    index.mark_name_scan_attempted(&r.note_short_id);
+                    index.mark_full_eval_attempted(&r.note_short_id);
+                }
+            }
+        }
+
         if let Ok(mut index) = core.cross_note_var_index.lock() {
             index.register_note(&note_id, &short_id);
             index.extern_vars_for(&note_id)
@@ -174,10 +210,39 @@ pub async fn evaluate_note_context_delta(
 
 /// Return exported variable entries for a note identified by its 8-char short ID.
 /// Used to populate cross-note variable autocomplete suggestions in the editor.
+/// If the note has never been evaluated this session, loads and evaluates it on demand.
 #[tauri::command]
 pub fn get_cross_note_vars(
     core: State<'_, AppCore>,
     short_id: String,
 ) -> Vec<VariableIndexEntry> {
-    core.cross_note_exports_for_autocomplete(&short_id)
+    // Fast path: name scan already done (covers notes with zero variables too).
+    let already = core
+        .cross_note_var_index
+        .lock()
+        .ok()
+        .map(|index| index.was_name_scan_attempted(&short_id))
+        .unwrap_or(false);
+    if already {
+        return core.cross_note_exports_for_autocomplete(&short_id);
+    }
+
+    // Slow path: load note body and do a fast name-only scan (no CalcEngine eval).
+    let note = match core.note_sources().resolve_wiki_link_note(&short_id) {
+        Ok(Some(n)) => n,
+        _ => {
+            if let Ok(mut index) = core.cross_note_var_index.lock() {
+                index.mark_name_scan_attempted(&short_id);
+            }
+            return Vec::new();
+        }
+    };
+    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
+    let entries = app_core::calc::scan_variable_assignments(&lines);
+    if let Ok(mut index) = core.cross_note_var_index.lock() {
+        index.register_note(&note.id, &short_id);
+        index.update_entries_only(&short_id, &entries);
+        index.mark_name_scan_attempted(&short_id);
+    }
+    entries
 }

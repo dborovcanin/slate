@@ -1,6 +1,8 @@
 use super::{
-    build_variable_suggestions, compute_calc_data, compute_calc_trailer_refresh,
-    contains_assignment_operator, display_cols_for_prefix, extract_variable_completion_prefix,
+    build_variable_suggestions, compute_calc_data, compute_calc_data_for_note,
+    compute_calc_trailer_refresh, contains_assignment_operator, cross_note_exports_for_autocomplete,
+    display_cols_for_prefix, extract_cross_note_completion_prefix,
+    extract_variable_completion_prefix, preload_cross_note_dep_value, tui_note_short_id,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, table_cell_edit_start,
     table_cell_info_at_char, table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind,
@@ -11,6 +13,7 @@ use super::{
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
+use app_core::calc::ExternVar;
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
 };
@@ -1516,13 +1519,25 @@ impl TerminalApp {
         }
         let calc_variables_enabled = self.calc_variables_enabled();
         let calc_table_enabled = self.note_table_module_enabled();
+
+        // Pre-load f64 values for any referenced dep notes before any eval path,
+        // including the stale (first-open) path. Guarded internally so O(1) after
+        // the first call per dep per session.
+        if calc_variables_enabled {
+            self.preload_cross_note_deps();
+        }
+
         if self.calc.stale {
-            let calc_data = compute_calc_data(
+            let note_id = self.active_note.id.clone();
+            let short_id = tui_note_short_id(&note_id).to_string();
+            let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
                 &self.lines,
                 calc_variables_enabled,
                 calc_table_enabled,
-                None,
+                &note_id,
+                &short_id,
+                &self.cross_note_var_index,
             );
             let calc_mask = self.calc_feature_mask();
             self.calc.calc_dependency_index =
@@ -1549,6 +1564,21 @@ impl TerminalApp {
             self.record_perf_duration("tui.calc.recompute", "stale_full", started.elapsed());
             return;
         }
+
+        // Snapshot extern vars once for the whole incremental recompute.
+        // Update deps from a live scan so refs added since the last full eval are picked up.
+        let incremental_extern_vars: Vec<ExternVar> = if calc_variables_enabled {
+            let note_id = self.active_note.id.clone();
+            let refs = app_core::calc::scan_cross_note_refs(&self.lines);
+            if let Ok(mut index) = self.cross_note_var_index.lock() {
+                index.update_deps(&note_id, &refs);
+                index.extern_vars_for(&note_id)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
 
         let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
             &self.calc.prev_line_metadata,
@@ -1655,6 +1685,7 @@ impl TerminalApp {
                     calc_variables_enabled,
                     calc_table_enabled,
                     Some((eval_from, eval_to)),
+                    incremental_extern_vars.clone(),
                 );
                 for idx in eval_from..eval_to {
                     if let Some(slot) = merged_results.get_mut(idx) {
@@ -1689,6 +1720,7 @@ impl TerminalApp {
                     calc_variables_enabled,
                     calc_table_enabled,
                     Some((eval_from, eval_to)),
+                    incremental_extern_vars.clone(),
                 );
                 for idx in eval_from..eval_to {
                     if let Some(slot) = merged_results.get_mut(idx) {
@@ -1701,12 +1733,16 @@ impl TerminalApp {
             }
             (merged_results, merged_cells)
         } else {
-            let calc_data = compute_calc_data(
+            let note_id = self.active_note.id.clone();
+            let short_id = tui_note_short_id(&note_id).to_string();
+            let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
                 &self.lines,
                 calc_variables_enabled,
                 calc_table_enabled,
-                None,
+                &note_id,
+                &short_id,
+                &self.cross_note_var_index,
             );
             (calc_data.line_results, calc_data.cell_results)
         };
@@ -2344,13 +2380,39 @@ impl TerminalApp {
         if self.mode != UiMode::Editor {
             return None;
         }
-        if !self.note_math_module_enabled()
-            || !self.note_variables_module_enabled()
-            || self.calc.variable_names.is_empty()
-        {
+        if !self.note_math_module_enabled() || !self.note_variables_module_enabled() {
             return None;
         }
+
+        // Cross-note prefix takes priority: [[SHORTID]].partial
         let line = self.current_line();
+        if let Some((short_id, from_col, partial)) =
+            extract_cross_note_completion_prefix(line, self.cursor_col)
+        {
+            let exports = cross_note_exports_for_autocomplete(
+                &short_id,
+                &self.cross_note_var_index,
+                &self.calc.engine,
+                &self.cross_note_db,
+            );
+            let suggestions: Vec<String> = exports
+                .iter()
+                .filter(|e| e.normalized.starts_with(&partial) && e.normalized != partial)
+                .map(|e| e.name.clone())
+                .collect();
+            if !suggestions.is_empty() {
+                return Some(VariableAutocompleteState {
+                    from_col,
+                    to_col: self.cursor_col,
+                    query: partial,
+                    suggestions,
+                });
+            }
+        }
+
+        if self.calc.variable_names.is_empty() {
+            return None;
+        }
         let prefix = extract_variable_completion_prefix(line, self.cursor_col)?;
         let suggestions = build_variable_suggestions(
             &self.calc.variable_names,
@@ -2466,7 +2528,7 @@ impl TerminalApp {
     ) -> bool {
         let from_col = from_col.min(self.cursor_col);
         let to_col = to_col.min(line_char_len(self.current_line()));
-        if from_col >= to_col {
+        if from_col > to_col {
             return false;
         }
 
@@ -3452,6 +3514,38 @@ impl TerminalApp {
         }
     }
 
+    /// Ensure f64 export values for every cross-note dep in the current note
+    /// are in the index. Guarded by `was_full_eval_attempted` so it's O(1)
+    /// after the first call per dep per session.
+    fn preload_cross_note_deps(&self) {
+        let refs = app_core::calc::scan_cross_note_refs(&self.lines);
+        if refs.is_empty() {
+            return;
+        }
+        // Collect unique short_ids that haven't been fully evaluated yet.
+        let missing: Vec<String> = self
+            .cross_note_var_index
+            .lock()
+            .ok()
+            .map(|index| {
+                refs.iter()
+                    .map(|r| r.note_short_id.clone())
+                    .filter(|sid| !index.was_full_eval_attempted(sid))
+                    .collect::<rustc_hash::FxHashSet<_>>()
+                    .into_iter()
+                    .collect()
+            })
+            .unwrap_or_default();
+        for short_id in missing {
+            preload_cross_note_dep_value(
+                &short_id,
+                &self.cross_note_var_index,
+                &self.calc.engine,
+                &self.cross_note_db,
+            );
+        }
+    }
+
     pub(super) fn recompute_calc_range(&mut self, eval_from: usize, eval_to: usize) {
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
@@ -3468,12 +3562,26 @@ impl TerminalApp {
             eval_to,
             calc_mask,
         );
+        let vars_enabled = self.calc_variables_enabled();
+        let extern_vars: Vec<ExternVar> = if vars_enabled {
+            let note_id = self.active_note.id.clone();
+            let refs = app_core::calc::scan_cross_note_refs(&self.lines);
+            if let Ok(mut index) = self.cross_note_var_index.lock() {
+                index.update_deps(&note_id, &refs);
+                index.extern_vars_for(&note_id)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
         let calc_data = compute_calc_data(
             &self.calc.engine,
             &self.lines,
-            self.calc_variables_enabled(),
+            vars_enabled,
             self.note_table_module_enabled(),
             Some((eval_from, eval_to)),
+            extern_vars,
         );
         if self.calc.results.len() != self.lines.len() {
             self.calc.results = vec![None; self.lines.len()];

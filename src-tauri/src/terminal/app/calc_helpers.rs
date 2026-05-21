@@ -1,7 +1,12 @@
 use super::VariableCompletionPrefix;
 #[cfg(test)]
 use crate::terminal::text_utils::line_display_cols;
-use app_core::calc::{CalcEngine, TableCellEvaluation};
+use app_core::calc::{
+    CalcEngine, ExternVar, NoteEvaluationOptions, TableCellEvaluation, VariableIndexEntry,
+};
+use app_core::cross_note::CrossNoteVarIndex;
+use crate::storage::Db;
+use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 pub(super) fn calc_ghost_prefix(text: &str, calc_ghost: Option<&str>) -> &'static str {
@@ -39,14 +44,15 @@ pub(super) fn compute_calc_data(
     variables_enabled: bool,
     table_enabled: bool,
     eval_range: Option<(usize, usize)>,
+    extern_vars: Vec<ExternVar>,
 ) -> CalcData {
     let result = engine.evaluate_note_context(
         lines,
-        app_core::calc::NoteEvaluationOptions {
+        NoteEvaluationOptions {
             variables_enabled,
             table_enabled,
             eval_range,
-            ..Default::default()
+            extern_vars,
         },
     );
     let mut variable_names = result
@@ -66,13 +72,73 @@ pub(super) fn compute_calc_data(
     }
 }
 
+/// Full-note eval that also reads/writes the shared cross-note variable index.
+/// Use this instead of `compute_calc_data` for whole-document recomputes so that
+/// cross-note variable references resolve correctly and exported variables stay
+/// visible to other notes.
+pub(super) fn compute_calc_data_for_note(
+    engine: &CalcEngine,
+    lines: &[String],
+    variables_enabled: bool,
+    table_enabled: bool,
+    note_id: &str,
+    short_id: &str,
+    cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
+) -> CalcData {
+    let extern_vars = if variables_enabled && !short_id.is_empty() {
+        if let Ok(mut index) = cross_note_var_index.lock() {
+            index.register_note(note_id, short_id);
+            // Pre-populate deps from a line scan so extern_vars_for works on the
+            // very first eval (before update_deps has been called from a prior eval).
+            let refs = app_core::calc::scan_cross_note_refs(lines);
+            index.update_deps(note_id, &refs);
+            index.extern_vars_for(note_id)
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let result = engine.evaluate_note_context(
+        lines,
+        NoteEvaluationOptions {
+            variables_enabled,
+            table_enabled,
+            eval_range: None,
+            extern_vars,
+        },
+    );
+
+    if variables_enabled && !short_id.is_empty() {
+        if let Ok(mut index) = cross_note_var_index.lock() {
+            index.update_exports(short_id, &result.variables, &result.variable_values);
+            index.update_deps(note_id, &result.cross_note_refs);
+        }
+    }
+
+    let mut variable_names = result
+        .variables
+        .into_iter()
+        .map(|entry| entry.normalized)
+        .collect::<Vec<_>>();
+    variable_names.sort();
+    variable_names.dedup();
+
+    CalcData {
+        line_results: result.line_results,
+        cell_results: result.table_cell_results,
+        variable_names,
+    }
+}
+
 #[cfg(test)]
 pub(super) fn compute_calc_results(
     lines: &[String],
     variables_enabled: bool,
 ) -> Vec<Option<String>> {
     let engine = CalcEngine::new();
-    compute_calc_data(&engine, lines, variables_enabled, true, None).line_results
+    compute_calc_data(&engine, lines, variables_enabled, true, None, Vec::new()).line_results
 }
 
 /// Decide whether an already-eligible line's trailing ` = <literal>` should
@@ -164,4 +230,121 @@ pub(super) fn build_variable_suggestions(
 
 pub(super) fn contains_assignment_operator(text: &str) -> bool {
     crate::editor_core::calc_plan::contains_assignment_operator(text)
+}
+
+/// Returns the 8-char wiki-link short ID for a DB note, or `""` for file notes.
+pub(super) fn tui_note_short_id(note_id: &str) -> &str {
+    if note_id.starts_with("mdfile:") || note_id.len() < 8 {
+        return "";
+    }
+    &note_id[..8]
+}
+
+/// Returns variable name entries for `short_id` for autocomplete suggestions.
+/// Uses a fast text scan (no expression evaluation) so the first call is cheap.
+/// Values are NOT populated by this function — use `preload_cross_note_dep_value`
+/// for ghost-eval correctness.
+pub(super) fn cross_note_exports_for_autocomplete(
+    short_id: &str,
+    cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
+    _engine: &CalcEngine,
+    db: &Db,
+) -> Vec<VariableIndexEntry> {
+    // Fast path: name scan already done for this short_id.
+    if let Ok(index) = cross_note_var_index.lock() {
+        if index.was_name_scan_attempted(short_id) {
+            return index.exports_for_short_id(short_id).to_vec();
+        }
+    }
+
+    // Slow path: load the note body and do a name-only scan (no eval).
+    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+    let note = match note_sources.resolve_wiki_link_note(short_id) {
+        Ok(Some(n)) => n,
+        _ => {
+            if let Ok(mut index) = cross_note_var_index.lock() {
+                index.mark_name_scan_attempted(short_id);
+            }
+            return Vec::new();
+        }
+    };
+    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
+    let entries = app_core::calc::scan_variable_assignments(&lines);
+    if let Ok(mut index) = cross_note_var_index.lock() {
+        index.register_note(&note.id, short_id);
+        index.update_entries_only(short_id, &entries);
+        index.mark_name_scan_attempted(short_id);
+    }
+    entries
+}
+
+/// Ensures the f64 export values for `short_id` are in the index by running a
+/// full CalcEngine eval if not already done this session. Called from
+/// `preload_cross_note_deps` before each recompute so ghost eval has values.
+pub(super) fn preload_cross_note_dep_value(
+    short_id: &str,
+    cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
+    engine: &CalcEngine,
+    db: &Db,
+) {
+    if let Ok(index) = cross_note_var_index.lock() {
+        if index.was_full_eval_attempted(short_id) {
+            return;
+        }
+    }
+
+    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
+    let note = match note_sources.resolve_wiki_link_note(short_id) {
+        Ok(Some(n)) => n,
+        _ => {
+            if let Ok(mut index) = cross_note_var_index.lock() {
+                index.mark_full_eval_attempted(short_id);
+            }
+            return;
+        }
+    };
+    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
+    let result = engine.evaluate_note_context(
+        &lines,
+        NoteEvaluationOptions {
+            variables_enabled: true,
+            table_enabled: false,
+            ..Default::default()
+        },
+    );
+    if let Ok(mut index) = cross_note_var_index.lock() {
+        index.register_note(&note.id, short_id);
+        index.update_exports(short_id, &result.variables, &result.variable_values);
+        index.mark_name_scan_attempted(short_id); // name scan implied by full eval
+        index.mark_full_eval_attempted(short_id);
+    }
+}
+
+/// If the text before `cursor_col` ends with `[[SHORTID]].partial`, return
+/// `(short_id, from_col_of_partial, partial_query)`.
+/// `from_col_of_partial` is the char index right after the dot.
+pub(super) fn extract_cross_note_completion_prefix(
+    line_text: &str,
+    cursor_col: usize,
+) -> Option<(String, usize, String)> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"\[\[([A-Za-z0-9]{8})\]\]\.([A-Za-z0-9_][A-Za-z0-9_ ]*)?$").unwrap()
+    });
+
+    let chars: Vec<char> = line_text.chars().collect();
+    let col = cursor_col.min(chars.len());
+    let text_before: String = chars[..col].iter().collect();
+    let m = re.captures(&text_before)?;
+    let short_id = m.get(1)?.as_str().to_string();
+    let partial_raw = m.get(2).map(|g| g.as_str()).unwrap_or("");
+    let partial = partial_raw.trim().to_lowercase();
+
+    // from_col = col - partial_raw.chars().count()
+    let partial_chars = partial_raw.chars().count();
+    let from_col = col.saturating_sub(partial_chars);
+
+    Some((short_id, from_col, partial))
 }

@@ -62,16 +62,29 @@ monthly_income := 5000
 - `crossNoteCompletionSource` — async CodeMirror completion source; detects `[[SHORTID]].partial` before the cursor, calls `getCrossNoteVars`, suggests variable names with `[[SHORTID]]` as the detail label; stale-doc guard after await
 - `variableAutocompleteExtensions` updated to include both sources in the `override` array; cross-note source always active (even when local variable autocomplete is disabled)
 
-### What remains (TUI)
+### What's done (TUI)
 
-**TUI reactive updates**
-- `calc_cache.rs`: call `AppCore.evaluate_note_with_cross_refs` instead of `CalcEngine::evaluate_note_context` so the shared index is updated on TUI edits too
-- Cross-note staleness on TUI is lazy: next keypress on a dependent note picks up fresh values automatically (same model as UI)
+**`crates/app-core/src/lib.rs`**
+- `cross_note_var_index` changed from `Mutex<CrossNoteVarIndex>` to `Arc<Mutex<CrossNoteVarIndex>>`
+- Added `cross_note_var_index_arc()` accessor to clone the Arc
 
-**TUI autocomplete**
-- TUI variable popup (`src-tauri/src/terminal/`): detect `[[SHORTID]].` prefix on the current line
-- On match: call `AppCore.cross_note_exports_for_autocomplete(short_id)` and render the existing popup with those entries
+**`src-tauri/src/terminal/app/calc_helpers.rs`**
+- `tui_note_short_id(note_id)` helper — extracts 8-char short ID, returns `""` for `mdfile:` notes
+- `compute_calc_data_for_note(...)` — full-note eval that reads extern vars from the shared index before eval and updates exports/deps after; used for whole-document recomputes
+- `extract_cross_note_completion_prefix(line, cursor_col)` — detects `[[SHORTID]].partial` before the cursor, returns `(short_id, from_col, partial_query)` using a lazy-compiled Regex
 
-**Module gating**
-- Cross-note refs are currently gated implicitly by `variables_enabled`
-- A dedicated `cross_note` module flag is deferred until the feature is stable
+**`src-tauri/src/terminal/app/mod.rs`**
+- Added `cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>` field to `TerminalApp`
+- `run_terminal_session` and `new_with_startup_metrics` accept and store the Arc
+- `std::sync::{Arc, Mutex}` and `app_core::cross_note::CrossNoteVarIndex` imported
+
+**`src-tauri/src/terminal/app/editing.rs`**
+- Stale full-recompute path (`if self.calc.stale { ... }`) uses `compute_calc_data_for_note` instead of `compute_calc_data` so the shared index is updated on every full TUI eval
+- `variable_autocomplete_state` checks for `[[SHORTID]].partial` prefix first; on match, queries the index directly and returns cross-note variable suggestions using the existing popup infrastructure
+
+**`src-tauri/src/lib.rs`** and **`src-tauri/src/bin/slight.rs`**
+- Both call sites of `run_terminal_session` updated to pass `core.cross_note_var_index_arc()`
+
+### Deferred
+
+**Module gating**: cross-note refs are gated implicitly by `variables_enabled`. A dedicated `cross_note` module flag is deferred until the feature is stable.

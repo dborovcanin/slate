@@ -445,7 +445,7 @@ fn run_terminal(opts: &TerminalOptions, theme: &config::ThemeConfig) -> Result<(
     }
     let core = AppCore::open_default()?;
     maybe_start_background_imap_sync(theme.background_tasks_enabled, core.db().clone());
-    terminal::run_terminal_session(core.db(), theme, opts)?;
+    terminal::run_terminal_session(core.db(), theme, opts, core.cross_note_var_index_arc())?;
     // Apply any staged restore that was not handled in-session (e.g. after a crash).
     drop(core);
     if let Err(e) = crate::commands::backup::apply_staged_restore_if_pending() {
