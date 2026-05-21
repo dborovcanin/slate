@@ -46,6 +46,7 @@ pub(super) fn compute_calc_data(
             variables_enabled,
             table_enabled,
             eval_range,
+            ..Default::default()
         },
     );
     let mut variable_names = result

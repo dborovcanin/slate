@@ -44,10 +44,11 @@ pub async fn evaluate_note_context(
         variables_enabled: variables_enabled.unwrap_or(true),
         table_enabled: table_enabled.unwrap_or(true),
         eval_range,
+        ..Default::default()
     };
     let generation = start_eval_generation();
     let fallback_lines = lines.clone();
-    let fallback_options = options;
+    let fallback_options = options.clone();
     let result = match tauri::async_runtime::spawn_blocking(move || {
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
     })
@@ -115,10 +116,11 @@ pub async fn evaluate_note_context_delta(
         variables_enabled: variables_enabled.unwrap_or(true),
         table_enabled: table_enabled.unwrap_or(true),
         eval_range,
+        ..Default::default()
     };
     let generation = start_eval_generation();
     let fallback_lines = Arc::clone(&lines);
-    let fallback_options = options;
+    let fallback_options = options.clone();
     match tauri::async_runtime::spawn_blocking(move || {
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
     })

@@ -1202,6 +1202,7 @@ pub(super) fn collect_table_formula_display_values(
         variables_enabled: true,
         table_enabled: true,
         eval_range: None,
+        ..Default::default()
     };
     let result = CalcEngine::new().evaluate_note_context(lines, options);
     let mut out = FxHashMap::default();

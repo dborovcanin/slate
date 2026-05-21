@@ -154,6 +154,7 @@ fn collect_note_calc_marks(probe: &mut Probe, note: &Note) {
             variables_enabled: note.modules.variables,
             table_enabled: note.modules.table,
             eval_range: None,
+            ..Default::default()
         },
     );
     probe.mark_ms(

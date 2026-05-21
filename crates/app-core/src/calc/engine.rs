@@ -9,7 +9,28 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 pub struct CalcEngine;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A variable value imported from another note for cross-note calc evaluation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExternVar {
+    /// 8-char lowercase alphanumeric short ID of the source note.
+    pub note_short_id: String,
+    /// Normalized (lowercased, spaces collapsed) variable name.
+    pub var_normalized: String,
+    pub value: f64,
+}
+
+/// A cross-note variable reference found while scanning a note's lines.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct CrossNoteRef {
+    /// 8-char lowercase alphanumeric short ID of the referenced note.
+    pub note_short_id: String,
+    /// Normalized variable name referenced from the other note.
+    pub var_normalized: String,
+    /// 1-based line number where the reference appears.
+    pub line: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct NoteEvaluationOptions {
     pub variables_enabled: bool,
     pub table_enabled: bool,
@@ -18,6 +39,9 @@ pub struct NoteEvaluationOptions {
     /// full document so that a restricted evaluation still sees vars defined elsewhere.
     /// Positions outside the range are returned as `None` in `line_results`.
     pub eval_range: Option<(usize, usize)>,
+    /// Values from other notes to substitute for `[[SHORTID]].var_name` references.
+    /// Only used when `variables_enabled` is true.
+    pub extern_vars: Vec<ExternVar>,
 }
 
 impl Default for NoteEvaluationOptions {
@@ -26,6 +50,7 @@ impl Default for NoteEvaluationOptions {
             variables_enabled: true,
             table_enabled: true,
             eval_range: None,
+            extern_vars: Vec::new(),
         }
     }
 }
@@ -44,7 +69,7 @@ pub struct NoteEvaluationDiagnostic {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NoteEvaluationResult {
     pub line_results: Vec<Option<String>>,
     pub variables: Vec<VariableIndexEntry>,
@@ -55,6 +80,14 @@ pub struct NoteEvaluationResult {
     /// top-to-bottom and earlier results are visible to subsequent formulas.
     #[serde(default)]
     pub table_cell_results: Vec<Vec<TableCellEvaluation>>,
+    /// Resolved numeric values for each note-local variable (normalized name → f64).
+    /// Populated only when `variables_enabled` is true. Used for cross-note export.
+    #[serde(default, skip_serializing_if = "rustc_hash::FxHashMap::is_empty")]
+    pub variable_values: rustc_hash::FxHashMap<String, f64>,
+    /// Cross-note variable references found in this note's lines.
+    /// Used by the caller to maintain the dependency graph.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cross_note_refs: Vec<CrossNoteRef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -235,6 +268,7 @@ struct VariableResolver<'a> {
 
 static VARIABLE_REGEX_CACHE: OnceLock<Mutex<FxHashMap<u64, Regex>>> = OnceLock::new();
 static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
+static CROSS_NOTE_REF_RE: OnceLock<Regex> = OnceLock::new();
 
 static EVAL_GENERATION: AtomicU64 = AtomicU64::new(1);
 
@@ -453,6 +487,13 @@ impl<'a> VariableResolver<'a> {
         Some(out)
     }
 
+    fn numeric_values(&self) -> FxHashMap<String, f64> {
+        self.values
+            .iter()
+            .filter_map(|(k, v)| extract_first_number(v).map(|n| (k.clone(), n)))
+            .collect()
+    }
+
     fn push_diagnostic(&mut self, kind: &str, line: usize, message: String) {
         if self
             .diagnostics
@@ -562,14 +603,53 @@ impl CalcEngine {
         options: NoteEvaluationOptions,
     ) -> NoteEvaluationResult {
         let mut ctx = new_context();
+
+        // Build extern_vars lookup and preprocess lines for cross-note refs.
+        let (eval_lines, cross_note_refs, lines_with_unresolved) =
+            if options.variables_enabled && !options.extern_vars.is_empty() {
+                let extern_map: FxHashMap<(String, String), f64> = options
+                    .extern_vars
+                    .iter()
+                    .map(|ev| ((ev.note_short_id.clone(), ev.var_normalized.clone()), ev.value))
+                    .collect();
+                let refs = scan_cross_note_refs(lines);
+                let mut preprocessed: Vec<String> = Vec::with_capacity(lines.len());
+                let mut unresolved_set: std::collections::HashSet<usize> =
+                    std::collections::HashSet::new();
+                for (idx, line) in lines.iter().enumerate() {
+                    let (new_line, has_unresolved) =
+                        preprocess_line_cross_note(line, &extern_map);
+                    if has_unresolved {
+                        unresolved_set.insert(idx);
+                    }
+                    preprocessed.push(new_line);
+                }
+                (std::borrow::Cow::Owned(preprocessed), refs, unresolved_set)
+            } else if options.variables_enabled {
+                let refs = scan_cross_note_refs(lines);
+                (
+                    std::borrow::Cow::Borrowed(lines),
+                    refs,
+                    std::collections::HashSet::new(),
+                )
+            } else {
+                (
+                    std::borrow::Cow::Borrowed(lines),
+                    Vec::new(),
+                    std::collections::HashSet::new(),
+                )
+            };
+
+        let eval_lines: &[String] = &eval_lines;
+
         let defs = if options.variables_enabled {
-            collect_variable_definitions(lines, options.table_enabled)
+            collect_variable_definitions(eval_lines, options.table_enabled)
         } else {
             FxHashMap::default()
         };
         let variables = variable_index_from_definitions(&defs);
 
-        let line_count = lines.len();
+        let line_count = eval_lines.len();
         let (eval_from, eval_to) = match options.eval_range {
             Some((from, to)) => (from.min(line_count), to.min(line_count)),
             None => (0, line_count),
@@ -596,25 +676,28 @@ impl CalcEngine {
         let mut table_eval_cache = TableEvalCache::default();
         let mut table_diagnostics: Vec<NoteEvaluationDiagnostic> = Vec::new();
 
-        // Helper: get a mutable reference to working_lines, cloning from `lines`
+        // Helper: get a mutable reference to working_lines, cloning from `eval_lines`
         // on first access. Call this only when a write is needed.
         macro_rules! ensure_working {
             () => {{
-                working_lines.get_or_insert_with(|| lines.to_vec())
+                working_lines.get_or_insert_with(|| eval_lines.to_vec())
             }};
         }
 
-        // Read a line from working_lines if allocated, otherwise from the input slice.
+        // Read a line from working_lines if allocated, otherwise from eval_lines.
         macro_rules! read_line {
             ($i:expr) => {
                 working_lines
                     .as_ref()
                     .map(|w| w[$i].as_str())
-                    .unwrap_or(&lines[$i])
+                    .unwrap_or(&eval_lines[$i])
             };
         }
 
         for idx in eval_from..eval_to {
+            if lines_with_unresolved.contains(&idx) {
+                continue;
+            }
             let line = read_line!(idx).to_string();
             let table_segments = if options.table_enabled && is_table_line(&line) {
                 table_expression_segments(&line, true)
@@ -692,7 +775,7 @@ impl CalcEngine {
 
             let result = if options.variables_enabled {
                 if let Some(value) = evaluate_table_formula(
-                    working_lines.as_deref().unwrap_or(lines),
+                    working_lines.as_deref().unwrap_or(eval_lines),
                     idx,
                     expression,
                     line_expr.table_cell_index,
@@ -724,7 +807,7 @@ impl CalcEngine {
                 }
             } else {
                 if let Some(value) = evaluate_table_formula(
-                    working_lines.as_deref().unwrap_or(lines),
+                    working_lines.as_deref().unwrap_or(eval_lines),
                     idx,
                     expression,
                     line_expr.table_cell_index,
@@ -762,6 +845,12 @@ impl CalcEngine {
             }
         }
 
+        let variable_values = if options.variables_enabled {
+            resolver.numeric_values()
+        } else {
+            FxHashMap::default()
+        };
+
         NoteEvaluationResult {
             line_results,
             variables,
@@ -771,6 +860,8 @@ impl CalcEngine {
                 Some(diagnostics)
             },
             table_cell_results,
+            variable_values,
+            cross_note_refs,
         }
     }
 }
@@ -1885,6 +1976,78 @@ fn variable_index_from_definitions(
     entries
 }
 
+fn cross_note_ref_regex() -> &'static Regex {
+    CROSS_NOTE_REF_RE.get_or_init(|| {
+        // Matches [[SHORTID]].var_name where SHORTID is 8 alphanumeric chars.
+        // Var name: starts and ends with [A-Za-z0-9_], allows internal spaces.
+        Regex::new(r"\[\[([A-Za-z0-9]{8})\]\]\.([A-Za-z0-9_](?:[A-Za-z0-9_ ]*[A-Za-z0-9_])?)")
+            .expect("cross-note ref regex is valid")
+    })
+}
+
+/// Scan lines for all `[[SHORTID]].var_name` references (1-based line numbers).
+pub fn scan_cross_note_refs(lines: &[String]) -> Vec<CrossNoteRef> {
+    let re = cross_note_ref_regex();
+    let mut refs = Vec::new();
+    for (line_idx, line) in lines.iter().enumerate() {
+        for cap in re.captures_iter(line) {
+            let short_id = cap[1].to_ascii_lowercase();
+            let raw_name = cap[2].trim();
+            let var_normalized = raw_name
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_ascii_lowercase();
+            if var_normalized.is_empty() {
+                continue;
+            }
+            refs.push(CrossNoteRef {
+                note_short_id: short_id,
+                var_normalized,
+                line: line_idx + 1,
+            });
+        }
+    }
+    refs
+}
+
+/// Replace `[[SHORTID]].var_name` tokens in a line with their resolved numeric values.
+/// Returns (preprocessed_line, has_unresolved) where has_unresolved is true if any
+/// ref in the line could not be resolved from extern_vars.
+fn preprocess_line_cross_note(
+    line: &str,
+    extern_map: &FxHashMap<(String, String), f64>,
+) -> (String, bool) {
+    let re = cross_note_ref_regex();
+    let mut has_unresolved = false;
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0usize;
+
+    for cap in re.captures_iter(line) {
+        let full = cap.get(0).unwrap();
+        let short_id = cap[1].to_ascii_lowercase();
+        let raw_name = cap[2].trim();
+        let var_normalized = raw_name
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+
+        out.push_str(&line[cursor..full.start()]);
+
+        let key = (short_id, var_normalized);
+        if let Some(&value) = extern_map.get(&key) {
+            out.push_str(&format_number(value));
+        } else {
+            has_unresolved = true;
+            out.push_str(full.as_str());
+        }
+        cursor = full.end();
+    }
+    out.push_str(&line[cursor..]);
+    (out, has_unresolved)
+}
+
 fn build_variable_regex(names_sorted: &[String]) -> Option<Regex> {
     let escaped: Vec<String> = names_sorted
         .iter()
@@ -2640,10 +2803,10 @@ mod tests {
         ];
         let result = engine.evaluate_note_context(
             &lines,
-            NoteEvaluationOptions {
-                variables_enabled: true,
+            NoteEvaluationOptions { variables_enabled: true,
                 table_enabled: false,
                 eval_range: None,
+            ..Default::default()
             },
         );
         assert_eq!(result.line_results[4], None);
@@ -2791,10 +2954,10 @@ mod tests {
 
         let result = engine.evaluate_note_context(
             &lines,
-            NoteEvaluationOptions {
-                variables_enabled: false,
+            NoteEvaluationOptions { variables_enabled: false,
                 table_enabled: true,
                 eval_range: None,
+            ..Default::default()
             },
         );
 
@@ -2869,6 +3032,7 @@ mod tests {
                 variables_enabled: true,
                 table_enabled: true,
                 eval_range: Some((1, 3)),
+                ..Default::default()
             },
         );
 
@@ -2895,6 +3059,7 @@ mod tests {
                 variables_enabled: true,
                 table_enabled: true,
                 eval_range: Some((2, 3)),
+                ..Default::default()
             },
         );
 
@@ -2913,5 +3078,83 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert!(result.variables.is_empty());
         assert_eq!(result.line_results[1], None);
+    }
+
+    // --- Cross-note variable tests ---
+
+    #[test]
+    fn scan_cross_note_refs_basic() {
+        let lines = vec![
+            "see [[ABCD1234]].monthly_income + 100".to_string(),
+            "plain line".to_string(),
+            "[[ABCD1234]].total cost + [[ZZZZZZZZ]].rate".to_string(),
+        ];
+        let refs = scan_cross_note_refs(&lines);
+        assert_eq!(refs.len(), 3);
+        assert_eq!(refs[0].note_short_id, "abcd1234");
+        assert_eq!(refs[0].var_normalized, "monthly_income");
+        assert_eq!(refs[0].line, 1);
+        // refs[1] = [[ABCD1234]].total cost, refs[2] = [[ZZZZZZZZ]].rate (both on line 3)
+        assert_eq!(refs[1].note_short_id, "abcd1234");
+        assert_eq!(refs[1].var_normalized, "total cost");
+        assert_eq!(refs[1].line, 3);
+        assert_eq!(refs[2].note_short_id, "zzzzzzzz");
+        assert_eq!(refs[2].var_normalized, "rate");
+        assert_eq!(refs[2].line, 3);
+    }
+
+    #[test]
+    fn cross_note_ref_substituted_and_evaluated() {
+        let engine = CalcEngine::new();
+        let lines = vec!["[[ABCD1234]].budget + 500".to_string()];
+        let options = NoteEvaluationOptions {
+            extern_vars: vec![ExternVar {
+                note_short_id: "abcd1234".to_string(),
+                var_normalized: "budget".to_string(),
+                value: 1000.0,
+            }],
+            ..Default::default()
+        };
+        let result = engine.evaluate_note_context(&lines, options);
+        assert_eq!(result.line_results[0], Some("1500".to_string()));
+        assert_eq!(result.cross_note_refs.len(), 1);
+        assert_eq!(result.cross_note_refs[0].var_normalized, "budget");
+    }
+
+    #[test]
+    fn cross_note_ref_unresolved_produces_no_output() {
+        let engine = CalcEngine::new();
+        let lines = vec!["[[ABCD1234]].missing + 500".to_string()];
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[0], None);
+        assert_eq!(result.cross_note_refs.len(), 1);
+    }
+
+    #[test]
+    fn cross_note_ref_mixed_with_local_variable() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "x := 10".to_string(),
+            "[[ABCD1234]].budget + x".to_string(),
+        ];
+        let options = NoteEvaluationOptions {
+            extern_vars: vec![ExternVar {
+                note_short_id: "abcd1234".to_string(),
+                var_normalized: "budget".to_string(),
+                value: 90.0,
+            }],
+            ..Default::default()
+        };
+        let result = engine.evaluate_note_context(&lines, options);
+        assert_eq!(result.line_results[1], Some("100".to_string()));
+    }
+
+    #[test]
+    fn variable_values_exported_in_result() {
+        let engine = CalcEngine::new();
+        let lines = vec!["x := 42".to_string(), "y := 8".to_string()];
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.variable_values.get("x"), Some(&42.0));
+        assert_eq!(result.variable_values.get("y"), Some(&8.0));
     }
 }

@@ -40,7 +40,6 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 ## Research and knowledge
 
 - [ ] **Ghost Notes** — `[[wiki-links]]` targeting non-existent notes create ghost entries that accumulate a reference pressure score. A dedicated view surfaces them ranked by pressure, making knowledge gaps explicit. Promoted to real notes on first write.
-- [ ] **Reactive Cross-Note Calculations** — extends the existing inline calc and variables system across note boundaries. Values defined in one note can be referenced and consumed in another; when the source changes, dependent expressions update reactively.
 - [ ] **Peripheral Context** — while writing, Slate passively monitors the current paragraph and surfaces relevant excerpts from other notes in a slim, non-blocking side column. Appears automatically via the same link layer as Ghost Notes; dismissed with a single keypress.
 - [ ] **Reasoning Timeline** *(requires AI integration)* — each note accumulates a semantic changelog: section-level snapshots recording how the meaning of a passage shifted over time, not just its characters. Navigable section-by-section with vim motions. Requires an LLM (external API or local model such as Ollama); opt-in.
 
