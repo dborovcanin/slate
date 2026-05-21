@@ -26,6 +26,8 @@ export interface ListOverlayOptions<T> {
   onKeydown?: (event: KeyboardEvent, state: ListOverlayState<T>) => boolean;
   /** Restore focus to the previously focused element when closing. Defaults to true. */
   restoreFocus?: boolean;
+  /** Debounce delay in ms for input → refresh. 0 or omitted means synchronous. */
+  debounceMs?: number;
 }
 
 export interface ListOverlayState<T> {
@@ -62,6 +64,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     emptyMessage = "No results",
     onKeydown,
     restoreFocus = true,
+    debounceMs = 0,
   } = options;
 
   let root: HTMLElement | null = null;
@@ -70,6 +73,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
   let restoreTarget: HTMLElement | null = null;
   let closingRoot: HTMLElement | null = null;
   let closeTimer: number | null = null;
+  let debounceTimer: number | null = null;
   let items: T[] = [];
   let selectedIndex = 0;
   let animateItems = true;
@@ -283,8 +287,17 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     }
 
     inputEl.addEventListener("input", () => {
-      selectedIndex = 0;
-      refresh();
+      if (!debounceMs) {
+        selectedIndex = 0;
+        refresh();
+        return;
+      }
+      if (debounceTimer !== null) window.clearTimeout(debounceTimer);
+      debounceTimer = window.setTimeout(() => {
+        debounceTimer = null;
+        selectedIndex = 0;
+        refresh();
+      }, debounceMs);
     });
     inputEl.addEventListener("keydown", handleKeydown);
 
@@ -296,6 +309,10 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
 
   function close() {
     if (!root) return;
+    if (debounceTimer !== null) {
+      window.clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
     const closeTarget = root;
     const closeClass = backdrop ? `${p}-overlay--closing` : `${p}-bar--closing`;
     const duration = parseDurationMs(

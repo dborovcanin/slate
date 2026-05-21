@@ -20,6 +20,8 @@ type SwitcherItem = {
 type DeleteCallback = (id: string) => void;
 type SwitcherMode = "title" | "content";
 const CONTENT_SEARCH_DEBOUNCE_MS = 120;
+const TITLE_SEARCH_DEBOUNCE_MS = 60;
+const MAX_TITLE_RESULTS = 100;
 const PREWARM_QUERY = "slatewarmup";
 const COLLECTION_PREFETCH_TTL_MS = 30_000;
 
@@ -282,19 +284,15 @@ function buildItems(query: string): SwitcherItem[] {
   const trimmed = query.trim();
   if (trimmed.length === 0) {
     resetContentSearchState();
-    return fuzzyFilter("", allNotes, (n) => n.title).map(({ item, positions }) => ({
-      item,
-      positions,
-      matchedByContent: false,
-    }));
+    return fuzzyFilter("", allNotes, (n) => n.title)
+      .slice(0, MAX_TITLE_RESULTS)
+      .map(({ item, positions }) => ({ item, positions, matchedByContent: false }));
   }
 
   if (activeMode === "title") {
-    return fuzzyFilter(trimmed, allNotes, (n) => n.title).map(({ item, positions }) => ({
-      item,
-      positions,
-      matchedByContent: false,
-    }));
+    return fuzzyFilter(trimmed, allNotes, (n) => n.title)
+      .slice(0, MAX_TITLE_RESULTS)
+      .map(({ item, positions }) => ({ item, positions, matchedByContent: false }));
   }
 
   if (activeSearchQuery !== trimmed) {
@@ -412,6 +410,7 @@ export function openSwitcher(
       classPrefix: "switcher",
       placeholder,
       backdrop: true,
+      debounceMs: mode === "title" ? TITLE_SEARCH_DEBOUNCE_MS : 0,
       getItems: buildItems,
       renderItem: renderSwitcherItem,
       onSelect: ({ item, lineNumber }) => onSelectCallback?.(item.id, lineNumber ?? null),
