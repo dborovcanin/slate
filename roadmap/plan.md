@@ -290,88 +290,10 @@ Roadmap ownership:
 
 ## Future Updates
 
-## WASM Plugin System Track
-
-- [ ] Design finalized in `roadmap/wasm-plugin-system.md`.
-- [ ] Implement shared host runtime and `HostPlugin` command dispatch.
-- [ ] Add capability prompts, lifecycle hooks, and parity/conformance suites.
-
-### Global
+Feature roadmap has moved to `roadmap/features.md`.
 
 - [x] Ability to open text/code files directly and save back to source path (GUI/TUI launch via `slate <file>`)
-- [ ] Global quick-capture: `slate capture "thought"` appends to today's inbox note without opening UI.
-- [ ] Clipboard-watch into a named note/section.
-- [ ] Pipe-in mode: `cmd | slate append`.
-- [ ] Email forwarding address that ingests into inbox note.
-- [ ] Templates (`:template meeting`).
-- [ ] Daily note auto-create with configurable template.
-- [ ] "On this day" recall view.
-- [ ] Random note resurfacing.
-- [ ] Add workspaces and workspace encryption.
-- [ ] Recurring reminders (cron-like).
-- [ ] Reminder snooze.
-- [ ] Agenda digest of active reminders and open tasks.
-- [ ] Tags (`#tag`) with tag index views.
-- [ ] Backlinks (`[[note]]`) with mentions footer.
-- [ ] Pinned notes.
-- [ ] Archive mode.
-- [ ] Add option for comments and math like Obsidian.
-- [ ] Add highlight.
-- [ ] Improve search style.
-- [ ] Consolidate commands autocompletion.
-- [ ] Add dt{char}.
-
-### Aggregation
-
-- TODO aggregator across all notes.
-- Saved searches.
-- Inline query blocks.
-- Habit tracker using checklist + calc semantics.
-- Time tracking commands with daily totals.
-
-### External
-
-- Per-note export (markdown/html/pdf).
 - [x] PDF export renders markdown notes with support for headings/lists/code blocks, markdown tables, markdown images, theme-aware inline styling (bold/italic/variables/code tokens), and rendered checklist boxes.
-- URL unfurl on paste.
-- One-way calendar sync (ICS/Google/iCal).
-- Web clipper endpoint.
-
-### Personal Data
-
-- Contacts as notes via `@person` references.
-- Book/movie note schema with lightweight metadata.
-- Journal mode with mood/energy metrics.
-
-### Reflective
-
-- Weekly review prompt/template.
-- Writing streak tracking.
-
-### Other
-
-- [ ] Multicursor support
-- [ ] Context menu for formatting conversions
-- [ ] Right-click conversion to checklist/ordered/unordered list
-- [ ] Support variable assignment from formula helpers like `a := sum_column()`
-- [ ] Trie search
-- [ ] Search coloring bug
-- [ ] UI settings page
-- [ ] Code folding UX improvements.
-- [ ] Search notes content
-- [ ] Auto backups
-- [ ] Support multiple formulas in row/column contexts
-- [ ] Link handling polish for `[text](url)` display behavior
-- [ ] Currency conversion support with local cache and startup sync
-- [ ] Keyboard shortcut expansion and menu coverage in UI and terminal flows
-- [ ] Export command enhancements
-- [ ] Micro-optimizations for precomputed derived UI styles
-- [ ] Improve overflow to full soft-wrap
-- [ ] Improve date-vs-list parsing edge cases
-- [ ] GD to go to link, header, tag
-- [ ] Store version in note in case we decide to extend MD sometime
-- [ ] Search notes by text
-- [ ] Add Archive mode - read only, special search
 
 ## Bugs and Fixes Backlog
 

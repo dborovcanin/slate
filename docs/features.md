@@ -138,3 +138,5 @@ Slate targets semantic parity between GUI and TUI for shared-core-owned behavior
 - vim stepping: shared
 - text semantics: shared
 - rendering and host side effects: frontend/runtime specific
+
+Planned features: see `roadmap/features.md`.
