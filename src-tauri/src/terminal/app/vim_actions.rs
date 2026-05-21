@@ -35,6 +35,9 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
             | crate::editor_core::vim::VimIntent::DeleteInsideBrace
             | crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote
             | crate::editor_core::vim::VimIntent::DeleteInsideBacktick
+            | crate::editor_core::vim::VimIntent::DeleteInsideAsterisk
+            | crate::editor_core::vim::VimIntent::DeleteInsideTilde
+            | crate::editor_core::vim::VimIntent::DeleteInsideUnderscore
             | crate::editor_core::vim::VimIntent::PasteAfter
             | crate::editor_core::vim::VimIntent::DeleteTillChar
     )
@@ -877,6 +880,15 @@ impl TerminalApp {
                         crate::editor_core::vim::VimIntent::DeleteInsideBacktick => {
                             Some(self.with_clipboard_status("deleted inside ` `"))
                         }
+                        crate::editor_core::vim::VimIntent::DeleteInsideAsterisk => {
+                            Some(self.with_clipboard_status("deleted inside * *"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideTilde => {
+                            Some(self.with_clipboard_status("deleted inside ~ ~"))
+                        }
+                        crate::editor_core::vim::VimIntent::DeleteInsideUnderscore => {
+                            Some(self.with_clipboard_status("deleted inside _ _"))
+                        }
                         _ => None,
                     };
                     if let Some(status) = status {
@@ -1379,6 +1391,9 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::DeleteInsideBrace => {}
                 crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote => {}
                 crate::editor_core::vim::VimIntent::DeleteInsideBacktick => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideAsterisk => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideTilde => {}
+                crate::editor_core::vim::VimIntent::DeleteInsideUnderscore => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
         }

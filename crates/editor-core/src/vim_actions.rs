@@ -119,6 +119,24 @@ pub fn execute_vim_action_with_target(
             DelimitedInsideObject::Backtick,
             repeats,
         )),
+        VimIntent::DeleteInsideAsterisk => Some(execute_delimited_inside_text_object(
+            text,
+            selection,
+            DelimitedInsideObject::Asterisk,
+            repeats,
+        )),
+        VimIntent::DeleteInsideTilde => Some(execute_delimited_inside_text_object(
+            text,
+            selection,
+            DelimitedInsideObject::Tilde,
+            repeats,
+        )),
+        VimIntent::DeleteInsideUnderscore => Some(execute_delimited_inside_text_object(
+            text,
+            selection,
+            DelimitedInsideObject::Underscore,
+            repeats,
+        )),
         VimIntent::YankWordForward => Some(execute_yank_word_forward(text, selection, repeats)),
         VimIntent::YankWordBackward => Some(execute_yank_word_backward(text, selection, repeats)),
         VimIntent::PasteAfter => execute_paste_after(text, selection, repeats, register),
@@ -158,6 +176,9 @@ pub fn supports_intent(intent: VimIntent) -> bool {
             | VimIntent::DeleteInsideBrace
             | VimIntent::DeleteInsideDoubleQuote
             | VimIntent::DeleteInsideBacktick
+            | VimIntent::DeleteInsideAsterisk
+            | VimIntent::DeleteInsideTilde
+            | VimIntent::DeleteInsideUnderscore
             | VimIntent::YankWordForward
             | VimIntent::YankWordBackward
             | VimIntent::PasteAfter
@@ -616,6 +637,9 @@ enum DelimitedInsideObject {
     Brace,
     DoubleQuote,
     Backtick,
+    Asterisk,
+    Tilde,
+    Underscore,
 }
 
 fn execute_delimited_inside_text_object(
@@ -1212,6 +1236,15 @@ fn find_delimited_inside_object_bounds(
         DelimitedInsideObject::Backtick => {
             find_same_delimiter_pair_around_cursor(&chars, cursor, '`')
         }
+        DelimitedInsideObject::Asterisk => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '*')
+        }
+        DelimitedInsideObject::Tilde => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '~')
+        }
+        DelimitedInsideObject::Underscore => {
+            find_same_delimiter_pair_around_cursor(&chars, cursor, '_')
+        }
     }?;
     let (start, end) = pair;
     let inner_start = (start + 1).min(end);
@@ -1648,6 +1681,41 @@ mod tests {
         assert_eq!(charwise_register(&result), Some("cargo test"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "run `` soon");
+    }
+
+    #[test]
+    fn delete_inside_asterisk_removes_emphasis_content() {
+        let text = "prefix *inside* suffix";
+        let cursor = text.find("inside").expect("inside");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideAsterisk, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("inside"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "prefix ** suffix");
+    }
+
+    #[test]
+    fn delete_inside_tilde_removes_tilde_wrapped_content() {
+        let text = "prefix ~inside~ suffix";
+        let cursor = text.find("inside").expect("inside");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideTilde, 1, None)
+            .expect("handled");
+        assert_eq!(charwise_register(&result), Some("inside"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "prefix ~~ suffix");
+    }
+
+    #[test]
+    fn delete_inside_underscore_removes_underscore_wrapped_content() {
+        let text = "prefix _inside_ suffix";
+        let cursor = text.find("inside").expect("inside");
+        let result =
+            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideUnderscore, 1, None)
+                .expect("handled");
+        assert_eq!(charwise_register(&result), Some("inside"));
+        let next = apply_operations(text.to_string(), &result.operations);
+        assert_eq!(next, "prefix __ suffix");
     }
 
     #[test]

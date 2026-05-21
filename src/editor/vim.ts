@@ -141,6 +141,9 @@ function shouldExecuteSharedVimAction(intent: VimIntent): boolean {
     case VIM_INTENT.DELETE_INSIDE_BRACE:
     case VIM_INTENT.DELETE_INSIDE_DOUBLE_QUOTE:
     case VIM_INTENT.DELETE_INSIDE_BACKTICK:
+    case VIM_INTENT.DELETE_INSIDE_ASTERISK:
+    case VIM_INTENT.DELETE_INSIDE_TILDE:
+    case VIM_INTENT.DELETE_INSIDE_UNDERSCORE:
       return true;
     default:
       return false;

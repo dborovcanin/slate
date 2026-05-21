@@ -127,6 +127,9 @@ pub enum VimIntent {
     DeleteInsideBrace,
     DeleteInsideDoubleQuote,
     DeleteInsideBacktick,
+    DeleteInsideAsterisk,
+    DeleteInsideTilde,
+    DeleteInsideUnderscore,
     YankVisualSelection,
     DeleteVisualSelection,
     StartMacroRecord,
@@ -878,6 +881,36 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                     handled,
                 };
             }
+            (VimPending::DeleteInner, VimKey::Char('*')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteInsideAsterisk, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteInner, VimKey::Char('~')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteInsideTilde, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::DeleteInner, VimKey::Char('_')) => {
+                let count = consume_pending_effective_count(&mut next);
+                actions.push(make_action(VimIntent::DeleteInsideUnderscore, count));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
             (VimPending::DeleteAround, VimKey::Char('|')) => {
                 let count = consume_pending_effective_count(&mut next);
                 actions.push(make_action(VimIntent::DeleteAroundPipe, count));
@@ -1034,6 +1067,42 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                 let count = consume_pending_effective_count(&mut next);
                 next.mode = VimMode::Insert;
                 actions.push(make_action(VimIntent::DeleteInsideBacktick, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeInner, VimKey::Char('*')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteInsideAsterisk, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeInner, VimKey::Char('~')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteInsideTilde, count));
+                actions.push(make_action(VimIntent::EnterInsert, 1));
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::ChangeInner, VimKey::Char('_')) => {
+                let count = consume_pending_effective_count(&mut next);
+                next.mode = VimMode::Insert;
+                actions.push(make_action(VimIntent::DeleteInsideUnderscore, count));
                 actions.push(make_action(VimIntent::EnterInsert, 1));
                 handled = true;
                 return VimStep {
@@ -1534,6 +1603,24 @@ mod tests {
         let two = step_token(&one.state, "char:i");
         let backtick = step_token(&two.state, "char:`");
         assert_eq!(backtick.actions[0].intent, VimIntent::DeleteInsideBacktick);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:i");
+        let asterisk = step_token(&two.state, "char:*");
+        assert_eq!(asterisk.actions[0].intent, VimIntent::DeleteInsideAsterisk);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:i");
+        let tilde = step_token(&two.state, "char:~");
+        assert_eq!(tilde.actions[0].intent, VimIntent::DeleteInsideTilde);
+
+        let one = step_token(&VimState::default(), "char:d");
+        let two = step_token(&one.state, "char:i");
+        let underscore = step_token(&two.state, "char:_");
+        assert_eq!(
+            underscore.actions[0].intent,
+            VimIntent::DeleteInsideUnderscore
+        );
     }
 
     #[test]
@@ -1767,6 +1854,27 @@ mod tests {
         assert_eq!(backtick.state.mode, VimMode::Insert);
         assert_eq!(backtick.actions[0].intent, VimIntent::DeleteInsideBacktick);
         assert_eq!(backtick.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:i");
+        let asterisk = step_token(&two.state, "char:*");
+        assert_eq!(asterisk.state.mode, VimMode::Insert);
+        assert_eq!(asterisk.actions[0].intent, VimIntent::DeleteInsideAsterisk);
+        assert_eq!(asterisk.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:i");
+        let tilde = step_token(&two.state, "char:~");
+        assert_eq!(tilde.state.mode, VimMode::Insert);
+        assert_eq!(tilde.actions[0].intent, VimIntent::DeleteInsideTilde);
+        assert_eq!(tilde.actions[1].intent, VimIntent::EnterInsert);
+
+        let one = step_token(&VimState::default(), "char:c");
+        let two = step_token(&one.state, "char:i");
+        let underscore = step_token(&two.state, "char:_");
+        assert_eq!(underscore.state.mode, VimMode::Insert);
+        assert_eq!(underscore.actions[0].intent, VimIntent::DeleteInsideUnderscore);
+        assert_eq!(underscore.actions[1].intent, VimIntent::EnterInsert);
     }
 
     #[test]
