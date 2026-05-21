@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use app_core::AppCore;
 use std::io::IsTerminal as _;
 use std::path::{Path, PathBuf};

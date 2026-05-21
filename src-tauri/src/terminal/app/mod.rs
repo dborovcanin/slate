@@ -1003,6 +1003,9 @@ impl TerminalApp {
                     self.record_perf_duration("tui.key.dispatch", "input", handle_start.elapsed());
                 }
                 None => {
+                    if input::take_resize() {
+                        self.render_dirty = true;
+                    }
                     let idle_start = Instant::now();
                     self.maybe_autosave(db)?;
                     self.record_perf_duration(

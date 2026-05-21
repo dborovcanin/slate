@@ -1,5 +1,16 @@
 use std::io::{self, Write};
 use std::mem::MaybeUninit;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static SIGWINCH_FIRED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn sigwinch_handler(_: libc::c_int) {
+    SIGWINCH_FIRED.store(true, Ordering::Relaxed);
+}
+
+pub fn take_resize() -> bool {
+    SIGWINCH_FIRED.swap(false, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Key {
@@ -131,6 +142,13 @@ impl TerminalGuard {
             ));
         }
 
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
+            sa.sa_flags = libc::SA_RESTART;
+            libc::sigaction(libc::SIGWINCH, &sa, std::ptr::null_mut());
+        }
+
         let mut out = io::stdout();
         out.write_all(b"\x1b[?1049h\x1b[?2004h\x1b[?7l\x1b[?25l\x1b[H\x1b[2J")
             .and_then(|_| out.flush())
@@ -157,7 +175,9 @@ fn read_byte() -> Result<Option<u8>, String> {
     }
     if n < 0 {
         let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock {
+        if err.kind() == io::ErrorKind::WouldBlock
+            || err.kind() == io::ErrorKind::Interrupted
+        {
             return Ok(None);
         }
         return Err(format!("Failed to read stdin: {err}"));
