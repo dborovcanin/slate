@@ -33,6 +33,7 @@ import {
   isEditorSearchOverlayTarget,
   openEditorSearch,
 } from "./search";
+import { requestMarkdownDecorationRefresh } from "./markdown-decoration.ts";
 import {
   VIM_INTENT,
   VimSession,
@@ -1837,6 +1838,30 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       return true;
+    },
+    keyup: (event, view) => {
+      if (mode() === "insert") return false;
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
+      if (
+        event.key === "ArrowUp"
+        || event.key === "ArrowDown"
+        || event.key === "ArrowLeft"
+        || event.key === "ArrowRight"
+        || event.key === "Up"
+        || event.key === "Down"
+        || event.key === "Left"
+        || event.key === "Right"
+        || event.key === "Home"
+        || event.key === "End"
+      ) {
+        requestMarkdownDecorationRefresh(view);
+      }
+      return false;
+    },
+    mouseup: (_event, view) => {
+      if (mode() === "insert") return false;
+      requestMarkdownDecorationRefresh(view);
+      return false;
     },
   });
 

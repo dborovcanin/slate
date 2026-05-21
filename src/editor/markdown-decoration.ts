@@ -506,9 +506,22 @@ function shouldRevealInlineMarker(
   lineFrom: number,
   activeSelection?: ActiveSelection,
 ): boolean {
+  const marker = tokens[markerIndex];
   const range = markerRevealComponentRangeForToken(tokens, markerIndex, componentRanges);
   if (!range) return false;
-  return selectionTouchesInlineRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
+  if (selectionTouchesInlineRange(activeSelection, lineFrom + range.from, lineFrom + range.to)) {
+    return true;
+  }
+  if (!marker || marker.type !== "code-marker" || !activeSelection?.empty) {
+    return false;
+  }
+  const hasFormattingBody = tokens.some((token) =>
+    token.from >= range.from
+    && token.to <= range.to
+    && (token.type === "strong" || token.type === "emphasis" || token.type === "strikethrough")
+  );
+  if (!hasFormattingBody) return false;
+  return activeSelection.from === lineFrom + range.to;
 }
 
 function shouldRevealInlineMarkerAtBoundary(
@@ -520,7 +533,11 @@ function shouldRevealInlineMarkerAtBoundary(
 ): boolean {
   const range = markerRevealComponentRangeForToken(tokens, markerIndex, componentRanges);
   if (!range) return false;
-  return selectionTouchesRange(activeSelection, lineFrom + range.from, lineFrom + range.to);
+  return selectionTouchesMarkerBoundaryRange(
+    activeSelection,
+    lineFrom + range.from,
+    lineFrom + range.to,
+  );
 }
 
 interface WLAccum {
@@ -1412,6 +1429,29 @@ function selectionTouchesInlineRange(
   if (selection.empty) {
     const pos = selection.from;
     if (pos >= from && pos < to) return true;
+    if (selection.assoc === -1) {
+      const leftPos = pos - 1;
+      if (leftPos >= from && leftPos < to) return true;
+    }
+    if (selection.assoc !== -1 && pos + 1 === from) return true;
+    return false;
+  }
+  return selection.from < to && from < selection.to;
+}
+
+function selectionTouchesMarkerBoundaryRange(
+  selection: ActiveSelection | undefined,
+  from: number,
+  to: number,
+): boolean {
+  if (!selection) return false;
+  if (selection.empty) {
+    const pos = selection.from;
+    if (pos >= from && pos <= to) return true;
+    if (selection.assoc === -1) {
+      const leftPos = pos - 1;
+      if (leftPos >= from && leftPos <= to) return true;
+    }
     if (selection.assoc !== -1 && pos + 1 === from) return true;
     return false;
   }
@@ -1472,6 +1512,24 @@ function inlineComponentSupportsRightBoundaryReveal(
   lineText: string,
   range: TextRange,
 ): boolean {
+  const span = lineText.slice(range.from, range.to);
+  if (span.length >= 4) {
+    if (
+      (span.startsWith("**") && span.endsWith("**"))
+      || (span.startsWith("__") && span.endsWith("__"))
+      || (span.startsWith("~~") && span.endsWith("~~"))
+    ) {
+      return true;
+    }
+  }
+  if (span.length >= 2) {
+    if (
+      (span.startsWith("*") && span.endsWith("*"))
+      || (span.startsWith("_") && span.endsWith("_"))
+    ) {
+      return true;
+    }
+  }
   if (range.to - range.from < 4) return false;
   if (lineText.startsWith("[[", range.from) && lineText.slice(range.to - 2, range.to) === "]]") {
     return true;
@@ -1755,6 +1813,15 @@ function changedRangeCount(update: ViewUpdate): number {
     count += 1;
   });
   return count;
+}
+
+function selectionMainChanged(update: ViewUpdate): boolean {
+  const prev = update.startState.selection.main;
+  const next = update.state.selection.main;
+  return prev.from !== next.from
+    || prev.to !== next.to
+    || prev.empty !== next.empty
+    || prev.assoc !== next.assoc;
 }
 
 function rangeTouchesTableRows(doc: Text, from: number, to: number): boolean {
@@ -2123,7 +2190,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
         return;
       }
 
-      if (update.selectionSet && !update.docChanged) {
+      if (!update.docChanged && (update.selectionSet || selectionMainChanged(update))) {
         const prevSelection: ActiveSelection = {
           from: update.startState.selection.main.from,
           to: update.startState.selection.main.to,

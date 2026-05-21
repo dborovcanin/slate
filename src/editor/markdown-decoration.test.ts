@@ -135,6 +135,25 @@ test("inlineMarkerRevealSignatureAtCursor keeps markdown image right boundary ac
   );
 });
 
+test("inlineMarkerRevealSignatureAtCursor keeps strong right boundary active", () => {
+  const lineText = "**bold** x";
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 0),
+    "0-8",
+    "markdown strong left boundary should keep edit-mode signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 8),
+    "0-8:rb",
+    "markdown strong right boundary should keep edit-mode boundary signature",
+  );
+  assert.equal(
+    inlineMarkerRevealSignatureAtCursor(lineText, 9),
+    "",
+    "cursor after markdown strong right boundary should clear signature",
+  );
+});
+
 test("tokenizeCodeLine marks keywords, numbers, strings, comments and symbols in fenced code", () => {
   const rust = tokenizeCodeLine('let total: Result = parse_value(42); let s = "ok" // note', "rust");
   const rustTypes = new Set(rust.map((token) => token.type));
@@ -542,11 +561,36 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
     "closing marker replacement should be removed when caret is inside closing marker",
   );
 
-  const hideImmediatelyAfterClosingMarker = buildMarkdownDecorationsForSpans(
+  const revealFromRightBoundary = buildMarkdownDecorationsForSpans(
     doc,
     [{ fromLine: 1, toLine: 1 }],
     [],
     { from: line.from + 8, to: line.from + 8, empty: true },
+  );
+  const revealFromRightBoundaryFlat = collectDecorations(revealFromRightBoundary);
+  assert.equal(
+    revealFromRightBoundaryFlat.some(
+      (d) => d.from === line.from && d.to === line.from + 2 && d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    false,
+    "opening marker replacement should be removed when caret is at the right boundary",
+  );
+  assert.equal(
+    revealFromRightBoundaryFlat.some(
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    false,
+    "closing marker replacement should be removed when caret is at the right boundary",
+  );
+
+  const hideImmediatelyAfterClosingMarker = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 9, to: line.from + 9, empty: true },
   );
   const hideAfterClosingFlat = collectDecorations(hideImmediatelyAfterClosingMarker);
   assert.ok(
@@ -566,6 +610,32 @@ test("buildMarkdownDecorationsForSpans hides inline markdown markers until caret
         d.widget === "HiddenMarkdownTokenWidget",
     ),
     "closing marker should hide immediately once caret leaves the inline component",
+  );
+
+  const hideAfterBoundaryAssocLeft = buildMarkdownDecorationsForSpans(
+    doc,
+    [{ fromLine: 1, toLine: 1 }],
+    [],
+    { from: line.from + 9, to: line.from + 9, empty: true, assoc: -1 },
+  );
+  const hideAfterBoundaryAssocLeftFlat = collectDecorations(hideAfterBoundaryAssocLeft);
+  assert.ok(
+    hideAfterBoundaryAssocLeftFlat.some(
+      (d) =>
+        d.from === line.from &&
+        d.to === line.from + 2 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    "opening marker should still hide after right-boundary exit with left-associated caret",
+  );
+  assert.ok(
+    hideAfterBoundaryAssocLeftFlat.some(
+      (d) =>
+        d.from === line.from + 6 &&
+        d.to === line.from + 8 &&
+        d.widget === "HiddenMarkdownTokenWidget",
+    ),
+    "closing marker should still hide after right-boundary exit with left-associated caret",
   );
 });
 
