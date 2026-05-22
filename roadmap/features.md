@@ -64,6 +64,10 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 
 - [ ] WASM plugin system — design in `roadmap/wasm-plugin-system.md`. Shared host runtime, `HostPlugin` command dispatch, capability prompts, lifecycle hooks, parity/conformance suites.
 
+## Variables
+
+- [ ] **Persistent variable name and dependency index** — store `note_variable_exports(note_id, variable_name)` and `note_cross_refs(from_note_id, to_short_id)` in the DB, populated by cheap text scans (`scan_variable_assignments`, `scan_cross_note_refs`) on note save. Load both into `CrossNoteVarIndex` on startup to warm name and dep maps without any `CalcEngine` work. Fixes cold-start autocomplete lag for cross-note variables. Values stay computed lazily in-memory as now — persisting values would require invalidation logic across concurrent edits.
+
 ## Editor and UI
 
 - [ ] Multicursor support.
