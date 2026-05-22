@@ -283,7 +283,7 @@ impl TerminalApp {
         if let Some(cached) = self.table_display_col_width_cache.get(&key) {
             return cached.clone();
         }
-        let widths = table_display_col_widths(&self.lines[block_start..=block_end].to_vec());
+        let widths = table_display_col_widths(&self.lines[block_start..=block_end]);
         self.table_display_col_width_cache.insert(key, widths.clone());
         // Evict any stale entries for this block_start (different block content).
         self.table_display_col_width_cache
@@ -1081,6 +1081,10 @@ impl TerminalApp {
                 let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
                 let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
                 let mut formula_segment_char_delta_prefix: Vec<isize> = Vec::new();
+                // Set by table reflow when cursor line is reformatted; holds
+                // output char positions of (left_pipe, right_pipe) for the
+                // cursor cell in the reformatted string.
+                let mut table_reflow_cell_pipes: Option<(usize, usize)> = None;
                 let line_text = self.lines[line_idx].clone();
                 let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
                 let collapsed_hidden_count = self
@@ -1244,17 +1248,17 @@ impl TerminalApp {
                     };
                     let col_widths = self.table_display_col_widths_for_line(line_idx);
                     if !col_widths.is_empty() {
-                        let (display_line, mapped_col) = reformat_table_row_for_display(
-                            rendered_line.as_ref(),
-                            &col_widths,
-                            cursor,
-                        );
+                        let (display_line, mapped_col, reflow_cell_pipes) =
+                            reformat_table_row_for_display(rendered_line.as_ref(), &col_widths, cursor);
                         rendered_line = Cow::Owned(display_line);
                         if is_cursor_line && cursor_line_override.is_none() {
                             let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
                             line_cursor_col = Some(mc);
                             cursor_line_override =
                                 Some((rendered_line.as_ref().to_string(), mc));
+                            // Record output pipe positions so focused_pipe_ranges
+                            // below can use reformatted positions instead of source ones.
+                            table_reflow_cell_pipes = reflow_cell_pipes;
                         }
                     }
                 }
@@ -1324,12 +1328,18 @@ impl TerminalApp {
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
                 // Highlight the focused table cell's pipe characters in accent so
-                // the active cell is obvious. Pipe positions are taken from
-                // the source `line_text` and translated to rendered char
-                // positions using the formula-mask delta accumulated above.
+                // the active cell is obvious.
+                //
+                // When table reflow ran, pipe positions in `rendered_line` differ
+                // from the source — use the output positions returned by the
+                // reflow. Otherwise fall back to source positions translated by
+                // the formula-mask delta.
                 let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
                 if self.note_table_module_enabled() && is_cursor_line && !is_fold_placeholder {
-                    if let Some(info) =
+                    if let Some((lp, rp)) = table_reflow_cell_pipes {
+                        focused_pipe_ranges.push((lp, lp + 1));
+                        focused_pipe_ranges.push((rp, rp + 1));
+                    } else if let Some(info) =
                         table_cell_info_at_char(&self.lines, line_idx, self.cursor_col)
                     {
                         let left_pipe_char = line_text[..info.left_pipe].chars().count();

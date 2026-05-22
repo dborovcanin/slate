@@ -262,19 +262,25 @@ pub(super) fn table_display_col_widths(block_lines: &[String]) -> Vec<usize> {
     col_widths
 }
 
-/// Re-renders a table row for display, collapsing inline markers in each cell
-/// and padding cells to `col_widths`.
+/// Re-renders a table row for display, adjusting column widths so cells align
+/// to their visible widths (after inline markers are collapsed).
 ///
 /// For the cursor line, pass `cursor_col` (raw char position in `line`); the
 /// cell containing the cursor reveals its markers the same way regular text
-/// does. For non-cursor lines pass `None`.
+/// does, and non-cursor cells are collapsed so `cursor_line_override` can be
+/// used for accurate terminal cursor positioning. For non-cursor lines pass
+/// `None` — cell content is kept raw so `render_line_full` can apply normal
+/// inline styling (code spans, bold, etc.) after hiding markers.
 ///
-/// Returns `(display_line, mapped_cursor_col)`.
+/// Returns `(display_line, mapped_cursor_col, cursor_cell_pipe_out_positions)`.
+/// The third element holds `(left_pipe_char, right_pipe_char)` in the output
+/// string for the cursor cell; callers use it to redraw `focused_pipe_ranges`
+/// from output positions rather than source positions.
 pub(super) fn reformat_table_row_for_display(
     line: &str,
     col_widths: &[usize],
     cursor_col: Option<usize>,
-) -> (String, Option<usize>) {
+) -> (String, Option<usize>, Option<(usize, usize)>) {
     use crate::editor_core::table::{
         is_delimiter_row, is_table_continuation_line, normalize_delimiter_cell_for_width,
         split_table_cells, table_pipe_positions,
@@ -287,7 +293,7 @@ pub(super) fn reformat_table_row_for_display(
 
     let pipes = table_pipe_positions(trimmed);
     if pipes.len() < 2 {
-        return (line.to_string(), cursor_col);
+        return (line.to_string(), cursor_col, None);
     }
 
     let is_cont = is_table_continuation_line(trimmed);
@@ -315,7 +321,8 @@ pub(super) fn reformat_table_row_for_display(
     out.push_str(&line[..lead_bytes]);
     out_chars += lead_chars;
 
-    // Track output char positions of each opening pipe (for cursor-at-pipe mapping).
+    // Track output char positions of each opening pipe (for cursor-at-pipe mapping
+    // and for returning cursor cell pipe positions to the caller).
     let mut out_pipe_positions: Vec<usize> = Vec::with_capacity(pipes.len());
 
     for (ci, window) in pipes.windows(2).enumerate() {
@@ -352,16 +359,27 @@ pub(super) fn reformat_table_row_for_display(
                 let raw_in_trimmed = &trimmed[left_pipe_byte + 1..right_pipe_byte];
                 let trim_lead = raw_in_trimmed.len() - raw_in_trimmed.trim_start().len();
                 let content_start_byte = left_pipe_byte + 1 + trim_lead;
-                let rel_byte = cb.saturating_sub(content_start_byte);
-                let rel_char = cell_content[..rel_byte.min(cell_content.len())]
-                    .chars()
-                    .count();
 
-                let (collapsed, mc) = collapse_inline_markers(cell_content, Some(rel_char));
-                let cell_w = collapsed.chars().count();
-                if let Some(rel) = mc {
-                    mapped_cursor = Some(out_chars + rel);
-                }
+                let (collapsed, cell_w) = if cb < content_start_byte {
+                    // Cursor is at the pipe or leading space — snap to the
+                    // opening pipe in the output; collapse content without hint.
+                    mapped_cursor = out_pipe_positions.last().copied();
+                    let (c, _) = collapse_inline_markers(cell_content, None);
+                    let w = c.chars().count();
+                    (c, w)
+                } else {
+                    let rel_byte = cb - content_start_byte;
+                    let rel_char = cell_content[..rel_byte.min(cell_content.len())]
+                        .chars()
+                        .count();
+                    let (c, mc) = collapse_inline_markers(cell_content, Some(rel_char));
+                    if let Some(rel) = mc {
+                        mapped_cursor = Some(out_chars + rel);
+                    }
+                    let w = c.chars().count();
+                    (c, w)
+                };
+
                 out.push_str(&collapsed);
                 out_chars += cell_w;
                 let pad = col_w.saturating_sub(cell_w);
@@ -369,8 +387,22 @@ pub(super) fn reformat_table_row_for_display(
                     out.push(' ');
                     out_chars += 1;
                 }
+            } else if cursor_col.is_none() {
+                // Non-cursor line: keep raw cell content so render_line_full
+                // can apply inline styling (code, bold, etc.) after hiding
+                // markers. Pad based on visible width so columns align.
+                let visible_w = cell_visible_width(cell_content);
+                let raw_chars = cell_content.chars().count();
+                out.push_str(cell_content);
+                out_chars += raw_chars;
+                let pad = col_w.saturating_sub(visible_w);
+                for _ in 0..pad {
+                    out.push(' ');
+                    out_chars += 1;
+                }
             } else {
-                // Non-cursor cell: collapse all markers.
+                // Non-cursor cell on cursor line: collapse all markers so the
+                // reformatted string can be used for terminal cursor positioning.
                 let (collapsed, _) = collapse_inline_markers(cell_content, None);
                 let cell_w = collapsed.chars().count();
                 out.push_str(&collapsed);
@@ -403,7 +435,15 @@ pub(super) fn reformat_table_row_for_display(
         mapped_cursor = out_pipe_positions.get(src_pipe_idx).copied();
     }
 
-    (out, mapped_cursor)
+    // Return the output pipe positions for the cursor cell so the caller can
+    // update focused_pipe_ranges using reformatted positions.
+    let cursor_cell_pipes = cursor_cell_idx.and_then(|ci| {
+        let lp = out_pipe_positions.get(ci).copied()?;
+        let rp = out_pipe_positions.get(ci + 1).copied()?;
+        Some((lp, rp))
+    });
+
+    (out, mapped_cursor, cursor_cell_pipes)
 }
 
 #[cfg(test)]
@@ -417,16 +457,18 @@ mod tests {
     #[test]
     fn reformat_plain_row_pads_to_col_widths() {
         let line = "| a | bc |".to_string();
-        let (out, cur) = reformat_table_row_for_display(&line, &w(&[5, 5]), None);
+        let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[5, 5]), None);
         assert_eq!(out, "| a     | bc    |");
         assert_eq!(cur, None);
     }
 
     #[test]
-    fn reformat_strips_backtick_markers_in_non_cursor_cell() {
+    fn reformat_keeps_backtick_markers_on_non_cursor_line() {
+        // Non-cursor lines keep raw content so render_line_full can style it.
         let line = "| `code` | plain |".to_string();
-        let (out, cur) = reformat_table_row_for_display(&line, &w(&[4, 5]), None);
-        assert_eq!(out, "| code | plain |");
+        let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[4, 5]), None);
+        // col_w=4 (visible "code"), raw "`code`" = 6 chars; padding = 4-4 = 0
+        assert!(out.contains("`code`"), "markers kept for styling by renderer");
         assert_eq!(cur, None);
     }
 
@@ -434,15 +476,25 @@ mod tests {
     fn reformat_cursor_in_cell_reveals_markers() {
         // cursor at char 3 (inside `code`)
         let line = "| `code` | plain |".to_string();
-        let (out, mc) = reformat_table_row_for_display(&line, &w(&[6, 5]), Some(3));
+        let (out, mc, pipes) = reformat_table_row_for_display(&line, &w(&[6, 5]), Some(3));
         assert!(out.contains("`code`"), "markers should be visible in cursor cell");
         assert!(mc.is_some());
+        assert!(pipes.is_some(), "cursor cell pipe positions returned");
+    }
+
+    #[test]
+    fn reformat_cursor_at_leading_space_snaps_to_pipe() {
+        // cursor at char 1 (the space after the opening |, before cell content)
+        let line = "| abc | def |".to_string();
+        let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[3, 3]), Some(1));
+        // position 1 is the space after the first |; should map to pipe (pos 0)
+        assert_eq!(mc, Some(0), "cursor at leading space maps to opening pipe");
     }
 
     #[test]
     fn reformat_delimiter_row_preserves_alignment_markers() {
         let line = "| :--- | ---: |".to_string();
-        let (out, _) = reformat_table_row_for_display(&line, &w(&[4, 4]), None);
+        let (out, _, _) = reformat_table_row_for_display(&line, &w(&[4, 4]), None);
         assert!(out.contains(":---"), "left-align marker preserved");
         assert!(out.contains("---:"), "right-align marker preserved");
     }

@@ -419,21 +419,29 @@ impl RenderContext {
                 active_cursor_col.is_some(),
             ));
             let inline_tokens = cached_inline_tokens(text);
-            // Markdown emphasis (`*x*`, `***x***`) inside table rows is
-            // ambiguous with our formula markers (`value*`, `value***`) and
-            // would otherwise leak italic/bold across cell boundaries.
-            // Skip inline emphasis tokens for table rows; keep code, links,
-            // and strikethrough (which are not asterisk-based).
+            // Inside table rows, single-asterisk Emphasis (`*x*`) is ambiguous
+            // with formula markers (`value*`, `value***`) and can leak across
+            // cell boundaries — always filter it.
+            //
+            // Strong (bold, `**x**`) uses double asterisks that wrap content;
+            // this is visually unambiguous when the token stays within one cell.
+            // Allow it unless the token spans a `|` character (cross-cell).
             let filtered_tokens: Vec<markdown_tokens::InlineToken>;
             let inline_tokens_to_apply: &[markdown_tokens::InlineToken] = if is_table_row {
                 filtered_tokens = inline_tokens
                     .iter()
                     .filter(|t| {
-                        !matches!(
-                            t.kind,
-                            markdown_tokens::InlineTokenType::Strong
-                                | markdown_tokens::InlineTokenType::Emphasis
-                        )
+                        if matches!(t.kind, markdown_tokens::InlineTokenType::Emphasis) {
+                            return false;
+                        }
+                        if matches!(t.kind, markdown_tokens::InlineTokenType::Strong) {
+                            // Drop bold that spans a pipe (cross-cell ambiguity).
+                            // Scan the chars slice directly — no Vec allocation.
+                            let from = t.from.min(len);
+                            let to = t.to.min(len);
+                            return !chars[from..to].iter().any(|&c| c == '|');
+                        }
+                        true
                     })
                     .cloned()
                     .collect();
