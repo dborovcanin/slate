@@ -51,6 +51,9 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
         super::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),
         "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
     )
     .expect("terminal app");
     app.mode = UiMode::Editor;
@@ -236,6 +239,9 @@ fn app_with_note_and_modules(
         super::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),
         "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
     )
     .expect("terminal app");
     app.mode = UiMode::Editor;
@@ -260,6 +266,7 @@ fn note_modules(
         table,
         variables,
         style,
+        cross_note: true,
     }
 }
 

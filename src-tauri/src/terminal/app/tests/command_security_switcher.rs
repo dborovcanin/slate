@@ -213,6 +213,9 @@ fn write_command_syncs_markdown_file_backed_note() {
         crate::terminal::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),
         "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
     )
     .expect("terminal app");
     assert_eq!(app.lines, vec!["file body".to_string()]);
@@ -300,6 +303,9 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
         crate::terminal::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),
         "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
     )
     .expect("terminal app");
     app.mode = UiMode::Normal;
@@ -1310,6 +1316,9 @@ fn startup_with_locked_recent_note_prompts_for_password() {
         crate::terminal::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),
         "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
     )
     .expect("terminal app");
 
@@ -1866,6 +1875,9 @@ fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
         crate::terminal::render::RenderPalette::default(),
         "%Y-%m-%d".to_string(),
         "%Y-%m-%d %H:%M".to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(
+            app_core::cross_note::CrossNoteVarIndex::default(),
+        )),
     )
     .expect("terminal app");
 

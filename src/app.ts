@@ -1615,6 +1615,7 @@ function updateStatusBar() {
         table: false,
         variables: false,
         style: false,
+        cross_note: false,
       };
     }
     const textModules = moduleIndicatorText(loaded);

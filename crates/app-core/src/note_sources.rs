@@ -839,6 +839,7 @@ fn modules_for_file_path(path: &Path) -> NoteModules {
         table: false,
         variables: false,
         style: true,
+        cross_note: false,
     }
 }
 

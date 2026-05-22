@@ -127,7 +127,9 @@ pub async fn evaluate_note_context_delta(
 
     // Snapshot extern vars from the cross-note index before entering spawn_blocking.
     let vars_enabled = variables_enabled.unwrap_or(true);
-    let extern_vars = if vars_enabled && !short_id.is_empty() {
+    // cross_note_enabled is not yet forwarded from the UI; default to true.
+    let cross_note_enabled = true;
+    let extern_vars = if cross_note_enabled && !short_id.is_empty() {
         // Pre-load any referenced notes not yet in the index so ghost eval
         // works without requiring the user to visit the source note first.
         let refs = app_core::calc::scan_cross_note_refs(&lines);
@@ -175,6 +177,7 @@ pub async fn evaluate_note_context_delta(
     let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let options = NoteEvaluationOptions {
         variables_enabled: vars_enabled,
+        cross_note_enabled,
         table_enabled: table_enabled.unwrap_or(true),
         eval_range,
         extern_vars,
@@ -196,7 +199,7 @@ pub async fn evaluate_note_context_delta(
     };
 
     // Update the cross-note index with this note's latest exports and deps.
-    if vars_enabled && !short_id.is_empty() {
+    if cross_note_enabled && !short_id.is_empty() {
         if let Ok(mut index) = core.cross_note_var_index.lock() {
             index.update_exports(&short_id, &result.variables, &result.variable_values);
             index.update_deps(&note_id, &result.cross_note_refs);

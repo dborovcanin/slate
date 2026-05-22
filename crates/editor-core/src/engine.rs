@@ -12,16 +12,18 @@ pub struct ModuleState {
     pub table: bool,
     pub variables: bool,
     pub style: bool,
+    pub cross_note: bool,
 }
 
 impl ModuleState {
     pub fn status_message(self) -> String {
         format!(
-            "modules math={} table={} variables={} style={}",
+            "modules math={} table={} variables={} style={} cross_note={}",
             if self.math { "on" } else { "off" },
             if self.table { "on" } else { "off" },
             if self.variables { "on" } else { "off" },
             if self.style { "on" } else { "off" },
+            if self.cross_note { "on" } else { "off" },
         )
     }
 }
@@ -33,6 +35,7 @@ pub enum ModuleName {
     Table,
     Variables,
     Style,
+    CrossNote,
 }
 
 impl ModuleName {
@@ -42,6 +45,7 @@ impl ModuleName {
             Self::Table => "table",
             Self::Variables => "variables",
             Self::Style => "style",
+            Self::CrossNote => "cross_note",
         }
     }
 }
@@ -252,7 +256,10 @@ impl EditorEngine {
             | CommandId::ModuleToggleVariables
             | CommandId::ModuleOnStyle
             | CommandId::ModuleOffStyle
-            | CommandId::ModuleToggleStyle => Some(HostCommandPlan::Module {
+            | CommandId::ModuleToggleStyle
+            | CommandId::ModuleOnCrossNote
+            | CommandId::ModuleOffCrossNote
+            | CommandId::ModuleToggleCrossNote => Some(HostCommandPlan::Module {
                 command_id: command.id,
             }),
             CommandId::Fold => Some(HostCommandPlan::Fold {
@@ -338,6 +345,17 @@ impl EditorEngine {
             ModuleToggleStyle => ModuleMutation::Toggle {
                 module: ModuleName::Style,
             },
+            ModuleOnCrossNote => ModuleMutation::Set {
+                module: ModuleName::CrossNote,
+                enabled: true,
+            },
+            ModuleOffCrossNote => ModuleMutation::Set {
+                module: ModuleName::CrossNote,
+                enabled: false,
+            },
+            ModuleToggleCrossNote => ModuleMutation::Toggle {
+                module: ModuleName::CrossNote,
+            },
             _ => return None,
         })
     }
@@ -365,6 +383,7 @@ fn module_enabled(state: ModuleState, module: ModuleName) -> bool {
         ModuleName::Table => state.table,
         ModuleName::Variables => state.variables,
         ModuleName::Style => state.style,
+        ModuleName::CrossNote => state.cross_note,
     }
 }
 
@@ -374,6 +393,7 @@ fn set_module_enabled(state: &mut ModuleState, module: ModuleName, enabled: bool
         ModuleName::Table => state.table = enabled,
         ModuleName::Variables => state.variables = enabled,
         ModuleName::Style => state.style = enabled,
+        ModuleName::CrossNote => state.cross_note = enabled,
     }
 }
 
@@ -424,6 +444,7 @@ mod tests {
             table: true,
             variables: true,
             style: true,
+            cross_note: true,
         };
         let plan =
             EditorEngine::plan_module_command(CommandId::ModuleOnMath, current).expect("plan");
@@ -439,6 +460,7 @@ mod tests {
             table: true,
             variables: true,
             style: true,
+            cross_note: true,
         };
         let plan =
             EditorEngine::plan_module_command(CommandId::ModuleToggleStyle, current).expect("plan");
@@ -446,7 +468,7 @@ mod tests {
         assert!(!plan.next.style);
         assert_eq!(
             plan.message,
-            "modules math=on table=on variables=on style=off"
+            "modules math=on table=on variables=on style=off cross_note=on"
         );
     }
 
@@ -457,6 +479,7 @@ mod tests {
             table: true,
             variables: false,
             style: true,
+            cross_note: true,
         };
         let plan =
             EditorEngine::plan_module_command(CommandId::ModuleStatus, current).expect("plan");
@@ -464,7 +487,7 @@ mod tests {
         assert_eq!(plan.next, current);
         assert_eq!(
             plan.message,
-            "modules math=off table=on variables=off style=on"
+            "modules math=off table=on variables=off style=on cross_note=on"
         );
     }
 

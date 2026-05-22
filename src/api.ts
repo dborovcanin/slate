@@ -5,6 +5,7 @@ export interface NoteModules {
   table: boolean;
   variables: boolean;
   style: boolean;
+  cross_note: boolean;
 }
 
 export type NoteAccessMode = "none" | "locked" | "encrypted";
@@ -151,6 +152,7 @@ export const DEFAULT_THEME_CONFIG: ThemeConfig = {
     table: true,
     variables: true,
     style: true,
+    cross_note: true,
   },
   encrypt_notes: false,
   notes_password_env: "SLATE_NOTES_PASSWORD",

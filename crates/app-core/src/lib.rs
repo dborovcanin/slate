@@ -112,7 +112,7 @@ impl AppCore {
         mut options: calc::NoteEvaluationOptions,
     ) -> calc::NoteEvaluationResult {
         // Inject extern vars from previously evaluated dependencies.
-        if options.variables_enabled {
+        if options.cross_note_enabled {
             if let Ok(index) = self.cross_note_var_index.lock() {
                 options.extern_vars = index.extern_vars_for(note_id);
             }

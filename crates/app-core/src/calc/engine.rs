@@ -34,13 +34,16 @@ pub struct CrossNoteRef {
 pub struct NoteEvaluationOptions {
     pub variables_enabled: bool,
     pub table_enabled: bool,
+    /// Controls whether `[[SHORTID]].var_name` cross-note references are scanned
+    /// and substituted. When `false`, cross-note refs are left as-is (no ghost output).
+    pub cross_note_enabled: bool,
     /// Optional half-open range `[from, to)` of line indices (0-based) to evaluate.
     /// When `None`, evaluates every line. Variable resolution always considers the
     /// full document so that a restricted evaluation still sees vars defined elsewhere.
     /// Positions outside the range are returned as `None` in `line_results`.
     pub eval_range: Option<(usize, usize)>,
     /// Values from other notes to substitute for `[[SHORTID]].var_name` references.
-    /// Only used when `variables_enabled` is true.
+    /// Only used when `cross_note_enabled` is true.
     pub extern_vars: Vec<ExternVar>,
 }
 
@@ -49,6 +52,7 @@ impl Default for NoteEvaluationOptions {
         Self {
             variables_enabled: true,
             table_enabled: true,
+            cross_note_enabled: true,
             eval_range: None,
             extern_vars: Vec::new(),
         }
@@ -606,7 +610,7 @@ impl CalcEngine {
 
         // Build extern_vars lookup and preprocess lines for cross-note refs.
         let (eval_lines, cross_note_refs, lines_with_unresolved) =
-            if options.variables_enabled && !options.extern_vars.is_empty() {
+            if options.cross_note_enabled && !options.extern_vars.is_empty() {
                 let extern_map: FxHashMap<(String, String), f64> = options
                     .extern_vars
                     .iter()
@@ -629,7 +633,7 @@ impl CalcEngine {
                     preprocessed.push(new_line);
                 }
                 (std::borrow::Cow::Owned(preprocessed), refs, unresolved_set)
-            } else if options.variables_enabled {
+            } else if options.cross_note_enabled {
                 let refs = scan_cross_note_refs(lines);
                 (
                     std::borrow::Cow::Borrowed(lines),

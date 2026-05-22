@@ -323,7 +323,10 @@ pub fn execute_command(
         | CommandId::ModuleToggleVariables
         | CommandId::ModuleOnStyle
         | CommandId::ModuleOffStyle
-        | CommandId::ModuleToggleStyle => result_with_message("module command handled by host"),
+        | CommandId::ModuleToggleStyle
+        | CommandId::ModuleOnCrossNote
+        | CommandId::ModuleOffCrossNote
+        | CommandId::ModuleToggleCrossNote => result_with_message("module command handled by host"),
         CommandId::ClipWatch => result_with_message("clip-watch on handled by host"),
         CommandId::ClipWatchStop => result_with_message("clip-watch off handled by host"),
         CommandId::Fold => result_with_message("fold handled by host"),

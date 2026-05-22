@@ -42,6 +42,7 @@ pub(super) fn compute_calc_data(
     engine: &CalcEngine,
     lines: &[String],
     variables_enabled: bool,
+    cross_note_enabled: bool,
     table_enabled: bool,
     eval_range: Option<(usize, usize)>,
     extern_vars: Vec<ExternVar>,
@@ -50,6 +51,7 @@ pub(super) fn compute_calc_data(
         lines,
         NoteEvaluationOptions {
             variables_enabled,
+            cross_note_enabled,
             table_enabled,
             eval_range,
             extern_vars,
@@ -80,12 +82,13 @@ pub(super) fn compute_calc_data_for_note(
     engine: &CalcEngine,
     lines: &[String],
     variables_enabled: bool,
+    cross_note_enabled: bool,
     table_enabled: bool,
     note_id: &str,
     short_id: &str,
     cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
 ) -> CalcData {
-    let extern_vars = if variables_enabled && !short_id.is_empty() {
+    let extern_vars = if cross_note_enabled && !short_id.is_empty() {
         if let Ok(mut index) = cross_note_var_index.lock() {
             index.register_note(note_id, short_id);
             // Pre-populate deps from a line scan so extern_vars_for works on the
@@ -104,13 +107,14 @@ pub(super) fn compute_calc_data_for_note(
         lines,
         NoteEvaluationOptions {
             variables_enabled,
+            cross_note_enabled,
             table_enabled,
             eval_range: None,
             extern_vars,
         },
     );
 
-    if variables_enabled && !short_id.is_empty() {
+    if cross_note_enabled && !short_id.is_empty() {
         if let Ok(mut index) = cross_note_var_index.lock() {
             index.update_exports(short_id, &result.variables, &result.variable_values);
             index.update_deps(note_id, &result.cross_note_refs);
@@ -138,7 +142,7 @@ pub(super) fn compute_calc_results(
     variables_enabled: bool,
 ) -> Vec<Option<String>> {
     let engine = CalcEngine::new();
-    compute_calc_data(&engine, lines, variables_enabled, true, None, Vec::new()).line_results
+    compute_calc_data(&engine, lines, variables_enabled, true, true, None, Vec::new()).line_results
 }
 
 /// Decide whether an already-eligible line's trailing ` = <literal>` should

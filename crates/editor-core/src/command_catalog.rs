@@ -29,6 +29,9 @@ pub enum CommandId {
     ModuleOnStyle,
     ModuleOffStyle,
     ModuleToggleStyle,
+    ModuleOnCrossNote,
+    ModuleOffCrossNote,
+    ModuleToggleCrossNote,
     ChooseCollection,
     ClearCollection,
     CreateCollection,
@@ -401,7 +404,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 62] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -606,6 +609,39 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 62] = [
             "modules toggle style",
         ],
         description: "toggle style module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOnCrossNote,
+        value: "module cross_note on",
+        aliases: &[
+            "module on cross_note",
+            "modules cross_note on",
+            "modules on cross_note",
+        ],
+        description: "enable cross-note variables module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleOffCrossNote,
+        value: "module cross_note off",
+        aliases: &[
+            "module off cross_note",
+            "modules cross_note off",
+            "modules off cross_note",
+        ],
+        description: "disable cross-note variables module",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::ModuleToggleCrossNote,
+        value: "module cross_note toggle",
+        aliases: &[
+            "module toggle cross_note",
+            "modules cross_note toggle",
+            "modules toggle cross_note",
+        ],
+        description: "toggle cross-note variables module",
         modes: &MODES_BOTH,
     },
     CommandDefinition {

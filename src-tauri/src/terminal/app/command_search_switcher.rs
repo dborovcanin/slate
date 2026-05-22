@@ -1205,6 +1205,7 @@ impl TerminalApp {
             table: self.active_note.modules.table,
             variables: self.active_note.modules.variables,
             style: self.active_note.modules.style,
+            cross_note: self.active_note.modules.cross_note,
         };
         let Some(plan) =
             crate::editor_core::engine::EditorEngine::plan_module_command(command_id, current)
@@ -1221,6 +1222,7 @@ impl TerminalApp {
             table: plan.next.table,
             variables: plan.next.variables,
             style: plan.next.style,
+            cross_note: plan.next.cross_note,
         };
         let capabilities = note_sources(db).capabilities_for_note_id(&self.active_note.id);
         if !capabilities.can_module_persist {
@@ -1234,7 +1236,8 @@ impl TerminalApp {
                 self.active_note.modules = saved_note.modules;
                 self.active_note.updated_at = saved_note.updated_at;
                 let calc_module_changed = previous_modules.math != self.active_note.modules.math
-                    || previous_modules.variables != self.active_note.modules.variables;
+                    || previous_modules.variables != self.active_note.modules.variables
+                    || previous_modules.cross_note != self.active_note.modules.cross_note;
                 if calc_module_changed {
                     self.calc_viewport_only = self.note_math_module_enabled()
                         && self.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES

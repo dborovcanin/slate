@@ -782,6 +782,7 @@ impl TerminalApp {
                 &calc_engine,
                 &lines,
                 active_has_variable_assignment,
+                active_note.modules.cross_note,
                 note_table_enabled,
                 None,
                 Vec::new(),
@@ -1591,6 +1592,7 @@ fn new_note_with_context(
         table: config.default_modules.table,
         variables: config.default_modules.variables,
         style: config.default_modules.style,
+        cross_note: config.default_modules.cross_note,
     };
     db.create_note_with_context(
         &id,

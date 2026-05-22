@@ -67,6 +67,7 @@ fn calc_snapshot_for_modules(lines: &[String], modules: &CalcParityModules) -> C
             variables_enabled: modules.variables,
             table_enabled: modules.table,
             eval_range: None,
+            ..Default::default()
         },
     );
     CalcParitySnapshot {
@@ -87,8 +88,10 @@ fn calc_snapshot_via_tui_path(lines: &[String], modules: &CalcParityModules) -> 
         &engine,
         lines,
         modules.variables,
+        true,
         modules.table,
         None,
+        Vec::new(),
     );
     CalcParitySnapshot {
         line_results: data.line_results,

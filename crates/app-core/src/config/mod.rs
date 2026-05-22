@@ -26,6 +26,7 @@ const DEFAULT_MODULE_MATH_ENABLED: bool = true;
 const DEFAULT_MODULE_TABLE_ENABLED: bool = true;
 const DEFAULT_MODULE_VARIABLES_ENABLED: bool = true;
 const DEFAULT_MODULE_STYLE_ENABLED: bool = true;
+const DEFAULT_MODULE_CROSS_NOTE_ENABLED: bool = true;
 const DEFAULT_ENCRYPT_NOTES: bool = false;
 const DEFAULT_NOTES_PASSWORD_ENV: &str = "SLATE_NOTES_PASSWORD";
 const MIN_VARIABLE_AUTOCOMPLETE_MIN_CHARS: u8 = 1;
@@ -188,6 +189,7 @@ pub struct EditorModulesConfig {
     pub table: bool,
     pub variables: bool,
     pub style: bool,
+    pub cross_note: bool,
 }
 
 impl Default for EditorModulesConfig {
@@ -197,6 +199,7 @@ impl Default for EditorModulesConfig {
             table: DEFAULT_MODULE_TABLE_ENABLED,
             variables: DEFAULT_MODULE_VARIABLES_ENABLED,
             style: DEFAULT_MODULE_STYLE_ENABLED,
+            cross_note: DEFAULT_MODULE_CROSS_NOTE_ENABLED,
         }
     }
 }
@@ -433,6 +436,7 @@ struct ModulesSection {
     table: Option<bool>,
     variables: Option<bool>,
     style: Option<bool>,
+    cross_note: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -681,6 +685,11 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
                 .modules
                 .style
                 .unwrap_or(DEFAULT_MODULE_STYLE_ENABLED),
+            cross_note: raw
+                .editor
+                .modules
+                .cross_note
+                .unwrap_or(DEFAULT_MODULE_CROSS_NOTE_ENABLED),
         },
         encrypt_notes: raw
             .editor

@@ -5,6 +5,7 @@ export const DEFAULT_NOTE_MODULES: NoteModules = {
   table: true,
   variables: true,
   style: true,
+  cross_note: true,
 };
 
 export function normalizeModules(modules: Partial<NoteModules> | null | undefined): NoteModules {
@@ -14,6 +15,7 @@ export function normalizeModules(modules: Partial<NoteModules> | null | undefine
     table: modules.table ?? true,
     variables: modules.variables ?? true,
     style: modules.style ?? true,
+    cross_note: modules.cross_note ?? true,
   };
 }
 
@@ -27,5 +29,6 @@ export function effectiveModules(modules: NoteModules, flags: RuntimeFlags): Not
     table: modules.table,
     variables: modules.variables && !flags.autocomplete_disable,
     style: modules.style && !flags.markdown_disable,
+    cross_note: modules.cross_note,
   };
 }

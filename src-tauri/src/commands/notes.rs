@@ -58,6 +58,7 @@ fn note_defaults_from_config() -> Result<(NoteModules, Option<String>), String> 
         table: cfg.default_modules.table,
         variables: cfg.default_modules.variables,
         style: cfg.default_modules.style,
+        cross_note: cfg.default_modules.cross_note,
     };
     Ok((modules, default_password))
 }

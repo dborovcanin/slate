@@ -337,6 +337,9 @@ fn module_command_value(command_id: CommandId) -> Option<&'static str> {
         CommandId::ModuleOnStyle => Some("module style on"),
         CommandId::ModuleOffStyle => Some("module style off"),
         CommandId::ModuleToggleStyle => Some("module style toggle"),
+        CommandId::ModuleOnCrossNote => Some("module cross_note on"),
+        CommandId::ModuleOffCrossNote => Some("module cross_note off"),
+        CommandId::ModuleToggleCrossNote => Some("module cross_note toggle"),
         _ => None,
     }
 }
@@ -514,6 +517,7 @@ pub fn wasm_plan_module_command(
     table: bool,
     variables: bool,
     style: bool,
+    cross_note: bool,
 ) -> Option<JsValue> {
     let mode = parse_mode(mode)?;
     let command = EditorEngine::resolve_command(mode, raw_input)?;
@@ -522,6 +526,7 @@ pub fn wasm_plan_module_command(
         table,
         variables,
         style,
+        cross_note,
     };
     let plan = EditorEngine::plan_module_command(command.id, current)?;
     to_js_value(&plan)

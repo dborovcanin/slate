@@ -1067,6 +1067,7 @@ export interface ModuleStateSnapshot {
   table: boolean;
   variables: boolean;
   style: boolean;
+  cross_note: boolean;
 }
 
 export interface ModuleCommandPlan {
@@ -1096,6 +1097,7 @@ export function planModuleCommandFromWasm(
     current.table,
     current.variables,
     current.style,
+    current.cross_note,
   ) as ModuleCommandPlan | null | undefined;
   return raw ?? null;
 }

@@ -3364,6 +3364,7 @@ mod tests {
                     table: true,
                     variables: false,
                     style: true,
+                    cross_note: true,
                 },
                 Some("enc-pass"),
             )
@@ -3455,6 +3456,7 @@ mod tests {
                     table: true,
                     variables: false,
                     style: true,
+                    cross_note: true,
                 },
             )
             .expect("module update succeeds");

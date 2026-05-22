@@ -546,6 +546,10 @@ impl TerminalApp {
         self.active_note.modules.style && !self.large_note_reduced_features()
     }
 
+    pub(super) fn note_cross_note_module_enabled(&self) -> bool {
+        self.active_note.modules.cross_note
+    }
+
     pub(super) fn calc_feature_mask(&self) -> crate::editor_core::calc_plan::CalcFeatureMask {
         crate::editor_core::calc_plan::CalcFeatureMask {
             math_enabled: self.note_math_module_enabled(),
@@ -570,6 +574,10 @@ impl TerminalApp {
 
     pub(super) fn calc_variables_enabled(&self) -> bool {
         self.active_has_variable_assignments()
+    }
+
+    pub(super) fn calc_cross_note_enabled(&self) -> bool {
+        self.note_math_module_enabled() && self.note_cross_note_module_enabled()
     }
 
     pub(super) fn should_defer_calc_recompute(&self) -> bool {
@@ -1519,12 +1527,13 @@ impl TerminalApp {
             self.refresh_calc_line_metadata_at(cursor_line);
         }
         let calc_variables_enabled = self.calc_variables_enabled();
+        let calc_cross_note_enabled = self.calc_cross_note_enabled();
         let calc_table_enabled = self.note_table_module_enabled();
 
         // Pre-load f64 values for any referenced dep notes before any eval path,
         // including the stale (first-open) path. Guarded internally so O(1) after
         // the first call per dep per session.
-        if calc_variables_enabled {
+        if calc_cross_note_enabled {
             self.preload_cross_note_deps();
         }
 
@@ -1535,6 +1544,7 @@ impl TerminalApp {
                 &self.calc.engine,
                 &self.lines,
                 calc_variables_enabled,
+                calc_cross_note_enabled,
                 calc_table_enabled,
                 &note_id,
                 &short_id,
@@ -1568,7 +1578,7 @@ impl TerminalApp {
 
         // Snapshot extern vars once for the whole incremental recompute.
         // Update deps from a live scan so refs added since the last full eval are picked up.
-        let incremental_extern_vars: Vec<ExternVar> = if calc_variables_enabled {
+        let incremental_extern_vars: Vec<ExternVar> = if calc_cross_note_enabled {
             let note_id = self.active_note.id.clone();
             let refs = app_core::calc::scan_cross_note_refs(&self.lines);
             if let Ok(mut index) = self.cross_note_var_index.lock() {
@@ -1684,6 +1694,7 @@ impl TerminalApp {
                     &self.calc.engine,
                     &self.lines,
                     calc_variables_enabled,
+                    calc_cross_note_enabled,
                     calc_table_enabled,
                     Some((eval_from, eval_to)),
                     incremental_extern_vars.clone(),
@@ -1719,6 +1730,7 @@ impl TerminalApp {
                     &self.calc.engine,
                     &self.lines,
                     calc_variables_enabled,
+                    calc_cross_note_enabled,
                     calc_table_enabled,
                     Some((eval_from, eval_to)),
                     incremental_extern_vars.clone(),
@@ -1740,6 +1752,7 @@ impl TerminalApp {
                 &self.calc.engine,
                 &self.lines,
                 calc_variables_enabled,
+                calc_cross_note_enabled,
                 calc_table_enabled,
                 &note_id,
                 &short_id,
@@ -3564,7 +3577,8 @@ impl TerminalApp {
             calc_mask,
         );
         let vars_enabled = self.calc_variables_enabled();
-        let extern_vars: Vec<ExternVar> = if vars_enabled {
+        let cross_note_enabled = self.calc_cross_note_enabled();
+        let extern_vars: Vec<ExternVar> = if cross_note_enabled {
             let note_id = self.active_note.id.clone();
             let refs = app_core::calc::scan_cross_note_refs(&self.lines);
             if let Ok(mut index) = self.cross_note_var_index.lock() {
@@ -3580,6 +3594,7 @@ impl TerminalApp {
             &self.calc.engine,
             &self.lines,
             vars_enabled,
+            cross_note_enabled,
             self.note_table_module_enabled(),
             Some((eval_from, eval_to)),
             extern_vars,
