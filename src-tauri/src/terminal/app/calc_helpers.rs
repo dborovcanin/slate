@@ -55,6 +55,7 @@ pub(super) fn compute_calc_data(
             table_enabled,
             eval_range,
             extern_vars,
+            ..Default::default()
         },
     );
     let mut variable_names = result
@@ -88,19 +89,23 @@ pub(super) fn compute_calc_data_for_note(
     short_id: &str,
     cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
 ) -> CalcData {
-    let extern_vars = if cross_note_enabled && !short_id.is_empty() {
-        if let Ok(mut index) = cross_note_var_index.lock() {
+    let has_cross_note_syntax =
+        cross_note_enabled && !short_id.is_empty() && lines.iter().any(|l| l.contains("[["));
+
+    let (extern_vars, precomputed_refs) = if has_cross_note_syntax {
+        // Scan outside the lock: TUI runs on a single event-loop thread so
+        // no concurrent eval can race update_deps for the same note_id.
+        let refs = app_core::calc::scan_cross_note_refs(lines);
+        let extern_vars = if let Ok(mut index) = cross_note_var_index.lock() {
             index.register_note(note_id, short_id);
-            // Pre-populate deps from a line scan so extern_vars_for works on the
-            // very first eval (before update_deps has been called from a prior eval).
-            let refs = app_core::calc::scan_cross_note_refs(lines);
             index.update_deps(note_id, &refs);
             index.extern_vars_for(note_id)
         } else {
             Vec::new()
-        }
+        };
+        (extern_vars, Some(refs))
     } else {
-        Vec::new()
+        (Vec::new(), None)
     };
 
     let result = engine.evaluate_note_context(
@@ -111,6 +116,7 @@ pub(super) fn compute_calc_data_for_note(
             table_enabled,
             eval_range: None,
             extern_vars,
+            precomputed_refs,
         },
     );
 
@@ -327,10 +333,14 @@ pub(super) fn preload_cross_note_dep_value(
 /// If the text before `cursor_col` ends with `[[SHORTID]].partial`, return
 /// `(short_id, from_col_of_partial, partial_query)`.
 /// `from_col_of_partial` is the char index right after the dot.
+/// Returns `(short_id, bracket_col, from_col, partial)`.
+/// `bracket_col` is the char column of the opening `[[` — used to anchor the
+/// autocomplete popup visually under the full `[[id]].` expression.
+/// `from_col` is the start of the partial var name — used for text replacement.
 pub(super) fn extract_cross_note_completion_prefix(
     line_text: &str,
     cursor_col: usize,
-) -> Option<(String, usize, String)> {
+) -> Option<(String, usize, usize, String)> {
     use regex::Regex;
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -342,13 +352,15 @@ pub(super) fn extract_cross_note_completion_prefix(
     let col = cursor_col.min(chars.len());
     let text_before: String = chars[..col].iter().collect();
     let m = re.captures(&text_before)?;
+    let full_match_start_byte = m.get(0)?.start();
+    let bracket_col = text_before[..full_match_start_byte].chars().count();
+
     let short_id = m.get(1)?.as_str().to_string();
     let partial_raw = m.get(2).map(|g| g.as_str()).unwrap_or("");
     let partial = partial_raw.trim().to_lowercase();
 
-    // from_col = col - partial_raw.chars().count()
     let partial_chars = partial_raw.chars().count();
     let from_col = col.saturating_sub(partial_chars);
 
-    Some((short_id, from_col, partial))
+    Some((short_id, bracket_col, from_col, partial))
 }

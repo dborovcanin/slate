@@ -21,6 +21,9 @@ pub struct CrossNoteVarIndex {
     /// short_ids for which a full CalcEngine eval has been done this session.
     /// Prevents re-evaluating a dep note when building extern_vars for ghost eval.
     full_eval_attempted_ids: FxHashSet<String>,
+    /// short_ids currently being evaluated on a background thread.
+    /// Guards against concurrent duplicate evals when multiple notes share a dep.
+    eval_in_flight_ids: FxHashSet<String>,
 }
 
 impl CrossNoteVarIndex {
@@ -130,12 +133,34 @@ impl CrossNoteVarIndex {
     // --- Full-eval tracking (fast path for ghost-eval preload) ---
 
     pub fn mark_full_eval_attempted(&mut self, short_id: &str) {
-        self.full_eval_attempted_ids
-            .insert(short_id.to_ascii_lowercase());
+        let key = short_id.to_ascii_lowercase();
+        self.eval_in_flight_ids.remove(&key);
+        self.full_eval_attempted_ids.insert(key);
     }
 
     pub fn was_full_eval_attempted(&self, short_id: &str) -> bool {
         self.full_eval_attempted_ids
             .contains(&short_id.to_ascii_lowercase())
+    }
+
+    /// Returns true if the full eval is already done OR currently in progress on
+    /// another thread. Used by the sync preload path to avoid duplicating work
+    /// that the autocomplete background thread is already handling.
+    pub fn is_eval_done_or_in_flight(&self, short_id: &str) -> bool {
+        let key = short_id.to_ascii_lowercase();
+        self.full_eval_attempted_ids.contains(&key) || self.eval_in_flight_ids.contains(&key)
+    }
+
+    /// Atomically checks whether a full eval is already done or in progress,
+    /// and if not, marks the short_id as in-flight. Returns `true` if the
+    /// caller successfully claimed the eval slot and should proceed with the
+    /// evaluation. Returns `false` if another caller already has it.
+    pub fn try_claim_eval(&mut self, short_id: &str) -> bool {
+        let key = short_id.to_ascii_lowercase();
+        if self.full_eval_attempted_ids.contains(&key) || self.eval_in_flight_ids.contains(&key) {
+            return false;
+        }
+        self.eval_in_flight_ids.insert(key);
+        true
     }
 }

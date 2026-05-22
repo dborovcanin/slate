@@ -275,6 +275,9 @@ struct VariableCompletionPrefix {
 
 #[derive(Debug, Clone)]
 struct VariableAutocompleteState {
+    /// Column used to anchor the popup box visually (start of `[[` for cross-note,
+    /// same as `from_col` for regular variables).
+    popup_anchor_col: usize,
     from_col: usize,
     to_col: usize,
     query: String,

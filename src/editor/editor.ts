@@ -27,7 +27,7 @@ import {
 } from "./markdown-editing";
 import { foldingExtensions } from "./folding.ts";
 import { reminderExtensions } from "./notify-decoration";
-import { makeVariableCompletionSource } from "./variable-autocomplete";
+import { autocompleteTooltipPositioner, crossNoteCompletionSource, makeVariableCompletionSource } from "./variable-autocomplete";
 import {
   invalidateWikiLinkCompletionCaches,
   wikiLinkCompletionSource,
@@ -495,6 +495,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
           minChars: options.variableAutocompleteMinChars ?? 3,
         });
         const sources = [
+          crossNoteCompletionSource(8),
           ...(varSource ? [varSource] : []),
           wikiLinkCompletionSource,
         ];
@@ -506,6 +507,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
             defaultKeymap: true,
             maxRenderedOptions: 20,
           }),
+          autocompleteTooltipPositioner(),
           ...wikiLinkExtensions(options.onNavigateToNote),
         ];
       })(),

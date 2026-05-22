@@ -109,9 +109,7 @@ pub async fn evaluate_note_context_delta(
     eval_from: Option<usize>,
     eval_to: Option<usize>,
 ) -> Result<NoteEvaluationResult, String> {
-    // Snapshot the Arc under the mutex, then release it before evaluation so
-    // expensive calc work doesn't block other cache updates. The Arc clone is
-    // O(1) — it does not copy the line data.
+    // Snapshot the line cache Arc (O(1) clone, no data copy).
     let lines: Arc<Vec<String>> = {
         let cache = core
             .note_line_cache
@@ -124,85 +122,117 @@ pub async fn evaluate_note_context_delta(
     };
 
     let short_id = note_short_id(&note_id).to_string();
-
-    // Snapshot extern vars from the cross-note index before entering spawn_blocking.
     let vars_enabled = variables_enabled.unwrap_or(true);
+    let table_enabled_val = table_enabled.unwrap_or(true);
     // cross_note_enabled is not yet forwarded from the UI; default to true.
     let cross_note_enabled = true;
-    let extern_vars = if cross_note_enabled && !short_id.is_empty() {
-        // Pre-load any referenced notes not yet in the index so ghost eval
-        // works without requiring the user to visit the source note first.
-        let refs = app_core::calc::scan_cross_note_refs(&lines);
-        for r in &refs {
-            let already = core
-                .cross_note_var_index
-                .lock()
-                .ok()
-                .map(|index| index.was_full_eval_attempted(&r.note_short_id))
-                .unwrap_or(true);
-            if !already {
-                if let Ok(Some(dep)) = core.note_sources().resolve_wiki_link_note(&r.note_short_id)
-                {
-                    let dep_lines: Vec<String> =
-                        dep.body.split('\n').map(|l| l.to_string()).collect();
-                    let dep_options = NoteEvaluationOptions {
-                        variables_enabled: true,
-                        table_enabled: false,
-                        ..Default::default()
-                    };
-                    core.evaluate_note_with_cross_refs(
-                        &dep.id,
-                        &r.note_short_id,
-                        &dep_lines,
-                        dep_options,
-                    );
-                }
-                if let Ok(mut index) = core.cross_note_var_index.lock() {
-                    index.mark_name_scan_attempted(&r.note_short_id);
-                    index.mark_full_eval_attempted(&r.note_short_id);
+    let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
+    let generation = start_eval_generation();
+
+    // Clone the two shared handles needed inside spawn_blocking.
+    // note_sources owns the DB connection (blocking I/O); var_index is Arc<Mutex<...>>.
+    // Neither can be borrowed across the await point via State<'_>.
+    let note_sources = core.note_sources().clone();
+    let var_index = core.cross_note_var_index_arc();
+    let var_index_post = Arc::clone(&var_index);
+
+    let fallback_lines = Arc::clone(&lines);
+    // Keep copies for the post-eval index update after the closure moves them.
+    let note_id_post = note_id.clone();
+    let short_id_post = short_id.clone();
+
+    // All blocking work — dep pre-loading (DB I/O + CalcEngine) and the main
+    // evaluation — runs together in one spawn_blocking so the async executor
+    // is never stalled.
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        // Quick check: if no line contains "[[", there are no cross-note refs at all.
+        // Avoids the full regex scan for the common case.
+        let has_cross_note_syntax =
+            cross_note_enabled && !short_id.is_empty() && lines.iter().any(|l| l.contains("[["));
+
+        let (extern_vars, refs) = if has_cross_note_syntax {
+            let refs = app_core::calc::scan_cross_note_refs(&lines);
+
+            for r in &refs {
+                let claimed = var_index
+                    .lock()
+                    .ok()
+                    .map(|mut idx| idx.try_claim_eval(&r.note_short_id))
+                    .unwrap_or(false);
+                if claimed {
+                    if let Ok(Some(dep)) = note_sources.resolve_wiki_link_note(&r.note_short_id) {
+                        let dep_lines: Vec<String> =
+                            dep.body.split('\n').map(|l| l.to_string()).collect();
+                        // Pre-scan dep lines so the engine skips its own internal scan.
+                        let dep_refs = app_core::calc::scan_cross_note_refs(&dep_lines);
+                        let dep_options = NoteEvaluationOptions {
+                            variables_enabled: true,
+                            table_enabled: false,
+                            precomputed_refs: Some(dep_refs),
+                            ..Default::default()
+                        };
+                        let dep_result =
+                            CalcEngine::new().evaluate_note_context(&dep_lines, dep_options);
+                        if let Ok(mut idx) = var_index.lock() {
+                            idx.register_note(&dep.id, &r.note_short_id);
+                            idx.update_exports(
+                                &r.note_short_id,
+                                &dep_result.variables,
+                                &dep_result.variable_values,
+                            );
+                            idx.mark_name_scan_attempted(&r.note_short_id);
+                            idx.mark_full_eval_attempted(&r.note_short_id);
+                            idx.update_deps(&dep.id, &dep_result.cross_note_refs);
+                        }
+                    } else if let Ok(mut idx) = var_index.lock() {
+                        idx.mark_name_scan_attempted(&r.note_short_id);
+                        idx.mark_full_eval_attempted(&r.note_short_id);
+                    }
                 }
             }
-        }
 
-        if let Ok(mut index) = core.cross_note_var_index.lock() {
-            index.register_note(&note_id, &short_id);
-            index.extern_vars_for(&note_id)
+            let extern_vars = if let Ok(mut idx) = var_index.lock() {
+                idx.register_note(&note_id, &short_id);
+                idx.update_deps(&note_id, &refs);
+                idx.extern_vars_for(&note_id)
+            } else {
+                Vec::new()
+            };
+            (extern_vars, refs)
         } else {
-            Vec::new()
-        }
-    } else {
-        Vec::new()
-    };
+            (Vec::new(), Vec::new())
+        };
 
-    let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
-    let options = NoteEvaluationOptions {
-        variables_enabled: vars_enabled,
-        cross_note_enabled,
-        table_enabled: table_enabled.unwrap_or(true),
-        eval_range,
-        extern_vars,
-    };
-    let generation = start_eval_generation();
-    let fallback_lines = Arc::clone(&lines);
-    let fallback_options = options.clone();
-    let result = match tauri::async_runtime::spawn_blocking(move || {
+        let options = NoteEvaluationOptions {
+            variables_enabled: vars_enabled,
+            cross_note_enabled,
+            table_enabled: table_enabled_val,
+            eval_range,
+            extern_vars,
+            // Pass the pre-scanned refs so the engine doesn't rescan the same lines.
+            precomputed_refs: if has_cross_note_syntax { Some(refs) } else { None },
+        };
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
     })
     .await
-    {
-        Ok(result) => result,
-        Err(_) => CalcEngine::new().evaluate_note_context_with_generation(
-            &fallback_lines,
-            fallback_options,
-            generation,
-        ),
-    };
+    .unwrap_or_else(|_| {
+        // spawn_blocking panicked — fall back to a plain eval with no extern vars.
+        let options = NoteEvaluationOptions {
+            variables_enabled: vars_enabled,
+            cross_note_enabled,
+            table_enabled: table_enabled_val,
+            eval_range,
+            extern_vars: Vec::new(),
+            ..Default::default()
+        };
+        CalcEngine::new().evaluate_note_context_with_generation(&fallback_lines, options, generation)
+    });
 
     // Update the cross-note index with this note's latest exports and deps.
-    if cross_note_enabled && !short_id.is_empty() {
-        if let Ok(mut index) = core.cross_note_var_index.lock() {
-            index.update_exports(&short_id, &result.variables, &result.variable_values);
-            index.update_deps(&note_id, &result.cross_note_refs);
+    if cross_note_enabled && !short_id_post.is_empty() {
+        if let Ok(mut idx) = var_index_post.lock() {
+            idx.update_exports(&short_id_post, &result.variables, &result.variable_values);
+            idx.update_deps(&note_id_post, &result.cross_note_refs);
         }
     }
 
@@ -211,36 +241,76 @@ pub async fn evaluate_note_context_delta(
 
 /// Return exported variable entries for a note identified by its 8-char short ID.
 /// Used to populate cross-note variable autocomplete suggestions in the editor.
-/// If the note has never been evaluated this session, loads and evaluates it on demand.
+/// Fully evaluates the note so that when the user selects a suggestion and the
+/// editor re-evaluates, the dep note's values are already in the index (no extra
+/// DB load on Enter).
 #[tauri::command]
-pub fn get_cross_note_vars(core: State<'_, AppCore>, short_id: String) -> Vec<VariableIndexEntry> {
-    // Fast path: name scan already done (covers notes with zero variables too).
+pub async fn get_cross_note_vars(
+    core: State<'_, AppCore>,
+    short_id: String,
+) -> Result<Vec<VariableIndexEntry>, String> {
+    // Fast path: already fully evaluated this session.
     let already = core
         .cross_note_var_index
         .lock()
         .ok()
-        .map(|index| index.was_name_scan_attempted(&short_id))
+        .map(|index| index.was_full_eval_attempted(&short_id))
         .unwrap_or(false);
     if already {
-        return core.cross_note_exports_for_autocomplete(&short_id);
+        return Ok(core.cross_note_exports_for_autocomplete(&short_id));
     }
 
-    // Slow path: load note body and do a fast name-only scan (no CalcEngine eval).
-    let note = match core.note_sources().resolve_wiki_link_note(&short_id) {
-        Ok(Some(n)) => n,
-        _ => {
-            if let Ok(mut index) = core.cross_note_var_index.lock() {
+    // Slow path: for small dep notes run a full CalcEngine eval so that variable
+    // *values* are indexed before the user presses Enter (no extra DB load at that
+    // point). For large notes the eval cost would make the dropdown visibly slow,
+    // so fall back to a cheap name-scan; the full eval will happen lazily inside
+    // evaluate_note_context_delta when the user accepts a suggestion.
+    const FULL_EVAL_LINE_LIMIT: usize = 400;
+    let note_sources = core.note_sources().clone();
+    let var_index = core.cross_note_var_index_arc();
+    let entries = tauri::async_runtime::spawn_blocking(move || {
+        let note = match note_sources.resolve_wiki_link_note(&short_id) {
+            Ok(Some(n)) => n,
+            _ => {
+                if let Ok(mut index) = var_index.lock() {
+                    index.mark_name_scan_attempted(&short_id);
+                    index.mark_full_eval_attempted(&short_id);
+                }
+                return Vec::new();
+            }
+        };
+        let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
+        if lines.len() <= FULL_EVAL_LINE_LIMIT {
+            let result = CalcEngine::new().evaluate_note_context(
+                &lines,
+                NoteEvaluationOptions {
+                    variables_enabled: true,
+                    table_enabled: false,
+                    ..Default::default()
+                },
+            );
+            if let Ok(mut index) = var_index.lock() {
+                index.register_note(&note.id, &short_id);
+                index.update_exports(&short_id, &result.variables, &result.variable_values);
+                index.update_deps(&note.id, &result.cross_note_refs);
+                index.mark_name_scan_attempted(&short_id);
+                index.mark_full_eval_attempted(&short_id);
+            }
+            result.variables
+        } else {
+            // Large note: name-scan only. mark_full_eval_attempted is intentionally
+            // NOT set so that evaluate_note_context_delta will do the full eval when
+            // the user accepts a suggestion and triggers a recompute.
+            let entries = app_core::calc::scan_variable_assignments(&lines);
+            if let Ok(mut index) = var_index.lock() {
+                index.register_note(&note.id, &short_id);
+                index.update_entries_only(&short_id, &entries);
                 index.mark_name_scan_attempted(&short_id);
             }
-            return Vec::new();
+            entries
         }
-    };
-    let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
-    let entries = app_core::calc::scan_variable_assignments(&lines);
-    if let Ok(mut index) = core.cross_note_var_index.lock() {
-        index.register_note(&note.id, &short_id);
-        index.update_entries_only(&short_id, &entries);
-        index.mark_name_scan_attempted(&short_id);
-    }
-    entries
+    })
+    .await
+    .unwrap_or_default();
+    Ok(entries)
 }

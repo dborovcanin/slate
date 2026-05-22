@@ -45,6 +45,10 @@ pub struct NoteEvaluationOptions {
     /// Values from other notes to substitute for `[[SHORTID]].var_name` references.
     /// Only used when `cross_note_enabled` is true.
     pub extern_vars: Vec<ExternVar>,
+    /// Pre-scanned cross-note refs for this note. When `Some`, the engine skips
+    /// its own `scan_cross_note_refs` call and uses this directly. Pass the result
+    /// of a prior `scan_cross_note_refs` call to avoid rescanning on every eval.
+    pub precomputed_refs: Option<Vec<CrossNoteRef>>,
 }
 
 impl Default for NoteEvaluationOptions {
@@ -55,6 +59,7 @@ impl Default for NoteEvaluationOptions {
             cross_note_enabled: true,
             eval_range: None,
             extern_vars: Vec::new(),
+            precomputed_refs: None,
         }
     }
 }
@@ -609,6 +614,7 @@ impl CalcEngine {
         let mut ctx = new_context();
 
         // Build extern_vars lookup and preprocess lines for cross-note refs.
+        // Use precomputed_refs when available to avoid rescanning the same lines.
         let (eval_lines, cross_note_refs, lines_with_unresolved) =
             if options.cross_note_enabled && !options.extern_vars.is_empty() {
                 let extern_map: FxHashMap<(String, String), f64> = options
@@ -621,10 +627,12 @@ impl CalcEngine {
                         )
                     })
                     .collect();
-                let refs = scan_cross_note_refs(lines);
+                let refs = options
+                    .precomputed_refs
+                    .unwrap_or_else(|| scan_cross_note_refs(lines));
                 let mut preprocessed: Vec<String> = Vec::with_capacity(lines.len());
-                let mut unresolved_set: std::collections::HashSet<usize> =
-                    std::collections::HashSet::new();
+                let mut unresolved_set: rustc_hash::FxHashSet<usize> =
+                    rustc_hash::FxHashSet::default();
                 for (idx, line) in lines.iter().enumerate() {
                     let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
                     if has_unresolved {
@@ -634,17 +642,19 @@ impl CalcEngine {
                 }
                 (std::borrow::Cow::Owned(preprocessed), refs, unresolved_set)
             } else if options.cross_note_enabled {
-                let refs = scan_cross_note_refs(lines);
+                let refs = options
+                    .precomputed_refs
+                    .unwrap_or_else(|| scan_cross_note_refs(lines));
                 (
                     std::borrow::Cow::Borrowed(lines),
                     refs,
-                    std::collections::HashSet::new(),
+                    rustc_hash::FxHashSet::default(),
                 )
             } else {
                 (
                     std::borrow::Cow::Borrowed(lines),
                     Vec::new(),
-                    std::collections::HashSet::new(),
+                    rustc_hash::FxHashSet::default(),
                 )
             };
 

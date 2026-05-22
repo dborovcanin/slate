@@ -2400,7 +2400,7 @@ impl TerminalApp {
 
         // Cross-note prefix takes priority: [[SHORTID]].partial
         let line = self.current_line();
-        if let Some((short_id, from_col, partial)) =
+        if let Some((short_id, bracket_col, from_col, partial)) =
             extract_cross_note_completion_prefix(line, self.cursor_col)
         {
             let exports = cross_note_exports_for_autocomplete(
@@ -2409,6 +2409,24 @@ impl TerminalApp {
                 &self.calc.engine,
                 &self.cross_note_db,
             );
+            // Eagerly preload dep values in the background so that when the
+            // user confirms the selection and a recompute fires, the index
+            // already has f64 values — avoiding a blocking DB load at that point.
+            let needs_preload = self
+                .cross_note_var_index
+                .lock()
+                .ok()
+                .map(|mut idx| idx.try_claim_eval(&short_id))
+                .unwrap_or(false);
+            if needs_preload {
+                let bg_short_id = short_id.clone();
+                let bg_var_index = std::sync::Arc::clone(&self.cross_note_var_index);
+                let bg_db = self.cross_note_db.clone();
+                std::thread::spawn(move || {
+                    let engine = app_core::calc::CalcEngine::new();
+                    preload_cross_note_dep_value(&bg_short_id, &bg_var_index, &engine, &bg_db);
+                });
+            }
             let suggestions: Vec<String> = exports
                 .iter()
                 .filter(|e| e.normalized.starts_with(&partial) && e.normalized != partial)
@@ -2416,6 +2434,7 @@ impl TerminalApp {
                 .collect();
             if !suggestions.is_empty() {
                 return Some(VariableAutocompleteState {
+                    popup_anchor_col: bracket_col,
                     from_col,
                     to_col: self.cursor_col,
                     query: partial,
@@ -2438,6 +2457,7 @@ impl TerminalApp {
             return None;
         }
         Some(VariableAutocompleteState {
+            popup_anchor_col: prefix.from_col,
             from_col: prefix.from_col,
             to_col: prefix.to_col,
             query: prefix.query,
@@ -2479,7 +2499,7 @@ impl TerminalApp {
             self.dismiss_variable_autocomplete_popup();
             return;
         };
-        let Some((anchor_row, anchor_col)) = self.variable_popup_anchor(state.from_col) else {
+        let Some((anchor_row, anchor_col)) = self.variable_popup_anchor(state.popup_anchor_col) else {
             self.dismiss_variable_autocomplete_popup();
             return;
         };
@@ -3536,20 +3556,59 @@ impl TerminalApp {
         if refs.is_empty() {
             return;
         }
-        // Collect unique short_ids that haven't been fully evaluated yet.
-        let missing: Vec<String> = self
-            .cross_note_var_index
-            .lock()
-            .ok()
-            .map(|index| {
-                refs.iter()
-                    .map(|r| r.note_short_id.clone())
-                    .filter(|sid| !index.was_full_eval_attempted(sid))
-                    .collect::<rustc_hash::FxHashSet<_>>()
-                    .into_iter()
-                    .collect()
-            })
-            .unwrap_or_default();
+        // Partition deps: truly missing (need sync load) vs. in-flight (bg thread
+        // is already loading them). For in-flight deps we do a short bounded wait
+        // so the recompute following a Tab press can still get correct values when
+        // the autocomplete background thread is nearly done.
+        let (missing, in_flight): (Vec<String>, Vec<String>) = {
+            let short_ids: rustc_hash::FxHashSet<String> = refs
+                .iter()
+                .map(|r| r.note_short_id.clone())
+                .collect();
+            match self.cross_note_var_index.lock() {
+                Ok(index) => {
+                    let mut missing = Vec::new();
+                    let mut in_flight = Vec::new();
+                    for sid in short_ids {
+                        if index.was_full_eval_attempted(&sid) {
+                            // already done
+                        } else if index.is_eval_done_or_in_flight(&sid) {
+                            in_flight.push(sid);
+                        } else {
+                            missing.push(sid);
+                        }
+                    }
+                    (missing, in_flight)
+                }
+                Err(_) => (Vec::new(), Vec::new()),
+            }
+        };
+
+        // Wait up to ~200 ms for in-flight evals to complete before the recompute.
+        // This prevents the blocking DB+eval work from running twice (once here, once
+        // on the bg thread) while still giving the recompute correct dep values.
+        if !in_flight.is_empty() {
+            const POLL_INTERVAL_MS: u64 = 20;
+            const MAX_POLLS: u32 = 10; // 10 × 20 ms = 200 ms cap
+            for _ in 0..MAX_POLLS {
+                let all_done = self
+                    .cross_note_var_index
+                    .lock()
+                    .ok()
+                    .map(|index| {
+                        in_flight
+                            .iter()
+                            .all(|sid| index.was_full_eval_attempted(sid))
+                    })
+                    .unwrap_or(true);
+                if all_done {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+            }
+        }
+
+        // Sync-load any deps that have no background thread covering them.
         for short_id in missing {
             preload_cross_note_dep_value(
                 &short_id,

@@ -1,10 +1,12 @@
 import {
   autocompletion,
+  completionStatus,
   type Completion,
   type CompletionContext,
   type CompletionResult,
   type CompletionSource,
 } from "@codemirror/autocomplete";
+import { ViewPlugin, type EditorView, type ViewUpdate } from "@codemirror/view";
 import { variableIndexField } from "./calc-decoration.ts";
 import { getCrossNoteVars } from "../api.ts";
 import type { VariableIndexEntry } from "../api.ts";
@@ -100,6 +102,10 @@ function variableCompletionSource(
     if (!selection.empty || selection.head !== context.pos) return null;
 
     const line = context.state.doc.lineAt(context.pos);
+    // Defer to crossNoteCompletionSource when inside [[SHORTID]]. syntax.
+    const textBefore = line.text.slice(0, context.pos - line.from);
+    if (CROSS_NOTE_PREFIX_RE.test(textBefore)) return null;
+
     const prefix = extractCompletionPrefix(line.text, context.pos - line.from);
     if (!prefix) return null;
 
@@ -132,7 +138,7 @@ export function makeVariableCompletionSource(
   return variableCompletionSource(minChars, maxSuggestions);
 }
 
-function crossNoteCompletionSource(maxSuggestions: number): CompletionSource {
+export function crossNoteCompletionSource(maxSuggestions: number): CompletionSource {
   return async (context: CompletionContext): Promise<CompletionResult | null> => {
     const selection = context.state.selection.main;
     if (!selection.empty || selection.head !== context.pos) return null;
@@ -203,4 +209,86 @@ export function variableAutocompleteExtensions(
       maxRenderedOptions: maxSuggestions,
     }),
   ];
+}
+
+const TOOLTIP_MARGIN = 6;
+
+/**
+ * Repositions the autocomplete tooltip at the cursor position after each CM
+ * layout cycle. Tries: lower-right → lower-left → upper-right → upper-left.
+ * CM positions the tooltip at `from` (start of the completion range), which
+ * may differ from the cursor. This plugin overrides that with cursor tracking.
+ */
+export function autocompleteTooltipPositioner() {
+  return ViewPlugin.fromClass(
+    class {
+      private rafId: number | null = null;
+      private view: EditorView;
+
+      constructor(view: EditorView) {
+        this.view = view;
+      }
+
+      update(update: ViewUpdate) {
+        // Only run when autocomplete is active to avoid unnecessary RAF cost.
+        const status = completionStatus(update.state);
+        if (status !== "active" && status !== "pending") return;
+        if (this.rafId !== null) return;
+        this.rafId = requestAnimationFrame(() => {
+          this.rafId = null;
+          this.reposition();
+        });
+      }
+
+      private reposition() {
+        // Find the autocomplete tooltip. Use the editor's own document to avoid
+        // cross-frame issues.
+        const doc = this.view.dom.ownerDocument;
+        const tooltip = doc.querySelector(".cm-tooltip-autocomplete") as HTMLElement | null;
+        if (!tooltip) return;
+
+        const cursor = this.view.state.selection.main.head;
+        const cc = this.view.coordsAtPos(cursor);
+        if (!cc) return;
+
+        const w = tooltip.offsetWidth;
+        const h = tooltip.offsetHeight;
+        if (!w || !h) return;
+
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const m = TOOLTIP_MARGIN;
+
+        // Evaluate the four candidate positions in preference order.
+        let left: number, top: number;
+        if (cc.left + w <= vw - m && cc.bottom + h <= vh - m) {
+          // Lower-right (preferred)
+          left = cc.left;
+          top = cc.bottom;
+        } else if (cc.left - w >= m && cc.bottom + h <= vh - m) {
+          // Lower-left
+          left = cc.left - w;
+          top = cc.bottom;
+        } else if (cc.left + w <= vw - m && cc.top - h >= m) {
+          // Upper-right
+          left = cc.left;
+          top = cc.top - h;
+        } else {
+          // Upper-left (fallback)
+          left = Math.max(m, cc.left - w);
+          top = Math.max(m, cc.top - h);
+        }
+
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+      }
+
+      destroy() {
+        if (this.rafId !== null) {
+          cancelAnimationFrame(this.rafId);
+          this.rafId = null;
+        }
+      }
+    },
+  );
 }
