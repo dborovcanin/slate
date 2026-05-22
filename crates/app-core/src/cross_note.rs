@@ -42,7 +42,11 @@ impl CrossNoteVarIndex {
         let short_id = short_id.to_ascii_lowercase();
         let new_exports: FxHashMap<String, f64> = entries
             .iter()
-            .filter_map(|e| values.get(&e.normalized).map(|&v| (e.normalized.clone(), v)))
+            .filter_map(|e| {
+                values
+                    .get(&e.normalized)
+                    .map(|&v| (e.normalized.clone(), v))
+            })
             .collect();
         let changed = self
             .exports

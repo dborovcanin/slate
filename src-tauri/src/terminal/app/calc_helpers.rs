@@ -1,11 +1,11 @@
 use super::VariableCompletionPrefix;
+use crate::storage::Db;
 #[cfg(test)]
 use crate::terminal::text_utils::line_display_cols;
 use app_core::calc::{
     CalcEngine, ExternVar, NoteEvaluationOptions, TableCellEvaluation, VariableIndexEntry,
 };
 use app_core::cross_note::CrossNoteVarIndex;
-use crate::storage::Db;
 use std::sync::{Arc, Mutex};
 
 #[cfg(test)]

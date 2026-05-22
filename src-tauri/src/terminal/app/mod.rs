@@ -19,12 +19,12 @@ use crate::storage::{Db, Note};
 use app_core::calc::CalcEngine;
 use app_core::cross_note::CrossNoteVarIndex;
 use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
-use std::sync::{Arc, Mutex};
 use rustc_hash::FxHashMap;
 use std::cmp::min;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 

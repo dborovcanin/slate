@@ -1674,12 +1674,11 @@ impl TerminalApp {
                     let (tx, rx) = std::sync::mpsc::channel();
                     let db_for_thread = db.clone();
                     std::thread::spawn(move || {
-                        let result =
-                            crate::commands::backup::backup_notes_database_blocking(
-                                &db_for_thread,
-                                &path,
-                            )
-                            .map(|r| format!("backed up notes to {}", r.path));
+                        let result = crate::commands::backup::backup_notes_database_blocking(
+                            &db_for_thread,
+                            &path,
+                        )
+                        .map(|r| format!("backed up notes to {}", r.path));
                         let _ = tx.send(super::BackupThreadResult::ExportDone(result));
                     });
                     self.backup_rx = Some(rx);
@@ -1702,8 +1701,8 @@ impl TerminalApp {
                     }
                     let (tx, rx) = std::sync::mpsc::channel();
                     std::thread::spawn(move || {
-                        let result = crate::commands::backup::stage_restore_from_zip(&path)
-                            .map(|_| ());
+                        let result =
+                            crate::commands::backup::stage_restore_from_zip(&path).map(|_| ());
                         let _ = tx.send(super::BackupThreadResult::LoadStageDone(result));
                     });
                     self.backup_rx = Some(rx);

@@ -10,9 +10,9 @@ mod storage;
 #[cfg(unix)]
 mod terminal;
 
-use app_core::AppCore;
 #[cfg(feature = "imap")]
 use app_core::storage::Db;
+use app_core::AppCore;
 #[cfg(feature = "gui")]
 use ipc::server;
 use std::io::IsTerminal as _;

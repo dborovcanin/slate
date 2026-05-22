@@ -139,9 +139,7 @@ pub async fn evaluate_note_context_delta(
                 .map(|index| index.was_full_eval_attempted(&r.note_short_id))
                 .unwrap_or(true);
             if !already {
-                if let Ok(Some(dep)) = core
-                    .note_sources()
-                    .resolve_wiki_link_note(&r.note_short_id)
+                if let Ok(Some(dep)) = core.note_sources().resolve_wiki_link_note(&r.note_short_id)
                 {
                     let dep_lines: Vec<String> =
                         dep.body.split('\n').map(|l| l.to_string()).collect();
@@ -212,10 +210,7 @@ pub async fn evaluate_note_context_delta(
 /// Used to populate cross-note variable autocomplete suggestions in the editor.
 /// If the note has never been evaluated this session, loads and evaluates it on demand.
 #[tauri::command]
-pub fn get_cross_note_vars(
-    core: State<'_, AppCore>,
-    short_id: String,
-) -> Vec<VariableIndexEntry> {
+pub fn get_cross_note_vars(core: State<'_, AppCore>, short_id: String) -> Vec<VariableIndexEntry> {
     // Fast path: name scan already done (covers notes with zero variables too).
     let already = core
         .cross_note_var_index

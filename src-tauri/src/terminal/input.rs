@@ -175,9 +175,7 @@ fn read_byte() -> Result<Option<u8>, String> {
     }
     if n < 0 {
         let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock
-            || err.kind() == io::ErrorKind::Interrupted
-        {
+        if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::Interrupted {
             return Ok(None);
         }
         return Err(format!("Failed to read stdin: {err}"));

@@ -1596,7 +1596,9 @@ mod tests {
         assert!(!strong.iter().any(|t| t.kind == InlineTokenType::Strong));
 
         let strike = tokenize_inline_markdown("~~~~");
-        assert!(!strike.iter().any(|t| t.kind == InlineTokenType::Strikethrough));
+        assert!(!strike
+            .iter()
+            .any(|t| t.kind == InlineTokenType::Strikethrough));
     }
 
     #[test]

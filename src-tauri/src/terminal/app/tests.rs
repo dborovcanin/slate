@@ -149,7 +149,8 @@ fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
     app.cursor_col = "Capability is **an action**".chars().count();
 
     let mut frame = Vec::new();
-    app.draw(&mut frame).expect("initial draw at right boundary");
+    app.draw(&mut frame)
+        .expect("initial draw at right boundary");
     let revealed = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
     assert!(
         revealed.contains("**an action**"),
@@ -1529,7 +1530,11 @@ fn vim_ci_tilde_preserves_double_tilde_boundaries_in_ui_and_tui_replay() {
         initial_state: crate::editor_core::vim::VimState::default(),
         initial_cursor_line: 0,
         initial_cursor_col: 3,
-        keys: vec!["char:c".to_string(), "char:i".to_string(), "char:~".to_string()],
+        keys: vec![
+            "char:c".to_string(),
+            "char:i".to_string(),
+            "char:~".to_string(),
+        ],
     };
 
     let gui = run_gui_parity_case(&case);
@@ -1551,7 +1556,11 @@ fn vim_ci_tilde_on_mixed_line_never_deletes_tilde_boundaries() {
             initial_state: crate::editor_core::vim::VimState::default(),
             initial_cursor_line: 0,
             initial_cursor_col: cursor_col,
-            keys: vec!["char:c".to_string(), "char:i".to_string(), "char:~".to_string()],
+            keys: vec![
+                "char:c".to_string(),
+                "char:i".to_string(),
+                "char:~".to_string(),
+            ],
         };
 
         let gui = run_gui_parity_case(&case);
@@ -1563,7 +1572,11 @@ fn vim_ci_tilde_on_mixed_line_never_deletes_tilde_boundaries() {
         } else {
             text.to_string()
         };
-        assert_eq!(gui.lines, vec![expected.clone()], "gui cursor_col={cursor_col}");
+        assert_eq!(
+            gui.lines,
+            vec![expected.clone()],
+            "gui cursor_col={cursor_col}"
+        );
         assert_eq!(tui.lines, vec![expected], "tui cursor_col={cursor_col}");
     }
 }
@@ -1595,7 +1608,11 @@ fn vim_left_then_ci_tilde_on_mixed_line_keeps_boundaries() {
         } else {
             text.to_string()
         };
-        assert_eq!(gui.lines, vec![expected.clone()], "gui cursor_col={cursor_col}");
+        assert_eq!(
+            gui.lines,
+            vec![expected.clone()],
+            "gui cursor_col={cursor_col}"
+        );
         assert_eq!(tui.lines, vec![expected], "tui cursor_col={cursor_col}");
     }
 }

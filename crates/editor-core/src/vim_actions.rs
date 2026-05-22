@@ -1296,19 +1296,11 @@ fn find_delimited_object_bounds(
         DelimitedObject::Paren => find_balanced_pair_around_cursor(&chars, cursor, '(', ')'),
         DelimitedObject::Bracket => find_balanced_pair_around_cursor(&chars, cursor, '[', ']'),
         DelimitedObject::Brace => find_balanced_pair_around_cursor(&chars, cursor, '{', '}'),
-        DelimitedObject::DoubleQuote => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '"')
-        }
-        DelimitedObject::Backtick => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '`')
-        }
-        DelimitedObject::Asterisk => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '*')
-        }
+        DelimitedObject::DoubleQuote => find_same_delimiter_pair_around_cursor(&chars, cursor, '"'),
+        DelimitedObject::Backtick => find_same_delimiter_pair_around_cursor(&chars, cursor, '`'),
+        DelimitedObject::Asterisk => find_same_delimiter_pair_around_cursor(&chars, cursor, '*'),
         DelimitedObject::Tilde => find_same_delimiter_pair_around_cursor(&chars, cursor, '~'),
-        DelimitedObject::Underscore => {
-            find_same_delimiter_pair_around_cursor(&chars, cursor, '_')
-        }
+        DelimitedObject::Underscore => find_same_delimiter_pair_around_cursor(&chars, cursor, '_'),
     };
     let (start, end) = pair_opt?;
     let is_run = matches!(
@@ -1806,9 +1798,14 @@ mod tests {
     fn delete_inside_underscore_removes_underscore_wrapped_content() {
         let text = "prefix _inside_ suffix";
         let cursor = text.find("inside").expect("inside");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideUnderscore, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(
+            text,
+            sel(cursor),
+            VimIntent::DeleteInsideUnderscore,
+            1,
+            None,
+        )
+        .expect("handled");
         assert_eq!(charwise_register(&result), Some("inside"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "prefix __ suffix");
@@ -1818,9 +1815,8 @@ mod tests {
     fn delete_around_paren_removes_delimiters_too() {
         let text = "fn call(alpha + beta)";
         let cursor = text.find("alpha").expect("alpha");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundParen, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundParen, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("(alpha + beta)"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "fn call");
@@ -1830,9 +1826,8 @@ mod tests {
     fn delete_around_bracket_removes_delimiters_too() {
         let text = "list[keep, remove]";
         let cursor = text.find("keep").expect("keep");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBracket, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBracket, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("[keep, remove]"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "list");
@@ -1842,9 +1837,8 @@ mod tests {
     fn delete_around_brace_removes_delimiters_too() {
         let text = "obj{keep: value}";
         let cursor = text.find("keep").expect("keep");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBrace, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundBrace, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("{keep: value}"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "obj");
@@ -1854,9 +1848,14 @@ mod tests {
     fn delete_around_double_quote_removes_delimiters_too() {
         let text = "say \"hello world\" now";
         let cursor = text.find("hello").expect("hello");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundDoubleQuote, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(
+            text,
+            sel(cursor),
+            VimIntent::DeleteAroundDoubleQuote,
+            1,
+            None,
+        )
+        .expect("handled");
         assert_eq!(charwise_register(&result), Some("\"hello world\""));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "say  now");
@@ -1890,9 +1889,8 @@ mod tests {
     fn delete_around_tilde_removes_delimiters_too() {
         let text = "prefix ~inside~ suffix";
         let cursor = text.find("inside").expect("inside");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundTilde, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundTilde, 1, None)
+            .expect("handled");
         assert_eq!(charwise_register(&result), Some("~inside~"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "prefix  suffix");
@@ -1902,9 +1900,14 @@ mod tests {
     fn delete_around_underscore_removes_delimiters_too() {
         let text = "prefix _inside_ suffix";
         let cursor = text.find("inside").expect("inside");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteAroundUnderscore, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(
+            text,
+            sel(cursor),
+            VimIntent::DeleteAroundUnderscore,
+            1,
+            None,
+        )
+        .expect("handled");
         assert_eq!(charwise_register(&result), Some("_inside_"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "prefix  suffix");
@@ -1950,9 +1953,14 @@ mod tests {
     fn delete_inside_underscore_handles_double_markers() {
         let text = "Capability is __an action__ linked";
         let cursor = text.find("action").expect("action");
-        let result =
-            execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideUnderscore, 1, None)
-                .expect("handled");
+        let result = execute_vim_action(
+            text,
+            sel(cursor),
+            VimIntent::DeleteInsideUnderscore,
+            1,
+            None,
+        )
+        .expect("handled");
         assert_eq!(charwise_register(&result), Some("an action"));
         let next = apply_operations(text.to_string(), &result.operations);
         assert_eq!(next, "Capability is ____ linked");
@@ -1973,8 +1981,9 @@ mod tests {
     fn delete_inside_tilde_keeps_boundaries_for_all_boundary_and_inner_cursor_positions() {
         let text = "~~test~~";
         for cursor in 0..text.len() {
-            let result = execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideTilde, 1, None)
-                .expect("handled");
+            let result =
+                execute_vim_action(text, sel(cursor), VimIntent::DeleteInsideTilde, 1, None)
+                    .expect("handled");
             assert_eq!(
                 charwise_register(&result),
                 Some("test"),

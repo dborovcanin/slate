@@ -1,23 +1,24 @@
 use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_data_for_note,
-    compute_calc_trailer_refresh, contains_assignment_operator, cross_note_exports_for_autocomplete,
-    display_cols_for_prefix, extract_cross_note_completion_prefix,
-    extract_variable_completion_prefix, preload_cross_note_dep_value, tui_note_short_id,
+    compute_calc_trailer_refresh, contains_assignment_operator,
+    cross_note_exports_for_autocomplete, display_cols_for_prefix,
+    extract_cross_note_completion_prefix, extract_variable_completion_prefix,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
-    is_markdown_table_line, line_char_len, line_display_cols, table_cell_edit_start,
-    table_cell_info_at_char, table_cell_is_empty, table_cell_navigation_anchor, Db, FoldKind,
-    LineReminderGhost, ReminderUndoEntry, TerminalApp, UiMode, UndoAction,
-    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
-    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
+    is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
+    table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
+    table_cell_navigation_anchor, tui_note_short_id, Db, FoldKind, LineReminderGhost,
+    ReminderUndoEntry, TerminalApp, UiMode, UndoAction, VariableAutocompletePopupState,
+    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
+    CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
 };
-use app_core::calc::ExternVar;
 use crate::terminal::text_utils::{
     byte_index, cursor_render_char_col, remove_char_at, viewport_col_for_display_col,
 };
 use crate::terminal::{folding, input};
+use app_core::calc::ExternVar;
 use std::cmp::min;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};

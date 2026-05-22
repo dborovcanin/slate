@@ -118,9 +118,7 @@ impl AppCore {
             }
         }
 
-        let result = self
-            .calc_engine
-            .evaluate_note_context(lines, options);
+        let result = self.calc_engine.evaluate_note_context(lines, options);
 
         // Update the index with this note's latest exports and deps.
         if let Ok(mut index) = self.cross_note_var_index.lock() {

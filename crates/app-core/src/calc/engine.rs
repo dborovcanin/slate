@@ -610,15 +610,19 @@ impl CalcEngine {
                 let extern_map: FxHashMap<(String, String), f64> = options
                     .extern_vars
                     .iter()
-                    .map(|ev| ((ev.note_short_id.clone(), ev.var_normalized.clone()), ev.value))
+                    .map(|ev| {
+                        (
+                            (ev.note_short_id.clone(), ev.var_normalized.clone()),
+                            ev.value,
+                        )
+                    })
                     .collect();
                 let refs = scan_cross_note_refs(lines);
                 let mut preprocessed: Vec<String> = Vec::with_capacity(lines.len());
                 let mut unresolved_set: std::collections::HashSet<usize> =
                     std::collections::HashSet::new();
                 for (idx, line) in lines.iter().enumerate() {
-                    let (new_line, has_unresolved) =
-                        preprocess_line_cross_note(line, &extern_map);
+                    let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
                     if has_unresolved {
                         unresolved_set.insert(idx);
                     }
@@ -2825,10 +2829,11 @@ mod tests {
         ];
         let result = engine.evaluate_note_context(
             &lines,
-            NoteEvaluationOptions { variables_enabled: true,
+            NoteEvaluationOptions {
+                variables_enabled: true,
                 table_enabled: false,
                 eval_range: None,
-            ..Default::default()
+                ..Default::default()
             },
         );
         assert_eq!(result.line_results[4], None);
@@ -2976,10 +2981,11 @@ mod tests {
 
         let result = engine.evaluate_note_context(
             &lines,
-            NoteEvaluationOptions { variables_enabled: false,
+            NoteEvaluationOptions {
+                variables_enabled: false,
                 table_enabled: true,
                 eval_range: None,
-            ..Default::default()
+                ..Default::default()
             },
         );
 
@@ -3155,10 +3161,7 @@ mod tests {
     #[test]
     fn cross_note_ref_mixed_with_local_variable() {
         let engine = CalcEngine::new();
-        let lines = vec![
-            "x := 10".to_string(),
-            "[[ABCD1234]].budget + x".to_string(),
-        ];
+        let lines = vec!["x := 10".to_string(), "[[ABCD1234]].budget + x".to_string()];
         let options = NoteEvaluationOptions {
             extern_vars: vec![ExternVar {
                 note_short_id: "abcd1234".to_string(),

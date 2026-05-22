@@ -1606,7 +1606,10 @@ mod tests {
         let one = step_token(&VimState::default(), "char:d");
         let two = step_token(&one.state, "char:a");
         let bracket_close = step_token(&two.state, "char:]");
-        assert_eq!(bracket_close.actions[0].intent, VimIntent::DeleteAroundBracket);
+        assert_eq!(
+            bracket_close.actions[0].intent,
+            VimIntent::DeleteAroundBracket
+        );
 
         let one = step_token(&VimState::default(), "char:d");
         let two = step_token(&one.state, "char:a");
@@ -1641,7 +1644,10 @@ mod tests {
         let one = step_token(&VimState::default(), "char:d");
         let two = step_token(&one.state, "char:a");
         let underscore = step_token(&two.state, "char:_");
-        assert_eq!(underscore.actions[0].intent, VimIntent::DeleteAroundUnderscore);
+        assert_eq!(
+            underscore.actions[0].intent,
+            VimIntent::DeleteAroundUnderscore
+        );
     }
 
     #[test]
@@ -1735,7 +1741,10 @@ mod tests {
         let two = step_token(&one.state, "char:i");
         let underscore = step_token(&two.state, "char:_");
         assert_eq!(underscore.state.mode, VimMode::Insert);
-        assert_eq!(underscore.actions[0].intent, VimIntent::DeleteInsideUnderscore);
+        assert_eq!(
+            underscore.actions[0].intent,
+            VimIntent::DeleteInsideUnderscore
+        );
         assert_eq!(underscore.actions[1].intent, VimIntent::EnterInsert);
     }
 
@@ -1778,7 +1787,10 @@ mod tests {
         let two = step_token(&one.state, "char:a");
         let bracket_close = step_token(&two.state, "char:]");
         assert_eq!(bracket_close.state.mode, VimMode::Insert);
-        assert_eq!(bracket_close.actions[0].intent, VimIntent::DeleteAroundBracket);
+        assert_eq!(
+            bracket_close.actions[0].intent,
+            VimIntent::DeleteAroundBracket
+        );
         assert_eq!(bracket_close.actions[1].intent, VimIntent::EnterInsert);
 
         let one = step_token(&VimState::default(), "char:c");
@@ -1827,7 +1839,10 @@ mod tests {
         let two = step_token(&one.state, "char:a");
         let underscore = step_token(&two.state, "char:_");
         assert_eq!(underscore.state.mode, VimMode::Insert);
-        assert_eq!(underscore.actions[0].intent, VimIntent::DeleteAroundUnderscore);
+        assert_eq!(
+            underscore.actions[0].intent,
+            VimIntent::DeleteAroundUnderscore
+        );
         assert_eq!(underscore.actions[1].intent, VimIntent::EnterInsert);
     }
 
