@@ -1,10 +1,11 @@
 use super::{
     contrast_fg_for_bg, cursor_render_char_col, display_cols_for_prefix, draw_framed_surface,
     draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
-    formula_marker_token, goto, line_display_cols, min, pad_right, table_cell_info_at_char,
-    viewport_col_for_display_col, AnsiStyle, DatePickerAction, TableFormulaSegment, TerminalApp,
-    UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER, OVERFLOW_RIGHT_MARKER, TITLE_ROW,
-    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    formula_marker_token, goto, is_markdown_table_line, line_display_cols, min, pad_right,
+    reformat_table_row_for_display, table_block_bounds_for_line, table_cell_info_at_char,
+    table_display_col_widths, viewport_col_for_display_col, AnsiStyle, DatePickerAction,
+    TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
+    OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::render;
 use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines};
@@ -259,6 +260,35 @@ impl TerminalApp {
             self.table_formula_segment_cache.remove(evict_key.as_str());
         }
         segments
+    }
+
+    /// Returns per-column visible display widths for the table block containing
+    /// `line_idx`. Results are cached by `(block_start, block_hash)`.
+    fn table_display_col_widths_for_line(&mut self, line_idx: usize) -> Vec<usize> {
+        let Some((block_start, block_end)) =
+            table_block_bounds_for_line(&self.lines, line_idx)
+        else {
+            return Vec::new();
+        };
+        let block_lines = &self.lines[block_start..=block_end];
+        // Hash the block content for cache validation.
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        block_start.hash(&mut hasher);
+        for l in block_lines {
+            l.hash(&mut hasher);
+        }
+        let block_hash = hasher.finish();
+        let key = (block_start, block_hash);
+        if let Some(cached) = self.table_display_col_width_cache.get(&key) {
+            return cached.clone();
+        }
+        let widths = table_display_col_widths(&self.lines[block_start..=block_end].to_vec());
+        self.table_display_col_width_cache.insert(key, widths.clone());
+        // Evict any stale entries for this block_start (different block content).
+        self.table_display_col_width_cache
+            .retain(|k, _| k.0 != block_start || k.1 == block_hash);
+        widths
     }
 
     fn render_wiki_link_display_line(&mut self, line_text: &str) -> (String, Vec<(usize, usize)>) {
@@ -1196,6 +1226,35 @@ impl TerminalApp {
                             line_cursor_col = Some(mapped_col);
                             cursor_line_override =
                                 Some((rendered_line.as_ref().to_string(), mapped_col));
+                        }
+                    }
+                }
+
+                // Table display reflow: collapse inline markers per cell and
+                // align columns to visible widths. Skipped for formula rows
+                // (already transformed above) and fold placeholders.
+                if !is_fold_placeholder
+                    && formula_segments.is_empty()
+                    && is_markdown_table_line(rendered_line.as_ref())
+                {
+                    let cursor = if is_cursor_line && cursor_line_override.is_none() {
+                        Some(line_cursor_col.unwrap_or(self.cursor_col))
+                    } else {
+                        None
+                    };
+                    let col_widths = self.table_display_col_widths_for_line(line_idx);
+                    if !col_widths.is_empty() {
+                        let (display_line, mapped_col) = reformat_table_row_for_display(
+                            rendered_line.as_ref(),
+                            &col_widths,
+                            cursor,
+                        );
+                        rendered_line = Cow::Owned(display_line);
+                        if is_cursor_line && cursor_line_override.is_none() {
+                            let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
+                            line_cursor_col = Some(mc);
+                            cursor_line_override =
+                                Some((rendered_line.as_ref().to_string(), mc));
                         }
                     }
                 }

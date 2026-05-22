@@ -1,3 +1,4 @@
+use crate::terminal::markdown_view::collapse_inline_markers;
 use crate::terminal::text_utils::byte_index;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -198,4 +199,294 @@ pub(super) fn should_mask_formula_cell(
 
 pub(super) fn format_formula_display_value(raw: &str) -> String {
     crate::editor_core::calc_plan::format_formula_display_value(raw)
+}
+
+// ── Table display reflow ──────────────────────────────────────────────────────
+//
+// The raw markdown table is stored with column widths based on raw char counts
+// (including inline marker characters like backticks). In the terminal display,
+// inline markers are collapsed (backticks hidden, bold/italic applied). To keep
+// columns aligned after collapsing, we recompute column widths from visible
+// content and re-render each row with the corrected widths.
+
+/// Returns the visible display width of a trimmed cell string after collapsing
+/// inline markdown markers (backticks, bold, italic, etc.).
+fn cell_visible_width(trimmed_cell: &str) -> usize {
+    let (collapsed, _) = collapse_inline_markers(trimmed_cell, None);
+    // Reuse the same <br>-aware width logic that the raw formatter uses.
+    crate::editor_core::table::table_cell_display_width(&collapsed)
+}
+
+/// Returns the line bounds `(block_start, block_end)` for the table block
+/// that contains `line_idx`.
+pub(super) fn table_block_bounds_for_line(
+    lines: &[String],
+    line_idx: usize,
+) -> Option<(usize, usize)> {
+    use crate::editor_core::table::is_table_line;
+    if !lines.get(line_idx).is_some_and(|l| is_table_line(l)) {
+        return None;
+    }
+    let mut start = line_idx;
+    while start > 0 && lines.get(start - 1).is_some_and(|l| is_table_line(l)) {
+        start -= 1;
+    }
+    let mut end = line_idx;
+    while lines.get(end + 1).is_some_and(|l| is_table_line(l)) {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+/// Computes per-column visible display widths for a table block.
+///
+/// Separator rows are skipped for width computation (they don't carry data
+/// content). Each non-separator cell contributes its visible width (after
+/// inline marker collapsing). Columns are at least 3 wide to accommodate `---`.
+pub(super) fn table_display_col_widths(block_lines: &[String]) -> Vec<usize> {
+    use crate::editor_core::table::{is_delimiter_row, split_table_cells};
+    let mut col_widths: Vec<usize> = Vec::new();
+    for line in block_lines {
+        let cells = split_table_cells(line);
+        if cells.is_empty() || is_delimiter_row(&cells) {
+            continue;
+        }
+        for (i, cell) in cells.iter().enumerate() {
+            let w = cell_visible_width(cell).max(1);
+            if i >= col_widths.len() {
+                col_widths.resize(i + 1, 3);
+            }
+            col_widths[i] = col_widths[i].max(w).max(3);
+        }
+    }
+    col_widths
+}
+
+/// Re-renders a table row for display, collapsing inline markers in each cell
+/// and padding cells to `col_widths`.
+///
+/// For the cursor line, pass `cursor_col` (raw char position in `line`); the
+/// cell containing the cursor reveals its markers the same way regular text
+/// does. For non-cursor lines pass `None`.
+///
+/// Returns `(display_line, mapped_cursor_col)`.
+pub(super) fn reformat_table_row_for_display(
+    line: &str,
+    col_widths: &[usize],
+    cursor_col: Option<usize>,
+) -> (String, Option<usize>) {
+    use crate::editor_core::table::{
+        is_delimiter_row, is_table_continuation_line, normalize_delimiter_cell_for_width,
+        split_table_cells, table_pipe_positions,
+    };
+
+    // Work on the trimmed portion so pipe positions are predictable.
+    let lead_bytes = line.len() - line.trim_start().len();
+    let lead_chars = line[..lead_bytes].chars().count();
+    let trimmed = &line[lead_bytes..];
+
+    let pipes = table_pipe_positions(trimmed);
+    if pipes.len() < 2 {
+        return (line.to_string(), cursor_col);
+    }
+
+    let is_cont = is_table_continuation_line(trimmed);
+    let cells = split_table_cells(trimmed);
+    let is_sep = is_delimiter_row(&cells);
+
+    // Map cursor byte position into `trimmed`.
+    let cursor_byte_in_trimmed: Option<usize> = cursor_col.map(|col| {
+        let col_in_trimmed = col.saturating_sub(lead_chars);
+        byte_index(trimmed, col_in_trimmed)
+    });
+
+    // Find which cell (pipe window index) the cursor falls in.
+    let cursor_cell_idx: Option<usize> = cursor_byte_in_trimmed.and_then(|cb| {
+        pipes
+            .windows(2)
+            .position(|w| cb > w[0] && cb <= w[1])
+    });
+
+    let mut out = String::with_capacity(line.len() + 16);
+    let mut mapped_cursor: Option<usize> = None;
+    let mut out_chars = 0usize;
+
+    // Preserve any leading whitespace from the original line.
+    out.push_str(&line[..lead_bytes]);
+    out_chars += lead_chars;
+
+    // Track output char positions of each opening pipe (for cursor-at-pipe mapping).
+    let mut out_pipe_positions: Vec<usize> = Vec::with_capacity(pipes.len());
+
+    for (ci, window) in pipes.windows(2).enumerate() {
+        let left_pipe_byte = window[0];
+        let right_pipe_byte = window[1];
+
+        // Opening pipe (continuation rows use `|>` for the first column).
+        out_pipe_positions.push(out_chars);
+        if ci == 0 && is_cont {
+            out.push_str("|>");
+            out_chars += 2;
+        } else {
+            out.push('|');
+            out_chars += 1;
+        }
+        out.push(' ');
+        out_chars += 1;
+
+        let col_w = col_widths.get(ci).copied().unwrap_or(3).max(1);
+
+        if is_sep {
+            // Render the delimiter cell (preserves `:---`, `---:`, `:---:`).
+            let raw_cell = cells.get(ci).map(|s| s.as_str()).unwrap_or("---");
+            let dashes = normalize_delimiter_cell_for_width(raw_cell, col_w);
+            out_chars += dashes.chars().count();
+            out.push_str(&dashes);
+        } else {
+            let cell_content = cells.get(ci).map(|s| s.as_str()).unwrap_or("");
+
+            if cursor_cell_idx == Some(ci) {
+                // Cursor cell: collapse with cursor-aware marker revealing.
+                let cb = cursor_byte_in_trimmed.unwrap_or(left_pipe_byte + 1);
+                // Byte offset of the trimmed cell content start within `trimmed`.
+                let raw_in_trimmed = &trimmed[left_pipe_byte + 1..right_pipe_byte];
+                let trim_lead = raw_in_trimmed.len() - raw_in_trimmed.trim_start().len();
+                let content_start_byte = left_pipe_byte + 1 + trim_lead;
+                let rel_byte = cb.saturating_sub(content_start_byte);
+                let rel_char = cell_content[..rel_byte.min(cell_content.len())]
+                    .chars()
+                    .count();
+
+                let (collapsed, mc) = collapse_inline_markers(cell_content, Some(rel_char));
+                let cell_w = collapsed.chars().count();
+                if let Some(rel) = mc {
+                    mapped_cursor = Some(out_chars + rel);
+                }
+                out.push_str(&collapsed);
+                out_chars += cell_w;
+                let pad = col_w.saturating_sub(cell_w);
+                for _ in 0..pad {
+                    out.push(' ');
+                    out_chars += 1;
+                }
+            } else {
+                // Non-cursor cell: collapse all markers.
+                let (collapsed, _) = collapse_inline_markers(cell_content, None);
+                let cell_w = collapsed.chars().count();
+                out.push_str(&collapsed);
+                out_chars += cell_w;
+                let pad = col_w.saturating_sub(cell_w);
+                for _ in 0..pad {
+                    out.push(' ');
+                    out_chars += 1;
+                }
+            }
+        }
+
+        out.push(' ');
+        out_chars += 1;
+    }
+
+    // Trailing pipe.
+    out_pipe_positions.push(out_chars);
+    out.push('|');
+
+    // If cursor wasn't mapped (cursor is at a pipe or leading space), find the
+    // nearest pipe position in the output.
+    if cursor_col.is_some() && mapped_cursor.is_none() {
+        let cb = cursor_byte_in_trimmed.unwrap_or(0);
+        // Find the source pipe index closest to the cursor byte.
+        let src_pipe_idx = pipes
+            .iter()
+            .position(|&p| p >= cb)
+            .unwrap_or(pipes.len().saturating_sub(1));
+        mapped_cursor = out_pipe_positions.get(src_pipe_idx).copied();
+    }
+
+    (out, mapped_cursor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn w(s: &[usize]) -> Vec<usize> {
+        s.to_vec()
+    }
+
+    #[test]
+    fn reformat_plain_row_pads_to_col_widths() {
+        let line = "| a | bc |".to_string();
+        let (out, cur) = reformat_table_row_for_display(&line, &w(&[5, 5]), None);
+        assert_eq!(out, "| a     | bc    |");
+        assert_eq!(cur, None);
+    }
+
+    #[test]
+    fn reformat_strips_backtick_markers_in_non_cursor_cell() {
+        let line = "| `code` | plain |".to_string();
+        let (out, cur) = reformat_table_row_for_display(&line, &w(&[4, 5]), None);
+        assert_eq!(out, "| code | plain |");
+        assert_eq!(cur, None);
+    }
+
+    #[test]
+    fn reformat_cursor_in_cell_reveals_markers() {
+        // cursor at char 3 (inside `code`)
+        let line = "| `code` | plain |".to_string();
+        let (out, mc) = reformat_table_row_for_display(&line, &w(&[6, 5]), Some(3));
+        assert!(out.contains("`code`"), "markers should be visible in cursor cell");
+        assert!(mc.is_some());
+    }
+
+    #[test]
+    fn reformat_delimiter_row_preserves_alignment_markers() {
+        let line = "| :--- | ---: |".to_string();
+        let (out, _) = reformat_table_row_for_display(&line, &w(&[4, 4]), None);
+        assert!(out.contains(":---"), "left-align marker preserved");
+        assert!(out.contains("---:"), "right-align marker preserved");
+    }
+
+    #[test]
+    fn table_display_col_widths_skips_delimiter_rows() {
+        let block = vec![
+            "| Header | Long header |".to_string(),
+            "| --- | --- |".to_string(),
+            "| a | b |".to_string(),
+        ];
+        let widths = table_display_col_widths(&block);
+        assert_eq!(widths[0], 6); // "Header"
+        assert_eq!(widths[1], 11); // "Long header"
+    }
+
+    #[test]
+    fn table_display_col_widths_collapses_inline_markers_for_width() {
+        let block = vec![
+            "| `code` | plain |".to_string(),
+            "| --- | --- |".to_string(),
+            "| b | c |".to_string(),
+        ];
+        let widths = table_display_col_widths(&block);
+        // `code` collapses to "code" (4 chars), not 6 raw chars
+        assert_eq!(widths[0], 4);
+    }
+
+    #[test]
+    fn table_block_bounds_finds_contiguous_lines() {
+        let lines: Vec<String> = vec![
+            "text".into(),
+            "| a | b |".into(),
+            "| --- | --- |".into(),
+            "| c | d |".into(),
+            "more text".into(),
+        ];
+        let bounds = table_block_bounds_for_line(&lines, 2);
+        assert_eq!(bounds, Some((1, 3)));
+    }
+
+    #[test]
+    fn table_block_bounds_returns_none_for_non_table_line() {
+        let lines: Vec<String> = vec!["plain text".into()];
+        assert_eq!(table_block_bounds_for_line(&lines, 0), None);
+    }
 }

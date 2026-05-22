@@ -540,12 +540,15 @@ fn module_commands_update_and_persist_note_modules() {
     assert!(app.variable_autocomplete_popup.visible);
 
     app.execute_terminal_command(&db, "module status");
-    assert_eq!(app.status, "modules math=on table=on variables=on style=on");
+    assert_eq!(
+        app.status,
+        "modules math=on table=on variables=on style=on cross_note=on"
+    );
 
     app.execute_terminal_command(&db, "modules variables off");
     assert_eq!(
         app.status,
-        "modules math=on table=on variables=off style=on"
+        "modules math=on table=on variables=off style=on cross_note=on"
     );
     assert!(!app.active_note.modules.variables);
     assert!(!app.variable_autocomplete_popup.visible);
@@ -558,7 +561,10 @@ fn module_commands_update_and_persist_note_modules() {
     assert!(!persisted.modules.variables);
 
     app.execute_terminal_command(&db, "module variables toggle");
-    assert_eq!(app.status, "modules math=on table=on variables=on style=on");
+    assert_eq!(
+        app.status,
+        "modules math=on table=on variables=on style=on cross_note=on"
+    );
     assert!(app.active_note.modules.variables);
 
     drop(app);
@@ -1434,7 +1440,7 @@ fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_op
             .iter()
             .map(|entry| entry.token.as_str())
             .collect::<Vec<_>>(),
-        vec!["math", "status", "style", "table", "variables"]
+        vec!["cross_note", "math", "status", "style", "table", "variables"]
     );
     assert_eq!(app.command_completion.selected_index, 0);
 
@@ -1450,7 +1456,7 @@ fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_op
 
     run_keys(&mut app, &db, &[Key::Enter]);
     assert!(!app.command_completion.visible);
-    assert_eq!(app.command_input, "module variables ");
+    assert_eq!(app.command_input, "module table ");
 
     run_keys(&mut app, &db, &[Key::Tab]);
     assert!(app.command_completion.visible);
@@ -1466,12 +1472,12 @@ fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_op
 
     run_keys(&mut app, &db, &[Key::Tab]);
     assert!(app.command_completion.visible);
-    assert_eq!(app.command_input, "module variables ");
+    assert_eq!(app.command_input, "module table ");
     assert_eq!(app.command_completion.selected_index, 1);
 
     run_keys(&mut app, &db, &[Key::Enter]);
     assert!(!app.command_completion.visible);
-    assert_eq!(app.command_input, "module variables on");
+    assert_eq!(app.command_input, "module table on");
 
     drop(app);
     drop(db);
@@ -1581,7 +1587,7 @@ fn command_bar_enter_accepts_picker_selection_before_execute() {
         ],
     );
     assert_eq!(app.mode, UiMode::CommandBar);
-    assert_eq!(app.command_input, "module math ");
+    assert_eq!(app.command_input, "module cross_note ");
     assert!(!app.command_completion.visible);
 
     drop(app);
@@ -1635,7 +1641,7 @@ fn command_bar_backtab_cycles_completion_backward() {
     assert_eq!(app.command_completion.selected_index, 0);
 
     run_keys(&mut app, &db, &[Key::BackTab]);
-    assert_eq!(app.command_completion.selected_index, 4);
+    assert_eq!(app.command_completion.selected_index, 5);
 
     drop(app);
     drop(db);

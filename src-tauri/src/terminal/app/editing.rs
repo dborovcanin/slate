@@ -2421,10 +2421,12 @@ impl TerminalApp {
             if needs_preload {
                 let bg_short_id = short_id.clone();
                 let bg_var_index = std::sync::Arc::clone(&self.cross_note_var_index);
+                let bg_condvar = std::sync::Arc::clone(&self.cross_note_eval_condvar);
                 let bg_db = self.cross_note_db.clone();
                 std::thread::spawn(move || {
                     let engine = app_core::calc::CalcEngine::new();
                     preload_cross_note_dep_value(&bg_short_id, &bg_var_index, &engine, &bg_db);
+                    bg_condvar.notify_all();
                 });
             }
             let suggestions: Vec<String> = exports
@@ -3584,27 +3586,17 @@ impl TerminalApp {
             }
         };
 
-        // Wait up to ~200 ms for in-flight evals to complete before the recompute.
-        // This prevents the blocking DB+eval work from running twice (once here, once
-        // on the bg thread) while still giving the recompute correct dep values.
+        // Park the event-loop thread until all in-flight background evals signal
+        // completion (or until the 200 ms deadline). The background thread calls
+        // cross_note_eval_condvar.notify_all() after mark_full_eval_attempted fires,
+        // so we wake up as soon as the data is ready instead of burning fixed intervals.
         if !in_flight.is_empty() {
-            const POLL_INTERVAL_MS: u64 = 20;
-            const MAX_POLLS: u32 = 10; // 10 × 20 ms = 200 ms cap
-            for _ in 0..MAX_POLLS {
-                let all_done = self
-                    .cross_note_var_index
-                    .lock()
-                    .ok()
-                    .map(|index| {
-                        in_flight
-                            .iter()
-                            .all(|sid| index.was_full_eval_attempted(sid))
-                    })
-                    .unwrap_or(true);
-                if all_done {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
+            if let Ok(lock) = self.cross_note_var_index.lock() {
+                let _ = self.cross_note_eval_condvar.wait_timeout_while(
+                    lock,
+                    Duration::from_millis(200),
+                    |index| in_flight.iter().any(|sid| !index.was_full_eval_attempted(sid)),
+                );
             }
         }
 

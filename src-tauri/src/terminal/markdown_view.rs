@@ -346,6 +346,65 @@ pub fn collapse_markdown_line_for_cursor_with_formatting_boundary_exit(
     (out, mapped_cursor.min(out_len))
 }
 
+/// Collapses inline markdown markers in `text`, returning the visible display string.
+///
+/// If `cursor` is provided, markers adjacent to the cursor are revealed (same semantics
+/// as the cursor-line collapsing for regular text). Used to compute visible cell content
+/// for table column alignment and display.
+///
+/// Returns `(collapsed_text, mapped_cursor_col)`.
+pub fn collapse_inline_markers(text: &str, cursor: Option<usize>) -> (String, Option<usize>) {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if len == 0 {
+        return (String::new(), cursor.map(|_| 0));
+    }
+    if !text
+        .chars()
+        .any(|ch| matches!(ch, '#' | '>' | '`' | '[' | '*' | '_' | '~'))
+    {
+        return (text.to_string(), cursor.map(|c| c.min(len)));
+    }
+    let clamped = cursor.map(|c| c.min(len));
+    let hidden_ranges = hidden_ranges_for_markdown_line(text, clamped);
+    if hidden_ranges.is_empty() {
+        return (text.to_string(), clamped);
+    }
+    let mut mapped = clamped;
+    if let Some(ref mut mc) = mapped {
+        for (from, to) in &hidden_ranges {
+            if *from >= *mc {
+                break;
+            }
+            let removed = if *to <= *mc {
+                to - from
+            } else {
+                mc.saturating_sub(*from)
+            };
+            *mc = mc.saturating_sub(removed);
+        }
+    }
+    let mut out = String::with_capacity(len);
+    let mut hidden_iter = hidden_ranges.iter().peekable();
+    for (idx, ch) in chars.iter().enumerate() {
+        while let Some((_, end)) = hidden_iter.peek() {
+            if idx >= *end {
+                hidden_iter.next();
+            } else {
+                break;
+            }
+        }
+        if let Some((start, end)) = hidden_iter.peek() {
+            if idx >= *start && idx < *end {
+                continue;
+            }
+        }
+        out.push(*ch);
+    }
+    let out_len = out.chars().count();
+    (out, mapped.map(|mc| mc.min(out_len)))
+}
+
 pub fn formatting_component_right_boundary_at(text: &str, cursor_col: usize) -> bool {
     let tokens = inline_tokens_for_display(text);
     if tokens.is_empty() {
@@ -376,7 +435,7 @@ mod tests {
     use crate::editor_core::markdown_tokens::{self, InlineTokenType};
 
     use super::{
-        collapse_markdown_line_for_cursor,
+        collapse_inline_markers, collapse_markdown_line_for_cursor,
         collapse_markdown_line_for_cursor_with_formatting_boundary_exit,
         formatting_component_right_boundary_at, hidden_ranges_for_markdown_line,
         wiki_link_hidden_token_ranges,
@@ -507,5 +566,35 @@ mod tests {
         let line = "![diagram](./assets/plan.png) tail";
         let hidden = hidden_ranges_for_markdown_line(line, Some(0));
         assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn collapse_inline_markers_no_cursor_strips_all_markers() {
+        let (text, cur) = collapse_inline_markers("`code` and **bold**", None);
+        assert_eq!(text, "code and bold");
+        assert_eq!(cur, None);
+    }
+
+    #[test]
+    fn collapse_inline_markers_with_cursor_reveals_markers_when_inside_span() {
+        // cursor at char 2 (inside `code`) keeps the whole span visible
+        let (text, cur) = collapse_inline_markers("`code`", Some(2));
+        assert_eq!(text, "`code`");
+        assert_eq!(cur, Some(2));
+    }
+
+    #[test]
+    fn collapse_inline_markers_with_cursor_hides_markers_when_outside_span() {
+        // cursor at char 8 (in "tail"), code span markers are hidden
+        let (text, cur) = collapse_inline_markers("`code` tail", Some(8));
+        assert_eq!(text, "code tail");
+        assert_eq!(cur, Some(6));
+    }
+
+    #[test]
+    fn collapse_inline_markers_no_markers_is_identity() {
+        let (text, cur) = collapse_inline_markers("plain text", None);
+        assert_eq!(text, "plain text");
+        assert_eq!(cur, None);
     }
 }

@@ -260,12 +260,10 @@ pub async fn get_cross_note_vars(
         return Ok(core.cross_note_exports_for_autocomplete(&short_id));
     }
 
-    // Slow path: for small dep notes run a full CalcEngine eval so that variable
-    // *values* are indexed before the user presses Enter (no extra DB load at that
-    // point). For large notes the eval cost would make the dropdown visibly slow,
-    // so fall back to a cheap name-scan; the full eval will happen lazily inside
-    // evaluate_note_context_delta when the user accepts a suggestion.
-    const FULL_EVAL_LINE_LIMIT: usize = 400;
+    // Slow path: run a full CalcEngine eval so that variable *values* are indexed
+    // before the user presses Enter (no extra DB load at that point). This runs
+    // inside spawn_blocking so the UI thread is not stalled. Large dep notes pay
+    // the eval cost once per session; subsequent calls hit the fast path above.
     let note_sources = core.note_sources().clone();
     let var_index = core.cross_note_var_index_arc();
     let entries = tauri::async_runtime::spawn_blocking(move || {
@@ -280,35 +278,22 @@ pub async fn get_cross_note_vars(
             }
         };
         let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
-        if lines.len() <= FULL_EVAL_LINE_LIMIT {
-            let result = CalcEngine::new().evaluate_note_context(
-                &lines,
-                NoteEvaluationOptions {
-                    variables_enabled: true,
-                    table_enabled: false,
-                    ..Default::default()
-                },
-            );
-            if let Ok(mut index) = var_index.lock() {
-                index.register_note(&note.id, &short_id);
-                index.update_exports(&short_id, &result.variables, &result.variable_values);
-                index.update_deps(&note.id, &result.cross_note_refs);
-                index.mark_name_scan_attempted(&short_id);
-                index.mark_full_eval_attempted(&short_id);
-            }
-            result.variables
-        } else {
-            // Large note: name-scan only. mark_full_eval_attempted is intentionally
-            // NOT set so that evaluate_note_context_delta will do the full eval when
-            // the user accepts a suggestion and triggers a recompute.
-            let entries = app_core::calc::scan_variable_assignments(&lines);
-            if let Ok(mut index) = var_index.lock() {
-                index.register_note(&note.id, &short_id);
-                index.update_entries_only(&short_id, &entries);
-                index.mark_name_scan_attempted(&short_id);
-            }
-            entries
+        let result = CalcEngine::new().evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                variables_enabled: true,
+                table_enabled: false,
+                ..Default::default()
+            },
+        );
+        if let Ok(mut index) = var_index.lock() {
+            index.register_note(&note.id, &short_id);
+            index.update_exports(&short_id, &result.variables, &result.variable_values);
+            index.update_deps(&note.id, &result.cross_note_refs);
+            index.mark_name_scan_attempted(&short_id);
+            index.mark_full_eval_attempted(&short_id);
         }
+        result.variables
     })
     .await
     .unwrap_or_default();

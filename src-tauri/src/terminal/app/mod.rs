@@ -24,7 +24,7 @@ use std::cmp::min;
 use std::collections::VecDeque;
 use std::io;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
@@ -475,6 +475,9 @@ struct TerminalApp {
     command_selection_linewise: bool,
     // Shared cross-note variable index (also held by AppCore / Tauri commands).
     cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>,
+    // Notified by background dep-eval threads when mark_full_eval_attempted fires.
+    // Allows preload_cross_note_deps to park instead of spin-sleep.
+    cross_note_eval_condvar: Arc<Condvar>,
     // DB handle for on-demand cross-note export loading (cheap Arc clone).
     cross_note_db: Db,
     // Calc ghost cache
@@ -514,6 +517,8 @@ struct TerminalApp {
     table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
     table_formula_segment_cache_order: VecDeque<String>,
     table_format_cache: crate::editor_core::table::TableFormatCache,
+    /// Maps (block_start_line, block_hash) → per-column display widths.
+    table_display_col_width_cache: FxHashMap<(usize, u64), Vec<usize>>,
     render_palette: render::RenderPalette,
     render_plain_text_file: bool,
     render_file_language: Option<String>,
@@ -911,6 +916,7 @@ impl TerminalApp {
             command_selection: None,
             command_selection_linewise: false,
             cross_note_var_index,
+            cross_note_eval_condvar: Arc::new(Condvar::new()),
             cross_note_db: db.clone(),
             calc: CalcCache {
                 engine: calc_engine,
@@ -960,6 +966,7 @@ impl TerminalApp {
             table_formula_segment_cache: FxHashMap::default(),
             table_formula_segment_cache_order: VecDeque::new(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
+            table_display_col_width_cache: FxHashMap::default(),
             render_palette,
             render_plain_text_file,
             render_file_language,

@@ -443,6 +443,9 @@ mod tests {
                 "module style on",
                 "module style off",
                 "module style toggle",
+                "module cross_note on",
+                "module cross_note off",
+                "module cross_note toggle",
                 "collection choose",
                 "collection clear",
                 "collection create",
@@ -474,7 +477,8 @@ mod tests {
                 "export pdf",
                 "export md",
                 "export txt",
-                "backup",
+                "backup export",
+                "backup load",
             ]
         );
 
