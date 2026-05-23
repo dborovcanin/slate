@@ -3,9 +3,12 @@ import type { Note, NoteAccessMode, NoteModules, NoteSummary } from "./api";
 export type EventType = "note-changed" | "notes-updated";
 type Listener = (event: EventType) => void;
 
-const TITLE_PREVIEW_LIMIT = 60;
+export const TITLE_PREVIEW_LIMIT = 60;
 
-function normalizeTitle(line: string): string {
+// Single source of truth for note-title preview rendering on the JS side.
+// Mirrors `note_sources::derive_note_title_from_body` (Rust) by char-trim +
+// 60-char limit + "..." suffix.
+export function normalizeTitle(line: string): string {
   const trimmed = line.trim();
   if (trimmed.length === 0) return "Untitled";
   return trimmed.length > TITLE_PREVIEW_LIMIT

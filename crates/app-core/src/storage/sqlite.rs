@@ -17,6 +17,7 @@ use super::models::{
     Collection, Note, NoteAccessMode, NoteModules, NoteSearchResult, NoteSummary, Reminder,
 };
 use super::note_access::{NoteAccessGrant, NoteAccessService};
+use crate::note_sources::derive_note_title_from_body;
 
 const DEFAULT_NOTE_MODULES_JSON: &str =
     r#"{"math":true,"table":true,"variables":true,"style":true}"#;
@@ -25,7 +26,6 @@ const ENCRYPTION_SALT_LEN: usize = 16;
 const ENCRYPTION_NONCE_LEN: usize = 12;
 const PASSWORD_HASH_LEN: usize = 32;
 const PBKDF2_ITERATIONS: u32 = 200_000;
-const NOTE_TITLE_MAX_CHARS: usize = 60;
 const SEARCH_QUERY_MAX_TERMS: usize = 8;
 const SEARCH_LIMIT_MAX: usize = 100;
 // Body prefix fetched per search result for per-line match expansion. Caps the
@@ -82,11 +82,14 @@ struct SqlitePoolGuard<'a> {
 
 impl SqlitePool {
     fn configure_connection(conn: &Connection) -> Result<(), String> {
+        // cache_size in negative form = KB of page cache per connection. 8 MB
+        // (-8192) is generous for a desktop notes app: trivial RAM cost and
+        // measurably faster FTS + metadata listings on large databases.
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA synchronous=NORMAL;
              PRAGMA foreign_keys=ON;
-             PRAGMA cache_size = -1024;
+             PRAGMA cache_size = -8192;
              PRAGMA busy_timeout = 5000;",
         )
         .map_err(|e| format!("Failed to set pragmas: {e}"))
@@ -2728,24 +2731,6 @@ fn map_unique_constraint_error(error: rusqlite::Error) -> String {
     text
 }
 
-fn derive_note_title_from_body(body: &str) -> String {
-    for line in body.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let mut out = String::new();
-        for (idx, ch) in trimmed.chars().enumerate() {
-            if idx >= NOTE_TITLE_MAX_CHARS {
-                out.push_str("...");
-                return out;
-            }
-            out.push(ch);
-        }
-        return out;
-    }
-    "Untitled".to_string()
-}
 
 fn is_note_protected(mode: NoteAccessMode) -> bool {
     !matches!(mode, NoteAccessMode::None)
@@ -3014,13 +2999,6 @@ fn build_fts_query(raw: &str) -> String {
     build_fts_query_from_terms(&parse_search_terms(raw))
 }
 
-fn line_matches_term(line: &str, term: &SearchTerm) -> bool {
-    match term {
-        SearchTerm::Phrase(phrase) => line.contains(&phrase.to_lowercase()),
-        SearchTerm::Prefix(prefix) => line.contains(&prefix.to_lowercase()),
-    }
-}
-
 // Raw SQL row before per-line expansion.
 struct RawSearchRow {
     id: String,
@@ -3037,12 +3015,20 @@ struct RawSearchRow {
 fn expand_search_row(row: RawSearchRow, terms: &[SearchTerm]) -> Vec<NoteSearchResult> {
     let mut results = Vec::new();
     if !terms.is_empty() {
+        // Lowercase each term once instead of allocating per-line per-term.
+        let lowered_terms: Vec<String> = terms
+            .iter()
+            .map(|term| match term {
+                SearchTerm::Phrase(phrase) => phrase.to_lowercase(),
+                SearchTerm::Prefix(prefix) => prefix.to_lowercase(),
+            })
+            .collect();
         for (idx, line) in row.body.lines().enumerate() {
             if results.len() >= SEARCH_MAX_RESULTS_PER_NOTE {
                 break;
             }
             let lower = line.to_lowercase();
-            if terms.iter().all(|term| line_matches_term(&lower, term)) {
+            if lowered_terms.iter().all(|needle| lower.contains(needle)) {
                 results.push(NoteSearchResult {
                     id: row.id.clone(),
                     title: row.title.clone(),
@@ -3978,6 +3964,16 @@ mod tests {
 
         db.save_note("n1", "restore me after rebuild")
             .expect("save note");
+
+        // Run one search against a healthy index so `ensure_search_index_checked`
+        // marks the one-shot auto-heal gate as done. Without this warm-up the
+        // next search would silently rebuild the index via
+        // `check_and_heal_search_index` and the empty-after-clear assertion
+        // below would never hold. Auto-heal coverage lives in a separate test
+        // (`search_notes_content_seeds_index_for_pre_fts_databases`).
+        let _ = db
+            .search_notes_content("warmup", 10)
+            .expect("warmup search closes the auto-heal gate");
 
         // Manually corrupt the index
         {

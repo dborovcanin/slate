@@ -281,12 +281,12 @@ export async function executeCommand(
       return `export failed: ${message}`;
     }
   }
-  if (hostPlan?.kind === "backup") {
+  if (hostPlan?.kind === "backup_export") {
     const path = hostPlan.path && hostPlan.path.trim().length > 0
       ? hostPlan.path.trim()
       : null;
     if (!path) {
-      return "usage: backup <path.zip>";
+      return "usage: backup export <path.zip>";
     }
     if (!options.onBackupCommand) {
       return "backup unavailable";
@@ -306,6 +306,11 @@ export async function executeCommand(
             : String(error);
       return `backup failed: ${message}`;
     }
+  }
+  if (hostPlan?.kind === "backup_load") {
+    // Restoring from a backup is a TUI-only flow; the GUI doesn't ship a
+    // restart-into-restored-db path.
+    return "backup load is only available in terminal mode";
   }
   if (hostPlan?.kind === "collection") {
     if (!options.onCollectionCommand) {

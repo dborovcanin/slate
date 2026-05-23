@@ -8,7 +8,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { defaultKeymap, deleteGroupBackward, history, historyKeymap, cursorGroupLeft, cursorGroupRight } from "@codemirror/commands";
-import { state } from "../state";
+import { state, normalizeTitle } from "../state";
 import {
   saveNote,
   type NoteModules,
@@ -64,7 +64,6 @@ let lastSaveErrorMessage = "";
 let lastSaveErrorAt = 0;
 const SAVE_DEBOUNCE_MS = 500;
 const SAVE_ERROR_THROTTLE_MS = 1500;
-const TITLE_PREVIEW_LIMIT = 60;
 const LARGE_DOC_STATE_RESET_THRESHOLD = 200_000;
 const suppressEditorSyncAnnotation = Annotation.define<boolean>();
 const autosaveSnapshots = new AutosaveSnapshotTracker({
@@ -95,11 +94,9 @@ function reportSaveError(message: string) {
 
 function deriveTitleFromDoc(doc: Text): string {
   for (let i = 1; i <= doc.lines; i++) {
-    const line = doc.line(i).text.trim();
-    if (line.length === 0) continue;
-    return line.length > TITLE_PREVIEW_LIMIT
-      ? `${line.slice(0, TITLE_PREVIEW_LIMIT)}...`
-      : line;
+    const text = doc.line(i).text;
+    if (text.trim().length === 0) continue;
+    return normalizeTitle(text);
   }
   return "Untitled";
 }

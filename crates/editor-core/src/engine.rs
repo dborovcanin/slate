@@ -75,7 +75,7 @@ pub enum CommandDispatchKind {
     HostRemindToggle,
     HostWrite,
     HostExport,
-    HostBackup,
+    HostBackupExport,
     HostBackupLoad,
     HostModule,
     HostCollection,
@@ -122,7 +122,7 @@ pub enum HostCommandPlan {
         format: ExportFormat,
         path: Option<String>,
     },
-    Backup {
+    BackupExport {
         path: Option<String>,
     },
     BackupLoad {
@@ -185,7 +185,7 @@ impl EditorEngine {
                 HostCommandPlan::RemindToggle => CommandDispatchKind::HostRemindToggle,
                 HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
                 HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
-                HostCommandPlan::Backup { .. } => CommandDispatchKind::HostBackup,
+                HostCommandPlan::BackupExport { .. } => CommandDispatchKind::HostBackupExport,
                 HostCommandPlan::BackupLoad { .. } => CommandDispatchKind::HostBackupLoad,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
                 HostCommandPlan::Collection { .. } => CommandDispatchKind::HostCollection,
@@ -218,7 +218,9 @@ impl EditorEngine {
         }
         if let Some(parsed) = command_catalog::parse_backup_command(raw_input) {
             return match parsed.action {
-                BackupAction::Export => Some(HostCommandPlan::Backup { path: parsed.path }),
+                BackupAction::Export => {
+                    Some(HostCommandPlan::BackupExport { path: parsed.path })
+                }
                 BackupAction::Load => Some(HostCommandPlan::BackupLoad { path: parsed.path }),
             };
         }
@@ -277,7 +279,7 @@ impl EditorEngine {
             CommandId::ClipWatchStop => Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             }),
-            CommandId::Backup => Some(HostCommandPlan::Backup { path: None }),
+            CommandId::BackupExport => Some(HostCommandPlan::BackupExport { path: None }),
             CommandId::BackupLoad => Some(HostCommandPlan::BackupLoad { path: None }),
             CommandId::Write => Some(HostCommandPlan::Write {
                 quit: false,
@@ -513,8 +515,18 @@ mod tests {
             Some(CommandDispatchKind::HostExport)
         );
         assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "backup /tmp/slate.zip"),
-            Some(CommandDispatchKind::HostBackup)
+            EditorEngine::classify_command_dispatch(
+                CommandMode::Editor,
+                "backup export /tmp/slate.zip"
+            ),
+            Some(CommandDispatchKind::HostBackupExport)
+        );
+        assert_eq!(
+            EditorEngine::classify_command_dispatch(
+                CommandMode::Editor,
+                "backup load /tmp/slate.zip"
+            ),
+            Some(CommandDispatchKind::HostBackupLoad)
         );
         assert_eq!(
             EditorEngine::classify_command_dispatch(CommandMode::Editor, "module math on"),

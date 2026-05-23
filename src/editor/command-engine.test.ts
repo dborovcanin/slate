@@ -34,6 +34,9 @@ test("editor mode exposes only editing commands", async () => {
     "module style on",
     "module style off",
     "module style toggle",
+    "module cross_note on",
+    "module cross_note off",
+    "module cross_note toggle",
     "collection choose",
     "collection clear",
     "collection create",
@@ -65,7 +68,8 @@ test("editor mode exposes only editing commands", async () => {
     "export pdf",
     "export md",
     "export txt",
-    "backup",
+    "backup export",
+    "backup load",
   ]);
   assert.equal(values.includes("q"), false);
 });
@@ -142,10 +146,10 @@ test("export host command routes format/path and clipboard fallback", async () =
   assert.equal(pdfMissingPath, "usage: export pdf <path>");
 });
 
-test("backup host command routes path and requires a zip path", async () => {
+test("backup export host command routes path and requires a zip path", async () => {
   let called: { path: string | null } | null = null;
 
-  const message = await executeCommand({} as any, "backup notes /tmp/slate.zip", {
+  const message = await executeCommand({} as any, "backup export /tmp/slate.zip", {
     mode: "editor",
     onBackupCommand: async (options) => {
       called = options;
@@ -155,11 +159,19 @@ test("backup host command routes path and requires a zip path", async () => {
   assert.equal(message, "ok-backup");
   assert.deepEqual(called, { path: "/tmp/slate.zip" });
 
-  const missing = await executeCommand({} as any, "backup", {
+  const missing = await executeCommand({} as any, "backup export", {
     mode: "editor",
     onBackupCommand: async () => "should-not-run",
   });
-  assert.equal(missing, "usage: backup <path.zip>");
+  assert.equal(missing, "usage: backup export <path.zip>");
+});
+
+test("backup load is rejected in GUI command engine", async () => {
+  const message = await executeCommand({} as any, "backup load /tmp/slate.zip", {
+    mode: "editor",
+    onBackupCommand: async () => "should-not-run",
+  });
+  assert.equal(message, "backup load is only available in terminal mode");
 });
 
 test("collection host command routes choose/create/delete/update/purge/join/leave/clear", async () => {

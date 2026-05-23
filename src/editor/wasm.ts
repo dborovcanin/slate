@@ -511,7 +511,8 @@ export type CommandDispatchKind =
   | "host_remind_toggle"
   | "host_write"
   | "host_export"
-  | "host_backup"
+  | "host_backup_export"
+  | "host_backup_load"
   | "host_module"
   | "host_collection"
   | "host_fold"
@@ -528,7 +529,8 @@ export type HostCommandPlan =
   | { kind: "remind_toggle" }
   | { kind: "write"; quit: boolean; force: boolean }
   | { kind: "export"; format: "pdf" | "md" | "txt"; path?: string | null }
-  | { kind: "backup"; path?: string | null }
+  | { kind: "backup_export"; path?: string | null }
+  | { kind: "backup_load"; path?: string | null }
   | { kind: "module"; command: string }
   | {
     kind: "collection";
@@ -617,42 +619,69 @@ function batchUtf16ToUtf8(text: string, utf16Offsets: readonly number[]): number
   return results;
 }
 
-function utf8ToUtf16Offset(text: string, utf8Offset: number): number {
-  const target = Math.max(0, utf8Offset);
-  let bytes = 0;
-  let index = 0;
-  while (index < text.length) {
-    const cp = text.codePointAt(index);
-    if (cp === undefined) break;
-    const utf16Len = cp > 0xffff ? 2 : 1;
-    const utf8Len = cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
-    if (bytes + utf8Len > target) break;
-    bytes += utf8Len;
-    index += utf16Len;
-    if (bytes === target) return index;
+// Inverse of batchUtf16ToUtf8: convert multiple UTF-8 byte offsets to UTF-16
+// char offsets in a single O(max_offset) walk. Avoids N separate O(offset)
+// walks when an operation has many changes.
+function batchUtf8ToUtf16(text: string, utf8Offsets: readonly number[]): number[] {
+  const len = utf8Offsets.length;
+  if (len === 0) return [];
+  const results = new Array<number>(len).fill(0);
+  const sorted = utf8Offsets.map((o, i) => ({ o: Math.max(0, o), i }));
+  sorted.sort((a, b) => a.o - b.o);
+  let bytePos = 0;
+  let charPos = 0;
+  for (const { o, i } of sorted) {
+    while (charPos < text.length) {
+      const cp = text.codePointAt(charPos);
+      if (cp === undefined) break;
+      const utf8Len = cp <= 0x7f ? 1 : cp <= 0x7ff ? 2 : cp <= 0xffff ? 3 : 4;
+      if (bytePos + utf8Len > o) break;
+      bytePos += utf8Len;
+      charPos += cp > 0xffff ? 2 : 1;
+      if (bytePos === o) break;
+    }
+    results[i] = charPos;
   }
-  return index;
+  return results;
 }
 
 function normalizeOptionalOffset(value: number | null | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+// Build post-text from source + non-overlapping changes (UTF-16 coords) in
+// O(text + sum_inserts) — collect parts and join once instead of O(changes × text)
+// repeated slice+concat. CodeMirror guarantees non-overlapping changes; we
+// sort defensively in case the input order varies.
 function applyChangesToText(text: string, changes: EditOperation["changes"]): string {
-  const ordered = [...changes].sort((a, b) => b.from - a.from || b.to - a.to);
-  let next = text;
+  if (changes.length === 0) return text;
+  const ordered = [...changes].sort((a, b) => a.from - b.from);
+  const parts: string[] = [];
+  let cursor = 0;
   for (const change of ordered) {
-    const from = Math.max(0, Math.min(change.from, next.length));
-    const to = Math.max(from, Math.min(change.to, next.length));
-    next = next.slice(0, from) + change.insert + next.slice(to);
+    const from = Math.max(cursor, Math.min(change.from, text.length));
+    const to = Math.max(from, Math.min(change.to, text.length));
+    if (from > cursor) parts.push(text.slice(cursor, from));
+    if (change.insert.length > 0) parts.push(change.insert);
+    cursor = to;
   }
-  return next;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts.join("");
 }
 
 function mapOperationFromUtf8ToUtf16(sourceText: string, operation: EditOperation): EditOperation {
-  const convertedChanges = operation.changes.map((change) => ({
-    from: utf8ToUtf16Offset(sourceText, change.from),
-    to: utf8ToUtf16Offset(sourceText, change.to),
+  // Convert every change endpoint in a single walk over sourceText instead of
+  // one walk per endpoint. Order in `changeOffsets` is from/to interleaved so
+  // we can read back by `i * 2` / `i * 2 + 1` after the batch.
+  const changeOffsets: number[] = new Array(operation.changes.length * 2);
+  for (let i = 0; i < operation.changes.length; i += 1) {
+    changeOffsets[i * 2] = operation.changes[i]!.from;
+    changeOffsets[i * 2 + 1] = operation.changes[i]!.to;
+  }
+  const convertedOffsets = batchUtf8ToUtf16(sourceText, changeOffsets);
+  const convertedChanges = operation.changes.map((change, i) => ({
+    from: convertedOffsets[i * 2]!,
+    to: convertedOffsets[i * 2 + 1]!,
     insert: change.insert,
   }));
 
@@ -666,11 +695,16 @@ function mapOperationFromUtf8ToUtf16(sourceText: string, operation: EditOperatio
       (operation.selection as { head?: number | null }).head,
     );
     const postText = applyChangesToText(sourceText, convertedChanges);
+    const selectionOffsets: number[] =
+      rawHead !== undefined
+        ? [operation.selection.anchor, rawHead]
+        : [operation.selection.anchor];
+    const selectionUtf16 = batchUtf8ToUtf16(postText, selectionOffsets);
     const mappedSelection: NonNullable<EditOperation["selection"]> = {
-      anchor: utf8ToUtf16Offset(postText, operation.selection.anchor),
+      anchor: selectionUtf16[0]!,
     };
     if (rawHead !== undefined) {
-      mappedSelection.head = utf8ToUtf16Offset(postText, rawHead);
+      mappedSelection.head = selectionUtf16[1]!;
     }
     mapped.selection = mappedSelection;
   }
@@ -1028,7 +1062,8 @@ export function classifyCommandDispatchFromWasm(
     raw === "host_remind_toggle" ||
     raw === "host_write" ||
     raw === "host_export" ||
-    raw === "host_backup" ||
+    raw === "host_backup_export" ||
+    raw === "host_backup_load" ||
     raw === "host_module" ||
     raw === "host_collection" ||
     raw === "host_fold" ||

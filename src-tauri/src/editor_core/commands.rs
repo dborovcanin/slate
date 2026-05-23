@@ -340,7 +340,7 @@ pub fn execute_command(
         CommandId::ExportPdf | CommandId::ExportMd | CommandId::ExportTxt => {
             result_with_message("export command handled by host")
         }
-        CommandId::Backup | CommandId::BackupLoad => {
+        CommandId::BackupExport | CommandId::BackupLoad => {
             result_with_message("backup command handled by host")
         }
         CommandId::ChooseCollection

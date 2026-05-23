@@ -811,7 +811,13 @@ fn markdown_file_timestamps(path: &Path) -> Result<(String, String), String> {
     Ok((created_at, updated_at))
 }
 
-fn derive_note_title_from_body(body: &str) -> String {
+/// Derive a short display title from a note body. Picks the first non-empty
+/// line, trims it, and truncates to `NOTE_TITLE_MAX_CHARS` chars (appending
+/// "..." when truncation occurs). Returns "Untitled" for empty bodies.
+///
+/// This is the single source of truth for note titles in the workspace — the
+/// SQLite layer and the wasm bridge both delegate here.
+pub fn derive_note_title_from_body(body: &str) -> String {
     for line in body.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {

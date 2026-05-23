@@ -716,9 +716,11 @@ impl CalcEngine {
             if lines_with_unresolved.contains(&idx) {
                 continue;
             }
-            let line = read_line!(idx).to_string();
-            let table_segments = if options.table_enabled && is_table_line(&line) {
-                table_expression_segments(&line, true)
+            // Borrow the current line text per probe; each `read_line!` borrow
+            // ends with the expression so it doesn't conflict with later
+            // `ensure_working!()` mutation of `working_lines`.
+            let table_segments = if options.table_enabled && is_table_line(read_line!(idx)) {
+                table_expression_segments(read_line!(idx), true)
             } else {
                 Vec::new()
             };
@@ -786,7 +788,8 @@ impl CalcEngine {
             }
 
             // Single-expression path (preserves original behavior).
-            let Some(line_expr) = extract_line_expression(&line, options.table_enabled) else {
+            let Some(line_expr) = extract_line_expression(read_line!(idx), options.table_enabled)
+            else {
                 continue;
             };
             let expression = line_expr.expression.as_str();

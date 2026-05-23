@@ -1663,7 +1663,7 @@ impl TerminalApp {
                     };
                     return;
                 }
-                crate::editor_core::engine::HostCommandPlan::Backup { path } => {
+                crate::editor_core::engine::HostCommandPlan::BackupExport { path } => {
                     let Some(path) = path else {
                         self.status = "usage: backup export <path.zip>".to_string();
                         return;

@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["src-tauri", "crates/editor-core", "crates/app-core"]
+
+# Thin LTO + single codegen unit pays a small build-time cost for noticeably
+# smaller binaries (native + wasm) and faster hot loops in editor-core and
+# the calc engine. Keep `debug = false` so release artifacts stay slim.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = false
