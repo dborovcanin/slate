@@ -69,7 +69,7 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 - Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
 - Folding: `za` toggles fold at cursor (GUI headings/code fences)
 - Wiki-link navigation: `gd` opens the link under cursor (`[[shortid]]` / `[[shortid#heading]]`)
-- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch`, `:clip-watch-stop`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:w`, `:wq`, `:q`
+- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch on`, `:clip-watch off`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:w`, `:wq`, `:q`
 - `:sum` and `:avg` compute from the selected scope, insert only `<value>` at cursor/selection, and copy the value to clipboard
 - Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `cw`, `cc`, `C`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 

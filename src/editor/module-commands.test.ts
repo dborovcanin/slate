@@ -19,7 +19,7 @@ function snapshot(text: string, head = 0, anchor = head) {
 }
 
 function modules(): NoteModules {
-  return { math: true, table: true, variables: true, style: true };
+  return { math: true, table: true, variables: true, style: true, cross_note: true };
 }
 
 test("module command reports status and updates selected module", async () => {
@@ -34,14 +34,20 @@ test("module command reports status and updates selected module", async () => {
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(status.message, "modules math=on table=on variables=on style=on");
+  assert.equal(
+    status.message,
+    "modules math=on table=on variables=on style=on cross_note=on",
+  );
 
   const off = await executeCommand(snapshot(""), ":module math off", {
     mode: "editor",
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(off.message, "modules math=off table=on variables=on style=on");
+  assert.equal(
+    off.message,
+    "modules math=off table=on variables=on style=on cross_note=on",
+  );
   assert.equal(current.math, false);
 
   const toggle = await executeCommand(snapshot(""), ":module style toggle", {
@@ -49,7 +55,10 @@ test("module command reports status and updates selected module", async () => {
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(toggle.message, "modules math=off table=on variables=on style=off");
+  assert.equal(
+    toggle.message,
+    "modules math=off table=on variables=on style=off cross_note=on",
+  );
   assert.equal(current.style, false);
 });
 
@@ -77,7 +86,13 @@ function noteWithModules(modules: NoteModules): Note {
 
 test("effectiveModules gates variables by per-note module", () => {
   const config = { ...DEFAULT_THEME_CONFIG };
-  const note = noteWithModules({ math: true, table: true, variables: false, style: true });
+  const note = noteWithModules({
+    math: true,
+    table: true,
+    variables: false,
+    style: true,
+    cross_note: true,
+  });
   const resolved = modulesForNote(note, config);
   const loaded = effectiveModules(resolved, DEFAULT_RUNTIME_FLAGS);
   assert.equal(loaded.variables, false);
@@ -85,7 +100,13 @@ test("effectiveModules gates variables by per-note module", () => {
 
 test("effectiveModules keeps variables enabled when note module is on", () => {
   const config = { ...DEFAULT_THEME_CONFIG };
-  const note = noteWithModules({ math: true, table: true, variables: true, style: true });
+  const note = noteWithModules({
+    math: true,
+    table: true,
+    variables: true,
+    style: true,
+    cross_note: true,
+  });
   const resolved = modulesForNote(note, config);
   const loaded = effectiveModules(resolved, DEFAULT_RUNTIME_FLAGS);
   assert.equal(loaded.variables, true);

@@ -122,6 +122,9 @@ test("core command suggestions are mode-aware", async () => {
     "module style on",
     "module style off",
     "module style toggle",
+    "module cross_note on",
+    "module cross_note off",
+    "module cross_note toggle",
     "collection choose",
     "collection clear",
     "collection create",
@@ -153,7 +156,8 @@ test("core command suggestions are mode-aware", async () => {
     "export pdf",
     "export md",
     "export txt",
-    "backup",
+    "backup export",
+    "backup load",
   ]);
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);
@@ -161,7 +165,7 @@ test("core command suggestions are mode-aware", async () => {
 });
 
 test("core executeCommand handles module status/on/off/toggle", async () => {
-  let current = { math: true, table: true, variables: true, style: true };
+  let current = { math: true, table: true, variables: true, style: true, cross_note: true };
   const getNoteModules = () => current;
   const setNoteModules = async (next: typeof current) => {
     current = next;
@@ -172,7 +176,10 @@ test("core executeCommand handles module status/on/off/toggle", async () => {
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(status.message, "modules math=on table=on variables=on style=on");
+  assert.equal(
+    status.message,
+    "modules math=on table=on variables=on style=on cross_note=on",
+  );
   assert.deepEqual(status.operations, []);
 
   const off = await executeCommand(snapshot("", 0), "module math off", {
@@ -180,7 +187,10 @@ test("core executeCommand handles module status/on/off/toggle", async () => {
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(off.message, "modules math=off table=on variables=on style=on");
+  assert.equal(
+    off.message,
+    "modules math=off table=on variables=on style=on cross_note=on",
+  );
   assert.equal(current.math, false);
 
   const toggle = await executeCommand(snapshot("", 0), "modules style toggle", {
@@ -188,12 +198,15 @@ test("core executeCommand handles module status/on/off/toggle", async () => {
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(toggle.message, "modules math=off table=on variables=on style=off");
+  assert.equal(
+    toggle.message,
+    "modules math=off table=on variables=on style=off cross_note=on",
+  );
   assert.equal(current.style, false);
 });
 
 test("core executeCommand module on/off is idempotent and requires persistence runtime", async () => {
-  let current = { math: true, table: true, variables: true, style: true };
+  let current = { math: true, table: true, variables: true, style: true, cross_note: true };
   const getNoteModules = () => current;
   let writes = 0;
   const setNoteModules = async (next: typeof current) => {
@@ -214,7 +227,10 @@ test("core executeCommand module on/off is idempotent and requires persistence r
     getNoteModules,
     setNoteModules,
   });
-  assert.equal(off.message, "modules math=off table=on variables=on style=on");
+  assert.equal(
+    off.message,
+    "modules math=off table=on variables=on style=on cross_note=on",
+  );
   assert.equal(writes, 1);
 
   const alreadyOff = await executeCommand(snapshot("", 0), "module math off", {
@@ -422,7 +438,7 @@ test("core executeCommand handles clip-watch start/stop", async () => {
   assert.equal(started.operations.length, 0);
   assert.equal(starts.length, 1);
 
-  const alreadyActive = await executeCommand(snapshot("alpha", 0), "clip-watch", {
+  const alreadyActive = await executeCommand(snapshot("alpha", 0), "clip-watch on", {
     mode: "editor",
     startClipboardWatch: async () => false,
   });
@@ -438,7 +454,7 @@ test("core executeCommand handles clip-watch start/stop", async () => {
   assert.equal(stopped.message, "clip-watch stopped");
   assert.equal(stops.length, 1);
 
-  const notActive = await executeCommand(snapshot("alpha", 0), "clip-watch-stop", {
+  const notActive = await executeCommand(snapshot("alpha", 0), "clip-watch off", {
     mode: "editor",
     stopClipboardWatch: async () => false,
   });
@@ -504,27 +520,6 @@ test("core executeCommand strips approximate wording and rounds unit totals", as
   });
 
   assert.equal(result.message, "sum(row) = 2.00 km");
-  assert.equal(result.operations.length, 1);
-  assert.equal(
-    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
-    "2.00km",
-  );
-});
-
-test("core executeCommand supports unit-aware sum column via underscore alias", async () => {
-  const text = [
-    "| item | a | b |",
-    "| --- | --- | --- |",
-    "| x | 2m | 2km |",
-    "| y | 3m | 4m |",
-  ].join("\n");
-  const cursor = text.lastIndexOf("4m");
-  const result = await executeCommand(snapshot(text, cursor), "sum_column", {
-    mode: "editor",
-    evaluateExpression: unitAwareEvaluator,
-  });
-
-  assert.equal(result.message, "sum(column) = 2.00 km");
   assert.equal(result.operations.length, 1);
   assert.equal(
     result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),

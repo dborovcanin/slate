@@ -239,7 +239,7 @@ export function openDateTimePicker(
     actions.className = "date-picker-actions";
 
     const cancelBtn = document.createElement("button");
-    cancelBtn.className = "date-picker-btn date-picker-btn-secondary";
+    cancelBtn.className = "date-picker-btn";
     cancelBtn.textContent = "Cancel";
 
     const insertBtn = document.createElement("button");

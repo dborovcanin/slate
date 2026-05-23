@@ -714,7 +714,7 @@ mod tests {
         let row3_start = table.rfind("| 4m").unwrap();
         let cursor = row3_start + table[row3_start..].find("5m").unwrap();
         let doc = snapshot(table, cursor, cursor);
-        let result = execute_command(&doc, "sum_column", CommandMode::Editor);
+        let result = execute_command(&doc, "sum column", CommandMode::Editor);
         assert_eq!(result.operations.len(), 1);
         assert!(result.message.contains("sum(column)"));
         // Only "3m" from row 1 is above the cursor in col 1 (row 2 is delimiter)

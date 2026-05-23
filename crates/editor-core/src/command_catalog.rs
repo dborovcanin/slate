@@ -330,17 +330,7 @@ pub fn parse_collection_command(input: &str) -> Option<ParsedCollectionCommand> 
         };
         (action, needs_arg, remainder)
     } else {
-        let remainder = tokens.collect::<Vec<_>>().join(" ").trim().to_string();
-        let (action, needs_arg) = match head.as_str() {
-            "choose_collection" | "choose-collection" => (CollectionCommandAction::Choose, true),
-            "clear_collection" | "clear-collection" => (CollectionCommandAction::Clear, false),
-            "add_to_collection" | "add-to-collection" => (CollectionCommandAction::Add, true),
-            "remove_from_collection" | "remove-from-collection" => {
-                (CollectionCommandAction::Remove, true)
-            }
-            _ => return None,
-        };
-        (action, needs_arg, remainder)
+        return None;
     };
 
     if action == CollectionCommandAction::Choose && remainder.eq_ignore_ascii_case("none") {
@@ -397,21 +387,21 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
     CommandDefinition {
         id: CommandId::SumRow,
         value: "sum row",
-        aliases: &["sum_row"],
+        aliases: &[],
         description: "sum markdown table per row at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::SumColumn,
         value: "sum column",
-        aliases: &["sum_column"],
+        aliases: &[],
         description: "sum markdown table per column at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::SumDoc,
         value: "sum doc",
-        aliases: &["sum_all", "sum all"],
+        aliases: &[],
         description: "sum whole document",
         modes: &MODES_BOTH,
     },
@@ -432,21 +422,21 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
     CommandDefinition {
         id: CommandId::AvgRow,
         value: "avg row",
-        aliases: &["avg_row"],
+        aliases: &[],
         description: "average markdown table per row at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::AvgColumn,
         value: "avg column",
-        aliases: &["avg_column"],
+        aliases: &[],
         description: "average markdown table per column at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::AvgDoc,
         value: "avg doc",
-        aliases: &["avg_all", "avg all"],
+        aliases: &[],
         description: "average whole document",
         modes: &MODES_BOTH,
     },
@@ -467,7 +457,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
     CommandDefinition {
         id: CommandId::RemindToggle,
         value: "remind toggle",
-        aliases: &["remind-toggle", "remind_toggle"],
+        aliases: &[],
         description: "toggle reminder for current line",
         modes: &MODES_BOTH,
     },
@@ -622,64 +612,56 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
     CommandDefinition {
         id: CommandId::ChooseCollection,
         value: "collection choose",
-        aliases: &[
-            "choose_collection",
-            "choose-collection",
-            "collection-choose",
-        ],
+        aliases: &[],
         description: "set working collection for new notes",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ClearCollection,
         value: "collection clear",
-        aliases: &["clear_collection", "clear-collection", "collection-clear"],
+        aliases: &[],
         description: "clear working collection",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::CreateCollection,
         value: "collection create",
-        aliases: &["collection-create"],
+        aliases: &[],
         description: "create collection",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::DeleteCollection,
         value: "collection delete",
-        aliases: &["collection-delete"],
+        aliases: &[],
         description: "delete collection only",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::UpdateCollection,
         value: "collection update",
-        aliases: &["collection-update"],
+        aliases: &[],
         description: "open collection update dialog",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::PurgeCollection,
         value: "collection purge",
-        aliases: &["collection-purge"],
+        aliases: &[],
         description: "delete collection and associated notes",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::AddToCollection,
         value: "collection join",
-        aliases: &["add_to_collection", "add-to-collection", "collection-join"],
+        aliases: &[],
         description: "add active note to collection",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::RemoveFromCollection,
         value: "collection leave",
-        aliases: &[
-            "remove_from_collection",
-            "remove-from-collection",
-            "collection-leave",
-        ],
+        aliases: &[],
         description: "remove active note from collection",
         modes: &MODES_BOTH,
     },
@@ -693,24 +675,18 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
     CommandDefinition {
         id: CommandId::ClipWatch,
         value: "clip-watch on",
-        aliases: &[
-            "clip-watch",
-            "clip_watch",
-            "clip-watch start",
-            "clip_watch_on",
-        ],
+        // Keep `start` as a semantic synonym for `on`; drop snake_case and the
+        // bare `clip-watch` legacy form.
+        aliases: &["clip-watch start"],
         description: "watch clipboard and paste text at cursor",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::ClipWatchStop,
         value: "clip-watch off",
-        aliases: &[
-            "clip-watch-stop",
-            "clip_watch_stop",
-            "clip-watch stop",
-            "clip_watch_off",
-        ],
+        // Keep `stop` as a semantic synonym for `off`; drop snake_case and the
+        // dash-joined legacy form.
+        aliases: &["clip-watch stop"],
         description: "stop clipboard watch",
         modes: &MODES_BOTH,
     },
@@ -1065,11 +1041,11 @@ mod tests {
     #[test]
     fn resolve_command_handles_aliases() {
         assert_eq!(
-            resolve_command(CommandMode::Editor, "sum_column").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "sum column").map(|cmd| cmd.id),
             Some(CommandId::SumColumn)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "avg_all").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "avg doc").map(|cmd| cmd.id),
             Some(CommandId::AvgDoc)
         );
         assert_eq!(
@@ -1078,7 +1054,7 @@ mod tests {
         );
         assert!(resolve_command(CommandMode::Editor, "notify").is_none());
         assert_eq!(
-            resolve_command(CommandMode::Editor, "remind-toggle").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "remind toggle").map(|cmd| cmd.id),
             Some(CommandId::RemindToggle)
         );
         assert_eq!(
@@ -1090,11 +1066,11 @@ mod tests {
             Some(CommandId::OrderedList)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "clip_watch_stop").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "clip-watch stop").map(|cmd| cmd.id),
             Some(CommandId::ClipWatchStop)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "clip-watch").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "clip-watch on").map(|cmd| cmd.id),
             Some(CommandId::ClipWatch)
         );
         assert_eq!(
@@ -1178,15 +1154,15 @@ mod tests {
         assert!(resolve_command(CommandMode::Editor, "backup /tmp/slate.zip").is_none());
         assert!(resolve_command(CommandMode::Editor, "backup notes /tmp/slate.zip").is_none());
         assert_eq!(
-            resolve_command(CommandMode::Editor, "choose_collection Work").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "collection choose Work").map(|cmd| cmd.id),
             Some(CommandId::ChooseCollection)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "choose_collection none").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "collection choose none").map(|cmd| cmd.id),
             Some(CommandId::ClearCollection)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "clear_collection").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "collection clear").map(|cmd| cmd.id),
             Some(CommandId::ClearCollection)
         );
         assert_eq!(
@@ -1206,11 +1182,11 @@ mod tests {
             Some(CommandId::PurgeCollection)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "add_to_collection Work").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "collection join Work").map(|cmd| cmd.id),
             Some(CommandId::AddToCollection)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "remove_from_collection Work").map(|cmd| cmd.id),
+            resolve_command(CommandMode::Editor, "collection leave Work").map(|cmd| cmd.id),
             Some(CommandId::RemoveFromCollection)
         );
     }
@@ -1277,26 +1253,30 @@ mod tests {
     }
 
     #[test]
-    fn parse_collection_command_supports_collection_subcommands_and_legacy_aliases() {
-        let choose = parse_collection_command("choose_collection Inbox").expect("choose parsed");
+    fn parse_collection_command_supports_collection_subcommands() {
+        let choose = parse_collection_command("collection choose Inbox").expect("choose parsed");
         assert_eq!(choose.action, CollectionCommandAction::Choose);
         assert_eq!(choose.collection.as_deref(), Some("Inbox"));
 
-        let clear_alias = parse_collection_command("choose_collection none").expect("clear alias");
-        assert_eq!(clear_alias.action, CollectionCommandAction::Clear);
-        assert_eq!(clear_alias.collection, None);
+        let choose_none =
+            parse_collection_command("collection choose none").expect("choose none parsed");
+        assert_eq!(choose_none.action, CollectionCommandAction::Clear);
+        assert_eq!(choose_none.collection, None);
 
-        let clear = parse_collection_command(":clear_collection").expect("clear parsed");
+        let clear = parse_collection_command("collection clear").expect("clear parsed");
         assert_eq!(clear.action, CollectionCommandAction::Clear);
         assert_eq!(clear.collection, None);
 
-        let add = parse_collection_command("add_to_collection Team").expect("add parsed");
+        let add = parse_collection_command("collection join Team").expect("join parsed");
         assert_eq!(add.action, CollectionCommandAction::Add);
         assert_eq!(add.collection.as_deref(), Some("Team"));
 
-        let remove = parse_collection_command("remove_from_collection Team").expect("remove");
+        let remove = parse_collection_command("collection leave Team").expect("leave parsed");
         assert_eq!(remove.action, CollectionCommandAction::Remove);
         assert_eq!(remove.collection.as_deref(), Some("Team"));
+
+        assert!(parse_collection_command("choose_collection Inbox").is_none());
+        assert!(parse_collection_command("add_to_collection Team").is_none());
 
         let create = parse_collection_command("collection create Team").expect("create parsed");
         assert_eq!(create.action, CollectionCommandAction::Create);

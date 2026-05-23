@@ -533,7 +533,10 @@ mod tests {
             Some(CommandDispatchKind::HostModule)
         );
         assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "choose_collection Inbox"),
+            EditorEngine::classify_command_dispatch(
+                CommandMode::Editor,
+                "collection choose Inbox",
+            ),
             Some(CommandDispatchKind::HostCollection)
         );
         assert_eq!(
@@ -541,7 +544,7 @@ mod tests {
             Some(CommandDispatchKind::HostFold)
         );
         assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "clip-watch"),
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "clip-watch on"),
             Some(CommandDispatchKind::HostClipWatch)
         );
         assert_eq!(
@@ -657,7 +660,7 @@ mod tests {
             })
         );
         assert_eq!(
-            EditorEngine::plan_host_command(CommandMode::Editor, "clip-watch-stop"),
+            EditorEngine::plan_host_command(CommandMode::Editor, "clip-watch stop"),
             Some(HostCommandPlan::ClipWatch {
                 action: HostClipWatchAction::Stop,
             })
@@ -669,28 +672,28 @@ mod tests {
             })
         );
         assert_eq!(
-            EditorEngine::plan_host_command(CommandMode::Editor, "choose_collection inbox"),
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection choose inbox"),
             Some(HostCommandPlan::Collection {
                 action: HostCollectionAction::Choose,
                 collection: Some("inbox".to_string()),
             })
         );
         assert_eq!(
-            EditorEngine::plan_host_command(CommandMode::Editor, "choose_collection none"),
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection choose none"),
             Some(HostCommandPlan::Collection {
                 action: HostCollectionAction::Clear,
                 collection: None,
             })
         );
         assert_eq!(
-            EditorEngine::plan_host_command(CommandMode::Editor, "add_to_collection work"),
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection join work"),
             Some(HostCommandPlan::Collection {
                 action: HostCollectionAction::Add,
                 collection: Some("work".to_string()),
             })
         );
         assert_eq!(
-            EditorEngine::plan_host_command(CommandMode::Editor, "remove_from_collection work"),
+            EditorEngine::plan_host_command(CommandMode::Editor, "collection leave work"),
             Some(HostCommandPlan::Collection {
                 action: HostCollectionAction::Remove,
                 collection: Some("work".to_string()),

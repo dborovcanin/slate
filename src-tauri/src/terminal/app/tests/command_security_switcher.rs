@@ -438,7 +438,7 @@ fn clip_watch_commands_toggle_terminal_watcher() {
     assert!(app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch started");
 
-    app.execute_terminal_command(&db, "clip-watch");
+    app.execute_terminal_command(&db, "clip-watch on");
     assert!(app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch already active");
 
@@ -446,7 +446,7 @@ fn clip_watch_commands_toggle_terminal_watcher() {
     assert!(!app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch stopped");
 
-    app.execute_terminal_command(&db, "clip-watch-stop");
+    app.execute_terminal_command(&db, "clip-watch off");
     assert!(!app.clipboard_watch_enabled);
     assert_eq!(app.status, "clip-watch not active");
 
@@ -1902,7 +1902,7 @@ fn collection_commands_choose_add_and_remove_match_expected_outcomes() {
         .create_collection("Projects", "project notes")
         .expect("collection created");
 
-    app.execute_terminal_command(&db, "choose_collection Projects");
+    app.execute_terminal_command(&db, "collection choose Projects");
     assert_eq!(app.status, "working collection: Projects");
     assert_eq!(
         app.working_collection_id.as_deref(),
@@ -1910,7 +1910,7 @@ fn collection_commands_choose_add_and_remove_match_expected_outcomes() {
     );
     assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
 
-    app.execute_terminal_command(&db, "add_to_collection Projects");
+    app.execute_terminal_command(&db, "collection join Projects");
     assert_eq!(app.status, "added to collection Projects");
     assert_eq!(
         db.get_note_collection_ids("n1")
@@ -1918,7 +1918,7 @@ fn collection_commands_choose_add_and_remove_match_expected_outcomes() {
         vec![collection.id.clone()]
     );
 
-    app.execute_terminal_command(&db, "remove_from_collection Projects");
+    app.execute_terminal_command(&db, "collection leave Projects");
     assert_eq!(app.status, "removed from collection Projects");
     assert!(db
         .get_note_collection_ids("n1")
@@ -1936,10 +1936,10 @@ fn clear_collection_command_resets_terminal_working_collection_context() {
     db.create_collection("Projects", "project notes")
         .expect("collection created");
 
-    app.execute_terminal_command(&db, "choose_collection Projects");
+    app.execute_terminal_command(&db, "collection choose Projects");
     assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
 
-    app.execute_terminal_command(&db, "clear_collection");
+    app.execute_terminal_command(&db, "collection clear");
     assert_eq!(app.status, "working collection cleared");
     assert!(app.working_collection_id.is_none());
     assert!(app.working_collection_name.is_none());
@@ -1956,7 +1956,7 @@ fn ctrl_n_creates_note_in_working_collection_context() {
         .create_collection("Projects", "project notes")
         .expect("collection created");
 
-    app.execute_terminal_command(&db, "choose_collection Projects");
+    app.execute_terminal_command(&db, "collection choose Projects");
     let previous_id = app.active_note.id.clone();
     app.mode = UiMode::Normal;
     app.handle_editor_key(&db, Key::Ctrl('n'))
@@ -1982,7 +1982,7 @@ fn refresh_switcher_items_clears_stale_working_collection_after_delete() {
         .create_collection("Projects", "project notes")
         .expect("collection created");
 
-    app.execute_terminal_command(&db, "choose_collection Projects");
+    app.execute_terminal_command(&db, "collection choose Projects");
     assert_eq!(
         app.working_collection_id.as_deref(),
         Some(collection.id.as_str())
