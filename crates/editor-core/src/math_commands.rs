@@ -11,6 +11,9 @@ use crate::types::{
     OperationSelection,
 };
 use regex::Regex;
+use std::sync::OnceLock;
+
+static NUMERIC_VALUE_RE: OnceLock<Regex> = OnceLock::new();
 
 fn parse_sum_numbers(text: &str) -> Vec<f64> {
     parse_numeric_values(text)
@@ -60,7 +63,10 @@ fn normalize_evaluated_value(raw: &str) -> Option<String> {
         return None;
     }
 
-    let matcher = Regex::new(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+").ok()?;
+    let matcher = NUMERIC_VALUE_RE.get_or_init(|| {
+        Regex::new(r"[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?|[-+]?\.\d+")
+            .expect("numeric value regex is valid")
+    });
     let found = matcher.find(cleaned)?;
     let numeric_raw = &cleaned[found.start()..found.end()];
     let numeric = numeric_raw.replace(',', "").parse::<f64>().ok()?;

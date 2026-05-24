@@ -74,7 +74,35 @@ pub fn display_cols_for_prefix(text: &str, prefix_chars: usize) -> usize {
 }
 
 pub fn line_display_cols(text: &str) -> usize {
-    display_cols_for_prefix(text, line_char_len(text))
+    let mut visible = 0usize;
+    for ch in text.chars() {
+        if ch == '\t' {
+            visible += render::TAB_WIDTH - (visible % render::TAB_WIDTH);
+        } else {
+            visible += ch.width().unwrap_or(0);
+        }
+    }
+    visible
+}
+
+/// Returns `(prefix_cols, total_cols)` in a single pass over the chars.
+/// Equivalent to calling `display_cols_for_prefix(text, prefix_chars)` and
+/// `line_display_cols(text)` separately but avoids the double iteration.
+pub fn display_cols_prefix_and_total(text: &str, prefix_chars: usize) -> (usize, usize) {
+    let mut visible = 0usize;
+    let mut prefix_cols = None;
+    for (idx, ch) in text.chars().enumerate() {
+        if idx == prefix_chars {
+            prefix_cols = Some(visible);
+        }
+        if ch == '\t' {
+            visible += render::TAB_WIDTH - (visible % render::TAB_WIDTH);
+        } else {
+            visible += ch.width().unwrap_or(0);
+        }
+    }
+    let total = visible;
+    (prefix_cols.unwrap_or(total), total)
 }
 
 /// Map a logical cursor char-column to the display char-column.

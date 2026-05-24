@@ -1,7 +1,8 @@
 use super::{
-    contrast_fg_for_bg, cursor_render_char_col, display_cols_for_prefix, draw_framed_surface,
-    draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
-    formula_marker_token, goto, is_markdown_table_line, line_display_cols, min, pad_right,
+    contrast_fg_for_bg, cursor_render_char_col, display_cols_prefix_and_total, draw_framed_surface,
+    draw_row_at_styled,
+    find_table_formula_segments, format_formula_display_value, formula_marker_token, goto,
+    is_markdown_table_line, line_display_cols, min, pad_right,
     reformat_table_row_for_display, table_block_bounds_for_line, table_cell_info_at_char,
     table_display_col_widths, viewport_col_for_display_col, AnsiStyle, DatePickerAction,
     TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
@@ -1657,8 +1658,8 @@ impl TerminalApp {
                         UiMode::Normal | UiMode::Visual | UiMode::VisualLine
                     ),
                 );
-                let display_col = display_cols_for_prefix(&line_text, display_char_col);
-                let line_width = line_display_cols(&line_text);
+                let (display_col, line_width) =
+                    display_cols_prefix_and_total(&line_text, display_char_col);
                 let visible_col = viewport_col_for_display_col(
                     display_col,
                     line_width,
@@ -1784,8 +1785,8 @@ impl TerminalApp {
                 );
                 let gutter_width = self.gutter_width();
                 let available = cols.saturating_sub(gutter_width);
-                let display_col = display_cols_for_prefix(line_text, display_char_col);
-                let line_width = line_display_cols(line_text);
+                let (display_col, line_width) =
+                    display_cols_prefix_and_total(line_text, display_char_col);
                 let visible_col = viewport_col_for_display_col(
                     display_col,
                     line_width,
