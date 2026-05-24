@@ -553,11 +553,13 @@ export function evaluateNoteContextDelta(
   variablesEnabled = true,
   range?: NoteEvaluationRange,
   tableEnabled = true,
+  crossNoteEnabled = true,
 ): Promise<NoteEvaluationResult> {
   return invoke<NoteEvaluationResult>("evaluate_note_context_delta", {
     noteId,
     variablesEnabled,
     tableEnabled,
+    crossNoteEnabled,
     evalFrom: range?.evalFrom,
     evalTo: range?.evalTo,
   });

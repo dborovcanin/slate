@@ -8,7 +8,8 @@
         "math": true,
         "table": true,
         "variables": false,
-        "style": true
+        "style": true,
+        "cross_note": false
       },
       "expected": {
         "changed": false,
@@ -16,9 +17,10 @@
           "math": true,
           "table": true,
           "variables": false,
-          "style": true
+          "style": true,
+          "cross_note": false
         },
-        "message": "modules math=on table=on variables=off style=on"
+        "message": "modules math=on table=on variables=off style=on cross_note=off"
       }
     },
     {
@@ -29,7 +31,8 @@
         "math": true,
         "table": true,
         "variables": true,
-        "style": true
+        "style": true,
+        "cross_note": false
       },
       "expected": {
         "changed": true,
@@ -37,9 +40,10 @@
           "math": true,
           "table": true,
           "variables": false,
-          "style": true
+          "style": true,
+          "cross_note": false
         },
-        "message": "modules math=on table=on variables=off style=on"
+        "message": "modules math=on table=on variables=off style=on cross_note=off"
       }
     },
     {
@@ -50,7 +54,8 @@
         "math": false,
         "table": true,
         "variables": false,
-        "style": true
+        "style": true,
+        "cross_note": false
       },
       "expected": {
         "changed": false,
@@ -58,7 +63,8 @@
           "math": false,
           "table": true,
           "variables": false,
-          "style": true
+          "style": true,
+          "cross_note": false
         },
         "message": "module style already on"
       }
@@ -71,7 +77,8 @@
         "math": false,
         "table": true,
         "variables": true,
-        "style": false
+        "style": false,
+        "cross_note": false
       },
       "expected": {
         "changed": true,
@@ -79,9 +86,10 @@
           "math": false,
           "table": false,
           "variables": true,
-          "style": false
+          "style": false,
+          "cross_note": false
         },
-        "message": "modules math=off table=off variables=on style=off"
+        "message": "modules math=off table=off variables=on style=off cross_note=off"
       }
     }
   ]

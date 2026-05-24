@@ -210,6 +210,7 @@ function editorOptionsForNote(note: Note | null) {
     onExportCommand: runExportCommand,
     onBackupCommand: runBackupCommand,
     variablesEnabled: plainFileNote || largeNoteMode ? false : loaded.variables,
+    crossNoteEnabled: plainFileNote || largeNoteMode ? false : loaded.cross_note,
     variableAutocompleteMinChars: appConfig.variables_autocomplete_min_chars,
     onExitCommand: handleExitWindow,
     onClipWatchStateChange: (active: boolean) => {
@@ -278,7 +279,8 @@ async function persistActiveNoteModules(modules: NoteModules) {
     active.modules.math === nextModules.math &&
     active.modules.table === nextModules.table &&
     active.modules.variables === nextModules.variables &&
-    active.modules.style === nextModules.style
+    active.modules.style === nextModules.style &&
+    active.modules.cross_note === nextModules.cross_note
   ) {
     return;
   }

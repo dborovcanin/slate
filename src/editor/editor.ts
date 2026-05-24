@@ -275,6 +275,7 @@ interface EditorMountOptions {
   onWriteCommand?: (options?: { force?: boolean }) => Promise<void> | void;
   onSaveError?: (message: string) => void;
   variablesEnabled?: boolean;
+  crossNoteEnabled?: boolean;
   variableAutocompleteMinChars?: number;
   onExitCommand?: () => Promise<void> | void;
   onExportCommand?: (options: {
@@ -491,8 +492,9 @@ function buildEditorExtensions(options: EditorMountOptions): {
           enabled: options.variablesEnabled ?? true,
           minChars: options.variableAutocompleteMinChars ?? 3,
         });
+        const crossNoteEnabled = options.crossNoteEnabled ?? true;
         const sources = [
-          crossNoteCompletionSource(8),
+          ...(crossNoteEnabled ? [crossNoteCompletionSource(8)] : []),
           ...(varSource ? [varSource] : []),
           wikiLinkCompletionSource,
         ];
@@ -513,6 +515,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         : calcExtensions({
             variablesEnabled: options.variablesEnabled ?? true,
             tableEnabled,
+            crossNoteEnabled: options.crossNoteEnabled ?? true,
             getActiveNoteId: () => state.activeNote?.id ?? null,
           })),
       ...(disableRemind

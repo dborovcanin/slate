@@ -106,6 +106,7 @@ pub async fn evaluate_note_context_delta(
     note_id: String,
     variables_enabled: Option<bool>,
     table_enabled: Option<bool>,
+    cross_note_enabled: Option<bool>,
     eval_from: Option<usize>,
     eval_to: Option<usize>,
 ) -> Result<NoteEvaluationResult, String> {
@@ -124,8 +125,7 @@ pub async fn evaluate_note_context_delta(
     let short_id = note_short_id(&note_id).to_string();
     let vars_enabled = variables_enabled.unwrap_or(true);
     let table_enabled_val = table_enabled.unwrap_or(true);
-    // cross_note_enabled is not yet forwarded from the UI; default to true.
-    let cross_note_enabled = true;
+    let cross_note_enabled = cross_note_enabled.unwrap_or(true);
     let eval_range = resolve_eval_range(lines.len(), eval_from, eval_to);
     let generation = start_eval_generation();
 

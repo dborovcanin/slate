@@ -1017,6 +1017,7 @@ mod tests {
         assert!(cfg.default_modules.table);
         assert!(!cfg.default_modules.variables);
         assert!(cfg.default_modules.style);
+        assert!(cfg.default_modules.cross_note);
         assert!(!cfg.encrypt_notes);
         assert_eq!(cfg.notes_password_env, "SLATE_NOTES_PASSWORD");
     }
@@ -1119,6 +1120,7 @@ mod tests {
         assert!(cfg.default_modules.table);
         assert!(cfg.default_modules.variables);
         assert!(cfg.default_modules.style);
+        assert!(cfg.default_modules.cross_note);
         assert!(!cfg.encrypt_notes);
         assert_eq!(cfg.notes_password_env, "SLATE_NOTES_PASSWORD");
     }

@@ -52,6 +52,7 @@ import {
 export interface CalcExtensionOptions {
   variablesEnabled?: boolean;
   tableEnabled?: boolean;
+  crossNoteEnabled?: boolean;
   getActiveNoteId?: () => string | null;
 }
 
@@ -1553,6 +1554,7 @@ function variableIndexEqual(
 function buildCalcPlugin(options: CalcExtensionOptions) {
   const variablesEnabled = options.variablesEnabled ?? true;
   const tableEnabled = options.tableEnabled ?? true;
+  const crossNoteEnabled = options.crossNoteEnabled ?? true;
   const getActiveNoteId = options.getActiveNoteId;
 
   return ViewPlugin.define((view) => {
@@ -1700,6 +1702,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
                 variablesEnabled,
                 { evalFrom, evalTo },
                 tableEnabled,
+                crossNoteEnabled,
               );
             } else {
               evaluated = await evaluateNoteContext(
@@ -1719,6 +1722,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
                 variablesEnabled,
                 undefined,
                 tableEnabled,
+                crossNoteEnabled,
               );
             } else {
               evaluated = await evaluateNoteContext(
