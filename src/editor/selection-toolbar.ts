@@ -21,7 +21,27 @@ type InsertBlockKind =
   | "code"
   | "table";
 
+type InsertMenuKeyEvent = Pick<
+  KeyboardEvent,
+  "altKey" | "code" | "ctrlKey" | "key" | "metaKey" | "shiftKey"
+>;
+
+interface BlockMenuItem {
+  label: string;
+  icon: string;
+  kind: InsertBlockKind;
+}
+
 const INLINE_MARKERS: readonly InlineMarker[] = ["**", "~~", "`", "*"];
+const BLOCK_MENU_ITEMS: readonly BlockMenuItem[] = [
+  { label: "Heading", icon: "H1", kind: "heading" },
+  { label: "Bullet list", icon: "-", kind: "bullet" },
+  { label: "Numbered list", icon: "1.", kind: "numbered" },
+  { label: "Checklist", icon: "[]", kind: "checklist" },
+  { label: "Quote", icon: ">", kind: "quote" },
+  { label: "Code block", icon: "{}", kind: "code" },
+  { label: "Table", icon: "| |", kind: "table" },
+];
 const FLOATING_MARGIN = 8;
 
 function clamp(value: number, min: number, max: number): number {
@@ -90,6 +110,22 @@ export function snippetForInsertBlock(
   return { text, cursorOffset };
 }
 
+export function isInsertMenuShortcut(event: InsertMenuKeyEvent): boolean {
+  const hasPrimaryModifier = event.ctrlKey || event.metaKey;
+  if (!hasPrimaryModifier || event.altKey || event.shiftKey) return false;
+  return event.key === "/" || event.code === "Slash";
+}
+
+export function nextBlockMenuIndex(
+  current: number,
+  delta: number,
+  itemCount = BLOCK_MENU_ITEMS.length,
+): number {
+  if (itemCount <= 0) return 0;
+  const wrapped = (current + delta) % itemCount;
+  return wrapped < 0 ? wrapped + itemCount : wrapped;
+}
+
 function titleLineText(lineText: string): string {
   const converted = convertLineToTitle(lineText);
   if (converted.changed) return converted.text;
@@ -110,7 +146,9 @@ class SelectionToolbarController implements PluginValue {
   private readonly toolbarEl: HTMLDivElement;
   private readonly blockButtonEl: HTMLButtonElement;
   private readonly blockMenuEl: HTMLDivElement;
+  private readonly blockMenuButtons: HTMLButtonElement[] = [];
   private blockMenuOpen = false;
+  private activeBlockMenuIndex = 0;
   private layoutFrame: number | null = null;
 
   private readonly onDocumentPointerDown = (event: PointerEvent) => {
@@ -133,6 +171,12 @@ class SelectionToolbarController implements PluginValue {
   private readonly onWindowResize = () => this.scheduleLayout();
   private readonly onWindowBlur = () => this.hideAll();
   private readonly onWindowKeydown = (event: KeyboardEvent) => {
+    if (this.handleOpenBlockMenuKeydown(event)) return;
+    if (isInsertMenuShortcut(event) && this.openBlockMenuFromKeyboard()) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
     if (event.key !== "Escape") return;
     if (this.toolbarEl.hidden && !this.blockMenuOpen && this.blockButtonEl.hidden) return;
     event.preventDefault();
@@ -163,7 +207,6 @@ class SelectionToolbarController implements PluginValue {
 
   update(update: ViewUpdate): void {
     if (
-      update.docChanged ||
       update.selectionSet ||
       update.viewportChanged ||
       update.heightChanged ||
@@ -198,7 +241,7 @@ class SelectionToolbarController implements PluginValue {
   }
 
   private layout() {
-    if (this.isSuppressed()) {
+    if (this.isSuppressed() || this.hasCompetingOverlay()) {
       this.hideAll();
       return;
     }
@@ -222,6 +265,12 @@ class SelectionToolbarController implements PluginValue {
   private isSuppressed(): boolean {
     if (!this.view.hasFocus) return true;
     return !!this.view.dom.dataset.vimMode;
+  }
+
+  private hasCompetingOverlay(): boolean {
+    return !!document.querySelector(
+      ".command-picker-bar, .editor-context-menu--open, .cm-search, .cm-tooltip-autocomplete, .variable-autocomplete",
+    );
   }
 
   private hideAll() {
@@ -299,11 +348,12 @@ class SelectionToolbarController implements PluginValue {
     this.blockButtonEl.style.top = `${top}px`;
   }
 
-  private openBlockMenu() {
+  private openBlockMenu(activeIndex = 0) {
     this.blockMenuOpen = true;
     this.blockMenuEl.hidden = false;
     this.blockMenuEl.classList.add("editor-block-menu--open");
     this.blockButtonEl.setAttribute("aria-expanded", "true");
+    this.setActiveBlockMenuIndex(activeIndex);
     this.positionBlockMenu();
   }
 
@@ -312,6 +362,7 @@ class SelectionToolbarController implements PluginValue {
     this.blockMenuEl.hidden = true;
     this.blockMenuEl.classList.remove("editor-block-menu--open");
     this.blockButtonEl.setAttribute("aria-expanded", "false");
+    this.blockMenuEl.removeAttribute("aria-activedescendant");
   }
 
   private positionBlockMenu() {
@@ -359,7 +410,7 @@ class SelectionToolbarController implements PluginValue {
     button.className = "editor-block-affordance";
     button.hidden = true;
     button.textContent = "+";
-    button.title = "Insert block";
+    button.title = "Insert block (Ctrl+/)";
     button.setAttribute("aria-label", "Insert block");
     button.setAttribute("aria-haspopup", "menu");
     button.setAttribute("aria-expanded", "false");
@@ -383,23 +434,85 @@ class SelectionToolbarController implements PluginValue {
     menu.setAttribute("aria-label", "Insert block");
     menu.addEventListener("pointerdown", this.preventEditorBlur);
 
-    const items: ReadonlyArray<{
-      label: string;
-      icon: string;
-      kind: InsertBlockKind;
-    }> = [
-      { label: "Heading", icon: "H1", kind: "heading" },
-      { label: "Bullet list", icon: "-", kind: "bullet" },
-      { label: "Numbered list", icon: "1.", kind: "numbered" },
-      { label: "Checklist", icon: "[]", kind: "checklist" },
-      { label: "Quote", icon: ">", kind: "quote" },
-      { label: "Code block", icon: "{}", kind: "code" },
-      { label: "Table", icon: "| |", kind: "table" },
-    ];
-    for (const item of items) {
-      menu.appendChild(this.createBlockMenuButton(item.label, item.icon, item.kind));
-    }
+    BLOCK_MENU_ITEMS.forEach((item, index) => {
+      const button = this.createBlockMenuButton(item.label, item.icon, item.kind, index);
+      this.blockMenuButtons.push(button);
+      menu.appendChild(button);
+    });
     return menu;
+  }
+
+  private openBlockMenuFromKeyboard(): boolean {
+    if (this.isSuppressed() || this.hasCompetingOverlay()) return false;
+    const main = this.view.state.selection.main;
+    if (!main.empty) return false;
+    this.toolbarEl.hidden = true;
+    this.positionBlockButton();
+    if (this.blockButtonEl.hidden) return false;
+    this.openBlockMenu(this.activeBlockMenuIndex);
+    return true;
+  }
+
+  private handleOpenBlockMenuKeydown(event: KeyboardEvent): boolean {
+    if (!this.blockMenuOpen) return false;
+
+    switch (event.key) {
+      case "ArrowDown":
+      case "Down":
+        event.preventDefault();
+        event.stopPropagation();
+        this.setActiveBlockMenuIndex(nextBlockMenuIndex(this.activeBlockMenuIndex, 1));
+        return true;
+      case "ArrowUp":
+      case "Up":
+        event.preventDefault();
+        event.stopPropagation();
+        this.setActiveBlockMenuIndex(nextBlockMenuIndex(this.activeBlockMenuIndex, -1));
+        return true;
+      case "Home":
+        event.preventDefault();
+        event.stopPropagation();
+        this.setActiveBlockMenuIndex(0);
+        return true;
+      case "End":
+        event.preventDefault();
+        event.stopPropagation();
+        this.setActiveBlockMenuIndex(BLOCK_MENU_ITEMS.length - 1);
+        return true;
+      case "Enter":
+      case " ":
+        event.preventDefault();
+        event.stopPropagation();
+        this.runAction(() => this.insertBlock(BLOCK_MENU_ITEMS[this.activeBlockMenuIndex].kind));
+        return true;
+      case "Escape":
+        event.preventDefault();
+        event.stopPropagation();
+        this.closeBlockMenu();
+        this.view.focus();
+        return true;
+      case "Tab":
+        this.closeBlockMenu();
+        return false;
+      default:
+        if (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete") {
+          this.closeBlockMenu();
+        }
+        return false;
+    }
+  }
+
+  private setActiveBlockMenuIndex(index: number) {
+    const count = this.blockMenuButtons.length;
+    if (count === 0) return;
+    this.activeBlockMenuIndex = ((index % count) + count) % count;
+    this.blockMenuButtons.forEach((button, buttonIndex) => {
+      const active = buttonIndex === this.activeBlockMenuIndex;
+      button.classList.toggle("editor-block-menu-item--active", active);
+      if (active) {
+        this.blockMenuEl.setAttribute("aria-activedescendant", button.id);
+      }
+    });
   }
 
   private createToolbarButton(
@@ -426,10 +539,12 @@ class SelectionToolbarController implements PluginValue {
     label: string,
     icon: string,
     kind: InsertBlockKind,
+    index: number,
   ): HTMLButtonElement {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "editor-block-menu-item";
+    button.id = `editor-block-menu-item-${index}`;
     button.setAttribute("role", "menuitem");
     const iconEl = document.createElement("span");
     iconEl.className = "editor-block-menu-icon";
@@ -439,6 +554,8 @@ class SelectionToolbarController implements PluginValue {
     labelEl.textContent = label;
     button.append(iconEl, labelEl);
     button.addEventListener("pointerdown", this.preventEditorBlur);
+    button.addEventListener("mouseenter", () => this.setActiveBlockMenuIndex(index));
+    button.addEventListener("focus", () => this.setActiveBlockMenuIndex(index));
     button.addEventListener("click", (event) => {
       event.preventDefault();
       this.runAction(() => this.insertBlock(kind));

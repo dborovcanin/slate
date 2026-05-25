@@ -4,6 +4,8 @@ import {
   clearInlineFormattingText,
   fallbackListLineText,
   fallbackTitleLineText,
+  isInsertMenuShortcut,
+  nextBlockMenuIndex,
   snippetForInsertBlock,
   toggleQuoteLineText,
 } from "./selection-toolbar.ts";
@@ -39,4 +41,48 @@ test("snippetForInsertBlock returns cursor offsets inside editable block bodies"
   const table = snippetForInsertBlock("table");
   assert.ok(table.text.includes("| Column 1 | Column 2 |"));
   assert.equal(table.text.slice(table.cursorOffset - 2, table.cursorOffset + 3), "|  | ");
+});
+
+test("isInsertMenuShortcut accepts only the primary slash shortcut", () => {
+  assert.equal(
+    isInsertMenuShortcut({
+      key: "/",
+      code: "Slash",
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+    }),
+    true,
+  );
+  assert.equal(
+    isInsertMenuShortcut({
+      key: "/",
+      code: "Slash",
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+    }),
+    false,
+  );
+  assert.equal(
+    isInsertMenuShortcut({
+      key: "?",
+      code: "Slash",
+      ctrlKey: true,
+      metaKey: false,
+      altKey: false,
+      shiftKey: true,
+    }),
+    false,
+  );
+});
+
+test("nextBlockMenuIndex wraps keyboard navigation in both directions", () => {
+  assert.equal(nextBlockMenuIndex(0, 1, 3), 1);
+  assert.equal(nextBlockMenuIndex(2, 1, 3), 0);
+  assert.equal(nextBlockMenuIndex(0, -1, 3), 2);
+  assert.equal(nextBlockMenuIndex(2, -4, 3), 1);
+  assert.equal(nextBlockMenuIndex(2, 1, 0), 0);
 });

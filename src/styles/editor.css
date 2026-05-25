@@ -829,6 +829,8 @@
   box-shadow:
     0 12px 28px rgba(0, 0, 0, 0.24),
     0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+  contain: layout style paint;
+  transform-origin: 50% 100%;
   user-select: none;
 }
 
@@ -874,7 +876,8 @@
 }
 
 .editor-selection-toolbar-btn:hover,
-.editor-selection-toolbar-btn:focus-visible {
+.editor-selection-toolbar-btn:focus-visible,
+.editor-selection-toolbar-btn:active {
   border-color: var(--border);
   background: var(--bg-overlay);
   outline: none;
@@ -900,6 +903,7 @@
   justify-content: center;
   opacity: 0.54;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  contain: layout style paint;
   transition:
     opacity var(--motion-duration-out) var(--motion-ease),
     background var(--motion-duration-out) var(--motion-ease),
@@ -933,6 +937,8 @@
   box-shadow:
     0 14px 30px rgba(0, 0, 0, 0.26),
     0 0 0 1px color-mix(in srgb, var(--accent) 9%, transparent);
+  contain: layout style paint;
+  transform-origin: 0 0;
   user-select: none;
 }
 
@@ -961,10 +967,15 @@
 }
 
 .editor-block-menu-item:hover,
-.editor-block-menu-item:focus-visible {
+.editor-block-menu-item:focus-visible,
+.editor-block-menu-item--active {
   border-color: var(--border);
   background: var(--bg-overlay);
   outline: none;
+}
+
+.editor-block-menu-item--active .editor-block-menu-icon {
+  color: var(--accent);
 }
 
 .editor-block-menu-icon {
