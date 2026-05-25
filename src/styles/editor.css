@@ -814,6 +814,171 @@
   right: calc(100% - 3px);
 }
 
+.editor-selection-toolbar {
+  position: fixed;
+  z-index: 76;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, var(--accent) 28%);
+  border-radius: 8px;
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--accent) 7%, transparent), transparent 56%),
+    color-mix(in srgb, var(--bg-surface) 96%, var(--fg) 4%);
+  box-shadow:
+    0 12px 28px rgba(0, 0, 0, 0.24),
+    0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+  user-select: none;
+}
+
+.editor-selection-toolbar--open {
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
+}
+
+.editor-selection-toolbar-btn {
+  width: 28px;
+  height: 26px;
+  min-width: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background var(--motion-duration-out) var(--motion-ease),
+    border-color var(--motion-duration-out) var(--motion-ease),
+    transform var(--motion-duration-out) var(--motion-ease);
+}
+
+.editor-selection-toolbar-btn--bold {
+  font-weight: 800;
+}
+
+.editor-selection-toolbar-btn--italic {
+  font-style: italic;
+}
+
+.editor-selection-toolbar-btn--strike {
+  text-decoration: line-through;
+}
+
+.editor-selection-toolbar-btn--clear {
+  color: var(--fg-dim);
+}
+
+.editor-selection-toolbar-btn:hover,
+.editor-selection-toolbar-btn:focus-visible {
+  border-color: var(--border);
+  background: var(--bg-overlay);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.editor-block-affordance {
+  position: fixed;
+  z-index: 72;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-surface) 92%, transparent);
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.54;
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+  transition:
+    opacity var(--motion-duration-out) var(--motion-ease),
+    background var(--motion-duration-out) var(--motion-ease),
+    border-color var(--motion-duration-out) var(--motion-ease),
+    color var(--motion-duration-out) var(--motion-ease),
+    transform var(--motion-duration-out) var(--motion-ease);
+}
+
+.editor-block-affordance:hover,
+.editor-block-affordance:focus-visible,
+.editor-block-affordance[aria-expanded="true"] {
+  opacity: 1;
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--border) 58%, var(--accent) 42%);
+  background: var(--bg-surface);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.editor-block-menu {
+  position: fixed;
+  z-index: 77;
+  display: none;
+  min-width: 178px;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 74%, var(--accent) 26%);
+  border-radius: 10px;
+  background:
+    linear-gradient(140deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 48%),
+    var(--bg-surface);
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.26),
+    0 0 0 1px color-mix(in srgb, var(--accent) 9%, transparent);
+  user-select: none;
+}
+
+.editor-block-menu--open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
+}
+
+.editor-block-menu-item {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.editor-block-menu-item:hover,
+.editor-block-menu-item:focus-visible {
+  border-color: var(--border);
+  background: var(--bg-overlay);
+  outline: none;
+}
+
+.editor-block-menu-icon {
+  width: 25px;
+  min-width: 25px;
+  color: var(--fg-dim);
+  font-size: 11px;
+  text-align: center;
+}
+
+.editor-block-menu-label {
+  color: var(--fg);
+}
+
 .command-picker-item {
   display: flex;
   align-items: center;

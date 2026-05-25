@@ -37,6 +37,7 @@ import { autocompletion } from "@codemirror/autocomplete";
 import { editorSearchExtensions } from "./search";
 import { vimModeExtension } from "./vim";
 import { editorContextMenuExtensions } from "./context-menu";
+import { selectionToolbarExtensions } from "./selection-toolbar";
 import {
   handleImagePasteAtPosition,
   imageImportDomHandlers,
@@ -541,6 +542,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         dateFormat: options.dateFormat,
         dateTimeFormat: options.dateTimeFormat,
       }),
+      ...(plainCodeMode || vimMode ? [] : selectionToolbarExtensions()),
       ...(plainCodeMode ? [] : [imageImportDomHandlers(), tableCellNavigationDomHandler()]),
       Prec.highest(keymap.of([
         {
