@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Slate
+Comment=Minimal, keyboard-first note-taking scratchpad
+Exec=slate %U
+Icon=slate
+Type=Application
+Categories=Utility;TextEditor;
+Keywords=notes;scratchpad;editor;text;
+StartupNotify=true
+Terminal=false

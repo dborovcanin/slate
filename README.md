@@ -241,6 +241,10 @@ Or use:
 make install
 ```
 
+`make install` also installs the Linux desktop launcher to
+`~/.local/share/applications/slate.desktop` and the app icon to
+`~/.local/share/pixmaps/slate.png`.
+
 ### Arch AUR Build Scripts
 
 This repo includes AUR packaging scripts under `packaging/aur/`:

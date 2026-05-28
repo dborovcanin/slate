@@ -1,5 +1,7 @@
 APP_NAME := slate
 BIN_DIR := $(HOME)/.local/bin
+DESKTOP_DIR := $(HOME)/.local/share/applications
+PIXMAP_DIR := $(HOME)/.local/share/pixmaps
 TAURI_DIR := src-tauri
 ICON_DIR := $(TAURI_DIR)/icons
 BUILD_DIR := build
@@ -30,7 +32,11 @@ build: npm-install
 install: build
 	mkdir -p "$(BIN_DIR)"
 	install -m 0755 "$(RELEASE_NOTE_BIN)" "$(BIN_DIR)/$(APP_NAME)"
+	mkdir -p "$(DESKTOP_DIR)" "$(PIXMAP_DIR)"
+	install -m 0644 "$(APP_NAME).desktop" "$(DESKTOP_DIR)/$(APP_NAME).desktop"
+	install -m 0644 "$(APP_NAME).png" "$(PIXMAP_DIR)/$(APP_NAME).png"
 	@echo "Installed $(APP_NAME) to $(BIN_DIR)"
+	@echo "Installed desktop launcher to $(DESKTOP_DIR)/$(APP_NAME).desktop"
 
 ensure-icons:
 	@mkdir -p "$(ICON_DIR)"
