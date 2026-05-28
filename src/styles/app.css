@@ -239,6 +239,10 @@ html, body {
   white-space: nowrap;
 }
 
+.status-collection-fixed[hidden] {
+  display: none;
+}
+
 .toast {
   position: fixed;
   bottom: 40px;
