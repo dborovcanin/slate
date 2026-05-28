@@ -64,6 +64,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { changeFontSize, cycleFont, getFontLabel } from "./theme/theme";
 import { openDatePicker } from "./editor/date-picker";
+import { openCommandPicker } from "./editor/command-picker";
+import { executeCommand } from "./editor/command-engine";
+import { mountAppMenu, type AppMenuSection } from "./menu/app-menu";
 import { startupMark } from "./perf/startup.ts";
 import {
   effectiveModules,
@@ -71,6 +74,8 @@ import {
   normalizeModules,
 } from "./editor/module-gating.ts";
 import { isNonMarkdownFileNoteId, syntaxLanguageForNoteId } from "./editor/file-note.ts";
+import { redo, selectAll, undo } from "@codemirror/commands";
+import { openSearchPanel } from "@codemirror/search";
 
 function moduleIndicatorText(modules: NoteModules): string {
   const labels: string[] = [];
@@ -110,6 +115,27 @@ function noteLineCount(body: string): number {
 
 function largeNoteReducedFeatures(note: Note | null): boolean {
   return !!note && noteLineCount(note.body) > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT;
+}
+
+function sameNoteModules(left: NoteModules, right: NoteModules): boolean {
+  return (
+    left.math === right.math &&
+    left.table === right.table &&
+    left.variables === right.variables &&
+    left.style === right.style &&
+    left.cross_note === right.cross_note
+  );
+}
+
+function noteFeatureContextChanged(previous: Note | null, next: Note | null): boolean {
+  if (!previous || !next) return previous !== next;
+  if (previous.id !== next.id) return true;
+  if (previous.access_mode !== next.access_mode) return true;
+  if (previous.is_unlocked !== next.is_unlocked) return true;
+  if (!sameNoteModules(previous.modules, next.modules)) return true;
+  if (largeNoteReducedFeatures(previous) !== largeNoteReducedFeatures(next)) return true;
+  if (isNonMarkdownFileNoteId(previous.id) !== isNonMarkdownFileNoteId(next.id)) return true;
+  return syntaxLanguageForNoteId(previous.id) !== syntaxLanguageForNoteId(next.id);
 }
 
 function autosaveEnabled(): boolean {
@@ -335,8 +361,11 @@ async function syncActiveNoteIfBackendChanged() {
       return;
     }
     const sameBody = latest.body === active.body;
+    const shouldReconfigure = noteFeatureContextChanged(active, latest);
     state.setActiveNote(latest);
-    reconfigureEditorForNote(latest);
+    if (shouldReconfigure) {
+      reconfigureEditorForNote(latest);
+    }
     if (!sameBody) {
       // Debounce editor resets so rapid external changes (e.g. IMAP initial
       // sync prepending many emails) coalesce into a single reset instead of
@@ -993,6 +1022,257 @@ async function handleInsertDate() {
   focusEditor();
 }
 
+async function handleBackupFile() {
+  await flushSave(true, false, {
+    throwOnError: true,
+    suppressErrorCallback: true,
+  });
+  const path = await save({
+    defaultPath: "slate-notes.zip",
+    filters: [{ name: "Zip archive", extensions: ["zip"] }],
+  });
+  if (!path) return;
+  const message = await runBackupCommand({ path });
+  if (message.trim().length > 0) showToast(message);
+}
+
+function insertSnippetAtCursor(text: string, cursorOffset = text.length): boolean {
+  const view = getEditorView();
+  if (!view) return false;
+  const main = view.state.selection.main;
+  const from = main.from;
+  const to = main.to;
+  const offset = Math.max(0, Math.min(text.length, cursorOffset));
+  view.dispatch({
+    changes: { from, to, insert: text },
+    selection: { anchor: from + offset },
+    scrollIntoView: true,
+  });
+  view.focus();
+  return true;
+}
+
+function insertTableSnippetAtCursor(): boolean {
+  const text = "| Column 1 | Column 2 |\n| --- | --- |\n|  |  |";
+  const cursorOffset = text.indexOf("|  |") + 2;
+  return insertSnippetAtCursor(text, cursorOffset > 1 ? cursorOffset : text.length);
+}
+
+function runCodeMirrorMenuCommand(
+  command: (target: NonNullable<ReturnType<typeof getEditorView>>) => boolean,
+  fallbackMessage: string,
+) {
+  const view = getEditorView();
+  if (!view || !command(view)) {
+    showToast(fallbackMessage);
+    return;
+  }
+  view.focus();
+}
+
+function runClipboardEditCommand(command: "cut" | "copy" | "paste", label: string) {
+  focusEditor();
+  if (!document.execCommand(command)) {
+    showToast(`${label} unavailable`);
+  }
+}
+
+function editorCommandOptions() {
+  return {
+    mode: "editor" as const,
+    dateFormat: appConfig?.date_format,
+    dateTimeFormat: appConfig?.date_time_format,
+    onWriteCommand: (options?: { force?: boolean }) =>
+      performFormatAndSave({
+        force: options?.force,
+        throwOnError: true,
+        suppressErrorCallback: true,
+      }),
+    onExitCommand: handleExitWindow,
+    onExportCommand: runExportCommand,
+    onBackupCommand: runBackupCommand,
+    onClipWatchStateChange: (active: boolean) => {
+      clipWatchActive = active;
+      updateStatusBar();
+    },
+    onClipWatchPaste: (text: string) => {
+      const suffix = text.includes("\n") ? " (multiline)" : "";
+      showToast(`clip-watch pasted${suffix}`);
+    },
+    getNoteModules: () =>
+      appConfig ? modulesForNote(state.activeNote, appConfig) : null,
+    setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),
+    onCollectionCommand: handleCollectionCommand,
+  };
+}
+
+async function runEditorMenuCommand(command: string) {
+  const view = getEditorView();
+  if (!view) {
+    showToast("Editor unavailable");
+    return;
+  }
+  const message = await executeCommand(view, command, editorCommandOptions());
+  if (message.trim().length > 0) showToast(message);
+  view.focus();
+}
+
+function openAppCommandPalette() {
+  const view = getEditorView();
+  if (!view) {
+    showToast("Editor unavailable");
+    return;
+  }
+  openCommandPicker(view, {
+    ...editorCommandOptions(),
+    source: "shortcut",
+  });
+}
+
+function buildAppMenuSections(): AppMenuSection[] {
+  const hasEditor = () => getEditorView() === null;
+  return [
+    {
+      label: "File",
+      groups: [
+        {
+          items: [
+            { label: "New note", shortcut: "Ctrl+N", action: () => runAction(handleCreateNote) },
+            { label: "Switch note", shortcut: "Ctrl+P", action: openNoteSwitcher },
+            { label: "Collections", shortcut: "Ctrl+G", action: () => runAction(openCollectionPickerForSession) },
+          ],
+        },
+        {
+          items: [
+            { label: "Save", shortcut: "Ctrl+S", action: () => runAction(performFormatAndSave) },
+            { label: "Export to clipboard", shortcut: "Ctrl+E", action: () => runAction(handleExportClipboard) },
+            { label: "Export file...", shortcut: "Ctrl+Shift+E", action: () => runAction(handleExportFile) },
+            { label: "Backup database...", action: () => runAction(handleBackupFile) },
+          ],
+        },
+        {
+          items: [
+            { label: "Hide window", shortcut: "Ctrl+W", action: () => runAction(handleHideWindow) },
+            { label: "Quit", shortcut: "Ctrl+Q", action: () => runAction(handleExitWindow) },
+          ],
+        },
+      ],
+    },
+    {
+      label: "Edit",
+      groups: [
+        {
+          items: [
+            { label: "Undo", shortcut: "Ctrl+Z", action: () => runCodeMirrorMenuCommand(undo, "Nothing to undo"), disabled: hasEditor },
+            { label: "Redo", shortcut: "Ctrl+Y", action: () => runCodeMirrorMenuCommand(redo, "Nothing to redo"), disabled: hasEditor },
+          ],
+        },
+        {
+          items: [
+            { label: "Cut", shortcut: "Ctrl+X", action: () => runClipboardEditCommand("cut", "Cut"), disabled: hasEditor },
+            { label: "Copy", shortcut: "Ctrl+C", action: () => runClipboardEditCommand("copy", "Copy"), disabled: hasEditor },
+            { label: "Paste", shortcut: "Ctrl+V", action: () => runClipboardEditCommand("paste", "Paste"), disabled: hasEditor },
+            { label: "Select all", shortcut: "Ctrl+A", action: () => runCodeMirrorMenuCommand(selectAll, "Select all unavailable"), disabled: hasEditor },
+          ],
+        },
+        {
+          items: [
+            { label: "Find", shortcut: "Ctrl+F", action: () => runCodeMirrorMenuCommand(openSearchPanel, "Search unavailable"), disabled: hasEditor },
+          ],
+        },
+      ],
+    },
+    {
+      label: "Format",
+      groups: [
+        {
+          items: [
+            { label: "Bold", shortcut: "Ctrl+B", action: () => runAction(() => runEditorMenuCommand("format bold")), disabled: hasEditor },
+            { label: "Italic", shortcut: "Ctrl+I", action: () => runAction(() => runEditorMenuCommand("format italic")), disabled: hasEditor },
+            { label: "Strikethrough", shortcut: "Ctrl+Shift+X", action: () => runAction(() => runEditorMenuCommand("format strike")), disabled: hasEditor },
+            { label: "Inline code", action: () => runAction(() => runEditorMenuCommand("format code")), disabled: hasEditor },
+            { label: "Clear inline formatting", action: () => runAction(() => runEditorMenuCommand("format clear")), disabled: hasEditor },
+          ],
+        },
+        {
+          items: [
+            { label: "Heading", action: () => runAction(() => runEditorMenuCommand("paragraph title")), disabled: hasEditor },
+            { label: "Bullet list", action: () => runAction(() => runEditorMenuCommand("paragraph ulist")), disabled: hasEditor },
+            { label: "Numbered list", action: () => runAction(() => runEditorMenuCommand("paragraph olist")), disabled: hasEditor },
+            { label: "Checklist", action: () => runAction(() => runEditorMenuCommand("paragraph clist")), disabled: hasEditor },
+            { label: "Format document", action: () => runAction(() => runEditorMenuCommand("format")), disabled: hasEditor },
+          ],
+        },
+      ],
+    },
+    {
+      label: "Insert",
+      groups: [
+        {
+          items: [
+            { label: "Date", shortcut: "Ctrl+Shift+D", action: () => runAction(handleInsertDate), disabled: hasEditor },
+            { label: "Reminder", action: () => runAction(() => runEditorMenuCommand("remind")), disabled: hasEditor },
+            { label: "Wiki link", action: () => insertSnippetAtCursor("[[]]", 2), disabled: hasEditor },
+            { label: "Image link", action: () => insertSnippetAtCursor("![]()", 4), disabled: hasEditor },
+          ],
+        },
+        {
+          items: [
+            { label: "Table", action: insertTableSnippetAtCursor, disabled: hasEditor },
+            { label: "Code block", action: () => insertSnippetAtCursor("```\n\n```", 4), disabled: hasEditor },
+          ],
+        },
+      ],
+    },
+    {
+      label: "View",
+      groups: [
+        {
+          items: [
+            { label: "Increase font size", shortcut: "Ctrl++", action: () => { const selection = changeFontSize(1); showToast(`Font size: ${selection.fontSize}px`); } },
+            { label: "Decrease font size", shortcut: "Ctrl+-", action: () => { const selection = changeFontSize(-1); showToast(`Font size: ${selection.fontSize}px`); } },
+            { label: "Next font", shortcut: "Ctrl+Alt++", action: () => { const selection = cycleFont(1); showToast(`Font: ${getFontLabel(selection.font)} (${selection.fontSize}px)`); } },
+            { label: "Previous font", shortcut: "Ctrl+Alt+-", action: () => { const selection = cycleFont(-1); showToast(`Font: ${getFontLabel(selection.font)} (${selection.fontSize}px)`); } },
+          ],
+        },
+        {
+          items: [
+            { label: "Toggle fold", shortcut: "Ctrl+Alt+Z", action: () => runAction(() => runEditorMenuCommand("fold-toggle")), disabled: hasEditor },
+            { label: "Fold", action: () => runAction(() => runEditorMenuCommand("fold")), disabled: hasEditor },
+            { label: "Unfold", action: () => runAction(() => runEditorMenuCommand("unfold")), disabled: hasEditor },
+          ],
+        },
+      ],
+    },
+    {
+      label: "Tools",
+      groups: [
+        {
+          items: [
+            { label: "Command palette", shortcut: "Ctrl+Shift+;", action: openAppCommandPalette, disabled: hasEditor },
+            { label: "Module status", action: () => runAction(() => runEditorMenuCommand("module status")), disabled: hasEditor },
+          ],
+        },
+        {
+          items: [
+            { label: "Toggle math", action: () => runAction(() => runEditorMenuCommand("module math toggle")), disabled: hasEditor },
+            { label: "Toggle tables", action: () => runAction(() => runEditorMenuCommand("module table toggle")), disabled: hasEditor },
+            { label: "Toggle variables", action: () => runAction(() => runEditorMenuCommand("module variables toggle")), disabled: hasEditor },
+            { label: "Toggle style", action: () => runAction(() => runEditorMenuCommand("module style toggle")), disabled: hasEditor },
+            { label: "Toggle cross-note variables", action: () => runAction(() => runEditorMenuCommand("module cross_note toggle")), disabled: hasEditor },
+          ],
+        },
+        {
+          items: [
+            { label: "Clip-watch on", action: () => runAction(() => runEditorMenuCommand("clip-watch on")), disabled: hasEditor },
+            { label: "Clip-watch off", action: () => runAction(() => runEditorMenuCommand("clip-watch off")), disabled: hasEditor },
+          ],
+        },
+      ],
+    },
+  ];
+}
+
 function confirmInApp(
   message: string,
   labels: { confirm?: string; cancel?: string } = {},
@@ -1552,6 +1832,13 @@ let statusCollectionEl: HTMLElement;
 let clipWatchActive = false;
 let macroRecordingRegister: string | null = null;
 
+function statusHintText(): string {
+  if (appConfig?.vim_mode) {
+    return "i insert | : commands | Ctrl+P notes";
+  }
+  return "Ctrl+Shift+; commands | Ctrl+P notes | Ctrl+B/I/K format";
+}
+
 function createStatusBar(container: HTMLElement) {
   const bar = document.createElement("div");
   bar.className = "status-bar";
@@ -1568,7 +1855,7 @@ function createStatusBar(container: HTMLElement) {
 
   const hint = document.createElement("span");
   hint.className = "status-bar-hint";
-  hint.textContent = "Ctrl+P notes | Ctrl+G collections";
+  hint.textContent = statusHintText();
 
   statusMetaEl.appendChild(hint);
   bar.appendChild(statusTitleEl);
@@ -1597,6 +1884,9 @@ function updateStatusBar() {
   }
 
   const hintEl = statusMetaEl.querySelector(".status-bar-hint");
+  if (hintEl) {
+    hintEl.textContent = statusHintText();
+  }
   if (state.workingCollection) {
     statusCollectionEl.textContent = `| ${state.workingCollection.name}`;
     statusCollectionEl.hidden = false;
@@ -1689,10 +1979,13 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
   const container = document.getElementById("app");
   if (!container) throw new Error("Missing #app element");
 
+  const menuEl = document.createElement("div");
+  menuEl.className = "app-menu-host";
+  container.appendChild(menuEl);
+
   const editorEl = document.createElement("div");
   editorEl.id = "editor";
-  editorEl.style.flex = "1";
-  editorEl.style.overflow = "hidden";
+  editorEl.className = "editor-shell";
   container.appendChild(editorEl);
 
   const notePromise = getOrCreateNote();
@@ -1714,6 +2007,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
     editorEl,
     backgroundTasksEnabled ? startupEditorOptionsForNote(note) : editorOptionsForNote(note),
   );
+  mountAppMenu(menuEl, buildAppMenuSections());
   startupMark("ui_editor_mounted");
   if (backgroundTasksEnabled) {
     scheduleEditorHydrationForStartup(note.id);
@@ -1746,7 +2040,7 @@ export async function initApp(configSource?: ThemeConfig | Promise<ThemeConfig>)
       `Large-note mode: folding, decorations, and calc disabled above ${LARGE_NOTE_FULL_FEATURE_LINE_LIMIT.toLocaleString()} lines`,
     );
   } else if (config.vim_mode) {
-    showToast("Vim mode: :sum, :sum list/row/column/doc, :avg, :avg list/row/column/doc, :date, :notify, :format, :clip-watch on, :clip-watch off, :w, :wq, :q");
+    showToast("Vim mode: i inserts, : opens commands, Esc returns to normal");
   }
 
   state.on(() => {

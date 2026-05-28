@@ -24,6 +24,132 @@ html, body {
   background-position: 0 0;
 }
 
+.app-menu-host {
+  flex: 0 0 auto;
+  min-height: 30px;
+  background: color-mix(in srgb, var(--bg-surface) 94%, var(--bg) 6%);
+  border-bottom: 1px solid var(--border);
+  contain: layout paint style;
+  user-select: none;
+}
+
+.app-menu {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 30px;
+  padding: 2px 8px;
+}
+
+.app-menu-trigger {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 3px 9px;
+  cursor: pointer;
+}
+
+.app-menu-trigger:hover,
+.app-menu-trigger:focus-visible,
+.app-menu-trigger[aria-expanded="true"] {
+  outline: none;
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--border) 74%, var(--accent) 26%);
+  background: var(--bg-overlay);
+}
+
+.app-menu-panel {
+  position: fixed;
+  z-index: 210;
+  display: none;
+  min-width: 230px;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, var(--accent) 22%);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.24),
+    0 0 0 1px color-mix(in srgb, var(--accent) 8%, transparent);
+  contain: layout paint style;
+}
+
+.app-menu-panel--open {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  animation: ui-popup-in var(--motion-duration-in) var(--motion-ease);
+}
+
+.app-menu-separator {
+  height: 1px;
+  margin: 4px 3px;
+  background: var(--border);
+}
+
+.app-menu-item {
+  appearance: none;
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 5px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.app-menu-item:hover,
+.app-menu-item:focus-visible {
+  outline: none;
+  border-color: color-mix(in srgb, var(--border) 76%, var(--accent) 24%);
+  background: var(--bg-overlay);
+}
+
+.app-menu-item:disabled {
+  cursor: default;
+  color: var(--fg-muted);
+  opacity: 0.62;
+}
+
+.app-menu-item:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.app-menu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-menu-item-shortcut {
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.editor-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  contain: layout style;
+}
+
 .status-bar {
   display: flex;
   align-items: center;
@@ -36,6 +162,7 @@ html, body {
   flex-shrink: 0;
   user-select: none;
   min-height: 28px;
+  contain: layout paint style;
 }
 
 .status-bar-title {
@@ -60,52 +187,47 @@ html, body {
   opacity: 0.6;
 }
 
-.status-clip-watch {
+.status-clip-watch,
+.status-macro-recording,
+.status-modules,
+.status-collection,
+.status-large-note {
   display: inline-flex;
   align-items: center;
   padding: 1px 7px;
-  border: 1px solid var(--accent);
   border-radius: 999px;
-  color: var(--accent);
-  background: var(--bg-overlay);
   font-size: 11px;
   letter-spacing: 0.02em;
+}
+
+.status-clip-watch {
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  background: var(--bg-overlay);
 }
 
 .status-macro-recording {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
   border: 1px solid var(--accent);
-  border-radius: 999px;
   color: var(--accent);
   background: var(--bg-overlay);
-  font-size: 11px;
-  letter-spacing: 0.02em;
 }
 
 .status-modules {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
   border: 1px solid var(--border);
-  border-radius: 999px;
   color: var(--fg-dim);
   background: var(--bg-overlay);
-  font-size: 11px;
-  letter-spacing: 0.02em;
 }
 
 .status-collection {
-  display: inline-flex;
-  align-items: center;
-  padding: 1px 7px;
   border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border));
-  border-radius: 999px;
   color: color-mix(in srgb, var(--accent) 72%, var(--fg));
   background: color-mix(in srgb, var(--accent) 12%, var(--bg-overlay));
-  font-size: 11px;
-  letter-spacing: 0.02em;
+}
+
+.status-large-note {
+  border: 1px solid color-mix(in srgb, var(--accent) 52%, var(--border));
+  color: color-mix(in srgb, var(--accent) 78%, var(--fg));
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-overlay));
 }
 
 .status-collection-fixed {
@@ -131,6 +253,7 @@ html, body {
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
+  will-change: opacity;
   z-index: 200;
 }
 

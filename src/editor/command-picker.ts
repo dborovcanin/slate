@@ -23,6 +23,10 @@ interface CommandPickerOptions {
   onBackupCommand?: (options: {
     path: string | null;
   }) => Promise<string | void> | string | void;
+  onCollectionCommand?: (options: {
+    action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
+    collection: string | null;
+  }) => Promise<string | void> | string | void;
   source?: "vim-colon" | "shortcut";
   onCancel?: () => void;
   selectionOverride?: {
@@ -47,6 +51,10 @@ interface CommandModeExtensionOptions {
   }) => Promise<string | void> | string | void;
   onBackupCommand?: (options: {
     path: string | null;
+  }) => Promise<string | void> | string | void;
+  onCollectionCommand?: (options: {
+    action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
+    collection: string | null;
   }) => Promise<string | void> | string | void;
 }
 
@@ -231,6 +239,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         setNoteModules: options.setNoteModules,
         onExportCommand: options.onExportCommand,
         onBackupCommand: options.onBackupCommand,
+        onCollectionCommand: options.onCollectionCommand,
         selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
@@ -260,7 +269,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   pickerOverlay = createListOverlay<CommandSuggestion>({
     container: view.dom,
     classPrefix: "command-picker",
-    placeholder: "command",
+    placeholder: "type a command",
     backdrop: false,
     getItems: (query) => listCommandSuggestions(options.mode, query),
     renderItem: renderCommandItem,
@@ -300,7 +309,10 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
   // Insert the `:` prefix before the input element
   pickerOverlay.open();
   const bar = view.dom.querySelector(".command-picker-bar");
-  if (bar) bar.prepend(prefixEl);
+  if (bar) {
+    bar.prepend(prefixEl);
+    bar.querySelector("input")?.setAttribute("aria-label", "Command");
+  }
 }
 
 export function commandModeExtension(options: CommandModeExtensionOptions = {}) {
@@ -322,6 +334,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         setNoteModules: options.setNoteModules,
         onExportCommand: options.onExportCommand,
         onBackupCommand: options.onBackupCommand,
+        onCollectionCommand: options.onCollectionCommand,
         source: "shortcut",
       });
       return true;
