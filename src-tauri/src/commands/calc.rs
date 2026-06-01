@@ -210,7 +210,11 @@ pub async fn evaluate_note_context_delta(
             eval_range,
             extern_vars,
             // Pass the pre-scanned refs so the engine doesn't rescan the same lines.
-            precomputed_refs: if has_cross_note_syntax { Some(refs) } else { None },
+            precomputed_refs: if has_cross_note_syntax {
+                Some(refs)
+            } else {
+                None
+            },
         };
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
     })
@@ -225,7 +229,11 @@ pub async fn evaluate_note_context_delta(
             extern_vars: Vec::new(),
             ..Default::default()
         };
-        CalcEngine::new().evaluate_note_context_with_generation(&fallback_lines, options, generation)
+        CalcEngine::new().evaluate_note_context_with_generation(
+            &fallback_lines,
+            options,
+            generation,
+        )
     });
 
     // Update the cross-note index with this note's latest exports and deps.

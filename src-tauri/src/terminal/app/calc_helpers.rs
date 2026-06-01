@@ -148,7 +148,16 @@ pub(super) fn compute_calc_results(
     variables_enabled: bool,
 ) -> Vec<Option<String>> {
     let engine = CalcEngine::new();
-    compute_calc_data(&engine, lines, variables_enabled, true, true, None, Vec::new()).line_results
+    compute_calc_data(
+        &engine,
+        lines,
+        variables_enabled,
+        true,
+        true,
+        None,
+        Vec::new(),
+    )
+    .line_results
 }
 
 /// Decide whether an already-eligible line's trailing ` = <literal>` should

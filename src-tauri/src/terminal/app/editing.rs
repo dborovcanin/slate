@@ -2501,7 +2501,8 @@ impl TerminalApp {
             self.dismiss_variable_autocomplete_popup();
             return;
         };
-        let Some((anchor_row, anchor_col)) = self.variable_popup_anchor(state.popup_anchor_col) else {
+        let Some((anchor_row, anchor_col)) = self.variable_popup_anchor(state.popup_anchor_col)
+        else {
             self.dismiss_variable_autocomplete_popup();
             return;
         };
@@ -3563,10 +3564,8 @@ impl TerminalApp {
         // so the recompute following a Tab press can still get correct values when
         // the autocomplete background thread is nearly done.
         let (missing, in_flight): (Vec<String>, Vec<String>) = {
-            let short_ids: rustc_hash::FxHashSet<String> = refs
-                .iter()
-                .map(|r| r.note_short_id.clone())
-                .collect();
+            let short_ids: rustc_hash::FxHashSet<String> =
+                refs.iter().map(|r| r.note_short_id.clone()).collect();
             match self.cross_note_var_index.lock() {
                 Ok(index) => {
                     let mut missing = Vec::new();
@@ -3595,7 +3594,11 @@ impl TerminalApp {
                 let _ = self.cross_note_eval_condvar.wait_timeout_while(
                     lock,
                     Duration::from_millis(200),
-                    |index| in_flight.iter().any(|sid| !index.was_full_eval_attempted(sid)),
+                    |index| {
+                        in_flight
+                            .iter()
+                            .any(|sid| !index.was_full_eval_attempted(sid))
+                    },
                 );
             }
         }

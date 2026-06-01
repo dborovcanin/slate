@@ -307,11 +307,8 @@ pub(super) fn reformat_table_row_for_display(
     });
 
     // Find which cell (pipe window index) the cursor falls in.
-    let cursor_cell_idx: Option<usize> = cursor_byte_in_trimmed.and_then(|cb| {
-        pipes
-            .windows(2)
-            .position(|w| cb > w[0] && cb <= w[1])
-    });
+    let cursor_cell_idx: Option<usize> = cursor_byte_in_trimmed
+        .and_then(|cb| pipes.windows(2).position(|w| cb > w[0] && cb <= w[1]));
 
     let mut out = String::with_capacity(line.len() + 16);
     let mut mapped_cursor: Option<usize> = None;
@@ -468,7 +465,10 @@ mod tests {
         let line = "| `code` | plain |".to_string();
         let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[4, 5]), None);
         // col_w=4 (visible "code"), raw "`code`" = 6 chars; padding = 4-4 = 0
-        assert!(out.contains("`code`"), "markers kept for styling by renderer");
+        assert!(
+            out.contains("`code`"),
+            "markers kept for styling by renderer"
+        );
         assert_eq!(cur, None);
     }
 
@@ -477,7 +477,10 @@ mod tests {
         // cursor at char 3 (inside `code`)
         let line = "| `code` | plain |".to_string();
         let (out, mc, pipes) = reformat_table_row_for_display(&line, &w(&[6, 5]), Some(3));
-        assert!(out.contains("`code`"), "markers should be visible in cursor cell");
+        assert!(
+            out.contains("`code`"),
+            "markers should be visible in cursor cell"
+        );
         assert!(mc.is_some());
         assert!(pipes.is_some(), "cursor cell pipe positions returned");
     }

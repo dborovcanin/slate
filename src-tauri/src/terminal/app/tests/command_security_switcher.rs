@@ -1440,7 +1440,14 @@ fn command_bar_tab_autocompletes_single_option_then_opens_picker_for_multiple_op
             .iter()
             .map(|entry| entry.token.as_str())
             .collect::<Vec<_>>(),
-        vec!["cross_note", "math", "status", "style", "table", "variables"]
+        vec![
+            "cross_note",
+            "math",
+            "status",
+            "style",
+            "table",
+            "variables"
+        ]
     );
     assert_eq!(app.command_completion.selected_index, 0);
 

@@ -218,9 +218,7 @@ impl EditorEngine {
         }
         if let Some(parsed) = command_catalog::parse_backup_command(raw_input) {
             return match parsed.action {
-                BackupAction::Export => {
-                    Some(HostCommandPlan::BackupExport { path: parsed.path })
-                }
+                BackupAction::Export => Some(HostCommandPlan::BackupExport { path: parsed.path }),
                 BackupAction::Load => Some(HostCommandPlan::BackupLoad { path: parsed.path }),
             };
         }
@@ -533,10 +531,7 @@ mod tests {
             Some(CommandDispatchKind::HostModule)
         );
         assert_eq!(
-            EditorEngine::classify_command_dispatch(
-                CommandMode::Editor,
-                "collection choose Inbox",
-            ),
+            EditorEngine::classify_command_dispatch(CommandMode::Editor, "collection choose Inbox",),
             Some(CommandDispatchKind::HostCollection)
         );
         assert_eq!(

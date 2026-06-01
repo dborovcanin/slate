@@ -2731,7 +2731,6 @@ fn map_unique_constraint_error(error: rusqlite::Error) -> String {
     text
 }
 
-
 fn is_note_protected(mode: NoteAccessMode) -> bool {
     !matches!(mode, NoteAccessMode::None)
 }

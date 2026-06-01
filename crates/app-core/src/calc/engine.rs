@@ -615,48 +615,48 @@ impl CalcEngine {
 
         // Build extern_vars lookup and preprocess lines for cross-note refs.
         // Use precomputed_refs when available to avoid rescanning the same lines.
-        let (eval_lines, cross_note_refs, lines_with_unresolved) =
-            if options.cross_note_enabled && !options.extern_vars.is_empty() {
-                let extern_map: FxHashMap<(String, String), f64> = options
-                    .extern_vars
-                    .iter()
-                    .map(|ev| {
-                        (
-                            (ev.note_short_id.clone(), ev.var_normalized.clone()),
-                            ev.value,
-                        )
-                    })
-                    .collect();
-                let refs = options
-                    .precomputed_refs
-                    .unwrap_or_else(|| scan_cross_note_refs(lines));
-                let mut preprocessed: Vec<String> = Vec::with_capacity(lines.len());
-                let mut unresolved_set: rustc_hash::FxHashSet<usize> =
-                    rustc_hash::FxHashSet::default();
-                for (idx, line) in lines.iter().enumerate() {
-                    let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
-                    if has_unresolved {
-                        unresolved_set.insert(idx);
-                    }
-                    preprocessed.push(new_line);
+        let (eval_lines, cross_note_refs, lines_with_unresolved) = if options.cross_note_enabled
+            && !options.extern_vars.is_empty()
+        {
+            let extern_map: FxHashMap<(String, String), f64> = options
+                .extern_vars
+                .iter()
+                .map(|ev| {
+                    (
+                        (ev.note_short_id.clone(), ev.var_normalized.clone()),
+                        ev.value,
+                    )
+                })
+                .collect();
+            let refs = options
+                .precomputed_refs
+                .unwrap_or_else(|| scan_cross_note_refs(lines));
+            let mut preprocessed: Vec<String> = Vec::with_capacity(lines.len());
+            let mut unresolved_set: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+            for (idx, line) in lines.iter().enumerate() {
+                let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
+                if has_unresolved {
+                    unresolved_set.insert(idx);
                 }
-                (std::borrow::Cow::Owned(preprocessed), refs, unresolved_set)
-            } else if options.cross_note_enabled {
-                let refs = options
-                    .precomputed_refs
-                    .unwrap_or_else(|| scan_cross_note_refs(lines));
-                (
-                    std::borrow::Cow::Borrowed(lines),
-                    refs,
-                    rustc_hash::FxHashSet::default(),
-                )
-            } else {
-                (
-                    std::borrow::Cow::Borrowed(lines),
-                    Vec::new(),
-                    rustc_hash::FxHashSet::default(),
-                )
-            };
+                preprocessed.push(new_line);
+            }
+            (std::borrow::Cow::Owned(preprocessed), refs, unresolved_set)
+        } else if options.cross_note_enabled {
+            let refs = options
+                .precomputed_refs
+                .unwrap_or_else(|| scan_cross_note_refs(lines));
+            (
+                std::borrow::Cow::Borrowed(lines),
+                refs,
+                rustc_hash::FxHashSet::default(),
+            )
+        } else {
+            (
+                std::borrow::Cow::Borrowed(lines),
+                Vec::new(),
+                rustc_hash::FxHashSet::default(),
+            )
+        };
 
         let eval_lines: &[String] = &eval_lines;
 

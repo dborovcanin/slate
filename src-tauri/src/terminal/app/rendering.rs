@@ -1,8 +1,7 @@
 use super::{
     contrast_fg_for_bg, cursor_render_char_col, display_cols_prefix_and_total, draw_framed_surface,
-    draw_row_at_styled,
-    find_table_formula_segments, format_formula_display_value, formula_marker_token, goto,
-    is_markdown_table_line, line_display_cols, min, pad_right,
+    draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
+    formula_marker_token, goto, is_markdown_table_line, line_display_cols, min, pad_right,
     reformat_table_row_for_display, table_block_bounds_for_line, table_cell_info_at_char,
     table_display_col_widths, viewport_col_for_display_col, AnsiStyle, DatePickerAction,
     TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
@@ -266,8 +265,7 @@ impl TerminalApp {
     /// Returns per-column visible display widths for the table block containing
     /// `line_idx`. Results are cached by `(block_start, block_hash)`.
     fn table_display_col_widths_for_line(&mut self, line_idx: usize) -> Vec<usize> {
-        let Some((block_start, block_end)) =
-            table_block_bounds_for_line(&self.lines, line_idx)
+        let Some((block_start, block_end)) = table_block_bounds_for_line(&self.lines, line_idx)
         else {
             return Vec::new();
         };
@@ -285,7 +283,8 @@ impl TerminalApp {
             return cached.clone();
         }
         let widths = table_display_col_widths(&self.lines[block_start..=block_end]);
-        self.table_display_col_width_cache.insert(key, widths.clone());
+        self.table_display_col_width_cache
+            .insert(key, widths.clone());
         // Evict any stale entries for this block_start (different block content).
         self.table_display_col_width_cache
             .retain(|k, _| k.0 != block_start || k.1 == block_hash);
@@ -1250,13 +1249,16 @@ impl TerminalApp {
                     let col_widths = self.table_display_col_widths_for_line(line_idx);
                     if !col_widths.is_empty() {
                         let (display_line, mapped_col, reflow_cell_pipes) =
-                            reformat_table_row_for_display(rendered_line.as_ref(), &col_widths, cursor);
+                            reformat_table_row_for_display(
+                                rendered_line.as_ref(),
+                                &col_widths,
+                                cursor,
+                            );
                         rendered_line = Cow::Owned(display_line);
                         if is_cursor_line && cursor_line_override.is_none() {
                             let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
                             line_cursor_col = Some(mc);
-                            cursor_line_override =
-                                Some((rendered_line.as_ref().to_string(), mc));
+                            cursor_line_override = Some((rendered_line.as_ref().to_string(), mc));
                             // Record output pipe positions so focused_pipe_ranges
                             // below can use reformatted positions instead of source ones.
                             table_reflow_cell_pipes = reflow_cell_pipes;
