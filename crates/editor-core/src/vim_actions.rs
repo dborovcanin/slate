@@ -1177,7 +1177,10 @@ fn char_to_byte_offset(line: &str, char_idx: usize) -> usize {
         .unwrap_or(line.len())
 }
 
-fn find_word_object_bounds(line: &str, cursor_col: usize, around: bool) -> Option<(usize, usize)> {
+/// Char-index bounds of the word text object (`iw` / `aw`) at `cursor_col` on a
+/// single line. Shared by the WASM path and the native TUI so both front ends
+/// resolve word objects identically.
+pub fn find_word_object_bounds(line: &str, cursor_col: usize, around: bool) -> Option<(usize, usize)> {
     let chars: Vec<char> = line.chars().collect();
     let len = chars.len();
     if len == 0 {

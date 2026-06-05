@@ -3,7 +3,7 @@ use super::{
     VimMacroStep, VimPipelineResult, VimRegister, VimRegisterMode,
 };
 use super::{clipboard, ClipboardWriteBackend};
-use crate::terminal::text_utils::{is_word_char, join_lines};
+use crate::terminal::text_utils::join_lines;
 
 const VIM_MACRO_REPLAY_STEP_BUDGET: usize = 10_000;
 
@@ -362,56 +362,13 @@ impl TerminalApp {
     }
 
     pub(super) fn find_word_object_bounds(&self, around: bool) -> Option<(usize, usize)> {
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        let len = chars.len();
-        if len == 0 {
-            return None;
-        }
-
-        let mut idx = self.cursor_col.min(len.saturating_sub(1));
-        if !is_word_char(chars[idx]) {
-            if idx > 0 && is_word_char(chars[idx - 1]) {
-                idx -= 1;
-            } else {
-                while idx < len && !is_word_char(chars[idx]) {
-                    idx += 1;
-                }
-                if idx >= len {
-                    return None;
-                }
-            }
-        }
-
-        let mut start = idx;
-        while start > 0 && is_word_char(chars[start - 1]) {
-            start -= 1;
-        }
-        let mut end = idx + 1;
-        while end < len && is_word_char(chars[end]) {
-            end += 1;
-        }
-
-        if around {
-            let mut astart = start;
-            let mut aend = end;
-            while aend < len && chars[aend].is_whitespace() {
-                aend += 1;
-            }
-            if aend == end {
-                while astart > 0 && chars[astart - 1].is_whitespace() {
-                    astart -= 1;
-                }
-            }
-            start = astart;
-            end = aend;
-        }
-
-        if start >= end {
-            None
-        } else {
-            Some((start, end))
-        }
+        // Delegate to the shared core implementation so word objects resolve
+        // identically in the TUI and the WASM/UI path.
+        crate::editor_core::vim_actions::find_word_object_bounds(
+            self.current_line(),
+            self.cursor_col,
+            around,
+        )
     }
 
     pub(super) fn find_pipe_object_bounds(&self, around: bool) -> Option<(usize, usize)> {

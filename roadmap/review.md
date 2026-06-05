@@ -23,19 +23,20 @@ This pass added new findings, shipped the undo span-gate fix and the WASM analyz
 **Problem**
 `src-tauri/src/terminal/app/editing.rs` (4227 lines), `vim_actions.rs` (1441 lines), and `command_search_switcher.rs` (2834 lines) still re-implement semantics that already live in `editor-core`. Confirmed duplications as of this pass:
 
-- `terminal/app/vim_actions.rs:364-538` — `find_word_object_bounds`, `find_pipe_object_bounds`, `apply_word_text_object`, `apply_pipe_text_object`. Parallel implementations of word/pipe text-object selection. Shared core already has the canonical version at `crates/editor-core/src/vim_actions.rs:665-723` (`execute_word_text_object` / `execute_pipe_text_object`, with bounds helpers at `1180-1296`), reachable from the UI path via `wasm_execute_vim_action`.
+- ~~`find_word_object_bounds`~~ **(done this pass)** — the TUI now delegates to the shared `editor_core::vim_actions::find_word_object_bounds` (made `pub`); the duplicated ~50-line body and the now-unused `is_word_char` import were removed. The two impls were verified byte-identical first, so this is pure dedup with zero behavior change (parity replay tests green).
+- `terminal/app/vim_actions.rs` — `find_pipe_object_bounds`, `apply_word_text_object`, `apply_pipe_text_object` remain TUI-local. **Parity bug found while doing the word slice:** the TUI `find_pipe_object_bounds` inner case (`ci|`/`di|`) keeps surrounding whitespace (`start = left + 1`, `end = right`), but core's `find_pipe_object_bounds` (`crates/editor-core/src/vim_actions.rs:1238`) trims leading/trailing whitespace inside the cell. So routing pipe objects through core is *not* a no-op — it changes (arguably fixes) TUI `ci|` behavior. Do it as a deliberate slice: route TUI → core, accept the trim, and update/extend the parity replay cases to lock the unified behavior. Canonical core entry points: `execute_word_text_object` / `execute_pipe_text_object` (`vim_actions.rs:665-723`), bounds helpers at `1180-1296`.
 - `terminal/app/editing.rs:387-540` — `rescan_calc_flags`, `update_calc_flags_incremental`, `rebuild_calc_line_metadata`, `refresh_calc_line_metadata_at`, `splice_calc_line_metadata`. These duplicate `calc_plan::detect_calc_signal_flags_with_mask` (`calc_plan.rs:757`), `contains_variable_assignment_with_mask` (`:730`), `contains_builtin_formula_with_mask` (`:747`), and `line_metadata_for_lines_with_mask` (`:81`). The TUI versions add incremental bookkeeping that core does not (single-line revalidation, line-count-delta splice), so the migration is more than a one-liner — but the per-keystroke signal-detection logic should live in core with the TUI calling through.
 
 Every duplicated primitive is a latent divergence bug: a fix to core semantics has to be manually replicated in the TUI, and the TUI's version will quietly drift.
 
 **Approach**
-Pick one primitive per sitting as a vertical slice. Recommended starting point: word text objects, because they are self-contained and have clear test coverage in editor-core.
+Pick one primitive per sitting as a vertical slice. Word text objects shipped this pass. Remaining order: pipe objects (note the behavior change above), then the calc metadata helpers.
 
-1. Add a WASM-less entry point in `editor-core` for the text-object operation if one doesn't exist (some already do via `wasm_execute_vim_action`).
-2. Route the TUI call through it — pass the line text in, get back the (start, end) byte range.
+1. Add a WASM-less entry point in `editor-core` for the text-object operation if one doesn't exist (some already do; `find_word_object_bounds` is now `pub`).
+2. Route the TUI call through it — pass the line text + cursor col in, get back the (start, end) char range.
 3. Delete the TUI-local impl.
-4. Run the parity test suite (`terminal/app/tests/parity.rs`) to confirm identical behavior.
-5. Repeat for pipe objects, then calc metadata helpers.
+4. Run the parity test suite (`terminal/app/tests/parity.rs`) to confirm behavior; for pipe objects, update the cases to the unified (trimmed) behavior.
+5. Repeat for the calc metadata helpers.
 
 **Risk**
 The TUI calls these synchronously on every keypress, so the core fn must not regress in hot-path cost. Verify with `cargo bench` or a manual timing check after each slice. The `apply_*` wrappers also manage TUI register/cursor/clipboard state, so the call site needs to keep that orchestration on the TUI side while delegating only the pure bounds/diff calculation to core. The incremental calc bookkeeping (item above) must keep its single-line / splice fast paths — do not regress to a full `detect_calc_signal_flags` rescan per keystroke when delegating.

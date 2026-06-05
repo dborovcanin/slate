@@ -4,10 +4,6 @@ use unicode_width::UnicodeWidthChar;
 
 use super::render;
 
-pub fn is_word_char(ch: char) -> bool {
-    ch.is_alphanumeric() || ch == '_'
-}
-
 pub fn split_lines(body: &str) -> Vec<String> {
     if body.is_empty() {
         vec![String::new()]
