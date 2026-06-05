@@ -96,6 +96,87 @@ pub fn line_metadata_for_lines_with_mask(
         .collect()
 }
 
+/// Update calc signal `flags` in place after a single edit, inspecting only the
+/// affected line(s) rather than rescanning the whole document. Flags only ever
+/// flip `false → true` here: a delete that removes the last occurrence of a
+/// signal leaves a stale `true`, which is safe (calc runs when unnecessary, it
+/// never wrongly skips). Callers reset to the true value via a full
+/// `detect_calc_signal_flags_with_mask` rescan on note switch.
+///
+/// `prev_result_len` is the document line count *before* this edit (the front
+/// end's cached per-line result count); `cursor_line` is the edited line.
+pub fn merge_incremental_signal_flags(
+    flags: &mut CalcSignalFlags,
+    lines: &[String],
+    prev_result_len: usize,
+    cursor_line: usize,
+    mask: CalcFeatureMask,
+) {
+    let scan_line = |idx: usize, flags: &mut CalcSignalFlags| {
+        let Some(text) = lines.get(idx) else {
+            return;
+        };
+        if !flags.has_variable_assignment
+            && contains_variable_assignment_with_mask(std::slice::from_ref(text), mask)
+        {
+            flags.has_variable_assignment = true;
+        }
+        if !flags.has_builtin_formula
+            && contains_builtin_formula_with_mask(std::slice::from_ref(text), mask)
+        {
+            flags.has_builtin_formula = true;
+        }
+    };
+
+    if lines.len() != prev_result_len {
+        // Line count changed (Enter / boundary delete). On insert, only the
+        // cursor line and the line above it can introduce new signals. On
+        // delete (lines shrank) we accept stale-true and do nothing.
+        if lines.len() > prev_result_len {
+            let cl = cursor_line.min(lines.len().saturating_sub(1));
+            for i in cl.saturating_sub(1)..=cl {
+                scan_line(i, flags);
+            }
+        }
+        return;
+    }
+
+    // Same-line edit: only the cursor line can introduce new signals.
+    scan_line(cursor_line, flags);
+}
+
+/// Splice `metadata` in place to reflect a line-span edit, recomputing metadata
+/// only for the replaced lines. Returns `false` when `metadata`'s length is
+/// inconsistent with the edit dimensions, signalling the caller to fall back to
+/// a full rebuild rather than corrupt the cache.
+pub fn splice_line_metadata(
+    metadata: &mut Vec<LineMetadata>,
+    lines: &[String],
+    start_line: usize,
+    old_line_span: usize,
+    new_line_span: usize,
+    mask: CalcFeatureMask,
+) -> bool {
+    let expected_prev_len = lines
+        .len()
+        .saturating_add(old_line_span)
+        .saturating_sub(new_line_span);
+    if metadata.len() != expected_prev_len {
+        return false;
+    }
+    let start = start_line.min(metadata.len());
+    let old_end = start.saturating_add(old_line_span).min(metadata.len());
+    let new_end = start_line.saturating_add(new_line_span).min(lines.len());
+    let replacement = lines
+        .get(start_line.min(lines.len())..new_end)
+        .unwrap_or(&[])
+        .iter()
+        .map(|line| line_metadata_with_mask(line, mask))
+        .collect::<Vec<_>>();
+    metadata.splice(start..old_end, replacement);
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CalcSegment {
@@ -3064,5 +3145,77 @@ mod tests {
             Some("total_cost".to_string())
         );
         assert_eq!(assignment_name("not assignment"), None);
+    }
+
+    #[test]
+    fn merge_incremental_signal_flags_same_line_edit_detects_new_signal() {
+        let mask = CalcFeatureMask::default();
+        let lines = vec!["x := 2".to_string(), "plain".to_string()];
+        let mut flags = CalcSignalFlags::default();
+        // Same length as prev results, cursor on the assignment line.
+        merge_incremental_signal_flags(&mut flags, &lines, lines.len(), 0, mask);
+        assert!(flags.has_variable_assignment);
+        assert!(!flags.has_builtin_formula);
+    }
+
+    #[test]
+    fn merge_incremental_signal_flags_on_insert_scans_cursor_and_line_above() {
+        let mask = CalcFeatureMask::default();
+        // Document grew from 1 line to 2 (an Enter); the new signal sits on the
+        // line above the cursor.
+        let lines = vec![
+            "| value | sum_col() |".to_string(),
+            "".to_string(),
+        ];
+        let mut flags = CalcSignalFlags::default();
+        merge_incremental_signal_flags(&mut flags, &lines, 1, 1, mask);
+        assert!(flags.has_builtin_formula);
+    }
+
+    #[test]
+    fn merge_incremental_signal_flags_never_clears_on_delete() {
+        let mask = CalcFeatureMask::default();
+        // Document shrank (delete); flags must not flip true → false even though
+        // no signal remains in the text.
+        let lines = vec!["plain".to_string()];
+        let mut flags = CalcSignalFlags {
+            has_variable_assignment: true,
+            has_builtin_formula: true,
+        };
+        merge_incremental_signal_flags(&mut flags, &lines, 2, 0, mask);
+        assert!(flags.has_variable_assignment);
+        assert!(flags.has_builtin_formula);
+    }
+
+    #[test]
+    fn splice_line_metadata_recomputes_only_replaced_lines() {
+        let mask = CalcFeatureMask::default();
+        let before = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let mut metadata = line_metadata_for_lines_with_mask(&before, mask);
+
+        // Replace line 1 ("b") with two lines, one of which is an assignment.
+        let after = vec![
+            "a".to_string(),
+            "x := 1".to_string(),
+            "b2".to_string(),
+            "c".to_string(),
+        ];
+        let ok = splice_line_metadata(&mut metadata, &after, 1, 1, 2, mask);
+        assert!(ok);
+        assert_eq!(metadata, line_metadata_for_lines_with_mask(&after, mask));
+        assert!(metadata[1].has_assignment);
+    }
+
+    #[test]
+    fn splice_line_metadata_returns_false_on_dimension_mismatch() {
+        let mask = CalcFeatureMask::default();
+        let after = vec!["a".to_string(), "b".to_string()];
+        // metadata length (1) is inconsistent with the edit dimensions:
+        // expected_prev_len = after.len()(2) + old(0) - new(0) = 2 != 1.
+        let mut metadata = line_metadata_for_lines_with_mask(&["a".to_string()], mask);
+        let ok = splice_line_metadata(&mut metadata, &after, 0, 0, 0, mask);
+        assert!(!ok);
+        // Caller is expected to full-rebuild; metadata left untouched.
+        assert_eq!(metadata.len(), 1);
     }
 }

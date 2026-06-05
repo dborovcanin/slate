@@ -402,63 +402,21 @@ impl TerminalApp {
     }
 
     pub(super) fn update_calc_flags_incremental(&mut self) {
-        if self.lines.len() != self.calc.results.len() {
-            // Line count changed (Enter, delete-at-boundary).
-            // Flags can only go false → true here, never true → false.
-            // On delete: the removed line may have been the only one with the
-            // syntax, but accepting stale-true is safe — it just means we run
-            // calc when not needed, which is correct.
-            // On insert: check only the two affected lines (cursor and cursor-1).
-            if self.lines.len() > self.calc.results.len() {
-                let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
-                for i in cl.saturating_sub(1)..=cl {
-                    if let Some(text) = self.lines.get(i) {
-                        let mask = self.calc_feature_mask();
-                        if !self.calc.cached_has_variable_assignment
-                            && crate::editor_core::calc_plan::contains_variable_assignment_with_mask(
-                                std::slice::from_ref(text),
-                                mask,
-                            )
-                        {
-                            self.calc.cached_has_variable_assignment = true;
-                        }
-                        if !self.calc.cached_has_builtin_formula
-                            && crate::editor_core::calc_plan::contains_builtin_formula_with_mask(
-                                std::slice::from_ref(text),
-                                mask,
-                            )
-                        {
-                            self.calc.cached_has_builtin_formula = true;
-                        }
-                    }
-                }
-            }
-            // Delete: accept stale-true; flags reset only via rescan_calc_flags
-            // (called on note switch and explicit rescans).
-            return;
-        }
-        // Same-line edit: check only the cursor line for new signals.
-        let line = self.cursor_line;
-        if !self.calc.cached_has_variable_assignment {
-            if let Some(text) = self.lines.get(line) {
-                if crate::editor_core::calc_plan::contains_variable_assignment_with_mask(
-                    std::slice::from_ref(text),
-                    self.calc_feature_mask(),
-                ) {
-                    self.calc.cached_has_variable_assignment = true;
-                }
-            }
-        }
-        if !self.calc.cached_has_builtin_formula {
-            if let Some(text) = self.lines.get(line) {
-                if crate::editor_core::calc_plan::contains_builtin_formula_with_mask(
-                    std::slice::from_ref(text),
-                    self.calc_feature_mask(),
-                ) {
-                    self.calc.cached_has_builtin_formula = true;
-                }
-            }
-        }
+        // Incremental signal-detection semantics live in the shared core; the
+        // TUI owns the cached flags and `results`-length bookkeeping.
+        let mut flags = crate::editor_core::calc_plan::CalcSignalFlags {
+            has_variable_assignment: self.calc.cached_has_variable_assignment,
+            has_builtin_formula: self.calc.cached_has_builtin_formula,
+        };
+        crate::editor_core::calc_plan::merge_incremental_signal_flags(
+            &mut flags,
+            &self.lines,
+            self.calc.results.len(),
+            self.cursor_line,
+            self.calc_feature_mask(),
+        );
+        self.calc.cached_has_variable_assignment = flags.has_variable_assignment;
+        self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
     }
 
     fn rebuild_calc_line_metadata(&mut self) {
@@ -497,36 +455,21 @@ impl TerminalApp {
         if self.calc.line_metadata.is_empty() && self.lines.is_empty() {
             return;
         }
-        // If dimensions are inconsistent, fall back to a full rebuild rather than corrupting state.
-        let expected_prev_len = self
-            .lines
-            .len()
-            .saturating_add(old_line_span)
-            .saturating_sub(new_line_span);
-        if self.calc.line_metadata.len() != expected_prev_len {
+        // Core recomputes metadata only for the replaced lines, or returns false
+        // when dimensions are inconsistent so we fall back to a full rebuild
+        // rather than corrupting the cache.
+        let mask = self.calc_feature_mask();
+        let spliced = crate::editor_core::calc_plan::splice_line_metadata(
+            &mut self.calc.line_metadata,
+            &self.lines,
+            start_line,
+            old_line_span,
+            new_line_span,
+            mask,
+        );
+        if !spliced {
             self.rebuild_calc_line_metadata();
-            return;
         }
-        let start = start_line.min(self.calc.line_metadata.len());
-        let old_end = start
-            .saturating_add(old_line_span)
-            .min(self.calc.line_metadata.len());
-        let new_end = start_line
-            .saturating_add(new_line_span)
-            .min(self.lines.len());
-        let replacement = self
-            .lines
-            .get(start_line.min(self.lines.len())..new_end)
-            .unwrap_or(&[])
-            .iter()
-            .map(|line| {
-                crate::editor_core::calc_plan::line_metadata_with_mask(
-                    line,
-                    self.calc_feature_mask(),
-                )
-            })
-            .collect::<Vec<_>>();
-        self.calc.line_metadata.splice(start..old_end, replacement);
     }
 
     pub(super) fn line_has_fold_structure(text: &str) -> bool {
