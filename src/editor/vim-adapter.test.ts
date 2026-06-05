@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { VIM_INTENT, VIM_KEY_KIND, VimSession } from "./wasm.ts";
+import test, { before } from "node:test";
+import { VIM_INTENT, VIM_KEY_KIND, VimSession, ensureWasmReady } from "./wasm.ts";
 import { buildUiVimContext, runUiVimPipeline, toUiVimKeyInput } from "./vim-adapter.ts";
+
+before(async () => {
+  await ensureWasmReady();
+});
 
 type EventLike = {
   key?: string;
