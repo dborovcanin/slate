@@ -361,137 +361,6 @@ impl TerminalApp {
         Some(deleted)
     }
 
-    pub(super) fn find_word_object_bounds(&self, around: bool) -> Option<(usize, usize)> {
-        // Delegate to the shared core implementation so word objects resolve
-        // identically in the TUI and the WASM/UI path.
-        crate::editor_core::vim_actions::find_word_object_bounds(
-            self.current_line(),
-            self.cursor_col,
-            around,
-        )
-    }
-
-    pub(super) fn find_pipe_object_bounds(&self, around: bool) -> Option<(usize, usize)> {
-        let line = self.current_line();
-        let chars: Vec<char> = line.chars().collect();
-        if chars.len() < 2 {
-            return None;
-        }
-        let pipes: Vec<usize> = chars
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, ch)| if *ch == '|' { Some(idx) } else { None })
-            .collect();
-        if pipes.len() < 2 {
-            return None;
-        }
-
-        let cursor = self.cursor_col.min(chars.len());
-        let mut pair = None;
-        for window in pipes.windows(2) {
-            let left = window[0];
-            let right = window[1];
-            if cursor == left || (cursor > left && cursor <= right) {
-                pair = Some((left, right));
-                break;
-            }
-        }
-        let (left, right) = pair?;
-        let start = if around { left } else { left + 1 };
-        let end = if around { right + 1 } else { right };
-        if start >= end {
-            None
-        } else {
-            Some((start, end))
-        }
-    }
-
-    pub(super) fn apply_word_text_object(
-        &mut self,
-        around: bool,
-        delete: bool,
-        count: usize,
-    ) -> usize {
-        let mut chunks = Vec::new();
-        let mut changed = false;
-        let mut applied = 0usize;
-
-        for _ in 0..count.max(1) {
-            let Some((start, end)) = self.find_word_object_bounds(around) else {
-                break;
-            };
-            if delete {
-                if let Some(deleted) = self.delete_current_line_cols(start, end) {
-                    chunks.push(deleted);
-                    changed = true;
-                    applied += 1;
-                } else {
-                    break;
-                }
-            } else if let Some(yanked) = self.slice_current_line_cols(start, end) {
-                self.cursor_col = end.min(line_char_len(self.current_line()));
-                chunks.push(yanked);
-                applied += 1;
-            } else {
-                break;
-            }
-        }
-
-        if chunks.is_empty() {
-            return 0;
-        }
-
-        self.set_clipboard_charwise(chunks.join("\n"));
-        if changed {
-            self.mark_edited();
-            self.adjust_cursor();
-        }
-        applied
-    }
-
-    pub(super) fn apply_pipe_text_object(
-        &mut self,
-        around: bool,
-        delete: bool,
-        count: usize,
-    ) -> usize {
-        let mut chunks = Vec::new();
-        let mut changed = false;
-        let mut applied = 0usize;
-
-        for _ in 0..count.max(1) {
-            let Some((start, end)) = self.find_pipe_object_bounds(around) else {
-                break;
-            };
-            if delete {
-                if let Some(deleted) = self.delete_current_line_cols(start, end) {
-                    chunks.push(deleted);
-                    changed = true;
-                    applied += 1;
-                } else {
-                    break;
-                }
-            } else if let Some(yanked) = self.slice_current_line_cols(start, end) {
-                self.cursor_col = end.min(line_char_len(self.current_line()));
-                chunks.push(yanked);
-                applied += 1;
-            } else {
-                break;
-            }
-        }
-
-        if chunks.is_empty() {
-            return 0;
-        }
-
-        self.set_clipboard_charwise(chunks.join("\n"));
-        if changed {
-            self.mark_edited();
-            self.adjust_cursor();
-        }
-        applied
-    }
-
     pub(super) fn apply_visual_selection_action(&mut self, delete: bool) -> bool {
         if !matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
             return false;
@@ -1146,93 +1015,21 @@ impl TerminalApp {
                         };
                     }
                 }
-                crate::editor_core::vim::VimIntent::DeleteInsideWord => {
-                    let applied = self.apply_word_text_object(false, true, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "deleted inside word".to_string()
-                        } else {
-                            format!("deleted inside {} words", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteAroundWord => {
-                    let applied = self.apply_word_text_object(true, true, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "deleted around word".to_string()
-                        } else {
-                            format!("deleted around {} words", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankInsideWord => {
-                    let applied = self.apply_word_text_object(false, false, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "yanked inside word".to_string()
-                        } else {
-                            format!("yanked inside {} words", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankAroundWord => {
-                    let applied = self.apply_word_text_object(true, false, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "yanked around word".to_string()
-                        } else {
-                            format!("yanked around {} words", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteInsidePipe => {
-                    let applied = self.apply_pipe_text_object(false, true, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "deleted inside | |".to_string()
-                        } else {
-                            format!("deleted inside {} pipe ranges", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteAroundPipe => {
-                    let applied = self.apply_pipe_text_object(true, true, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "deleted around | |".to_string()
-                        } else {
-                            format!("deleted around {} pipe ranges", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankInsidePipe => {
-                    let applied = self.apply_pipe_text_object(false, false, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "yanked inside | |".to_string()
-                        } else {
-                            format!("yanked inside {} pipe ranges", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankAroundPipe => {
-                    let applied = self.apply_pipe_text_object(true, false, count);
-                    if applied > 0 {
-                        let msg = if applied == 1 {
-                            "yanked around | |".to_string()
-                        } else {
-                            format!("yanked around {} pipe ranges", applied)
-                        };
-                        self.status = self.with_clipboard_status(msg);
-                    }
+                crate::editor_core::vim::VimIntent::DeleteInsideWord
+                | crate::editor_core::vim::VimIntent::DeleteAroundWord
+                | crate::editor_core::vim::VimIntent::YankInsideWord
+                | crate::editor_core::vim::VimIntent::YankAroundWord
+                | crate::editor_core::vim::VimIntent::DeleteInsidePipe
+                | crate::editor_core::vim::VimIntent::DeleteAroundPipe
+                | crate::editor_core::vim::VimIntent::YankInsidePipe
+                | crate::editor_core::vim::VimIntent::YankAroundPipe => {
+                    // Word and pipe text objects are resolved by the shared core
+                    // path (see `try_execute_shared_vim_action` /
+                    // `supports_intent`), which runs before this match and
+                    // `continue`s. We only fall through to here when core returns
+                    // no operation (e.g. cursor not inside a pipe pair, or an
+                    // empty/whitespace-only cell after trimming) — a no-op, which
+                    // matches the WASM/UI behavior.
                 }
                 crate::editor_core::vim::VimIntent::DeleteWordForward => {
                     let mut deleted = Vec::new();
