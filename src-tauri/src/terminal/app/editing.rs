@@ -294,7 +294,15 @@ impl TerminalApp {
     }
 
     fn prefer_span_history_fast_path(&self) -> bool {
-        self.lines.len() >= super::LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES
+        // Above COALESCE_ANCHOR_MAX_LINES the generic `record_edit` path no longer
+        // coalesces (its coalesce anchor is only retained while the doc fits within
+        // that cap), so it already emits one undo entry per edit. The span fast path
+        // is then behavior-equivalent but O(changed lines) instead of O(doc) per
+        // keystroke, because `record_edit`'s prefix/suffix diff scans from the
+        // document ends. Gate on the coalesce cap rather than the much larger
+        // lightweight-fold threshold so mid-size notes (5k–30k lines) stop paying
+        // the per-keystroke full-document diff.
+        self.lines.len() > crate::terminal::history::COALESCE_ANCHOR_MAX_LINES
     }
 
     fn record_history_after_edit(

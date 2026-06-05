@@ -11,8 +11,10 @@ Recently shipped (prior pass) and dropped from the table:
 - TUI switcher fuzzy-match recomputation allocated a fresh `Vec<(usize, i32)>` and called `sort_by` on every keystroke. It now reuses a `switcher_score_scratch` field and uses `sort_unstable_by`.
 - TUI command completion options were emitted in `COMMAND_DEFINITIONS` insertion order; they are now sorted alphabetically before truncation so the menu doesn't reorder by registration history.
 - Calc gating for large notes was over-restrictive: `note_math_module_enabled` / `note_table_module_enabled` / `note_variables_module_enabled` all AND-ed with `!large_note_reduced_features()`, so 100k-line notes with explicit calc syntax silently dropped results. The math/table/variables gates now follow raw `modules.*` (matching the runtime `calc_viewport_only` configuration); only the style gate keeps the large-note cutoff because rendering is the legitimate motivation for it.
+- **(was item 4) WASM analyze hot path moved off `serde_wasm_bindgen` to a flat encoding.** `wasm_markdown_analyze_lines` previously reflected every line's info struct + every inline/code token into a JS object across the FFI boundary (one property write per field, interned string keys), then the TS `markdownAnalyzeLines` rebuilt a second object per line. It now packs all numerics into a single `Int32Array` (one boundary copy) plus a deduped fence-lang string table, and the TS decoder (`decodeMarkdownAnalyzeFlat`) rebuilds the same `MarkdownAnalyzeResult` object shape in one pass — so both decoration plugins (which call this per viewport scan) benefit and the consumer (`buildMarkdownDecorationsForSpans`) is unchanged. Stable token-type ids live in `markdown_tokens.rs` (`InlineTokenType::id` / `CodeTokenType::id`) mirrored by `INLINE_TOKEN_TYPE_BY_ID` / `CODE_TOKEN_TYPE_BY_ID` in `wasm.ts`, locked by tests on both sides (`token_type_ids_are_contiguous_and_match_as_str_order`, `markdown-analyze.test.ts`). Residual: the per-line cold exports (`wasm_markdown_classify_line`, `wasm_markdown_find_inline_tokens`, `wasm_markdown_tokenize_code_line`) still use serde; left as-is since they are not per-viewport-per-dispatch.
+- **(was item 5) Undo span fast-path gate lowered from 30k to the coalesce cap.** `prefer_span_history_fast_path` (`terminal/app/editing.rs`) gated the O(changed-lines) `record_edit_span` path behind `>= LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES` (30_001). Below that, every keystroke ran `record_edit` → `build_history_entry`, an O(distance-from-doc-ends) full-string line diff. But `record_edit` only coalesces while the doc fits within `COALESCE_ANCHOR_MAX_LINES` (5_000) — above that its coalesce anchor is `None` and it already emits one undo entry per edit. The gate now fires at `> COALESCE_ANCHOR_MAX_LINES`, so 5k–30k-line notes take the span path: identical undo granularity, O(changed lines) instead of O(doc) per keystroke. Removed the now-unused `LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES` const; added a boundary regression test (`history_record_edit_span_roundtrips_just_above_coalesce_cap`). ≤5k notes keep `record_edit` (coalescing intact, diff bounded to ≤5k lines).
 
-This pass added items 4–6 (new findings) and refreshed line numbers on items 1–3.
+This pass added new findings, shipped the undo span-gate fix and the WASM analyze flat encoding (both above), and refreshed line numbers on items 1–3.
 
 ---
 
@@ -62,7 +64,7 @@ Current state (verified `markdown-decoration.ts:2130-2243`, `calc-decoration.ts:
 CodeMirror requires decorations to be added in document order within a `RangeSetBuilder`. Track changed ranges by start position and process in order. Keep the current debounced full safeBuild as a fallback for viewport-change-only events where no line content changed.
 
 **Expected gain**
-Keystroke decoration latency on large documents (>5k lines) drops from O(viewport size) to O(changed lines), which for typical single-line edits is O(1) in practice. Sharing the analysis pass between the two plugins roughly halves the per-dispatch wasm-boundary + scan cost (see item 4). Closes the gap that the immediate-`map` fast path opened.
+Keystroke decoration latency on large documents (>5k lines) drops from O(viewport size) to O(changed lines), which for typical single-line edits is O(1) in practice. The analyze flat encoding shipped this pass (see "Recently shipped") already cut the per-line boundary cost; sharing one analysis pass between the two plugins removes the second scan entirely. Note the rebuild is viewport-bounded today (deferred margins of 8 lines markdown / 80 lines calc), not document-bounded, so the absolute win is capped by screen height — useful, but smaller than a doc-scaled gain. Closes the gap that the immediate-`map` fast path opened.
 
 ---
 
@@ -81,61 +83,22 @@ Borrow checker friction — many call sites hold `&mut self` across multiple sub
 
 ---
 
-## 4. WASM boundary double-marshalling on the hot decoration path (new)
-
-**Problem**
-Every `editor-core` WASM export returns its result through `serde_wasm_bindgen::to_value` (`crates/editor-core/src/wasm.rs:115`, used by all 51 exports), and the TypeScript side then **re-parses and re-validates every field** of that value into a typed object. On the hottest path — `markdownAnalyzeLines` — this happens for the whole viewport on every `safeBuild`:
-
-- Rust side: `wasm_markdown_analyze_lines` serializes a nested `Vec<AnalyzedLine>` (each line = `info` struct + `inlineTokens[]` + `codeTokens[]`) via serde reflection into JS objects.
-- JS side (`src/editor/wasm.ts:1517-1526`): every returned line is walked again — `asMarkdownLineInfo(rawLine.info)`, `asMarkdownInlineTokens(...)`, `asMarkdownCodeTokens(...)` — allocating a second typed object per line and per token.
-
-So each analyzed line is built three times: native struct → serde JS object → re-validated JS object. For a viewport scan this is the dominant per-dispatch boundary cost, and item 2 currently runs it twice (markdown + calc plugins) per structural change.
-
-The offset-conversion paths were already optimized (`batchUtf16ToUtf8` / `batchUtf8ToUtf16` do a single walk instead of N slices), which shows the boundary cost is on the radar — but the analyze/token *payload* marshalling was not addressed.
-
-**Approach**
-1. Land item 2's shared-scan first so the analyze payload is produced once per dispatch, not twice.
-2. For the analyze hot path, replace the serde object graph with a flat, index-addressable encoding (typed arrays / a single packed `Uint32Array` of `[lineFlags, headingLevel, tokenStart, tokenEnd, tokenType, ...]` plus a string side-table) that the JS side can consume without per-field re-validation. This removes both the serde reflection cost in Rust and the `as*` re-allocation in JS.
-3. If a full flat-buffer rewrite is too large, the cheaper intermediate win is to drop the JS-side re-validation for the trusted analyze payload (the wire shape is produced by our own Rust, so the defensive `as*` coercion is redundant on the hot path) and keep it only for untrusted/optional fields.
-
-**Risk**
-The `as*` coercions guard against `undefined`/shape drift; removing them trades safety for speed, so gate the flat encoding behind the existing decoration profiler samples (`markdown.decorations.safeBuild` already records `analyzeLinesMs`) and confirm no correctness regression on the parity/decoration tests. Keep the serde path for the cold/low-frequency exports — this only pays off where the call is per-viewport-per-dispatch.
-
-**Expected gain**
-Removes one of three allocations per analyzed line and the serde reflection pass; combined with item 2's single-scan coordination, the per-keystroke (deferred) decoration boundary cost on large viewports drops substantially. Also shrinks the JS validation code on the hot path.
-
----
-
-## 5. Undo span fast-path gated behind the 30k-line threshold (new)
-
-**Problem**
-`record_history_after_edit` (`src-tauri/src/terminal/app/editing.rs:300-345`) only takes the O(changed-lines) `record_edit_span` path when `prefer_span_history_fast_path()` is true, which is `self.lines.len() >= LARGE_NOTE_LIGHTWEIGHT_FOLD_LINES` = **30_001 lines** (`mod.rs:77`). Below that threshold — i.e. for the overwhelming majority of real notes — it falls through to `record_edit`, which calls `build_history_entry` (`terminal/history.rs:326`). That function recomputes the changed region from scratch via `shared_prefix_lines_len` + `shared_suffix_lines_len`, an O(distance-from-document-ends) line-by-line `String` comparison on **every keystroke**.
-
-The span information (`start_line`, `old_line_span`, `new_line_span`) is already available at the call site and is simply discarded under 30k lines. For a 25k-line note edited in the middle, that is ~12k line comparisons per keystroke to rediscover a range the caller already knew.
-
-**Approach**
-Use the span fast path whenever `history_span` is `Some`, regardless of line count — the caller already has the exact changed range, so `record_edit_span` is strictly cheaper and equally correct. Keep `record_edit` (full diff) only for the `history_span == None` callers where no span is known.
-
-**Risk / caveat**
-`record_edit` and `record_edit_span` differ in coalescing behavior: `record_edit` runs the `coalesce_anchor` merge logic (`history.rs:113-137`) while `record_edit_span` does not. Making the span path the default changes undo-granularity for sub-30k notes (rapid typing may produce more, finer undo entries). Decide whether to (a) port the coalesce-anchor merge into `record_edit_span`, or (b) accept the granularity change. Validate against the undo/redo tests before flipping the gate. Secondary note: `record_edit` clones the full snapshot for `coalesce_anchor` when `len <= COALESCE_ANCHOR_MAX_LINES` (5_000) on each non-coalesced edit — bounded, but it disappears for free if the span path becomes default.
-
----
-
-## 6. TUI document model is a flat `Vec<String>` (new — architectural observation, monitor)
+## 4. TUI document model is a flat `Vec<String>` (new — architectural observation, monitor)
 
 **Observation**
-The TUI's canonical document model is `lines: Vec<String>` (`mod.rs:396`) with a derived `joined_text_cache`. Mid-document structural edits (Enter / join / delete-line) are `Vec::insert` / `Vec::remove` = O(n) pointer memmove of the line vector, and several subsystems are built around the same line-vector assumption (undo prefix/suffix diff in item 5, calc `line_metadata` splice, fence checkpoints, folding maps). The web frontend uses CodeMirror's rope, so the two front ends have fundamentally different document representations — acceptable, but it means "large notes stay fast" is enforced by **tiered feature reduction** (`LARGE_DOC_CALC_DEFER_LINES = 20_000`, `LARGE_NOTE_FULL_FEATURE_LINE_LIMIT = 30_000`, reduced-undo / lightweight-fold at 30_001) rather than by a sublinear data structure.
+The TUI's canonical document model is `lines: Vec<String>` (`mod.rs:396`) with a derived `joined_text_cache`. Mid-document structural edits (Enter / join / delete-line) are `Vec::insert` / `Vec::remove` = O(n) pointer memmove of the line vector, and several subsystems are built around the same line-vector assumption (undo prefix/suffix diff, calc `line_metadata` splice, fence checkpoints, folding maps). The web frontend uses CodeMirror's rope, so the two front ends have fundamentally different document representations — acceptable, but it means "large notes stay fast" is enforced by **tiered feature reduction** (`LARGE_DOC_CALC_DEFER_LINES = 20_000`, `LARGE_NOTE_FULL_FEATURE_LINE_LIMIT = 30_000`, reduced-undo at 30_001) rather than by a sublinear data structure.
 
-This is most likely a deliberate, accepted tradeoff: the line-vector keeps every per-line subsystem simple, and the tier thresholds cap the O(n) costs. No action is proposed now — but it is the structural reason items 5 and 1's calc-splice logic exist, and it is the ceiling the `30k/100k/200k/400k` regression gates in `plan.md` are defending.
+This is most likely a deliberate, accepted tradeoff: the line-vector keeps every per-line subsystem simple, and the tier thresholds cap the O(n) costs. No action is proposed now — but it is the structural reason the undo span fast path and item 1's calc-splice logic exist, and it is the ceiling the `30k/100k/200k/400k` regression gates in `plan.md` are defending.
 
-**If a tier gate regresses**, the options in priority order are: (a) widen the span/incremental fast paths so they cover all sizes (items 1, 5) before touching the data model; (b) only if line-vector memmove itself shows up in profiles, consider a gap-buffer-of-lines or rope-of-lines for the TUI model. Option (b) is a large refactor touching every subsystem listed above and should not be undertaken speculatively.
+**If a tier gate regresses**, the options in priority order are: (a) widen the span/incremental fast paths so they cover all sizes (item 1, and the now-shipped undo span path) before touching the data model; (b) only if line-vector memmove itself shows up in profiles, consider a gap-buffer-of-lines or rope-of-lines for the TUI model. Option (b) is a large refactor touching every subsystem listed above and should not be undertaken speculatively.
 
 ---
 
 ## Notes
 
 - Items 1, 2, 3 are carried over from prior reviews and remain accurate; line numbers and file sizes updated to current files.
-- Items 4, 5, 6 are new this pass. 4 and 5 are concrete, bounded-risk wins; 6 is a watch item, not a task.
+- Item 4 (flat `Vec<String>` doc model) is a watch item, not a task. Two findings shipped this pass — the undo span gate and the WASM analyze flat encoding — see "Recently shipped".
 - `TerminalApp` is now 121 flat fields (item 3); the count is up from the prior review, reinforcing the decomposition case.
-- Large-note tier policy (`adaptive large-note mode`, regression gates at `30k/100k/200k/400k`) lives in `roadmap/plan.md` Next Sprint Checklist and is not duplicated here; item 6 records the structural reason those gates exist.
+- Remaining open work: item 1 (TUI dedup), item 2 (decoration delta rebuild / shared scan), item 3 (`TerminalApp` decomposition). Item 2's remaining value is the shared single scan across the two plugins; the per-line marshal cost it depended on is already addressed.
+- Large-note tier policy (`adaptive large-note mode`, regression gates at `30k/100k/200k/400k`) lives in `roadmap/plan.md` Next Sprint Checklist and is not duplicated here; item 4 records the structural reason those gates exist.
 - All execution backlog for measurement/operations references stays in `roadmap/performance.md`, `roadmap/perf-tracing.md`, `roadmap/perf-multirow-table.md` per the ownership note in `plan.md`.

@@ -780,8 +780,137 @@ fn fold_ranges_to_js_1_based(ranges: &[folding::FoldRange]) -> Option<JsValue> {
     to_js_value(&wire)
 }
 
-fn markdown_analyze_result_to_js(result: &MarkdownAnalyzeResult) -> Option<JsValue> {
-    to_js_value(result)
+// Flat wasm encoding for the markdown analyze hot path.
+//
+// `serde_wasm_bindgen` reflects every line's info struct and every inline/code
+// token into a JS object across the FFI boundary (one property write per field,
+// with interned string keys). For a viewport scan that is thousands of boundary
+// operations per rebuild. Instead we pack all numeric data into a single
+// `Int32Array` (one copy across the boundary) plus a deduped string table for
+// fence languages, and rebuild the object graph in a tight JS loop. The JS
+// `markdownAnalyzeLines` decoder mirrors this layout.
+//
+// Layout of the Int32Array `data`:
+//   [0] line_count
+//   [1] final flags (bit0 = final_in_code_block)
+//   [2] final_code_fence_lang string index (-1 = none)
+//   then `line_count` fixed-stride line headers (FLAT_LINE_STRIDE ints each):
+//     0: heading_level            (-1 = none)
+//     1: heading_marker_end       (-1 = none)
+//     2: quote_marker_end         (-1 = none)
+//     3: list_marker_end          (-1 = none)
+//     4: checklist_marker_start   (-1 = none)
+//     5: checklist_marker_end     (-1 = none)
+//     6: checklist_content_start  (-1 = none)
+//     7: flags (bit0 checklist_checked, bit1 is_horizontal_rule,
+//              bit2 is_code_fence, bit3 in_code_block)
+//     8: code_fence_lang string index (-1 = none)
+//     9: inline_token_count
+//    10: inline_token_offset  (in token units, from token section start)
+//    11: code_token_count
+//    12: code_token_offset    (in token units, from token section start)
+//   then a token section: 3 ints per token [from, to, kind_id], inline tokens
+//   for a line immediately followed by that line's code tokens.
+const FLAT_HEADER_PREFIX: usize = 3;
+const FLAT_LINE_STRIDE: usize = 13;
+const FLAT_TOKEN_STRIDE: usize = 3;
+
+fn opt_usize_to_i32(value: Option<usize>) -> i32 {
+    match value {
+        Some(v) => v as i32,
+        None => -1,
+    }
+}
+
+fn intern_str<'a>(table: &mut Vec<&'a str>, value: &'a str) -> i32 {
+    if let Some(pos) = table.iter().position(|&e| e == value) {
+        return pos as i32;
+    }
+    table.push(value);
+    (table.len() - 1) as i32
+}
+
+fn markdown_analyze_result_to_flat_js(result: &MarkdownAnalyzeResult) -> JsValue {
+    use js_sys::Int32Array;
+
+    let line_count = result.lines.len();
+    let total_tokens: usize = result
+        .lines
+        .iter()
+        .map(|line| line.inline_tokens.len() + line.code_tokens.len())
+        .sum();
+
+    let token_section_base = FLAT_HEADER_PREFIX + line_count * FLAT_LINE_STRIDE;
+    let mut data: Vec<i32> = vec![0; token_section_base + total_tokens * FLAT_TOKEN_STRIDE];
+    let mut strings: Vec<&str> = Vec::new();
+
+    data[0] = line_count as i32;
+    data[1] = if result.final_in_code_block { 1 } else { 0 };
+    data[2] = match result.final_code_fence_lang.as_deref() {
+        Some(s) => intern_str(&mut strings, s),
+        None => -1,
+    };
+
+    let mut token_cursor: usize = 0; // in token units
+    for (line_idx, line) in result.lines.iter().enumerate() {
+        let header = FLAT_HEADER_PREFIX + line_idx * FLAT_LINE_STRIDE;
+        let info = &line.info;
+        data[header] = opt_usize_to_i32(info.heading_level);
+        data[header + 1] = opt_usize_to_i32(info.heading_marker_end);
+        data[header + 2] = opt_usize_to_i32(info.quote_marker_end);
+        data[header + 3] = opt_usize_to_i32(info.list_marker_end);
+        data[header + 4] = opt_usize_to_i32(info.checklist_marker_start);
+        data[header + 5] = opt_usize_to_i32(info.checklist_marker_end);
+        data[header + 6] = opt_usize_to_i32(info.checklist_content_start);
+        let mut flags = 0i32;
+        if info.checklist_checked {
+            flags |= 1;
+        }
+        if info.is_horizontal_rule {
+            flags |= 2;
+        }
+        if info.is_code_fence {
+            flags |= 4;
+        }
+        if line.in_code_block {
+            flags |= 8;
+        }
+        data[header + 7] = flags;
+        data[header + 8] = match line.code_fence_lang.as_deref() {
+            Some(s) => intern_str(&mut strings, s),
+            None => -1,
+        };
+
+        data[header + 9] = line.inline_tokens.len() as i32;
+        data[header + 10] = token_cursor as i32;
+        for token in &line.inline_tokens {
+            let pos = token_section_base + token_cursor * FLAT_TOKEN_STRIDE;
+            data[pos] = token.from as i32;
+            data[pos + 1] = token.to as i32;
+            data[pos + 2] = token.kind.id() as i32;
+            token_cursor += 1;
+        }
+
+        data[header + 11] = line.code_tokens.len() as i32;
+        data[header + 12] = token_cursor as i32;
+        for token in &line.code_tokens {
+            let pos = token_section_base + token_cursor * FLAT_TOKEN_STRIDE;
+            data[pos] = token.from as i32;
+            data[pos + 1] = token.to as i32;
+            data[pos + 2] = token.kind.id() as i32;
+            token_cursor += 1;
+        }
+    }
+
+    let data_arr = Int32Array::from(data.as_slice());
+    let strings_arr = Array::new();
+    for s in &strings {
+        strings_arr.push(&JsValue::from_str(s));
+    }
+    let out = Array::new();
+    out.push(&data_arr);
+    out.push(&strings_arr);
+    out.into()
 }
 
 fn wiki_link_match_to_js(entry: &WikiLinkMatch) -> Option<JsValue> {
@@ -865,7 +994,7 @@ pub fn wasm_markdown_analyze_lines(
         start_in_code_block,
         start_code_fence_lang.as_deref(),
     );
-    markdown_analyze_result_to_js(&result)
+    Some(markdown_analyze_result_to_flat_js(&result))
 }
 
 #[wasm_bindgen]

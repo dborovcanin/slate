@@ -28,7 +28,7 @@ pub struct LineHistory {
     coalesce_anchor: Option<HistorySnapshot>,
 }
 
-const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
+pub(crate) const COALESCE_ANCHOR_MAX_LINES: usize = 5_000;
 
 impl LineHistory {
     pub fn new(
@@ -495,6 +495,31 @@ mod tests {
         let cursor = history.undo(&mut start).expect("undo");
         assert_eq!(cursor.line, 100);
         assert_eq!(start[100], "first");
+    }
+
+    #[test]
+    fn history_record_edit_span_roundtrips_just_above_coalesce_cap() {
+        // Mirrors the doc size at which `prefer_span_history_fast_path` now routes
+        // edits through `record_edit_span`. The generic path does not coalesce here
+        // (see `history_large_docs_avoid_coalesce_anchor_clone`), so the span path is
+        // behavior-equivalent: one entry per edit, exact undo/redo.
+        let mut lines = vec!["plain".to_string(); super::COALESCE_ANCHOR_MAX_LINES + 1];
+        let mut history = LineHistory::new(8, &lines, 0, 0);
+
+        lines[4000] = "edited".to_string();
+        assert!(history.record_edit_span(&lines, 4000, 6, 4000, 1, 1));
+        lines[4000] = "edited again".to_string();
+        assert!(history.record_edit_span(&lines, 4000, 12, 4000, 1, 1));
+
+        assert_eq!(history.undo_depth(), 2);
+
+        let cursor = history.undo(&mut lines).expect("undo 1");
+        assert_eq!(cursor.line, 4000);
+        assert_eq!(lines[4000], "edited");
+        history.undo(&mut lines).expect("undo 2");
+        assert_eq!(lines[4000], "plain");
+        history.redo(&mut lines).expect("redo");
+        assert_eq!(lines[4000], "edited");
     }
 
     #[test]

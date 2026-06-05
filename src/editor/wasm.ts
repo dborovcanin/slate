@@ -1454,6 +1454,113 @@ export function markdownParseFenceLanguage(lineText: string): string | null {
   return wasm_markdown_parse_fence_language(lineText) ?? null;
 }
 
+// Flat wasm encoding layout for the markdown analyze hot path. Mirrors
+// `markdown_analyze_result_to_flat_js` in `crates/editor-core/src/wasm.rs`;
+// keep both in sync.
+const FLAT_HEADER_PREFIX = 3;
+const FLAT_LINE_STRIDE = 13;
+const FLAT_TOKEN_STRIDE = 3;
+
+// Indexed by `InlineTokenType::id()` / `CodeTokenType::id()` in markdown_tokens.rs.
+// Order MUST match those `id()` methods.
+const INLINE_TOKEN_TYPE_BY_ID: readonly MarkdownInlineTokenType[] = [
+  "strong",
+  "emphasis",
+  "strikethrough",
+  "code",
+  "code-marker",
+  "image-alt",
+  "image-src",
+  "image-marker",
+  "link-text",
+  "link-url",
+  "link-marker",
+  "wiki-link-marker",
+  "wiki-link-id",
+  "wiki-link-sep",
+  "wiki-link-title",
+  "wiki-link-anchor",
+];
+
+const CODE_TOKEN_TYPE_BY_ID: readonly MarkdownCodeTokenType[] = [
+  "keyword",
+  "string",
+  "number",
+  "comment",
+  "function",
+  "type",
+];
+
+function decodeMarkdownAnalyzeFlat(
+  data: Int32Array | readonly number[],
+  strings: readonly string[],
+): MarkdownAnalyzeResult {
+  const lineCount = data[0] ?? 0;
+  const tokenBase = FLAT_HEADER_PREFIX + lineCount * FLAT_LINE_STRIDE;
+  const langForIndex = (idx: number): string | null =>
+    idx < 0 ? null : strings[idx] ?? null;
+
+  const outLines: MarkdownAnalyzedLine[] = new Array(lineCount);
+  for (let i = 0; i < lineCount; i++) {
+    const h = FLAT_HEADER_PREFIX + i * FLAT_LINE_STRIDE;
+    const optAt = (k: number): number | null => {
+      const v = data[h + k]!;
+      return v < 0 ? null : v;
+    };
+    const flags = data[h + 7]!;
+    const info: MarkdownLineInfo = {
+      headingLevel: optAt(0),
+      headingMarkerEnd: optAt(1),
+      quoteMarkerEnd: optAt(2),
+      listMarkerEnd: optAt(3),
+      checklistMarkerStart: optAt(4),
+      checklistMarkerEnd: optAt(5),
+      checklistContentStart: optAt(6),
+      checklistChecked: (flags & 1) !== 0,
+      isHorizontalRule: (flags & 2) !== 0,
+      isCodeFence: (flags & 4) !== 0,
+    };
+
+    const inlineCount = data[h + 9]!;
+    const inlineOffset = data[h + 10]!;
+    const inlineTokens: MarkdownInlineToken[] = new Array(inlineCount);
+    for (let t = 0; t < inlineCount; t++) {
+      const p = tokenBase + (inlineOffset + t) * FLAT_TOKEN_STRIDE;
+      inlineTokens[t] = {
+        from: data[p]!,
+        to: data[p + 1]!,
+        type: INLINE_TOKEN_TYPE_BY_ID[data[p + 2]!] ?? "strong",
+      };
+    }
+
+    const codeCount = data[h + 11]!;
+    const codeOffset = data[h + 12]!;
+    const codeTokens: MarkdownCodeToken[] = new Array(codeCount);
+    for (let t = 0; t < codeCount; t++) {
+      const p = tokenBase + (codeOffset + t) * FLAT_TOKEN_STRIDE;
+      codeTokens[t] = {
+        from: data[p]!,
+        to: data[p + 1]!,
+        type: CODE_TOKEN_TYPE_BY_ID[data[p + 2]!] ?? "keyword",
+      };
+    }
+
+    outLines[i] = {
+      info,
+      inCodeBlock: (flags & 8) !== 0,
+      codeFenceLang: langForIndex(data[h + 8]!),
+      inlineTokens,
+      codeTokens,
+    };
+  }
+
+  return {
+    lines: outLines,
+    finalInCodeBlock: (data[1] ?? 0) !== 0,
+    finalCodeFenceLang: langForIndex(data[2] ?? -1),
+  };
+}
+
 export function markdownAnalyzeLines(
   lines: readonly string[],
   start: { inCodeBlock: boolean; codeFenceLang: string | null },
@@ -1493,7 +1600,14 @@ export function markdownAnalyzeLines(
     start.codeFenceLang ?? undefined,
   ) as unknown;
 
-  if (typeof raw !== "object" || raw === null || !Array.isArray((raw as MarkdownAnalyzeResult).lines)) {
+  // Flat payload: [Int32Array data, string[] fence-lang table]. See
+  // decodeMarkdownAnalyzeFlat / the Rust encoder for the layout.
+  const data = Array.isArray(raw) ? raw[0] : undefined;
+  const strings = Array.isArray(raw) ? raw[1] : undefined;
+  const dataOk =
+    data instanceof Int32Array ||
+    (Array.isArray(data) && data.every((v) => typeof v === "number"));
+  if (!dataOk || !Array.isArray(strings)) {
     const fallback: MarkdownAnalyzeResult = {
       lines: [],
       finalInCodeBlock: start.inCodeBlock,
@@ -1512,24 +1626,10 @@ export function markdownAnalyzeLines(
     return fallback;
   }
 
-  const payload = raw as MarkdownAnalyzeResult;
-
-  const outLines: MarkdownAnalyzedLine[] = payload.lines.map((line) => {
-    const rawLine = line as Partial<MarkdownAnalyzedLine>;
-    return {
-      info: asMarkdownLineInfo(rawLine.info) ?? DEFAULT_MARKDOWN_LINE_INFO,
-      inCodeBlock: rawLine.inCodeBlock === true,
-      codeFenceLang: typeof rawLine.codeFenceLang === "string" ? rawLine.codeFenceLang : null,
-      inlineTokens: asMarkdownInlineTokens(rawLine.inlineTokens),
-      codeTokens: asMarkdownCodeTokens(rawLine.codeTokens),
-    };
-  });
-
-  const out: MarkdownAnalyzeResult = {
-    lines: outLines,
-    finalInCodeBlock: payload.finalInCodeBlock ?? start.inCodeBlock,
-    finalCodeFenceLang: payload.finalCodeFenceLang ?? null,
-  };
+  const out = decodeMarkdownAnalyzeFlat(
+    data as Int32Array | number[],
+    strings as string[],
+  );
   if (profiling) {
     recordEditorProfilerSample(
       "wasm.markdownAnalyzeLines",
