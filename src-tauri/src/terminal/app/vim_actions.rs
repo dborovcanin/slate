@@ -1,5 +1,5 @@
 use super::{
-    byte_index, line_char_len, min, split_lines, Db, Key, TerminalApp, TerminalVimAdapter, UiMode,
+    line_char_len, min, Db, Key, TerminalApp, TerminalVimAdapter, UiMode,
     VimMacroStep, VimPipelineResult, VimRegister, VimRegisterMode,
 };
 use super::{clipboard, ClipboardWriteBackend};
@@ -256,109 +256,6 @@ impl TerminalApp {
                 None
             }
         })
-    }
-
-    pub(super) fn slice_current_line_cols(
-        &self,
-        start_col: usize,
-        end_col: usize,
-    ) -> Option<String> {
-        if start_col >= end_col {
-            return None;
-        }
-        let line = self.current_line();
-        let start = byte_index(line, start_col);
-        let end = byte_index(line, end_col);
-        if start >= end || end > line.len() {
-            return None;
-        }
-        Some(line[start..end].to_string())
-    }
-
-    pub(super) fn delete_current_line_cols(
-        &mut self,
-        start_col: usize,
-        end_col: usize,
-    ) -> Option<String> {
-        if start_col >= end_col {
-            return None;
-        }
-        let line = self.current_line().to_string();
-        let start = byte_index(&line, start_col);
-        let end = byte_index(&line, end_col);
-        if start >= end || end > line.len() {
-            return None;
-        }
-        let deleted = line[start..end].to_string();
-        let mut updated = line;
-        updated.replace_range(start..end, "");
-        self.lines[self.cursor_line] = updated;
-        self.cursor_col = start_col;
-        Some(deleted)
-    }
-
-    pub(super) fn line_col_lt(
-        left_line: usize,
-        left_col: usize,
-        right_line: usize,
-        right_col: usize,
-    ) -> bool {
-        left_line < right_line || (left_line == right_line && left_col < right_col)
-    }
-
-    pub(super) fn slice_cols_range(
-        &self,
-        from_line: usize,
-        from_col: usize,
-        to_line: usize,
-        to_col: usize,
-    ) -> Option<String> {
-        if !Self::line_col_lt(from_line, from_col, to_line, to_col) {
-            return None;
-        }
-        if from_line == to_line {
-            let line = self.lines.get(from_line)?;
-            let start = byte_index(line, from_col);
-            let end = byte_index(line, to_col);
-            if start >= end || end > line.len() {
-                return None;
-            }
-            return Some(line[start..end].to_string());
-        }
-        let text = join_lines(&self.lines);
-        let start = self.byte_offset_for_line_col(from_line, from_col);
-        let end = self.byte_offset_for_line_col(to_line, to_col);
-        if start >= end || end > text.len() {
-            return None;
-        }
-        Some(text[start..end].to_string())
-    }
-
-    pub(super) fn delete_cols_range(
-        &mut self,
-        from_line: usize,
-        from_col: usize,
-        to_line: usize,
-        to_col: usize,
-    ) -> Option<String> {
-        if !Self::line_col_lt(from_line, from_col, to_line, to_col) {
-            return None;
-        }
-        if from_line == to_line {
-            return self.delete_current_line_cols(from_col, to_col);
-        }
-        let mut text = join_lines(&self.lines);
-        let start = self.byte_offset_for_line_col(from_line, from_col);
-        let end = self.byte_offset_for_line_col(to_line, to_col);
-        if start >= end || end > text.len() {
-            return None;
-        }
-        let deleted = text[start..end].to_string();
-        text.replace_range(start..end, "");
-        self.lines = split_lines(&text);
-        self.cursor_line = from_line.min(self.lines.len().saturating_sub(1));
-        self.cursor_col = from_col;
-        Some(deleted)
     }
 
     pub(super) fn apply_visual_selection_action(&mut self, delete: bool) -> bool {
@@ -847,118 +744,6 @@ impl TerminalApp {
                         self.status = "-- NORMAL --".to_string();
                     }
                 }
-                crate::editor_core::vim::VimIntent::DeleteLine => {
-                    let mut deleted = Vec::new();
-                    for _ in 0..count {
-                        if self.cursor_line < self.lines.len() {
-                            deleted.push(self.lines.remove(self.cursor_line));
-                        }
-                    }
-                    if self.lines.is_empty() {
-                        self.lines.push(String::new());
-                    }
-                    if !deleted.is_empty() {
-                        self.set_clipboard_linewise(deleted);
-                        self.status =
-                            self.with_clipboard_status(format!("deleted {} lines", count));
-                        self.mark_edited();
-                        self.adjust_cursor();
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankLine => {
-                    let mut yanked = Vec::new();
-                    for i in 0..count {
-                        if self.cursor_line + i < self.lines.len() {
-                            yanked.push(self.lines[self.cursor_line + i].clone());
-                        }
-                    }
-                    if !yanked.is_empty() {
-                        self.set_clipboard_linewise(yanked);
-                        self.status = self.with_clipboard_status(format!("yanked {} lines", count));
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteToLineStart => {
-                    let mut chunks = Vec::new();
-                    for _ in 0..count {
-                        if self.cursor_col == 0 {
-                            break;
-                        }
-                        if let Some(deleted) = self.delete_current_line_cols(0, self.cursor_col) {
-                            chunks.push(deleted);
-                        } else {
-                            break;
-                        }
-                    }
-                    if !chunks.is_empty() {
-                        self.set_clipboard_charwise(chunks.join("\n"));
-                        self.status = self.with_clipboard_status("deleted to line start");
-                        self.mark_edited();
-                        self.adjust_cursor();
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteToLineEnd => {
-                    let mut chunks = Vec::new();
-                    for _ in 0..count {
-                        let end_col = line_char_len(self.current_line());
-                        if self.cursor_col >= end_col {
-                            break;
-                        }
-                        if let Some(deleted) =
-                            self.delete_current_line_cols(self.cursor_col, end_col)
-                        {
-                            chunks.push(deleted);
-                        } else {
-                            break;
-                        }
-                    }
-                    if !chunks.is_empty() {
-                        self.set_clipboard_charwise(chunks.join("\n"));
-                        self.status = self.with_clipboard_status("deleted to line end");
-                        self.mark_edited();
-                        self.adjust_cursor();
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankToLineStart => {
-                    let mut chunks = Vec::new();
-                    for _ in 0..count {
-                        if self.cursor_col == 0 {
-                            break;
-                        }
-                        if let Some(yanked) = self.slice_current_line_cols(0, self.cursor_col) {
-                            chunks.push(yanked);
-                        } else {
-                            break;
-                        }
-                    }
-                    if !chunks.is_empty() {
-                        self.set_clipboard_charwise(chunks.join("\n"));
-                        self.status = self.with_clipboard_status("yanked to line start");
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankToLineEnd => {
-                    let mut chunks = Vec::new();
-                    for _ in 0..count {
-                        let end_col = line_char_len(self.current_line());
-                        if self.cursor_col >= end_col {
-                            break;
-                        }
-                        if let Some(yanked) = self.slice_current_line_cols(self.cursor_col, end_col)
-                        {
-                            chunks.push(yanked);
-                        } else {
-                            break;
-                        }
-                    }
-                    if !chunks.is_empty() {
-                        self.set_clipboard_charwise(chunks.join("\n"));
-                        self.status = self.with_clipboard_status("yanked to line end");
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteChar => {
-                    for _ in 0..count {
-                        self.delete_forward();
-                    }
-                }
                 crate::editor_core::vim::VimIntent::PasteAfter => {
                     if let Some(sys_clip_text) = self.read_system_clipboard_text() {
                         if self.clipboard.is_empty() || self.clipboard.text != sys_clip_text {
@@ -1015,136 +800,6 @@ impl TerminalApp {
                         };
                     }
                 }
-                crate::editor_core::vim::VimIntent::DeleteInsideWord
-                | crate::editor_core::vim::VimIntent::DeleteAroundWord
-                | crate::editor_core::vim::VimIntent::YankInsideWord
-                | crate::editor_core::vim::VimIntent::YankAroundWord
-                | crate::editor_core::vim::VimIntent::DeleteInsidePipe
-                | crate::editor_core::vim::VimIntent::DeleteAroundPipe
-                | crate::editor_core::vim::VimIntent::YankInsidePipe
-                | crate::editor_core::vim::VimIntent::YankAroundPipe => {
-                    // Word and pipe text objects are resolved by the shared core
-                    // path (see `try_execute_shared_vim_action` /
-                    // `supports_intent`), which runs before this match and
-                    // `continue`s. We only fall through to here when core returns
-                    // no operation (e.g. cursor not inside a pipe pair, or an
-                    // empty/whitespace-only cell after trimming) — a no-op, which
-                    // matches the WASM/UI behavior.
-                }
-                crate::editor_core::vim::VimIntent::DeleteWordForward => {
-                    let mut deleted = Vec::new();
-                    for _ in 0..count {
-                        let from_line = self.cursor_line;
-                        let from_col = self.cursor_col;
-                        self.move_cursor_right_word();
-                        let to_line = self.cursor_line;
-                        let to_col = self.cursor_col;
-                        if Self::line_col_lt(from_line, from_col, to_line, to_col) {
-                            if let Some(chunk) =
-                                self.delete_cols_range(from_line, from_col, to_line, to_col)
-                            {
-                                deleted.push(chunk);
-                            }
-                        } else {
-                            self.cursor_line = from_line;
-                            self.cursor_col = from_col;
-                            break;
-                        }
-                    }
-                    if !deleted.is_empty() {
-                        self.set_clipboard_charwise(deleted.join(""));
-                        self.status = self.with_clipboard_status("deleted word forward");
-                        self.mark_edited();
-                        self.adjust_cursor();
-                    }
-                }
-                crate::editor_core::vim::VimIntent::DeleteWordBackward => {
-                    let mut deleted = Vec::new();
-                    for _ in 0..count {
-                        let from_line = self.cursor_line;
-                        let from_col = self.cursor_col;
-                        self.move_cursor_left_word();
-                        let to_line = self.cursor_line;
-                        let to_col = self.cursor_col;
-                        if Self::line_col_lt(to_line, to_col, from_line, from_col) {
-                            if let Some(chunk) =
-                                self.delete_cols_range(to_line, to_col, from_line, from_col)
-                            {
-                                deleted.push(chunk);
-                            }
-                        } else {
-                            self.cursor_line = from_line;
-                            self.cursor_col = from_col;
-                            break;
-                        }
-                    }
-                    if !deleted.is_empty() {
-                        deleted.reverse();
-                        self.set_clipboard_charwise(deleted.join(""));
-                        self.status = self.with_clipboard_status("deleted word backward");
-                        self.mark_edited();
-                        self.adjust_cursor();
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankWordForward => {
-                    let mut yanked = Vec::new();
-                    let origin_line = self.cursor_line;
-                    let origin_col = self.cursor_col;
-                    for _ in 0..count {
-                        let from_line = self.cursor_line;
-                        let from_col = self.cursor_col;
-                        self.move_cursor_right_word();
-                        let to_line = self.cursor_line;
-                        let to_col = self.cursor_col;
-                        if Self::line_col_lt(from_line, from_col, to_line, to_col) {
-                            if let Some(chunk) =
-                                self.slice_cols_range(from_line, from_col, to_line, to_col)
-                            {
-                                yanked.push(chunk);
-                            }
-                        } else {
-                            self.cursor_line = from_line;
-                            self.cursor_col = from_col;
-                            break;
-                        }
-                    }
-                    self.cursor_line = origin_line;
-                    self.cursor_col = origin_col;
-                    if !yanked.is_empty() {
-                        self.set_clipboard_charwise(yanked.join(""));
-                        self.status = self.with_clipboard_status("yanked word forward");
-                    }
-                }
-                crate::editor_core::vim::VimIntent::YankWordBackward => {
-                    let mut yanked = Vec::new();
-                    let origin_line = self.cursor_line;
-                    let origin_col = self.cursor_col;
-                    for _ in 0..count {
-                        let from_line = self.cursor_line;
-                        let from_col = self.cursor_col;
-                        self.move_cursor_left_word();
-                        let to_line = self.cursor_line;
-                        let to_col = self.cursor_col;
-                        if Self::line_col_lt(to_line, to_col, from_line, from_col) {
-                            if let Some(chunk) =
-                                self.slice_cols_range(to_line, to_col, from_line, from_col)
-                            {
-                                yanked.push(chunk);
-                            }
-                        } else {
-                            self.cursor_line = from_line;
-                            self.cursor_col = from_col;
-                            break;
-                        }
-                    }
-                    self.cursor_line = origin_line;
-                    self.cursor_col = origin_col;
-                    if !yanked.is_empty() {
-                        yanked.reverse();
-                        self.set_clipboard_charwise(yanked.join(""));
-                        self.status = self.with_clipboard_status("yanked word backward");
-                    }
-                }
                 crate::editor_core::vim::VimIntent::Undo => {
                     for _ in 0..count {
                         self.undo(db);
@@ -1170,24 +825,53 @@ impl TerminalApp {
                 crate::editor_core::vim::VimIntent::StartMacroRecord => {}
                 crate::editor_core::vim::VimIntent::StopMacroRecord => {}
                 crate::editor_core::vim::VimIntent::PlayMacro => {}
-                crate::editor_core::vim::VimIntent::DeleteWordEnd => {}
-                crate::editor_core::vim::VimIntent::DeleteTillChar => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideParen => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideBracket => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideBrace => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideBacktick => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideAsterisk => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideTilde => {}
-                crate::editor_core::vim::VimIntent::DeleteInsideUnderscore => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundParen => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundBracket => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundBrace => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundDoubleQuote => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundBacktick => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundAsterisk => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundTilde => {}
-                crate::editor_core::vim::VimIntent::DeleteAroundUnderscore => {}
+                // These intents are all resolved by the shared core path
+                // (`try_execute_shared_vim_action` / `supports_intent`), which
+                // runs before this match and `continue`s, so reaching one here is
+                // unreachable in practice (core always returns an action for them —
+                // see `execute_vim_action_with_target`). They are listed only to
+                // keep this match exhaustive — deliberately no wildcard, so a new
+                // intent forces a compile error here. `PasteAfter` is the one
+                // `supports_intent` exception handled above, because it can fall
+                // through with an empty register and then pull from the system
+                // clipboard.
+                crate::editor_core::vim::VimIntent::DeleteLine
+                | crate::editor_core::vim::VimIntent::YankLine
+                | crate::editor_core::vim::VimIntent::DeleteToLineStart
+                | crate::editor_core::vim::VimIntent::DeleteToLineEnd
+                | crate::editor_core::vim::VimIntent::YankToLineStart
+                | crate::editor_core::vim::VimIntent::YankToLineEnd
+                | crate::editor_core::vim::VimIntent::DeleteChar
+                | crate::editor_core::vim::VimIntent::DeleteWordForward
+                | crate::editor_core::vim::VimIntent::DeleteWordBackward
+                | crate::editor_core::vim::VimIntent::DeleteWordEnd
+                | crate::editor_core::vim::VimIntent::YankWordForward
+                | crate::editor_core::vim::VimIntent::YankWordBackward
+                | crate::editor_core::vim::VimIntent::DeleteTillChar
+                | crate::editor_core::vim::VimIntent::DeleteInsideWord
+                | crate::editor_core::vim::VimIntent::DeleteAroundWord
+                | crate::editor_core::vim::VimIntent::YankInsideWord
+                | crate::editor_core::vim::VimIntent::YankAroundWord
+                | crate::editor_core::vim::VimIntent::DeleteInsidePipe
+                | crate::editor_core::vim::VimIntent::DeleteAroundPipe
+                | crate::editor_core::vim::VimIntent::YankInsidePipe
+                | crate::editor_core::vim::VimIntent::YankAroundPipe
+                | crate::editor_core::vim::VimIntent::DeleteInsideParen
+                | crate::editor_core::vim::VimIntent::DeleteInsideBracket
+                | crate::editor_core::vim::VimIntent::DeleteInsideBrace
+                | crate::editor_core::vim::VimIntent::DeleteInsideDoubleQuote
+                | crate::editor_core::vim::VimIntent::DeleteInsideBacktick
+                | crate::editor_core::vim::VimIntent::DeleteInsideAsterisk
+                | crate::editor_core::vim::VimIntent::DeleteInsideTilde
+                | crate::editor_core::vim::VimIntent::DeleteInsideUnderscore
+                | crate::editor_core::vim::VimIntent::DeleteAroundParen
+                | crate::editor_core::vim::VimIntent::DeleteAroundBracket
+                | crate::editor_core::vim::VimIntent::DeleteAroundBrace
+                | crate::editor_core::vim::VimIntent::DeleteAroundDoubleQuote
+                | crate::editor_core::vim::VimIntent::DeleteAroundBacktick
+                | crate::editor_core::vim::VimIntent::DeleteAroundAsterisk
+                | crate::editor_core::vim::VimIntent::DeleteAroundTilde
+                | crate::editor_core::vim::VimIntent::DeleteAroundUnderscore => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
         }

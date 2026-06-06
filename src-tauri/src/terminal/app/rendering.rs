@@ -121,12 +121,12 @@ impl TerminalApp {
     }
 
     fn wiki_link_cache_entry(&mut self, short_id: &str) -> (String, bool) {
-        if let Some(entry) = self.wiki_link_render_cache.get(short_id) {
+        if let Some(entry) = self.render_caches.wiki_link_render_cache.get(short_id) {
             if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_RENDER_CACHE_TTL_MS
             {
                 return (entry.display.clone(), entry.broken);
             }
-            self.wiki_link_render_cache.remove(short_id);
+            self.render_caches.wiki_link_render_cache.remove(short_id);
         }
         let (display, broken) = if let Some(entry) = self.wiki_link_prefix_index.get(short_id) {
             let title = if entry.title.trim().is_empty() {
@@ -139,8 +139,8 @@ impl TerminalApp {
             ("?".to_string(), true)
         };
 
-        let is_new = !self.wiki_link_render_cache.contains_key(short_id);
-        self.wiki_link_render_cache.insert(
+        let is_new = !self.render_caches.wiki_link_render_cache.contains_key(short_id);
+        self.render_caches.wiki_link_render_cache.insert(
             short_id.to_string(),
             super::WikiLinkRenderCacheEntry {
                 display: display.clone(),
@@ -149,14 +149,14 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.wiki_link_render_cache_order
+            self.render_caches.wiki_link_render_cache_order
                 .push_back(short_id.to_string());
         }
-        while self.wiki_link_render_cache.len() > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES {
-            let Some(evict_key) = self.wiki_link_render_cache_order.pop_front() else {
+        while self.render_caches.wiki_link_render_cache.len() > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES {
+            let Some(evict_key) = self.render_caches.wiki_link_render_cache_order.pop_front() else {
                 break;
             };
-            self.wiki_link_render_cache.remove(&evict_key);
+            self.render_caches.wiki_link_render_cache.remove(&evict_key);
         }
 
         (display, broken)
@@ -166,14 +166,14 @@ impl TerminalApp {
         &mut self,
         line_text: &str,
     ) -> Option<(String, Vec<(usize, usize)>)> {
-        let Some(entry) = self.wiki_link_line_render_cache.get(line_text) else {
+        let Some(entry) = self.render_caches.wiki_link_line_render_cache.get(line_text) else {
             return None;
         };
         if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_LINE_RENDER_CACHE_TTL_MS
         {
             return Some((entry.rendered_line.clone(), entry.underline_ranges.clone()));
         }
-        self.wiki_link_line_render_cache.remove(line_text);
+        self.render_caches.wiki_link_line_render_cache.remove(line_text);
         None
     }
 
@@ -181,13 +181,13 @@ impl TerminalApp {
         if short_id.is_empty() {
             return;
         }
-        self.wiki_link_render_cache.remove(short_id);
+        self.render_caches.wiki_link_render_cache.remove(short_id);
         // The line-level cache keys are full line text strings; scanning them
         // for the changed short_id would be O(entries). Clearing the whole
         // cache is O(1) and correct — entries are cheap to rebuild on the
         // next draw using the still-warm short_id cache above.
-        self.wiki_link_line_render_cache.clear();
-        self.wiki_link_line_render_cache_order.clear();
+        self.render_caches.wiki_link_line_render_cache.clear();
+        self.render_caches.wiki_link_line_render_cache_order.clear();
     }
 
     fn insert_wiki_link_line_cache(
@@ -196,8 +196,8 @@ impl TerminalApp {
         rendered_line: &str,
         underline_ranges: &[(usize, usize)],
     ) {
-        let is_new = !self.wiki_link_line_render_cache.contains_key(line_text);
-        self.wiki_link_line_render_cache.insert(
+        let is_new = !self.render_caches.wiki_link_line_render_cache.contains_key(line_text);
+        self.render_caches.wiki_link_line_render_cache.insert(
             line_text.to_string(),
             super::WikiLinkLineRenderCacheEntry {
                 rendered_line: rendered_line.to_string(),
@@ -206,16 +206,16 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.wiki_link_line_render_cache_order
+            self.render_caches.wiki_link_line_render_cache_order
                 .push_back(line_text.to_string());
         }
-        while self.wiki_link_line_render_cache.len()
+        while self.render_caches.wiki_link_line_render_cache.len()
             > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES
         {
-            let Some(evict_key) = self.wiki_link_line_render_cache_order.pop_front() else {
+            let Some(evict_key) = self.render_caches.wiki_link_line_render_cache_order.pop_front() else {
                 break;
             };
-            self.wiki_link_line_render_cache.remove(evict_key.as_str());
+            self.render_caches.wiki_link_line_render_cache.remove(evict_key.as_str());
         }
     }
 
@@ -223,14 +223,14 @@ impl TerminalApp {
         &mut self,
         line_text: &str,
     ) -> Option<Vec<TableFormulaSegment>> {
-        let Some(entry) = self.table_formula_segment_cache.get(line_text) else {
+        let Some(entry) = self.render_caches.table_formula_segment_cache.get(line_text) else {
             return None;
         };
         if entry.cached_at.elapsed().as_millis() as u64 <= super::TABLE_FORMULA_SEGMENT_CACHE_TTL_MS
         {
             return Some(entry.segments.clone());
         }
-        self.table_formula_segment_cache.remove(line_text);
+        self.render_caches.table_formula_segment_cache.remove(line_text);
         None
     }
 
@@ -239,8 +239,8 @@ impl TerminalApp {
             return cached;
         }
         let segments = find_table_formula_segments(line_text);
-        let is_new = !self.table_formula_segment_cache.contains_key(line_text);
-        self.table_formula_segment_cache.insert(
+        let is_new = !self.render_caches.table_formula_segment_cache.contains_key(line_text);
+        self.render_caches.table_formula_segment_cache.insert(
             line_text.to_string(),
             super::TableFormulaSegmentCacheEntry {
                 segments: segments.clone(),
@@ -248,16 +248,16 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.table_formula_segment_cache_order
+            self.render_caches.table_formula_segment_cache_order
                 .push_back(line_text.to_string());
         }
-        while self.table_formula_segment_cache.len()
+        while self.render_caches.table_formula_segment_cache.len()
             > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES
         {
-            let Some(evict_key) = self.table_formula_segment_cache_order.pop_front() else {
+            let Some(evict_key) = self.render_caches.table_formula_segment_cache_order.pop_front() else {
                 break;
             };
-            self.table_formula_segment_cache.remove(evict_key.as_str());
+            self.render_caches.table_formula_segment_cache.remove(evict_key.as_str());
         }
         segments
     }
@@ -279,14 +279,14 @@ impl TerminalApp {
         }
         let block_hash = hasher.finish();
         let key = (block_start, block_hash);
-        if let Some(cached) = self.table_display_col_width_cache.get(&key) {
+        if let Some(cached) = self.render_caches.table_display_col_width_cache.get(&key) {
             return cached.clone();
         }
         let widths = table_display_col_widths(&self.lines[block_start..=block_end]);
-        self.table_display_col_width_cache
+        self.render_caches.table_display_col_width_cache
             .insert(key, widths.clone());
         // Evict any stale entries for this block_start (different block content).
-        self.table_display_col_width_cache
+        self.render_caches.table_display_col_width_cache
             .retain(|k, _| k.0 != block_start || k.1 == block_hash);
         widths
     }

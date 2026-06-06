@@ -390,6 +390,22 @@ impl Default for PerfTraceState {
     }
 }
 
+/// Render-time caches pulled out of the `TerminalApp` monolith. These have only
+/// render-path read/write sites and don't cross subsystem boundaries, so they
+/// group cleanly. Each `*_cache` map has a parallel `*_order` `VecDeque` giving
+/// O(1) FIFO eviction once the cap is hit.
+#[derive(Default)]
+struct RenderCaches {
+    wiki_link_render_cache: FxHashMap<String, WikiLinkRenderCacheEntry>,
+    wiki_link_render_cache_order: VecDeque<String>,
+    wiki_link_line_render_cache: FxHashMap<String, WikiLinkLineRenderCacheEntry>,
+    wiki_link_line_render_cache_order: VecDeque<String>,
+    table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
+    table_formula_segment_cache_order: VecDeque<String>,
+    /// Maps (block_start_line, block_hash) → per-column display widths.
+    table_display_col_width_cache: FxHashMap<(usize, u64), Vec<usize>>,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -509,15 +525,8 @@ struct TerminalApp {
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
     wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
-    wiki_link_render_cache: FxHashMap<String, WikiLinkRenderCacheEntry>,
-    wiki_link_render_cache_order: VecDeque<String>,
-    wiki_link_line_render_cache: FxHashMap<String, WikiLinkLineRenderCacheEntry>,
-    wiki_link_line_render_cache_order: VecDeque<String>,
-    table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
-    table_formula_segment_cache_order: VecDeque<String>,
+    render_caches: RenderCaches,
     table_format_cache: crate::editor_core::table::TableFormatCache,
-    /// Maps (block_start_line, block_hash) → per-column display widths.
-    table_display_col_width_cache: FxHashMap<(usize, u64), Vec<usize>>,
     render_palette: render::RenderPalette,
     render_plain_text_file: bool,
     render_file_language: Option<String>,
@@ -958,14 +967,8 @@ impl TerminalApp {
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
             wiki_link_prefix_index: FxHashMap::default(),
-            wiki_link_render_cache: FxHashMap::default(),
-            wiki_link_render_cache_order: VecDeque::new(),
-            wiki_link_line_render_cache: FxHashMap::default(),
-            wiki_link_line_render_cache_order: VecDeque::new(),
-            table_formula_segment_cache: FxHashMap::default(),
-            table_formula_segment_cache_order: VecDeque::new(),
+            render_caches: RenderCaches::default(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
-            table_display_col_width_cache: FxHashMap::default(),
             render_palette,
             render_plain_text_file,
             render_file_language,

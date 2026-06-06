@@ -1259,7 +1259,7 @@ impl TerminalApp {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         let line_count_changed = self.lines.len() != self.calc.results.len();
         self.invalidate_joined_text_cache();
-        self.table_formula_segment_cache.clear();
+        self.render_caches.table_formula_segment_cache.clear();
         self.dirty = true;
         if changed_from_line == 0 {
             self.switcher_needs_title_refresh = true;

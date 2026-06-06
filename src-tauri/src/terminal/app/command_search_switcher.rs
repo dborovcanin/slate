@@ -2622,8 +2622,8 @@ impl TerminalApp {
         self.search_matches.clear();
         self.rebuild_wiki_link_prefix_index();
         self.rebuild_wiki_link_note_suggestions_cache();
-        self.wiki_link_render_cache.clear();
-        self.wiki_link_line_render_cache.clear();
+        self.render_caches.wiki_link_render_cache.clear();
+        self.render_caches.wiki_link_line_render_cache.clear();
         self.history =
             super::build_history_for_note(&self.lines, self.cursor_line, self.cursor_col);
         self.undo_actions.clear();
