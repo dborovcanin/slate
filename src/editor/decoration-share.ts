@@ -1,4 +1,5 @@
-import type { EditorView, DecorationSet } from "@codemirror/view";
+import type { Decoration, EditorView, DecorationSet } from "@codemirror/view";
+import type { Range } from "@codemirror/state";
 
 /**
  * Per-view hand-off of the calc decoration set computed by the markdown
@@ -27,6 +28,33 @@ export function stashCombinedCalcDecorations(view: EditorView, calc: DecorationS
     vpFrom: view.viewport.from,
     vpTo: view.viewport.to,
     calc,
+  });
+}
+
+/**
+ * Replace every decoration overlapping the byte range [fromPos, toPos] in `base`
+ * with the decorations `rebuilt` carries in that same range. Used by the
+ * changed-line delta path: `base` is the previous set already mapped through the
+ * edit (so unchanged lines are correct), and `rebuilt` is a fresh build of just
+ * the changed line span. Markdown/calc decorations are per-line (none span the
+ * region boundary), so a flat filter+add splice is exact.
+ */
+export function spliceDecorations(
+  base: DecorationSet,
+  fromPos: number,
+  toPos: number,
+  rebuilt: DecorationSet,
+): DecorationSet {
+  const add: Range<Decoration>[] = [];
+  rebuilt.between(fromPos, toPos, (from, to, value) => {
+    add.push(value.range(from, to));
+  });
+  return base.update({
+    filterFrom: fromPos,
+    filterTo: toPos,
+    filter: () => false,
+    add,
+    sort: true,
   });
 }
 
