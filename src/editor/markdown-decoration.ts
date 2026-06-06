@@ -12,6 +12,7 @@ import {
   emitCalcFocusedPipe,
   finalizeCalcItems,
   expandedCalcVisibleSpans,
+  buildCalcDecorationsForSpans,
   type CalcDecorationItem,
 } from "./calc-decoration.ts";
 import { stashCombinedCalcDecorations } from "./decoration-share.ts";
@@ -1387,7 +1388,7 @@ export interface CombinedViewportDecorations {
  * state at each union-span start, so per-line results match the per-md-span
  * analysis exactly.
  */
-function buildCombinedViewportDecorations(
+export function buildCombinedViewportDecorations(
   view: EditorView,
   fenceCache: FenceCheckpointCache,
   matcherCache: VariableMatcherCache,
@@ -1473,6 +1474,58 @@ function buildCombinedViewportDecorations(
 
   emitCalcFocusedPipe(calcItems, view.state, calcSpans);
   return { markdown: mdBuilder.finish(), calc: finalizeCalcItems(calcItems) };
+}
+
+// Test-only: build both decoration sets via the combined single pass and via the
+// standalone builders, for `combined-decoration.test.ts` to assert parity. A
+// minimal `{ state, visibleRanges }` stand-in for the view is enough — the
+// builders only read those two properties.
+export function combinedVsStandaloneForTest(view: EditorView): {
+  combinedMarkdown: DecorationSet;
+  standaloneMarkdown: DecorationSet;
+  combinedCalc: DecorationSet;
+  standaloneCalc: DecorationSet;
+} {
+  const combined = buildCombinedViewportDecorations(
+    view,
+    new FenceCheckpointCache(),
+    new VariableMatcherCache(),
+  );
+
+  const doc = view.state.doc;
+  const variableIndex = view.state.field(variableIndexField, false) ?? [];
+  const selection = view.state.selection.main;
+  const mdSpans = expandedVisibleSpans(view, VIEWPORT_MARGIN_LINES);
+  const strict = visibleSpans(view);
+  const fenceCache = new FenceCheckpointCache();
+  const standaloneMarkdown = buildMarkdownDecorationsForSpans(
+    doc,
+    mdSpans,
+    variableIndex,
+    {
+      from: selection.from,
+      to: selection.to,
+      empty: selection.empty,
+      assoc: selection.assoc,
+    },
+    {
+      getFenceStateBeforeLine: (lineNumber) => fenceCache.getStateBeforeLine(doc, lineNumber),
+      variableMatcher: createVariableMatcher(variableIndex),
+      resolveWikiLinksForLine: (lineNumber) => lineInVisibleSpans(lineNumber, strict),
+      resolveImagesForLine: (lineNumber) => lineInVisibleSpans(lineNumber, strict),
+    },
+  );
+  const standaloneCalc = buildCalcDecorationsForSpans(
+    view.state,
+    expandedCalcVisibleSpans(view),
+  );
+
+  return {
+    combinedMarkdown: combined.markdown,
+    standaloneMarkdown,
+    combinedCalc: combined.calc,
+    standaloneCalc,
+  };
 }
 
 function lineChecklistRevealRanges(

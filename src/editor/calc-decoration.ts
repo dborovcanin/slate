@@ -14,8 +14,8 @@ import {
   RangeSet,
   RangeValue,
   Annotation,
+  EditorState,
   type ChangeDesc,
-  type EditorState,
   type Line,
   type SelectionRange,
   type Text,
@@ -573,7 +573,7 @@ export function finalizeCalcItems(items: CalcDecorationItem[]): DecorationSet {
   return builder.finish();
 }
 
-function buildCalcDecorationsForSpans(
+export function buildCalcDecorationsForSpans(
   state: EditorState,
   spans: readonly CalcVisibleLineSpan[],
 ): DecorationSet {
@@ -2072,4 +2072,29 @@ export function calcExtensions(options: CalcExtensionOptions = {}) {
     buildCalcPlugin(options),
     calcTabKeymap,
   ];
+}
+
+// ── Test-only helpers ─────────────────────────────────────────────────────────
+// Build a headless EditorState wired with the calc/variable decoration fields
+// and seeded results, so decoration parity can be checked without a DOM-backed
+// EditorView. Exported for `combined-decoration.test.ts`.
+export function makeCalcDecorationTestState(opts: {
+  doc: string;
+  results?: Iterable<[number, string]>;
+  cells?: Iterable<[number, TableCellEvaluation[]]>;
+  variableIndex?: VariableIndexEntry[];
+  selectionHead?: number;
+}): EditorState {
+  const base = EditorState.create({
+    doc: opts.doc,
+    extensions: [calcResultsField, cellCalcResultsField, variableIndexField],
+  });
+  const effects: StateEffect<unknown>[] = [];
+  if (opts.results) effects.push(setCalcResults.of(new Map(opts.results)));
+  if (opts.cells) effects.push(setCellCalcResults.of(new Map(opts.cells)));
+  if (opts.variableIndex) effects.push(setVariableIndex.of(opts.variableIndex));
+  return base.update({
+    effects,
+    selection: opts.selectionHead != null ? { anchor: opts.selectionHead } : undefined,
+  }).state;
 }
