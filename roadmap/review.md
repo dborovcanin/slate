@@ -29,7 +29,20 @@ This pass added new findings, shipped the undo span-gate fix and the WASM analyz
 
 Every duplicated primitive is a latent divergence bug: a fix to core semantics has to be manually replicated in the TUI, and the TUI's version will quietly drift.
 
-**Status:** the `vim_actions.rs` half of item 1 is now done — word/pipe text objects, the calc-metadata incremental algorithms, and the full vestigial-fallback set in `apply_vim_actions` are all resolved (net ~−380 lines across the file this pass). The remaining `editing.rs` / `command_search_switcher.rs` surfaces (4227 / 2834 lines) have not been audited for further duplication; treat that as a fresh pass, not a continuation.
+**Status: effectively resolved.** The `vim_actions.rs` half was done in a prior pass (word/pipe text objects, calc-metadata incremental algorithms, vestigial fallback set; net ~−380 lines). The `editing.rs` / `command_search_switcher.rs` surfaces have now been **audited** (read-only pass) and found **already well-deduplicated** — the original "still re-implement semantics" premise is stale for the genuine-dedup sense:
+
+- Commands route through `editor_core::engine` (~29 sites), `command_catalog` (~25), `commands::list_command_suggestions`, `command_history::{remember_command,cycle_prev,cycle_next}`, and `normalize_command` — suggestions/normalization/history are all core-sourced.
+- Structured-editing rules route through `editor_core::text_rules::run_*` (enter / tab / table-cell-nav / table-pipe-insert / table-header-delete / table-boundary / doc-change). The `try_*_rule` fns are thin dispatch wrappers.
+- Table / calc / folding / fence semantics route through `editor_core::{table,calc_plan,folding,markdown_tokens}`. The 7 helper fns whose names collide with core (`builtin_formula_label`, `compute_calc_trailer_refresh`, `contains_assignment_operator`, `find_table_formula_segment(s)`, `format_formula_display_value`) are forwarding wrappers, not forks.
+
+**One genuine duplicate found and fixed this pass:** `is_markdown_table_line` (`app/table_helpers.rs`, 18 call sites) held a byte-identical copy of `editor_core::table::is_table_line` (`trim()` + `starts_with('|') && ends_with('|')`). Now forwards to the canonical core fn (single source of truth; follows core if the table-line predicate ever grows escaped-pipe / continuation handling). Full workspace + 316 terminal tests green.
+
+**Audited but deliberately left (not clean dedups):**
+- `line_has_fold_structure` / `line_might_trigger_doc_change_rules` — cheap TUI fast-path *gates* that partially mirror core structure detection; the real rules run in core afterward, so a conservative/loose gate is safe. Low drift risk.
+- Insert-mode word motion char classification (`is_alphanumeric() || '_'`) concept-duplicates core's `char_class` (`vim_actions.rs:1015`), but that fn is **private** and the web front end uses CodeMirror's native word motion — no shared primitive to delegate to. Unifying would need a core API change (expose `char_class`, route both vim word objects and insert-mode motion through it) and is speculative; not done.
+- `table_cell_navigation_anchor` operates on the TUI-specific `TableCellInfo` struct — tied to that type, not a portable fork.
+
+No further `editing.rs` / `command_search_switcher.rs` dedup work is outstanding.
 
 **Caveat learned this pass:** two of the three text-object/calc bullets turned out to be *not* live cross-frontend divergences — the shared semantics already lived in core. Before treating an item-1 entry as a dedup, confirm there is actually a second consumer (or that the TUI logic is genuinely unreachable); otherwise the work is either dead-code removal or an architecture-cleanliness move (front-end-thin), not parity dedup.
 
@@ -101,6 +114,6 @@ This is most likely a deliberate, accepted tradeoff: the line-vector keeps every
 - Items 1, 2, 3 are carried over from prior reviews and remain accurate; line numbers and file sizes updated to current files.
 - Item 4 (flat `Vec<String>` doc model) is a watch item, not a task. Two findings shipped this pass — the undo span gate and the WASM analyze flat encoding — see "Recently shipped".
 - `TerminalApp` decomposition (item 3) is **complete** — the five `plan.md` substruct targets all exist; remaining loose fields are top-level coordination state (mode/status/quit, config flags, vim register/macros, command bar, reminders, cross-note handles, undo) that did not map to one of the named subsystems and were left as-is.
-- Remaining open work: item 1 (TUI dedup), item 2 (decoration delta rebuild / shared scan). Item 2's remaining value is the shared single scan across the two plugins; the per-line marshal cost it depended on is already addressed.
+- Remaining open work: item 2 (decoration delta rebuild / shared scan). Item 1 (TUI dedup) is now resolved — `vim_actions.rs` done in a prior pass, `editing.rs` / `command_search_switcher.rs` audited this pass and found already-deduplicated apart from the one `is_markdown_table_line` fork (fixed). Item 2's remaining value is the shared single scan across the two plugins; the per-line marshal cost it depended on is already addressed.
 - Large-note tier policy (`adaptive large-note mode`, regression gates at `30k/100k/200k/400k`) lives in `roadmap/plan.md` Next Sprint Checklist and is not duplicated here; item 4 records the structural reason those gates exist.
 - All execution backlog for measurement/operations references stays in `roadmap/performance.md`, `roadmap/perf-tracing.md`, `roadmap/perf-multirow-table.md` per the ownership note in `plan.md`.

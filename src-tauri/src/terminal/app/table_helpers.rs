@@ -44,9 +44,11 @@ fn line_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+/// Forwards to the canonical `editor_core::table::is_table_line` so the
+/// table-line predicate has a single source of truth shared with the rest of
+/// the editor core (it previously held a byte-identical copy of that logic).
 pub(super) fn is_markdown_table_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
+    crate::editor_core::table::is_table_line(line)
 }
 
 pub(super) fn table_cell_info_at_char(
