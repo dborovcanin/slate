@@ -425,44 +425,169 @@ struct ClipboardWatch {
     last_poll: Instant,
 }
 
-struct TerminalApp {
-    active_note: Note,
+/// Date-picker overlay state (`:date` insert flow). Modal/input-and-render only;
+/// no hot-path or partial-borrow coupling with `lines`/`calc`. `format` and
+/// `time_format` are seeded from config at construction; the rest reset to the
+/// `Default` below each time the picker opens.
+struct DatePickerState {
+    year: i32,
+    month: u32,  // 1-12
+    day: u32,    // 1-31
+    hour: u32,   // 0-23
+    minute: u32, // 0-59
+    include_time: bool,
+    require_time: bool,
+    action: DatePickerAction,
+    return_mode: UiMode,
+    format: String,
+    time_format: String,
+}
+
+impl Default for DatePickerState {
+    fn default() -> Self {
+        Self {
+            year: 0,
+            month: 0,
+            day: 0,
+            hour: 0,
+            minute: 0,
+            include_time: false,
+            require_time: false,
+            action: DatePickerAction::InsertDate,
+            return_mode: UiMode::Editor,
+            format: String::new(),
+            time_format: String::new(),
+        }
+    }
+}
+
+/// Calc recompute scheduling/runtime flags (distinct from `calc: CalcCache`,
+/// which holds the ghost results). These coordinate the debounced viewport/full
+/// eval passes; all written on the edit hot path but read/written independently
+/// of the cache, so they split cleanly off the monolith.
+#[derive(Default)]
+struct CalcRuntime {
+    recompute_pending: bool,
+    recompute_due_at: Option<Instant>,
+    pending_viewport_pass: bool,
+    pending_full_pass: bool,
+    viewport_only: bool,
+    last_view_eval_range: Option<(usize, usize)>,
+}
+
+/// Draw-output and render-bookkeeping state: the reused draw buffer, the
+/// last-frame diff snapshot, cached cursor placement, the fence-state
+/// checkpoints used during `draw()`, and the file-render flags. Render-path
+/// only; disjoint from the document/calc fields it reads.
+struct RenderState {
+    plain_text_file: bool,
+    file_language: Option<String>,
+    /// Fence state checkpoints for draw(). Entry k = fence state BEFORE line
+    /// k * FENCE_CHECKPOINT_INTERVAL. `fence_checkpoints_valid_through` is the
+    /// highest index whose entry is current; all higher indices are stale.
+    fence_checkpoints: Vec<(bool, Option<String>)>,
+    fence_checkpoints_valid_through: usize,
+    draw_buf: String,
+    last_drawn_rows: Vec<String>,
+    last_drawn_rows_dim: (usize, usize),
+    last_cursor_row: usize,
+    last_cursor_col: usize,
+    last_cursor_block: bool,
+    last_draw_had_overlay: bool,
+    dirty: bool,
+}
+
+/// Editable document model: the canonical `Vec<String>` line buffer plus its
+/// derived joined-text cache, the cursor position, viewport scroll offsets, the
+/// selection anchor, and the markdown-formatting boundary-exit marker. These
+/// are the fields edits, motions, and rendering all read/write together, so
+/// they are grouped to keep `lines` and `joined_text_cache` co-owned (the
+/// partial-borrow canary called out in roadmap/review.md item 3).
+#[derive(Default)]
+struct EditorModel {
     lines: Vec<String>,
     joined_text_cache: Option<String>,
     cursor_line: usize,
     cursor_col: usize, // char index
-    markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
     scroll_line: usize,
     scroll_col: usize,
+    selection_anchor: Option<(usize, usize)>, // (line, col)
+    markdown_formatting_right_boundary_exit: Option<(usize, usize)>,
+}
+
+/// Note-switcher overlay state: the fuzzy query + result list, the reused
+/// scoring scratch buffer, selection cursor, open/delete confirmation prompts,
+/// the active collection filter, and the prewarm / title-refresh flags.
+#[derive(Default)]
+struct SwitcherState {
+    query: String,
+    items: Vec<NoteMeta>,
+    matches: Vec<usize>,
+    score_scratch: Vec<(usize, i32)>,
+    selected: usize,
+    open_confirm: Option<SwitcherOpenConfirm>,
+    delete_confirm: Option<SwitcherDeleteConfirm>,
+    collection_filter_id: Option<String>,
+    collection_filter_name: Option<String>,
+    prewarm_pending: bool,
+    needs_title_refresh: bool,
+}
+
+/// Collection-switcher overlay state: the fuzzy query + collection list,
+/// selection cursor, and the inline collection edit dialog.
+#[derive(Default)]
+struct CollectionSwitcherState {
+    query: String,
+    items: Vec<CollectionMeta>,
+    matches: Vec<usize>,
+    selected: usize,
+    edit_dialog: Option<CollectionEditDialogState>,
+}
+
+/// Content-search overlay state: cross-note full-text search query/results,
+/// the async worker receivers (primary + detached), debounce timer, and the
+/// optional collection filter scoping the search.
+#[derive(Default)]
+struct ContentSearchState {
+    query: String,
+    cursor_col: usize,
+    results: Vec<NoteSearchResult>,
+    selected: usize,
+    pending: bool,
+    debounce_until: Option<Instant>,
+    rx: Option<std::sync::mpsc::Receiver<ContentSearchResponse>>,
+    detached_rxs: Vec<std::sync::mpsc::Receiver<ContentSearchResponse>>,
+    collection_filter_id: Option<String>,
+    collection_filter_name: Option<String>,
+}
+
+/// In-note `/`-search overlay state: the query, the match spans, the current
+/// match cursor, and the pre-search origin used to restore position on cancel.
+#[derive(Default)]
+struct SearchState {
+    query: String,
+    matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
+    current: usize,
+    orig_line: usize,
+    orig_col: usize,
+    orig_scroll: usize,
+}
+
+struct TerminalApp {
+    active_note: Note,
+    // Editable document model: line buffer + joined-text cache, cursor, viewport
+    // scroll, selection anchor, and the markdown-formatting boundary-exit marker.
+    editor: EditorModel,
     mode: UiMode,
     vim_enabled: bool,
-    switcher_query: String,
-    switcher_items: Vec<NoteMeta>,
-    switcher_matches: Vec<usize>,
-    switcher_score_scratch: Vec<(usize, i32)>,
-    switcher_selected: usize,
-    switcher_open_confirm: Option<SwitcherOpenConfirm>,
-    switcher_delete_confirm: Option<SwitcherDeleteConfirm>,
-    collection_switcher_query: String,
-    collection_switcher_items: Vec<CollectionMeta>,
-    collection_switcher_matches: Vec<usize>,
-    collection_switcher_selected: usize,
-    collection_edit_dialog: Option<CollectionEditDialogState>,
-    content_search_query: String,
-    content_search_cursor_col: usize,
-    content_search_results: Vec<NoteSearchResult>,
-    content_search_selected: usize,
-    content_search_pending: bool,
-    content_search_debounce_until: Option<Instant>,
-    content_search_rx: Option<std::sync::mpsc::Receiver<ContentSearchResponse>>,
-    content_search_detached_rxs: Vec<std::sync::mpsc::Receiver<ContentSearchResponse>>,
+    // Note switcher overlay
+    switcher: SwitcherState,
+    // Collection switcher overlay
+    collection_switcher: CollectionSwitcherState,
+    // Content-search overlay (cross-note full-text search)
+    content_search: ContentSearchState,
     working_collection_id: Option<String>,
     working_collection_name: Option<String>,
-    switcher_collection_filter_id: Option<String>,
-    switcher_collection_filter_name: Option<String>,
-    content_search_collection_filter_id: Option<String>,
-    content_search_collection_filter_name: Option<String>,
-    switcher_prewarm_pending: bool,
     search_index_prewarm_pending: bool,
     search_index_prewarm_rx: Option<std::sync::mpsc::Receiver<bool>>,
     search_index_prewarm_started_at: Option<Instant>,
@@ -482,18 +607,8 @@ struct TerminalApp {
     quit: bool,
     force_quit: bool,
     backup: BackupState,
-    // Date picker state
-    date_year: i32,
-    date_month: u32, // 1-12
-    date_day: u32,
-    date_hour: u32,   // 0-23
-    date_minute: u32, // 0-59
-    date_include_time: bool,
-    date_require_time: bool,
-    date_picker_action: DatePickerAction,
-    date_picker_return_mode: UiMode,
-    date_format: String,
-    date_time_format: String,
+    // Date picker overlay
+    date_picker: DatePickerState,
     // Vim state
     vim_state: crate::editor_core::vim::VimState,
     vim_macro_recording: Option<char>,
@@ -501,7 +616,6 @@ struct TerminalApp {
     vim_macro_replaying: bool,
     clipboard: VimRegister,
     last_clipboard_backend: Option<ClipboardWriteBackend>,
-    selection_anchor: Option<(usize, usize)>, // (line, col)
     command_selection: Option<crate::editor_core::types::SelectionSnapshot>,
     command_selection_linewise: bool,
     // Shared cross-note variable index (also held by AppCore / Tauri commands).
@@ -513,22 +627,12 @@ struct TerminalApp {
     cross_note_db: Db,
     // Calc ghost cache
     calc: CalcCache,
-    calc_recompute_pending: bool,
-    calc_recompute_due_at: Option<Instant>,
-    calc_pending_viewport_pass: bool,
-    calc_pending_full_pass: bool,
-    calc_viewport_only: bool,
-    calc_last_view_eval_range: Option<(usize, usize)>,
+    calc_runtime: CalcRuntime,
     reminder_ghosts: FxHashMap<usize, LineReminderGhost>, // 0-based line index
     reminders_dirty: bool,
     last_reminder_check: Instant,
-    // Search state
-    search_query: String,
-    search_matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
-    search_current: usize,
-    search_orig_line: usize,
-    search_orig_col: usize,
-    search_orig_scroll: usize,
+    // In-note search overlay
+    search: SearchState,
     // Auto format
     autosave_enabled: bool,
     format_on_save: bool,
@@ -544,8 +648,8 @@ struct TerminalApp {
     render_caches: RenderCaches,
     table_format_cache: crate::editor_core::table::TableFormatCache,
     render_palette: render::RenderPalette,
-    render_plain_text_file: bool,
-    render_file_language: Option<String>,
+    // Draw output + render bookkeeping (buffer, last-frame diff, fence checkpoints)
+    render_state: RenderState,
     // Folding (real-line indexed, 0-based)
     folds: FoldingState,
     // Track which mode entered command bar from
@@ -556,21 +660,7 @@ struct TerminalApp {
     history: LineHistory,
     undo_actions: Vec<UndoAction>,
     undo_action_pos: usize,
-    // Fence state checkpoints for draw(). Entry k = fence state BEFORE line
-    // k * FENCE_CHECKPOINT_INTERVAL. fence_checkpoints_valid_through is the
-    // highest index whose entry is current; all higher indices are stale.
-    fence_checkpoints: Vec<(bool, Option<String>)>,
-    fence_checkpoints_valid_through: usize,
-    draw_buf: String,
-    last_drawn_rows: Vec<String>,
-    last_drawn_rows_dim: (usize, usize),
-    last_cursor_row: usize,
-    last_cursor_col: usize,
-    last_cursor_block: bool,
-    last_draw_had_overlay: bool,
     perf_trace: PerfTraceState,
-    render_dirty: bool,
-    switcher_needs_title_refresh: bool,
 }
 
 mod calc_helpers;
@@ -590,14 +680,14 @@ use table_helpers::*;
 
 impl TerminalApp {
     fn large_note_reduced_features(&self) -> bool {
-        self.lines.len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
+        self.editor.lines.len() > LARGE_NOTE_FULL_FEATURE_LINE_LIMIT
     }
 
     fn maybe_compact_buffers_after_note_switch(&mut self) {
         // Best-effort memory trimming when switching from very large notes.
         // This doesn't guarantee RSS drops immediately (allocator-dependent),
         // but it releases large vector capacities held by app structures.
-        self.lines.shrink_to_fit();
+        self.editor.lines.shrink_to_fit();
         self.calc.results.shrink_to_fit();
         self.calc.cell_results.shrink_to_fit();
         self.calc.variable_names.shrink_to_fit();
@@ -703,29 +793,30 @@ impl TerminalApp {
         }
 
         self.mode = UiMode::Switcher;
-        self.switcher_query.clear();
+        self.switcher.query.clear();
         self.recompute_switcher_matches();
 
         let mut note_title = self.active_note.id.clone();
         if let Some((match_idx, switcher_idx)) = self
-            .switcher_matches
+            .switcher
+            .matches
             .iter()
             .enumerate()
-            .find(|(_, idx)| self.switcher_items[**idx].id == self.active_note.id)
+            .find(|(_, idx)| self.switcher.items[**idx].id == self.active_note.id)
         {
-            self.switcher_selected = match_idx;
-            note_title = self.switcher_items[*switcher_idx].title.clone();
+            self.switcher.selected = match_idx;
+            note_title = self.switcher.items[*switcher_idx].title.clone();
         } else {
-            self.switcher_selected = 0;
+            self.switcher.selected = 0;
         }
 
-        self.switcher_open_confirm = Some(SwitcherOpenConfirm {
+        self.switcher.open_confirm = Some(SwitcherOpenConfirm {
             note_id: self.active_note.id.clone(),
             note_title,
             password: String::new(),
             line_number: None,
         });
-        self.switcher_delete_confirm = None;
+        self.switcher.delete_confirm = None;
         self.status = "password required to open protected note".to_string();
     }
 
@@ -859,42 +950,21 @@ impl TerminalApp {
 
         let mut app = Self {
             active_note,
-            lines,
-            joined_text_cache: None,
-            cursor_line: 0,
-            cursor_col: 0,
-            markdown_formatting_right_boundary_exit: None,
-            scroll_line: 0,
-            scroll_col: 0,
+            editor: EditorModel {
+                lines,
+                ..Default::default()
+            },
             mode: initial_mode,
             vim_enabled: vim_mode,
-            switcher_query: String::new(),
-            switcher_items,
-            switcher_matches: Vec::new(),
-            switcher_score_scratch: Vec::new(),
-            switcher_selected: 0,
-            switcher_open_confirm: None,
-            switcher_delete_confirm: None,
-            collection_switcher_query: String::new(),
-            collection_switcher_items: Vec::new(),
-            collection_switcher_matches: Vec::new(),
-            collection_switcher_selected: 0,
-            collection_edit_dialog: None,
-            content_search_query: String::new(),
-            content_search_cursor_col: 0,
-            content_search_results: Vec::new(),
-            content_search_selected: 0,
-            content_search_pending: false,
-            content_search_debounce_until: None,
-            content_search_rx: None,
-            content_search_detached_rxs: Vec::new(),
+            switcher: SwitcherState {
+                items: switcher_items,
+                prewarm_pending: background_tasks_enabled,
+                ..Default::default()
+            },
+            collection_switcher: CollectionSwitcherState::default(),
+            content_search: ContentSearchState::default(),
             working_collection_id: None,
             working_collection_name: None,
-            switcher_collection_filter_id: None,
-            switcher_collection_filter_name: None,
-            content_search_collection_filter_id: None,
-            content_search_collection_filter_name: None,
-            switcher_prewarm_pending: background_tasks_enabled,
             search_index_prewarm_pending: background_tasks_enabled,
             search_index_prewarm_rx: None,
             search_index_prewarm_started_at: None,
@@ -914,24 +984,17 @@ impl TerminalApp {
             quit: false,
             force_quit: false,
             backup: BackupState::default(),
-            date_year: 0,
-            date_month: 0,
-            date_day: 0,
-            date_hour: 0,
-            date_minute: 0,
-            date_include_time: false,
-            date_require_time: false,
-            date_picker_action: DatePickerAction::InsertDate,
-            date_picker_return_mode: UiMode::Editor,
-            date_format,
-            date_time_format,
+            date_picker: DatePickerState {
+                format: date_format,
+                time_format: date_time_format,
+                ..DatePickerState::default()
+            },
             vim_state: crate::editor_core::vim::VimState::default(),
             vim_macro_recording: None,
             vim_macro_registers: FxHashMap::default(),
             vim_macro_replaying: false,
             clipboard: VimRegister::default(),
             last_clipboard_backend: None,
-            selection_anchor: None,
             command_selection: None,
             command_selection_linewise: false,
             cross_note_var_index,
@@ -951,21 +1014,18 @@ impl TerminalApp {
                 pathological_window_streak: 0,
                 forced_full_recompute_remaining: 0,
             },
-            calc_recompute_pending: defer_initial_full_calc,
-            calc_recompute_due_at: None,
-            calc_pending_viewport_pass: defer_initial_full_calc,
-            calc_pending_full_pass: defer_initial_full_calc,
-            calc_viewport_only,
-            calc_last_view_eval_range: None,
+            calc_runtime: CalcRuntime {
+                recompute_pending: defer_initial_full_calc,
+                recompute_due_at: None,
+                pending_viewport_pass: defer_initial_full_calc,
+                pending_full_pass: defer_initial_full_calc,
+                viewport_only: calc_viewport_only,
+                last_view_eval_range: None,
+            },
             reminder_ghosts,
             reminders_dirty: false,
             last_reminder_check: Instant::now(),
-            search_query: String::new(),
-            search_matches: Vec::new(),
-            search_current: 0,
-            search_orig_line: 0,
-            search_orig_col: 0,
-            search_orig_scroll: 0,
+            search: SearchState::default(),
             autosave_enabled,
             format_on_save,
             markdown_autoformat,
@@ -981,8 +1041,20 @@ impl TerminalApp {
             render_caches: RenderCaches::default(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
             render_palette,
-            render_plain_text_file,
-            render_file_language,
+            render_state: RenderState {
+                plain_text_file: render_plain_text_file,
+                file_language: render_file_language,
+                fence_checkpoints: vec![(false, None)],
+                fence_checkpoints_valid_through: 0,
+                draw_buf: String::new(),
+                last_drawn_rows: Vec::new(),
+                last_drawn_rows_dim: (0, 0),
+                last_cursor_row: 0,
+                last_cursor_col: 0,
+                last_cursor_block: false,
+                last_draw_had_overlay: false,
+                dirty: true,
+            },
             folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,
             clipboard_watch: ClipboardWatch {
@@ -993,28 +1065,17 @@ impl TerminalApp {
             history,
             undo_actions: Vec::new(),
             undo_action_pos: 0,
-            fence_checkpoints: vec![(false, None)],
-            fence_checkpoints_valid_through: 0,
-            draw_buf: String::new(),
-            last_drawn_rows: Vec::new(),
-            last_drawn_rows_dim: (0, 0),
-            last_cursor_row: 0,
-            last_cursor_col: 0,
-            last_cursor_block: false,
-            last_draw_had_overlay: false,
             perf_trace: PerfTraceState {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()
             },
-            render_dirty: true,
-            switcher_needs_title_refresh: false,
         };
 
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();
         app.require_startup_password_if_needed();
-        if app.calc_viewport_only {
+        if app.calc_runtime.viewport_only {
             let editor_height = app.editor_height();
             app.ensure_calc_for_viewport(editor_height, true);
         }
@@ -1034,9 +1095,9 @@ impl TerminalApp {
         let mut stdout = io::stdout();
 
         loop {
-            if self.render_dirty {
+            if self.render_state.dirty {
                 let draw_start = Instant::now();
-                self.render_dirty = false;
+                self.render_state.dirty = false;
                 self.draw(&mut stdout)?;
                 self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
             }
@@ -1048,12 +1109,12 @@ impl TerminalApp {
                 Some(key) => {
                     let handle_start = Instant::now();
                     self.handle_key(db, key)?;
-                    self.render_dirty = true;
+                    self.render_state.dirty = true;
                     self.record_perf_duration("tui.key.dispatch", "input", handle_start.elapsed());
                 }
                 None => {
                     if input::take_resize() {
-                        self.render_dirty = true;
+                        self.render_state.dirty = true;
                     }
                     let idle_start = Instant::now();
                     self.maybe_autosave(db)?;
@@ -1079,7 +1140,7 @@ impl TerminalApp {
                             };
                             self.status =
                                 format!("{label}{}", ".".repeat(self.backup.anim_dots as usize));
-                            self.render_dirty = true;
+                            self.render_state.dirty = true;
                         }
                     }
                 }
@@ -1112,7 +1173,7 @@ impl TerminalApp {
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.backup.rx = None;
                     self.status = "backup operation failed unexpectedly".to_string();
-                    self.render_dirty = true;
+                    self.render_state.dirty = true;
                     return;
                 }
             },
@@ -1130,7 +1191,7 @@ impl TerminalApp {
                 match crate::commands::backup::apply_restore_in_session(db) {
                     Ok(true) => {
                         self.dirty = false;
-                        self.joined_text_cache = None;
+                        self.editor.joined_text_cache = None;
                         match self.open_switcher(db) {
                             Ok(()) => self.status = "backup loaded — select a note".to_string(),
                             Err(e) => self.status = format!("backup loaded (open notes: {e})"),
@@ -1148,7 +1209,7 @@ impl TerminalApp {
                 self.status = format!("backup load failed: {e}");
             }
         }
-        self.render_dirty = true;
+        self.render_state.dirty = true;
     }
 
     fn maybe_autosave(&mut self, db: &Db) -> Result<(), String> {
@@ -1160,7 +1221,7 @@ impl TerminalApp {
         if self.folds.rescan_pending {
             self.folds.rescan_pending = false;
             self.recompute_folding();
-            self.render_dirty = true;
+            self.render_state.dirty = true;
         }
         self.maybe_recompute_calc_after_idle();
         self.maybe_dispatch_content_search(db);
@@ -1195,7 +1256,7 @@ impl TerminalApp {
                 started.elapsed(),
             );
             self.startup_fold_hydration_pending = false;
-            self.render_dirty = true;
+            self.render_state.dirty = true;
         }
 
         if self.startup_reminder_hydration_pending {
@@ -1205,7 +1266,7 @@ impl TerminalApp {
                 }
             }
             let started = Instant::now();
-            match load_note_reminder_ghosts(db, &self.active_note.id, &self.lines) {
+            match load_note_reminder_ghosts(db, &self.active_note.id, &self.editor.lines) {
                 Ok(ghosts) => {
                     self.reminder_ghosts = ghosts;
                     self.reminders_dirty = false;
@@ -1217,7 +1278,7 @@ impl TerminalApp {
                     self.startup_reminder_hydration_pending = false;
                     self.startup_reminder_hydration_retry_at = None;
                     self.startup_reminder_hydration_retry_count = 0;
-                    self.render_dirty = true;
+                    self.render_state.dirty = true;
                 }
                 Err(error) => {
                     self.startup_reminder_hydration_retry_count = self
@@ -1265,11 +1326,11 @@ impl TerminalApp {
             }
         }
 
-        if self.switcher_prewarm_pending {
+        if self.switcher.prewarm_pending {
             if tick_started.elapsed() >= tick_budget {
                 return;
             }
-            if self.switcher_items.is_empty() {
+            if self.switcher.items.is_empty() {
                 let started = Instant::now();
                 if self.refresh_switcher_items(db).is_ok() {
                     self.record_perf_duration(
@@ -1279,7 +1340,7 @@ impl TerminalApp {
                     );
                 }
             }
-            self.switcher_prewarm_pending = false;
+            self.switcher.prewarm_pending = false;
         }
 
         if self.search_index_prewarm_pending && self.search_index_prewarm_rx.is_none() {
@@ -1392,35 +1453,35 @@ impl TerminalApp {
         if self.mode != UiMode::ContentSearch {
             return;
         }
-        if !self.content_search_pending || self.content_search_rx.is_some() {
+        if !self.content_search.pending || self.content_search.rx.is_some() {
             return;
         }
-        if let Some(until) = self.content_search_debounce_until {
+        if let Some(until) = self.content_search.debounce_until {
             if Instant::now() < until {
                 return;
             }
-            self.content_search_debounce_until = None;
+            self.content_search.debounce_until = None;
         }
-        let query = self.content_search_query.trim().to_string();
+        let query = self.content_search.query.trim().to_string();
         if query.is_empty() {
-            self.content_search_pending = false;
-            self.content_search_debounce_until = None;
-            self.content_search_results.clear();
-            self.content_search_selected = 0;
+            self.content_search.pending = false;
+            self.content_search.debounce_until = None;
+            self.content_search.results.clear();
+            self.content_search.selected = 0;
             return;
         }
 
-        self.content_search_pending = false;
-        self.content_search_debounce_until = None;
+        self.content_search.pending = false;
+        self.content_search.debounce_until = None;
         let (tx, rx) = std::sync::mpsc::channel();
         let search_db = db.clone();
-        let collection_filter = self.content_search_collection_filter_id.clone();
+        let collection_filter = self.content_search.collection_filter_id.clone();
         std::thread::spawn(move || {
             let result =
                 search_db.search_notes_content_filtered(&query, 100, collection_filter.as_deref());
             tx.send((query, result)).ok();
         });
-        self.content_search_rx = Some(rx);
+        self.content_search.rx = Some(rx);
     }
 
     fn start_clipboard_watch(&mut self) -> bool {
@@ -1443,30 +1504,31 @@ impl TerminalApp {
     }
 
     fn maybe_collect_search_results(&mut self, db: &Db) {
-        if let Some(rx) = &self.content_search_rx {
+        if let Some(rx) = &self.content_search.rx {
             match rx.try_recv() {
                 Ok((query, Ok(results))) => {
-                    if self.content_search_query.trim() == query {
-                        self.content_search_results = results;
-                        self.content_search_selected = 0;
+                    if self.content_search.query.trim() == query {
+                        self.content_search.results = results;
+                        self.content_search.selected = 0;
                     }
-                    self.content_search_rx = None;
-                    self.render_dirty = true;
+                    self.content_search.rx = None;
+                    self.render_state.dirty = true;
                 }
                 Ok((_, Err(error))) => {
                     self.status = format!("content search failed: {error}");
-                    self.content_search_results.clear();
-                    self.content_search_rx = None;
-                    self.render_dirty = true;
+                    self.content_search.results.clear();
+                    self.content_search.rx = None;
+                    self.render_state.dirty = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.content_search_rx = None;
+                    self.content_search.rx = None;
                 }
             }
         }
 
-        self.content_search_detached_rxs
+        self.content_search
+            .detached_rxs
             .retain(|rx| matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)));
 
         self.maybe_dispatch_content_search(db);
@@ -1507,7 +1569,7 @@ impl TerminalApp {
         self.adjust_cursor();
         self.adjust_scroll();
         self.status = "clip-watch pasted".to_string();
-        self.render_dirty = true;
+        self.render_state.dirty = true;
     }
 }
 

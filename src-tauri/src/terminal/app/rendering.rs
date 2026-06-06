@@ -139,7 +139,10 @@ impl TerminalApp {
             ("?".to_string(), true)
         };
 
-        let is_new = !self.render_caches.wiki_link_render_cache.contains_key(short_id);
+        let is_new = !self
+            .render_caches
+            .wiki_link_render_cache
+            .contains_key(short_id);
         self.render_caches.wiki_link_render_cache.insert(
             short_id.to_string(),
             super::WikiLinkRenderCacheEntry {
@@ -149,11 +152,15 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.render_caches.wiki_link_render_cache_order
+            self.render_caches
+                .wiki_link_render_cache_order
                 .push_back(short_id.to_string());
         }
-        while self.render_caches.wiki_link_render_cache.len() > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES {
-            let Some(evict_key) = self.render_caches.wiki_link_render_cache_order.pop_front() else {
+        while self.render_caches.wiki_link_render_cache.len()
+            > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES
+        {
+            let Some(evict_key) = self.render_caches.wiki_link_render_cache_order.pop_front()
+            else {
                 break;
             };
             self.render_caches.wiki_link_render_cache.remove(&evict_key);
@@ -166,14 +173,20 @@ impl TerminalApp {
         &mut self,
         line_text: &str,
     ) -> Option<(String, Vec<(usize, usize)>)> {
-        let Some(entry) = self.render_caches.wiki_link_line_render_cache.get(line_text) else {
+        let Some(entry) = self
+            .render_caches
+            .wiki_link_line_render_cache
+            .get(line_text)
+        else {
             return None;
         };
         if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_LINE_RENDER_CACHE_TTL_MS
         {
             return Some((entry.rendered_line.clone(), entry.underline_ranges.clone()));
         }
-        self.render_caches.wiki_link_line_render_cache.remove(line_text);
+        self.render_caches
+            .wiki_link_line_render_cache
+            .remove(line_text);
         None
     }
 
@@ -196,7 +209,10 @@ impl TerminalApp {
         rendered_line: &str,
         underline_ranges: &[(usize, usize)],
     ) {
-        let is_new = !self.render_caches.wiki_link_line_render_cache.contains_key(line_text);
+        let is_new = !self
+            .render_caches
+            .wiki_link_line_render_cache
+            .contains_key(line_text);
         self.render_caches.wiki_link_line_render_cache.insert(
             line_text.to_string(),
             super::WikiLinkLineRenderCacheEntry {
@@ -206,16 +222,23 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.render_caches.wiki_link_line_render_cache_order
+            self.render_caches
+                .wiki_link_line_render_cache_order
                 .push_back(line_text.to_string());
         }
         while self.render_caches.wiki_link_line_render_cache.len()
             > super::WIKI_LINK_LINE_RENDER_CACHE_MAX_ENTRIES
         {
-            let Some(evict_key) = self.render_caches.wiki_link_line_render_cache_order.pop_front() else {
+            let Some(evict_key) = self
+                .render_caches
+                .wiki_link_line_render_cache_order
+                .pop_front()
+            else {
                 break;
             };
-            self.render_caches.wiki_link_line_render_cache.remove(evict_key.as_str());
+            self.render_caches
+                .wiki_link_line_render_cache
+                .remove(evict_key.as_str());
         }
     }
 
@@ -223,14 +246,20 @@ impl TerminalApp {
         &mut self,
         line_text: &str,
     ) -> Option<Vec<TableFormulaSegment>> {
-        let Some(entry) = self.render_caches.table_formula_segment_cache.get(line_text) else {
+        let Some(entry) = self
+            .render_caches
+            .table_formula_segment_cache
+            .get(line_text)
+        else {
             return None;
         };
         if entry.cached_at.elapsed().as_millis() as u64 <= super::TABLE_FORMULA_SEGMENT_CACHE_TTL_MS
         {
             return Some(entry.segments.clone());
         }
-        self.render_caches.table_formula_segment_cache.remove(line_text);
+        self.render_caches
+            .table_formula_segment_cache
+            .remove(line_text);
         None
     }
 
@@ -239,7 +268,10 @@ impl TerminalApp {
             return cached;
         }
         let segments = find_table_formula_segments(line_text);
-        let is_new = !self.render_caches.table_formula_segment_cache.contains_key(line_text);
+        let is_new = !self
+            .render_caches
+            .table_formula_segment_cache
+            .contains_key(line_text);
         self.render_caches.table_formula_segment_cache.insert(
             line_text.to_string(),
             super::TableFormulaSegmentCacheEntry {
@@ -248,16 +280,23 @@ impl TerminalApp {
             },
         );
         if is_new {
-            self.render_caches.table_formula_segment_cache_order
+            self.render_caches
+                .table_formula_segment_cache_order
                 .push_back(line_text.to_string());
         }
         while self.render_caches.table_formula_segment_cache.len()
             > super::TABLE_FORMULA_SEGMENT_CACHE_MAX_ENTRIES
         {
-            let Some(evict_key) = self.render_caches.table_formula_segment_cache_order.pop_front() else {
+            let Some(evict_key) = self
+                .render_caches
+                .table_formula_segment_cache_order
+                .pop_front()
+            else {
                 break;
             };
-            self.render_caches.table_formula_segment_cache.remove(evict_key.as_str());
+            self.render_caches
+                .table_formula_segment_cache
+                .remove(evict_key.as_str());
         }
         segments
     }
@@ -265,11 +304,12 @@ impl TerminalApp {
     /// Returns per-column visible display widths for the table block containing
     /// `line_idx`. Results are cached by `(block_start, block_hash)`.
     fn table_display_col_widths_for_line(&mut self, line_idx: usize) -> Vec<usize> {
-        let Some((block_start, block_end)) = table_block_bounds_for_line(&self.lines, line_idx)
+        let Some((block_start, block_end)) =
+            table_block_bounds_for_line(&self.editor.lines, line_idx)
         else {
             return Vec::new();
         };
-        let block_lines = &self.lines[block_start..=block_end];
+        let block_lines = &self.editor.lines[block_start..=block_end];
         // Hash the block content for cache validation.
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         use std::hash::{Hash, Hasher};
@@ -282,11 +322,13 @@ impl TerminalApp {
         if let Some(cached) = self.render_caches.table_display_col_width_cache.get(&key) {
             return cached.clone();
         }
-        let widths = table_display_col_widths(&self.lines[block_start..=block_end]);
-        self.render_caches.table_display_col_width_cache
+        let widths = table_display_col_widths(&self.editor.lines[block_start..=block_end]);
+        self.render_caches
+            .table_display_col_width_cache
             .insert(key, widths.clone());
         // Evict any stale entries for this block_start (different block content).
-        self.render_caches.table_display_col_width_cache
+        self.render_caches
+            .table_display_col_width_cache
             .retain(|k, _| k.0 != block_start || k.1 == block_hash);
         widths
     }
@@ -567,16 +609,17 @@ impl TerminalApp {
         // Matches are always ordered by line (recompute_search iterates lines in order),
         // so partition_point gives us the first match on this line in O(log n).
         let start = self
-            .search_matches
+            .search
+            .matches
             .partition_point(|&(l, _, _)| l < line_idx);
         let mut matches = Vec::new();
         let mut current = Vec::new();
-        for (offset, &(line, col_start, col_end)) in self.search_matches[start..].iter().enumerate()
+        for (offset, &(line, col_start, col_end)) in self.search.matches[start..].iter().enumerate()
         {
             if line != line_idx {
                 break;
             }
-            if start + offset == self.search_current {
+            if start + offset == self.search.current {
                 current.push((col_start, col_end));
             } else {
                 matches.push((col_start, col_end));
@@ -586,7 +629,7 @@ impl TerminalApp {
     }
 
     pub(super) fn line_is_in_visual_selection(&self, line_idx: usize) -> bool {
-        let Some(anchor) = self.selection_anchor else {
+        let Some(anchor) = self.editor.selection_anchor else {
             return false;
         };
         let has_visual_selection = self.mode == UiMode::Visual
@@ -596,8 +639,8 @@ impl TerminalApp {
             return false;
         }
 
-        let start_line = min(anchor.0, self.cursor_line);
-        let end_line = std::cmp::max(anchor.0, self.cursor_line);
+        let start_line = min(anchor.0, self.editor.cursor_line);
+        let end_line = std::cmp::max(anchor.0, self.editor.cursor_line);
         line_idx >= start_line && line_idx <= end_line
     }
 
@@ -606,7 +649,7 @@ impl TerminalApp {
         line_idx: usize,
         ranges: &mut Vec<(usize, usize)>,
     ) {
-        let Some(anchor) = self.selection_anchor else {
+        let Some(anchor) = self.editor.selection_anchor else {
             return;
         };
         let has_visual_selection = self.mode == UiMode::Visual
@@ -616,8 +659,8 @@ impl TerminalApp {
             return;
         }
 
-        let start_line = min(anchor.0, self.cursor_line);
-        let end_line = std::cmp::max(anchor.0, self.cursor_line);
+        let start_line = min(anchor.0, self.editor.cursor_line);
+        let end_line = std::cmp::max(anchor.0, self.editor.cursor_line);
 
         if line_idx < start_line || line_idx > end_line {
             return;
@@ -630,21 +673,21 @@ impl TerminalApp {
             return;
         }
 
-        let (start_col, end_col) = if anchor.0 == self.cursor_line {
+        let (start_col, end_col) = if anchor.0 == self.editor.cursor_line {
             (
-                min(anchor.1, self.cursor_col),
-                std::cmp::max(anchor.1, self.cursor_col),
+                min(anchor.1, self.editor.cursor_col),
+                std::cmp::max(anchor.1, self.editor.cursor_col),
             )
-        } else if anchor.0 < self.cursor_line {
-            (anchor.1, self.cursor_col)
+        } else if anchor.0 < self.editor.cursor_line {
+            (anchor.1, self.editor.cursor_col)
         } else {
-            (self.cursor_col, anchor.1)
+            (self.editor.cursor_col, anchor.1)
         };
 
         if start_line == end_line {
             ranges.push((start_col, end_col + 1));
         } else if line_idx == start_line {
-            let line_len = self.lines[line_idx].chars().count();
+            let line_len = self.editor.lines[line_idx].chars().count();
             ranges.push((start_col, line_len.max(start_col + 1)));
         } else if line_idx == end_line {
             ranges.push((0, end_col + 1));
@@ -873,7 +916,11 @@ impl TerminalApp {
         // height = top border + title row + body rows + bottom border
         let box_height = 3 + shown_body;
 
-        let cursor_screen_row = self.cursor_line.saturating_sub(self.scroll_line) + EDITOR_TOP_ROW;
+        let cursor_screen_row = self
+            .editor
+            .cursor_line
+            .saturating_sub(self.editor.scroll_line)
+            + EDITOR_TOP_ROW;
         let y = if cursor_screen_row >= EDITOR_TOP_ROW + box_height {
             cursor_screen_row.saturating_sub(box_height)
         } else {
@@ -883,7 +930,11 @@ impl TerminalApp {
         }
         .max(EDITOR_TOP_ROW);
 
-        let cursor_screen_col = self.cursor_col.saturating_sub(self.scroll_col) + 1;
+        let cursor_screen_col = self
+            .editor
+            .cursor_col
+            .saturating_sub(self.editor.scroll_col)
+            + 1;
         let x = if cursor_screen_col + box_width <= cols + 1 {
             cursor_screen_col
         } else {
@@ -991,10 +1042,10 @@ impl TerminalApp {
         self.ensure_calc_for_viewport(editor_height, false);
         let gutter_width = self.gutter_width();
         let line_number_width = gutter_width.saturating_sub(2);
-        let mut buf = std::mem::take(&mut self.draw_buf);
+        let mut buf = std::mem::take(&mut self.render_state.draw_buf);
         buf.clear();
 
-        let title = derive_title_from_lines(&self.lines);
+        let title = derive_title_from_lines(&self.editor.lines);
         let dirty_mark = if self.dirty { " [+]" } else { "" };
         let large_note_label = if self.large_note_reduced_features() {
             " LARGE-NOTE"
@@ -1021,14 +1072,14 @@ impl TerminalApp {
         );
 
         let first_real_line = self
-            .real_line_for_virtual(self.scroll_line)
-            .unwrap_or(self.lines.len());
+            .real_line_for_virtual(self.editor.scroll_line)
+            .unwrap_or(self.editor.lines.len());
         let (fence_in_code_block, fence_lang) = self.fence_state_before_line(first_real_line);
         let mut ctx = render::RenderContext::with_syntax_mode(
             fence_in_code_block,
             fence_lang,
-            self.render_plain_text_file || self.large_note_reduced_features(),
-            self.render_file_language.clone(),
+            self.render_state.plain_text_file || self.large_note_reduced_features(),
+            self.render_state.file_language.clone(),
             self.render_palette,
         );
         let mut last_rendered_real = if first_real_line > 0 {
@@ -1052,20 +1103,20 @@ impl TerminalApp {
                     ..Default::default()
                 },
             );
-            let virtual_line = self.scroll_line + i;
+            let virtual_line = self.editor.scroll_line + i;
             if let Some(line_idx) = self.real_line_for_virtual(virtual_line) {
                 if let Some(prev_real) = last_rendered_real {
                     if line_idx > prev_real + 1 {
-                        ctx.advance_lines(&self.lines[(prev_real + 1)..line_idx]);
+                        ctx.advance_lines(&self.editor.lines[(prev_real + 1)..line_idx]);
                     }
                 }
                 last_rendered_real = Some(line_idx);
 
                 let line_no = virtual_line + 1;
                 let available = cols.saturating_sub(gutter_width);
-                let is_cursor_line = line_idx == self.cursor_line;
+                let is_cursor_line = line_idx == self.editor.cursor_line;
                 let mut line_cursor_col = if is_cursor_line {
-                    Some(self.cursor_col)
+                    Some(self.editor.cursor_col)
                 } else {
                     None
                 };
@@ -1085,7 +1136,7 @@ impl TerminalApp {
                 // output char positions of (left_pipe, right_pipe) for the
                 // cursor cell in the reformatted string.
                 let mut table_reflow_cell_pipes: Option<(usize, usize)> = None;
-                let line_text = self.lines[line_idx].clone();
+                let line_text = self.editor.lines[line_idx].clone();
                 let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
                 let collapsed_hidden_count = self
                     .folds
@@ -1162,8 +1213,8 @@ impl TerminalApp {
                                 line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
                             let is_focused = is_cursor_line
-                                && self.cursor_col >= seg.cell_from_char
-                                && self.cursor_col < seg.cell_to_char;
+                                && self.editor.cursor_col >= seg.cell_from_char
+                                && self.editor.cursor_col < seg.cell_to_char;
 
                             // Ghost trailer: focused cell shows the value
                             // (so the user can see the result while editing),
@@ -1187,7 +1238,7 @@ impl TerminalApp {
                             if is_focused {
                                 out.push_str(&line_text[seg.from_byte..seg.to_byte]);
                                 let mapped =
-                                    (self.cursor_col as isize + char_delta).max(0) as usize;
+                                    (self.editor.cursor_col as isize + char_delta).max(0) as usize;
                                 focused_cursor_col = Some(mapped);
                                 formula_segment_char_delta_prefix.push(char_delta);
                             } else {
@@ -1219,13 +1270,13 @@ impl TerminalApp {
                                 // source char delta.
                                 let seg_count = formula_segments
                                     .iter()
-                                    .take_while(|seg| seg.cell_to_char <= self.cursor_col)
+                                    .take_while(|seg| seg.cell_to_char <= self.editor.cursor_col)
                                     .count();
                                 let delta = formula_segment_char_delta_prefix
                                     .get(seg_count)
                                     .copied()
                                     .unwrap_or(0);
-                                ((self.cursor_col as isize) + delta).max(0) as usize
+                                ((self.editor.cursor_col as isize) + delta).max(0) as usize
                             });
                             line_cursor_col = Some(mapped_col);
                             cursor_line_override =
@@ -1242,7 +1293,7 @@ impl TerminalApp {
                     && is_markdown_table_line(rendered_line.as_ref())
                 {
                     let cursor = if is_cursor_line && cursor_line_override.is_none() {
-                        Some(line_cursor_col.unwrap_or(self.cursor_col))
+                        Some(line_cursor_col.unwrap_or(self.editor.cursor_col))
                     } else {
                         None
                     };
@@ -1293,8 +1344,9 @@ impl TerminalApp {
                 }
 
                 if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
-                    let source_cursor_col = line_cursor_col.unwrap_or(self.cursor_col);
+                    let source_cursor_col = line_cursor_col.unwrap_or(self.editor.cursor_col);
                     let force_formatting_boundary_exit = self
+                        .editor
                         .markdown_formatting_right_boundary_exit
                         .is_some_and(|(line, _)| line == line_idx);
                     let (collapsed_line, mapped_col) =
@@ -1311,11 +1363,12 @@ impl TerminalApp {
                 if is_cursor_line
                     && cursor_line_override.is_none()
                     && (rendered_line.as_ref() != line_text.as_str()
-                        || line_cursor_col.unwrap_or(self.cursor_col) != self.cursor_col)
+                        || line_cursor_col.unwrap_or(self.editor.cursor_col)
+                            != self.editor.cursor_col)
                 {
                     cursor_line_override = Some((
                         rendered_line.as_ref().to_string(),
-                        line_cursor_col.unwrap_or(self.cursor_col),
+                        line_cursor_col.unwrap_or(self.editor.cursor_col),
                     ));
                 }
 
@@ -1326,7 +1379,7 @@ impl TerminalApp {
                 } else {
                     None
                 };
-                let line_scroll_col = self.scroll_col;
+                let line_scroll_col = self.editor.scroll_col;
                 let line_width = line_display_cols(rendered_line.as_ref());
                 let viewport = compute_line_viewport(line_width, line_scroll_col, available);
 
@@ -1342,9 +1395,11 @@ impl TerminalApp {
                     if let Some((lp, rp)) = table_reflow_cell_pipes {
                         focused_pipe_ranges.push((lp, lp + 1));
                         focused_pipe_ranges.push((rp, rp + 1));
-                    } else if let Some(info) =
-                        table_cell_info_at_char(&self.lines, line_idx, self.cursor_col)
-                    {
+                    } else if let Some(info) = table_cell_info_at_char(
+                        &self.editor.lines,
+                        line_idx,
+                        self.editor.cursor_col,
+                    ) {
                         let left_pipe_char = line_text[..info.left_pipe].chars().count();
                         let right_pipe_char = line_text[..info.right_pipe].chars().count();
                         let translate = |src_col: usize| -> usize {
@@ -1477,9 +1532,9 @@ impl TerminalApp {
             | UiMode::Visual
             | UiMode::VisualLine => &self.status,
             UiMode::Switcher => {
-                if self.switcher_open_confirm.is_some() {
+                if self.switcher.open_confirm.is_some() {
                     "Open note: type password, Enter confirm, Esc cancel"
-                } else if let Some(confirm) = self.switcher_delete_confirm.as_ref() {
+                } else if let Some(confirm) = self.switcher.delete_confirm.as_ref() {
                     if confirm.requires_password {
                         "Confirm delete: type password, Enter confirm, Esc cancel"
                     } else {
@@ -1490,14 +1545,14 @@ impl TerminalApp {
                 }
             }
             UiMode::CollectionSwitcher => {
-                if self.collection_edit_dialog.is_some() {
+                if self.collection_switcher.edit_dialog.is_some() {
                     "Collection edit: Tab/Shift+Tab field, Enter save, Esc cancel"
                 } else {
                     &self.status
                 }
             }
             UiMode::ContentSearch => {
-                if self.switcher_open_confirm.is_some() {
+                if self.switcher.open_confirm.is_some() {
                     "Open note: type password, Enter confirm, Esc cancel"
                 } else {
                     &self.status
@@ -1534,17 +1589,17 @@ impl TerminalApp {
         if self.mode == UiMode::Switcher {
             switcher::draw_switcher(
                 &SwitcherView {
-                    query: &self.switcher_query,
-                    items: &self.switcher_items,
-                    matches: &self.switcher_matches,
-                    selected: self.switcher_selected,
+                    query: &self.switcher.query,
+                    items: &self.switcher.items,
+                    matches: &self.switcher.matches,
+                    selected: self.switcher.selected,
                 },
                 &mut buf,
                 rows,
                 cols,
                 self.render_palette,
             );
-            if let Some(confirm) = self.switcher_delete_confirm.as_ref() {
+            if let Some(confirm) = self.switcher.delete_confirm.as_ref() {
                 switcher::draw_delete_confirm(
                     &confirm.note_title,
                     confirm.requires_password,
@@ -1555,7 +1610,7 @@ impl TerminalApp {
                     self.render_palette,
                 );
             }
-            if let Some(confirm) = self.switcher_open_confirm.as_ref() {
+            if let Some(confirm) = self.switcher.open_confirm.as_ref() {
                 switcher::draw_open_confirm(
                     &confirm.note_title,
                     confirm.password.chars().count(),
@@ -1570,10 +1625,10 @@ impl TerminalApp {
         if self.mode == UiMode::CollectionSwitcher {
             switcher::draw_collection_switcher(
                 &CollectionSwitcherView {
-                    query: &self.collection_switcher_query,
-                    items: &self.collection_switcher_items,
-                    matches: &self.collection_switcher_matches,
-                    selected: self.collection_switcher_selected,
+                    query: &self.collection_switcher.query,
+                    items: &self.collection_switcher.items,
+                    matches: &self.collection_switcher.matches,
+                    selected: self.collection_switcher.selected,
                     working_collection_id: self.working_collection_id.as_deref(),
                 },
                 &mut buf,
@@ -1581,7 +1636,7 @@ impl TerminalApp {
                 cols,
                 self.render_palette,
             );
-            if let Some(dialog) = self.collection_edit_dialog.as_ref() {
+            if let Some(dialog) = self.collection_switcher.edit_dialog.as_ref() {
                 switcher::draw_collection_edit_dialog(
                     &CollectionEditView {
                         name: &dialog.name,
@@ -1600,16 +1655,16 @@ impl TerminalApp {
         if self.mode == UiMode::ContentSearch {
             switcher::draw_content_search(
                 &ContentSearchView {
-                    query: &self.content_search_query,
-                    results: &self.content_search_results,
-                    selected: self.content_search_selected,
+                    query: &self.content_search.query,
+                    results: &self.content_search.results,
+                    selected: self.content_search.selected,
                 },
                 &mut buf,
                 rows,
                 cols,
                 self.render_palette,
             );
-            if let Some(confirm) = self.switcher_open_confirm.as_ref() {
+            if let Some(confirm) = self.switcher.open_confirm.as_ref() {
                 switcher::draw_open_confirm(
                     &confirm.note_title,
                     confirm.password.chars().count(),
@@ -1624,16 +1679,16 @@ impl TerminalApp {
         if self.mode == UiMode::DatePicker {
             date_picker::draw_date_picker(
                 &DatePickerView {
-                    year: self.date_year,
-                    month: self.date_month,
-                    day: self.date_day,
-                    hour: self.date_hour,
-                    minute: self.date_minute,
-                    include_time: self.date_include_time,
-                    require_time: self.date_require_time,
-                    is_remind: self.date_picker_action == DatePickerAction::SetRemind,
-                    date_format: &self.date_format,
-                    date_time_format: &self.date_time_format,
+                    year: self.date_picker.year,
+                    month: self.date_picker.month,
+                    day: self.date_picker.day,
+                    hour: self.date_picker.hour,
+                    minute: self.date_picker.minute,
+                    include_time: self.date_picker.include_time,
+                    require_time: self.date_picker.require_time,
+                    is_remind: self.date_picker.action == DatePickerAction::SetRemind,
+                    date_format: &self.date_picker.format,
+                    date_time_format: &self.date_picker.time_format,
                 },
                 &mut buf,
                 rows,
@@ -1665,7 +1720,7 @@ impl TerminalApp {
                 let visible_col = viewport_col_for_display_col(
                     display_col,
                     line_width,
-                    self.scroll_col,
+                    self.editor.scroll_col,
                     available,
                 );
                 cursor_col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
@@ -1682,19 +1737,19 @@ impl TerminalApp {
         };
 
         let row_chunks = Self::split_frame_rows(&buf, rows);
-        let dims_changed = self.last_drawn_rows_dim != (rows, cols)
-            || self.last_drawn_rows.len() != row_chunks.len();
+        let dims_changed = self.render_state.last_drawn_rows_dim != (rows, cols)
+            || self.render_state.last_drawn_rows.len() != row_chunks.len();
         let overlay_active = matches!(
             self.mode,
             UiMode::Switcher
                 | UiMode::CollectionSwitcher
                 | UiMode::ContentSearch
                 | UiMode::DatePicker
-        ) || self.switcher_open_confirm.is_some()
-            || self.switcher_delete_confirm.is_some();
+        ) || self.switcher.open_confirm.is_some()
+            || self.switcher.delete_confirm.is_some();
         // Full-screen repaint only on overlay transitions (open/close) so
         // content search remains stable while typing.
-        let overlay_transition = overlay_active != self.last_draw_had_overlay;
+        let overlay_transition = overlay_active != self.render_state.last_draw_had_overlay;
         let force_full_redraw = dims_changed || overlay_transition;
 
         let mut changed_rows = Vec::new();
@@ -1703,6 +1758,7 @@ impl TerminalApp {
         } else {
             for (row_idx, row_text) in row_chunks.iter().enumerate() {
                 if self
+                    .render_state
                     .last_drawn_rows
                     .get(row_idx)
                     .map(|prev| prev != row_text)
@@ -1714,13 +1770,13 @@ impl TerminalApp {
         }
 
         let cursor_changed = dims_changed
-            || self.last_cursor_row != cursor_row
-            || self.last_cursor_col != cursor_col
-            || self.last_cursor_block != cursor_block;
+            || self.render_state.last_cursor_row != cursor_row
+            || self.render_state.last_cursor_col != cursor_col
+            || self.render_state.last_cursor_block != cursor_block;
 
         if changed_rows.is_empty() && !cursor_changed {
-            self.last_draw_had_overlay = overlay_active;
-            self.draw_buf = buf;
+            self.render_state.last_draw_had_overlay = overlay_active;
+            self.render_state.draw_buf = buf;
             return Ok(());
         }
 
@@ -1745,14 +1801,14 @@ impl TerminalApp {
             .and_then(|_| out.flush())
             .map_err(|e| format!("Failed to draw terminal UI: {e}"));
         if result.is_ok() {
-            self.last_drawn_rows = row_chunks;
-            self.last_drawn_rows_dim = (rows, cols);
-            self.last_cursor_row = cursor_row;
-            self.last_cursor_col = cursor_col;
-            self.last_cursor_block = cursor_block;
-            self.last_draw_had_overlay = overlay_active;
+            self.render_state.last_drawn_rows = row_chunks;
+            self.render_state.last_drawn_rows_dim = (rows, cols);
+            self.render_state.last_cursor_row = cursor_row;
+            self.render_state.last_cursor_col = cursor_col;
+            self.render_state.last_cursor_block = cursor_block;
+            self.render_state.last_draw_had_overlay = overlay_active;
         }
-        self.draw_buf = buf;
+        self.render_state.draw_buf = buf;
         result
     }
 
@@ -1763,7 +1819,7 @@ impl TerminalApp {
                 (rows, col.max(1))
             }
             UiMode::Search => {
-                let col = (1 + 1 + self.search_query.chars().count()).min(cols.max(1));
+                let col = (1 + 1 + self.search.query.chars().count()).min(cols.max(1));
                 (rows, col.max(1))
             }
             UiMode::DatePicker => {
@@ -1774,12 +1830,12 @@ impl TerminalApp {
                 let cursor_virtual = self.current_virtual_line();
                 let row = EDITOR_TOP_ROW
                     + cursor_virtual
-                        .saturating_sub(self.scroll_line)
+                        .saturating_sub(self.editor.scroll_line)
                         .min(rows.saturating_sub(2));
                 let line_text = self.current_line();
                 let display_char_col = cursor_render_char_col(
                     line_text,
-                    self.cursor_col,
+                    self.editor.cursor_col,
                     matches!(
                         self.mode,
                         UiMode::Normal | UiMode::Visual | UiMode::VisualLine
@@ -1792,7 +1848,7 @@ impl TerminalApp {
                 let visible_col = viewport_col_for_display_col(
                     display_col,
                     line_width,
-                    self.scroll_col,
+                    self.editor.scroll_col,
                     available,
                 );
                 let col = (gutter_width + visible_col + 1).min(cols.max(1));
@@ -1804,7 +1860,7 @@ impl TerminalApp {
                 let x = (cols.saturating_sub(box_w)) / 2 + 1;
                 let y = (rows.saturating_sub(box_h)) / 2 + 1;
                 let prompt = " search: ";
-                let col = (x + 1 + prompt.chars().count() + self.switcher_query.chars().count())
+                let col = (x + 1 + prompt.chars().count() + self.switcher.query.chars().count())
                     .min(cols.max(1));
                 (y + 1, col.max(1))
             }
@@ -1813,7 +1869,7 @@ impl TerminalApp {
                 let box_h = min(rows.saturating_sub(4).max(8), 14);
                 let x = (cols.saturating_sub(box_w)) / 2 + 1;
                 let y = (rows.saturating_sub(box_h)) / 2 + 1;
-                if let Some(dialog) = self.collection_edit_dialog.as_ref() {
+                if let Some(dialog) = self.collection_switcher.edit_dialog.as_ref() {
                     let edit_w = min(cols.saturating_sub(4).max(48), 88);
                     let edit_h = min(rows.saturating_sub(4).max(10), 12);
                     let edit_x = (cols.saturating_sub(edit_w)) / 2 + 1;
@@ -1836,7 +1892,7 @@ impl TerminalApp {
                     let col = (x
                         + 1
                         + prompt.chars().count()
-                        + self.collection_switcher_query.chars().count())
+                        + self.collection_switcher.query.chars().count())
                     .min(cols.max(1));
                     (y + 1, col.max(1))
                 }
@@ -1844,7 +1900,7 @@ impl TerminalApp {
             UiMode::ContentSearch => {
                 let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);
                 let prompt = " content: ";
-                let col = (x + 1 + prompt.chars().count() + self.content_search_cursor_col)
+                let col = (x + 1 + prompt.chars().count() + self.content_search.cursor_col)
                     .min(cols.max(1));
                 (y + 1, col.max(1))
             }

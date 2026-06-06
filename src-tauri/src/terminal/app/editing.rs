@@ -302,7 +302,7 @@ impl TerminalApp {
         // document ends. Gate on the coalesce cap rather than the much larger
         // lightweight-fold threshold so mid-size notes (5k–30k lines) stop paying
         // the per-keystroke full-document diff.
-        self.lines.len() > crate::terminal::history::COALESCE_ANCHOR_MAX_LINES
+        self.editor.lines.len() > crate::terminal::history::COALESCE_ANCHOR_MAX_LINES
     }
 
     fn record_history_after_edit(
@@ -315,9 +315,9 @@ impl TerminalApp {
         {
             if self.prefer_span_history_fast_path() {
                 let history_changed = self.history.record_edit_span(
-                    &self.lines,
-                    self.cursor_line,
-                    self.cursor_col,
+                    &self.editor.lines,
+                    self.editor.cursor_line,
+                    self.editor.cursor_col,
                     start_line,
                     old_line_span,
                     new_line_span,
@@ -331,16 +331,16 @@ impl TerminalApp {
                 return;
             }
             self.history.record_edit(
-                &self.lines,
-                self.cursor_line,
-                self.cursor_col,
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
                 coalesce_undo,
             )
         } else {
             self.history.record_edit(
-                &self.lines,
-                self.cursor_line,
-                self.cursor_col,
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
                 coalesce_undo,
             )
         };
@@ -356,9 +356,9 @@ impl TerminalApp {
         // Keep startup cheap for very large notes: build a plain 1:1 visible
         // map and defer expensive fold structure analysis until needed.
         self.folds.ranges.clear();
-        self.folds.range_by_start = vec![None; self.lines.len()];
+        self.folds.range_by_start = vec![None; self.editor.lines.len()];
         self.folds.collapsed_starts.clear();
-        self.folds.line_has_structure = vec![false; self.lines.len()];
+        self.folds.line_has_structure = vec![false; self.editor.lines.len()];
         // Keep memory lean at startup; full snapshots are only needed once
         // fold analysis actually runs.
         self.folds.line_text_snapshot.clear();
@@ -370,31 +370,32 @@ impl TerminalApp {
     fn ensure_fold_analysis_ready_for_command(&mut self) {
         if !self.folds.analysis_ready
             || self.folds.rescan_pending
-            || self.folds.range_by_start.len() != self.lines.len()
-            || self.folds.line_has_structure.len() != self.lines.len()
-            || self.folds.line_text_snapshot.len() != self.lines.len()
+            || self.folds.range_by_start.len() != self.editor.lines.len()
+            || self.folds.line_has_structure.len() != self.editor.lines.len()
+            || self.folds.line_text_snapshot.len() != self.editor.lines.len()
         {
             self.recompute_folding();
         }
     }
 
     pub(super) fn current_line(&self) -> &str {
-        self.lines
-            .get(self.cursor_line)
+        self.editor
+            .lines
+            .get(self.editor.cursor_line)
             .map(|s| s.as_str())
             .unwrap_or("")
     }
 
     pub(super) fn current_line_mut(&mut self) -> &mut String {
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
+        if self.editor.lines.is_empty() {
+            self.editor.lines.push(String::new());
         }
-        &mut self.lines[self.cursor_line]
+        &mut self.editor.lines[self.editor.cursor_line]
     }
 
     pub(super) fn rescan_calc_flags(&mut self) {
         let flags = crate::editor_core::calc_plan::detect_calc_signal_flags_with_mask(
-            &self.lines,
+            &self.editor.lines,
             self.calc_feature_mask(),
         );
         self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
@@ -410,9 +411,9 @@ impl TerminalApp {
         };
         crate::editor_core::calc_plan::merge_incremental_signal_flags(
             &mut flags,
-            &self.lines,
+            &self.editor.lines,
             self.calc.results.len(),
-            self.cursor_line,
+            self.editor.cursor_line,
             self.calc_feature_mask(),
         );
         self.calc.cached_has_variable_assignment = flags.has_variable_assignment;
@@ -421,27 +422,27 @@ impl TerminalApp {
 
     fn rebuild_calc_line_metadata(&mut self) {
         self.calc.line_metadata = crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(
-            &self.lines,
+            &self.editor.lines,
             self.calc_feature_mask(),
         );
     }
 
     fn ensure_calc_line_metadata(&mut self) {
-        if self.calc.line_metadata.len() != self.lines.len() {
+        if self.calc.line_metadata.len() != self.editor.lines.len() {
             self.rebuild_calc_line_metadata();
         }
     }
 
     fn refresh_calc_line_metadata_at(&mut self, line_idx: usize) {
-        if self.calc.line_metadata.is_empty() && self.lines.is_empty() {
+        if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
             return;
         }
         self.ensure_calc_line_metadata();
-        if line_idx >= self.lines.len() || line_idx >= self.calc.line_metadata.len() {
+        if line_idx >= self.editor.lines.len() || line_idx >= self.calc.line_metadata.len() {
             return;
         }
         self.calc.line_metadata[line_idx] = crate::editor_core::calc_plan::line_metadata_with_mask(
-            &self.lines[line_idx],
+            &self.editor.lines[line_idx],
             self.calc_feature_mask(),
         );
     }
@@ -452,7 +453,7 @@ impl TerminalApp {
         old_line_span: usize,
         new_line_span: usize,
     ) {
-        if self.calc.line_metadata.is_empty() && self.lines.is_empty() {
+        if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
             return;
         }
         // Core recomputes metadata only for the replaced lines, or returns false
@@ -461,7 +462,7 @@ impl TerminalApp {
         let mask = self.calc_feature_mask();
         let spliced = crate::editor_core::calc_plan::splice_line_metadata(
             &mut self.calc.line_metadata,
-            &self.lines,
+            &self.editor.lines,
             start_line,
             old_line_span,
             new_line_span,
@@ -532,7 +533,7 @@ impl TerminalApp {
     }
 
     pub(super) fn should_defer_calc_recompute(&self) -> bool {
-        self.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
+        self.editor.lines.len() >= LARGE_DOC_CALC_DEFER_LINES
             && !self.calc.cached_has_builtin_formula
             && !self.active_has_variable_assignments()
     }
@@ -553,10 +554,10 @@ impl TerminalApp {
     }
 
     fn schedule_calc_recompute(&mut self, viewport_pass: bool, full_pass: bool) {
-        self.calc_recompute_pending = true;
-        self.calc_pending_viewport_pass |= viewport_pass;
-        self.calc_pending_full_pass |= full_pass;
-        self.calc_recompute_due_at = None;
+        self.calc_runtime.recompute_pending = true;
+        self.calc_runtime.pending_viewport_pass |= viewport_pass;
+        self.calc_runtime.pending_full_pass |= full_pass;
+        self.calc_runtime.recompute_due_at = None;
     }
 
     fn shared_prefix_len_hashes(prev_hashes: &[u64], next_hashes: &[u64]) -> usize {
@@ -593,7 +594,7 @@ impl TerminalApp {
         self.ensure_calc_line_metadata();
 
         let prev_len = self.calc.results.len();
-        let next_len = self.lines.len();
+        let next_len = self.editor.lines.len();
         if prev_len == 0
             || self.calc.cell_results.len() != prev_len
             || self.calc.prev_line_metadata.len() != prev_len
@@ -632,7 +633,11 @@ impl TerminalApp {
             .iter()
             .any(|entry| entry.has_builtin_formula);
         let mask = self.calc_feature_mask();
-        let changed_lines = self.lines.get(changed_from..changed_to_next).unwrap_or(&[]);
+        let changed_lines = self
+            .editor
+            .lines
+            .get(changed_from..changed_to_next)
+            .unwrap_or(&[]);
         let changed_touches_table = mask.table_enabled
             && changed_lines
                 .iter()
@@ -686,16 +691,16 @@ impl TerminalApp {
         self.calc.cell_results = remapped_cell_results;
         self.calc.prev_line_metadata = self.calc.line_metadata.clone();
         self.calc.stale = false;
-        self.calc_recompute_pending = false;
-        self.calc_recompute_due_at = None;
-        self.calc_pending_viewport_pass = false;
-        self.calc_pending_full_pass = false;
+        self.calc_runtime.recompute_pending = false;
+        self.calc_runtime.recompute_due_at = None;
+        self.calc_runtime.pending_viewport_pass = false;
+        self.calc_runtime.pending_full_pass = false;
         true
     }
 
     pub(super) fn clear_calc_cache(&mut self) {
-        self.calc.results = vec![None; self.lines.len()];
-        self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+        self.calc.results = vec![None; self.editor.lines.len()];
+        self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
         self.calc.variable_names.clear();
         self.calc.calc_dependency_index = None;
         self.calc.line_metadata.clear();
@@ -703,11 +708,11 @@ impl TerminalApp {
         self.calc.stale = false;
         self.calc.pathological_window_streak = 0;
         self.calc.forced_full_recompute_remaining = 0;
-        self.calc_last_view_eval_range = None;
-        self.calc_recompute_pending = false;
-        self.calc_recompute_due_at = None;
-        self.calc_pending_viewport_pass = false;
-        self.calc_pending_full_pass = false;
+        self.calc_runtime.last_view_eval_range = None;
+        self.calc_runtime.recompute_pending = false;
+        self.calc_runtime.recompute_due_at = None;
+        self.calc_runtime.pending_viewport_pass = false;
+        self.calc_runtime.pending_full_pass = false;
     }
 
     pub(super) fn defer_calc_state_after_edit(&mut self) {
@@ -715,13 +720,13 @@ impl TerminalApp {
         // state on every keystroke.
         // Clear the full cache so same-line-count multi-line edits cannot
         // leave stale calc ghosts on non-cursor lines.
-        if self.calc.results.len() != self.lines.len() {
-            self.calc.results = vec![None; self.lines.len()];
+        if self.calc.results.len() != self.editor.lines.len() {
+            self.calc.results = vec![None; self.editor.lines.len()];
         } else {
             self.calc.results.fill(None);
         }
-        if self.calc.cell_results.len() != self.lines.len() {
-            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+        if self.calc.cell_results.len() != self.editor.lines.len() {
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
         } else {
             for row in &mut self.calc.cell_results {
                 row.clear();
@@ -736,21 +741,21 @@ impl TerminalApp {
             if !self.folds.ranges.is_empty() {
                 self.folds.ranges.clear();
             }
-            if self.folds.range_by_start.len() != self.lines.len() {
-                self.folds.range_by_start = vec![None; self.lines.len()];
+            if self.folds.range_by_start.len() != self.editor.lines.len() {
+                self.folds.range_by_start = vec![None; self.editor.lines.len()];
             }
             if !self.folds.collapsed_starts.is_empty() {
                 self.folds.collapsed_starts.clear();
             }
-            if self.folds.visible_to_real.len() != self.lines.len()
-                || self.folds.real_to_visible.len() != self.lines.len()
-                || self.folds.hidden_owner.len() != self.lines.len()
-                || self.folds.placeholder_hidden_lines.len() != self.lines.len()
+            if self.folds.visible_to_real.len() != self.editor.lines.len()
+                || self.folds.real_to_visible.len() != self.editor.lines.len()
+                || self.folds.hidden_owner.len() != self.editor.lines.len()
+                || self.folds.placeholder_hidden_lines.len() != self.editor.lines.len()
             {
                 self.rebuild_fold_view_map();
             }
-            if self.folds.line_has_structure.len() != self.lines.len() {
-                self.folds.line_has_structure = vec![false; self.lines.len()];
+            if self.folds.line_has_structure.len() != self.editor.lines.len() {
+                self.folds.line_has_structure = vec![false; self.editor.lines.len()];
             }
             self.folds.line_text_snapshot.clear();
             self.folds.rescan_pending = false;
@@ -764,7 +769,7 @@ impl TerminalApp {
             return;
         }
 
-        if self.lines.is_empty() {
+        if self.editor.lines.is_empty() {
             self.folds.line_has_structure.clear();
             self.folds.line_text_snapshot.clear();
             self.apply_fold_ranges(Vec::new());
@@ -772,11 +777,14 @@ impl TerminalApp {
             return;
         }
 
-        let cl = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        let line_count_changed = self.lines.len() != self.folds.line_has_structure.len();
+        let cl = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
+        let line_count_changed = self.editor.lines.len() != self.folds.line_has_structure.len();
 
         if line_count_changed {
-            let next_len = self.lines.len();
+            let next_len = self.editor.lines.len();
             let prev_len = self.folds.line_has_structure.len();
             // Safety guard: incremental insert/remove remap assumes snapshot and
             // structure vectors are aligned. If a prior mode change/reset left
@@ -796,7 +804,12 @@ impl TerminalApp {
                     .get(insert_at)
                     .cloned()
                     .unwrap_or_default();
-                let new_line_text = self.lines.get(insert_at).cloned().unwrap_or_default();
+                let new_line_text = self
+                    .editor
+                    .lines
+                    .get(insert_at)
+                    .cloned()
+                    .unwrap_or_default();
                 remap_edits.push(crate::editor_core::folding::FoldLineEdit {
                     old_start_line: insert_at,
                     old_line_span: 1,
@@ -808,16 +821,18 @@ impl TerminalApp {
                 if cl > 0 {
                     if let Some(flag) = self.folds.line_has_structure.get_mut(cl - 1) {
                         *flag = self
+                            .editor
                             .lines
                             .get(cl - 1)
                             .map(|l| Self::line_has_fold_structure(l))
                             .unwrap_or(false);
                     }
                     if let Some(text) = self.folds.line_text_snapshot.get_mut(cl - 1) {
-                        *text = self.lines.get(cl - 1).cloned().unwrap_or_default();
+                        *text = self.editor.lines.get(cl - 1).cloned().unwrap_or_default();
                     }
                 }
                 let new_flag = self
+                    .editor
                     .lines
                     .get(insert_at)
                     .map(|l| Self::line_has_fold_structure(l))
@@ -836,7 +851,12 @@ impl TerminalApp {
                     .get(old_start_line)
                     .cloned()
                     .unwrap_or_default();
-                let new_line_text = self.lines.get(old_start_line).cloned().unwrap_or_default();
+                let new_line_text = self
+                    .editor
+                    .lines
+                    .get(old_start_line)
+                    .cloned()
+                    .unwrap_or_default();
                 remap_edits.push(crate::editor_core::folding::FoldLineEdit {
                     old_start_line,
                     old_line_span: 2,
@@ -854,13 +874,19 @@ impl TerminalApp {
                 let update_at = remove_at.min(next_len.saturating_sub(1));
                 if let Some(flag) = self.folds.line_has_structure.get_mut(update_at) {
                     *flag = self
+                        .editor
                         .lines
                         .get(update_at)
                         .map(|l| Self::line_has_fold_structure(l))
                         .unwrap_or(false);
                 }
                 if let Some(text) = self.folds.line_text_snapshot.get_mut(update_at) {
-                    *text = self.lines.get(update_at).cloned().unwrap_or_default();
+                    *text = self
+                        .editor
+                        .lines
+                        .get(update_at)
+                        .cloned()
+                        .unwrap_or_default();
                 }
             } else {
                 // Bulk change (paste, format, etc.): rebuild entirely.
@@ -874,7 +900,7 @@ impl TerminalApp {
 
             if self.folds.collapsed_starts.is_empty() {
                 self.folds.ranges.clear();
-                self.folds.range_by_start = vec![None; self.lines.len()];
+                self.folds.range_by_start = vec![None; self.editor.lines.len()];
                 self.rebuild_fold_view_map();
                 self.folds.rescan_pending = true;
                 self.folds.analysis_ready = false;
@@ -891,7 +917,7 @@ impl TerminalApp {
             .get(cl)
             .cloned()
             .unwrap_or_default();
-        let current_text = self.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
+        let current_text = self.editor.lines.get(cl).map(|s| s.as_str()).unwrap_or("");
         let new_text = current_text.to_string();
         let next_flag = Self::line_has_fold_structure(current_text);
         let prev_flag = self
@@ -935,17 +961,18 @@ impl TerminalApp {
 
     pub(super) fn recompute_folding(&mut self) {
         self.folds.line_has_structure = self
+            .editor
             .lines
             .iter()
             .map(|line| Self::line_has_fold_structure(line))
             .collect();
-        self.folds.line_text_snapshot = self.lines.clone();
+        self.folds.line_text_snapshot = self.editor.lines.clone();
         self.recompute_folding_from_cached_structure();
     }
 
     pub(super) fn recompute_folding_from_cached_structure(&mut self) {
         self.folds.rescan_pending = false;
-        let ranges = folding::build_fold_ranges(&self.lines);
+        let ranges = folding::build_fold_ranges(&self.editor.lines);
         self.apply_fold_ranges(ranges);
         self.folds.analysis_ready = true;
     }
@@ -963,7 +990,7 @@ impl TerminalApp {
         let mapped = crate::editor_core::folding::map_ranges_through_line_edits(
             &self.folds.ranges,
             edits,
-            self.lines.len().max(1),
+            self.editor.lines.len().max(1),
         );
         self.folds.rescan_pending = false;
         self.apply_fold_ranges(mapped);
@@ -973,7 +1000,7 @@ impl TerminalApp {
 
     fn apply_fold_ranges(&mut self, ranges: Vec<crate::editor_core::folding::FoldRange>) {
         self.folds.ranges = ranges;
-        self.folds.range_by_start = vec![None; self.lines.len()];
+        self.folds.range_by_start = vec![None; self.editor.lines.len()];
         for range in &self.folds.ranges {
             if range.start_line < self.folds.range_by_start.len() {
                 self.folds.range_by_start[range.start_line] = Some(*range);
@@ -989,7 +1016,7 @@ impl TerminalApp {
     }
 
     pub(super) fn rebuild_fold_view_map(&mut self) {
-        let line_count = self.lines.len();
+        let line_count = self.editor.lines.len();
         self.folds.visible_to_real.clear();
         self.folds.visible_to_real.reserve(line_count);
         self.folds.real_to_visible = vec![0; line_count];
@@ -1070,15 +1097,16 @@ impl TerminalApp {
         if target_line == 0 {
             return (false, None);
         }
-        let target = target_line.min(self.lines.len());
+        let target = target_line.min(self.editor.lines.len());
         let target_ck = target / FENCE_CHECKPOINT_INTERVAL;
-        let start_ck = target_ck.min(self.fence_checkpoints_valid_through);
+        let start_ck = target_ck.min(self.render_state.fence_checkpoints_valid_through);
         let start_line = start_ck * FENCE_CHECKPOINT_INTERVAL;
 
         let (mut in_code_block, mut code_fence_lang) = if start_ck == 0 {
             (false, None)
         } else {
-            self.fence_checkpoints
+            self.render_state
+                .fence_checkpoints
                 .get(start_ck)
                 .cloned()
                 .unwrap_or((false, None))
@@ -1089,15 +1117,16 @@ impl TerminalApp {
             // At each new checkpoint boundary, cache the current state.
             if line_idx > 0 && line_idx % FENCE_CHECKPOINT_INTERVAL == 0 {
                 let ck = line_idx / FENCE_CHECKPOINT_INTERVAL;
-                if ck > self.fence_checkpoints_valid_through {
-                    while self.fence_checkpoints.len() <= ck {
-                        self.fence_checkpoints.push((false, None));
+                if ck > self.render_state.fence_checkpoints_valid_through {
+                    while self.render_state.fence_checkpoints.len() <= ck {
+                        self.render_state.fence_checkpoints.push((false, None));
                     }
-                    self.fence_checkpoints[ck] = (in_code_block, code_fence_lang.clone());
-                    self.fence_checkpoints_valid_through = ck;
+                    self.render_state.fence_checkpoints[ck] =
+                        (in_code_block, code_fence_lang.clone());
+                    self.render_state.fence_checkpoints_valid_through = ck;
                 }
             }
-            if let Some(line_text) = self.lines.get(line_idx) {
+            if let Some(line_text) = self.editor.lines.get(line_idx) {
                 let mut state = crate::editor_core::markdown_tokens::FenceState {
                     in_code_block,
                     code_fence_lang,
@@ -1115,8 +1144,8 @@ impl TerminalApp {
     // `line_idx`. Called whenever lines at or before a checkpoint boundary change.
     pub(super) fn invalidate_fence_checkpoints_from_line(&mut self, line_idx: usize) {
         let keep_through = line_idx / FENCE_CHECKPOINT_INTERVAL;
-        if self.fence_checkpoints_valid_through > keep_through {
-            self.fence_checkpoints_valid_through = keep_through;
+        if self.render_state.fence_checkpoints_valid_through > keep_through {
+            self.render_state.fence_checkpoints_valid_through = keep_through;
         }
     }
 
@@ -1127,7 +1156,7 @@ impl TerminalApp {
     pub(super) fn current_virtual_line(&self) -> usize {
         self.folds
             .real_to_visible
-            .get(self.cursor_line)
+            .get(self.editor.cursor_line)
             .copied()
             .unwrap_or(0)
     }
@@ -1176,7 +1205,10 @@ impl TerminalApp {
             return false;
         }
         self.ensure_fold_analysis_ready_for_command();
-        let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let line = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
             self.status = "fold: no foldable block at cursor".to_string();
             return false;
@@ -1194,7 +1226,10 @@ impl TerminalApp {
             return false;
         }
         self.ensure_fold_analysis_ready_for_command();
-        let line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let line = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
         let Some(start_line) = self.fold_start_for_line(line) else {
             self.status = "fold: no foldable block at cursor".to_string();
             return false;
@@ -1257,20 +1292,20 @@ impl TerminalApp {
         history_span: Option<(usize, usize, usize)>,
     ) {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
-        let line_count_changed = self.lines.len() != self.calc.results.len();
+        let line_count_changed = self.editor.lines.len() != self.calc.results.len();
         self.invalidate_joined_text_cache();
         self.render_caches.table_formula_segment_cache.clear();
         self.dirty = true;
         if changed_from_line == 0 {
-            self.switcher_needs_title_refresh = true;
+            self.switcher.needs_title_refresh = true;
         }
         if !self.reminder_ghosts.is_empty() {
             self.reminders_dirty = true;
         }
-        let clamped_changed_line = if self.lines.is_empty() {
+        let clamped_changed_line = if self.editor.lines.is_empty() {
             0
         } else {
-            changed_from_line.min(self.lines.len().saturating_sub(1))
+            changed_from_line.min(self.editor.lines.len().saturating_sub(1))
         };
         self.invalidate_fence_checkpoints_from_line(clamped_changed_line);
         self.update_calc_flags_incremental();
@@ -1281,18 +1316,18 @@ impl TerminalApp {
             // prev_line_metadata may drift from `lines` until the next real
             // recompute, but the planner falls back to full eval safely when
             // the diff looks large, so correctness holds.
-            self.calc_recompute_pending = false;
-            self.calc_recompute_due_at = None;
-            self.calc_pending_viewport_pass = false;
-            self.calc_pending_full_pass = false;
+            self.calc_runtime.recompute_pending = false;
+            self.calc_runtime.recompute_due_at = None;
+            self.calc_runtime.pending_viewport_pass = false;
+            self.calc_runtime.pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
             self.defer_calc_state_after_edit();
-            self.calc_recompute_pending = false;
-            self.calc_recompute_due_at = None;
-            self.calc_pending_viewport_pass = false;
-            self.calc_pending_full_pass = false;
+            self.calc_runtime.recompute_pending = false;
+            self.calc_runtime.recompute_due_at = None;
+            self.calc_runtime.pending_viewport_pass = false;
+            self.calc_runtime.pending_full_pass = false;
         } else {
-            if self.lines.len() >= CALC_ASYNC_MIN_LINES {
+            if self.editor.lines.len() >= CALC_ASYNC_MIN_LINES {
                 if line_count_changed {
                     // Structural edits (Enter/join/delete-at-boundary): try a
                     // cheap remap-only path first, and recompute only when
@@ -1305,10 +1340,10 @@ impl TerminalApp {
                     // the next idle tick and clear only the edited line's
                     // cached result so we don't show stale ghosts while
                     // pending.
-                    if let Some(slot) = self.calc.results.get_mut(self.cursor_line) {
+                    if let Some(slot) = self.calc.results.get_mut(self.editor.cursor_line) {
                         *slot = None;
                     }
-                    if let Some(slot) = self.calc.cell_results.get_mut(self.cursor_line) {
+                    if let Some(slot) = self.calc.cell_results.get_mut(self.editor.cursor_line) {
                         slot.clear();
                     }
                     self.schedule_calc_recompute(true, true);
@@ -1326,11 +1361,14 @@ impl TerminalApp {
     }
 
     pub(super) fn mark_edited(&mut self) {
-        self.mark_edited_from_line_with_span(self.cursor_line, None);
+        self.mark_edited_from_line_with_span(self.editor.cursor_line, None);
     }
 
     pub(super) fn mark_edited_current_line(&mut self) {
-        let changed_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        let changed_line = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
         self.mark_edited_from_line_with_span(changed_line, Some((changed_line, 1, 1)));
     }
 
@@ -1369,15 +1407,18 @@ impl TerminalApp {
 
     fn undo_text_action(&mut self) {
         let keep_cursor_on_exhaust = self.history.undo_depth() == 1;
-        let cursor_before_undo = (self.cursor_line, self.cursor_col);
-        if let Some(cursor) = self.history.undo(&mut self.lines) {
+        let cursor_before_undo = (self.editor.cursor_line, self.editor.cursor_col);
+        if let Some(cursor) = self.history.undo(&mut self.editor.lines) {
             self.invalidate_joined_text_cache();
             if keep_cursor_on_exhaust {
-                self.cursor_line = cursor_before_undo.0.min(self.lines.len().saturating_sub(1));
-                self.cursor_col = cursor_before_undo.1;
+                self.editor.cursor_line = cursor_before_undo
+                    .0
+                    .min(self.editor.lines.len().saturating_sub(1));
+                self.editor.cursor_col = cursor_before_undo.1;
             } else {
-                self.cursor_line = cursor.line.min(self.lines.len().saturating_sub(1));
-                self.cursor_col = cursor.col;
+                self.editor.cursor_line =
+                    cursor.line.min(self.editor.lines.len().saturating_sub(1));
+                self.editor.cursor_col = cursor.col;
             }
             self.dirty = true;
             self.last_edit = Instant::now();
@@ -1385,14 +1426,17 @@ impl TerminalApp {
                 self.reminders_dirty = true;
             }
             // Full lines replacement: invalidate all caches.
-            self.fence_checkpoints.truncate(1);
-            self.fence_checkpoints_valid_through = 0;
+            self.render_state.fence_checkpoints.truncate(1);
+            self.render_state.fence_checkpoints_valid_through = 0;
             self.run_calc_recompute();
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
-            self.history
-                .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+            self.history.checkpoint(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            );
             self.status = format!("undo ({} left)", self.undo_action_pos.saturating_sub(1));
         } else {
             self.status = "already at oldest change".to_string();
@@ -1400,23 +1444,26 @@ impl TerminalApp {
     }
 
     fn redo_text_action(&mut self) {
-        if let Some(cursor) = self.history.redo(&mut self.lines) {
+        if let Some(cursor) = self.history.redo(&mut self.editor.lines) {
             self.invalidate_joined_text_cache();
-            self.cursor_line = cursor.line.min(self.lines.len().saturating_sub(1));
-            self.cursor_col = cursor.col;
+            self.editor.cursor_line = cursor.line.min(self.editor.lines.len().saturating_sub(1));
+            self.editor.cursor_col = cursor.col;
             self.dirty = true;
             self.last_edit = Instant::now();
             if !self.reminder_ghosts.is_empty() {
                 self.reminders_dirty = true;
             }
-            self.fence_checkpoints.truncate(1);
-            self.fence_checkpoints_valid_through = 0;
+            self.render_state.fence_checkpoints.truncate(1);
+            self.render_state.fence_checkpoints_valid_through = 0;
             self.run_calc_recompute();
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
-            self.history
-                .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+            self.history.checkpoint(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            );
             self.status = format!("redo ({} left)", self.history.redo_depth());
         } else {
             self.status = "already at newest change".to_string();
@@ -1463,18 +1510,21 @@ impl TerminalApp {
 
     pub(super) fn run_calc_recompute(&mut self) {
         let started = Instant::now();
-        self.calc_recompute_due_at = None;
-        self.calc_pending_viewport_pass = false;
-        self.calc_pending_full_pass = false;
+        self.calc_runtime.recompute_due_at = None;
+        self.calc_runtime.pending_viewport_pass = false;
+        self.calc_runtime.pending_full_pass = false;
         if !self.note_math_module_enabled() {
             self.clear_calc_cache();
-            self.calc_recompute_pending = false;
+            self.calc_runtime.recompute_pending = false;
             self.record_perf_duration("tui.calc.recompute", "math_disabled", started.elapsed());
             return;
         }
         self.ensure_calc_line_metadata();
-        if !self.lines.is_empty() {
-            let cursor_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
+        if !self.editor.lines.is_empty() {
+            let cursor_line = self
+                .editor
+                .cursor_line
+                .min(self.editor.lines.len().saturating_sub(1));
             self.refresh_calc_line_metadata_at(cursor_line);
         }
         let calc_variables_enabled = self.calc_variables_enabled();
@@ -1493,7 +1543,7 @@ impl TerminalApp {
             let short_id = tui_note_short_id(&note_id).to_string();
             let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
-                &self.lines,
+                &self.editor.lines,
                 calc_variables_enabled,
                 calc_cross_note_enabled,
                 calc_table_enabled,
@@ -1503,7 +1553,10 @@ impl TerminalApp {
             );
             let calc_mask = self.calc_feature_mask();
             self.calc.calc_dependency_index =
-                crate::editor_core::calc_plan::build_calc_dependency_index(&self.lines, calc_mask);
+                crate::editor_core::calc_plan::build_calc_dependency_index(
+                    &self.editor.lines,
+                    calc_mask,
+                );
             self.calc.prev_line_metadata = self.calc.line_metadata.clone();
             self.calc.results = calc_data.line_results;
             self.calc.cell_results = calc_data.cell_results;
@@ -1519,10 +1572,10 @@ impl TerminalApp {
             self.calc.pathological_window_streak = 0;
             self.calc.forced_full_recompute_remaining = 0;
             self.calc.stale = false;
-            self.calc_recompute_pending = false;
-            self.calc_recompute_due_at = None;
-            self.calc_pending_viewport_pass = false;
-            self.calc_pending_full_pass = false;
+            self.calc_runtime.recompute_pending = false;
+            self.calc_runtime.recompute_due_at = None;
+            self.calc_runtime.pending_viewport_pass = false;
+            self.calc_runtime.pending_full_pass = false;
             self.record_perf_duration("tui.calc.recompute", "stale_full", started.elapsed());
             return;
         }
@@ -1531,7 +1584,7 @@ impl TerminalApp {
         // Update deps from a live scan so refs added since the last full eval are picked up.
         let incremental_extern_vars: Vec<ExternVar> = if calc_cross_note_enabled {
             let note_id = self.active_note.id.clone();
-            let refs = app_core::calc::scan_cross_note_refs(&self.lines);
+            let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
             if let Ok(mut index) = self.cross_note_var_index.lock() {
                 index.update_deps(&note_id, &refs);
                 index.extern_vars_for(&note_id)
@@ -1545,7 +1598,7 @@ impl TerminalApp {
         let plan = crate::editor_core::calc_plan::plan_incremental_calc_from_line_metadata(
             &self.calc.prev_line_metadata,
             &self.calc.results,
-            &self.lines,
+            &self.editor.lines,
             &self.calc.line_metadata,
         );
         let has_prev = !self.calc.prev_line_metadata.is_empty();
@@ -1554,7 +1607,7 @@ impl TerminalApp {
         // formulas (not all lines). Partial eval is safe as long as the edit
         // doesn't touch a formula/assignment — whole-doc presence of formulas
         // elsewhere doesn't force recomputation of unchanged lines.
-        let suffix_len = self.lines.len().saturating_sub(plan.eval_to);
+        let suffix_len = self.editor.lines.len().saturating_sub(plan.eval_to);
         let prev_changed_from = plan.eval_from.min(self.calc.prev_line_metadata.len());
         let prev_changed_to = self
             .calc
@@ -1578,14 +1631,14 @@ impl TerminalApp {
         let calc_mask = self.calc_feature_mask();
         crate::editor_core::calc_plan::sync_calc_dependency_index(
             &mut self.calc.calc_dependency_index,
-            &self.lines,
+            &self.editor.lines,
             plan.eval_from,
             plan.eval_to,
             calc_mask,
         );
         let eval_window = crate::editor_core::calc_plan::decide_eval_window(
             &crate::editor_core::calc_plan::DecideEvalWindowParams {
-                lines: &self.lines,
+                lines: &self.editor.lines,
                 changed_from: plan.eval_from,
                 changed_to: plan.eval_to,
                 has_prev,
@@ -1602,7 +1655,7 @@ impl TerminalApp {
         let mut eval_from = eval_window.eval_from;
         let mut eval_to = eval_window.eval_to;
 
-        let line_count = self.lines.len();
+        let line_count = self.editor.lines.len();
         let eval_span = eval_to.saturating_sub(eval_from);
         let is_pathological_window = can_use_partial
             && line_count >= CALC_PATHOLOGICAL_WINDOW_MIN_LINES
@@ -1634,8 +1687,8 @@ impl TerminalApp {
         let prev_results = std::mem::take(&mut self.calc.results);
         let prev_results_snapshot = prev_results.clone();
         let prev_cell_results = std::mem::take(&mut self.calc.cell_results);
-        let same_shape_cache =
-            prev_results.len() == self.lines.len() && prev_cell_results.len() == self.lines.len();
+        let same_shape_cache = prev_results.len() == self.editor.lines.len()
+            && prev_cell_results.len() == self.editor.lines.len();
 
         let (mut new_results, mut new_cell_results) = if can_use_partial && same_shape_cache {
             let mut merged_results = prev_results;
@@ -1643,7 +1696,7 @@ impl TerminalApp {
             if eval_from < eval_to {
                 let calc_data = compute_calc_data(
                     &self.calc.engine,
-                    &self.lines,
+                    &self.editor.lines,
                     calc_variables_enabled,
                     calc_cross_note_enabled,
                     calc_table_enabled,
@@ -1661,14 +1714,14 @@ impl TerminalApp {
             }
             (merged_results, merged_cells)
         } else if can_use_partial {
-            let mut merged_results = vec![None; self.lines.len()];
+            let mut merged_results = vec![None; self.editor.lines.len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_results.get_mut(entry.line_idx) {
                     *slot = Some(entry.result.clone());
                 }
             }
             let mut merged_cells: Vec<Vec<app_core::calc::TableCellEvaluation>> =
-                vec![Vec::new(); self.lines.len()];
+                vec![Vec::new(); self.editor.lines.len()];
             for entry in &plan.base_results {
                 if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
                     if let Some(cached) = prev_cell_results.get(entry.line_idx) {
@@ -1679,7 +1732,7 @@ impl TerminalApp {
             if eval_from < eval_to {
                 let calc_data = compute_calc_data(
                     &self.calc.engine,
-                    &self.lines,
+                    &self.editor.lines,
                     calc_variables_enabled,
                     calc_cross_note_enabled,
                     calc_table_enabled,
@@ -1701,7 +1754,7 @@ impl TerminalApp {
             let short_id = tui_note_short_id(&note_id).to_string();
             let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
-                &self.lines,
+                &self.editor.lines,
                 calc_variables_enabled,
                 calc_cross_note_enabled,
                 calc_table_enabled,
@@ -1732,18 +1785,18 @@ impl TerminalApp {
         // delete) invalidate per-index alignment; we skip the pass and
         // reseed the snapshot below, so eligibility returns on the next
         // recompute once the user resumes normal in-line editing.
-        let aligned = self.calc.prev_line_metadata.len() == self.lines.len()
-            && prev_results_snapshot.len() == self.lines.len();
+        let aligned = self.calc.prev_line_metadata.len() == self.editor.lines.len()
+            && prev_results_snapshot.len() == self.editor.lines.len();
         let mut trailer_rewritten_lines: Vec<usize> = Vec::new();
 
         if aligned {
-            let cursor_line = self.cursor_line;
-            let cursor_col = self.cursor_col;
+            let cursor_line = self.editor.cursor_line;
+            let cursor_col = self.editor.cursor_col;
             let selection_range: Option<(usize, usize)> = if matches!(
                 self.mode,
                 UiMode::Visual | UiMode::VisualLine | UiMode::CommandBar
             ) {
-                self.selection_anchor.map(|(anchor_line, _)| {
+                self.editor.selection_anchor.map(|(anchor_line, _)| {
                     let a = anchor_line.min(cursor_line);
                     let b = anchor_line.max(cursor_line);
                     (a, b)
@@ -1752,7 +1805,7 @@ impl TerminalApp {
                 None
             };
 
-            for i in 0..self.lines.len() {
+            for i in 0..self.editor.lines.len() {
                 let Some(new_result) = new_results[i].as_deref() else {
                     continue;
                 };
@@ -1770,13 +1823,13 @@ impl TerminalApp {
                     continue;
                 }
                 let refresh = compute_calc_trailer_refresh(
-                    &self.lines[i],
+                    &self.editor.lines[i],
                     new_result,
                     cursor_line == i,
                     cursor_col,
                 );
                 if let Some((eq_idx, new_tail)) = refresh {
-                    self.lines[i].replace_range(eq_idx.., &new_tail);
+                    self.editor.lines[i].replace_range(eq_idx.., &new_tail);
                     // Line is back in sync with the backend, reflect it in
                     // the cached result so the ghost widget disappears and
                     // the next eligibility round still sees prev-None here.
@@ -1788,7 +1841,7 @@ impl TerminalApp {
                     // snapshot stays in sync for the next recompute.
                     self.calc.line_metadata[i] =
                         crate::editor_core::calc_plan::line_metadata_with_mask(
-                            &self.lines[i],
+                            &self.editor.lines[i],
                             self.calc_feature_mask(),
                         );
                     trailer_rewritten_lines.push(i);
@@ -1829,19 +1882,20 @@ impl TerminalApp {
         self.calc.cell_results = new_cell_results;
         self.calc.variable_names = variable_names;
         self.calc.stale = false;
-        self.calc_recompute_pending = false;
-        self.calc_recompute_due_at = None;
-        self.calc_pending_viewport_pass = false;
-        self.calc_pending_full_pass = false;
+        self.calc_runtime.recompute_pending = false;
+        self.calc_runtime.recompute_due_at = None;
+        self.calc_runtime.pending_viewport_pass = false;
+        self.calc_runtime.pending_full_pass = false;
         self.record_perf_duration("tui.calc.recompute", "incremental", started.elapsed());
     }
 
     pub(super) fn maybe_recompute_calc_after_idle(&mut self) {
-        if !self.calc_recompute_pending {
+        if !self.calc_runtime.recompute_pending {
             return;
         }
         if self
-            .calc_recompute_due_at
+            .calc_runtime
+            .recompute_due_at
             .is_some_and(|due| Instant::now() < due)
         {
             return;
@@ -1849,25 +1903,25 @@ impl TerminalApp {
         if self.last_edit.elapsed() < self.calc_recompute_debounce_duration() {
             return;
         }
-        self.render_dirty = true;
-        if self.calc_viewport_only {
+        self.render_state.dirty = true;
+        if self.calc_runtime.viewport_only {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
-            self.calc_recompute_pending = false;
-            self.calc_recompute_due_at = None;
-            self.calc_pending_viewport_pass = false;
-            self.calc_pending_full_pass = false;
+            self.calc_runtime.recompute_pending = false;
+            self.calc_runtime.recompute_due_at = None;
+            self.calc_runtime.pending_viewport_pass = false;
+            self.calc_runtime.pending_full_pass = false;
             return;
         }
-        if self.lines.len() >= CALC_ASYNC_MIN_LINES {
+        if self.editor.lines.len() >= CALC_ASYNC_MIN_LINES {
             let budget = Duration::from_millis(CALC_IDLE_EVAL_BUDGET_MS);
             let tick_started = Instant::now();
-            if self.calc_pending_viewport_pass {
+            if self.calc_runtime.pending_viewport_pass {
                 let editor_height = self.editor_height();
                 self.ensure_calc_for_viewport(editor_height, true);
-                self.calc_pending_viewport_pass = false;
+                self.calc_runtime.pending_viewport_pass = false;
                 if tick_started.elapsed() >= budget {
-                    self.calc_recompute_due_at = Some(
+                    self.calc_runtime.recompute_due_at = Some(
                         Instant::now() + Duration::from_millis(CALC_RECOMPUTE_PENDING_RETRY_MS),
                     );
                     return;
@@ -1880,12 +1934,12 @@ impl TerminalApp {
     // --- Search ---
 
     pub(super) fn move_cursor_left_word(&mut self) {
-        if self.cursor_col == 0 {
+        if self.editor.cursor_col == 0 {
             let current_virtual = self.current_virtual_line();
             if current_virtual > 0 {
                 if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
-                    self.cursor_line = prev_real;
-                    self.cursor_col = line_char_len(self.current_line());
+                    self.editor.cursor_line = prev_real;
+                    self.editor.cursor_col = line_char_len(self.current_line());
                 }
             }
             return;
@@ -1894,12 +1948,12 @@ impl TerminalApp {
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
 
-        let mut col = self.cursor_col;
+        let mut col = self.editor.cursor_col;
         if col > len {
             col = len;
         }
         if col == 0 {
-            self.cursor_col = 0;
+            self.editor.cursor_col = 0;
             return;
         }
 
@@ -1931,24 +1985,24 @@ impl TerminalApp {
                 break;
             }
         }
-        self.cursor_col = col;
+        self.editor.cursor_col = col;
     }
 
     pub(super) fn move_cursor_right_word(&mut self) {
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
-        if self.cursor_col >= len {
+        if self.editor.cursor_col >= len {
             let current_virtual = self.current_virtual_line();
             if current_virtual + 1 < self.visible_line_count() {
                 if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
-                    self.cursor_line = next_real;
-                    self.cursor_col = 0;
+                    self.editor.cursor_line = next_real;
+                    self.editor.cursor_col = 0;
                 }
             }
             return;
         }
-        let mut col = self.cursor_col;
+        let mut col = self.editor.cursor_col;
         let start_class = chars.get(col).map_or(0, |c| {
             if c.is_whitespace() {
                 0
@@ -1982,27 +2036,29 @@ impl TerminalApp {
             }
         }
 
-        self.cursor_col = col;
+        self.editor.cursor_col = col;
     }
 
     pub(super) fn delete_word_backward(&mut self) -> bool {
-        if self.cursor_col == 0 {
-            if self.cursor_line > 0 {
+        if self.editor.cursor_col == 0 {
+            if self.editor.cursor_line > 0 {
                 self.backspace();
                 return true;
             }
             return false;
         }
         if self.note_table_module_enabled() {
-            if let Some(cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
+            if let Some(cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-                if self.cursor_col <= edit_start {
+                if self.editor.cursor_col <= edit_start {
                     return false;
                 }
-                let mut col = self.cursor_col.min(edit_end);
+                let mut col = self.editor.cursor_col.min(edit_end);
                 let line = self.current_line();
                 let chars: Vec<char> = line.chars().collect();
                 while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
@@ -2011,15 +2067,15 @@ impl TerminalApp {
                 while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
                     col -= 1;
                 }
-                if col == self.cursor_col {
+                if col == self.editor.cursor_col {
                     return false;
                 }
                 let start_byte = byte_index(self.current_line(), col);
-                let end_byte = byte_index(self.current_line(), self.cursor_col);
+                let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
                 let text = self.current_line_mut();
                 text.replace_range(start_byte..end_byte, "");
-                self.cursor_col = col;
-                self.refresh_calc_line_metadata_at(self.cursor_line);
+                self.editor.cursor_col = col;
+                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 self.mark_edited_current_line();
                 self.prune_empty_table_continuation_row_at_cursor();
                 return true;
@@ -2027,7 +2083,7 @@ impl TerminalApp {
         }
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
-        let mut col = self.cursor_col;
+        let mut col = self.editor.cursor_col;
         while col > 0 && chars.get(col - 1).map_or(false, |c| !c.is_alphanumeric()) {
             col -= 1;
         }
@@ -2036,11 +2092,11 @@ impl TerminalApp {
         }
 
         let start_byte = byte_index(self.current_line(), col);
-        let end_byte = byte_index(self.current_line(), self.cursor_col);
+        let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
         let text = self.current_line_mut();
         text.replace_range(start_byte..end_byte, "");
-        self.cursor_col = col;
-        self.refresh_calc_line_metadata_at(self.cursor_line);
+        self.editor.cursor_col = col;
+        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
         self.prune_empty_table_continuation_row_at_cursor();
         true
@@ -2050,21 +2106,26 @@ impl TerminalApp {
         if ch.is_control() {
             return;
         }
-        let col = self.cursor_col;
+        let col = self.editor.cursor_col;
         let line = self.current_line_mut();
         let idx = byte_index(line, col);
         line.insert(idx, ch);
-        self.cursor_col += 1;
-        self.refresh_calc_line_metadata_at(self.cursor_line);
+        self.editor.cursor_col += 1;
+        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
     }
 
     pub(super) fn should_defer_table_space_autoformat(&self) -> bool {
-        if !self.note_table_module_enabled() || self.lines.is_empty() {
+        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
             return false;
         }
-        let line_idx = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        let Some(cell) = table_cell_info_at_char(&self.lines, line_idx, self.cursor_col) else {
+        let line_idx = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
+        let Some(cell) =
+            table_cell_info_at_char(&self.editor.lines, line_idx, self.editor.cursor_col)
+        else {
             return false;
         };
         let line = self.current_line();
@@ -2074,34 +2135,40 @@ impl TerminalApp {
         // (inside right padding). This preserves intended intra-word spaces at
         // the end of a cell while keeping canonical reflow active for regular
         // in-cell edits, including middle-of-cell typing.
-        self.cursor_col >= anchor && self.cursor_col < right_pipe
+        self.editor.cursor_col >= anchor && self.editor.cursor_col < right_pipe
     }
 
     pub(super) fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
         }
-        let col = self.cursor_col;
+        let col = self.editor.cursor_col;
         let line = self.current_line_mut();
         let idx = byte_index(line, col);
         line.insert_str(idx, text);
-        self.cursor_col += text.chars().count();
-        self.refresh_calc_line_metadata_at(self.cursor_line);
+        self.editor.cursor_col += text.chars().count();
+        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited_current_line();
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
-        if !self.note_table_module_enabled() || !normalized.contains('\n') || self.lines.is_empty()
+        if !self.note_table_module_enabled()
+            || !normalized.contains('\n')
+            || self.editor.lines.is_empty()
         {
             return false;
         }
 
-        let line_idx = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        let Some(cell_info) = table_cell_info_at_char(&self.lines, line_idx, self.cursor_col)
+        let line_idx = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
+        let Some(cell_info) =
+            table_cell_info_at_char(&self.editor.lines, line_idx, self.editor.cursor_col)
         else {
             return false;
         };
-        let Some(current_line) = self.lines.get(line_idx).cloned() else {
+        let Some(current_line) = self.editor.lines.get(line_idx).cloned() else {
             return false;
         };
         if !is_markdown_table_line(&current_line) {
@@ -2114,11 +2181,12 @@ impl TerminalApp {
         }
 
         let mut block_start = line_idx;
-        while block_start > 0 && is_markdown_table_line(&self.lines[block_start - 1]) {
+        while block_start > 0 && is_markdown_table_line(&self.editor.lines[block_start - 1]) {
             block_start -= 1;
         }
         let mut block_end = line_idx;
-        while block_end + 1 < self.lines.len() && is_markdown_table_line(&self.lines[block_end + 1])
+        while block_end + 1 < self.editor.lines.len()
+            && is_markdown_table_line(&self.editor.lines[block_end + 1])
         {
             block_end += 1;
         }
@@ -2129,10 +2197,10 @@ impl TerminalApp {
         }
 
         let mut row_cells: Vec<Vec<String>> = (block_start..=block_end)
-            .map(|ln| crate::editor_core::table::split_table_cells(&self.lines[ln]))
+            .map(|ln| crate::editor_core::table::split_table_cells(&self.editor.lines[ln]))
             .collect();
         let mut row_continuations: Vec<bool> = (block_start..=block_end)
-            .map(|ln| crate::editor_core::table::is_table_continuation_line(&self.lines[ln]))
+            .map(|ln| crate::editor_core::table::is_table_continuation_line(&self.editor.lines[ln]))
             .collect();
         let relative_row = line_idx.saturating_sub(block_start);
         let Some(current_row_len) = row_cells.get(relative_row).map(|row| row.len()) else {
@@ -2159,7 +2227,7 @@ impl TerminalApp {
         let content_start = (span.left_pipe + 1 + span.trim_start).min(current_line.len());
         let content_end = (span.left_pipe + 1 + span.trim_end).min(current_line.len());
         let cursor_byte =
-            byte_index(&current_line, self.cursor_col).clamp(content_start, content_end);
+            byte_index(&current_line, self.editor.cursor_col).clamp(content_start, content_end);
         let left_existing = current_line[content_start..cursor_byte].to_string();
         let right_existing = current_line[cursor_byte..content_end].to_string();
 
@@ -2199,13 +2267,14 @@ impl TerminalApp {
         );
 
         let replaced_count = block_end.saturating_sub(block_start) + 1;
-        self.lines
+        self.editor
+            .lines
             .splice(block_start..=block_end, formatted.clone());
 
         let target_relative_row = relative_row + parts.len() - 1;
-        self.cursor_line =
-            (block_start + target_relative_row).min(self.lines.len().saturating_sub(1));
-        if let Some(target_line) = self.lines.get(self.cursor_line) {
+        self.editor.cursor_line =
+            (block_start + target_relative_row).min(self.editor.lines.len().saturating_sub(1));
+        if let Some(target_line) = self.editor.lines.get(self.editor.cursor_line) {
             let target_pipes = crate::editor_core::table::table_pipe_positions(target_line);
             if let Some(target_span) = crate::editor_core::table::table_cell_span(
                 target_line,
@@ -2220,12 +2289,12 @@ impl TerminalApp {
                 if target_byte > target_span.navigation_anchor() {
                     target_byte = target_span.navigation_anchor();
                 }
-                self.cursor_col = target_line[..target_byte].chars().count();
+                self.editor.cursor_col = target_line[..target_byte].chars().count();
             } else {
-                self.cursor_col = 0;
+                self.editor.cursor_col = 0;
             }
         } else {
-            self.cursor_col = 0;
+            self.editor.cursor_col = 0;
         }
 
         self.splice_calc_line_metadata(block_start, replaced_count, formatted.len());
@@ -2238,8 +2307,8 @@ impl TerminalApp {
             return;
         }
 
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
+        if self.editor.lines.is_empty() {
+            self.editor.lines.push(String::new());
         }
 
         // Normalize line endings to keep cursor/line mapping predictable.
@@ -2252,32 +2321,37 @@ impl TerminalApp {
             return;
         }
 
-        let line_idx = self.cursor_line.min(self.lines.len().saturating_sub(1));
-        let col = self.cursor_col;
-        let current = self.lines[line_idx].clone();
+        let line_idx = self
+            .editor
+            .cursor_line
+            .min(self.editor.lines.len().saturating_sub(1));
+        let col = self.editor.cursor_col;
+        let current = self.editor.lines[line_idx].clone();
         let split_idx = byte_index(&current, col);
         let (left, right) = current.split_at(split_idx);
 
         if parts.len() == 1 {
-            self.lines[line_idx] = format!("{left}{}{right}", parts[0]);
-            self.cursor_line = line_idx;
-            self.cursor_col = col + parts[0].chars().count();
+            self.editor.lines[line_idx] = format!("{left}{}{right}", parts[0]);
+            self.editor.cursor_line = line_idx;
+            self.editor.cursor_col = col + parts[0].chars().count();
             self.splice_calc_line_metadata(line_idx, 1, 1);
             self.mark_edited_from_line(line_idx);
             return;
         }
 
-        self.lines[line_idx] = format!("{left}{}", parts[0]);
+        self.editor.lines[line_idx] = format!("{left}{}", parts[0]);
         let mut insert_at = line_idx + 1;
         for part in &parts[1..parts.len() - 1] {
-            self.lines.insert(insert_at, (*part).to_string());
+            self.editor.lines.insert(insert_at, (*part).to_string());
             insert_at += 1;
         }
 
         let tail = *parts.last().unwrap_or(&"");
-        self.lines.insert(insert_at, format!("{tail}{right}"));
-        self.cursor_line = insert_at;
-        self.cursor_col = tail.chars().count();
+        self.editor
+            .lines
+            .insert(insert_at, format!("{tail}{right}"));
+        self.editor.cursor_line = insert_at;
+        self.editor.cursor_col = tail.chars().count();
         self.splice_calc_line_metadata(line_idx, 1, parts.len());
         self.mark_edited_from_line(line_idx);
     }
@@ -2328,15 +2402,15 @@ impl TerminalApp {
     }
 
     pub(super) fn insert_newline(&mut self) {
-        let changed_from_line = self.cursor_line;
-        let col = self.cursor_col;
+        let changed_from_line = self.editor.cursor_line;
+        let col = self.editor.cursor_col;
         let idx = byte_index(self.current_line(), col);
-        let right = self.lines[self.cursor_line][idx..].to_string();
-        self.lines[self.cursor_line].truncate(idx);
-        let insert_at = self.cursor_line + 1;
-        self.lines.insert(insert_at, right);
-        self.cursor_line += 1;
-        self.cursor_col = 0;
+        let right = self.editor.lines[self.editor.cursor_line][idx..].to_string();
+        self.editor.lines[self.editor.cursor_line].truncate(idx);
+        let insert_at = self.editor.cursor_line + 1;
+        self.editor.lines.insert(insert_at, right);
+        self.editor.cursor_line += 1;
+        self.editor.cursor_col = 0;
         self.splice_calc_line_metadata(changed_from_line, 1, 2);
         self.mark_edited_from_line(changed_from_line);
     }
@@ -2352,7 +2426,7 @@ impl TerminalApp {
         // Cross-note prefix takes priority: [[SHORTID]].partial
         let line = self.current_line();
         if let Some((short_id, bracket_col, from_col, partial)) =
-            extract_cross_note_completion_prefix(line, self.cursor_col)
+            extract_cross_note_completion_prefix(line, self.editor.cursor_col)
         {
             let exports = cross_note_exports_for_autocomplete(
                 &short_id,
@@ -2389,7 +2463,7 @@ impl TerminalApp {
                 return Some(VariableAutocompleteState {
                     popup_anchor_col: bracket_col,
                     from_col,
-                    to_col: self.cursor_col,
+                    to_col: self.editor.cursor_col,
                     query: partial,
                     suggestions,
                 });
@@ -2399,7 +2473,7 @@ impl TerminalApp {
         if self.calc.variable_names.is_empty() {
             return None;
         }
-        let prefix = extract_variable_completion_prefix(line, self.cursor_col)?;
+        let prefix = extract_variable_completion_prefix(line, self.editor.cursor_col)?;
         let suggestions = build_variable_suggestions(
             &self.calc.variable_names,
             &prefix.query,
@@ -2426,7 +2500,7 @@ impl TerminalApp {
         let cursor_virtual = self.current_virtual_line();
         let row = EDITOR_TOP_ROW
             + cursor_virtual
-                .saturating_sub(self.scroll_line)
+                .saturating_sub(self.editor.scroll_line)
                 .min(rows.saturating_sub(2));
         let gutter_width = self.gutter_width();
         let available = cols.saturating_sub(gutter_width);
@@ -2437,8 +2511,12 @@ impl TerminalApp {
         let line_col = anchor_col.min(line_char_len(line_text));
         let display_col = display_cols_for_prefix(line_text, line_col);
         let line_width = line_display_cols(line_text);
-        let visible_col =
-            viewport_col_for_display_col(display_col, line_width, self.scroll_col, available);
+        let visible_col = viewport_col_for_display_col(
+            display_col,
+            line_width,
+            self.editor.scroll_col,
+            available,
+        );
         let col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
         Some((row.max(EDITOR_TOP_ROW), col))
     }
@@ -2458,8 +2536,8 @@ impl TerminalApp {
             return;
         };
         let previous_selection = if self.variable_autocomplete_popup.visible
-            && self.variable_autocomplete_popup.cursor_line == self.cursor_line
-            && self.variable_autocomplete_popup.cursor_col <= self.cursor_col
+            && self.variable_autocomplete_popup.cursor_line == self.editor.cursor_line
+            && self.variable_autocomplete_popup.cursor_col <= self.editor.cursor_col
             && self.variable_autocomplete_popup.query == state.query
         {
             self.variable_autocomplete_popup
@@ -2483,8 +2561,8 @@ impl TerminalApp {
             query: state.query,
             suggestions: state.suggestions,
             selected_index,
-            cursor_line: self.cursor_line,
-            cursor_col: self.cursor_col,
+            cursor_line: self.editor.cursor_line,
+            cursor_col: self.editor.cursor_col,
         };
     }
 
@@ -2514,7 +2592,7 @@ impl TerminalApp {
         to_col: usize,
         pick: String,
     ) -> bool {
-        let from_col = from_col.min(self.cursor_col);
+        let from_col = from_col.min(self.editor.cursor_col);
         let to_col = to_col.min(line_char_len(self.current_line()));
         if from_col > to_col {
             return false;
@@ -2522,9 +2600,9 @@ impl TerminalApp {
 
         let from_byte = byte_index(self.current_line(), from_col);
         let to_byte = byte_index(self.current_line(), to_col);
-        self.lines[self.cursor_line].replace_range(from_byte..to_byte, &pick);
-        self.cursor_col = from_col + pick.chars().count();
-        self.refresh_calc_line_metadata_at(self.cursor_line);
+        self.editor.lines[self.editor.cursor_line].replace_range(from_byte..to_byte, &pick);
+        self.editor.cursor_col = from_col + pick.chars().count();
+        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited();
         self.status = format!("autocomplete: {pick}");
         self.dismiss_variable_autocomplete_popup();
@@ -2533,8 +2611,8 @@ impl TerminalApp {
 
     pub(super) fn apply_variable_autocomplete_popup_selection(&mut self) -> bool {
         if !self.variable_autocomplete_popup.visible
-            || self.variable_autocomplete_popup.cursor_line != self.cursor_line
-            || self.variable_autocomplete_popup.cursor_col > self.cursor_col
+            || self.variable_autocomplete_popup.cursor_line != self.editor.cursor_line
+            || self.variable_autocomplete_popup.cursor_col > self.editor.cursor_col
         {
             self.dismiss_variable_autocomplete_popup();
             return false;
@@ -2603,14 +2681,14 @@ impl TerminalApp {
         if !self.note_math_module_enabled() {
             return false;
         }
-        if self.calc_recompute_pending {
-            if self.calc_viewport_only {
+        if self.calc_runtime.recompute_pending {
+            if self.calc_runtime.viewport_only {
                 let editor_height = self.editor_height();
                 self.ensure_calc_for_viewport(editor_height, true);
-                self.calc_recompute_pending = false;
-                self.calc_recompute_due_at = None;
-                self.calc_pending_viewport_pass = false;
-                self.calc_pending_full_pass = false;
+                self.calc_runtime.recompute_pending = false;
+                self.calc_runtime.recompute_due_at = None;
+                self.calc_runtime.pending_viewport_pass = false;
+                self.calc_runtime.pending_full_pass = false;
             } else {
                 self.run_calc_recompute();
             }
@@ -2619,7 +2697,7 @@ impl TerminalApp {
         let Some(result) = self
             .calc
             .results
-            .get(self.cursor_line)
+            .get(self.editor.cursor_line)
             .and_then(|value| value.clone())
         else {
             return false;
@@ -2630,33 +2708,34 @@ impl TerminalApp {
         let should_reflow_table = self.note_table_module_enabled() && is_markdown_table_line(&text);
 
         if let Some((from_byte, to_byte)) = find_calc_segment_range(&text) {
-            self.lines[self.cursor_line].replace_range(from_byte..to_byte, &result);
-            self.cursor_col = self.lines[self.cursor_line]
+            self.editor.lines[self.editor.cursor_line].replace_range(from_byte..to_byte, &result);
+            self.editor.cursor_col = self.editor.lines[self.editor.cursor_line]
                 [..from_byte.saturating_add(result.len())]
                 .chars()
                 .count();
             if should_reflow_table {
                 self.try_autoformat_rules();
             }
-            self.refresh_calc_line_metadata_at(self.cursor_line);
+            self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited();
             return true;
         }
 
         if should_reflow_table {
-            let cursor_col = self.cursor_col;
+            let cursor_col = self.editor.cursor_col;
             let formula = find_table_formula_segments(&text)
                 .into_iter()
                 .find(|seg| cursor_col >= seg.cell_from_char && cursor_col <= seg.cell_to_char)
                 .or_else(|| find_table_formula_segments(&text).into_iter().next());
             if let Some(seg) = formula {
-                self.lines[self.cursor_line].replace_range(seg.from_byte..seg.to_byte, &result);
-                self.cursor_col = self.lines[self.cursor_line]
+                self.editor.lines[self.editor.cursor_line]
+                    .replace_range(seg.from_byte..seg.to_byte, &result);
+                self.editor.cursor_col = self.editor.lines[self.editor.cursor_line]
                     [..seg.from_byte.saturating_add(result.len())]
                     .chars()
                     .count();
                 self.try_autoformat_rules();
-                self.refresh_calc_line_metadata_at(self.cursor_line);
+                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 self.mark_edited_current_line();
                 return true;
             }
@@ -2678,18 +2757,19 @@ impl TerminalApp {
     }
 
     pub(super) fn scoped_rule_line_span(&self, center_line: usize) -> (usize, usize) {
-        if self.lines.is_empty() {
+        if self.editor.lines.is_empty() {
             return (0, 0);
         }
-        let center = center_line.min(self.lines.len().saturating_sub(1));
-        let current = self.lines[center].as_str();
+        let center = center_line.min(self.editor.lines.len().saturating_sub(1));
+        let current = self.editor.lines[center].as_str();
         if self.note_table_module_enabled() && is_markdown_table_line(current) {
             let mut start = center;
             let mut end = center;
-            while start > 0 && is_markdown_table_line(self.lines[start - 1].as_str()) {
+            while start > 0 && is_markdown_table_line(self.editor.lines[start - 1].as_str()) {
                 start -= 1;
             }
-            while end + 1 < self.lines.len() && is_markdown_table_line(self.lines[end + 1].as_str())
+            while end + 1 < self.editor.lines.len()
+                && is_markdown_table_line(self.editor.lines[end + 1].as_str())
             {
                 end += 1;
             }
@@ -2700,7 +2780,7 @@ impl TerminalApp {
             center.saturating_sub(window),
             center
                 .saturating_add(window)
-                .min(self.lines.len().saturating_sub(1)),
+                .min(self.editor.lines.len().saturating_sub(1)),
         )
     }
 
@@ -2712,8 +2792,9 @@ impl TerminalApp {
             return;
         }
 
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
-        let cursor_offset = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
+        let cursor_offset =
+            self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
         let changed = crate::editor_core::types::TextRange {
             from: cursor_offset.saturating_sub(1),
             to: cursor_offset,
@@ -2740,7 +2821,7 @@ impl TerminalApp {
     }
 
     pub(super) fn try_enter_rule(&mut self) -> bool {
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TextRuleOptions {
@@ -2760,7 +2841,7 @@ impl TerminalApp {
     }
 
     pub(super) fn try_tab_rule(&mut self, outdent: bool) -> bool {
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TabRuleOptions {
@@ -2783,7 +2864,7 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TabRuleOptions {
@@ -2805,7 +2886,7 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         let op = crate::editor_core::text_rules::run_table_multiline_break_rule_with_table_cache(
@@ -2825,7 +2906,7 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         if let Some(op) =
@@ -2845,7 +2926,7 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         if let Some(op) =
@@ -2869,7 +2950,7 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return None;
         }
-        let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
         let (ctx, scope_start_offset) =
             self.build_scoped_context_for_line_span(start_line, end_line, None);
         let options = crate::editor_core::text_rules::TableBoundaryEditOptions {
@@ -2895,11 +2976,11 @@ impl TerminalApp {
         }
         if op.changes.is_empty() {
             if let Some(sel) = &op.selection {
-                let target = sel.anchor.min(document_text_len(&self.lines));
-                let (line_idx, line_byte) = line_and_byte_for_offset(&self.lines, target);
-                if let Some(line) = self.lines.get(line_idx) {
-                    self.cursor_line = line_idx;
-                    self.cursor_col = line[..line_byte.min(line.len())].chars().count();
+                let target = sel.anchor.min(document_text_len(&self.editor.lines));
+                let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, target);
+                if let Some(line) = self.editor.lines.get(line_idx) {
+                    self.editor.cursor_line = line_idx;
+                    self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
                 }
                 self.adjust_cursor();
                 self.adjust_scroll();
@@ -2909,14 +2990,14 @@ impl TerminalApp {
 
         if op.changes.len() == 1 {
             let change = &op.changes[0];
-            let doc_len = document_text_len(&self.lines);
+            let doc_len = document_text_len(&self.editor.lines);
             let from = change.from.min(doc_len);
             let to = change.to.min(doc_len);
-            let (from_line, from_byte) = line_and_byte_for_offset(&self.lines, from);
-            let (to_line, to_byte) = line_and_byte_for_offset(&self.lines, to);
+            let (from_line, from_byte) = line_and_byte_for_offset(&self.editor.lines, from);
+            let (to_line, to_byte) = line_and_byte_for_offset(&self.editor.lines, to);
 
             let mut mapped_anchor =
-                self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+                self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
             if from <= mapped_anchor {
                 if to <= mapped_anchor {
                     let removed = to.saturating_sub(from);
@@ -2928,8 +3009,13 @@ impl TerminalApp {
                 }
             }
 
-            let from_text = self.lines.get(from_line).cloned().unwrap_or_default();
-            let to_text = self.lines.get(to_line).cloned().unwrap_or_default();
+            let from_text = self
+                .editor
+                .lines
+                .get(from_line)
+                .cloned()
+                .unwrap_or_default();
+            let to_text = self.editor.lines.get(to_line).cloned().unwrap_or_default();
             let prefix = &from_text[..from_byte.min(from_text.len())];
             let suffix = &to_text[to_byte.min(to_text.len())..];
             let insert_parts = change.insert.split('\n').collect::<Vec<_>>();
@@ -2953,14 +3039,14 @@ impl TerminalApp {
 
             let old_line_span = to_line.saturating_sub(from_line).saturating_add(1);
             let new_line_span = replacement.len().max(1);
-            if from_line <= to_line && from_line < self.lines.len() {
-                let end = to_line.min(self.lines.len().saturating_sub(1));
-                self.lines.splice(from_line..=end, replacement);
+            if from_line <= to_line && from_line < self.editor.lines.len() {
+                let end = to_line.min(self.editor.lines.len().saturating_sub(1));
+                self.editor.lines.splice(from_line..=end, replacement);
             } else {
-                self.lines = replacement;
+                self.editor.lines = replacement;
             }
-            if self.lines.is_empty() {
-                self.lines.push(String::new());
+            if self.editor.lines.is_empty() {
+                self.editor.lines.push(String::new());
             }
 
             self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
@@ -2973,10 +3059,10 @@ impl TerminalApp {
                 .as_ref()
                 .map_or(mapped_anchor, |selection| selection.anchor)
                 .min(new_doc_len);
-            let (line_idx, line_byte) = line_and_byte_for_offset(&self.lines, final_anchor);
-            if let Some(line) = self.lines.get(line_idx) {
-                self.cursor_line = line_idx;
-                self.cursor_col = line[..line_byte.min(line.len())].chars().count();
+            let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, final_anchor);
+            if let Some(line) = self.editor.lines.get(line_idx) {
+                self.editor.cursor_line = line_idx;
+                self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
             }
             self.folds.rescan_pending = true;
             self.mark_edited_from_line_with_span(
@@ -2988,7 +3074,7 @@ impl TerminalApp {
             return;
         }
 
-        let old_doc_len = document_text_len(&self.lines);
+        let old_doc_len = document_text_len(&self.editor.lines);
         let changed_from_offset = op
             .changes
             .iter()
@@ -3001,11 +3087,12 @@ impl TerminalApp {
             .map(|change| change.to.min(old_doc_len))
             .max()
             .unwrap_or(changed_from_offset);
-        let changed_from_line = line_and_byte_for_offset(&self.lines, changed_from_offset).0;
+        let changed_from_line = line_and_byte_for_offset(&self.editor.lines, changed_from_offset).0;
         let old_changed_to_line_exclusive =
-            line_and_byte_for_offset(&self.lines, changed_to_offset_old).0 + 1;
+            line_and_byte_for_offset(&self.editor.lines, changed_to_offset_old).0 + 1;
 
-        let original_anchor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let original_anchor =
+            self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
         let mut changes = op.changes.clone();
         changes.sort_by(|a, b| b.from.cmp(&a.from));
         let mapped_anchor = map_offset_through_changes(original_anchor, &changes);
@@ -3016,7 +3103,7 @@ impl TerminalApp {
             let to = change.to.min(current_doc_len);
             let removed = to.saturating_sub(from);
             let (from_line, old_line_span, new_line_span) =
-                apply_text_change_in_place(&mut self.lines, change, current_doc_len);
+                apply_text_change_in_place(&mut self.editor.lines, change, current_doc_len);
             self.splice_calc_line_metadata(from_line, old_line_span, new_line_span);
             current_doc_len = current_doc_len
                 .saturating_add(change.insert.len())
@@ -3029,7 +3116,7 @@ impl TerminalApp {
             map_offset_through_changes(changed_to_offset_old, &changes).min(current_doc_len);
         let mapped_changed_to = mapped_from.max(mapped_to);
         let new_changed_to_line_exclusive =
-            line_and_byte_for_offset(&self.lines, mapped_changed_to).0 + 1;
+            line_and_byte_for_offset(&self.editor.lines, mapped_changed_to).0 + 1;
         let old_line_span = old_changed_to_line_exclusive
             .saturating_sub(changed_from_line)
             .max(1);
@@ -3044,10 +3131,10 @@ impl TerminalApp {
             mapped_anchor
         }
         .min(current_doc_len);
-        let (line_idx, line_byte) = line_and_byte_for_offset(&self.lines, final_anchor);
-        if let Some(line) = self.lines.get(line_idx) {
-            self.cursor_line = line_idx;
-            self.cursor_col = line[..line_byte.min(line.len())].chars().count();
+        let (line_idx, line_byte) = line_and_byte_for_offset(&self.editor.lines, final_anchor);
+        if let Some(line) = self.editor.lines.get(line_idx) {
+            self.editor.cursor_line = line_idx;
+            self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
         }
         self.folds.rescan_pending = true;
         self.mark_edited_from_line_with_span(
@@ -3059,10 +3146,10 @@ impl TerminalApp {
     }
 
     fn prune_empty_table_continuation_row_at_cursor(&mut self) -> bool {
-        if !self.note_table_module_enabled() || self.lines.is_empty() {
+        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
             return false;
         }
-        if self.cursor_line >= self.lines.len() {
+        if self.editor.cursor_line >= self.editor.lines.len() {
             return false;
         }
         let current = self.current_line();
@@ -3081,20 +3168,28 @@ impl TerminalApp {
             return false;
         }
 
-        let remove_line = self.cursor_line;
-        self.lines.remove(remove_line);
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
-            self.cursor_line = 0;
-            self.cursor_col = 0;
+        let remove_line = self.editor.cursor_line;
+        self.editor.lines.remove(remove_line);
+        if self.editor.lines.is_empty() {
+            self.editor.lines.push(String::new());
+            self.editor.cursor_line = 0;
+            self.editor.cursor_col = 0;
         } else {
-            self.cursor_line = remove_line.saturating_sub(1).min(self.lines.len() - 1);
-            self.cursor_col = self.cursor_col.min(line_char_len(self.current_line()));
+            self.editor.cursor_line = remove_line
+                .saturating_sub(1)
+                .min(self.editor.lines.len() - 1);
+            self.editor.cursor_col = self
+                .editor
+                .cursor_col
+                .min(line_char_len(self.current_line()));
             if self.note_table_module_enabled() {
-                if let Some(cell) =
-                    table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-                {
-                    self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+                if let Some(cell) = table_cell_info_at_char(
+                    &self.editor.lines,
+                    self.editor.cursor_line,
+                    self.editor.cursor_col,
+                ) {
+                    self.editor.cursor_col =
+                        table_cell_navigation_anchor(self.current_line(), &cell);
                 }
             }
         }
@@ -3106,76 +3201,83 @@ impl TerminalApp {
 
     pub(super) fn backspace(&mut self) {
         if self.note_table_module_enabled() {
-            if let Some(cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
+            if let Some(cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-                if self.cursor_col <= edit_start {
+                if self.editor.cursor_col <= edit_start {
                     self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
-                if self.cursor_col > edit_end {
-                    self.cursor_col = edit_end;
+                if self.editor.cursor_col > edit_end {
+                    self.editor.cursor_col = edit_end;
                     self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
-                let new_col = self.cursor_col - 1;
+                let new_col = self.editor.cursor_col - 1;
                 if new_col < edit_start {
                     self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
-                remove_char_at(&mut self.lines[self.cursor_line], new_col);
-                self.cursor_col = new_col;
-                self.refresh_calc_line_metadata_at(self.cursor_line);
+                remove_char_at(&mut self.editor.lines[self.editor.cursor_line], new_col);
+                self.editor.cursor_col = new_col;
+                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 self.mark_edited();
                 self.prune_empty_table_continuation_row_at_cursor();
                 return;
             }
         }
 
-        if self.cursor_col > 0 {
-            let new_col = self.cursor_col - 1;
-            remove_char_at(&mut self.lines[self.cursor_line], new_col);
-            self.cursor_col = new_col;
-            self.refresh_calc_line_metadata_at(self.cursor_line);
+        if self.editor.cursor_col > 0 {
+            let new_col = self.editor.cursor_col - 1;
+            remove_char_at(&mut self.editor.lines[self.editor.cursor_line], new_col);
+            self.editor.cursor_col = new_col;
+            self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
 
-        if self.cursor_line == 0 {
+        if self.editor.cursor_line == 0 {
             return;
         }
 
-        let removed = self.lines.remove(self.cursor_line);
-        self.cursor_line -= 1;
-        let prev_len = line_char_len(&self.lines[self.cursor_line]);
-        self.lines[self.cursor_line].push_str(&removed);
-        self.cursor_col = prev_len;
-        self.splice_calc_line_metadata(self.cursor_line, 2, 1);
-        self.mark_edited_from_line_with_span(self.cursor_line, Some((self.cursor_line, 2, 1)));
+        let removed = self.editor.lines.remove(self.editor.cursor_line);
+        self.editor.cursor_line -= 1;
+        let prev_len = line_char_len(&self.editor.lines[self.editor.cursor_line]);
+        self.editor.lines[self.editor.cursor_line].push_str(&removed);
+        self.editor.cursor_col = prev_len;
+        self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);
+        self.mark_edited_from_line_with_span(
+            self.editor.cursor_line,
+            Some((self.editor.cursor_line, 2, 1)),
+        );
     }
 
     pub(super) fn delete_forward(&mut self) {
         if self.note_table_module_enabled() {
-            if let Some(cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
+            if let Some(cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
                 let edit_start = table_cell_edit_start(&cell);
                 let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-                if self.cursor_col < edit_start {
-                    self.cursor_col = edit_start;
+                if self.editor.cursor_col < edit_start {
+                    self.editor.cursor_col = edit_start;
                     self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
-                if self.cursor_col >= edit_end {
+                if self.editor.cursor_col >= edit_end {
                     self.prune_empty_table_continuation_row_at_cursor();
                     return;
                 }
-                let col = self.cursor_col;
-                remove_char_at(&mut self.lines[self.cursor_line], col);
-                self.refresh_calc_line_metadata_at(self.cursor_line);
+                let col = self.editor.cursor_col;
+                remove_char_at(&mut self.editor.lines[self.editor.cursor_line], col);
+                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
                 self.mark_edited_current_line();
                 self.prune_empty_table_continuation_row_at_cursor();
                 return;
@@ -3183,46 +3285,52 @@ impl TerminalApp {
         }
 
         let line_len = line_char_len(self.current_line());
-        if self.cursor_col < line_len {
-            let col = self.cursor_col;
-            remove_char_at(&mut self.lines[self.cursor_line], col);
-            self.refresh_calc_line_metadata_at(self.cursor_line);
+        if self.editor.cursor_col < line_len {
+            let col = self.editor.cursor_col;
+            remove_char_at(&mut self.editor.lines[self.editor.cursor_line], col);
+            self.refresh_calc_line_metadata_at(self.editor.cursor_line);
             self.mark_edited_current_line();
             self.prune_empty_table_continuation_row_at_cursor();
             return;
         }
 
-        if self.cursor_line + 1 >= self.lines.len() {
+        if self.editor.cursor_line + 1 >= self.editor.lines.len() {
             return;
         }
 
-        let next = self.lines.remove(self.cursor_line + 1);
-        self.lines[self.cursor_line].push_str(&next);
-        self.splice_calc_line_metadata(self.cursor_line, 2, 1);
-        self.mark_edited_from_line_with_span(self.cursor_line, Some((self.cursor_line, 2, 1)));
+        let next = self.editor.lines.remove(self.editor.cursor_line + 1);
+        self.editor.lines[self.editor.cursor_line].push_str(&next);
+        self.splice_calc_line_metadata(self.editor.cursor_line, 2, 1);
+        self.mark_edited_from_line_with_span(
+            self.editor.cursor_line,
+            Some((self.editor.cursor_line, 2, 1)),
+        );
     }
 
     pub(super) fn move_cursor_left(&mut self) {
-        if self.markdown_formatting_right_boundary_exit == Some((self.cursor_line, self.cursor_col))
+        if self.editor.markdown_formatting_right_boundary_exit
+            == Some((self.editor.cursor_line, self.editor.cursor_col))
         {
-            self.markdown_formatting_right_boundary_exit = None;
+            self.editor.markdown_formatting_right_boundary_exit = None;
             return;
         }
-        self.markdown_formatting_right_boundary_exit = None;
+        self.editor.markdown_formatting_right_boundary_exit = None;
 
         let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
-            if let Some(current_cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
+            if let Some(current_cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
                 let anchor = table_cell_navigation_anchor(line_text, &current_cell);
                 let edit_start = table_cell_edit_start(&current_cell);
                 if table_cell_is_empty(&current_cell) {
                     Some(anchor)
-                } else if self.cursor_col > anchor {
+                } else if self.editor.cursor_col > anchor {
                     // Entering left/right padding is not allowed; snap back to content anchor.
                     Some(anchor)
-                } else if self.cursor_col <= edit_start {
+                } else if self.editor.cursor_col <= edit_start {
                     // Regular arrows do not cross cell boundaries.
                     Some(edit_start)
                 } else {
@@ -3235,55 +3343,57 @@ impl TerminalApp {
             None
         };
         if let Some(target_col) = table_target_col {
-            self.cursor_col = target_col;
+            self.editor.cursor_col = target_col;
             return;
         }
 
-        if self.cursor_col > 0 {
-            self.cursor_col -= 1;
+        if self.editor.cursor_col > 0 {
+            self.editor.cursor_col -= 1;
             return;
         }
         let current_virtual = self.current_virtual_line();
         if current_virtual > 0 {
             if let Some(prev_real) = self.real_line_for_virtual(current_virtual - 1) {
-                self.cursor_line = prev_real;
-                self.cursor_col = line_char_len(self.current_line());
+                self.editor.cursor_line = prev_real;
+                self.editor.cursor_col = line_char_len(self.current_line());
             }
         }
     }
 
     pub(super) fn move_cursor_right(&mut self) {
-        let consumed_boundary_exit = self.markdown_formatting_right_boundary_exit
-            == Some((self.cursor_line, self.cursor_col));
+        let consumed_boundary_exit = self.editor.markdown_formatting_right_boundary_exit
+            == Some((self.editor.cursor_line, self.editor.cursor_col));
         if consumed_boundary_exit {
-            self.markdown_formatting_right_boundary_exit = None;
+            self.editor.markdown_formatting_right_boundary_exit = None;
         }
 
         let boundary_exit_anchor = if !consumed_boundary_exit
             && crate::terminal::markdown_view::formatting_component_right_boundary_at(
                 self.current_line(),
-                self.cursor_col,
+                self.editor.cursor_col,
             ) {
-            Some((self.cursor_line, self.cursor_col))
+            Some((self.editor.cursor_line, self.editor.cursor_col))
         } else {
             None
         };
 
         let table_target_col = if self.note_table_module_enabled() {
             let line_text = self.current_line();
-            if let Some(current_cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
+            if let Some(current_cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
                 let anchor = table_cell_navigation_anchor(line_text, &current_cell);
                 let edit_start = table_cell_edit_start(&current_cell);
                 if table_cell_is_empty(&current_cell) {
                     Some(anchor)
-                } else if self.cursor_col < edit_start {
+                } else if self.editor.cursor_col < edit_start {
                     Some(edit_start)
-                } else if self.cursor_col > anchor {
+                } else if self.editor.cursor_col > anchor {
                     // Entering padding is not allowed; snap back.
                     Some(anchor)
-                } else if self.cursor_col == anchor {
+                } else if self.editor.cursor_col == anchor {
                     // Regular arrows do not cross cell boundaries.
                     Some(anchor)
                 } else {
@@ -3296,43 +3406,45 @@ impl TerminalApp {
             None
         };
         if let Some(target_col) = table_target_col {
-            self.cursor_col = target_col;
-            self.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
+            self.editor.cursor_col = target_col;
+            self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
             return;
         }
 
         let line_len = line_char_len(self.current_line());
-        if self.cursor_col < line_len {
-            self.cursor_col += 1;
-            self.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
+        if self.editor.cursor_col < line_len {
+            self.editor.cursor_col += 1;
+            self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
             return;
         }
         let current_virtual = self.current_virtual_line();
         if current_virtual + 1 < self.visible_line_count() {
             if let Some(next_real) = self.real_line_for_virtual(current_virtual + 1) {
-                self.cursor_line = next_real;
-                self.cursor_col = 0;
-                self.markdown_formatting_right_boundary_exit = None;
+                self.editor.cursor_line = next_real;
+                self.editor.cursor_col = 0;
+                self.editor.markdown_formatting_right_boundary_exit = None;
                 return;
             }
         }
 
-        self.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
+        self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
     }
 
     pub(super) fn move_cursor_up(&mut self, count: usize) {
         if count == 0 {
             return;
         }
-        self.markdown_formatting_right_boundary_exit = None;
+        self.editor.markdown_formatting_right_boundary_exit = None;
         let current_virtual = self.current_virtual_line();
         let target_virtual = current_virtual.saturating_sub(count);
-        self.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
+        self.editor.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
         if self.note_table_module_enabled() {
-            if let Some(cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
-                self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+            if let Some(cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
+                self.editor.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
             }
         }
     }
@@ -3341,49 +3453,53 @@ impl TerminalApp {
         if count == 0 {
             return;
         }
-        self.markdown_formatting_right_boundary_exit = None;
+        self.editor.markdown_formatting_right_boundary_exit = None;
         let current_virtual = self.current_virtual_line();
         let target_virtual = min(
             current_virtual.saturating_add(count),
             self.visible_line_count().saturating_sub(1),
         );
-        self.cursor_line = self
+        self.editor.cursor_line = self
             .real_line_for_virtual(target_virtual)
-            .unwrap_or_else(|| self.lines.len().saturating_sub(1));
+            .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
         if self.note_table_module_enabled() {
-            if let Some(cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
-                self.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
+            if let Some(cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
+                self.editor.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
             }
         }
     }
 
     pub(super) fn adjust_cursor_with_table_padding_guard(&mut self, clamp_table_padding: bool) {
-        if self.lines.is_empty() {
-            self.lines.push(String::new());
+        if self.editor.lines.is_empty() {
+            self.editor.lines.push(String::new());
         }
-        if self.cursor_line >= self.lines.len() {
-            self.cursor_line = self.lines.len() - 1;
+        if self.editor.cursor_line >= self.editor.lines.len() {
+            self.editor.cursor_line = self.editor.lines.len() - 1;
         }
-        if let Some(owner) = self.fold_hidden_owner_for_line(self.cursor_line) {
-            self.cursor_line = owner.min(self.lines.len().saturating_sub(1));
+        if let Some(owner) = self.fold_hidden_owner_for_line(self.editor.cursor_line) {
+            self.editor.cursor_line = owner.min(self.editor.lines.len().saturating_sub(1));
         }
         let len = line_char_len(self.current_line());
-        if self.cursor_col > len {
-            self.cursor_col = len;
+        if self.editor.cursor_col > len {
+            self.editor.cursor_col = len;
         }
         let table_anchor = if self.note_table_module_enabled() {
             let line_text = self.current_line();
-            if let Some(cell) =
-                table_cell_info_at_char(&self.lines, self.cursor_line, self.cursor_col)
-            {
+            if let Some(cell) = table_cell_info_at_char(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            ) {
                 let anchor = table_cell_navigation_anchor(line_text, &cell);
                 let edit_start = table_cell_edit_start(&cell);
                 if table_cell_is_empty(&cell) {
                     Some(anchor)
-                } else if self.cursor_col < edit_start
-                    || (clamp_table_padding && self.cursor_col > anchor)
+                } else if self.editor.cursor_col < edit_start
+                    || (clamp_table_padding && self.editor.cursor_col > anchor)
                 {
                     // Keep the cursor inside content; right padding is
                     // reserved for alignment only.
@@ -3398,7 +3514,7 @@ impl TerminalApp {
             None
         };
         if let Some(anchor) = table_anchor {
-            self.cursor_col = anchor;
+            self.editor.cursor_col = anchor;
         }
     }
 
@@ -3418,29 +3534,30 @@ impl TerminalApp {
     pub(super) fn adjust_scroll(&mut self) {
         let height = self.editor_height();
         let cursor_virtual = self.current_virtual_line();
-        if cursor_virtual < self.scroll_line {
-            self.scroll_line = cursor_virtual;
-        } else if cursor_virtual >= self.scroll_line + height {
-            self.scroll_line = cursor_virtual + 1 - height;
+        if cursor_virtual < self.editor.scroll_line {
+            self.editor.scroll_line = cursor_virtual;
+        } else if cursor_virtual >= self.editor.scroll_line + height {
+            self.editor.scroll_line = cursor_virtual + 1 - height;
         }
-        self.scroll_line = self
+        self.editor.scroll_line = self
+            .editor
             .scroll_line
             .min(self.visible_line_count().saturating_sub(1));
 
         let (_, cols) = input::terminal_size();
         let available = cols.saturating_sub(self.gutter_width());
         if available == 0 {
-            self.scroll_col = 0;
+            self.editor.scroll_col = 0;
             return;
         }
 
         let (cursor_display_col, max_scroll) = {
             let line_text = self.current_line();
             let line_len = line_char_len(line_text);
-            let logical_col = min(self.cursor_col, line_len);
+            let logical_col = min(self.editor.cursor_col, line_len);
             let render_col = cursor_render_char_col(
                 line_text,
-                self.cursor_col,
+                self.editor.cursor_col,
                 matches!(
                     self.mode,
                     UiMode::Normal | UiMode::Visual | UiMode::VisualLine
@@ -3463,20 +3580,21 @@ impl TerminalApp {
             )
         };
 
-        if cursor_display_col < self.scroll_col {
-            self.scroll_col = cursor_display_col.saturating_sub(HORIZONTAL_SCROLL_LEFT_CONTEXT);
-        } else if cursor_display_col >= self.scroll_col + available {
-            self.scroll_col = cursor_display_col + 1 - available;
+        if cursor_display_col < self.editor.scroll_col {
+            self.editor.scroll_col =
+                cursor_display_col.saturating_sub(HORIZONTAL_SCROLL_LEFT_CONTEXT);
+        } else if cursor_display_col >= self.editor.scroll_col + available {
+            self.editor.scroll_col = cursor_display_col + 1 - available;
         }
 
-        self.scroll_col = self.scroll_col.min(max_scroll);
+        self.editor.scroll_col = self.editor.scroll_col.min(max_scroll);
     }
 
     pub(super) fn calc_eval_range_for_viewport(
         &self,
         editor_height: usize,
     ) -> Option<(usize, usize)> {
-        if self.lines.is_empty() || editor_height == 0 {
+        if self.editor.lines.is_empty() || editor_height == 0 {
             return None;
         }
         let visible_count = self.visible_line_count();
@@ -3484,8 +3602,9 @@ impl TerminalApp {
             return None;
         }
         let prefetch = editor_height.saturating_mul(CALC_VIEWPORT_PREFETCH_MULTIPLIER);
-        let start_virtual = self.scroll_line.saturating_sub(prefetch);
+        let start_virtual = self.editor.scroll_line.saturating_sub(prefetch);
         let end_virtual = self
+            .editor
             .scroll_line
             .saturating_add(editor_height)
             .saturating_add(prefetch)
@@ -3493,8 +3612,10 @@ impl TerminalApp {
         let start_line = self.real_line_for_virtual(start_virtual).unwrap_or(0);
         let end_line_inclusive = self
             .real_line_for_virtual(end_virtual)
-            .unwrap_or_else(|| self.lines.len().saturating_sub(1));
-        let end_line_exclusive = end_line_inclusive.saturating_add(1).min(self.lines.len());
+            .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
+        let end_line_exclusive = end_line_inclusive
+            .saturating_add(1)
+            .min(self.editor.lines.len());
         if start_line >= end_line_exclusive {
             None
         } else {
@@ -3506,7 +3627,7 @@ impl TerminalApp {
     /// are in the index. Guarded by `was_full_eval_attempted` so it's O(1)
     /// after the first call per dep per session.
     fn preload_cross_note_deps(&self) {
-        let refs = app_core::calc::scan_cross_note_refs(&self.lines);
+        let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
         if refs.is_empty() {
             return;
         }
@@ -3570,13 +3691,13 @@ impl TerminalApp {
             self.clear_calc_cache();
             return;
         }
-        if eval_from >= eval_to || eval_to > self.lines.len() {
+        if eval_from >= eval_to || eval_to > self.editor.lines.len() {
             return;
         }
         let calc_mask = self.calc_feature_mask();
         crate::editor_core::calc_plan::sync_calc_dependency_index(
             &mut self.calc.calc_dependency_index,
-            &self.lines,
+            &self.editor.lines,
             eval_from,
             eval_to,
             calc_mask,
@@ -3585,7 +3706,7 @@ impl TerminalApp {
         let cross_note_enabled = self.calc_cross_note_enabled();
         let extern_vars: Vec<ExternVar> = if cross_note_enabled {
             let note_id = self.active_note.id.clone();
-            let refs = app_core::calc::scan_cross_note_refs(&self.lines);
+            let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
             if let Ok(mut index) = self.cross_note_var_index.lock() {
                 index.update_deps(&note_id, &refs);
                 index.extern_vars_for(&note_id)
@@ -3597,18 +3718,18 @@ impl TerminalApp {
         };
         let calc_data = compute_calc_data(
             &self.calc.engine,
-            &self.lines,
+            &self.editor.lines,
             vars_enabled,
             cross_note_enabled,
             self.note_table_module_enabled(),
             Some((eval_from, eval_to)),
             extern_vars,
         );
-        if self.calc.results.len() != self.lines.len() {
-            self.calc.results = vec![None; self.lines.len()];
+        if self.calc.results.len() != self.editor.lines.len() {
+            self.calc.results = vec![None; self.editor.lines.len()];
         }
-        if self.calc.cell_results.len() != self.lines.len() {
-            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+        if self.calc.cell_results.len() != self.editor.lines.len() {
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
         }
         for line_idx in eval_from..eval_to {
             if let Some(slot) = self.calc.results.get_mut(line_idx) {
@@ -3674,7 +3795,8 @@ impl TerminalApp {
 
     pub(super) fn rebuild_wiki_link_note_suggestions_cache(&mut self) {
         self.wiki_link_note_suggestions_cache = self
-            .switcher_items
+            .switcher
+            .items
             .iter()
             .cloned()
             .filter(|n| n.access_mode == app_core::storage::NoteAccessMode::None || n.is_unlocked)
@@ -3696,7 +3818,7 @@ impl TerminalApp {
     }
 
     fn ensure_wiki_link_sources_loaded(&mut self, db: &crate::storage::Db) {
-        if !self.switcher_items.is_empty() {
+        if !self.switcher.items.is_empty() {
             return;
         }
         if let Ok(items) = crate::terminal::switcher::load_note_meta_filtered(
@@ -3704,7 +3826,7 @@ impl TerminalApp {
             Some(&self.active_note.id),
             self.working_collection_id.as_deref(),
         ) {
-            self.switcher_items = items;
+            self.switcher.items = items;
             self.rebuild_wiki_link_prefix_index();
             self.rebuild_wiki_link_note_suggestions_cache();
         }
@@ -3723,11 +3845,11 @@ impl TerminalApp {
             return;
         };
         let line_idx = self.wiki_link_autocomplete_popup.cursor_line;
-        if line_idx >= self.lines.len() {
+        if line_idx >= self.editor.lines.len() {
             return;
         }
         let from_col = self.wiki_link_autocomplete_popup.from_col;
-        let line = self.lines[line_idx].clone();
+        let line = self.editor.lines[line_idx].clone();
         let chars: Vec<char> = line.chars().collect();
         let hash_col = from_col + 2 + short_id.chars().count();
         if hash_col >= chars.len() || chars[hash_col] != '#' {
@@ -3748,9 +3870,9 @@ impl TerminalApp {
         if from_byte == to_byte {
             return;
         }
-        self.lines[line_idx].replace_range(from_byte..to_byte, "");
-        if self.cursor_line == line_idx {
-            self.cursor_col = hash_col;
+        self.editor.lines[line_idx].replace_range(from_byte..to_byte, "");
+        if self.editor.cursor_line == line_idx {
+            self.editor.cursor_col = hash_col;
         }
         self.refresh_calc_line_metadata_at(line_idx);
         self.mark_edited();
@@ -3763,11 +3885,14 @@ impl TerminalApp {
 
     pub(super) fn open_wiki_link_autocomplete(&mut self, db: &crate::storage::Db) {
         self.ensure_wiki_link_sources_loaded(db);
-        let from_col = self.cursor_col.saturating_sub(2);
+        let from_col = self.editor.cursor_col.saturating_sub(2);
         let note_suggestions = self.wiki_link_note_suggestions_cache.clone();
         let suggestions = note_suggestions.clone();
         let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
-            self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW,
+            self.editor
+                .cursor_line
+                .saturating_sub(self.editor.scroll_line)
+                + super::EDITOR_TOP_ROW,
             from_col.saturating_add(1),
         ));
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState {
@@ -3781,7 +3906,7 @@ impl TerminalApp {
             heading_cache: rustc_hash::FxHashMap::default(),
             suggestions,
             selected_index: 0,
-            cursor_line: self.cursor_line,
+            cursor_line: self.editor.cursor_line,
         };
     }
 
@@ -3795,18 +3920,18 @@ impl TerminalApp {
         }
         let line = self.current_line().to_string();
         let Some(link) =
-            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.cursor_col)
+            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.editor.cursor_col)
         else {
             return false;
         };
-        if self.cursor_col < link.from + 2 {
+        if self.editor.cursor_col < link.from + 2 {
             return false;
         }
         let from_col = link.from;
         let query: String = line
             .chars()
             .skip(from_col + 2)
-            .take(self.cursor_col.saturating_sub(from_col + 2))
+            .take(self.editor.cursor_col.saturating_sub(from_col + 2))
             .collect();
         if Self::parse_wiki_link_query(&query).is_none() {
             return false;
@@ -3815,7 +3940,10 @@ impl TerminalApp {
         let note_suggestions = self.wiki_link_note_suggestions_cache.clone();
         let suggestions = note_suggestions.clone();
         let (anchor_row, anchor_col) = self.variable_popup_anchor(from_col).unwrap_or((
-            self.cursor_line.saturating_sub(self.scroll_line) + super::EDITOR_TOP_ROW,
+            self.editor
+                .cursor_line
+                .saturating_sub(self.editor.scroll_line)
+                + super::EDITOR_TOP_ROW,
             from_col.saturating_add(1),
         ));
         self.wiki_link_autocomplete_popup = WikiLinkAutocompletePopupState {
@@ -3829,7 +3957,7 @@ impl TerminalApp {
             heading_cache: rustc_hash::FxHashMap::default(),
             suggestions,
             selected_index: 0,
-            cursor_line: self.cursor_line,
+            cursor_line: self.editor.cursor_line,
         };
         self.refresh_wiki_link_autocomplete(db);
         true
@@ -3839,21 +3967,21 @@ impl TerminalApp {
         if !self.wiki_link_autocomplete_popup.visible {
             return;
         }
-        if self.wiki_link_autocomplete_popup.cursor_line != self.cursor_line {
+        if self.wiki_link_autocomplete_popup.cursor_line != self.editor.cursor_line {
             self.cancel_wiki_link_autocomplete();
             return;
         }
         let line = self.current_line();
         let from_col = self.wiki_link_autocomplete_popup.from_col;
         // Cursor must stay to the right of [[ and line must still have ]] ahead.
-        if self.cursor_col < from_col + 2 {
+        if self.editor.cursor_col < from_col + 2 {
             self.cancel_wiki_link_autocomplete();
             return;
         }
         let query: String = line
             .chars()
             .skip(from_col + 2)
-            .take(self.cursor_col - from_col - 2)
+            .take(self.editor.cursor_col - from_col - 2)
             .collect();
         let Some((_, _heading_query)) = Self::parse_wiki_link_query(&query) else {
             self.cancel_wiki_link_autocomplete();
@@ -3997,7 +4125,7 @@ impl TerminalApp {
         // Find end of [[...]] span: scan forward from from_col for ]]
         let line = self.current_line().to_string();
         let chars: Vec<char> = line.chars().collect();
-        let mut end_col = self.cursor_col;
+        let mut end_col = self.editor.cursor_col;
         while end_col + 1 < chars.len() {
             if chars[end_col] == ']' && chars[end_col + 1] == ']' {
                 end_col += 2;
@@ -4008,14 +4136,14 @@ impl TerminalApp {
 
         let from_byte = byte_index(&line, from_col);
         let to_byte = byte_index(&line, end_col);
-        self.lines[self.cursor_line].replace_range(from_byte..to_byte, &replacement);
+        self.editor.lines[self.editor.cursor_line].replace_range(from_byte..to_byte, &replacement);
         if heading.is_some() {
-            self.cursor_col = from_col + replacement.chars().count();
+            self.editor.cursor_col = from_col + replacement.chars().count();
         } else {
             // Keep caret right after the auto-added # to filter heading picks.
-            self.cursor_col = from_col + 2 + short_id.chars().count() + 1;
+            self.editor.cursor_col = from_col + 2 + short_id.chars().count() + 1;
         }
-        self.refresh_calc_line_metadata_at(self.cursor_line);
+        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited();
         if heading.is_some() {
             self.wiki_link_autocomplete_popup.pending_heading_short_id = None;
@@ -4025,7 +4153,7 @@ impl TerminalApp {
             self.wiki_link_autocomplete_popup.query = format!("{short_id}#");
             self.wiki_link_autocomplete_popup.pending_heading_short_id = Some(short_id);
             self.wiki_link_autocomplete_popup.selected_index = 0;
-            self.wiki_link_autocomplete_popup.cursor_line = self.cursor_line;
+            self.wiki_link_autocomplete_popup.cursor_line = self.editor.cursor_line;
             if let Some((anchor_row, anchor_col)) =
                 self.variable_popup_anchor(self.wiki_link_autocomplete_popup.from_col)
             {
@@ -4041,7 +4169,7 @@ impl TerminalApp {
     pub(super) fn navigate_wiki_link_at_cursor(&mut self, db: &crate::storage::Db) -> bool {
         let line = self.current_line().to_string();
         let Some(link) =
-            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.cursor_col)
+            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.editor.cursor_col)
         else {
             return false;
         };
@@ -4081,7 +4209,7 @@ impl TerminalApp {
     pub(super) fn open_wiki_link_preview(&mut self, db: &crate::storage::Db) {
         let line = self.current_line().to_string();
         let Some(link) =
-            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.cursor_col)
+            crate::editor_core::markdown_tokens::wiki_link_at_cursor(&line, self.editor.cursor_col)
         else {
             self.status = "no wiki-link at cursor".to_string();
             return;
@@ -4125,15 +4253,15 @@ impl TerminalApp {
         if needle.is_empty() {
             return;
         }
-        for (idx, line) in self.lines.iter().enumerate() {
+        for (idx, line) in self.editor.lines.iter().enumerate() {
             let trimmed = line.trim_start();
             if !trimmed.starts_with('#') {
                 continue;
             }
             let content = trimmed.trim_start_matches('#').trim();
             if normalize(content) == needle {
-                self.cursor_line = idx;
-                self.cursor_col = 0;
+                self.editor.cursor_line = idx;
+                self.editor.cursor_col = 0;
                 self.adjust_scroll();
                 return;
             }
@@ -4142,17 +4270,17 @@ impl TerminalApp {
 
     pub(super) fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {
         let started = Instant::now();
-        if !self.calc_viewport_only {
+        if !self.calc_runtime.viewport_only {
             return;
         }
         let Some(eval_range) = self.calc_eval_range_for_viewport(editor_height) else {
             return;
         };
-        if !force && self.calc_last_view_eval_range == Some(eval_range) {
+        if !force && self.calc_runtime.last_view_eval_range == Some(eval_range) {
             return;
         }
         self.recompute_calc_range(eval_range.0, eval_range.1);
-        self.calc_last_view_eval_range = Some(eval_range);
+        self.calc_runtime.last_view_eval_range = Some(eval_range);
         self.record_perf_duration("tui.calc.viewport_eval", "eval", started.elapsed());
     }
 }

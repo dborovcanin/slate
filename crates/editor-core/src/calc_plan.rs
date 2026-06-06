@@ -3163,10 +3163,7 @@ mod tests {
         let mask = CalcFeatureMask::default();
         // Document grew from 1 line to 2 (an Enter); the new signal sits on the
         // line above the cursor.
-        let lines = vec![
-            "| value | sum_col() |".to_string(),
-            "".to_string(),
-        ];
+        let lines = vec!["| value | sum_col() |".to_string(), "".to_string()];
         let mut flags = CalcSignalFlags::default();
         merge_incremental_signal_flags(&mut flags, &lines, 1, 1, mask);
         assert!(flags.has_builtin_formula);

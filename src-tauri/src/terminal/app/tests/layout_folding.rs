@@ -138,8 +138,8 @@ fn gutter_width_expands_after_four_digit_line_numbers() {
 fn cursor_position_respects_expanded_gutter_width() {
     let body = vec!["x"; 10_000].join("\n");
     let (_db, mut app, path) = app_with_note(&body);
-    app.cursor_line = 9_999;
-    app.cursor_col = 0;
+    app.editor.cursor_line = 9_999;
+    app.editor.cursor_col = 0;
     app.adjust_scroll();
 
     let (rows, cols) = crate::terminal::input::terminal_size();
@@ -165,14 +165,14 @@ fn insert_newline_invalidates_fence_checkpoints_from_original_line() {
     let (db, mut app, path) = app_with_note(&body);
 
     let _ = app.fence_state_before_line(interval + 20);
-    assert!(app.fence_checkpoints_valid_through >= 1);
+    assert!(app.render_state.fence_checkpoints_valid_through >= 1);
 
-    app.cursor_line = fence_line;
-    app.cursor_col = 0;
+    app.editor.cursor_line = fence_line;
+    app.editor.cursor_col = 0;
     app.insert_newline();
 
-    assert_eq!(app.cursor_line, interval);
-    assert_eq!(app.fence_checkpoints_valid_through, 0);
+    assert_eq!(app.editor.cursor_line, interval);
+    assert_eq!(app.render_state.fence_checkpoints_valid_through, 0);
 
     let (in_code_block, _) = app.fence_state_before_line(interval);
     assert!(!in_code_block);
@@ -193,14 +193,14 @@ fn insert_paste_multiline_invalidates_fence_checkpoints_from_original_line() {
     let (db, mut app, path) = app_with_note(&body);
 
     let _ = app.fence_state_before_line(interval + 20);
-    assert!(app.fence_checkpoints_valid_through >= 1);
+    assert!(app.render_state.fence_checkpoints_valid_through >= 1);
 
-    app.cursor_line = fence_line;
-    app.cursor_col = 0;
+    app.editor.cursor_line = fence_line;
+    app.editor.cursor_col = 0;
     app.insert_paste("\n");
 
-    assert_eq!(app.cursor_line, interval);
-    assert_eq!(app.fence_checkpoints_valid_through, 0);
+    assert_eq!(app.editor.cursor_line, interval);
+    assert_eq!(app.render_state.fence_checkpoints_valid_through, 0);
 
     let (in_code_block, _) = app.fence_state_before_line(interval);
     assert!(!in_code_block);
@@ -217,36 +217,42 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
     let (db, mut app, path) = app_with_note(&body);
 
     app.mode = UiMode::Editor;
-    app.cursor_line = app.lines.len().saturating_sub(1);
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    let insert_scroll_before = app.scroll_line;
+    let insert_scroll_before = app.editor.scroll_line;
 
     run_keys(&mut app, &db, &[Key::Enter]);
 
-    assert_eq!(app.lines.len(), 100_001);
-    assert_eq!(app.folds.real_to_visible.len(), app.lines.len());
-    assert_eq!(app.folds.hidden_owner.len(), app.lines.len());
-    assert_eq!(app.folds.placeholder_hidden_lines.len(), app.lines.len());
-    assert_eq!(app.folds.range_by_start.len(), app.lines.len());
-    assert!(app.scroll_line > 0);
-    assert!(app.scroll_line >= insert_scroll_before.saturating_sub(1));
+    assert_eq!(app.editor.lines.len(), 100_001);
+    assert_eq!(app.folds.real_to_visible.len(), app.editor.lines.len());
+    assert_eq!(app.folds.hidden_owner.len(), app.editor.lines.len());
+    assert_eq!(
+        app.folds.placeholder_hidden_lines.len(),
+        app.editor.lines.len()
+    );
+    assert_eq!(app.folds.range_by_start.len(), app.editor.lines.len());
+    assert!(app.editor.scroll_line > 0);
+    assert!(app.editor.scroll_line >= insert_scroll_before.saturating_sub(1));
 
     app.mode = UiMode::Normal;
-    app.cursor_line = app.lines.len().saturating_sub(2);
-    app.cursor_col = 0;
+    app.editor.cursor_line = app.editor.lines.len().saturating_sub(2);
+    app.editor.cursor_col = 0;
     app.adjust_scroll();
-    let delete_scroll_before = app.scroll_line;
+    let delete_scroll_before = app.editor.scroll_line;
 
     run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
 
-    assert_eq!(app.lines.len(), 100_000);
-    assert_eq!(app.folds.real_to_visible.len(), app.lines.len());
-    assert_eq!(app.folds.hidden_owner.len(), app.lines.len());
-    assert_eq!(app.folds.placeholder_hidden_lines.len(), app.lines.len());
-    assert_eq!(app.folds.range_by_start.len(), app.lines.len());
-    assert!(app.scroll_line > 0);
-    assert!(app.scroll_line >= delete_scroll_before.saturating_sub(2));
+    assert_eq!(app.editor.lines.len(), 100_000);
+    assert_eq!(app.folds.real_to_visible.len(), app.editor.lines.len());
+    assert_eq!(app.folds.hidden_owner.len(), app.editor.lines.len());
+    assert_eq!(
+        app.folds.placeholder_hidden_lines.len(),
+        app.editor.lines.len()
+    );
+    assert_eq!(app.folds.range_by_start.len(), app.editor.lines.len());
+    assert!(app.editor.scroll_line > 0);
+    assert!(app.editor.scroll_line >= delete_scroll_before.saturating_sub(2));
 
     let mut out = Vec::new();
     app.draw(&mut out).expect("draw after large-file EOF edits");
@@ -269,14 +275,14 @@ fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
     };
 
     for step_idx in 0..24usize {
-        let len = app.lines.len().max(1);
+        let len = app.editor.lines.len().max(1);
         let tail_window = 500usize.min(len.saturating_sub(1)).max(1);
         let tail_start = len.saturating_sub(tail_window);
         let span = len.saturating_sub(tail_start).max(1);
         let target = tail_start + (next_u64() as usize % span);
 
-        app.cursor_line = target.min(app.lines.len().saturating_sub(1));
-        app.cursor_col = 0;
+        app.editor.cursor_line = target.min(app.editor.lines.len().saturating_sub(1));
+        app.editor.cursor_col = 0;
         app.mode = UiMode::Normal;
         app.vim_state = crate::editor_core::vim::VimState::default();
         app.adjust_cursor();
@@ -295,39 +301,39 @@ fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
         }
 
         assert!(
-            !app.lines.is_empty(),
+            !app.editor.lines.is_empty(),
             "step {step_idx}: lines unexpectedly empty after op {op}"
         );
         assert!(
-            app.cursor_line < app.lines.len(),
+            app.editor.cursor_line < app.editor.lines.len(),
             "step {step_idx}: cursor_line {} out of bounds {} after op {op}",
-            app.cursor_line,
-            app.lines.len()
+            app.editor.cursor_line,
+            app.editor.lines.len()
         );
         assert_eq!(
             app.folds.real_to_visible.len(),
-            app.lines.len(),
+            app.editor.lines.len(),
             "step {step_idx}: fold_real_to_visible size mismatch after op {op}"
         );
         assert_eq!(
             app.folds.hidden_owner.len(),
-            app.lines.len(),
+            app.editor.lines.len(),
             "step {step_idx}: fold_hidden_owner size mismatch after op {op}"
         );
         assert_eq!(
             app.folds.placeholder_hidden_lines.len(),
-            app.lines.len(),
+            app.editor.lines.len(),
             "step {step_idx}: fold_placeholder_hidden_lines size mismatch after op {op}"
         );
         assert_eq!(
             app.folds.range_by_start.len(),
-            app.lines.len(),
+            app.editor.lines.len(),
             "step {step_idx}: fold_range_by_start size mismatch after op {op}"
         );
         assert!(
-            app.scroll_line < app.visible_line_count(),
+            app.editor.scroll_line < app.visible_line_count(),
             "step {step_idx}: scroll_line {} out of visible range {} after op {op}",
-            app.scroll_line,
+            app.editor.scroll_line,
             app.visible_line_count()
         );
 
@@ -358,8 +364,8 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
     assert!(!app.calc.cached_has_variable_assignment);
 
     app.mode = UiMode::Editor;
-    app.cursor_line = app.lines.len().saturating_sub(1);
-    app.cursor_col = 0;
+    app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);
+    app.editor.cursor_col = 0;
     run_keys(
         &mut app,
         &db,
@@ -379,7 +385,7 @@ fn large_doc_deferred_calc_reactivates_when_assignment_is_typed() {
 
     assert!(app.calc.cached_has_variable_assignment);
     assert!(!app.calc.stale);
-    assert_eq!(app.calc.prev_line_metadata.len(), app.lines.len());
+    assert_eq!(app.calc.prev_line_metadata.len(), app.editor.lines.len());
     assert!(app
         .calc
         .prev_line_metadata
@@ -440,7 +446,7 @@ fn heading_folds_stop_at_same_level_only() {
 fn normal_mode_za_toggles_fold_and_vertical_navigation_uses_virtual_lines() {
     let (db, mut app, path) = app_with_note("# h1\none\ntwo\n# h2\nthree");
     app.mode = UiMode::Normal;
-    app.cursor_line = 0;
+    app.editor.cursor_line = 0;
 
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
 
@@ -449,12 +455,12 @@ fn normal_mode_za_toggles_fold_and_vertical_navigation_uses_virtual_lines() {
     assert_eq!(app.folds.placeholder_hidden_lines[0], Some(2));
 
     run_keys(&mut app, &db, &[Key::Char('j')]);
-    assert_eq!(app.cursor_line, 3);
+    assert_eq!(app.editor.cursor_line, 3);
     assert_eq!(app.current_virtual_line(), 1);
 
-    app.cursor_line = 1;
+    app.editor.cursor_line = 1;
     app.adjust_cursor();
-    assert_eq!(app.cursor_line, 0);
+    assert_eq!(app.editor.cursor_line, 0);
 
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
     assert!(!app.folds.collapsed_starts.contains(&0));
@@ -468,7 +474,7 @@ fn normal_mode_za_toggles_fold_and_vertical_navigation_uses_virtual_lines() {
 fn heading_fold_keeps_title_and_preserves_separator_blank_line() {
     let (db, mut app, path) = app_with_note("## 13.05.2026.\nentry\n\n## 14.05.2026.\nnext line");
     app.mode = UiMode::Normal;
-    app.cursor_line = 0;
+    app.editor.cursor_line = 0;
 
     run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
 
@@ -492,8 +498,8 @@ fn horizontal_scroll_clamps_to_last_visible_window_at_line_end_in_normal_mode() 
     let long = "a".repeat(200);
     let (_db, mut app, path) = app_with_note(&long);
     app.mode = UiMode::Normal;
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
 
     let (_rows, cols) = crate::terminal::input::terminal_size();
@@ -501,7 +507,7 @@ fn horizontal_scroll_clamps_to_last_visible_window_at_line_end_in_normal_mode() 
     let expected = crate::terminal::text_utils::line_display_cols(app.current_line())
         .saturating_sub(available);
 
-    assert_eq!(app.scroll_col, expected);
+    assert_eq!(app.editor.scroll_col, expected);
 
     drop(app);
     cleanup_db_files(&path);
@@ -512,8 +518,8 @@ fn horizontal_scroll_allows_insert_end_slot_on_overflow_line_end() {
     let long = "a".repeat(200);
     let (_db, mut app, path) = app_with_note(&long);
     app.mode = UiMode::Editor;
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
 
     let (_rows, cols) = crate::terminal::input::terminal_size();
@@ -522,11 +528,14 @@ fn horizontal_scroll_allows_insert_end_slot_on_overflow_line_end() {
         .saturating_sub(available)
         .saturating_add(1);
 
-    assert_eq!(app.scroll_col, expected);
+    assert_eq!(app.editor.scroll_col, expected);
 
     let line_width = crate::terminal::text_utils::line_display_cols(app.current_line());
-    let viewport =
-        crate::terminal::text_utils::compute_line_viewport(line_width, app.scroll_col, available);
+    let viewport = crate::terminal::text_utils::compute_line_viewport(
+        line_width,
+        app.editor.scroll_col,
+        available,
+    );
     assert!(!viewport.has_right_overflow);
     assert_eq!(
         viewport.text_window_col + viewport.text_width,
@@ -545,19 +554,19 @@ fn sample_overflow_line_places_cursor_on_last_screen_cell_in_insert_and_normal()
     let available = cols.saturating_sub(crate::terminal::app::GUTTER_WIDTH);
     let line_width = crate::terminal::text_utils::line_display_cols(app.current_line());
 
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.mode = UiMode::Editor;
     app.adjust_scroll();
     let (_row, col_insert) = app.cursor_position(rows, cols);
     assert_eq!(col_insert, cols);
-    assert!(line_width <= app.scroll_col.saturating_add(available));
+    assert!(line_width <= app.editor.scroll_col.saturating_add(available));
 
     app.mode = UiMode::Normal;
     app.adjust_scroll();
     let (_row, col_normal) = app.cursor_position(rows, cols);
     assert_eq!(col_normal, cols);
-    assert!(line_width <= app.scroll_col.saturating_add(available));
+    assert!(line_width <= app.editor.scroll_col.saturating_add(available));
 
     drop(app);
     cleanup_db_files(&path);
@@ -568,8 +577,8 @@ fn normal_mode_cursor_at_logical_line_end_renders_on_last_character_cell() {
     let (_db, mut app, path) = app_with_note("UI settings page");
     let (rows, cols) = crate::terminal::input::terminal_size();
     app.mode = UiMode::Normal;
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
 
     let (_row, cursor_col) = app.cursor_position(rows, cols);
@@ -586,21 +595,24 @@ fn append_line_end_on_overflow_keeps_last_character_visible_and_cursor_at_screen
     let (db, mut app, path) = app_with_note(sample);
     app.mode = UiMode::Normal;
     app.vim_state = crate::editor_core::vim::VimState::default();
-    app.cursor_line = 0;
-    app.cursor_col = 0;
-    app.scroll_col = 0;
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = 0;
+    app.editor.scroll_col = 0;
 
     run_keys(&mut app, &db, &[Key::Char('A')]);
 
     let (rows, cols) = crate::terminal::input::terminal_size();
     let available = cols.saturating_sub(crate::terminal::app::GUTTER_WIDTH);
     let line_width = crate::terminal::text_utils::line_display_cols(app.current_line());
-    let viewport =
-        crate::terminal::text_utils::compute_line_viewport(line_width, app.scroll_col, available);
+    let viewport = crate::terminal::text_utils::compute_line_viewport(
+        line_width,
+        app.editor.scroll_col,
+        available,
+    );
     let (_row, cursor_col) = app.cursor_position(rows, cols);
 
     assert_eq!(app.mode, UiMode::Editor);
-    assert_eq!(app.cursor_col, line_char_len(app.current_line()));
+    assert_eq!(app.editor.cursor_col, line_char_len(app.current_line()));
     assert_eq!(cursor_col, cols);
     assert_eq!(
         viewport.text_window_col + viewport.text_width,
@@ -617,14 +629,14 @@ fn append_line_end_on_overflow_keeps_last_character_visible_and_cursor_at_screen
 fn normal_mode_dollar_then_a_stays_on_same_line_and_enters_insert_at_line_end() {
     let (db, mut app, path) = app_with_note("alpha\nbeta");
     app.mode = UiMode::Normal;
-    app.cursor_line = 0;
-    app.cursor_col = 0;
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = 0;
 
     run_keys(&mut app, &db, &[Key::Char('$'), Key::Char('a')]);
 
     assert_eq!(app.mode, UiMode::Editor);
-    assert_eq!(app.cursor_line, 0);
-    assert_eq!(app.cursor_col, line_char_len("alpha"));
+    assert_eq!(app.editor.cursor_line, 0);
+    assert_eq!(app.editor.cursor_col, line_char_len("alpha"));
 
     drop(app);
     drop(db);
@@ -635,18 +647,18 @@ fn normal_mode_dollar_then_a_stays_on_same_line_and_enters_insert_at_line_end() 
 fn enter_from_overflowing_checklist_repositions_cursor_and_resets_horizontal_scroll() {
     let long = format!("- [ ] {}", "a".repeat(200));
     let (db, mut app, path) = app_with_note(&long);
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.scroll_col > 0);
+    assert!(app.editor.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
 
-    assert_eq!(app.cursor_line, 1);
-    assert_eq!(app.lines[1], "- [ ] ");
-    assert_eq!(app.cursor_col, line_char_len("- [ ] "));
-    assert_eq!(app.scroll_col, 0);
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.editor.lines[1], "- [ ] ");
+    assert_eq!(app.editor.cursor_col, line_char_len("- [ ] "));
+    assert_eq!(app.editor.scroll_col, 0);
 
     drop(app);
     drop(db);
@@ -657,18 +669,18 @@ fn enter_from_overflowing_checklist_repositions_cursor_and_resets_horizontal_scr
 fn enter_from_overflowing_unordered_list_repositions_cursor_and_resets_horizontal_scroll() {
     let long = format!("- {}", "a".repeat(200));
     let (db, mut app, path) = app_with_note(&long);
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.scroll_col > 0);
+    assert!(app.editor.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
 
-    assert_eq!(app.cursor_line, 1);
-    assert_eq!(app.lines[1], "- ");
-    assert_eq!(app.cursor_col, line_char_len("- "));
-    assert_eq!(app.scroll_col, 0);
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.editor.lines[1], "- ");
+    assert_eq!(app.editor.cursor_col, line_char_len("- "));
+    assert_eq!(app.editor.scroll_col, 0);
 
     drop(app);
     drop(db);
@@ -679,18 +691,18 @@ fn enter_from_overflowing_unordered_list_repositions_cursor_and_resets_horizonta
 fn enter_from_overflowing_ordered_list_repositions_cursor_and_resets_horizontal_scroll() {
     let long = format!("9. {}", "a".repeat(200));
     let (db, mut app, path) = app_with_note(&long);
-    app.cursor_line = 0;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.scroll_col > 0);
+    assert!(app.editor.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
 
-    assert_eq!(app.cursor_line, 1);
-    assert_eq!(app.lines[1], "10. ");
-    assert_eq!(app.cursor_col, line_char_len("10. "));
-    assert_eq!(app.scroll_col, 0);
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.editor.lines[1], "10. ");
+    assert_eq!(app.editor.cursor_col, line_char_len("10. "));
+    assert_eq!(app.editor.scroll_col, 0);
 
     drop(app);
     drop(db);
@@ -702,19 +714,19 @@ fn enter_from_overflowing_table_row_repositions_cursor_and_resets_horizontal_scr
     let long_cell = "a".repeat(180);
     let row = format!("| col |\n| --- |\n| {} |", long_cell);
     let (db, mut app, path) = app_with_note(&row);
-    app.cursor_line = 2;
-    app.cursor_col = line_char_len(app.current_line());
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_scroll();
-    assert!(app.scroll_col > 0);
+    assert!(app.editor.scroll_col > 0);
 
     app.handle_editor_key(&db, Key::Enter)
         .expect("enter applies");
 
-    assert_eq!(app.cursor_line, 3);
-    assert!(app.lines[3].starts_with("| "));
-    assert!(app.lines[3].ends_with(" |"));
-    assert_eq!(app.cursor_col, 2);
-    assert_eq!(app.scroll_col, 0);
+    assert_eq!(app.editor.cursor_line, 3);
+    assert!(app.editor.lines[3].starts_with("| "));
+    assert!(app.editor.lines[3].ends_with(" |"));
+    assert_eq!(app.editor.cursor_col, 2);
+    assert_eq!(app.editor.scroll_col, 0);
 
     drop(app);
     drop(db);

@@ -194,11 +194,11 @@ impl TerminalApp {
                 moved_cursor = true;
             }
             Key::Home => {
-                self.cursor_col = 0;
+                self.editor.cursor_col = 0;
                 moved_cursor = true;
             }
             Key::End => {
-                self.cursor_col = line_char_len(self.current_line());
+                self.editor.cursor_col = line_char_len(self.current_line());
                 moved_cursor = true;
             }
             Key::Backspace => {
@@ -310,14 +310,14 @@ impl TerminalApp {
                     self.insert_char(ch);
                     should_autoformat = !defer_table_space_autoformat;
                     // Auto-close [[ → [[]] and open wiki-link picker.
-                    if ch == '[' && self.cursor_col >= 2 {
+                    if ch == '[' && self.editor.cursor_col >= 2 {
                         let prev = self
                             .current_line()
                             .chars()
-                            .nth(self.cursor_col.saturating_sub(2));
+                            .nth(self.editor.cursor_col.saturating_sub(2));
                         if prev == Some('[') {
                             self.insert_text("]]");
-                            self.cursor_col = self.cursor_col.saturating_sub(2);
+                            self.editor.cursor_col = self.editor.cursor_col.saturating_sub(2);
                             self.dismiss_variable_autocomplete_popup();
                             self.open_wiki_link_autocomplete(db);
                         }
@@ -455,8 +455,8 @@ impl TerminalApp {
             VimPipelineResult::Applied { doc_mutated } => doc_mutated,
         };
         if key == Key::Esc {
-            self.search_matches.clear();
-            self.search_query.clear();
+            self.search.matches.clear();
+            self.search.query.clear();
             self.status = "-- NORMAL --".to_string();
         }
 
@@ -464,7 +464,7 @@ impl TerminalApp {
         self.adjust_scroll();
 
         if doc_mutated && Self::line_might_trigger_doc_change_rules(self.current_line()) {
-            let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+            let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
             let (ctx, scope_start_offset) =
                 self.build_scoped_context_for_line_span(start_line, end_line, None);
             let options = crate::editor_core::text_rules::TextRuleOptions {
@@ -511,7 +511,7 @@ impl TerminalApp {
         self.adjust_scroll();
 
         if doc_mutated && Self::line_might_trigger_doc_change_rules(self.current_line()) {
-            let (start_line, end_line) = self.scoped_rule_line_span(self.cursor_line);
+            let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
             let (ctx, scope_start_offset) =
                 self.build_scoped_context_for_line_span(start_line, end_line, None);
             let options = crate::editor_core::text_rules::TextRuleOptions {
@@ -536,25 +536,25 @@ impl TerminalApp {
         self.dismiss_variable_autocomplete_popup();
         if let Some((year, month, day, hour, minute)) = date_picker::current_local_datetime_parts()
         {
-            self.date_year = year;
-            self.date_month = month;
-            self.date_day = day;
-            self.date_hour = hour;
-            self.date_minute = minute;
+            self.date_picker.year = year;
+            self.date_picker.month = month;
+            self.date_picker.day = day;
+            self.date_picker.hour = hour;
+            self.date_picker.minute = minute;
         } else {
             let now = time::OffsetDateTime::now_utc();
             let date = now.date();
             let tod = now.time();
-            self.date_year = date.year();
-            self.date_month = date.month() as u32;
-            self.date_day = date.day() as u32;
-            self.date_hour = u32::from(tod.hour());
-            self.date_minute = u32::from(tod.minute());
+            self.date_picker.year = date.year();
+            self.date_picker.month = date.month() as u32;
+            self.date_picker.day = date.day() as u32;
+            self.date_picker.hour = u32::from(tod.hour());
+            self.date_picker.minute = u32::from(tod.minute());
         }
-        self.date_require_time = require_time;
-        self.date_include_time = require_time;
-        self.date_picker_action = action;
-        self.date_picker_return_mode = self.mode;
+        self.date_picker.require_time = require_time;
+        self.date_picker.include_time = require_time;
+        self.date_picker.action = action;
+        self.date_picker.return_mode = self.mode;
         self.mode = UiMode::DatePicker;
         self.status =
             "Date picker: arrows days, Ctrl+arrows months, h/l hour, j/k minute, Tab time, Enter confirm"
@@ -562,7 +562,7 @@ impl TerminalApp {
     }
 
     pub(super) fn close_date_picker(&mut self) {
-        self.mode = self.date_picker_return_mode;
+        self.mode = self.date_picker.return_mode;
         self.status = if self.mode == UiMode::Normal {
             "-- NORMAL --".to_string()
         } else {
@@ -571,18 +571,18 @@ impl TerminalApp {
     }
 
     pub(super) fn adjust_picker_hour(&mut self, delta: i32) {
-        let mut next = self.date_hour as i32 + delta;
+        let mut next = self.date_picker.hour as i32 + delta;
         while next < 0 {
             next += 24;
         }
         while next >= 24 {
             next -= 24;
         }
-        self.date_hour = next as u32;
+        self.date_picker.hour = next as u32;
     }
 
     pub(super) fn adjust_picker_minute(&mut self, delta: i32) {
-        let mut next = self.date_minute as i32 + delta;
+        let mut next = self.date_picker.minute as i32 + delta;
         while next < 0 {
             next += 60;
             self.adjust_picker_hour(-1);
@@ -591,7 +591,7 @@ impl TerminalApp {
             next -= 60;
             self.adjust_picker_hour(1);
         }
-        self.date_minute = next as u32;
+        self.date_picker.minute = next as u32;
     }
 
     pub(super) fn handle_date_picker_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -600,17 +600,17 @@ impl TerminalApp {
                 self.close_date_picker();
             }
             Key::Enter => {
-                if self.date_picker_action == DatePickerAction::InsertDate {
+                if self.date_picker.action == DatePickerAction::InsertDate {
                     let inserted = date_picker::format_datetime_with_pattern(
-                        self.date_year,
-                        self.date_month,
-                        self.date_day,
-                        self.date_hour,
-                        self.date_minute,
-                        if self.date_include_time {
-                            &self.date_time_format
+                        self.date_picker.year,
+                        self.date_picker.month,
+                        self.date_picker.day,
+                        self.date_picker.hour,
+                        self.date_picker.minute,
+                        if self.date_picker.include_time {
+                            &self.date_picker.time_format
                         } else {
-                            &self.date_format
+                            &self.date_picker.format
                         },
                     );
                     self.close_date_picker();
@@ -620,24 +620,24 @@ impl TerminalApp {
                 }
 
                 let remind_at_ms = date_picker::local_datetime_to_epoch_ms(
-                    self.date_year,
-                    self.date_month,
-                    self.date_day,
-                    self.date_hour,
-                    self.date_minute,
+                    self.date_picker.year,
+                    self.date_picker.month,
+                    self.date_picker.day,
+                    self.date_picker.hour,
+                    self.date_picker.minute,
                 )
                 .ok_or_else(|| "failed to convert reminder time".to_string())?;
                 let display_at = date_picker::format_datetime_with_pattern(
-                    self.date_year,
-                    self.date_month,
-                    self.date_day,
-                    self.date_hour,
-                    self.date_minute,
-                    &self.date_time_format,
+                    self.date_picker.year,
+                    self.date_picker.month,
+                    self.date_picker.day,
+                    self.date_picker.hour,
+                    self.date_picker.minute,
+                    &self.date_picker.time_format,
                 );
-                let line_number = (self.cursor_line + 1) as i64;
+                let line_number = (self.editor.cursor_line + 1) as i64;
                 let line_text = self.current_line().to_string();
-                let before_reminder = self.reminder_ghosts.get(&self.cursor_line).cloned();
+                let before_reminder = self.reminder_ghosts.get(&self.editor.cursor_line).cloned();
                 db.upsert_reminder(
                     &self.active_note.id,
                     line_number,
@@ -662,76 +662,78 @@ impl TerminalApp {
                 self.status = format!("remind set ⏰ {display_at}");
             }
             Key::ArrowLeft => {
-                if self.date_day > 1 {
-                    self.date_day -= 1;
+                if self.date_picker.day > 1 {
+                    self.date_picker.day -= 1;
                 }
             }
             Key::ArrowRight => {
-                let max = date_picker::days_in_month(self.date_year, self.date_month);
-                if self.date_day < max {
-                    self.date_day += 1;
+                let max = date_picker::days_in_month(self.date_picker.year, self.date_picker.month);
+                if self.date_picker.day < max {
+                    self.date_picker.day += 1;
                 }
             }
             Key::ArrowUp => {
-                if self.date_day > 7 {
-                    self.date_day -= 7;
+                if self.date_picker.day > 7 {
+                    self.date_picker.day -= 7;
                 } else {
                     // Go to previous month
-                    if self.date_month == 1 {
-                        self.date_month = 12;
-                        self.date_year -= 1;
+                    if self.date_picker.month == 1 {
+                        self.date_picker.month = 12;
+                        self.date_picker.year -= 1;
                     } else {
-                        self.date_month -= 1;
+                        self.date_picker.month -= 1;
                     }
-                    let max = date_picker::days_in_month(self.date_year, self.date_month);
-                    self.date_day = max.min(self.date_day);
+                    let max =
+                        date_picker::days_in_month(self.date_picker.year, self.date_picker.month);
+                    self.date_picker.day = max.min(self.date_picker.day);
                 }
             }
             Key::ArrowDown => {
-                let max = date_picker::days_in_month(self.date_year, self.date_month);
-                if self.date_day + 7 <= max {
-                    self.date_day += 7;
+                let max = date_picker::days_in_month(self.date_picker.year, self.date_picker.month);
+                if self.date_picker.day + 7 <= max {
+                    self.date_picker.day += 7;
                 } else {
                     // Go to next month
-                    if self.date_month == 12 {
-                        self.date_month = 1;
-                        self.date_year += 1;
+                    if self.date_picker.month == 12 {
+                        self.date_picker.month = 1;
+                        self.date_picker.year += 1;
                     } else {
-                        self.date_month += 1;
+                        self.date_picker.month += 1;
                     }
-                    let new_max = date_picker::days_in_month(self.date_year, self.date_month);
-                    self.date_day = new_max.min(self.date_day);
+                    let new_max =
+                        date_picker::days_in_month(self.date_picker.year, self.date_picker.month);
+                    self.date_picker.day = new_max.min(self.date_picker.day);
                 }
             }
             Key::CtrlArrowLeft => {
                 // Previous month
-                if self.date_month == 1 {
-                    self.date_month = 12;
-                    self.date_year -= 1;
+                if self.date_picker.month == 1 {
+                    self.date_picker.month = 12;
+                    self.date_picker.year -= 1;
                 } else {
-                    self.date_month -= 1;
+                    self.date_picker.month -= 1;
                 }
-                let max = date_picker::days_in_month(self.date_year, self.date_month);
-                self.date_day = self.date_day.min(max);
+                let max = date_picker::days_in_month(self.date_picker.year, self.date_picker.month);
+                self.date_picker.day = self.date_picker.day.min(max);
             }
             Key::CtrlArrowRight => {
                 // Next month
-                if self.date_month == 12 {
-                    self.date_month = 1;
-                    self.date_year += 1;
+                if self.date_picker.month == 12 {
+                    self.date_picker.month = 1;
+                    self.date_picker.year += 1;
                 } else {
-                    self.date_month += 1;
+                    self.date_picker.month += 1;
                 }
-                let max = date_picker::days_in_month(self.date_year, self.date_month);
-                self.date_day = self.date_day.min(max);
+                let max = date_picker::days_in_month(self.date_picker.year, self.date_picker.month);
+                self.date_picker.day = self.date_picker.day.min(max);
             }
             Key::Home | Key::Char('h') => self.adjust_picker_hour(-1),
             Key::End | Key::Char('l') => self.adjust_picker_hour(1),
             Key::PageUp | Key::Char('j') => self.adjust_picker_minute(-1),
             Key::PageDown | Key::Char('k') => self.adjust_picker_minute(1),
             Key::Tab | Key::Char('t') | Key::Char('T') => {
-                if !self.date_require_time {
-                    self.date_include_time = !self.date_include_time;
+                if !self.date_picker.require_time {
+                    self.date_picker.include_time = !self.date_picker.include_time;
                 }
             }
             _ => {}

@@ -126,7 +126,7 @@ fn remove_char_at_char_col(target: &mut String, char_col: usize) -> bool {
 impl TerminalApp {
     pub(super) fn rebuild_wiki_link_prefix_index(&mut self) {
         self.wiki_link_prefix_index.clear();
-        for note in &self.switcher_items {
+        for note in &self.switcher.items {
             let short_id: String = note.id.chars().take(8).collect();
             if short_id.len() != 8 || !short_id.chars().all(|ch| ch.is_ascii_alphanumeric()) {
                 continue;
@@ -155,15 +155,16 @@ impl TerminalApp {
     fn content_search_title_fallback_results(&self, query: &str) -> Vec<NoteSearchResult> {
         const CONTENT_SEARCH_FALLBACK_LIMIT: usize = 60;
 
-        let mut ordered = Vec::with_capacity(self.switcher_items.len());
+        let mut ordered = Vec::with_capacity(self.switcher.items.len());
         if let Some(active_idx) = self
-            .switcher_items
+            .switcher
+            .items
             .iter()
             .position(|note| note.id == self.active_note.id)
         {
-            ordered.push((0usize, &self.switcher_items[active_idx]));
+            ordered.push((0usize, &self.switcher.items[active_idx]));
         }
-        for (idx, note) in self.switcher_items.iter().enumerate() {
+        for (idx, note) in self.switcher.items.iter().enumerate() {
             if note.id != self.active_note.id {
                 ordered.push((idx + 1, note));
             }
@@ -214,41 +215,42 @@ impl TerminalApp {
     fn clear_content_search_session(&mut self) {
         // Move any in-flight receiver into the detached pool so the stale worker
         // can drain without blocking the next dialog session.
-        if let Some(rx) = self.content_search_rx.take() {
+        if let Some(rx) = self.content_search.rx.take() {
             self.push_detached_content_search_rx(rx);
         }
-        self.content_search_query.clear();
-        self.content_search_cursor_col = 0;
-        self.content_search_results.clear();
-        self.content_search_selected = 0;
-        self.content_search_pending = false;
-        self.content_search_debounce_until = None;
+        self.content_search.query.clear();
+        self.content_search.cursor_col = 0;
+        self.content_search.results.clear();
+        self.content_search.selected = 0;
+        self.content_search.pending = false;
+        self.content_search.debounce_until = None;
     }
 
     fn push_detached_content_search_rx(
         &mut self,
         rx: std::sync::mpsc::Receiver<ContentSearchResponse>,
     ) {
-        if self.content_search_detached_rxs.len() >= CONTENT_SEARCH_MAX_DETACHED_WORKERS {
-            self.content_search_detached_rxs.remove(0);
+        if self.content_search.detached_rxs.len() >= CONTENT_SEARCH_MAX_DETACHED_WORKERS {
+            self.content_search.detached_rxs.remove(0);
         }
-        self.content_search_detached_rxs.push(rx);
+        self.content_search.detached_rxs.push(rx);
     }
 
     fn refresh_content_search_preview(&mut self) {
-        self.content_search_cursor_col = self
-            .content_search_cursor_col
-            .min(char_len(&self.content_search_query));
-        let query = self.content_search_query.trim().to_string();
+        self.content_search.cursor_col = self
+            .content_search
+            .cursor_col
+            .min(char_len(&self.content_search.query));
+        let query = self.content_search.query.trim().to_string();
         // Supersede any stale in-flight worker immediately when the query/filter
         // changes so the next debounced dispatch is never blocked.
-        if let Some(rx) = self.content_search_rx.take() {
+        if let Some(rx) = self.content_search.rx.take() {
             self.push_detached_content_search_rx(rx);
         }
-        self.content_search_results = self.content_search_title_fallback_results(&query);
-        self.content_search_selected = 0;
-        self.content_search_pending = !query.is_empty();
-        self.content_search_debounce_until = if query.is_empty() {
+        self.content_search.results = self.content_search_title_fallback_results(&query);
+        self.content_search.selected = 0;
+        self.content_search.pending = !query.is_empty();
+        self.content_search.debounce_until = if query.is_empty() {
             None
         } else {
             Some(Instant::now() + Duration::from_millis(CONTENT_SEARCH_DEBOUNCE_MS))
@@ -256,8 +258,8 @@ impl TerminalApp {
     }
 
     fn reset_content_search_filter_to_working_collection(&mut self) {
-        self.content_search_collection_filter_id = self.working_collection_id.clone();
-        self.content_search_collection_filter_name = self.working_collection_name.clone();
+        self.content_search.collection_filter_id = self.working_collection_id.clone();
+        self.content_search.collection_filter_name = self.working_collection_name.clone();
     }
 
     fn toggle_content_search_collection_filter(&mut self) {
@@ -265,19 +267,19 @@ impl TerminalApp {
             return;
         };
         let use_working =
-            self.content_search_collection_filter_id.as_deref() != Some(working_id.as_str());
+            self.content_search.collection_filter_id.as_deref() != Some(working_id.as_str());
         if use_working {
-            self.content_search_collection_filter_id = Some(working_id);
-            self.content_search_collection_filter_name = self.working_collection_name.clone();
+            self.content_search.collection_filter_id = Some(working_id);
+            self.content_search.collection_filter_name = self.working_collection_name.clone();
         } else {
-            self.content_search_collection_filter_id = None;
-            self.content_search_collection_filter_name = None;
+            self.content_search.collection_filter_id = None;
+            self.content_search.collection_filter_name = None;
         }
     }
 
     fn reset_switcher_filter_to_working_collection(&mut self) {
-        self.switcher_collection_filter_id = self.working_collection_id.clone();
-        self.switcher_collection_filter_name = self.working_collection_name.clone();
+        self.switcher.collection_filter_id = self.working_collection_id.clone();
+        self.switcher.collection_filter_name = self.working_collection_name.clone();
     }
 
     fn toggle_switcher_collection_filter(&mut self) {
@@ -285,24 +287,26 @@ impl TerminalApp {
             return;
         };
         let use_working =
-            self.switcher_collection_filter_id.as_deref() != Some(working_id.as_str());
+            self.switcher.collection_filter_id.as_deref() != Some(working_id.as_str());
         if use_working {
-            self.switcher_collection_filter_id = Some(working_id);
-            self.switcher_collection_filter_name = self.working_collection_name.clone();
+            self.switcher.collection_filter_id = Some(working_id);
+            self.switcher.collection_filter_name = self.working_collection_name.clone();
         } else {
-            self.switcher_collection_filter_id = None;
-            self.switcher_collection_filter_name = None;
+            self.switcher.collection_filter_id = None;
+            self.switcher.collection_filter_name = None;
         }
     }
 
     fn switcher_collection_filter_label(&self) -> &str {
-        self.switcher_collection_filter_name
+        self.switcher
+            .collection_filter_name
             .as_deref()
             .unwrap_or("All")
     }
 
     fn content_search_collection_filter_label(&self) -> &str {
-        self.content_search_collection_filter_name
+        self.content_search
+            .collection_filter_name
             .as_deref()
             .unwrap_or("All")
     }
@@ -349,10 +353,10 @@ impl TerminalApp {
     }
 
     pub(super) fn handle_switcher_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
-        if self.switcher_open_confirm.is_some() {
+        if self.switcher.open_confirm.is_some() {
             return self.handle_switcher_open_confirm_key(db, key);
         }
-        if self.switcher_delete_confirm.is_some() {
+        if self.switcher.delete_confirm.is_some() {
             return self.handle_switcher_delete_confirm_key(db, key);
         }
 
@@ -369,7 +373,7 @@ impl TerminalApp {
                 }
             }
             Key::Ctrl('w') => {
-                trim_trailing_word(&mut self.switcher_query);
+                trim_trailing_word(&mut self.switcher.query);
                 self.recompute_switcher_matches();
             }
             Key::Ctrl('n') => {
@@ -377,27 +381,27 @@ impl TerminalApp {
                 self.handle_editor_key(db, Key::Ctrl('n'))?;
             }
             Key::ArrowUp => {
-                if self.switcher_selected > 0 {
-                    self.switcher_selected -= 1;
+                if self.switcher.selected > 0 {
+                    self.switcher.selected -= 1;
                 }
             }
             Key::ArrowDown => {
-                if self.switcher_selected + 1 < self.switcher_matches.len() {
-                    self.switcher_selected += 1;
+                if self.switcher.selected + 1 < self.switcher.matches.len() {
+                    self.switcher.selected += 1;
                 }
             }
             Key::Backspace => {
-                self.switcher_query.pop();
+                self.switcher.query.pop();
                 self.recompute_switcher_matches();
             }
             Key::Delete | Key::CtrlBackspace => {
                 self.request_switcher_delete_confirmation(db);
             }
             Key::Enter => {
-                if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
-                    let item = self.switcher_items[idx].clone();
+                if let Some(idx) = self.switcher.matches.get(self.switcher.selected).copied() {
+                    let item = self.switcher.items[idx].clone();
                     if item.access_mode != NoteAccessMode::None && !item.is_unlocked {
-                        self.switcher_open_confirm = Some(SwitcherOpenConfirm {
+                        self.switcher.open_confirm = Some(SwitcherOpenConfirm {
                             note_id: item.id,
                             note_title: item.title,
                             password: String::new(),
@@ -409,12 +413,12 @@ impl TerminalApp {
                 }
             }
             Key::Char(ch) => {
-                self.switcher_query.push(ch);
+                self.switcher.query.push(ch);
                 self.recompute_switcher_matches();
             }
             Key::Paste(text) => {
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
-                    self.switcher_query.push(ch);
+                    self.switcher.query.push(ch);
                 }
                 self.recompute_switcher_matches();
             }
@@ -445,27 +449,27 @@ impl TerminalApp {
         db: &Db,
         key: Key,
     ) -> Result<(), String> {
-        if self.collection_edit_dialog.is_some() {
+        if self.collection_switcher.edit_dialog.is_some() {
             match key {
                 Key::Esc => {
-                    self.collection_edit_dialog = None;
+                    self.collection_switcher.edit_dialog = None;
                     self.status = "collection update canceled".to_string();
                 }
                 Key::Enter => {
                     self.save_collection_edit_dialog(db)?;
                 }
                 Key::Tab => {
-                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                    if let Some(dialog) = self.collection_switcher.edit_dialog.as_mut() {
                         dialog.selected_field = (dialog.selected_field + 1) % 3;
                     }
                 }
                 Key::BackTab => {
-                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                    if let Some(dialog) = self.collection_switcher.edit_dialog.as_mut() {
                         dialog.selected_field = (dialog.selected_field + 2) % 3;
                     }
                 }
                 Key::Ctrl('w') | Key::CtrlBackspace => {
-                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                    if let Some(dialog) = self.collection_switcher.edit_dialog.as_mut() {
                         match dialog.selected_field {
                             0 => trim_trailing_word(&mut dialog.name),
                             1 => trim_trailing_word(&mut dialog.description),
@@ -474,7 +478,7 @@ impl TerminalApp {
                     }
                 }
                 Key::Backspace => {
-                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                    if let Some(dialog) = self.collection_switcher.edit_dialog.as_mut() {
                         match dialog.selected_field {
                             0 => {
                                 dialog.name.pop();
@@ -489,7 +493,7 @@ impl TerminalApp {
                     }
                 }
                 Key::Char(ch) => {
-                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                    if let Some(dialog) = self.collection_switcher.edit_dialog.as_mut() {
                         match dialog.selected_field {
                             0 => dialog.name.push(ch),
                             1 => dialog.description.push(ch),
@@ -498,7 +502,7 @@ impl TerminalApp {
                     }
                 }
                 Key::Paste(text) => {
-                    if let Some(dialog) = self.collection_edit_dialog.as_mut() {
+                    if let Some(dialog) = self.collection_switcher.edit_dialog.as_mut() {
                         for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                             match dialog.selected_field {
                                 0 => dialog.name.push(ch),
@@ -524,30 +528,31 @@ impl TerminalApp {
                 self.quit = true;
             }
             Key::Ctrl('w') => {
-                trim_trailing_word(&mut self.collection_switcher_query);
+                trim_trailing_word(&mut self.collection_switcher.query);
                 self.recompute_collection_switcher_matches();
             }
             Key::ArrowUp => {
-                if self.collection_switcher_selected > 0 {
-                    self.collection_switcher_selected -= 1;
+                if self.collection_switcher.selected > 0 {
+                    self.collection_switcher.selected -= 1;
                 }
             }
             Key::ArrowDown => {
-                if self.collection_switcher_selected + 1 < self.collection_switcher_matches.len() {
-                    self.collection_switcher_selected += 1;
+                if self.collection_switcher.selected + 1 < self.collection_switcher.matches.len() {
+                    self.collection_switcher.selected += 1;
                 }
             }
             Key::Backspace => {
-                self.collection_switcher_query.pop();
+                self.collection_switcher.query.pop();
                 self.recompute_collection_switcher_matches();
             }
             Key::Enter => {
                 if let Some(idx) = self
-                    .collection_switcher_matches
-                    .get(self.collection_switcher_selected)
+                    .collection_switcher
+                    .matches
+                    .get(self.collection_switcher.selected)
                     .copied()
                 {
-                    if let Some(item) = self.collection_switcher_items.get(idx) {
+                    if let Some(item) = self.collection_switcher.items.get(idx) {
                         let is_clear = item.is_clear || item.id.is_none();
                         let selected_name = item.name.clone();
                         let selected_id = item.id.clone();
@@ -571,12 +576,12 @@ impl TerminalApp {
                 self.open_collection_edit_dialog_for_selected(db)?;
             }
             Key::Char(ch) => {
-                self.collection_switcher_query.push(ch);
+                self.collection_switcher.query.push(ch);
                 self.recompute_collection_switcher_matches();
             }
             Key::Paste(text) => {
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
-                    self.collection_switcher_query.push(ch);
+                    self.collection_switcher.query.push(ch);
                 }
                 self.recompute_collection_switcher_matches();
             }
@@ -598,10 +603,10 @@ impl TerminalApp {
                 self.close_switcher();
             }
             Key::Esc => {
-                self.switcher_delete_confirm = None;
+                self.switcher.delete_confirm = None;
             }
             Key::Enter => {
-                if let Some(confirm) = self.switcher_delete_confirm.clone() {
+                if let Some(confirm) = self.switcher.delete_confirm.clone() {
                     if confirm.requires_password && confirm.password.trim().is_empty() {
                         self.status = "password required to delete protected note".to_string();
                         return Ok(());
@@ -618,11 +623,11 @@ impl TerminalApp {
                         password,
                     ) {
                         Ok(()) => {
-                            self.switcher_delete_confirm = None;
+                            self.switcher.delete_confirm = None;
                         }
                         Err(error) => {
                             self.status = format!("delete failed: {error}");
-                            if let Some(current) = self.switcher_delete_confirm.as_mut() {
+                            if let Some(current) = self.switcher.delete_confirm.as_mut() {
                                 current.password.clear();
                             }
                         }
@@ -631,12 +636,13 @@ impl TerminalApp {
             }
             Key::Char('y') => {
                 let requires_password = self
-                    .switcher_delete_confirm
+                    .switcher
+                    .delete_confirm
                     .as_ref()
                     .map(|confirm| confirm.requires_password)
                     .unwrap_or(false);
                 if !requires_password {
-                    if let Some(confirm) = self.switcher_delete_confirm.clone() {
+                    if let Some(confirm) = self.switcher.delete_confirm.clone() {
                         match self.delete_note_from_switcher(
                             db,
                             &confirm.note_id,
@@ -644,25 +650,26 @@ impl TerminalApp {
                             None,
                         ) {
                             Ok(()) => {
-                                self.switcher_delete_confirm = None;
+                                self.switcher.delete_confirm = None;
                             }
                             Err(error) => {
                                 self.status = format!("delete failed: {error}");
                             }
                         }
                     }
-                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                } else if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     confirm.password.push('y');
                 }
             }
             Key::Char('Y') => {
                 let requires_password = self
-                    .switcher_delete_confirm
+                    .switcher
+                    .delete_confirm
                     .as_ref()
                     .map(|confirm| confirm.requires_password)
                     .unwrap_or(false);
                 if !requires_password {
-                    if let Some(confirm) = self.switcher_delete_confirm.clone() {
+                    if let Some(confirm) = self.switcher.delete_confirm.clone() {
                         match self.delete_note_from_switcher(
                             db,
                             &confirm.note_id,
@@ -670,50 +677,52 @@ impl TerminalApp {
                             None,
                         ) {
                             Ok(()) => {
-                                self.switcher_delete_confirm = None;
+                                self.switcher.delete_confirm = None;
                             }
                             Err(error) => {
                                 self.status = format!("delete failed: {error}");
                             }
                         }
                     }
-                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                } else if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     confirm.password.push('Y');
                 }
             }
             Key::Char('n') => {
                 let requires_password = self
-                    .switcher_delete_confirm
+                    .switcher
+                    .delete_confirm
                     .as_ref()
                     .map(|confirm| confirm.requires_password)
                     .unwrap_or(false);
                 if !requires_password {
-                    self.switcher_delete_confirm = None;
-                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    self.switcher.delete_confirm = None;
+                } else if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     confirm.password.push('n');
                 }
             }
             Key::Char('N') => {
                 let requires_password = self
-                    .switcher_delete_confirm
+                    .switcher
+                    .delete_confirm
                     .as_ref()
                     .map(|confirm| confirm.requires_password)
                     .unwrap_or(false);
                 if !requires_password {
-                    self.switcher_delete_confirm = None;
-                } else if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                    self.switcher.delete_confirm = None;
+                } else if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     confirm.password.push('N');
                 }
             }
             Key::Backspace | Key::CtrlBackspace => {
-                if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     if confirm.requires_password {
                         confirm.password.pop();
                     }
                 }
             }
             Key::Paste(text) => {
-                if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     if confirm.requires_password {
                         for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                             confirm.password.push(ch);
@@ -722,7 +731,7 @@ impl TerminalApp {
                 }
             }
             Key::Char(ch) => {
-                if let Some(confirm) = self.switcher_delete_confirm.as_mut() {
+                if let Some(confirm) = self.switcher.delete_confirm.as_mut() {
                     if confirm.requires_password {
                         confirm.password.push(ch);
                     }
@@ -746,10 +755,10 @@ impl TerminalApp {
                 self.close_switcher();
             }
             Key::Esc => {
-                self.switcher_open_confirm = None;
+                self.switcher.open_confirm = None;
             }
             Key::Enter => {
-                if let Some(confirm) = self.switcher_open_confirm.clone() {
+                if let Some(confirm) = self.switcher.open_confirm.clone() {
                     if confirm.password.trim().is_empty() {
                         self.status = "password required to open protected note".to_string();
                         return Ok(());
@@ -761,11 +770,11 @@ impl TerminalApp {
                         confirm.line_number,
                     ) {
                         Ok(()) => {
-                            self.switcher_open_confirm = None;
+                            self.switcher.open_confirm = None;
                         }
                         Err(error) => {
                             self.status = format!("open failed: {error}");
-                            if let Some(current) = self.switcher_open_confirm.as_mut() {
+                            if let Some(current) = self.switcher.open_confirm.as_mut() {
                                 current.password.clear();
                             }
                         }
@@ -773,19 +782,19 @@ impl TerminalApp {
                 }
             }
             Key::Backspace | Key::CtrlBackspace => {
-                if let Some(confirm) = self.switcher_open_confirm.as_mut() {
+                if let Some(confirm) = self.switcher.open_confirm.as_mut() {
                     confirm.password.pop();
                 }
             }
             Key::Paste(text) => {
-                if let Some(confirm) = self.switcher_open_confirm.as_mut() {
+                if let Some(confirm) = self.switcher.open_confirm.as_mut() {
                     for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
                         confirm.password.push(ch);
                     }
                 }
             }
             Key::Char(ch) => {
-                if let Some(confirm) = self.switcher_open_confirm.as_mut() {
+                if let Some(confirm) = self.switcher.open_confirm.as_mut() {
                     confirm.password.push(ch);
                 }
             }
@@ -816,9 +825,9 @@ impl TerminalApp {
         };
         self.set_active_note(db, note)?;
         if let Some(line_number) = line_number {
-            let max_line = self.lines.len().saturating_sub(1);
-            self.cursor_line = line_number.saturating_sub(1).min(max_line);
-            self.cursor_col = 0;
+            let max_line = self.editor.lines.len().saturating_sub(1);
+            self.editor.cursor_line = line_number.saturating_sub(1).min(max_line);
+            self.editor.cursor_col = 0;
             self.adjust_cursor();
             self.adjust_scroll();
         }
@@ -829,19 +838,19 @@ impl TerminalApp {
         self.close_switcher();
         self.mode = UiMode::Normal;
         self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
-        self.selection_anchor = None;
+        self.editor.selection_anchor = None;
         self.command_selection = None;
         self.status = "-- NORMAL --".to_string();
         Ok(())
     }
 
     pub(super) fn request_switcher_delete_confirmation(&mut self, db: &Db) {
-        if let Some(idx) = self.switcher_matches.get(self.switcher_selected).copied() {
-            let item = &self.switcher_items[idx];
+        if let Some(idx) = self.switcher.matches.get(self.switcher.selected).copied() {
+            let item = &self.switcher.items[idx];
             let capabilities = note_sources(db).capabilities_for_note_id(&item.id);
             if !capabilities.can_delete {
                 self.status = "file-backed notes are not deleted via switcher".to_string();
-                self.switcher_delete_confirm = None;
+                self.switcher.delete_confirm = None;
                 return;
             }
             let requires_password = match db.get_note_meta(&item.id) {
@@ -855,7 +864,7 @@ impl TerminalApp {
                     false
                 }
             };
-            self.switcher_delete_confirm = Some(SwitcherDeleteConfirm {
+            self.switcher.delete_confirm = Some(SwitcherDeleteConfirm {
                 note_id: item.id.clone(),
                 note_title: item.title.clone(),
                 requires_password,
@@ -1239,13 +1248,13 @@ impl TerminalApp {
                     || previous_modules.variables != self.active_note.modules.variables
                     || previous_modules.cross_note != self.active_note.modules.cross_note;
                 if calc_module_changed {
-                    self.calc_viewport_only = self.note_math_module_enabled()
-                        && self.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+                    self.calc_runtime.viewport_only = self.note_math_module_enabled()
+                        && self.editor.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
                         && self.active_has_variable_assignments()
                         && !self.calc.cached_has_builtin_formula;
                     if self.note_math_module_enabled() {
                         self.calc.stale = true;
-                        if self.calc_viewport_only {
+                        if self.calc_runtime.viewport_only {
                             self.clear_calc_cache();
                             let editor_height = self.editor_height();
                             self.ensure_calc_for_viewport(editor_height, true);
@@ -1412,17 +1421,17 @@ impl TerminalApp {
             self.working_collection_id = None;
             self.working_collection_name = None;
         }
-        if self.switcher_collection_filter_id.as_deref() == Some(collection.id.as_str()) {
-            self.switcher_collection_filter_id = self.working_collection_id.clone();
-            self.switcher_collection_filter_name = self.working_collection_name.clone();
+        if self.switcher.collection_filter_id.as_deref() == Some(collection.id.as_str()) {
+            self.switcher.collection_filter_id = self.working_collection_id.clone();
+            self.switcher.collection_filter_name = self.working_collection_name.clone();
         }
-        if self.content_search_collection_filter_id.as_deref() == Some(collection.id.as_str()) {
-            self.content_search_collection_filter_id = self.working_collection_id.clone();
-            self.content_search_collection_filter_name = self.working_collection_name.clone();
+        if self.content_search.collection_filter_id.as_deref() == Some(collection.id.as_str()) {
+            self.content_search.collection_filter_id = self.working_collection_id.clone();
+            self.content_search.collection_filter_name = self.working_collection_name.clone();
         }
         self.refresh_switcher_items(db)?;
         if active_note_in_target_collection {
-            if let Some(next) = self.switcher_items.first().cloned() {
+            if let Some(next) = self.switcher.items.first().cloned() {
                 if let Some(note) = db.get_note(&next.id)? {
                     self.set_active_note(db, note)?;
                 }
@@ -1596,20 +1605,21 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::RemindToggle => {
-                    let line_number = (self.cursor_line + 1) as i64;
-                    let before_reminder = self.reminder_ghosts.get(&self.cursor_line).cloned();
+                    let line_number = (self.editor.cursor_line + 1) as i64;
+                    let before_reminder =
+                        self.reminder_ghosts.get(&self.editor.cursor_line).cloned();
                     match db.delete_reminder(&self.active_note.id, line_number) {
                         Ok(true) => {
-                            self.reminder_ghosts.remove(&self.cursor_line);
+                            self.reminder_ghosts.remove(&self.editor.cursor_line);
                             if before_reminder.is_some() {
                                 self.push_reminder_undo_entry(
-                                    self.cursor_line,
+                                    self.editor.cursor_line,
                                     before_reminder,
                                     None,
                                 );
                             }
                             self.status =
-                                format!("remind removed on line {}", self.cursor_line + 1);
+                                format!("remind removed on line {}", self.editor.cursor_line + 1);
                         }
                         Ok(false) => {
                             self.open_date_picker(DatePickerAction::SetRemind, true);
@@ -1621,7 +1631,7 @@ impl TerminalApp {
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::Export { format, path } => {
-                    let content = join_lines(&self.lines);
+                    let content = join_lines(&self.editor.lines);
                     self.status = match (format, path) {
                         (crate::editor_core::command_catalog::ExportFormat::Pdf, None) => {
                             "usage: export pdf <path>".to_string()
@@ -1856,7 +1866,7 @@ impl TerminalApp {
 
     pub(super) fn byte_offset_for_line_col(&self, line_idx: usize, col: usize) -> usize {
         let mut offset = 0;
-        for (i, line) in self.lines.iter().enumerate() {
+        for (i, line) in self.editor.lines.iter().enumerate() {
             if i == line_idx {
                 offset += byte_index(line, col);
                 break;
@@ -1869,21 +1879,25 @@ impl TerminalApp {
     pub(super) fn capture_visual_command_selection(
         &self,
     ) -> Option<crate::editor_core::types::SelectionSnapshot> {
-        let anchor = self.selection_anchor?;
+        let anchor = self.editor.selection_anchor?;
         match self.mode {
             UiMode::Visual => {
                 let anchor_offset = self.byte_offset_for_line_col(anchor.0, anchor.1);
-                let head_offset = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+                let head_offset =
+                    self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
                 Some(crate::editor_core::types::SelectionSnapshot {
                     anchor: anchor_offset,
                     head: head_offset,
                 })
             }
             UiMode::VisualLine => {
-                let anchor_line = anchor.0.min(self.lines.len().saturating_sub(1));
-                let head_line = self.cursor_line.min(self.lines.len().saturating_sub(1));
-                let anchor_line_len = line_char_len(&self.lines[anchor_line]);
-                let head_line_len = line_char_len(&self.lines[head_line]);
+                let anchor_line = anchor.0.min(self.editor.lines.len().saturating_sub(1));
+                let head_line = self
+                    .editor
+                    .cursor_line
+                    .min(self.editor.lines.len().saturating_sub(1));
+                let anchor_line_len = line_char_len(&self.editor.lines[anchor_line]);
+                let head_line_len = line_char_len(&self.editor.lines[head_line]);
 
                 let (anchor_offset, head_offset) = if head_line >= anchor_line {
                     (
@@ -1907,19 +1921,20 @@ impl TerminalApp {
     }
 
     pub(super) fn invalidate_joined_text_cache(&mut self) {
-        self.joined_text_cache = None;
+        self.editor.joined_text_cache = None;
     }
 
     fn joined_text_cached_ref(&mut self) -> &str {
-        if self.joined_text_cache.is_none() {
-            self.joined_text_cache = Some(join_lines(&self.lines));
+        if self.editor.joined_text_cache.is_none() {
+            self.editor.joined_text_cache = Some(join_lines(&self.editor.lines));
         }
-        self.joined_text_cache.as_deref().unwrap()
+        self.editor.joined_text_cache.as_deref().unwrap()
     }
 
     pub(super) fn build_snapshot(&mut self) -> crate::editor_core::types::EditorContextSnapshot {
         let text = self.joined_text_cached_ref().to_owned();
-        let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let fallback_cursor =
+            self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
         let selection =
             self.command_selection
                 .unwrap_or(crate::editor_core::types::SelectionSnapshot {
@@ -1957,7 +1972,7 @@ impl TerminalApp {
         end_line: usize,
         changed_range_abs: Option<crate::editor_core::types::TextRange>,
     ) -> (crate::editor_core::types::EditorContextSnapshot, usize) {
-        if self.lines.is_empty() {
+        if self.editor.lines.is_empty() {
             let snapshot = crate::editor_core::types::EditorContextSnapshot {
                 text: String::new(),
                 selection: crate::editor_core::types::SelectionSnapshot { anchor: 0, head: 0 },
@@ -1966,15 +1981,16 @@ impl TerminalApp {
             return (snapshot, 0);
         }
 
-        let clamped_start = start_line.min(self.lines.len().saturating_sub(1));
+        let clamped_start = start_line.min(self.editor.lines.len().saturating_sub(1));
         let clamped_end = end_line
-            .min(self.lines.len().saturating_sub(1))
+            .min(self.editor.lines.len().saturating_sub(1))
             .max(clamped_start);
         let scope_start_offset = self.byte_offset_for_line_col(clamped_start, 0);
-        let scope_text = join_lines(&self.lines[clamped_start..=clamped_end]);
+        let scope_text = join_lines(&self.editor.lines[clamped_start..=clamped_end]);
         let scope_len = scope_text.len();
 
-        let fallback_cursor = self.byte_offset_for_line_col(self.cursor_line, self.cursor_col);
+        let fallback_cursor =
+            self.byte_offset_for_line_col(self.editor.cursor_line, self.editor.cursor_col);
         let selection_abs =
             self.command_selection
                 .unwrap_or(crate::editor_core::types::SelectionSnapshot {
@@ -2028,21 +2044,21 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh_collection_switcher_items(&mut self, db: &Db) -> Result<(), String> {
-        self.collection_switcher_items = switcher::load_collection_meta(db)?;
+        self.collection_switcher.items = switcher::load_collection_meta(db)?;
         self.recompute_collection_switcher_matches();
         Ok(())
     }
 
     pub(super) fn recompute_collection_switcher_matches(&mut self) {
-        let query = self.collection_switcher_query.trim();
+        let query = self.collection_switcher.query.trim();
         if query.is_empty() {
-            self.collection_switcher_matches = (0..self.collection_switcher_items.len()).collect();
-            self.collection_switcher_selected = 0;
+            self.collection_switcher.matches = (0..self.collection_switcher.items.len()).collect();
+            self.collection_switcher.selected = 0;
             return;
         }
 
         let mut scored: Vec<(usize, i32)> = Vec::new();
-        for (idx, item) in self.collection_switcher_items.iter().enumerate() {
+        for (idx, item) in self.collection_switcher.items.iter().enumerate() {
             let haystack = if item.description.trim().is_empty() {
                 item.name.clone()
             } else {
@@ -2053,8 +2069,8 @@ impl TerminalApp {
             }
         }
         scored.sort_by(|a, b| b.1.cmp(&a.1));
-        self.collection_switcher_matches = scored.into_iter().map(|(idx, _)| idx).collect();
-        self.collection_switcher_selected = 0;
+        self.collection_switcher.matches = scored.into_iter().map(|(idx, _)| idx).collect();
+        self.collection_switcher.selected = 0;
     }
 
     pub(super) fn open_collection_switcher(&mut self, db: &Db) -> Result<(), String> {
@@ -2064,9 +2080,9 @@ impl TerminalApp {
         }
         self.refresh_collection_switcher_items(db)?;
         self.mode = UiMode::CollectionSwitcher;
-        self.collection_switcher_query.clear();
+        self.collection_switcher.query.clear();
         self.recompute_collection_switcher_matches();
-        self.collection_edit_dialog = None;
+        self.collection_switcher.edit_dialog = None;
         self.status =
             "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
         Ok(())
@@ -2075,22 +2091,23 @@ impl TerminalApp {
     pub(super) fn close_collection_switcher(&mut self) {
         self.dismiss_variable_autocomplete_popup();
         self.mode = UiMode::Editor;
-        self.collection_switcher_query.clear();
-        self.collection_switcher_matches.clear();
-        self.collection_switcher_selected = 0;
-        self.collection_edit_dialog = None;
+        self.collection_switcher.query.clear();
+        self.collection_switcher.matches.clear();
+        self.collection_switcher.selected = 0;
+        self.collection_switcher.edit_dialog = None;
         self.status = format!("editing {}", self.active_note.id);
     }
 
     fn open_collection_edit_dialog_for_selected(&mut self, db: &Db) -> Result<(), String> {
         let Some(match_idx) = self
-            .collection_switcher_matches
-            .get(self.collection_switcher_selected)
+            .collection_switcher
+            .matches
+            .get(self.collection_switcher.selected)
             .copied()
         else {
             return Ok(());
         };
-        let Some(item) = self.collection_switcher_items.get(match_idx) else {
+        let Some(item) = self.collection_switcher.items.get(match_idx) else {
             return Ok(());
         };
         let Some(collection_id) = item.id.clone() else {
@@ -2099,7 +2116,7 @@ impl TerminalApp {
         };
 
         let default_tags = db.list_collection_default_tags(&collection_id)?;
-        self.collection_edit_dialog = Some(CollectionEditDialogState {
+        self.collection_switcher.edit_dialog = Some(CollectionEditDialogState {
             collection_id,
             selected_field: 0,
             name: item.name.clone(),
@@ -2127,19 +2144,21 @@ impl TerminalApp {
 
         self.refresh_collection_switcher_items(db)?;
         self.mode = UiMode::CollectionSwitcher;
-        self.collection_switcher_query.clear();
+        self.collection_switcher.query.clear();
         self.recompute_collection_switcher_matches();
         if let Some(position) = self
-            .collection_switcher_items
+            .collection_switcher
+            .items
             .iter()
             .position(|entry| entry.id.as_deref() == Some(collection.id.as_str()))
         {
             if let Some(match_position) = self
-                .collection_switcher_matches
+                .collection_switcher
+                .matches
                 .iter()
                 .position(|idx| *idx == position)
             {
-                self.collection_switcher_selected = match_position;
+                self.collection_switcher.selected = match_position;
             }
         }
         self.open_collection_edit_dialog_for_selected(db)?;
@@ -2150,7 +2169,7 @@ impl TerminalApp {
     }
 
     fn save_collection_edit_dialog(&mut self, db: &Db) -> Result<(), String> {
-        let Some(dialog) = self.collection_edit_dialog.clone() else {
+        let Some(dialog) = self.collection_switcher.edit_dialog.clone() else {
             return Ok(());
         };
         let name = dialog.name.trim();
@@ -2175,7 +2194,7 @@ impl TerminalApp {
         }
         self.refresh_collection_switcher_items(db)?;
         self.refresh_switcher_items(db)?;
-        self.collection_edit_dialog = None;
+        self.collection_switcher.edit_dialog = None;
         self.status = format!("collection updated: {}", current.name);
         Ok(())
     }
@@ -2188,10 +2207,10 @@ impl TerminalApp {
         self.reset_switcher_filter_to_working_collection();
         self.refresh_switcher_items(db)?;
         self.mode = UiMode::Switcher;
-        self.switcher_query.clear();
+        self.switcher.query.clear();
         self.recompute_switcher_matches();
-        self.switcher_open_confirm = None;
-        self.switcher_delete_confirm = None;
+        self.switcher.open_confirm = None;
+        self.switcher.delete_confirm = None;
         self.update_switcher_status_hint();
         Ok(())
     }
@@ -2199,36 +2218,38 @@ impl TerminalApp {
     pub(super) fn close_switcher(&mut self) {
         self.dismiss_variable_autocomplete_popup();
         self.mode = UiMode::Editor;
-        self.switcher_query.clear();
-        self.switcher_matches.clear();
-        self.switcher_selected = 0;
-        self.switcher_open_confirm = None;
-        self.switcher_delete_confirm = None;
+        self.switcher.query.clear();
+        self.switcher.matches.clear();
+        self.switcher.selected = 0;
+        self.switcher.open_confirm = None;
+        self.switcher.delete_confirm = None;
         self.status = format!("editing {}", self.active_note.id);
     }
 
     pub(super) fn recompute_switcher_matches(&mut self) {
-        let query = self.switcher_query.trim();
+        let query = self.switcher.query.trim();
         if query.is_empty() {
-            self.switcher_matches = (0..self.switcher_items.len()).collect();
-            self.switcher_selected = 0;
+            self.switcher.matches = (0..self.switcher.items.len()).collect();
+            self.switcher.selected = 0;
             return;
         }
 
-        self.switcher_score_scratch.clear();
-        for (idx, item) in self.switcher_items.iter().enumerate() {
+        self.switcher.score_scratch.clear();
+        for (idx, item) in self.switcher.items.iter().enumerate() {
             if let Some(score) = switcher::fuzzy_score(query, &item.title) {
-                self.switcher_score_scratch.push((idx, score));
+                self.switcher.score_scratch.push((idx, score));
             }
         }
-        self.switcher_score_scratch
+        self.switcher
+            .score_scratch
             .sort_unstable_by(|a, b| b.1.cmp(&a.1));
-        self.switcher_matches = self
-            .switcher_score_scratch
+        self.switcher.matches = self
+            .switcher
+            .score_scratch
             .iter()
             .map(|(idx, _)| *idx)
             .collect();
-        self.switcher_selected = 0;
+        self.switcher.selected = 0;
     }
 
     pub(super) fn save(&mut self, db: &Db) -> Result<(), String> {
@@ -2246,9 +2267,10 @@ impl TerminalApp {
         }
         self.sync_reminder_ghosts_if_dirty(db)?;
         let body = self
+            .editor
             .joined_text_cache
             .take()
-            .unwrap_or_else(|| join_lines(&self.lines));
+            .unwrap_or_else(|| join_lines(&self.editor.lines));
         let mut saved = note_sources(db).save_note_by_id(
             &self.active_note.id,
             &body,
@@ -2257,18 +2279,21 @@ impl TerminalApp {
                 force,
             },
         )?;
-        // The returned body duplicates what we already hold in `self.lines`;
+        // The returned body duplicates what we already hold in `self.editor.lines`;
         // drop it to keep memory usage flat.
         saved.body = String::new();
         self.active_note = saved;
-        self.joined_text_cache = Some(body);
+        self.editor.joined_text_cache = Some(body);
         self.dirty = false;
-        self.history
-            .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
-        self.render_dirty = true;
+        self.history.checkpoint(
+            &self.editor.lines,
+            self.editor.cursor_line,
+            self.editor.cursor_col,
+        );
+        self.render_state.dirty = true;
         // Only do a full DB scan when the first line (note title) changed.
         // Body-only saves don't affect the prefix index or wiki link caches.
-        if self.switcher_needs_title_refresh {
+        if self.switcher.needs_title_refresh {
             self.refresh_switcher_items(db)?;
         } else {
             self.update_switcher_item_after_body_save();
@@ -2284,12 +2309,13 @@ impl TerminalApp {
     fn update_switcher_item_after_body_save(&mut self) {
         let note_id = &self.active_note.id;
         let updated_at = self.active_note.updated_at.clone();
-        if let Some(item) = self.switcher_items.iter_mut().find(|i| &i.id == note_id) {
+        if let Some(item) = self.switcher.items.iter_mut().find(|i| &i.id == note_id) {
             item.updated_at = updated_at;
         }
         // Keep the list sorted by updated_at DESC (DB order); the saved note
         // just became the most-recently-modified so it floats to the top.
-        self.switcher_items
+        self.switcher
+            .items
             .sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     }
 
@@ -2297,8 +2323,9 @@ impl TerminalApp {
         if !self.reminders_dirty {
             return Ok(());
         }
-        self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
-        self.render_dirty = true;
+        self.reminder_ghosts =
+            load_note_reminder_ghosts(db, &self.active_note.id, &self.editor.lines)?;
+        self.render_state.dirty = true;
         self.reminders_dirty = false;
         Ok(())
     }
@@ -2327,7 +2354,7 @@ impl TerminalApp {
             .collect::<Vec<_>>();
         due_lines.sort_unstable();
         if !due_lines.is_empty() {
-            self.render_dirty = true;
+            self.render_state.dirty = true;
         }
 
         for line_idx in due_lines {
@@ -2335,6 +2362,7 @@ impl TerminalApp {
                 continue;
             };
             let body = self
+                .editor
                 .lines
                 .get(line_idx)
                 .map(|line| line.trim())
@@ -2364,6 +2392,7 @@ impl TerminalApp {
                     if let Some(entry) = self.reminder_ghosts.get_mut(&line_idx) {
                         entry.reminded_at_ms = Some(reminded_at);
                         entry.line_text = self
+                            .editor
                             .lines
                             .get(line_idx)
                             .cloned()
@@ -2380,15 +2409,15 @@ impl TerminalApp {
     pub(super) fn open_content_search(&mut self, db: &Db) -> Result<(), String> {
         self.dismiss_variable_autocomplete_popup();
         // Pre-load switcher items so title fallback can mirror UI behavior.
-        if self.switcher_items.is_empty() {
+        if self.switcher.items.is_empty() {
             self.refresh_switcher_items(db)?;
         }
         self.mode = UiMode::ContentSearch;
         self.clear_content_search_session();
         self.reset_content_search_filter_to_working_collection();
-        self.content_search_results = self.content_search_title_fallback_results("");
-        self.switcher_open_confirm = None;
-        self.switcher_delete_confirm = None;
+        self.content_search.results = self.content_search_title_fallback_results("");
+        self.switcher.open_confirm = None;
+        self.switcher.delete_confirm = None;
         self.update_content_search_status_hint();
         Ok(())
     }
@@ -2415,83 +2444,86 @@ impl TerminalApp {
                 self.open_switcher(db)?;
             }
             Key::Ctrl('w') | Key::CtrlBackspace => {
-                if self.content_search_cursor_col == char_len(&self.content_search_query) {
-                    trim_trailing_word(&mut self.content_search_query);
-                    self.content_search_cursor_col = char_len(&self.content_search_query);
+                if self.content_search.cursor_col == char_len(&self.content_search.query) {
+                    trim_trailing_word(&mut self.content_search.query);
+                    self.content_search.cursor_col = char_len(&self.content_search.query);
                 } else {
                     // Keep behavior predictable away from end-of-line by deleting one char.
                     if remove_char_before_char_col(
-                        &mut self.content_search_query,
-                        self.content_search_cursor_col,
+                        &mut self.content_search.query,
+                        self.content_search.cursor_col,
                     ) {
-                        self.content_search_cursor_col =
-                            self.content_search_cursor_col.saturating_sub(1);
+                        self.content_search.cursor_col =
+                            self.content_search.cursor_col.saturating_sub(1);
                     }
                 }
                 self.refresh_content_search_preview();
             }
             Key::ArrowUp => {
-                if self.content_search_selected > 0 {
-                    self.content_search_selected -= 1;
+                if self.content_search.selected > 0 {
+                    self.content_search.selected -= 1;
                 }
             }
             Key::ArrowDown => {
-                if self.content_search_selected + 1 < self.content_search_results.len() {
-                    self.content_search_selected += 1;
+                if self.content_search.selected + 1 < self.content_search.results.len() {
+                    self.content_search.selected += 1;
                 }
             }
             Key::ArrowLeft => {
-                self.content_search_cursor_col = self.content_search_cursor_col.saturating_sub(1);
+                self.content_search.cursor_col = self.content_search.cursor_col.saturating_sub(1);
             }
             Key::ArrowRight => {
-                self.content_search_cursor_col =
-                    (self.content_search_cursor_col + 1).min(char_len(&self.content_search_query));
+                self.content_search.cursor_col =
+                    (self.content_search.cursor_col + 1).min(char_len(&self.content_search.query));
             }
             Key::Home => {
-                self.content_search_cursor_col = 0;
+                self.content_search.cursor_col = 0;
             }
             Key::End => {
-                self.content_search_cursor_col = char_len(&self.content_search_query);
+                self.content_search.cursor_col = char_len(&self.content_search.query);
             }
             Key::Backspace => {
                 if remove_char_before_char_col(
-                    &mut self.content_search_query,
-                    self.content_search_cursor_col,
+                    &mut self.content_search.query,
+                    self.content_search.cursor_col,
                 ) {
-                    self.content_search_cursor_col =
-                        self.content_search_cursor_col.saturating_sub(1);
+                    self.content_search.cursor_col =
+                        self.content_search.cursor_col.saturating_sub(1);
                     self.refresh_content_search_preview();
                 }
             }
             Key::Delete => {
                 if remove_char_at_char_col(
-                    &mut self.content_search_query,
-                    self.content_search_cursor_col,
+                    &mut self.content_search.query,
+                    self.content_search.cursor_col,
                 ) {
                     self.refresh_content_search_preview();
                 }
             }
             Key::Enter => {
                 if let Some(result) = self
-                    .content_search_results
-                    .get(self.content_search_selected)
+                    .content_search
+                    .results
+                    .get(self.content_search.selected)
                     .cloned()
                 {
                     // Check if the note is protected
                     let access_mode = self
-                        .switcher_items
+                        .switcher
+                        .items
                         .iter()
                         .find(|n| n.id == result.id)
                         .map(|n| n.access_mode)
                         .unwrap_or(NoteAccessMode::None);
                     let is_unlocked = self
-                        .switcher_items
+                        .switcher
+                        .items
                         .iter()
                         .find(|n| n.id == result.id)
                         .map(|n| n.is_unlocked)
                         .unwrap_or(false);
                     if access_mode != NoteAccessMode::None && !is_unlocked {
-                        self.switcher_open_confirm = Some(SwitcherOpenConfirm {
+                        self.switcher.open_confirm = Some(SwitcherOpenConfirm {
                             note_id: result.id.clone(),
                             note_title: result.title.clone(),
                             password: String::new(),
@@ -2512,11 +2544,11 @@ impl TerminalApp {
             Key::Char(ch) => {
                 let insert = ch.to_string();
                 insert_str_at_char_col(
-                    &mut self.content_search_query,
-                    self.content_search_cursor_col,
+                    &mut self.content_search.query,
+                    self.content_search.cursor_col,
                     &insert,
                 );
-                self.content_search_cursor_col += 1;
+                self.content_search.cursor_col += 1;
                 self.refresh_content_search_preview();
             }
             Key::Paste(text) => {
@@ -2527,11 +2559,11 @@ impl TerminalApp {
                 if !sanitized.is_empty() {
                     let added = char_len(&sanitized);
                     insert_str_at_char_col(
-                        &mut self.content_search_query,
-                        self.content_search_cursor_col,
+                        &mut self.content_search.query,
+                        self.content_search.cursor_col,
                         &sanitized,
                     );
-                    self.content_search_cursor_col += added;
+                    self.content_search.cursor_col += added;
                     self.refresh_content_search_preview();
                 }
             }
@@ -2542,29 +2574,29 @@ impl TerminalApp {
     }
 
     pub(super) fn refresh_switcher_items(&mut self, db: &Db) -> Result<(), String> {
-        self.switcher_needs_title_refresh = false;
+        self.switcher.needs_title_refresh = false;
         if let Some(working_id) = self.working_collection_id.clone() {
             if db.get_collection(&working_id)?.is_none() {
                 self.working_collection_id = None;
                 self.working_collection_name = None;
-                if self.switcher_collection_filter_id.as_deref() == Some(working_id.as_str()) {
-                    self.switcher_collection_filter_id = None;
-                    self.switcher_collection_filter_name = None;
+                if self.switcher.collection_filter_id.as_deref() == Some(working_id.as_str()) {
+                    self.switcher.collection_filter_id = None;
+                    self.switcher.collection_filter_name = None;
                 }
-                if self.content_search_collection_filter_id.as_deref() == Some(working_id.as_str())
+                if self.content_search.collection_filter_id.as_deref() == Some(working_id.as_str())
                 {
-                    self.content_search_collection_filter_id = None;
-                    self.content_search_collection_filter_name = None;
+                    self.content_search.collection_filter_id = None;
+                    self.content_search.collection_filter_name = None;
                 }
             }
         }
         let previous_prefix_index = self.wiki_link_prefix_index.clone();
         let switcher_collection_filter = match self.mode {
-            UiMode::Switcher => self.switcher_collection_filter_id.as_deref(),
-            UiMode::ContentSearch => self.content_search_collection_filter_id.as_deref(),
+            UiMode::Switcher => self.switcher.collection_filter_id.as_deref(),
+            UiMode::ContentSearch => self.content_search.collection_filter_id.as_deref(),
             _ => self.working_collection_id.as_deref(),
         };
-        self.switcher_items = switcher::load_note_meta_filtered(
+        self.switcher.items = switcher::load_note_meta_filtered(
             db,
             Some(&self.active_note.id),
             switcher_collection_filter,
@@ -2603,43 +2635,47 @@ impl TerminalApp {
         self.active_note = note;
         let (render_plain_text_file, render_file_language) =
             super::file_render_syntax_for_note_id(&self.active_note.id);
-        self.render_plain_text_file = render_plain_text_file;
-        self.render_file_language = render_file_language;
-        self.lines = split_lines(&self.active_note.body);
-        self.joined_text_cache = None;
+        self.render_state.plain_text_file = render_plain_text_file;
+        self.render_state.file_language = render_file_language;
+        self.editor.lines = split_lines(&self.active_note.body);
+        self.editor.joined_text_cache = None;
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
-        self.reminder_ghosts = load_note_reminder_ghosts(db, &self.active_note.id, &self.lines)?;
+        self.reminder_ghosts =
+            load_note_reminder_ghosts(db, &self.active_note.id, &self.editor.lines)?;
         self.reminders_dirty = false;
         self.last_reminder_check = Instant::now();
-        self.cursor_line = 0;
-        self.cursor_col = 0;
-        self.scroll_line = 0;
-        self.scroll_col = 0;
+        self.editor.cursor_line = 0;
+        self.editor.cursor_col = 0;
+        self.editor.scroll_line = 0;
+        self.editor.scroll_col = 0;
         self.dirty = false;
         self.last_edit = Instant::now();
-        self.search_query.clear();
-        self.search_matches.clear();
+        self.search.query.clear();
+        self.search.matches.clear();
         self.rebuild_wiki_link_prefix_index();
         self.rebuild_wiki_link_note_suggestions_cache();
         self.render_caches.wiki_link_render_cache.clear();
         self.render_caches.wiki_link_line_render_cache.clear();
-        self.history =
-            super::build_history_for_note(&self.lines, self.cursor_line, self.cursor_col);
+        self.history = super::build_history_for_note(
+            &self.editor.lines,
+            self.editor.cursor_line,
+            self.editor.cursor_col,
+        );
         self.undo_actions.clear();
         self.undo_action_pos = 0;
-        self.fence_checkpoints.truncate(1);
-        self.fence_checkpoints_valid_through = 0;
+        self.render_state.fence_checkpoints.truncate(1);
+        self.render_state.fence_checkpoints_valid_through = 0;
         self.rescan_calc_flags();
-        self.calc_viewport_only = self.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
+        self.calc_runtime.viewport_only = self.editor.lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
             && self.active_has_variable_assignments()
             && !self.calc.cached_has_builtin_formula;
-        self.calc_last_view_eval_range = None;
-        if self.calc_viewport_only
+        self.calc_runtime.last_view_eval_range = None;
+        if self.calc_runtime.viewport_only
             || (!self.calc.cached_has_builtin_formula && !self.active_has_variable_assignments())
         {
-            self.calc.results = vec![None; self.lines.len()];
-            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+            self.calc.results = vec![None; self.editor.lines.len()];
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
             self.calc.variable_names.clear();
             self.calc.calc_dependency_index = None;
             self.calc.line_metadata.clear();
@@ -2647,13 +2683,13 @@ impl TerminalApp {
             self.calc.stale = false;
             self.calc.pathological_window_streak = 0;
             self.calc.forced_full_recompute_remaining = 0;
-            self.calc_recompute_pending = false;
-            self.calc_recompute_due_at = None;
-            self.calc_pending_viewport_pass = false;
-            self.calc_pending_full_pass = false;
+            self.calc_runtime.recompute_pending = false;
+            self.calc_runtime.recompute_due_at = None;
+            self.calc_runtime.pending_viewport_pass = false;
+            self.calc_runtime.pending_full_pass = false;
         } else if self.should_defer_calc_recompute() {
-            self.calc.results = vec![None; self.lines.len()];
-            self.calc.cell_results = vec![Vec::new(); self.lines.len()];
+            self.calc.results = vec![None; self.editor.lines.len()];
+            self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];
             self.calc.variable_names.clear();
             self.calc.calc_dependency_index = None;
             self.calc.line_metadata.clear();
@@ -2661,34 +2697,37 @@ impl TerminalApp {
             self.calc.stale = true;
             self.calc.pathological_window_streak = 0;
             self.calc.forced_full_recompute_remaining = 0;
-            self.calc_recompute_pending = false;
-            self.calc_recompute_due_at = None;
-            self.calc_pending_viewport_pass = false;
-            self.calc_pending_full_pass = false;
+            self.calc_runtime.recompute_pending = false;
+            self.calc_runtime.recompute_due_at = None;
+            self.calc_runtime.pending_viewport_pass = false;
+            self.calc_runtime.pending_full_pass = false;
         } else {
             self.run_calc_recompute();
         }
         self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
-        if self.calc_viewport_only {
+        if self.calc_runtime.viewport_only {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
         }
-        self.history
-            .checkpoint(&self.lines, self.cursor_line, self.cursor_col);
+        self.history.checkpoint(
+            &self.editor.lines,
+            self.editor.cursor_line,
+            self.editor.cursor_col,
+        );
         self.maybe_compact_buffers_after_note_switch();
         Ok(())
     }
 
     pub(super) fn open_search(&mut self) {
         self.dismiss_variable_autocomplete_popup();
-        self.search_query.clear();
-        self.search_matches.clear();
-        self.search_current = 0;
-        self.search_orig_line = self.cursor_line;
-        self.search_orig_col = self.cursor_col;
-        self.search_orig_scroll = self.scroll_line;
+        self.search.query.clear();
+        self.search.matches.clear();
+        self.search.current = 0;
+        self.search.orig_line = self.editor.cursor_line;
+        self.search.orig_col = self.editor.cursor_col;
+        self.search.orig_scroll = self.editor.scroll_line;
         self.mode = UiMode::Search;
         self.status = "/".to_string();
     }
@@ -2696,28 +2735,29 @@ impl TerminalApp {
     pub(super) fn handle_search_key(&mut self, key: Key) -> Result<(), String> {
         match key {
             Key::Esc => {
-                self.cursor_line = self.search_orig_line;
-                self.cursor_col = self.search_orig_col;
-                self.scroll_line = self.search_orig_scroll;
+                self.editor.cursor_line = self.search.orig_line;
+                self.editor.cursor_col = self.search.orig_col;
+                self.editor.scroll_line = self.search.orig_scroll;
                 self.adjust_cursor();
-                self.scroll_line = self
+                self.editor.scroll_line = self
+                    .editor
                     .scroll_line
                     .min(self.visible_line_count().saturating_sub(1));
                 self.mode = UiMode::Normal;
-                self.search_query.clear();
-                self.search_matches.clear();
+                self.search.query.clear();
+                self.search.matches.clear();
                 self.status = "-- NORMAL --".to_string();
             }
             Key::Enter => {
                 self.mode = UiMode::Normal;
-                self.status = if self.search_matches.is_empty() {
+                self.status = if self.search.matches.is_empty() {
                     "no matches".to_string()
                 } else {
                     format!(
                         "/{} ({}/{})",
-                        self.search_query,
-                        self.search_current + 1,
-                        self.search_matches.len()
+                        self.search.query,
+                        self.search.current + 1,
+                        self.search.matches.len()
                     )
                 };
             }
@@ -2728,20 +2768,20 @@ impl TerminalApp {
                 self.search_prev();
             }
             Key::Backspace => {
-                self.search_query.pop();
+                self.search.query.pop();
                 self.recompute_search();
             }
             Key::Ctrl('w') => {
-                trim_trailing_word(&mut self.search_query);
+                trim_trailing_word(&mut self.search.query);
                 self.recompute_search();
             }
             Key::Char(ch) => {
-                self.search_query.push(ch);
+                self.search.query.push(ch);
                 self.recompute_search();
             }
             Key::Paste(text) => {
                 for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
-                    self.search_query.push(ch);
+                    self.search.query.push(ch);
                 }
                 self.recompute_search();
             }
@@ -2751,83 +2791,84 @@ impl TerminalApp {
     }
 
     pub(super) fn recompute_search(&mut self) {
-        self.search_matches.clear();
-        self.search_current = 0;
+        self.search.matches.clear();
+        self.search.current = 0;
 
-        let query = self.search_query.to_lowercase();
+        let query = self.search.query.to_lowercase();
         if query.is_empty() {
             self.status = "/".to_string();
             return;
         }
 
         let query_chars = query.chars().count();
-        for (line_idx, line) in self.lines.iter().enumerate() {
+        for (line_idx, line) in self.editor.lines.iter().enumerate() {
             let lower = line.to_lowercase();
             let mut byte_start = 0;
             while let Some(pos) = lower[byte_start..].find(&query) {
                 let abs_byte = byte_start + pos;
                 let char_start = line[..abs_byte].chars().count();
-                self.search_matches
+                self.search
+                    .matches
                     .push((line_idx, char_start, char_start + query_chars));
                 byte_start = abs_byte + query.len();
             }
         }
 
-        if !self.search_matches.is_empty() {
+        if !self.search.matches.is_empty() {
             self.jump_to_nearest_match();
         }
         self.update_search_status();
     }
 
     pub(super) fn update_search_status(&mut self) {
-        if self.search_matches.is_empty() {
-            self.status = format!("/{} (no matches)", self.search_query);
+        if self.search.matches.is_empty() {
+            self.status = format!("/{} (no matches)", self.search.query);
         } else {
             self.status = format!(
                 "/{} ({}/{})",
-                self.search_query,
-                self.search_current + 1,
-                self.search_matches.len()
+                self.search.query,
+                self.search.current + 1,
+                self.search.matches.len()
             );
         }
     }
 
     pub(super) fn jump_to_nearest_match(&mut self) {
-        for (i, &(line, _, _)) in self.search_matches.iter().enumerate() {
-            if line >= self.search_orig_line {
-                self.search_current = i;
+        for (i, &(line, _, _)) in self.search.matches.iter().enumerate() {
+            if line >= self.search.orig_line {
+                self.search.current = i;
                 self.jump_to_current_match();
                 return;
             }
         }
-        self.search_current = 0;
+        self.search.current = 0;
         self.jump_to_current_match();
     }
 
     pub(super) fn jump_to_current_match(&mut self) {
-        if let Some(&(line, col, _)) = self.search_matches.get(self.search_current) {
-            self.cursor_line = line;
-            self.cursor_col = col;
+        if let Some(&(line, col, _)) = self.search.matches.get(self.search.current) {
+            self.editor.cursor_line = line;
+            self.editor.cursor_col = col;
             self.adjust_cursor();
             self.adjust_scroll();
         }
     }
 
     pub(super) fn search_next(&mut self) {
-        if self.search_matches.is_empty() {
+        if self.search.matches.is_empty() {
             return;
         }
-        self.search_current = (self.search_current + 1) % self.search_matches.len();
+        self.search.current = (self.search.current + 1) % self.search.matches.len();
         self.jump_to_current_match();
         self.update_search_status();
     }
 
     pub(super) fn search_prev(&mut self) {
-        if self.search_matches.is_empty() {
+        if self.search.matches.is_empty() {
             return;
         }
-        self.search_current =
-            (self.search_current + self.search_matches.len() - 1) % self.search_matches.len();
+        self.search.current =
+            (self.search.current + self.search.matches.len() - 1) % self.search.matches.len();
         self.jump_to_current_match();
         self.update_search_status();
     }

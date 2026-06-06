@@ -256,9 +256,10 @@ Source: deep architecture/performance pass over `editor-core`, `app-core`, TUI, 
 - [ ] Live GUI parity runner for markdown/calc/folding (CodeMirror-backed)
   Owner: UI adapter + test infrastructure
   Expected impact: catches simulator-vs-runtime parity drift earlier and protects cross-frontend behavior consistency.
-- [ ] `TerminalApp` state decomposition (`EditorModel`, `CalcRuntime`, `OverlayState`, `RenderState`, `FoldRuntime`)
+- [x] `TerminalApp` state decomposition (`EditorModel`, `CalcRuntime`, `OverlayState`, `RenderState`, `FoldRuntime`)
   Owner: TUI adapter
   Expected impact: smaller, safer diffs in terminal rendering/runtime changes and easier targeted performance work.
+  Done: all five substructs landed (`EditorModel` doc/cursor/viewport, `CalcRuntime` recompute scheduling, `RenderState` draw output + fence checkpoints, `OverlayState` family = `DatePickerState`/`SearchState`/`ContentSearchState`/`SwitcherState`/`CollectionSwitcherState`, `FoldRuntime` = pre-existing `folds: FoldingState`). Full workspace tests green; no partial-borrow regressions. See `roadmap/review.md` item 3 for the per-substruct field map and the mechanical-conversion caveats.
 - [ ] Adaptive large-note mode (follow-up to threshold policy)
   Owner: UI + TUI adapters + editor-core
   Scope:

@@ -90,7 +90,7 @@ fn strip_ansi_control_sequences(raw: &str) -> String {
 }
 
 fn frame_rows_without_ansi(app: &TerminalApp) -> Vec<String> {
-    let text = strip_ansi_control_sequences(&app.draw_buf);
+    let text = strip_ansi_control_sequences(&app.render_state.draw_buf);
     let (_, cols) = super::input::terminal_size();
     if cols == 0 {
         return vec![text];
@@ -113,17 +113,20 @@ fn first_editor_row_for(rows: &[String], line_no: usize) -> String {
 #[test]
 fn editor_right_arrow_exits_inline_formatting_boundary_before_advancing() {
     let (db, mut app, path) = app_with_note("**bold** tail");
-    app.cursor_col = 8;
+    app.editor.cursor_col = 8;
 
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("right advances while exiting boundary");
-    assert_eq!(app.cursor_col, 9);
-    assert_eq!(app.markdown_formatting_right_boundary_exit, Some((0, 8)));
+    assert_eq!(app.editor.cursor_col, 9);
+    assert_eq!(
+        app.editor.markdown_formatting_right_boundary_exit,
+        Some((0, 8))
+    );
 
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("second right advances normally");
-    assert_eq!(app.cursor_col, 10);
-    assert_eq!(app.markdown_formatting_right_boundary_exit, None);
+    assert_eq!(app.editor.cursor_col, 10);
+    assert_eq!(app.editor.markdown_formatting_right_boundary_exit, None);
 
     drop(app);
     drop(db);
@@ -133,12 +136,15 @@ fn editor_right_arrow_exits_inline_formatting_boundary_before_advancing() {
 #[test]
 fn editor_right_arrow_snaps_at_formatting_boundary_when_no_forward_motion_exists() {
     let (db, mut app, path) = app_with_note("**bold**");
-    app.cursor_col = 8;
+    app.editor.cursor_col = 8;
 
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("right snaps boundary in no-move edge case");
-    assert_eq!(app.cursor_col, 8);
-    assert_eq!(app.markdown_formatting_right_boundary_exit, Some((0, 8)));
+    assert_eq!(app.editor.cursor_col, 8);
+    assert_eq!(
+        app.editor.markdown_formatting_right_boundary_exit,
+        Some((0, 8))
+    );
 
     drop(app);
     drop(db);
@@ -149,7 +155,7 @@ fn editor_right_arrow_snaps_at_formatting_boundary_when_no_forward_motion_exists
 fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
     let line = "Capability is **an action** linked to the entity type or resource type";
     let (db, mut app, path) = app_with_note(line);
-    app.cursor_col = "Capability is **an action**".chars().count();
+    app.editor.cursor_col = "Capability is **an action**".chars().count();
 
     let mut frame = Vec::new();
     app.draw(&mut frame)
@@ -174,11 +180,11 @@ fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
         "closing strong markers stayed revealed after first right:\n{snapped_after_first}"
     );
 
-    let col_after_first = app.cursor_col;
+    let col_after_first = app.editor.cursor_col;
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("second right continues forward");
     assert!(
-        app.cursor_col > col_after_first,
+        app.editor.cursor_col > col_after_first,
         "second right should advance source cursor forward"
     );
     frame.clear();
@@ -197,13 +203,13 @@ fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
 #[test]
 fn editor_left_arrow_restores_inline_formatting_boundary_reveal() {
     let (db, mut app, path) = app_with_note("**bold**");
-    app.cursor_col = 8;
+    app.editor.cursor_col = 8;
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("right snaps boundary in no-move edge case");
     app.handle_editor_key(&db, Key::ArrowLeft)
         .expect("left restores boundary reveal");
-    assert_eq!(app.cursor_col, 8);
-    assert_eq!(app.markdown_formatting_right_boundary_exit, None);
+    assert_eq!(app.editor.cursor_col, 8);
+    assert_eq!(app.editor.markdown_formatting_right_boundary_exit, None);
 
     drop(app);
     drop(db);
@@ -1128,15 +1134,15 @@ fn run_tui_parity_case(case: &VimParityReplayCase) -> ParitySnapshot {
     let (db, mut app, path) = app_with_note(&case.initial_text);
     app.mode = ui_mode_from_vim_mode(case.initial_state.mode);
     app.vim_state = case.initial_state.clone();
-    if app.lines.is_empty() {
-        app.lines.push(String::new());
+    if app.editor.lines.is_empty() {
+        app.editor.lines.push(String::new());
     }
-    app.cursor_line = case
+    app.editor.cursor_line = case
         .initial_cursor_line
-        .min(app.lines.len().saturating_sub(1));
-    app.cursor_col = case.initial_cursor_col;
+        .min(app.editor.lines.len().saturating_sub(1));
+    app.editor.cursor_col = case.initial_cursor_col;
     if matches!(app.mode, UiMode::Visual | UiMode::VisualLine) {
-        app.selection_anchor = Some((app.cursor_line, app.cursor_col));
+        app.editor.selection_anchor = Some((app.editor.cursor_line, app.editor.cursor_col));
     }
     app.adjust_cursor();
 
@@ -1152,12 +1158,12 @@ fn run_tui_parity_case(case: &VimParityReplayCase) -> ParitySnapshot {
     app.adjust_cursor();
 
     let snapshot = ParitySnapshot {
-        lines: app.lines.clone(),
-        cursor_line: app.cursor_line,
-        cursor_col: app.cursor_col,
+        lines: app.editor.lines.clone(),
+        cursor_line: app.editor.cursor_line,
+        cursor_col: app.editor.cursor_col,
         mode: app.mode,
         vim_state: app.vim_state.clone(),
-        selection_anchor: app.selection_anchor,
+        selection_anchor: app.editor.selection_anchor,
         clipboard_text: app.clipboard.text.clone(),
         clipboard_mode: app.clipboard.mode,
     };
@@ -1497,13 +1503,13 @@ fn run_gui_markdown_parity_case(case: &MarkdownParityReplayCase) -> MarkdownPari
 fn run_tui_markdown_parity_case(case: &MarkdownParityReplayCase) -> MarkdownParitySnapshot {
     let (db, mut app, path) = app_with_note(&case.initial_text);
     app.mode = UiMode::Editor;
-    if app.lines.is_empty() {
-        app.lines.push(String::new());
+    if app.editor.lines.is_empty() {
+        app.editor.lines.push(String::new());
     }
-    app.cursor_line = case
+    app.editor.cursor_line = case
         .initial_cursor_line
-        .min(app.lines.len().saturating_sub(1));
-    app.cursor_col = case.initial_cursor_col;
+        .min(app.editor.lines.len().saturating_sub(1));
+    app.editor.cursor_col = case.initial_cursor_col;
     app.adjust_cursor();
 
     for token in &case.keys {
@@ -1518,9 +1524,9 @@ fn run_tui_markdown_parity_case(case: &MarkdownParityReplayCase) -> MarkdownPari
     app.adjust_cursor();
 
     let snapshot = MarkdownParitySnapshot {
-        lines: app.lines.clone(),
-        cursor_line: app.cursor_line,
-        cursor_col: app.cursor_col,
+        lines: app.editor.lines.clone(),
+        cursor_line: app.editor.cursor_line,
+        cursor_col: app.editor.cursor_col,
     };
 
     drop(app);
