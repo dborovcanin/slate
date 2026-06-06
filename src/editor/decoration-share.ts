@@ -1,5 +1,41 @@
-import type { Decoration, EditorView, DecorationSet } from "@codemirror/view";
+import type { Decoration, EditorView, DecorationSet, ViewUpdate } from "@codemirror/view";
 import type { Range } from "@codemirror/state";
+
+// If the dispatch is a single contiguous edit contained within one line on both
+// the old and new side (no line added/removed), return the edited line number in
+// each doc; otherwise null (the caller falls back to a full/deferred rebuild).
+// Used by both decoration plugins to gate the changed-line delta path.
+export function singleLineEditRange(
+  update: ViewUpdate,
+): { editLine: number; oldEditLine: number } | null {
+  if (!update.docChanged) return null;
+  let count = 0;
+  let bail = false;
+  let result: { editLine: number; oldEditLine: number } | null = null;
+  update.changes.iterChangedRanges((fromA, toA, fromB, toB) => {
+    count += 1;
+    if (count > 1 || bail) {
+      bail = true;
+      return;
+    }
+    const startDoc = update.startState.doc;
+    const newDoc = update.state.doc;
+    if (startDoc.lineAt(fromA).number !== startDoc.lineAt(toA).number) {
+      bail = true;
+      return;
+    }
+    if (newDoc.lineAt(fromB).number !== newDoc.lineAt(toB).number) {
+      bail = true;
+      return;
+    }
+    result = {
+      editLine: newDoc.lineAt(fromB).number,
+      oldEditLine: startDoc.lineAt(fromA).number,
+    };
+  });
+  if (bail || count !== 1) return null;
+  return result;
+}
 
 /**
  * Per-view hand-off of the calc decoration set computed by the markdown

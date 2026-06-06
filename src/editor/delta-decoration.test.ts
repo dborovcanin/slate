@@ -11,7 +11,8 @@ import {
   buildCalcDecorationsForSpans,
   makeCalcDecorationTestState,
 } from "./calc-decoration.ts";
-import { spliceDecorations } from "./decoration-share.ts";
+import type { ViewUpdate } from "@codemirror/view";
+import { singleLineEditRange, spliceDecorations } from "./decoration-share.ts";
 import { ensureWasmReady } from "./wasm.ts";
 
 before(async () => {
@@ -177,4 +178,60 @@ test("splice parity: delete characters in a list item", () => {
     to: 22,
     insert: "",
   });
+});
+
+// Minimal stand-in for the parts of ViewUpdate that singleLineEditRange reads.
+function fakeUpdate(
+  oldText: string,
+  spec: { from: number; to?: number; insert?: string } | Array<{ from: number; to?: number; insert?: string }>,
+): ViewUpdate {
+  const startState = EditorState.create({ doc: oldText });
+  const changes = startState.changes(spec);
+  const next = startState.update({ changes });
+  return {
+    docChanged: !changes.empty,
+    changes,
+    startState,
+    state: next.state,
+  } as unknown as ViewUpdate;
+}
+
+test("singleLineEditRange: in-line insert returns the edited line", () => {
+  const doc = "line one\nline two\nline three";
+  const lineTwoStart = EditorState.create({ doc }).doc.line(2).from;
+  const range = singleLineEditRange(fakeUpdate(doc, { from: lineTwoStart + 2, insert: "X" }));
+  assert.deepEqual(range, { editLine: 2, oldEditLine: 2 });
+});
+
+test("singleLineEditRange: in-line deletion returns the edited line", () => {
+  const doc = "alpha\nbeta gamma delta\nepsilon";
+  const lineTwoStart = EditorState.create({ doc }).doc.line(2).from;
+  const range = singleLineEditRange(
+    fakeUpdate(doc, { from: lineTwoStart + 5, to: lineTwoStart + 10 }),
+  );
+  assert.deepEqual(range, { editLine: 2, oldEditLine: 2 });
+});
+
+test("singleLineEditRange: inserting a newline bails (null)", () => {
+  const doc = "one\ntwo\nthree";
+  const lineTwoStart = EditorState.create({ doc }).doc.line(2).from;
+  assert.equal(singleLineEditRange(fakeUpdate(doc, { from: lineTwoStart + 1, insert: "a\nb" })), null);
+});
+
+test("singleLineEditRange: deletion spanning a line break bails (null)", () => {
+  const doc = "one\ntwo\nthree";
+  const line1 = EditorState.create({ doc }).doc.line(1);
+  // Delete from inside line 1 through into line 2 (removes the newline).
+  assert.equal(singleLineEditRange(fakeUpdate(doc, { from: line1.to - 1, to: line1.to + 2 })), null);
+});
+
+test("singleLineEditRange: multiple changed ranges bail (null)", () => {
+  const doc = "aaaa\nbbbb\ncccc";
+  assert.equal(
+    singleLineEditRange(fakeUpdate(doc, [
+      { from: 1, insert: "X" },
+      { from: 6, insert: "Y" },
+    ])),
+    null,
+  );
 });

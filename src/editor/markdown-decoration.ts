@@ -15,7 +15,11 @@ import {
   buildCalcDecorationsForSpans,
   type CalcDecorationItem,
 } from "./calc-decoration.ts";
-import { stashCombinedCalcDecorations } from "./decoration-share.ts";
+import {
+  singleLineEditRange,
+  spliceDecorations,
+  stashCombinedCalcDecorations,
+} from "./decoration-share.ts";
 import type { VariableIndexEntry } from "../api.ts";
 import { resolveNoteImagePaths, resolveWikiLinks } from "../api.ts";
 import { state } from "../state.ts";
@@ -2400,18 +2404,27 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       // viewport's text and fence state are both unchanged and CodeMirror
       // auto-maps the existing decorations through the transaction.
       if (allChangesBelowViewport(update)) return;
-      // Keep typing responsive by mapping existing decorations immediately
-      // and coalescing an actual rebuild after input settles.
+
       const profiling = isEditorProfilerEnabled();
       const startedAt = profiling ? editorProfilerNowMs() : 0;
-      this.decorations = this.decorations.map(update.changes);
-      this.scheduleDeferredRefresh(update.view);
+
+      // Fast path: a single-line, non-fence edit only affects its own line (plus
+      // a neighbour for selection-reveal). Map the existing set and splice in a
+      // rebuild of just that small range — O(changed) instead of O(viewport),
+      // with no deferred full rebuild needed.
+      const deltaApplied = this.tryMarkdownDeltaRebuild(update);
+      if (!deltaApplied) {
+        // Keep typing responsive by mapping existing decorations immediately
+        // and coalescing an actual rebuild after input settles.
+        this.decorations = this.decorations.map(update.changes);
+        this.scheduleDeferredRefresh(update.view);
+      }
       if (profiling) {
         recordEditorProfilerSample(
           "markdown.decorations.rebuildTrigger",
           editorProfilerNowMs() - startedAt,
           {
-            reason: "docChanged_immediate",
+            reason: deltaApplied ? "docChanged_delta" : "docChanged_immediate",
             metrics: {
               changedRanges: changedRangeCount(update),
             },
@@ -2420,69 +2433,49 @@ const markdownRichPlugin = ViewPlugin.fromClass(
       }
     }
 
-    private safeBuild(
-      view: EditorView,
-      fallback: DecorationSet,
-      marginLines: number,
-      reason: string,
-    ): DecorationSet {
-      const profilingEnabled = isEditorProfilerEnabled();
-      const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
-      const profiling = profilingEnabled ? createMarkdownBuildProfiling() : undefined;
-      try {
-        const newIds = new Set<string>();
-        const newImageSources = new Set<string>();
-        const activeNoteId = state.activeNote?.id ?? null;
-        if (this.imageResolveNoteId !== activeNoteId) {
-          this.clearImageCache();
-          this.imageResolveNoteId = activeNoteId;
-        }
-        const wikiLinkResolver = (shortId: string): WikiLinkResolution | null => {
-          const cached = this.getCachedWikiLink(shortId);
-          if (cached === false) return { exists: false, title: "" };
-          if (cached !== undefined) return cached;
-          newIds.add(shortId);
-          return null;
-        };
-        const imagePreviewResolver = (
-          _lineNumber: number,
-          src: string,
-        ): ResolvedImagePreview | null => {
-          const noteId = activeNoteId;
-          const source = src.trim();
-          if (!noteId || source.length === 0) return null;
-          const cacheKey = this.imageCacheKey(noteId, source);
-          const cached = this.getCachedImagePath(cacheKey);
-          if (cached === false) return { srcUrl: null, broken: true };
-          if (typeof cached === "string") {
-            if (cached.startsWith(DATA_URL_PREFIX)) {
-              const objectUrl = this.imageObjectUrlForCacheKey(cacheKey, cached);
-              return {
-                srcUrl: objectUrl ?? cached,
-                fallbackSrcUrl: null,
-              };
-            }
-            return {
-              srcUrl: convertFileSrc(cached),
-              fallbackSrcUrl: absolutePathToFileUrl(cached),
-            };
+    private makeDecorationResolvers(view: EditorView): {
+      wikiLinkResolver: (shortId: string) => WikiLinkResolution | null;
+      imagePreviewResolver: (lineNumber: number, src: string) => ResolvedImagePreview | null;
+      finalize: () => void;
+    } {
+      const newIds = new Set<string>();
+      const newImageSources = new Set<string>();
+      const activeNoteId = state.activeNote?.id ?? null;
+      if (this.imageResolveNoteId !== activeNoteId) {
+        this.clearImageCache();
+        this.imageResolveNoteId = activeNoteId;
+      }
+      const wikiLinkResolver = (shortId: string): WikiLinkResolution | null => {
+        const cached = this.getCachedWikiLink(shortId);
+        if (cached === false) return { exists: false, title: "" };
+        if (cached !== undefined) return cached;
+        newIds.add(shortId);
+        return null;
+      };
+      const imagePreviewResolver = (
+        _lineNumber: number,
+        src: string,
+      ): ResolvedImagePreview | null => {
+        const noteId = activeNoteId;
+        const source = src.trim();
+        if (!noteId || source.length === 0) return null;
+        const cacheKey = this.imageCacheKey(noteId, source);
+        const cached = this.getCachedImagePath(cacheKey);
+        if (cached === false) return { srcUrl: null, broken: true };
+        if (typeof cached === "string") {
+          if (cached.startsWith(DATA_URL_PREFIX)) {
+            const objectUrl = this.imageObjectUrlForCacheKey(cacheKey, cached);
+            return { srcUrl: objectUrl ?? cached, fallbackSrcUrl: null };
           }
-          newImageSources.add(source);
-          return null;
-        };
-        const combined = buildCombinedViewportDecorations(
-          view,
-          this.fenceCache,
-          this.matcherCache,
-          marginLines,
-          profiling,
-          wikiLinkResolver,
-          imagePreviewResolver,
-        );
-        const next = combined.markdown;
-        // Share this dispatch's calc set with the calc plugin (runs after this
-        // one), so both front-of-viewport scans collapse into this single pass.
-        stashCombinedCalcDecorations(view, combined.calc);
+          return {
+            srcUrl: convertFileSrc(cached),
+            fallbackSrcUrl: absolutePathToFileUrl(cached),
+          };
+        }
+        newImageSources.add(source);
+        return null;
+      };
+      const finalize = () => {
         for (const shortId of newIds) {
           if (this.resolvingIds.has(shortId)) continue;
           this.resolvingIds.add(shortId);
@@ -2502,6 +2495,90 @@ const markdownRichPlugin = ViewPlugin.fromClass(
             this.scheduleImagePathBatchResolve(view, activeNoteId);
           }
         }
+      };
+      return { wikiLinkResolver, imagePreviewResolver, finalize };
+    }
+
+    private tryMarkdownDeltaRebuild(update: ViewUpdate): boolean {
+      const range = singleLineEditRange(update);
+      if (!range) return false;
+      const newDoc = update.state.doc;
+      const startDoc = update.startState.doc;
+      const fromLine = Math.max(1, range.editLine - 1);
+      const toLine = Math.min(newDoc.lines, range.editLine + 1);
+      // Bail on any code-fence line in the touched region (old or new): a fence
+      // edit cascades fence state to lines below, which the map path leaves stale.
+      for (let ln = fromLine; ln <= toLine; ln++) {
+        if (classifyMarkdownLine(newDoc.line(ln).text).isCodeFence) return false;
+      }
+      const oldFrom = Math.max(1, range.oldEditLine - 1);
+      const oldTo = Math.min(startDoc.lines, range.oldEditLine + 1);
+      for (let ln = oldFrom; ln <= oldTo; ln++) {
+        if (classifyMarkdownLine(startDoc.line(ln).text).isCodeFence) return false;
+      }
+
+      const view = update.view;
+      const { wikiLinkResolver, imagePreviewResolver, finalize } =
+        this.makeDecorationResolvers(view);
+      const variableIndex = update.state.field(variableIndexField, false) ?? [];
+      const selection = update.state.selection.main;
+      const strict = visibleSpans(view);
+      const rebuilt = buildMarkdownDecorationsForSpans(
+        newDoc,
+        [{ fromLine, toLine }],
+        variableIndex,
+        {
+          from: selection.from,
+          to: selection.to,
+          empty: selection.empty,
+          assoc: selection.assoc,
+        },
+        {
+          getFenceStateBeforeLine: (n) => this.fenceCache.getStateBeforeLine(newDoc, n),
+          variableMatcher: this.matcherCache.get(variableIndex),
+          wikiLinkResolver,
+          resolveWikiLinksForLine: (n) => lineInVisibleSpans(n, strict),
+          imagePreviewResolver,
+          resolveImagesForLine: (n) => lineInVisibleSpans(n, strict),
+        },
+      );
+      finalize();
+      const mapped = this.decorations.map(update.changes);
+      this.decorations = spliceDecorations(
+        mapped,
+        newDoc.line(fromLine).from,
+        newDoc.line(toLine).to,
+        rebuilt,
+      );
+      return true;
+    }
+
+    private safeBuild(
+      view: EditorView,
+      fallback: DecorationSet,
+      marginLines: number,
+      reason: string,
+    ): DecorationSet {
+      const profilingEnabled = isEditorProfilerEnabled();
+      const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
+      const profiling = profilingEnabled ? createMarkdownBuildProfiling() : undefined;
+      try {
+        const { wikiLinkResolver, imagePreviewResolver, finalize } =
+          this.makeDecorationResolvers(view);
+        const combined = buildCombinedViewportDecorations(
+          view,
+          this.fenceCache,
+          this.matcherCache,
+          marginLines,
+          profiling,
+          wikiLinkResolver,
+          imagePreviewResolver,
+        );
+        const next = combined.markdown;
+        // Share this dispatch's calc set with the calc plugin (runs after this
+        // one), so both front-of-viewport scans collapse into this single pass.
+        stashCombinedCalcDecorations(view, combined.calc);
+        finalize();
         if (profilingEnabled) {
           const durationMs = editorProfilerNowMs() - startedAt;
           const analyzeMs = profiling?.analyzeLinesMs ?? 0;

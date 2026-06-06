@@ -35,7 +35,11 @@ import {
 } from "./calc-line-utils.ts";
 import { calcFindTableFormulaSegments, type TableFormulaSegment } from "./wasm.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
-import { takeFreshCombinedCalcDecorations } from "./decoration-share.ts";
+import {
+  singleLineEditRange,
+  spliceDecorations,
+  takeFreshCombinedCalcDecorations,
+} from "./decoration-share.ts";
 import {
   calcBuiltinFormulaLabel,
   calcDecideEvalWindow,
@@ -928,8 +932,14 @@ function calcDecorationsPlugin() {
           !cellsChanged &&
           !update.viewportChanged
         ) {
-          this.decorations = this.decorations.map(update.changes);
-          this.scheduleDeferredRebuild(update.view);
+          // Single-line edit: splice just the changed line (+/-1) instead of a
+          // deferred full viewport rebuild. Calc decorations are per-line and key
+          // off the (unchanged) results map, so this is exact; result recomputes
+          // arrive on a later resultsChanged dispatch and take the full path.
+          if (!this.tryCalcDeltaRebuild(update)) {
+            this.decorations = this.decorations.map(update.changes);
+            this.scheduleDeferredRebuild(update.view);
+          }
           return;
         }
 
@@ -943,6 +953,23 @@ function calcDecorationsPlugin() {
           this.decorations,
           calcDecorationRebuildReason(update, resultsChanged, cellsChanged),
         );
+      }
+
+      private tryCalcDeltaRebuild(update: ViewUpdate): boolean {
+        const range = singleLineEditRange(update);
+        if (!range) return false;
+        const newDoc = update.state.doc;
+        const fromLine = Math.max(1, range.editLine - 1);
+        const toLine = Math.min(newDoc.lines, range.editLine + 1);
+        const rebuilt = buildCalcDecorationsForSpans(update.state, [{ fromLine, toLine }]);
+        const mapped = this.decorations.map(update.changes);
+        this.decorations = spliceDecorations(
+          mapped,
+          newDoc.line(fromLine).from,
+          newDoc.line(toLine).to,
+          rebuilt,
+        );
+        return true;
       }
 
       private safeBuild(
