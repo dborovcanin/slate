@@ -53,7 +53,13 @@ The TUI calls these synchronously on every keypress, so the core fn must not reg
 
 ## 2. Delta-based decoration rebuild in the web frontend (carry-over, partially mitigated)
 
-**Status:** approach 3 (shared single viewport scan) is **done** — both decoration sets are now produced in one pass; see the struck-through bullet/approach below. Approaches 1 (changed-line delta rebuild reusing `planIncrementalCalc`'s range) and 2 (fold table-widget placement into the single inline-token builder pass) remain open. Full TS suite + tsc green after the shared-scan change.
+**Status:** approaches 1 and 3 are **done**; only approach 2 remains.
+- **Approach 3 (shared single viewport scan)** — both decoration sets produced in one pass; see the struck-through bullet/approach below.
+- **Approach 1 (changed-line delta rebuild)** — on a single-line, non-fence edit (the dominant typing case) both plugins now map their existing `RangeSet` through the change and splice in a rebuild of just the edited line ±1, instead of mapping + a debounced full viewport rebuild. Settled decoration cost drops O(viewport) → O(changed lines). Gated by `singleLineEditRange` (`decoration-share.ts`); markdown additionally bails on a code-fence in the touched region (fence cascade); calc needs no fence check (decorations key off the per-line results map, which is unchanged on a docChanged-only dispatch — result recomputes arrive on a later `resultsChanged` dispatch and take the full path). The splice primitive `spliceDecorations` + per-line emitters are byte-exact vs the standalone builders (headless parity tests: `delta-decoration.test.ts`, `combined-decoration.test.ts`). Did not reuse `planIncrementalCalc`'s range — `update.changes` gives the same info directly and keeps the two plugins independent.
+- **Approach 2 (fold table-widget placement into the single inline-token builder pass)** — still open. Smaller, self-contained.
+- **Residual:** the live plugin `update()` dispatch flow has no DOM/EditorView test (node:test has no DOM); components (splice math, builder parity, edit-range gating) are covered. An in-app verify is the remaining confidence step.
+
+Full TS suite + tsc green.
 
 **Problem**
 `src/editor/markdown-decoration.ts` (2396 lines) and `src/editor/calc-decoration.ts` (2030 lines) still rebuild their CodeMirror `RangeSet` over the entire visible viewport for every transaction that signals a structural change. The previous review noted this was true on every keystroke; the situation has improved but is not solved.

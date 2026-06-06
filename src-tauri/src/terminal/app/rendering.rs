@@ -1292,27 +1292,46 @@ impl TerminalApp {
                     && formula_segments.is_empty()
                     && is_markdown_table_line(rendered_line.as_ref())
                 {
-                    let cursor = if is_cursor_line && cursor_line_override.is_none() {
-                        Some(line_cursor_col.unwrap_or(self.editor.cursor_col))
-                    } else {
-                        None
-                    };
                     let col_widths = self.table_display_col_widths_for_line(line_idx);
                     if !col_widths.is_empty() {
-                        let (display_line, mapped_col, reflow_cell_pipes) =
-                            reformat_table_row_for_display(
+                        if is_cursor_line && cursor_line_override.is_none() {
+                            // Cursor row: render from a RAW-marker reflow so
+                            // `render_line` still applies inline styles (bold,
+                            // italic, code) and reveals markers near the cursor —
+                            // collapsing here would strip `**` and lose bold.
+                            // Cursor-column positioning uses a separate
+                            // cursor-aware collapsed reflow (markers removed),
+                            // matching what `render_line` actually displays.
+                            let cursor = Some(line_cursor_col.unwrap_or(self.editor.cursor_col));
+                            let (raw_display, _, _) = reformat_table_row_for_display(
                                 rendered_line.as_ref(),
                                 &col_widths,
-                                cursor,
+                                None,
                             );
-                        rendered_line = Cow::Owned(display_line);
-                        if is_cursor_line && cursor_line_override.is_none() {
+                            let (collapsed_display, mapped_col, _) =
+                                reformat_table_row_for_display(
+                                    rendered_line.as_ref(),
+                                    &col_widths,
+                                    cursor,
+                                );
+                            // Focused-cell pipe highlight in RAW display coords.
+                            let cell_idx = table_cursor_cell_index(
+                                rendered_line.as_ref(),
+                                self.editor.cursor_col,
+                            );
+                            table_reflow_cell_pipes = cell_idx
+                                .and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
                             let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
                             line_cursor_col = Some(mc);
-                            cursor_line_override = Some((rendered_line.as_ref().to_string(), mc));
-                            // Record output pipe positions so focused_pipe_ranges
-                            // below can use reformatted positions instead of source ones.
-                            table_reflow_cell_pipes = reflow_cell_pipes;
+                            cursor_line_override = Some((collapsed_display, mc));
+                            rendered_line = Cow::Owned(raw_display);
+                        } else {
+                            let (display_line, _, _) = reformat_table_row_for_display(
+                                rendered_line.as_ref(),
+                                &col_widths,
+                                None,
+                            );
+                            rendered_line = Cow::Owned(display_line);
                         }
                     }
                 }

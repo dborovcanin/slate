@@ -44,6 +44,43 @@ fn line_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
+/// 0-based table cell index containing `cursor_char` (a char offset into
+/// `line`), using the same pipe-window rule as the reformatter. None if the
+/// cursor is not inside a cell.
+pub(super) fn table_cursor_cell_index(line: &str, cursor_char: usize) -> Option<usize> {
+    let pipes: Vec<usize> = line
+        .chars()
+        .enumerate()
+        .filter(|(_, c)| *c == '|')
+        .map(|(i, _)| i)
+        .collect();
+    if pipes.len() < 2 {
+        return None;
+    }
+    pipes
+        .windows(2)
+        .position(|w| cursor_char > w[0] && cursor_char <= w[1])
+}
+
+/// Output char positions of the (left, right) pipe bounding cell `cell_idx` in a
+/// reformatted display row. None if the index is out of range.
+pub(super) fn display_cell_pipe_positions(display: &str, cell_idx: usize) -> Option<(usize, usize)> {
+    let mut left = None;
+    let mut seen = 0usize;
+    for (i, c) in display.chars().enumerate() {
+        if c != '|' {
+            continue;
+        }
+        if seen == cell_idx {
+            left = Some(i);
+        } else if seen == cell_idx + 1 {
+            return left.map(|l| (l, i));
+        }
+        seen += 1;
+    }
+    None
+}
+
 /// Forwards to the canonical `editor_core::table::is_table_line` so the
 /// table-line predicate has a single source of truth shared with the rest of
 /// the editor core (it previously held a byte-identical copy of that logic).
