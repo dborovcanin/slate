@@ -16,6 +16,8 @@ import {
   Annotation,
   type ChangeDesc,
   type EditorState,
+  type Line,
+  type SelectionRange,
   type Text,
 } from "@codemirror/state";
 import {
@@ -33,6 +35,7 @@ import {
 } from "./calc-line-utils.ts";
 import { calcFindTableFormulaSegments, type TableFormulaSegment } from "./wasm.ts";
 import { planIncrementalCalc } from "./calc-incremental.ts";
+import { takeFreshCombinedCalcDecorations } from "./decoration-share.ts";
 import {
   calcBuiltinFormulaLabel,
   calcDecideEvalWindow,
@@ -444,7 +447,7 @@ const focusedPipeMark = Decoration.mark({ class: "cm-table-pipe-focused" });
 
 const CALC_VIEWPORT_MARGIN_LINES = 80;
 
-interface CalcVisibleLineSpan {
+export interface CalcVisibleLineSpan {
   fromLine: number;
   toLine: number;
 }
@@ -467,7 +470,7 @@ function mergeCalcLineSpans(spans: readonly CalcVisibleLineSpan[]): CalcVisibleL
 let _cachedVisibleRanges: EditorView["visibleRanges"] | null = null;
 let _cachedVisibleSpans: CalcVisibleLineSpan[] = [];
 
-function expandedCalcVisibleSpans(view: EditorView): CalcVisibleLineSpan[] {
+export function expandedCalcVisibleSpans(view: EditorView): CalcVisibleLineSpan[] {
   if (view.visibleRanges === _cachedVisibleRanges) return _cachedVisibleSpans;
   _cachedVisibleRanges = view.visibleRanges;
   if (view.visibleRanges.length === 0) {
@@ -515,248 +518,53 @@ function shouldSkipSelectionOnlyCalcRebuild(update: ViewUpdate): boolean {
   );
 }
 
-function buildCalcDecorationsForSpans(
+export type CalcDecorationItem = { from: number; to: number; deco: Decoration };
+
+export function makeCalcEmitContext(state: EditorState): CalcLineEmitContext {
+  const selection = state.selection.main;
+  return {
+    results: state.field(calcResultsField),
+    cellResults: state.field(cellCalcResultsField),
+    selection,
+    collapsedSelection: selection.from === selection.to,
+    cursorLineNumber: state.doc.lineAt(selection.head).number,
+  };
+}
+
+// Highlight the focused table cell's pipe characters (post-line-loop pass).
+export function emitCalcFocusedPipe(
+  items: CalcDecorationItem[],
   state: EditorState,
   spans: readonly CalcVisibleLineSpan[],
-): DecorationSet {
-  if (spans.length === 0) return Decoration.none;
-  const results = state.field(calcResultsField);
-  const cellResults = state.field(cellCalcResultsField);
-  // Range additions must be sorted by from-position. Collect them in a
-  // throwaway list then add to the builder in document order at the end.
-  const items: { from: number; to: number; deco: Decoration }[] = [];
+): void {
   const selection = state.selection.main;
-  const collapsedSelection = selection.from === selection.to;
-  const cursorLineNumber = state.doc.lineAt(selection.head).number;
-
-  for (const span of spans) {
-    const fromLine = Math.max(1, span.fromLine);
-    const toLine = Math.min(state.doc.lines, span.toLine);
-    for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber++) {
-      const lineIndex = lineNumber - 1;
-      const line = state.doc.line(lineNumber); // 1-based
-      const result = results.get(lineIndex);
-      const cellsForLine = cellResults.get(lineIndex);
-      if (result == null && (!cellsForLine || cellsForLine.length === 0)) continue;
-
-      const segments = cachedCalcFindTableFormulaSegments(line.text);
-      if (segments.length > 0) {
-        const cells = cellsForLine ?? [];
-        const canUseLineMemo = collapsedSelection && lineNumber !== cursorLineNumber;
-        let lineMemoKey: string | null = null;
-        if (canUseLineMemo) {
-          lineMemoKey = formulaLineRenderCacheKey(line.text, result ?? null, cells);
-          const memoHit = cachedFormulaLineDecorationGet(lineMemoKey);
-          if (memoHit) {
-            for (const replacement of memoHit.replacements) {
-              items.push({
-                from: line.from + replacement.fromChar,
-                to: line.from + replacement.toChar,
-                deco: Decoration.replace({
-                  widget: new FormulaCellWidget(
-                    replacement.value,
-                    replacement.marker,
-                    replacement.widthCh,
-                  ),
-                }),
-              });
-            }
-            if (memoHit.trailer.length > 0) {
-              items.push({
-                from: line.to,
-                to: line.to,
-                deco: Decoration.widget({
-                  widget: new CalcResultWidget(memoHit.trailer, " "),
-                  side: 1,
-                }),
-              });
-            }
-            continue;
-          }
-        }
-        const cellsByIndex = new Map<number, { value: string; hasError: boolean }>();
-        for (const cell of cells) {
-          cellsByIndex.set(cell.cell_index, {
-            value: formatFormulaDisplayValue(cell.value),
-            hasError: cell.error_kind != null,
-          });
-        }
-        const lineFallback = result == null
-          ? null
-          : {
-              value: formatFormulaDisplayValue(result),
-              hasError: result.trimStart().startsWith("!ERROR"),
-            };
-        const valueForCell = (
-          cellIndex: number,
-          segmentIndex: number,
-        ): { value: string; hasError: boolean } | null => {
-          const hit = cellsByIndex.get(cellIndex);
-          if (!hit) {
-            // Keep the first formula cell stable if per-cell payload is
-            // temporarily absent but legacy per-line result is available.
-            if (segmentIndex === 0 && lineFallback) return lineFallback;
-            return null;
-          }
-          return hit;
-        };
-
-        const trailerParts: string[] = [];
-        const memoReplacements: CachedFormulaLineDecoration["replacements"] = [];
-        let memoEligible = canUseLineMemo;
-        segments.forEach((seg, fi) => {
-          const marker = formulaMarkerToken(fi);
-          const computed = valueForCell(seg.cellIndex, fi);
-          const formulaSource = segmentFormulaSource(line.text, seg);
-          const editingCell = selectionTouchesSegment(
-            selection,
-            line.from,
-            seg.cellLeftPipeChar + 1,
-            seg.cellRightPipeChar,
-          );
-
-          if (computed && !computed.hasError && !editingCell) {
-            const widthCh = Math.max(1, seg.toChar - seg.fromChar);
-            const fitted = fitFormulaMarkerReplacement(
-              computed.value,
-              marker,
-              widthCh,
-              computed.hasError,
-            );
-            items.push({
-              from: line.from + seg.fromChar,
-              to: line.from + seg.toChar,
-              deco: Decoration.replace({
-                widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
-              }),
-            });
-            memoReplacements.push({
-              fromChar: seg.fromChar,
-              toChar: seg.toChar,
-              value: fitted.value,
-              marker: fitted.marker,
-              widthCh,
-            });
-            trailerParts.push(`${marker} \u279c ${formulaSource}`);
-            return;
-          }
-
-          if (computed && !computed.hasError && editingCell) {
-            memoEligible = false;
-            trailerParts.push(`${marker} \u279c ${computed.value}`);
-            return;
-          }
-
-          memoEligible = false;
-          if (formulaSource.length > 0) {
-            trailerParts.push(`${marker} \u279c ${formulaSource}`);
-          }
-        });
-
-        if (trailerParts.length > 0) {
-          items.push({
-            from: line.to,
-            to: line.to,
-            deco: Decoration.widget({
-              widget: new CalcResultWidget(trailerParts.join("  "), " "),
-              side: 1,
-            }),
-          });
-        }
-
-        if (memoEligible && lineMemoKey) {
-          cachedFormulaLineDecorationSet(lineMemoKey, {
-            replacements: memoReplacements,
-            trailer: trailerParts.join("  "),
-          });
-        }
-
-        continue;
-      }
-
-      // Non-formula line: legacy single calc-ghost trailer.
-      if (result == null) continue;
-      const cell = findSingleCalcTableCell(line.text);
-      const labels = cell ? builtinFormulaLabels(cell.expr) : [];
-      if (cell && labels.length > 0) {
-        const revealBounds = tableCellBoundsForSegment(line.text, cell) ?? {
-          fromCol: cell.fromCol,
-          toCol: cell.toCol,
-        };
-        const editingCell = selectionTouchesSegment(
-          selection,
-          line.from,
-          revealBounds.fromCol,
-          revealBounds.toCol,
-        );
-        if (editingCell) continue;
-
-        const formatted = formatFormulaDisplayValue(result);
-        const marker = formulaMarkerSuffix(labels.length);
-        const widthCh = Math.max(1, cell.toCol - cell.fromCol);
-        const fitted = fitFormulaMarkerReplacement(
-          formatted,
-          marker,
-          widthCh,
-          formatted.startsWith("!ERROR"),
-        );
-
-        items.push({
-          from: line.from + cell.fromCol,
-          to: line.from + cell.toCol,
-          deco: Decoration.replace({
-            widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
-          }),
-        });
-        items.push({
-          from: line.to,
-          to: line.to,
-          deco: Decoration.widget({
-            widget: new CalcResultWidget(formulaGhostExplanation(labels), " "),
-            side: 1,
-          }),
-        });
-        continue;
-      }
-      const prefix = lineUsesAssignmentGhostPrefix(line.text) ? " = " : " \u2192 ";
-      items.push({
-        from: line.to,
-        to: line.to,
-        deco: Decoration.widget({
-          widget: new CalcResultWidget(result, prefix),
-          side: 1,
-        }),
-      });
-    }
-  }
-
-  // Highlight the focused table cell's pipe characters.
   const cursor = selection.head;
-  if (cursor >= 0 && cursor <= state.doc.length) {
-    const cursorLine = state.doc.lineAt(cursor);
-    if (calcLineInSpans(cursorLine.number, spans)) {
-      const text = cursorLine.text;
-      const trimmed = text.trim();
-      if (trimmed.startsWith("|") && trimmed.endsWith("|")) {
-        const col = cursor - cursorLine.from;
-        const leftPipe = text.lastIndexOf("|", Math.max(0, col - 1));
-        const rightPipe = text.indexOf("|", Math.max(col, leftPipe + 1));
-        if (leftPipe >= 0 && rightPipe > leftPipe) {
-          items.push({
-            from: cursorLine.from + leftPipe,
-            to: cursorLine.from + leftPipe + 1,
-            deco: focusedPipeMark,
-          });
-          items.push({
-            from: cursorLine.from + rightPipe,
-            to: cursorLine.from + rightPipe + 1,
-            deco: focusedPipeMark,
-          });
-        }
-      }
-    }
+  if (cursor < 0 || cursor > state.doc.length) return;
+  const cursorLine = state.doc.lineAt(cursor);
+  if (!calcLineInSpans(cursorLine.number, spans)) return;
+  const text = cursorLine.text;
+  const trimmed = text.trim();
+  if (!(trimmed.startsWith("|") && trimmed.endsWith("|"))) return;
+  const col = cursor - cursorLine.from;
+  const leftPipe = text.lastIndexOf("|", Math.max(0, col - 1));
+  const rightPipe = text.indexOf("|", Math.max(col, leftPipe + 1));
+  if (leftPipe >= 0 && rightPipe > leftPipe) {
+    items.push({
+      from: cursorLine.from + leftPipe,
+      to: cursorLine.from + leftPipe + 1,
+      deco: focusedPipeMark,
+    });
+    items.push({
+      from: cursorLine.from + rightPipe,
+      to: cursorLine.from + rightPipe + 1,
+      deco: focusedPipeMark,
+    });
   }
+}
 
+// Range additions must be sorted by from-position; collect into a throwaway
+// list then add to the builder in document order.
+export function finalizeCalcItems(items: CalcDecorationItem[]): DecorationSet {
   items.sort((a, b) => a.from - b.from || a.to - b.to);
   const builder = new RangeSetBuilder<Decoration>();
   for (const item of items) {
@@ -764,6 +572,239 @@ function buildCalcDecorationsForSpans(
   }
   return builder.finish();
 }
+
+function buildCalcDecorationsForSpans(
+  state: EditorState,
+  spans: readonly CalcVisibleLineSpan[],
+): DecorationSet {
+  if (spans.length === 0) return Decoration.none;
+  const calcCtx = makeCalcEmitContext(state);
+  const items: CalcDecorationItem[] = [];
+
+  for (const span of spans) {
+    const fromLine = Math.max(1, span.fromLine);
+    const toLine = Math.min(state.doc.lines, span.toLine);
+    for (let lineNumber = fromLine; lineNumber <= toLine; lineNumber++) {
+      emitCalcLineDecorations(items, state.doc.line(lineNumber), lineNumber, calcCtx);
+    }
+  }
+
+  emitCalcFocusedPipe(items, state, spans);
+  return finalizeCalcItems(items);
+}
+
+export interface CalcLineEmitContext {
+  results: Map<number, string>;
+  cellResults: Map<number, TableCellEvaluation[]>;
+  selection: SelectionRange;
+  collapsedSelection: boolean;
+  cursorLineNumber: number;
+}
+
+// Per-line calc decoration emit, shared by the standalone span builder and
+// the combined viewport coordinator. Collects into `items` (order-independent;
+// the caller sorts before building the RangeSet).
+export function emitCalcLineDecorations(
+  items: { from: number; to: number; deco: Decoration }[],
+  line: Line,
+  lineNumber: number,
+  ctx: CalcLineEmitContext,
+): void {
+  const { results, cellResults, selection, collapsedSelection, cursorLineNumber } =
+    ctx;
+  const lineIndex = lineNumber - 1;
+  const result = results.get(lineIndex);
+  const cellsForLine = cellResults.get(lineIndex);
+  if (result == null && (!cellsForLine || cellsForLine.length === 0)) return;
+
+  const segments = cachedCalcFindTableFormulaSegments(line.text);
+  if (segments.length > 0) {
+    const cells = cellsForLine ?? [];
+    const canUseLineMemo = collapsedSelection && lineNumber !== cursorLineNumber;
+    let lineMemoKey: string | null = null;
+    if (canUseLineMemo) {
+      lineMemoKey = formulaLineRenderCacheKey(line.text, result ?? null, cells);
+      const memoHit = cachedFormulaLineDecorationGet(lineMemoKey);
+      if (memoHit) {
+        for (const replacement of memoHit.replacements) {
+          items.push({
+            from: line.from + replacement.fromChar,
+            to: line.from + replacement.toChar,
+            deco: Decoration.replace({
+              widget: new FormulaCellWidget(
+                replacement.value,
+                replacement.marker,
+                replacement.widthCh,
+              ),
+            }),
+          });
+        }
+        if (memoHit.trailer.length > 0) {
+          items.push({
+            from: line.to,
+            to: line.to,
+            deco: Decoration.widget({
+              widget: new CalcResultWidget(memoHit.trailer, " "),
+              side: 1,
+            }),
+          });
+        }
+        return;
+      }
+    }
+    const cellsByIndex = new Map<number, { value: string; hasError: boolean }>();
+    for (const cell of cells) {
+      cellsByIndex.set(cell.cell_index, {
+        value: formatFormulaDisplayValue(cell.value),
+        hasError: cell.error_kind != null,
+      });
+    }
+    const lineFallback = result == null
+      ? null
+      : {
+          value: formatFormulaDisplayValue(result),
+          hasError: result.trimStart().startsWith("!ERROR"),
+        };
+    const valueForCell = (
+      cellIndex: number,
+      segmentIndex: number,
+    ): { value: string; hasError: boolean } | null => {
+      const hit = cellsByIndex.get(cellIndex);
+      if (!hit) {
+        // Keep the first formula cell stable if per-cell payload is
+        // temporarily absent but legacy per-line result is available.
+        if (segmentIndex === 0 && lineFallback) return lineFallback;
+        return null;
+      }
+      return hit;
+    };
+
+    const trailerParts: string[] = [];
+    const memoReplacements: CachedFormulaLineDecoration["replacements"] = [];
+    let memoEligible = canUseLineMemo;
+    segments.forEach((seg, fi) => {
+      const marker = formulaMarkerToken(fi);
+      const computed = valueForCell(seg.cellIndex, fi);
+      const formulaSource = segmentFormulaSource(line.text, seg);
+      const editingCell = selectionTouchesSegment(
+        selection,
+        line.from,
+        seg.cellLeftPipeChar + 1,
+        seg.cellRightPipeChar,
+      );
+
+      if (computed && !computed.hasError && !editingCell) {
+        const widthCh = Math.max(1, seg.toChar - seg.fromChar);
+        const fitted = fitFormulaMarkerReplacement(
+          computed.value,
+          marker,
+          widthCh,
+          computed.hasError,
+        );
+        items.push({
+          from: line.from + seg.fromChar,
+          to: line.from + seg.toChar,
+          deco: Decoration.replace({
+            widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
+          }),
+        });
+        memoReplacements.push({
+          fromChar: seg.fromChar,
+          toChar: seg.toChar,
+          value: fitted.value,
+          marker: fitted.marker,
+          widthCh,
+        });
+        trailerParts.push(`${marker} \u279c ${formulaSource}`);
+        return;
+      }
+
+      if (computed && !computed.hasError && editingCell) {
+        memoEligible = false;
+        trailerParts.push(`${marker} \u279c ${computed.value}`);
+        return;
+      }
+
+      memoEligible = false;
+      if (formulaSource.length > 0) {
+        trailerParts.push(`${marker} \u279c ${formulaSource}`);
+      }
+    });
+
+    if (trailerParts.length > 0) {
+      items.push({
+        from: line.to,
+        to: line.to,
+        deco: Decoration.widget({
+          widget: new CalcResultWidget(trailerParts.join("  "), " "),
+          side: 1,
+        }),
+      });
+    }
+
+    if (memoEligible && lineMemoKey) {
+      cachedFormulaLineDecorationSet(lineMemoKey, {
+        replacements: memoReplacements,
+        trailer: trailerParts.join("  "),
+      });
+    }
+
+    return;
+  }
+
+  // Non-formula line: legacy single calc-ghost trailer.
+  if (result == null) return;
+  const cell = findSingleCalcTableCell(line.text);
+  const labels = cell ? builtinFormulaLabels(cell.expr) : [];
+  if (cell && labels.length > 0) {
+    const revealBounds = tableCellBoundsForSegment(line.text, cell) ?? {
+      fromCol: cell.fromCol,
+      toCol: cell.toCol,
+    };
+    const editingCell = selectionTouchesSegment(
+      selection,
+      line.from,
+      revealBounds.fromCol,
+      revealBounds.toCol,
+    );
+    if (editingCell) return;
+
+    const formatted = formatFormulaDisplayValue(result);
+    const marker = formulaMarkerSuffix(labels.length);
+    const widthCh = Math.max(1, cell.toCol - cell.fromCol);
+    const fitted = fitFormulaMarkerReplacement(
+      formatted,
+      marker,
+      widthCh,
+      formatted.startsWith("!ERROR"),
+    );
+
+    items.push({
+      from: line.from + cell.fromCol,
+      to: line.from + cell.toCol,
+      deco: Decoration.replace({
+        widget: new FormulaCellWidget(fitted.value, fitted.marker, widthCh),
+      }),
+    });
+    items.push({
+      from: line.to,
+      to: line.to,
+      deco: Decoration.widget({
+        widget: new CalcResultWidget(formulaGhostExplanation(labels), " "),
+        side: 1,
+      }),
+    });
+    return;
+  }
+  const prefix = lineUsesAssignmentGhostPrefix(line.text) ? " = " : " \u2192 ";
+  items.push({
+    from: line.to,
+    to: line.to,
+    deco: Decoration.widget({
+      widget: new CalcResultWidget(result, prefix),
+      side: 1,
+    }),
+  });}
 
 function buildCalcDecorations(
   view: EditorView,
@@ -913,7 +954,11 @@ function calcDecorationsPlugin() {
         const startedAt = profilingEnabled ? editorProfilerNowMs() : 0;
         const metrics = profilingEnabled ? calcDecorationBuildMetrics(view) : null;
         try {
-          const next = buildCalcDecorations(view);
+          // The markdown plugin runs first and, on a full rebuild, computes the
+          // calc set in the same single viewport pass. Reuse it when fresh for
+          // this dispatch; otherwise build our own.
+          const next =
+            takeFreshCombinedCalcDecorations(view) ?? buildCalcDecorations(view);
           if (profilingEnabled) {
             recordEditorProfilerSample(
               "calc.decorations.safeBuild",

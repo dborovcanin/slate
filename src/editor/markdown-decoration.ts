@@ -5,7 +5,16 @@ import {
 } from "@codemirror/state";
 import { Decoration, EditorView, ViewPlugin, WidgetType } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import { variableIndexField } from "./calc-decoration.ts";
+import {
+  variableIndexField,
+  makeCalcEmitContext,
+  emitCalcLineDecorations,
+  emitCalcFocusedPipe,
+  finalizeCalcItems,
+  expandedCalcVisibleSpans,
+  type CalcDecorationItem,
+} from "./calc-decoration.ts";
+import { stashCombinedCalcDecorations } from "./decoration-share.ts";
 import type { VariableIndexEntry } from "../api.ts";
 import { resolveNoteImagePaths, resolveWikiLinks } from "../api.ts";
 import { state } from "../state.ts";
@@ -18,6 +27,7 @@ import {
   markdownFindInlineTokens,
   markdownInlineMarkerComponentRanges,
   markdownTokenizeCodeLine,
+  type MarkdownAnalyzedLine,
   type MarkdownCodeToken as SharedCodeToken,
   type MarkdownInlineMarkerComponentRange as SharedInlineMarkerComponentRange,
   type MarkdownInlineToken as SharedInlineToken,
@@ -1198,6 +1208,57 @@ export class FenceCheckpointCache {
   }
 }
 
+/** Per-line markdown decoration emit, shared by the standalone span builder and
+ * the combined viewport coordinator so both produce byte-identical output from
+ * one analyzed line. Adds to `builder` in document order. */
+export interface MarkdownLineEmitContext {
+  matcher: VariableMatcher;
+  activeSelection?: ActiveSelection;
+  profiling?: MarkdownBuildProfiling;
+  wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null;
+  imagePreviewResolver?: (lineNumber: number, src: string) => ResolvedImagePreview | null;
+  resolveWikiLinksForLine?: (lineNumber: number) => boolean;
+  resolveImagesForLine?: (lineNumber: number) => boolean;
+}
+
+export function emitMarkdownLineDecorations(
+  builder: RangeSetBuilder<Decoration>,
+  line: { from: number; to: number; text: string; number: number },
+  lineNo: number,
+  lineAnalysis: MarkdownAnalyzedLine,
+  ctx: MarkdownLineEmitContext,
+): void {
+  const info = lineAnalysis.info;
+
+  if (info.isCodeFence) {
+    builder.add(line.from, line.from, decCodeFenceLine);
+    builder.add(line.from, line.to, decFenceToken);
+    return;
+  }
+
+  if (lineAnalysis.inCodeBlock) {
+    builder.add(line.from, line.from, decCodeBlockLine);
+    addCodeSyntaxDecorations(builder, line.from, lineAnalysis.codeTokens);
+    return;
+  }
+
+  decorateContentLine(
+    builder,
+    line,
+    info,
+    ctx.matcher,
+    lineAnalysis.inlineTokens,
+    ctx.activeSelection,
+    ctx.profiling,
+    ctx.resolveWikiLinksForLine?.(lineNo) === false ? undefined : ctx.wikiLinkResolver,
+    ctx.resolveImagesForLine?.(lineNo) === false
+      ? undefined
+      : ctx.imagePreviewResolver
+        ? (src: string) => ctx.imagePreviewResolver!(lineNo, src)
+        : undefined,
+  );
+}
+
 export function buildMarkdownDecorationsForSpans(
   doc: Text,
   spans: readonly VisibleLineSpan[],
@@ -1213,6 +1274,15 @@ export function buildMarkdownDecorationsForSpans(
   );
   const builder = new RangeSetBuilder<Decoration>();
   const matcher = options.variableMatcher ?? createVariableMatcher(variableIndex);
+  const emitContext: MarkdownLineEmitContext = {
+    matcher,
+    activeSelection,
+    profiling,
+    wikiLinkResolver: options.wikiLinkResolver,
+    imagePreviewResolver: options.imagePreviewResolver,
+    resolveWikiLinksForLine: options.resolveWikiLinksForLine,
+    resolveImagesForLine: options.resolveImagesForLine,
+  };
 
   for (const span of sortedSpans) {
     const fromLine = Math.max(1, span.fromLine);
@@ -1247,37 +1317,7 @@ export function buildMarkdownDecorationsForSpans(
       const line = doc.line(lineNo);
       const lineAnalysis = analysis.lines[idx];
       if (!lineAnalysis) continue;
-      const info = lineAnalysis.info;
-
-      if (info.isCodeFence) {
-        builder.add(line.from, line.from, decCodeFenceLine);
-        builder.add(line.from, line.to, decFenceToken);
-        continue;
-      }
-
-      if (lineAnalysis.inCodeBlock) {
-        builder.add(line.from, line.from, decCodeBlockLine);
-        addCodeSyntaxDecorations(builder, line.from, lineAnalysis.codeTokens);
-        continue;
-      }
-
-      decorateContentLine(
-        builder,
-        line,
-        info,
-        matcher,
-        lineAnalysis.inlineTokens,
-        activeSelection,
-        profiling,
-        options.resolveWikiLinksForLine?.(lineNo) === false
-          ? undefined
-          : options.wikiLinkResolver,
-        options.resolveImagesForLine?.(lineNo) === false
-          ? undefined
-          : options.imagePreviewResolver
-            ? (src: string) => options.imagePreviewResolver!(lineNo, src)
-            : undefined,
-      );
+      emitMarkdownLineDecorations(builder, line, lineNo, lineAnalysis, emitContext);
     }
   }
 
@@ -1329,7 +1369,25 @@ function lineInVisibleSpans(lineNumber: number, spans: readonly VisibleLineSpan[
   return false;
 }
 
-function buildMarkdownDecorations(
+export interface CombinedViewportDecorations {
+  markdown: DecorationSet;
+  calc: DecorationSet;
+}
+
+/**
+ * Single viewport iteration producing BOTH the markdown and calc decoration
+ * sets. The markdown plugin (registered first) drives this; the calc set is
+ * stashed per-view via {@link stashCombinedCalcDecorations} and read by the calc
+ * plugin in the same dispatch, so the two plugins share one viewport scan
+ * instead of iterating the visible range independently.
+ *
+ * Each set is sliced to its own margin (markdown {@link VIEWPORT_MARGIN_LINES},
+ * calc 80) over the merged union span, so output is byte-identical to the
+ * standalone builders. The markdown analysis is seeded with the correct fence
+ * state at each union-span start, so per-line results match the per-md-span
+ * analysis exactly.
+ */
+function buildCombinedViewportDecorations(
   view: EditorView,
   fenceCache: FenceCheckpointCache,
   matcherCache: VariableMatcherCache,
@@ -1337,30 +1395,84 @@ function buildMarkdownDecorations(
   profiling?: MarkdownBuildProfiling,
   wikiLinkResolver?: (shortId: string) => WikiLinkResolution | null,
   imagePreviewResolver?: (lineNumber: number, src: string) => ResolvedImagePreview | null,
-): DecorationSet {
+): CombinedViewportDecorations {
   const doc = view.state.doc;
   const variableIndex = view.state.field(variableIndexField, false) ?? [];
   const selection = view.state.selection.main;
-  const spans = expandedVisibleSpans(view, marginLines);
+  const mdSpans = expandedVisibleSpans(view, marginLines);
+  const calcSpans = expandedCalcVisibleSpans(view);
+
+  if (mdSpans.length === 0 && calcSpans.length === 0) {
+    return { markdown: Decoration.none, calc: Decoration.none };
+  }
+
+  const unionSpans = mergeLineSpans([...mdSpans, ...calcSpans]);
   const strictVisibleSpans = visibleSpans(view);
   const matcher = matcherCache.get(variableIndex);
-  return buildMarkdownDecorationsForSpans(doc, spans, variableIndex, {
-    from: selection.from,
-    to: selection.to,
-    empty: selection.empty,
-    assoc: selection.assoc,
-  }, {
-    getFenceStateBeforeLine: (lineNumber) =>
-      fenceCache.getStateBeforeLine(doc, lineNumber),
-    variableMatcher: matcher,
+  const mdEmitCtx: MarkdownLineEmitContext = {
+    matcher,
+    activeSelection: {
+      from: selection.from,
+      to: selection.to,
+      empty: selection.empty,
+      assoc: selection.assoc,
+    },
     profiling,
     wikiLinkResolver,
+    imagePreviewResolver,
     resolveWikiLinksForLine: (lineNumber) =>
       lineInVisibleSpans(lineNumber, strictVisibleSpans),
-    imagePreviewResolver,
     resolveImagesForLine: (lineNumber) =>
       lineInVisibleSpans(lineNumber, strictVisibleSpans),
-  });
+  };
+  const mdBuilder = new RangeSetBuilder<Decoration>();
+  const calcCtx = makeCalcEmitContext(view.state);
+  const calcItems: CalcDecorationItem[] = [];
+
+  for (const span of unionSpans) {
+    const fromLine = Math.max(1, span.fromLine);
+    const toLine = Math.min(doc.lines, span.toLine);
+    if (fromLine > toLine) continue;
+    if (profiling) profiling.spanCount += 1;
+
+    const chunkLines: string[] = [];
+    for (let lineNo = fromLine; lineNo <= toLine; lineNo++) {
+      chunkLines.push(doc.line(lineNo).text);
+    }
+    const fenceState = cloneFenceState(fenceCache.getStateBeforeLine(doc, fromLine));
+    const analyzeStartedAt = profiling ? editorProfilerNowMs() : 0;
+    const analysis = markdownAnalyzeLines(chunkLines, fenceState);
+    if (profiling) {
+      profiling.analyzeLinesMs += editorProfilerNowMs() - analyzeStartedAt;
+    }
+
+    for (let idx = 0; idx < analysis.lines.length; idx++) {
+      const lineNo = fromLine + idx;
+      if (lineNo > toLine) break;
+      const line = doc.line(lineNo);
+
+      if (lineInVisibleSpans(lineNo, mdSpans)) {
+        const lineAnalysis = analysis.lines[idx];
+        if (lineAnalysis) {
+          if (profiling) {
+            profiling.lineCount += 1;
+            profiling.totalChars += line.text.length;
+            if (line.text.length > profiling.maxLineLength) {
+              profiling.maxLineLength = line.text.length;
+            }
+          }
+          emitMarkdownLineDecorations(mdBuilder, line, lineNo, lineAnalysis, mdEmitCtx);
+        }
+      }
+
+      if (lineInVisibleSpans(lineNo, calcSpans)) {
+        emitCalcLineDecorations(calcItems, line, lineNo, calcCtx);
+      }
+    }
+  }
+
+  emitCalcFocusedPipe(calcItems, view.state, calcSpans);
+  return { markdown: mdBuilder.finish(), calc: finalizeCalcItems(calcItems) };
 }
 
 function lineChecklistRevealRanges(
@@ -2305,7 +2417,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           newImageSources.add(source);
           return null;
         };
-        const next = buildMarkdownDecorations(
+        const combined = buildCombinedViewportDecorations(
           view,
           this.fenceCache,
           this.matcherCache,
@@ -2314,6 +2426,10 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           wikiLinkResolver,
           imagePreviewResolver,
         );
+        const next = combined.markdown;
+        // Share this dispatch's calc set with the calc plugin (runs after this
+        // one), so both front-of-viewport scans collapse into this single pass.
+        stashCombinedCalcDecorations(view, combined.calc);
         for (const shortId of newIds) {
           if (this.resolvingIds.has(shortId)) continue;
           this.resolvingIds.add(shortId);
