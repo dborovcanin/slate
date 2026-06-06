@@ -1684,10 +1684,10 @@ impl TerminalApp {
                         .map(|r| format!("backed up notes to {}", r.path));
                         let _ = tx.send(super::BackupThreadResult::ExportDone(result));
                     });
-                    self.backup_rx = Some(rx);
-                    self.backup_anim_op = super::BackupAnimOp::Export;
-                    self.backup_anim_dots = 1;
-                    self.backup_anim_last_tick = Some(std::time::Instant::now());
+                    self.backup.rx = Some(rx);
+                    self.backup.anim_op = super::BackupAnimOp::Export;
+                    self.backup.anim_dots = 1;
+                    self.backup.anim_last_tick = Some(std::time::Instant::now());
                     self.status = "exporting backup.".to_string();
                     return;
                 }
@@ -1708,10 +1708,10 @@ impl TerminalApp {
                             crate::commands::backup::stage_restore_from_zip(&path).map(|_| ());
                         let _ = tx.send(super::BackupThreadResult::LoadStageDone(result));
                     });
-                    self.backup_rx = Some(rx);
-                    self.backup_anim_op = super::BackupAnimOp::Load;
-                    self.backup_anim_dots = 1;
-                    self.backup_anim_last_tick = Some(std::time::Instant::now());
+                    self.backup.rx = Some(rx);
+                    self.backup.anim_op = super::BackupAnimOp::Load;
+                    self.backup.anim_dots = 1;
+                    self.backup.anim_last_tick = Some(std::time::Instant::now());
                     self.status = "loading backup.".to_string();
                     return;
                 }

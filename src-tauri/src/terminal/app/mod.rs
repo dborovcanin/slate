@@ -30,8 +30,9 @@ use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 enum BackupAnimOp {
+    #[default]
     Export,
     Load,
 }
@@ -406,6 +407,24 @@ struct RenderCaches {
     table_display_col_width_cache: FxHashMap<(usize, u64), Vec<usize>>,
 }
 
+/// Background-backup thread handle + the status-bar dot animation that runs
+/// while an export/load is in flight.
+#[derive(Default)]
+struct BackupState {
+    rx: Option<mpsc::Receiver<BackupThreadResult>>,
+    anim_op: BackupAnimOp,
+    anim_dots: u8,
+    anim_last_tick: Option<Instant>,
+}
+
+/// Clipboard-watch polling state (the `:clipwatch` feature). Self-contained;
+/// no `Default` because `last_poll` seeds from `Instant::now()`.
+struct ClipboardWatch {
+    enabled: bool,
+    last_text: Option<String>,
+    last_poll: Instant,
+}
+
 struct TerminalApp {
     active_note: Note,
     lines: Vec<String>,
@@ -462,10 +481,7 @@ struct TerminalApp {
     command_history_index: Option<usize>,
     quit: bool,
     force_quit: bool,
-    backup_rx: Option<mpsc::Receiver<BackupThreadResult>>,
-    backup_anim_op: BackupAnimOp,
-    backup_anim_dots: u8,
-    backup_anim_last_tick: Option<Instant>,
+    backup: BackupState,
     // Date picker state
     date_year: i32,
     date_month: u32, // 1-12
@@ -535,9 +551,7 @@ struct TerminalApp {
     // Track which mode entered command bar from
     command_bar_from_normal: bool,
     // Clipboard watch
-    clipboard_watch_enabled: bool,
-    clipboard_watch_last_text: Option<String>,
-    clipboard_watch_last_poll: Instant,
+    clipboard_watch: ClipboardWatch,
     // Undo/redo
     history: LineHistory,
     undo_actions: Vec<UndoAction>,
@@ -899,10 +913,7 @@ impl TerminalApp {
             command_history_index: None,
             quit: false,
             force_quit: false,
-            backup_rx: None,
-            backup_anim_op: BackupAnimOp::Export,
-            backup_anim_dots: 0,
-            backup_anim_last_tick: None,
+            backup: BackupState::default(),
             date_year: 0,
             date_month: 0,
             date_day: 0,
@@ -974,9 +985,11 @@ impl TerminalApp {
             render_file_language,
             folds: FoldingState::empty(Vec::new(), Vec::new()),
             command_bar_from_normal: false,
-            clipboard_watch_enabled: false,
-            clipboard_watch_last_text: None,
-            clipboard_watch_last_poll: Instant::now(),
+            clipboard_watch: ClipboardWatch {
+                enabled: false,
+                last_text: None,
+                last_poll: Instant::now(),
+            },
             history,
             undo_actions: Vec::new(),
             undo_action_pos: 0,
@@ -1050,21 +1063,22 @@ impl TerminalApp {
                         idle_start.elapsed(),
                     );
                     // Advance the dot animation (~1s per step) while a backup op is running.
-                    if self.backup_rx.is_some() {
+                    if self.backup.rx.is_some() {
                         let now = Instant::now();
                         let elapsed = self
-                            .backup_anim_last_tick
+                            .backup
+                            .anim_last_tick
                             .map(|t| now.duration_since(t))
                             .unwrap_or(Duration::from_secs(1));
                         if elapsed >= Duration::from_millis(1000) {
-                            self.backup_anim_dots = self.backup_anim_dots % 3 + 1;
-                            self.backup_anim_last_tick = Some(now);
-                            let label = match self.backup_anim_op {
+                            self.backup.anim_dots = self.backup.anim_dots % 3 + 1;
+                            self.backup.anim_last_tick = Some(now);
+                            let label = match self.backup.anim_op {
                                 BackupAnimOp::Export => "exporting backup",
                                 BackupAnimOp::Load => "loading backup",
                             };
                             self.status =
-                                format!("{label}{}", ".".repeat(self.backup_anim_dots as usize));
+                                format!("{label}{}", ".".repeat(self.backup.anim_dots as usize));
                             self.render_dirty = true;
                         }
                     }
@@ -1091,12 +1105,12 @@ impl TerminalApp {
     }
 
     fn maybe_finish_backup_op(&mut self, db: &Db) {
-        let result = match &self.backup_rx {
+        let result = match &self.backup.rx {
             Some(rx) => match rx.try_recv() {
                 Ok(result) => result,
                 Err(mpsc::TryRecvError::Empty) => return,
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.backup_rx = None;
+                    self.backup.rx = None;
                     self.status = "backup operation failed unexpectedly".to_string();
                     self.render_dirty = true;
                     return;
@@ -1104,7 +1118,7 @@ impl TerminalApp {
             },
             None => return,
         };
-        self.backup_rx = None;
+        self.backup.rx = None;
         match result {
             BackupThreadResult::ExportDone(Ok(msg)) => {
                 self.status = msg;
@@ -1410,21 +1424,21 @@ impl TerminalApp {
     }
 
     fn start_clipboard_watch(&mut self) -> bool {
-        if self.clipboard_watch_enabled {
+        if self.clipboard_watch.enabled {
             return false;
         }
-        self.clipboard_watch_enabled = true;
-        self.clipboard_watch_last_text = clipboard::read_clipboard_via_commands();
-        self.clipboard_watch_last_poll =
+        self.clipboard_watch.enabled = true;
+        self.clipboard_watch.last_text = clipboard::read_clipboard_via_commands();
+        self.clipboard_watch.last_poll =
             Instant::now() - Duration::from_millis(CLIPBOARD_WATCH_POLL_MS);
         true
     }
 
     fn stop_clipboard_watch(&mut self) -> bool {
-        if !self.clipboard_watch_enabled {
+        if !self.clipboard_watch.enabled {
             return false;
         }
-        self.clipboard_watch_enabled = false;
+        self.clipboard_watch.enabled = false;
         true
     }
 
@@ -1459,7 +1473,7 @@ impl TerminalApp {
     }
 
     fn maybe_clipboard_watch(&mut self) {
-        if !self.clipboard_watch_enabled {
+        if !self.clipboard_watch.enabled {
             return;
         }
         if !self.active_note_is_editable() {
@@ -1468,11 +1482,11 @@ impl TerminalApp {
         if !matches!(self.mode, UiMode::Editor | UiMode::Normal) {
             return;
         }
-        if self.clipboard_watch_last_poll.elapsed() < Duration::from_millis(CLIPBOARD_WATCH_POLL_MS)
+        if self.clipboard_watch.last_poll.elapsed() < Duration::from_millis(CLIPBOARD_WATCH_POLL_MS)
         {
             return;
         }
-        self.clipboard_watch_last_poll = Instant::now();
+        self.clipboard_watch.last_poll = Instant::now();
 
         let Some(text) = clipboard::read_clipboard_via_commands() else {
             return;
@@ -1480,11 +1494,11 @@ impl TerminalApp {
         if text.is_empty() {
             return;
         }
-        if self.clipboard_watch_last_text.as_deref() == Some(text.as_str()) {
+        if self.clipboard_watch.last_text.as_deref() == Some(text.as_str()) {
             return;
         }
 
-        self.clipboard_watch_last_text = Some(text.clone());
+        self.clipboard_watch.last_text = Some(text.clone());
         let mut pasted = text;
         if !pasted.ends_with('\n') {
             pasted.push('\n');

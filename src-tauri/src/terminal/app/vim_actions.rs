@@ -122,7 +122,7 @@ impl TerminalApp {
         if register.mode == VimRegisterMode::Charwise && register.text.is_empty() {
             return None;
         }
-        self.clipboard_watch_last_text = Some(register.text.clone());
+        self.clipboard_watch.last_text = Some(register.text.clone());
         let backend = clipboard::copy_text_to_clipboard(&register.text);
         self.last_clipboard_backend = backend;
         self.clipboard = register;

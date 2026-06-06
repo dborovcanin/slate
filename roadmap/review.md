@@ -71,7 +71,14 @@ Keystroke decoration latency on large documents (>5k lines) drops from O(viewpor
 
 This was already listed in `roadmap/plan.md`'s Next Sprint Checklist as `TerminalApp state decomposition (EditorModel, CalcRuntime, OverlayState, RenderState, FoldRuntime)`.
 
-**Progress (this pass): first slice done — `RenderCaches`.** Pulled the seven render-time cache fields (`wiki_link_render_cache` + `_order`, `wiki_link_line_render_cache` + `_order`, `table_formula_segment_cache` + `_order`, `table_display_col_width_cache`) into a `#[derive(Default)] struct RenderCaches`, accessed as `self.render_caches.*` (33 call sites across `rendering.rs`/`command_search_switcher.rs`/`editing.rs`). No borrow friction — these are render-path-only with disjoint field access. `joined_text_cache` and `switcher_score_scratch` were **deliberately excluded** from this slice: the former is read/written on the edit/save hot paths alongside `self.lines` (real partial-borrow risk), the latter belongs to the switcher subsystem, not rendering.
+**Progress (this pass): three substruct slices done.**
+- `RenderCaches` — the seven render-time cache fields (`wiki_link_render_cache` + `_order`, `wiki_link_line_render_cache` + `_order`, `table_formula_segment_cache` + `_order`, `table_display_col_width_cache`) → `#[derive(Default)] struct RenderCaches`, `self.render_caches.*` (33 sites). No borrow friction (render-path-only, disjoint access).
+- `BackupState` — `backup_rx` / `backup_anim_op` / `backup_anim_dots` / `backup_anim_last_tick` → `self.backup.{rx,anim_op,anim_dots,anim_last_tick}` (`#[derive(Default)]`; added `#[default] Export` to `BackupAnimOp`). ~16 sites, `mod.rs` + `command_search_switcher.rs`.
+- `ClipboardWatch` — `clipboard_watch_enabled/last_text/last_poll` → `self.clipboard_watch.{enabled,last_text,last_poll}` (no `Default` — `last_poll` seeds from `Instant::now()`, built inline). ~12 sites, `mod.rs` + `vim_actions.rs` (+ one test). Note: distinct from the vim-register `self.clipboard`, left untouched.
+
+`joined_text_cache` and `switcher_score_scratch` remain **deliberately excluded**: the former is read/written on the edit/save hot paths alongside `self.lines` (real partial-borrow risk — defer to an `EditorModel` slice that owns both), the latter belongs to the switcher subsystem.
+
+Mechanical note: multi-line `self\n    .field` accesses are not caught by a contiguous `self.field` find/replace — sweep for leftover `.old_field` (leading-dot) hits, and remember test modules reference fields too.
 
 **Remaining approach**
 Continue by subsystem in small slices (the `plan.md` targets: `EditorModel`, `CalcRuntime`, `OverlayState`, `FoldRuntime`). For each, check that call sites don't hold `&mut self.<substruct>` across a `&self` method call; back out a slice if it forces awkward partial-borrow gymnastics the flat struct hides. `joined_text_cache` is a good canary for that risk — defer it until an `EditorModel` slice can own `lines` + `joined_text_cache` together.

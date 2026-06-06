@@ -435,19 +435,19 @@ fn clip_watch_commands_toggle_terminal_watcher() {
     app.mode = UiMode::Normal;
 
     app.execute_terminal_command(&db, "clip-watch on");
-    assert!(app.clipboard_watch_enabled);
+    assert!(app.clipboard_watch.enabled);
     assert_eq!(app.status, "clip-watch started");
 
     app.execute_terminal_command(&db, "clip-watch on");
-    assert!(app.clipboard_watch_enabled);
+    assert!(app.clipboard_watch.enabled);
     assert_eq!(app.status, "clip-watch already active");
 
     app.execute_terminal_command(&db, "clip-watch off");
-    assert!(!app.clipboard_watch_enabled);
+    assert!(!app.clipboard_watch.enabled);
     assert_eq!(app.status, "clip-watch stopped");
 
     app.execute_terminal_command(&db, "clip-watch off");
-    assert!(!app.clipboard_watch_enabled);
+    assert!(!app.clipboard_watch.enabled);
     assert_eq!(app.status, "clip-watch not active");
 
     drop(app);
