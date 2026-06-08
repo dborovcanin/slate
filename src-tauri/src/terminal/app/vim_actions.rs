@@ -78,6 +78,24 @@ fn is_recordable_macro_intent(intent: crate::editor_core::vim::VimIntent) -> boo
     )
 }
 
+fn vim_intent_mirrors_register_to_system_clipboard(
+    intent: crate::editor_core::vim::VimIntent,
+) -> bool {
+    matches!(
+        intent,
+        crate::editor_core::vim::VimIntent::YankLine
+            | crate::editor_core::vim::VimIntent::YankToLineStart
+            | crate::editor_core::vim::VimIntent::YankToLineEnd
+            | crate::editor_core::vim::VimIntent::YankWordForward
+            | crate::editor_core::vim::VimIntent::YankWordBackward
+            | crate::editor_core::vim::VimIntent::YankInsideWord
+            | crate::editor_core::vim::VimIntent::YankAroundWord
+            | crate::editor_core::vim::VimIntent::YankInsidePipe
+            | crate::editor_core::vim::VimIntent::YankAroundPipe
+            | crate::editor_core::vim::VimIntent::YankVisualSelection
+    )
+}
+
 // Ownership: vim intent pipeline, text objects, and vim action application.
 impl TerminalApp {
     pub(super) fn build_vim_context(&self) -> crate::editor_core::vim::VimContext {
@@ -119,24 +137,25 @@ impl TerminalApp {
         &mut self,
         register: VimRegister,
     ) -> Option<ClipboardWriteBackend> {
-        if register.mode == VimRegisterMode::Charwise && register.text.is_empty() {
+        if register.is_empty() {
             return None;
         }
-        self.clipboard_watch.last_text = Some(register.text.clone());
         let backend = clipboard::copy_text_to_clipboard(&register.text);
+        if backend.is_some() {
+            self.clipboard_watch.last_text = Some(register.text.clone());
+        }
         self.last_clipboard_backend = backend;
         self.clipboard = register;
         backend
     }
 
-    pub(super) fn set_clipboard_linewise(
-        &mut self,
-        lines: Vec<String>,
-    ) -> Option<ClipboardWriteBackend> {
-        if lines.is_empty() {
-            return None;
+    pub(super) fn set_vim_register(&mut self, register: VimRegister) -> bool {
+        if register.is_empty() {
+            return false;
         }
-        self.set_clipboard_register(VimRegister::linewise(lines.join("\n")))
+        self.last_clipboard_backend = None;
+        self.clipboard = register;
+        true
     }
 
     pub(super) fn set_clipboard_charwise(&mut self, text: String) -> Option<ClipboardWriteBackend> {
@@ -224,6 +243,7 @@ impl TerminalApp {
     pub(super) fn apply_shared_vim_action_result(
         &mut self,
         result: crate::editor_core::vim_actions::VimActionExecutionResult,
+        mirror_register_to_system_clipboard: bool,
     ) {
         for operation in &result.operations {
             self.apply_edit_operation(operation);
@@ -237,10 +257,15 @@ impl TerminalApp {
                     VimRegisterMode::Linewise
                 }
             };
-            let _ = self.set_clipboard_register(VimRegister {
+            let register = VimRegister {
                 text: register.text,
                 mode,
-            });
+            };
+            if mirror_register_to_system_clipboard {
+                let _ = self.set_clipboard_register(register);
+            } else {
+                let _ = self.set_vim_register(register);
+            }
         }
     }
 
@@ -362,10 +387,15 @@ impl TerminalApp {
             return false;
         }
 
-        if self.mode == UiMode::VisualLine {
-            self.set_clipboard_linewise(yanked);
+        let register = if self.mode == UiMode::VisualLine {
+            VimRegister::linewise(yanked.join("\n"))
         } else {
-            self.set_clipboard_charwise(yanked.join("\n"));
+            VimRegister::charwise(yanked.join("\n"))
+        };
+        if delete {
+            let _ = self.set_vim_register(register);
+        } else {
+            let _ = self.set_clipboard_register(register);
         }
 
         self.mode = UiMode::Normal;
@@ -538,7 +568,10 @@ impl TerminalApp {
                         .collect(),
                     register: shared.register,
                 };
-                self.apply_shared_vim_action_result(mapped);
+                self.apply_shared_vim_action_result(
+                    mapped,
+                    vim_intent_mirrors_register_to_system_clipboard(action.intent),
+                );
                 if had_register {
                     let status = match action.intent {
                         crate::editor_core::vim::VimIntent::DeleteLine => {
@@ -752,8 +785,8 @@ impl TerminalApp {
                     }
                 }
                 crate::editor_core::vim::VimIntent::PasteAfter => {
-                    if let Some(sys_clip_text) = self.read_system_clipboard_text() {
-                        if self.clipboard.is_empty() || self.clipboard.text != sys_clip_text {
+                    if self.clipboard.is_empty() {
+                        if let Some(sys_clip_text) = self.read_system_clipboard_text() {
                             self.clipboard = VimRegister::charwise(sys_clip_text);
                         }
                     }

@@ -171,6 +171,24 @@ function isRecordableMacroIntent(intent: VimIntent): boolean {
   }
 }
 
+function vimIntentMirrorsRegisterToSystemClipboard(intent: VimIntent): boolean {
+  switch (intent) {
+    case VIM_INTENT.YANK_LINE:
+    case VIM_INTENT.YANK_TO_LINE_START:
+    case VIM_INTENT.YANK_TO_LINE_END:
+    case VIM_INTENT.YANK_WORD_FORWARD:
+    case VIM_INTENT.YANK_WORD_BACKWARD:
+    case VIM_INTENT.YANK_INSIDE_WORD:
+    case VIM_INTENT.YANK_AROUND_WORD:
+    case VIM_INTENT.YANK_INSIDE_PIPE:
+    case VIM_INTENT.YANK_AROUND_PIPE:
+    case VIM_INTENT.YANK_VISUAL_SELECTION:
+      return true;
+    default:
+      return false;
+  }
+}
+
 function scopedSharedVimMarginLines(intent: VimIntent, count: number): number {
   const repeats = Math.max(1, count);
   switch (intent) {
@@ -707,9 +725,14 @@ export function vimModeExtension(options: VimOptions = {}) {
 
   const mode = (): VimUiMode => currentMode;
 
-  const setRegister = (text: string, registerMode: VimRegisterMode = "charwise") => {
-    if (registerMode === "charwise" && !text) return;
+  const setLocalRegister = (text: string, registerMode: VimRegisterMode = "charwise") => {
+    if (registerMode === "charwise" && !text) return false;
     unnamedRegister = { text, mode: registerMode };
+    return true;
+  };
+
+  const setSystemRegister = (text: string, registerMode: VimRegisterMode = "charwise") => {
+    if (!setLocalRegister(text, registerMode)) return;
     copyToClipboard(text);
   };
 
@@ -1010,7 +1033,11 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
 
     if (chunks.length > 0) {
-      setRegister(chunks.join("\n"));
+      if (shouldDelete) {
+        setLocalRegister(chunks.join("\n"));
+      } else {
+        setSystemRegister(chunks.join("\n"));
+      }
     }
 
     return chunks.length;
@@ -1059,7 +1086,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       chunks.push(view.state.sliceDoc(line.from, head));
     }
     if (chunks.length > 0) {
-      setRegister(chunks.join("\n"));
+      setSystemRegister(chunks.join("\n"));
       return true;
     }
     return false;
@@ -1074,7 +1101,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       chunks.push(view.state.sliceDoc(head, line.to));
     }
     if (chunks.length > 0) {
-      setRegister(chunks.join("\n"));
+      setSystemRegister(chunks.join("\n"));
       return true;
     }
     return false;
@@ -1089,7 +1116,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       if (from === to) break;
       const start = Math.min(from, to);
       const end = Math.max(from, to);
-      setRegister(view.state.sliceDoc(start, end));
+      setLocalRegister(view.state.sliceDoc(start, end));
       deleteRange(view, start, end);
       changed = true;
     }
@@ -1105,7 +1132,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       if (from === to) break;
       const start = Math.min(from, to);
       const end = Math.max(from, to);
-      setRegister(view.state.sliceDoc(start, end));
+      setLocalRegister(view.state.sliceDoc(start, end));
       deleteRange(view, start, end);
       changed = true;
     }
@@ -1126,7 +1153,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     if (!resolved) return false;
     const to = Math.min(text.length, target + 1);
     if (to <= from) return false;
-    setRegister(text.slice(from, to));
+    setLocalRegister(text.slice(from, to));
     deleteRange(view, from, to);
     return true;
   };
@@ -1151,7 +1178,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     if (matchIdx <= rel) return false;
     const from = line.from + rel;
     const to = line.from + matchIdx;
-    setRegister(view.state.sliceDoc(from, to));
+    setLocalRegister(view.state.sliceDoc(from, to));
     deleteRange(view, from, to);
     return true;
   };
@@ -1168,7 +1195,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     }
     view.dispatch({ selection: { anchor: origHead }, scrollIntoView: true });
     if (chunks.length > 0) {
-      setRegister(chunks.join(""));
+      setSystemRegister(chunks.join(""));
       return true;
     }
     return false;
@@ -1187,7 +1214,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     view.dispatch({ selection: { anchor: origHead }, scrollIntoView: true });
     if (chunks.length > 0) {
       chunks.reverse();
-      setRegister(chunks.join(""));
+      setSystemRegister(chunks.join(""));
       return true;
     }
     return false;
@@ -1203,12 +1230,12 @@ export function vimModeExtension(options: VimOptions = {}) {
       for (let lineNo = start; lineNo <= end; lineNo++) {
         parts.push(view.state.doc.line(lineNo).text);
       }
-      setRegister(parts.join("\n"), "linewise");
+      setSystemRegister(parts.join("\n"), "linewise");
       return true;
     }
 
     const text = view.state.sliceDoc(view.state.selection.main.from, view.state.selection.main.to);
-    setRegister(text);
+    setSystemRegister(text);
     return true;
   };
 
@@ -1226,7 +1253,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       for (let lineNo = startLine; lineNo <= endLine; lineNo++) {
         parts.push(view.state.doc.line(lineNo).text);
       }
-      setRegister(parts.join("\n"), "linewise");
+      setLocalRegister(parts.join("\n"), "linewise");
 
       let from = view.state.doc.line(startLine).from;
       let to = view.state.doc.line(endLine).to;
@@ -1256,7 +1283,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       if (to <= from) return false;
     }
 
-    setRegister(view.state.sliceDoc(from, to));
+    setLocalRegister(view.state.sliceDoc(from, to));
     view.dispatch({
       changes: { from, to, insert: "" },
       selection: { anchor: from },
@@ -1272,7 +1299,7 @@ export function vimModeExtension(options: VimOptions = {}) {
     for (let lineNo = current; lineNo <= end; lineNo++) {
       parts.push(view.state.doc.line(lineNo).text);
     }
-    setRegister(parts.join("\n"), "linewise");
+    setSystemRegister(parts.join("\n"), "linewise");
     return true;
   };
 
@@ -1284,7 +1311,7 @@ export function vimModeExtension(options: VimOptions = {}) {
       parts.push(view.state.doc.line(lineNo).text);
     }
     if (parts.length === 0) return false;
-    setRegister(parts.join("\n"), "linewise");
+    setLocalRegister(parts.join("\n"), "linewise");
 
     let from = view.state.doc.line(current).from;
     let to = view.state.doc.line(end).to;
@@ -1332,7 +1359,11 @@ export function vimModeExtension(options: VimOptions = {}) {
       );
       if (sharedResult) {
         if (sharedResult.register) {
-          setRegister(sharedResult.register.text, sharedResult.register.mode);
+          if (vimIntentMirrorsRegisterToSystemClipboard(action.intent)) {
+            setSystemRegister(sharedResult.register.text, sharedResult.register.mode);
+          } else {
+            setLocalRegister(sharedResult.register.text, sharedResult.register.mode);
+          }
         }
         if (sharedResult.operations.length > 0) {
           applyEditOperations(view, sharedResult.operations);

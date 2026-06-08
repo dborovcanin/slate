@@ -1,8 +1,11 @@
+#[cfg(not(test))]
 use std::io::{self, IsTerminal as _, Write};
 use std::process::{Command, Stdio};
 
+#[cfg(not(test))]
 use base64::Engine as _;
 
+#[cfg_attr(test, allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClipboardWriteBackend {
     Arboard,
@@ -30,6 +33,12 @@ impl ClipboardWriteBackend {
     }
 }
 
+#[cfg(test)]
+pub fn copy_text_to_clipboard(_text: &str) -> Option<ClipboardWriteBackend> {
+    None
+}
+
+#[cfg(not(test))]
 pub fn copy_text_to_clipboard(text: &str) -> Option<ClipboardWriteBackend> {
     if text.is_empty() {
         return None;
@@ -84,6 +93,7 @@ pub fn read_clipboard_via_commands() -> Option<String> {
     None
 }
 
+#[cfg(not(test))]
 fn write_terminal_sequence(sequence: &str) -> bool {
     if io::stdout().is_terminal() {
         let mut out = io::stdout();
@@ -108,6 +118,7 @@ fn write_terminal_sequence(sequence: &str) -> bool {
     false
 }
 
+#[cfg(not(test))]
 fn run_clipboard_write_command(bin: &str, args: &[&str], text: &str) -> bool {
     let mut child = match Command::new(bin)
         .args(args)
@@ -133,6 +144,7 @@ fn run_clipboard_write_command(bin: &str, args: &[&str], text: &str) -> bool {
     matches!(child.wait(), Ok(status) if status.success())
 }
 
+#[cfg(not(test))]
 fn run_clipboard_write_command_with_arg(bin: &str, args: &[&str], text: &str) -> bool {
     matches!(
         Command::new(bin)
@@ -164,6 +176,7 @@ fn run_clipboard_read_command(bin: &str, args: &[&str]) -> Option<String> {
     }
 }
 
+#[cfg(not(test))]
 fn write_clipboard_via_tmux(text: &str) -> bool {
     if run_clipboard_write_command("tmux", &["load-buffer", "-w", "-"], text) {
         return true;
@@ -177,6 +190,7 @@ fn write_clipboard_via_tmux(text: &str) -> bool {
     run_clipboard_write_command_with_arg("tmux", &["set-buffer", "--"], text)
 }
 
+#[cfg(not(test))]
 fn write_clipboard_via_commands(text: &str) -> Option<ClipboardWriteBackend> {
     if run_clipboard_write_command("wl-copy", &[], text) {
         return Some(ClipboardWriteBackend::WlCopy);
@@ -202,6 +216,7 @@ fn write_clipboard_via_commands(text: &str) -> Option<ClipboardWriteBackend> {
     None
 }
 
+#[cfg(not(test))]
 fn build_osc52_sequence(encoded: &str, terminator: &str) -> String {
     if std::env::var_os("TMUX").is_some() {
         return format!("\x1bPtmux;\x1b\x1b]52;c;{encoded}{terminator}\x1b\\");
@@ -212,6 +227,7 @@ fn build_osc52_sequence(encoded: &str, terminator: &str) -> String {
     format!("\x1b]52;c;{encoded}{terminator}")
 }
 
+#[cfg(not(test))]
 fn write_clipboard_via_osc52(text: &str) -> bool {
     let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
     let bel = build_osc52_sequence(&encoded, "\x07");

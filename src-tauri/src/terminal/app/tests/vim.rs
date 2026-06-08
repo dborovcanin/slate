@@ -376,6 +376,53 @@ fn vim_dollar_and_d0_delete_line_ranges() {
 }
 
 #[test]
+fn vim_delete_updates_register_without_syncing_clipboard_watch_text() {
+    let (db, mut app, path) = app_with_note("alpha beta");
+    app.mode = UiMode::Normal;
+    app.clipboard_watch.last_text = Some("external clipboard".to_string());
+    app.editor.cursor_col = 0;
+
+    run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('w')]);
+
+    assert_eq!(app.editor.lines, vec!["beta".to_string()]);
+    assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+    assert_eq!(app.clipboard.text, "alpha ");
+    assert_eq!(
+        app.clipboard_watch.last_text.as_deref(),
+        Some("external clipboard")
+    );
+    assert_eq!(app.last_clipboard_backend, None);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn visual_delete_updates_register_without_syncing_clipboard_watch_text() {
+    let (db, mut app, path) = app_with_note("alpha beta");
+    app.mode = UiMode::Visual;
+    app.clipboard_watch.last_text = Some("external clipboard".to_string());
+    app.editor.selection_anchor = Some((0, 0));
+    app.editor.cursor_col = 4;
+
+    assert!(app.apply_visual_selection_action(true));
+
+    assert_eq!(app.editor.lines, vec![" beta".to_string()]);
+    assert_eq!(app.clipboard.mode, VimRegisterMode::Charwise);
+    assert_eq!(app.clipboard.text, "alpha");
+    assert_eq!(
+        app.clipboard_watch.last_text.as_deref(),
+        Some("external clipboard")
+    );
+    assert_eq!(app.last_clipboard_backend, None);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn move_cursor_left_word_clamps_empty_line_cursor_without_underflow() {
     let (db, mut app, path) = app_with_note("alpha\n\nbeta");
     app.mode = UiMode::Normal;
