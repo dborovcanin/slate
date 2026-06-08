@@ -1025,6 +1025,27 @@ fn normal_jk_movement_through_table_preserves_text_column() {
 }
 
 #[test]
+fn empty_table_row_draws_cursor_inside_editable_cell_slot() {
+    let body = "| sasa | sasasa | sasasa |\n| ---- | ------ | ------ |\n|      |        |        |";
+    let (db, mut app, path) = app_with_note(body);
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 2;
+
+    let mut out = Vec::new();
+    app.draw(&mut out).expect("draw empty table row");
+
+    let expected_screen_col = app.gutter_width() + 3;
+    assert_eq!(
+        app.render_state.last_cursor_col, expected_screen_col,
+        "cursor should render after the opening pipe and padding, not on the pipe"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn typing_space_in_table_cell_allows_followup_word_input() {
     let (db, mut app, path) = app_with_note("| aaa |");
     app.editor.cursor_col = 5; // end of content

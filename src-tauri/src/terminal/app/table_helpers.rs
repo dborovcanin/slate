@@ -400,9 +400,10 @@ pub(super) fn reformat_table_row_for_display(
                 let content_start_byte = left_pipe_byte + 1 + trim_lead;
 
                 let (collapsed, cell_w) = if cb < content_start_byte {
-                    // Cursor is at the pipe or leading space — snap to the
-                    // opening pipe in the output; collapse content without hint.
-                    mapped_cursor = out_pipe_positions.last().copied();
+                    // Cursor is in the cell's leading padding. Keep the
+                    // rendered caret in the editable cell slot instead of
+                    // snapping it back onto the border pipe.
+                    mapped_cursor = Some(out_chars);
                     let (c, _) = collapse_inline_markers(cell_content, None);
                     let w = c.chars().count();
                     (c, w)
@@ -528,12 +529,18 @@ mod tests {
     }
 
     #[test]
-    fn reformat_cursor_at_leading_space_snaps_to_pipe() {
+    fn reformat_cursor_at_leading_space_maps_to_edit_slot() {
         // cursor at char 1 (the space after the opening |, before cell content)
         let line = "| abc | def |".to_string();
         let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[3, 3]), Some(1));
-        // position 1 is the space after the first |; should map to pipe (pos 0)
-        assert_eq!(mc, Some(0), "cursor at leading space maps to opening pipe");
+        assert_eq!(mc, Some(2), "cursor at leading space maps inside the cell");
+    }
+
+    #[test]
+    fn reformat_cursor_in_empty_cell_maps_to_edit_slot() {
+        let line = "|      |        |".to_string();
+        let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[6, 8]), Some(2));
+        assert_eq!(mc, Some(2), "empty cell cursor maps after the pipe padding");
     }
 
     #[test]
