@@ -64,7 +64,10 @@ pub(super) fn table_cursor_cell_index(line: &str, cursor_char: usize) -> Option<
 
 /// Output char positions of the (left, right) pipe bounding cell `cell_idx` in a
 /// reformatted display row. None if the index is out of range.
-pub(super) fn display_cell_pipe_positions(display: &str, cell_idx: usize) -> Option<(usize, usize)> {
+pub(super) fn display_cell_pipe_positions(
+    display: &str,
+    cell_idx: usize,
+) -> Option<(usize, usize)> {
     let mut left = None;
     let mut seen = 0usize;
     for (i, c) in display.chars().enumerate() {

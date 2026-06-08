@@ -8,6 +8,18 @@ use std::time::{Duration, Instant};
 
 // Ownership: key dispatch and per-mode key handling entry points.
 impl TerminalApp {
+    fn key_preserves_vertical_text_column(key: &Key) -> bool {
+        matches!(
+            key,
+            Key::ArrowUp
+                | Key::ArrowDown
+                | Key::PageUp
+                | Key::PageDown
+                | Key::Char('j')
+                | Key::Char('k')
+        )
+    }
+
     fn maybe_record_vim_insert_macro_key(&mut self, key: &Key) {
         if self.vim_macro_replaying {
             return;
@@ -62,6 +74,7 @@ impl TerminalApp {
         let mut should_autoformat = false;
         let mut clamp_table_padding = true;
         let mut moved_cursor = false;
+        let mut preserve_table_column = false;
         let mut refresh_variable_popup = false;
         if !self.active_note_is_editable() && Self::editor_key_may_edit_note(&key) {
             self.set_locked_note_status();
@@ -126,6 +139,7 @@ impl TerminalApp {
                 } else if !self.move_variable_autocomplete_selection(-1) {
                     self.move_cursor_up(1);
                     moved_cursor = true;
+                    preserve_table_column = true;
                 }
             }
             Key::ArrowDown => {
@@ -134,6 +148,7 @@ impl TerminalApp {
                 } else if !self.move_variable_autocomplete_selection(1) {
                     self.move_cursor_down(1);
                     moved_cursor = true;
+                    preserve_table_column = true;
                 }
             }
             Key::ArrowLeft => {
@@ -188,10 +203,12 @@ impl TerminalApp {
             Key::PageUp => {
                 self.move_cursor_up(self.editor_height().saturating_sub(1));
                 moved_cursor = true;
+                preserve_table_column = true;
             }
             Key::PageDown => {
                 self.move_cursor_down(self.editor_height().saturating_sub(1));
                 moved_cursor = true;
+                preserve_table_column = true;
             }
             Key::Home => {
                 self.editor.cursor_col = 0;
@@ -352,7 +369,11 @@ impl TerminalApp {
             Key::Ctrl(_) => {}
         }
 
-        self.adjust_cursor_with_table_padding_guard(clamp_table_padding);
+        if preserve_table_column {
+            self.clamp_cursor_to_line_bounds();
+        } else {
+            self.adjust_cursor_with_table_padding_guard(clamp_table_padding);
+        }
         self.adjust_scroll();
 
         if should_autoformat {
@@ -460,7 +481,11 @@ impl TerminalApp {
             self.status = "-- NORMAL --".to_string();
         }
 
-        self.adjust_cursor();
+        if !doc_mutated && Self::key_preserves_vertical_text_column(&key) {
+            self.clamp_cursor_to_line_bounds();
+        } else {
+            self.adjust_cursor();
+        }
         self.adjust_scroll();
 
         if doc_mutated && Self::line_might_trigger_doc_change_rules(self.current_line()) {
@@ -499,7 +524,11 @@ impl TerminalApp {
         let normalized_key = if key == Key::Ctrl('c') { Key::Esc } else { key };
         let doc_mutated = match self.run_vim_pipeline(db, &normalized_key) {
             VimPipelineResult::NoIntent => {
-                self.adjust_cursor();
+                if Self::key_preserves_vertical_text_column(&normalized_key) {
+                    self.clamp_cursor_to_line_bounds();
+                } else {
+                    self.adjust_cursor();
+                }
                 self.adjust_scroll();
                 return Ok(());
             }
@@ -507,7 +536,11 @@ impl TerminalApp {
             VimPipelineResult::Applied { doc_mutated } => doc_mutated,
         };
 
-        self.adjust_cursor();
+        if !doc_mutated && Self::key_preserves_vertical_text_column(&normalized_key) {
+            self.clamp_cursor_to_line_bounds();
+        } else {
+            self.adjust_cursor();
+        }
         self.adjust_scroll();
 
         if doc_mutated && Self::line_might_trigger_doc_change_rules(self.current_line()) {

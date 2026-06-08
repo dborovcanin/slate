@@ -981,14 +981,43 @@ fn ctrl_backspace_and_ctrl_delete_remove_table_column_when_header_cell_empty() {
 }
 
 #[test]
-fn vertical_movement_into_table_cell_snaps_to_cell_end() {
+fn vertical_arrow_movement_into_table_preserves_text_column() {
     let (db, mut app, path) = app_with_note("plain\n| aaa | bb  |");
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = 0;
+    app.editor.cursor_col = 1;
     app.handle_editor_key(&db, Key::ArrowDown)
         .expect("move into table row");
     assert_eq!(app.editor.cursor_line, 1);
-    assert_eq!(app.editor.cursor_col, 5);
+    assert_eq!(app.editor.cursor_col, 1);
+
+    app.handle_editor_key(&db, Key::ArrowUp)
+        .expect("move out of table row");
+    assert_eq!(app.editor.cursor_line, 0);
+    assert_eq!(app.editor.cursor_col, 1);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn normal_jk_movement_through_table_preserves_text_column() {
+    let (db, mut app, path) = app_with_note("plain\n| aaa | bb  |\nafter");
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = 1;
+
+    run_keys(&mut app, &db, &[Key::Char('j')]);
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.editor.cursor_col, 1);
+
+    run_keys(&mut app, &db, &[Key::Char('j')]);
+    assert_eq!(app.editor.cursor_line, 2);
+    assert_eq!(app.editor.cursor_col, 1);
+
+    run_keys(&mut app, &db, &[Key::Char('k')]);
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.editor.cursor_col, 1);
 
     drop(app);
     drop(db);

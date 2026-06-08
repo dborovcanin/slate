@@ -1,8 +1,9 @@
 use super::{
-    contrast_fg_for_bg, cursor_render_char_col, display_cols_prefix_and_total, draw_framed_surface,
-    draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
-    formula_marker_token, goto, is_markdown_table_line, line_display_cols, min, pad_right,
-    reformat_table_row_for_display, table_block_bounds_for_line, table_cell_info_at_char,
+    contrast_fg_for_bg, cursor_render_char_col, display_cell_pipe_positions,
+    display_cols_prefix_and_total, draw_framed_surface, draw_row_at_styled,
+    find_table_formula_segments, format_formula_display_value, formula_marker_token, goto,
+    is_markdown_table_line, line_display_cols, min, pad_right, reformat_table_row_for_display,
+    table_block_bounds_for_line, table_cell_info_at_char, table_cursor_cell_index,
     table_display_col_widths, viewport_col_for_display_col, AnsiStyle, DatePickerAction,
     TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
@@ -1308,12 +1309,11 @@ impl TerminalApp {
                                 &col_widths,
                                 None,
                             );
-                            let (collapsed_display, mapped_col, _) =
-                                reformat_table_row_for_display(
-                                    rendered_line.as_ref(),
-                                    &col_widths,
-                                    cursor,
-                                );
+                            let (collapsed_display, mapped_col, _) = reformat_table_row_for_display(
+                                rendered_line.as_ref(),
+                                &col_widths,
+                                cursor,
+                            );
                             // Focused-cell pipe highlight in RAW display coords.
                             let cell_idx = table_cursor_cell_index(
                                 rendered_line.as_ref(),

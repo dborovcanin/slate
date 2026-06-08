@@ -3438,15 +3438,7 @@ impl TerminalApp {
         let current_virtual = self.current_virtual_line();
         let target_virtual = current_virtual.saturating_sub(count);
         self.editor.cursor_line = self.real_line_for_virtual(target_virtual).unwrap_or(0);
-        if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                self.editor.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
-            }
-        }
+        self.clamp_cursor_to_line_bounds();
     }
 
     pub(super) fn move_cursor_down(&mut self, count: usize) {
@@ -3462,18 +3454,10 @@ impl TerminalApp {
         self.editor.cursor_line = self
             .real_line_for_virtual(target_virtual)
             .unwrap_or_else(|| self.editor.lines.len().saturating_sub(1));
-        if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                self.editor.cursor_col = table_cell_navigation_anchor(self.current_line(), &cell);
-            }
-        }
+        self.clamp_cursor_to_line_bounds();
     }
 
-    pub(super) fn adjust_cursor_with_table_padding_guard(&mut self, clamp_table_padding: bool) {
+    fn adjust_cursor_line_and_col_bounds(&mut self) {
         if self.editor.lines.is_empty() {
             self.editor.lines.push(String::new());
         }
@@ -3487,6 +3471,14 @@ impl TerminalApp {
         if self.editor.cursor_col > len {
             self.editor.cursor_col = len;
         }
+    }
+
+    pub(super) fn clamp_cursor_to_line_bounds(&mut self) {
+        self.adjust_cursor_line_and_col_bounds();
+    }
+
+    pub(super) fn adjust_cursor_with_table_padding_guard(&mut self, clamp_table_padding: bool) {
+        self.adjust_cursor_line_and_col_bounds();
         let table_anchor = if self.note_table_module_enabled() {
             let line_text = self.current_line();
             if let Some(cell) = table_cell_info_at_char(
