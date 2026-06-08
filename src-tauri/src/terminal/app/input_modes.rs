@@ -8,18 +8,6 @@ use std::time::{Duration, Instant};
 
 // Ownership: key dispatch and per-mode key handling entry points.
 impl TerminalApp {
-    fn key_preserves_vertical_text_column(key: &Key) -> bool {
-        matches!(
-            key,
-            Key::ArrowUp
-                | Key::ArrowDown
-                | Key::PageUp
-                | Key::PageDown
-                | Key::Char('j')
-                | Key::Char('k')
-        )
-    }
-
     fn maybe_record_vim_insert_macro_key(&mut self, key: &Key) {
         if self.vim_macro_replaying {
             return;
@@ -471,9 +459,12 @@ impl TerminalApp {
             return Ok(());
         }
 
-        let doc_mutated = match self.run_vim_pipeline(db, &key) {
+        let (doc_mutated, preserve_vertical_column) = match self.run_vim_pipeline(db, &key) {
             VimPipelineResult::NoIntent | VimPipelineResult::Unhandled => return Ok(()),
-            VimPipelineResult::Applied { doc_mutated } => doc_mutated,
+            VimPipelineResult::Applied {
+                doc_mutated,
+                preserve_vertical_column,
+            } => (doc_mutated, preserve_vertical_column),
         };
         if key == Key::Esc {
             self.search.matches.clear();
@@ -481,7 +472,7 @@ impl TerminalApp {
             self.status = "-- NORMAL --".to_string();
         }
 
-        if !doc_mutated && Self::key_preserves_vertical_text_column(&key) {
+        if preserve_vertical_column {
             self.clamp_cursor_to_line_bounds();
         } else {
             self.adjust_cursor();
@@ -522,21 +513,21 @@ impl TerminalApp {
         }
 
         let normalized_key = if key == Key::Ctrl('c') { Key::Esc } else { key };
-        let doc_mutated = match self.run_vim_pipeline(db, &normalized_key) {
+        let (doc_mutated, preserve_vertical_column) = match self.run_vim_pipeline(db, &normalized_key)
+        {
             VimPipelineResult::NoIntent => {
-                if Self::key_preserves_vertical_text_column(&normalized_key) {
-                    self.clamp_cursor_to_line_bounds();
-                } else {
-                    self.adjust_cursor();
-                }
+                self.adjust_cursor();
                 self.adjust_scroll();
                 return Ok(());
             }
-            VimPipelineResult::Unhandled => false,
-            VimPipelineResult::Applied { doc_mutated } => doc_mutated,
+            VimPipelineResult::Unhandled => (false, false),
+            VimPipelineResult::Applied {
+                doc_mutated,
+                preserve_vertical_column,
+            } => (doc_mutated, preserve_vertical_column),
         };
 
-        if !doc_mutated && Self::key_preserves_vertical_text_column(&normalized_key) {
+        if preserve_vertical_column {
             self.clamp_cursor_to_line_bounds();
         } else {
             self.adjust_cursor();

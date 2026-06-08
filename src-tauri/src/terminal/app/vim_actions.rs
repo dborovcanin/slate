@@ -78,6 +78,16 @@ fn is_recordable_macro_intent(intent: crate::editor_core::vim::VimIntent) -> boo
     )
 }
 
+// Vertical line motions whose desired text column should survive the move,
+// rather than snapping to a table cell. Mirrors the `MoveUp`/`MoveDown` intents
+// emitted for j/k and the arrow keys.
+fn vim_intent_preserves_vertical_text_column(intent: crate::editor_core::vim::VimIntent) -> bool {
+    matches!(
+        intent,
+        crate::editor_core::vim::VimIntent::MoveUp | crate::editor_core::vim::VimIntent::MoveDown
+    )
+}
+
 fn vim_intent_mirrors_register_to_system_clipboard(
     intent: crate::editor_core::vim::VimIntent,
 ) -> bool {
@@ -124,13 +134,21 @@ impl TerminalApp {
             .actions
             .iter()
             .any(|action| Self::vim_intent_mutates_document(action.intent));
+        let preserve_vertical_column = !doc_mutated
+            && step
+                .actions
+                .iter()
+                .any(|action| vim_intent_preserves_vertical_text_column(action.intent));
         self.apply_vim_actions(db, &step.actions);
         self.record_perf_duration(
             "tui.vim.step",
             if doc_mutated { "mutating" } else { "movement" },
             perf_start.elapsed(),
         );
-        VimPipelineResult::Applied { doc_mutated }
+        VimPipelineResult::Applied {
+            doc_mutated,
+            preserve_vertical_column,
+        }
     }
 
     pub(super) fn set_clipboard_register(
@@ -914,6 +932,31 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::DeleteAroundUnderscore => {}
                 crate::editor_core::vim::VimIntent::Swallow => {}
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vim_intent_preserves_vertical_text_column as preserves;
+    use crate::editor_core::vim::VimIntent;
+
+    #[test]
+    fn only_vertical_line_motions_preserve_the_text_column() {
+        assert!(preserves(VimIntent::MoveUp));
+        assert!(preserves(VimIntent::MoveDown));
+        // Horizontal / jump / mutating intents must fall through to the table
+        // padding guard instead of keeping the raw column.
+        for intent in [
+            VimIntent::MoveLeft,
+            VimIntent::MoveRight,
+            VimIntent::MoveToLine,
+            VimIntent::MoveDocStart,
+            VimIntent::MoveDocEnd,
+            VimIntent::DeleteLine,
+            VimIntent::PasteAfter,
+        ] {
+            assert!(!preserves(intent), "{intent:?} should not preserve column");
         }
     }
 }

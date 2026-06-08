@@ -159,7 +159,13 @@ enum UiMode {
 enum VimPipelineResult {
     NoIntent,
     Unhandled,
-    Applied { doc_mutated: bool },
+    Applied {
+        doc_mutated: bool,
+        // True when the resolved motion was a vertical line move (j/k/arrows ->
+        // MoveUp/MoveDown). Lets the caller keep the desired text column instead
+        // of snapping to a table cell, without inspecting the raw key.
+        preserve_vertical_column: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
