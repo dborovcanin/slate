@@ -581,7 +581,9 @@ fn is_marker_left_boundary(chars: &[char], marker_start: usize) -> bool {
 }
 
 fn is_marker_right_boundary(chars: &[char], marker_end: usize) -> bool {
-    marker_end >= chars.len() || chars[marker_end].is_whitespace()
+    marker_end >= chars.len()
+        || chars[marker_end].is_whitespace()
+        || chars[marker_end].is_ascii_punctuation()
 }
 
 fn find_backtick_close(chars: &[char], from: usize, count: usize) -> Option<usize> {
@@ -1653,6 +1655,25 @@ mod tests {
         assert!(!kinds.contains(&"emphasis"));
         assert!(!kinds.contains(&"strong"));
         assert!(!kinds.contains(&"strikethrough"));
+    }
+
+    #[test]
+    fn inline_tokenizer_allows_punctuation_after_closing_marker() {
+        for text in [
+            "**Attestation API**: generates reports",
+            "*emph*, next",
+            "~~gone~~; rest",
+            "**done**.",
+        ] {
+            let tokens = tokenize_inline_markdown(text);
+            let kinds: Vec<&str> = tokens.iter().map(|t| t.kind.as_str()).collect();
+            assert!(
+                kinds.contains(&"strong")
+                    || kinds.contains(&"emphasis")
+                    || kinds.contains(&"strikethrough"),
+                "expected decoration in {text:?}, got {kinds:?}",
+            );
+        }
     }
 
     #[test]
