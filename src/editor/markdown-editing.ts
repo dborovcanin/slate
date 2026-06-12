@@ -946,20 +946,44 @@ function checklistClickHandlers() {
 }
 
 function tableCursorPaddingGuard() {
-  return ViewPlugin.define(() => ({
-    update(update: ViewUpdate) {
-      if (!update.selectionSet) return;
-      if (shouldDeferTableAutoformatForInsertion(update)) return;
-      const main = update.state.selection.main;
-      if (!main.empty) return;
-      const clamped = clampTableCursorToContent(update.state, main.head);
-      if (clamped === null || clamped === main.head) return;
-      update.view.dispatch({
-        selection: { anchor: clamped },
-        scrollIntoView: false,
-      });
-    },
-  }));
+  return ViewPlugin.define(() => {
+    // Re-clamp burst limiter: a clamp dispatch triggers another selectionSet
+    // update, so a clamp target that is not a fixed point would otherwise
+    // re-dispatch indefinitely.
+    let burstCount = 0;
+    let burstStartedAt = 0;
+    return {
+      update(update: ViewUpdate) {
+        if (!update.selectionSet) return;
+        if (shouldDeferTableAutoformatForInsertion(update)) return;
+        const main = update.state.selection.main;
+        if (!main.empty) return;
+        const clamped = clampTableCursorToContent(update.state, main.head);
+        if (clamped === null || clamped === main.head) return;
+        const now = performance.now();
+        if (now - burstStartedAt > 200) {
+          burstStartedAt = now;
+          burstCount = 0;
+        }
+        burstCount += 1;
+        if (burstCount > 16) return;
+        // Dispatching synchronously from a plugin update crashes the plugin
+        // ("Calls to EditorView.update are not allowed while an update is in
+        // progress"); defer to a microtask and re-check that the selection
+        // still sits on the position we decided to clamp.
+        const view = update.view;
+        const expectedHead = main.head;
+        queueMicrotask(() => {
+          const current = view.state.selection.main;
+          if (!current.empty || current.head !== expectedHead) return;
+          view.dispatch({
+            selection: { anchor: clamped },
+            scrollIntoView: false,
+          });
+        });
+      },
+    };
+  });
 }
 
 interface MarkdownEditingOptions {
