@@ -795,11 +795,15 @@ fn arrow_navigation_does_not_jump_across_empty_table_cells() {
 }
 
 #[test]
-fn arrow_right_from_content_end_does_not_jump_to_next_cell() {
+fn arrow_right_from_content_end_moves_to_next_cell_edit_start() {
     let (db, mut app, path) = app_with_note("| aaa | bb  |");
     app.editor.cursor_col = 5; // end of first cell content
     app.handle_editor_key(&db, Key::ArrowRight)
-        .expect("stay at current cell content end");
+        .expect("jump to next cell edit start");
+    assert_eq!(app.editor.cursor_col, 8);
+
+    app.handle_editor_key(&db, Key::ArrowLeft)
+        .expect("jump back to previous cell content end");
     assert_eq!(app.editor.cursor_col, 5);
 
     drop(app);
@@ -994,6 +998,40 @@ fn vertical_arrow_movement_into_table_preserves_text_column() {
         .expect("move out of table row");
     assert_eq!(app.editor.cursor_line, 0);
     assert_eq!(app.editor.cursor_col, 1);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vertical_arrow_movement_inside_table_uses_shared_cell_planner() {
+    let (db, mut app, path) =
+        app_with_note("before\n| name | qty |\n| ---- | --- |\n| pen  | 2   |\nafter");
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 12; // end of "qty"
+
+    app.handle_editor_key(&db, Key::ArrowDown)
+        .expect("down skips delimiter and preserves table cell index");
+    assert_eq!(app.editor.cursor_line, 3);
+    assert_eq!(app.editor.cursor_col, 10);
+
+    app.handle_editor_key(&db, Key::ArrowUp)
+        .expect("up skips delimiter and returns to header cell");
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.editor.cursor_col, 12);
+
+    app.handle_editor_key(&db, Key::ArrowUp)
+        .expect("up exits before table block");
+    assert_eq!(app.editor.cursor_line, 0);
+    assert_eq!(app.editor.cursor_col, "before".chars().count());
+
+    app.editor.cursor_line = 3;
+    app.editor.cursor_col = 10;
+    app.handle_editor_key(&db, Key::ArrowDown)
+        .expect("down exits after table block");
+    assert_eq!(app.editor.cursor_line, 4);
+    assert_eq!(app.editor.cursor_col, "after".chars().count());
 
     drop(app);
     drop(db);

@@ -5,11 +5,11 @@ use super::{
     extract_cross_note_completion_prefix, extract_variable_completion_prefix,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
-    table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
-    table_cell_navigation_anchor, tui_note_short_id, Db, FoldKind, LineReminderGhost,
-    ReminderUndoEntry, TerminalApp, UiMode, UndoAction, VariableAutocompletePopupState,
-    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
-    CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
+    table_block_bounds_for_line, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_is_empty, table_cell_navigation_anchor, tui_note_short_id, Db, FoldKind,
+    LineReminderGhost, ReminderUndoEntry, TerminalApp, UiMode, UndoAction,
+    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
+    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
@@ -3307,6 +3307,100 @@ impl TerminalApp {
         );
     }
 
+    pub(super) fn try_shared_table_cursor_motion(
+        &mut self,
+        direction: crate::editor_core::table::TableCursorMotionDirection,
+    ) -> bool {
+        if !self.note_table_module_enabled() {
+            return false;
+        }
+        let Some((block_start, block_end)) =
+            table_block_bounds_for_line(&self.editor.lines, self.editor.cursor_line)
+        else {
+            return false;
+        };
+        let block_lines = &self.editor.lines[block_start..=block_end];
+        let Some(target) = crate::editor_core::table::plan_table_cursor_motion(
+            block_lines,
+            self.editor.cursor_line.saturating_sub(block_start),
+            self.editor.cursor_col,
+            direction,
+        ) else {
+            return false;
+        };
+
+        self.editor.markdown_formatting_right_boundary_exit = None;
+        if target.line_index < 0 {
+            if let Some(prev_line) = self.visible_line_before(block_start) {
+                self.editor.cursor_line = prev_line;
+                let exit_col = self.table_cursor_motion_exit_col(direction, target.col);
+                self.editor.cursor_col = exit_col.min(line_char_len(self.current_line()));
+            }
+            return true;
+        }
+
+        let block_len = block_end.saturating_sub(block_start).saturating_add(1);
+        let Ok(target_index) = usize::try_from(target.line_index) else {
+            return false;
+        };
+        if target_index >= block_len {
+            if let Some(next_line) = self.visible_line_after(block_end) {
+                self.editor.cursor_line = next_line;
+                let exit_col = self.table_cursor_motion_exit_col(direction, target.col);
+                self.editor.cursor_col = exit_col.min(line_char_len(self.current_line()));
+            }
+            return true;
+        }
+
+        self.editor.cursor_line = block_start + target_index;
+        self.editor.cursor_col = target.col.min(line_char_len(self.current_line()));
+        self.clamp_cursor_to_line_bounds();
+        true
+    }
+
+    fn table_cursor_motion_exit_col(
+        &self,
+        direction: crate::editor_core::table::TableCursorMotionDirection,
+        planner_col: usize,
+    ) -> usize {
+        match direction {
+            crate::editor_core::table::TableCursorMotionDirection::Up
+            | crate::editor_core::table::TableCursorMotionDirection::Down => self.editor.cursor_col,
+            crate::editor_core::table::TableCursorMotionDirection::Left
+            | crate::editor_core::table::TableCursorMotionDirection::Right => planner_col,
+        }
+    }
+
+    fn visible_line_before(&self, real_line: usize) -> Option<usize> {
+        let visible = self
+            .folds
+            .real_to_visible
+            .get(real_line)
+            .copied()
+            .unwrap_or_else(|| self.current_virtual_line());
+        visible
+            .checked_sub(1)
+            .and_then(|virtual_line| self.real_line_for_virtual(virtual_line))
+    }
+
+    fn visible_line_after(&self, real_line: usize) -> Option<usize> {
+        let mut visible = self
+            .folds
+            .real_to_visible
+            .get(real_line)
+            .copied()
+            .unwrap_or_else(|| self.current_virtual_line());
+        while visible + 1 < self.visible_line_count() {
+            visible += 1;
+            if let Some(next_real) = self.real_line_for_virtual(visible) {
+                if next_real > real_line {
+                    return Some(next_real);
+                }
+            }
+        }
+        None
+    }
+
     pub(super) fn move_cursor_left(&mut self) {
         if self.editor.markdown_formatting_right_boundary_exit
             == Some((self.editor.cursor_line, self.editor.cursor_col))
@@ -3316,34 +3410,9 @@ impl TerminalApp {
         }
         self.editor.markdown_formatting_right_boundary_exit = None;
 
-        let table_target_col = if self.note_table_module_enabled() {
-            let line_text = self.current_line();
-            if let Some(current_cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                let anchor = table_cell_navigation_anchor(line_text, &current_cell);
-                let edit_start = table_cell_edit_start(&current_cell);
-                if table_cell_is_empty(&current_cell) {
-                    Some(anchor)
-                } else if self.editor.cursor_col > anchor {
-                    // Entering left/right padding is not allowed; snap back to content anchor.
-                    Some(anchor)
-                } else if self.editor.cursor_col <= edit_start {
-                    // Regular arrows do not cross cell boundaries.
-                    Some(edit_start)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Some(target_col) = table_target_col {
-            self.editor.cursor_col = target_col;
+        if self.try_shared_table_cursor_motion(
+            crate::editor_core::table::TableCursorMotionDirection::Left,
+        ) {
             return;
         }
 
@@ -3377,37 +3446,9 @@ impl TerminalApp {
             None
         };
 
-        let table_target_col = if self.note_table_module_enabled() {
-            let line_text = self.current_line();
-            if let Some(current_cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                let anchor = table_cell_navigation_anchor(line_text, &current_cell);
-                let edit_start = table_cell_edit_start(&current_cell);
-                if table_cell_is_empty(&current_cell) {
-                    Some(anchor)
-                } else if self.editor.cursor_col < edit_start {
-                    Some(edit_start)
-                } else if self.editor.cursor_col > anchor {
-                    // Entering padding is not allowed; snap back.
-                    Some(anchor)
-                } else if self.editor.cursor_col == anchor {
-                    // Regular arrows do not cross cell boundaries.
-                    Some(anchor)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        if let Some(target_col) = table_target_col {
-            self.editor.cursor_col = target_col;
-            self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
+        if self.try_shared_table_cursor_motion(
+            crate::editor_core::table::TableCursorMotionDirection::Right,
+        ) {
             return;
         }
 

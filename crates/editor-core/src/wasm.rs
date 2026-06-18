@@ -273,6 +273,13 @@ struct TableCursorCellInfoWire {
     is_continuation_row: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TableCursorMotionTargetWire {
+    line_index: isize,
+    col: usize,
+}
+
 #[wasm_bindgen]
 pub fn wasm_table_cursor_cell_info(
     block_lines: Vec<String>,
@@ -292,6 +299,27 @@ pub fn wasm_table_cursor_cell_info(
         logical_row_index: info.logical_row_index,
         logical_row_count: info.logical_row_count,
         is_continuation_row: info.is_continuation_row,
+    })
+}
+
+#[wasm_bindgen]
+pub fn wasm_table_cursor_motion_target(
+    block_lines: Vec<String>,
+    line_index: usize,
+    col: usize,
+    direction: &str,
+) -> Option<JsValue> {
+    let direction = match direction {
+        "left" => table::TableCursorMotionDirection::Left,
+        "right" => table::TableCursorMotionDirection::Right,
+        "up" => table::TableCursorMotionDirection::Up,
+        "down" => table::TableCursorMotionDirection::Down,
+        _ => return None,
+    };
+    let target = table::plan_table_cursor_motion(&block_lines, line_index, col, direction)?;
+    to_js_value(&TableCursorMotionTargetWire {
+        line_index: target.line_index,
+        col: target.col,
     })
 }
 

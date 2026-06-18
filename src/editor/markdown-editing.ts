@@ -11,6 +11,7 @@ import {
 } from "./core/codemirror-adapter.ts";
 import {
   getTableCursorCellInfo,
+  getTableCursorMotionTarget,
   markdownClassifyLine,
   runTablePipeInsertColumnRule,
   runTableMultilineBreakRule,
@@ -36,10 +37,6 @@ interface TableCellInfo {
 function isMarkdownTableLine(text: string): boolean {
   const trimmed = text.trim();
   return trimmed.startsWith("|") && trimmed.endsWith("|");
-}
-
-function isTableDelimiterLine(text: string): boolean {
-  return isMarkdownTableLine(text) && /^[\s|:-]+$/.test(text);
 }
 
 function firstNonSpaceOffset(text: string): number {
@@ -103,25 +100,6 @@ function tableCellAtColumn(lineText: string, col: number): TableCellInfo | null 
   }
 
   return selected ?? fallback;
-}
-
-function tableCellAtIndex(lineText: string, index: number): TableCellInfo | null {
-  if (!isMarkdownTableLine(lineText)) return null;
-  const pipes = unescapedTablePipeOffsets(lineText);
-  if (pipes.length < 2) return null;
-  const cellCount = pipes.length - 1;
-  const clamped = Math.max(0, Math.min(index, cellCount - 1));
-  const leftPipe = pipes[clamped]!;
-  const rightPipe = pipes[clamped + 1]!;
-  const raw = lineText.slice(leftPipe + 1, rightPipe);
-  return {
-    index: clamped,
-    cellCount,
-    leftPipe,
-    rightPipe,
-    trimStart: firstNonSpaceOffset(raw),
-    trimEnd: lastNonSpaceEndOffset(raw),
-  };
 }
 
 function tableCellAtStatePosition(
@@ -406,156 +384,48 @@ function indentListOnTab(
   return true;
 }
 
-function tableArrowMovePrev(
-  view: EditorView,
-  line: ReturnType<EditorView["state"]["doc"]["lineAt"]>,
-  cell: TableCellInfo,
-): boolean {
-  const state = view.state;
-  if (cell.index > 0) {
-    const prevCell = tableCellAtColumn(line.text, cell.leftPipe - 1);
-    if (prevCell && prevCell.index !== cell.index) {
-      view.dispatch({
-        selection: { anchor: line.from + tableCellNavigationAnchorInLine(prevCell) },
-        scrollIntoView: true,
-      });
-      return true;
-    }
+function tableBlockLines(state: EditorView["state"], bounds: TableLineBounds): string[] {
+  const lines: string[] = [];
+  for (let lineNo = bounds.startLine; lineNo <= bounds.endLine; lineNo += 1) {
+    lines.push(state.doc.line(lineNo).text);
   }
-  const bounds = tableBoundsForLineNo(state, line.number);
-  for (let ln = line.number - 1; ln >= (bounds?.startLine ?? 1); ln -= 1) {
-    const prevLine = state.doc.line(ln);
-    if (isTableDelimiterLine(prevLine.text)) continue;
-    const prevCell = tableCellAtColumn(prevLine.text, prevLine.text.length);
-    if (prevCell) {
-      view.dispatch({
-        selection: { anchor: prevLine.from + tableCellNavigationAnchorInLine(prevCell) },
-        scrollIntoView: true,
-      });
-      return true;
-    }
-  }
-  if (!bounds || bounds.startLine <= 1) {
-    view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
-  } else {
-    const exitLine = state.doc.line(bounds.startLine - 1);
-    view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
-  }
-  return true;
+  return lines;
 }
 
-function tableArrowMoveNext(
+function applyTableCursorMotion(
   view: EditorView,
-  line: ReturnType<EditorView["state"]["doc"]["lineAt"]>,
-  cell: TableCellInfo,
+  direction: "left" | "right" | "up" | "down",
 ): boolean {
-  const state = view.state;
-  const nextCell = tableCellAtColumn(line.text, cell.rightPipe + 1);
-  if (nextCell && nextCell.index !== cell.index) {
-    view.dispatch({
-      selection: { anchor: line.from + Math.min(nextCell.leftPipe + 2, nextCell.rightPipe) },
-      scrollIntoView: true,
-    });
-    return true;
-  }
-  const bounds = tableBoundsForLineNo(state, line.number);
-  for (let ln = line.number + 1; ln <= (bounds?.endLine ?? state.doc.lines); ln += 1) {
-    const nextLine = state.doc.line(ln);
-    if (isTableDelimiterLine(nextLine.text)) continue;
-    const firstCell = tableCellAtColumn(nextLine.text, 1);
-    if (firstCell) {
-      view.dispatch({
-        selection: { anchor: nextLine.from + Math.min(firstCell.leftPipe + 2, firstCell.rightPipe) },
-        scrollIntoView: true,
-      });
-      return true;
-    }
-  }
-  if (!bounds || bounds.endLine >= state.doc.lines) {
-    view.dispatch({ selection: { anchor: state.doc.length }, scrollIntoView: true });
-  } else {
-    const exitLine = state.doc.line(bounds.endLine + 1);
-    view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
-  }
-  return true;
-}
-
-function tableArrowMove(view: EditorView, direction: -1 | 1): boolean {
   const main = view.state.selection.main;
   if (!main.empty) return false;
+  const state = view.state;
   const line = view.state.doc.lineAt(main.head);
-  const cell = tableCellAtStatePosition(view.state, main.head);
-  if (!cell) return false;
-
-  const contentStart = line.from + Math.min(cell.leftPipe + 2, cell.rightPipe);
-  const contentEnd = line.from + tableCellNavigationAnchorInLine(cell);
-
-  if (cell.trimEnd <= cell.trimStart || main.head > contentEnd) {
-    if (main.head !== contentEnd) {
-      view.dispatch({ selection: { anchor: contentEnd }, scrollIntoView: true });
-    }
-    return true;
-  }
-
-  if (direction === -1) {
-    if (main.head > contentStart) {
-      view.dispatch({ selection: { anchor: main.head - 1 }, scrollIntoView: true });
-      return true;
-    }
-    return tableArrowMovePrev(view, line, cell);
-  }
-
-  if (main.head < contentEnd) {
-    view.dispatch({ selection: { anchor: main.head + 1 }, scrollIntoView: true });
-    return true;
-  }
-  return tableArrowMoveNext(view, line, cell);
-}
-
-function tableVerticalMove(view: EditorView, direction: -1 | 1): boolean {
-  const main = view.state.selection.main;
-  if (!main.empty) return false;
-  const state = view.state;
-  const line = state.doc.lineAt(main.head);
-  const cell = tableCellAtStatePosition(state, main.head);
-  if (!cell || !isMarkdownTableLine(line.text)) return false;
-
   const bounds = tableBoundsForLineNo(state, line.number);
   if (!bounds) return false;
+  const target = getTableCursorMotionTarget(
+    tableBlockLines(state, bounds),
+    line.number - bounds.startLine,
+    Math.max(0, Math.min(main.head - line.from, line.text.length)),
+    direction,
+  );
+  if (!target) return false;
 
-  const step = direction < 0 ? -1 : 1;
-  for (
-    let lineNo = line.number + step;
-    lineNo >= bounds.startLine && lineNo <= bounds.endLine;
-    lineNo += step
-  ) {
-    const targetLine = state.doc.line(lineNo);
-    if (isTableDelimiterLine(targetLine.text)) continue;
-    const targetCell = tableCellAtIndex(targetLine.text, cell.index);
-    if (!targetCell) continue;
-    view.dispatch({
-      selection: { anchor: targetLine.from + tableCellNavigationAnchorInLine(targetCell) },
-      scrollIntoView: true,
-    });
+  if (target.lineIndex < 0) {
+    const anchor = bounds.startLine <= 1 ? 0 : state.doc.line(bounds.startLine - 1).from;
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
+    return true;
+  }
+  if (target.lineIndex >= bounds.endLine - bounds.startLine + 1) {
+    const anchor = bounds.endLine >= state.doc.lines
+      ? state.doc.length
+      : state.doc.line(bounds.endLine + 1).from;
+    view.dispatch({ selection: { anchor }, scrollIntoView: true });
     return true;
   }
 
-  if (direction < 0) {
-    if (bounds.startLine <= 1) {
-      view.dispatch({ selection: { anchor: 0 }, scrollIntoView: true });
-    } else {
-      const exitLine = state.doc.line(bounds.startLine - 1);
-      view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
-    }
-    return true;
-  }
-
-  if (bounds.endLine >= state.doc.lines) {
-    view.dispatch({ selection: { anchor: state.doc.length }, scrollIntoView: true });
-  } else {
-    const exitLine = state.doc.line(bounds.endLine + 1);
-    view.dispatch({ selection: { anchor: exitLine.from }, scrollIntoView: true });
-  }
+  const targetLine = state.doc.line(bounds.startLine + target.lineIndex);
+  const anchor = targetLine.from + Math.max(0, Math.min(target.col, targetLine.text.length));
+  view.dispatch({ selection: { anchor }, scrollIntoView: true });
   return true;
 }
 
@@ -681,7 +551,7 @@ export function runTableVerticalMoveCommand(
   view: EditorView,
   direction: -1 | 1,
 ): boolean {
-  return tableVerticalMove(view, direction);
+  return applyTableCursorMotion(view, direction < 0 ? "up" : "down");
 }
 
 function tableCellJump(
@@ -784,11 +654,11 @@ function tableCursorKeymap(
     },
     {
       key: "ArrowLeft",
-      run: (view) => tableArrowMove(view, -1),
+      run: (view) => applyTableCursorMotion(view, "left"),
     },
     {
       key: "ArrowRight",
-      run: (view) => tableArrowMove(view, 1),
+      run: (view) => applyTableCursorMotion(view, "right"),
     },
     {
       key: "Ctrl-ArrowLeft",
@@ -802,11 +672,11 @@ function tableCursorKeymap(
     },
     {
       key: "ArrowUp",
-      run: (view) => tableVerticalMove(view, -1),
+      run: (view) => applyTableCursorMotion(view, "up"),
     },
     {
       key: "ArrowDown",
-      run: (view) => tableVerticalMove(view, 1),
+      run: (view) => applyTableCursorMotion(view, "down"),
     },
     {
       key: "Shift-Enter",

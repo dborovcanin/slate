@@ -28,6 +28,7 @@ import init, {
   wasm_format_markdown,
   wasm_format_table_lines,
   wasm_table_cursor_cell_info,
+  wasm_table_cursor_motion_target,
   wasm_list_command_suggestions,
   wasm_markdown_analyze_lines,
   wasm_markdown_build_fold_ranges_ui,
@@ -328,6 +329,11 @@ export interface TableCursorCellInfo {
   logicalRowIndex: number | null;
   logicalRowCount: number;
   isContinuationRow: boolean;
+}
+
+export interface TableCursorMotionTarget {
+  lineIndex: number;
+  col: number;
 }
 
 export interface CommitMarkerLoc {
@@ -1025,6 +1031,28 @@ export function getTableCursorCellInfo(
     return null;
   }
   return info;
+}
+
+export function getTableCursorMotionTarget(
+  blockLines: readonly string[],
+  lineIndex: number,
+  col: number,
+  direction: "left" | "right" | "up" | "down",
+): TableCursorMotionTarget | null {
+  if (blockLines.length === 0) return null;
+  if (!ensureWasmReadyNonBlocking()) return null;
+  const raw = wasm_table_cursor_motion_target(
+    [...blockLines],
+    Math.max(0, Math.trunc(lineIndex)),
+    Math.max(0, Math.trunc(col)),
+    direction,
+  ) as unknown;
+  if (typeof raw !== "object" || raw === null) return null;
+  const target = raw as TableCursorMotionTarget;
+  if (typeof target.lineIndex !== "number" || typeof target.col !== "number") {
+    return null;
+  }
+  return target;
 }
 
 export function normalizeCommand(rawInput: string): string {

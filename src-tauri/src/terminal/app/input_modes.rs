@@ -125,18 +125,26 @@ impl TerminalApp {
                 if self.wiki_link_autocomplete_popup.visible {
                     self.move_wiki_link_selection(-1);
                 } else if !self.move_variable_autocomplete_selection(-1) {
-                    self.move_cursor_up(1);
+                    if !self.try_shared_table_cursor_motion(
+                        crate::editor_core::table::TableCursorMotionDirection::Up,
+                    ) {
+                        self.move_cursor_up(1);
+                        preserve_table_column = true;
+                    }
                     moved_cursor = true;
-                    preserve_table_column = true;
                 }
             }
             Key::ArrowDown => {
                 if self.wiki_link_autocomplete_popup.visible {
                     self.move_wiki_link_selection(1);
                 } else if !self.move_variable_autocomplete_selection(1) {
-                    self.move_cursor_down(1);
+                    if !self.try_shared_table_cursor_motion(
+                        crate::editor_core::table::TableCursorMotionDirection::Down,
+                    ) {
+                        self.move_cursor_down(1);
+                        preserve_table_column = true;
+                    }
                     moved_cursor = true;
-                    preserve_table_column = true;
                 }
             }
             Key::ArrowLeft => {
@@ -513,19 +521,19 @@ impl TerminalApp {
         }
 
         let normalized_key = if key == Key::Ctrl('c') { Key::Esc } else { key };
-        let (doc_mutated, preserve_vertical_column) = match self.run_vim_pipeline(db, &normalized_key)
-        {
-            VimPipelineResult::NoIntent => {
-                self.adjust_cursor();
-                self.adjust_scroll();
-                return Ok(());
-            }
-            VimPipelineResult::Unhandled => (false, false),
-            VimPipelineResult::Applied {
-                doc_mutated,
-                preserve_vertical_column,
-            } => (doc_mutated, preserve_vertical_column),
-        };
+        let (doc_mutated, preserve_vertical_column) =
+            match self.run_vim_pipeline(db, &normalized_key) {
+                VimPipelineResult::NoIntent => {
+                    self.adjust_cursor();
+                    self.adjust_scroll();
+                    return Ok(());
+                }
+                VimPipelineResult::Unhandled => (false, false),
+                VimPipelineResult::Applied {
+                    doc_mutated,
+                    preserve_vertical_column,
+                } => (doc_mutated, preserve_vertical_column),
+            };
 
         if preserve_vertical_column {
             self.clamp_cursor_to_line_bounds();

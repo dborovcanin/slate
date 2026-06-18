@@ -109,6 +109,20 @@ pub struct TableCursorCellInfo {
     pub is_continuation_row: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableCursorMotionDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct TableCursorMotionTarget {
+    pub line_index: isize,
+    pub col: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TableLogicalRowCache {
     block_start: usize,
@@ -148,6 +162,185 @@ impl TableCursorCellInfo {
             self.edit_start()
         } else {
             ((self.left_pipe + 1) + self.trim_end).min(self.right_pipe)
+        }
+    }
+}
+
+fn table_cursor_motion_edit_start(cell: &TableCursorCellInfo) -> usize {
+    (cell.left_pipe + 2).min(cell.right_pipe)
+}
+
+fn table_cursor_motion_navigation_anchor(cell: &TableCursorCellInfo) -> usize {
+    if cell.is_empty() {
+        table_cursor_motion_edit_start(cell)
+    } else {
+        ((cell.left_pipe + 1) + cell.trim_end).min(cell.right_pipe)
+    }
+}
+
+fn is_table_delimiter_line(text: &str) -> bool {
+    is_table_line(text)
+        && text
+            .chars()
+            .all(|ch| ch == '|' || ch == ':' || ch == '-' || ch.is_whitespace())
+}
+
+fn table_cursor_motion_target_for_cell(
+    lines: &[String],
+    line_index: usize,
+    cell_index: usize,
+    at_edit_start: bool,
+) -> Option<TableCursorMotionTarget> {
+    let line = lines.get(line_index)?;
+    let pipes = table_pipe_positions(line);
+    if pipes.len() < 2 || cell_index + 1 >= pipes.len() {
+        return None;
+    }
+    let probe_col = pipes[cell_index].saturating_add(1).min(line.len());
+    let info = table_cell_cursor_info_in_document(lines, line_index, probe_col)?;
+    let col = if at_edit_start {
+        table_cursor_motion_edit_start(&info)
+    } else {
+        table_cursor_motion_navigation_anchor(&info)
+    };
+    Some(TableCursorMotionTarget {
+        line_index: line_index as isize,
+        col,
+    })
+}
+
+pub fn plan_table_cursor_motion(
+    lines: &[String],
+    line_index: usize,
+    col: usize,
+    direction: TableCursorMotionDirection,
+) -> Option<TableCursorMotionTarget> {
+    let line = lines.get(line_index)?;
+    if !is_table_line(line) {
+        return None;
+    }
+    let current = table_cell_cursor_info_in_document(lines, line_index, col)?;
+    let col = col.min(line.len());
+    let edit_start = table_cursor_motion_edit_start(&current);
+    let content_end = table_cursor_motion_navigation_anchor(&current);
+
+    match direction {
+        TableCursorMotionDirection::Left | TableCursorMotionDirection::Right
+            if current.is_empty() || col > content_end =>
+        {
+            return Some(TableCursorMotionTarget {
+                line_index: line_index as isize,
+                col: content_end,
+            });
+        }
+        TableCursorMotionDirection::Left => {
+            if col > edit_start {
+                return Some(TableCursorMotionTarget {
+                    line_index: line_index as isize,
+                    col: col.saturating_sub(1),
+                });
+            }
+            if current.column_index > 0 {
+                return table_cursor_motion_target_for_cell(
+                    lines,
+                    line_index,
+                    current.column_index - 1,
+                    false,
+                );
+            }
+            for target_line in (0..line_index).rev() {
+                let target = lines.get(target_line)?;
+                if is_table_delimiter_line(target) {
+                    continue;
+                }
+                let pipes = table_pipe_positions(target);
+                if pipes.len() < 2 {
+                    continue;
+                }
+                return table_cursor_motion_target_for_cell(
+                    lines,
+                    target_line,
+                    pipes.len().saturating_sub(2),
+                    false,
+                );
+            }
+            Some(TableCursorMotionTarget {
+                line_index: -1,
+                col: 0,
+            })
+        }
+        TableCursorMotionDirection::Right => {
+            if col < edit_start {
+                return Some(TableCursorMotionTarget {
+                    line_index: line_index as isize,
+                    col: edit_start,
+                });
+            }
+            if col < content_end {
+                return Some(TableCursorMotionTarget {
+                    line_index: line_index as isize,
+                    col: col.saturating_add(1),
+                });
+            }
+            if current.column_index + 1 < current.column_count {
+                return table_cursor_motion_target_for_cell(
+                    lines,
+                    line_index,
+                    current.column_index + 1,
+                    true,
+                );
+            }
+            for target_line in (line_index + 1)..lines.len() {
+                let target = lines.get(target_line)?;
+                if is_table_delimiter_line(target) {
+                    continue;
+                }
+                return table_cursor_motion_target_for_cell(lines, target_line, 0, true);
+            }
+            Some(TableCursorMotionTarget {
+                line_index: lines.len() as isize,
+                col: 0,
+            })
+        }
+        TableCursorMotionDirection::Up => {
+            for target_line in (0..line_index).rev() {
+                let target = lines.get(target_line)?;
+                if is_table_delimiter_line(target) {
+                    continue;
+                }
+                if let Some(target) = table_cursor_motion_target_for_cell(
+                    lines,
+                    target_line,
+                    current.column_index,
+                    false,
+                ) {
+                    return Some(target);
+                }
+            }
+            Some(TableCursorMotionTarget {
+                line_index: -1,
+                col: 0,
+            })
+        }
+        TableCursorMotionDirection::Down => {
+            for target_line in (line_index + 1)..lines.len() {
+                let target = lines.get(target_line)?;
+                if is_table_delimiter_line(target) {
+                    continue;
+                }
+                if let Some(target) = table_cursor_motion_target_for_cell(
+                    lines,
+                    target_line,
+                    current.column_index,
+                    false,
+                ) {
+                    return Some(target);
+                }
+            }
+            Some(TableCursorMotionTarget {
+                line_index: lines.len() as isize,
+                col: 0,
+            })
         }
     }
 }
@@ -1100,6 +1293,46 @@ mod tests {
         assert_eq!(info_cont.logical_row_index, Some(0));
         assert_eq!(info_next.logical_row_index, Some(1));
         assert!(info_cont.is_continuation_row);
+    }
+
+    #[test]
+    fn table_cursor_motion_moves_right_to_next_cell_edit_start() {
+        let lines = vec!["| a | b |".to_string(), "| --- | --- |".to_string()];
+        let target = plan_table_cursor_motion(&lines, 0, 3, TableCursorMotionDirection::Right)
+            .expect("target");
+        assert_eq!(target.line_index, 0);
+        assert_eq!(target.col, 6);
+    }
+
+    #[test]
+    fn table_cursor_motion_moves_down_to_content_anchor_and_skips_delimiter() {
+        let lines = vec![
+            "| longvalue | x |".to_string(),
+            "| --------- | - |".to_string(),
+            "| a         | y |".to_string(),
+        ];
+        let target = plan_table_cursor_motion(&lines, 0, 11, TableCursorMotionDirection::Down)
+            .expect("target");
+        assert_eq!(target.line_index, 2);
+        assert_eq!(target.col, 3);
+    }
+
+    #[test]
+    fn table_cursor_motion_exits_before_and_after_block() {
+        let lines = vec![
+            "| a | b |".to_string(),
+            "| --- | --- |".to_string(),
+            "| c | d |".to_string(),
+        ];
+        let before = plan_table_cursor_motion(&lines, 0, 2, TableCursorMotionDirection::Left)
+            .expect("before");
+        assert_eq!(before.line_index, -1);
+        assert_eq!(before.col, 0);
+
+        let after = plan_table_cursor_motion(&lines, 2, 7, TableCursorMotionDirection::Down)
+            .expect("after");
+        assert_eq!(after.line_index, 3);
+        assert_eq!(after.col, 0);
     }
 
     #[test]
