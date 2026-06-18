@@ -1543,6 +1543,30 @@ impl TerminalApp {
         } else {
             None
         };
+        let switcher_status_owned = match self.mode {
+            UiMode::Switcher | UiMode::ContentSearch => {
+                if let Some(confirm) = self.switcher.open_confirm.as_ref() {
+                    Some(format!(
+                        "Open {}: type password, Enter confirm, Esc cancel",
+                        Self::access_mode_prompt_label(confirm.access_mode)
+                    ))
+                } else if self.mode == UiMode::Switcher {
+                    self.switcher.delete_confirm.as_ref().map(|confirm| {
+                        if confirm.requires_password {
+                            format!(
+                                "Confirm delete {}: type password, Enter confirm, Esc cancel",
+                                Self::access_mode_prompt_label(confirm.access_mode)
+                            )
+                        } else {
+                            "Confirm delete: Enter/Y confirm, Esc/N cancel".to_string()
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
         let status_base = match self.mode {
             UiMode::Editor => editor_status_owned.as_deref().unwrap_or(&self.status),
             UiMode::Normal
@@ -1550,19 +1574,7 @@ impl TerminalApp {
             | UiMode::Search
             | UiMode::Visual
             | UiMode::VisualLine => &self.status,
-            UiMode::Switcher => {
-                if self.switcher.open_confirm.is_some() {
-                    "Open note: type password, Enter confirm, Esc cancel"
-                } else if let Some(confirm) = self.switcher.delete_confirm.as_ref() {
-                    if confirm.requires_password {
-                        "Confirm delete: type password, Enter confirm, Esc cancel"
-                    } else {
-                        "Confirm delete: Enter/Y confirm, Esc/N cancel"
-                    }
-                } else {
-                    &self.status
-                }
-            }
+            UiMode::Switcher => switcher_status_owned.as_deref().unwrap_or(&self.status),
             UiMode::CollectionSwitcher => {
                 if self.collection_switcher.edit_dialog.is_some() {
                     "Collection edit: Tab/Shift+Tab field, Enter save, Esc cancel"
@@ -1570,13 +1582,7 @@ impl TerminalApp {
                     &self.status
                 }
             }
-            UiMode::ContentSearch => {
-                if self.switcher.open_confirm.is_some() {
-                    "Open note: type password, Enter confirm, Esc cancel"
-                } else {
-                    &self.status
-                }
-            }
+            UiMode::ContentSearch => switcher_status_owned.as_deref().unwrap_or(&self.status),
             UiMode::DatePicker => {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }

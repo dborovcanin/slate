@@ -20,7 +20,7 @@ use super::note_access::{NoteAccessGrant, NoteAccessService};
 use crate::note_sources::derive_note_title_from_body;
 
 const DEFAULT_NOTE_MODULES_JSON: &str =
-    r#"{"math":true,"table":true,"variables":true,"style":true}"#;
+    r#"{"math":true,"table":true,"variables":true,"style":true,"cross_note":true}"#;
 const PASSWORD_SALT_LEN: usize = 16;
 const ENCRYPTION_SALT_LEN: usize = 16;
 const ENCRYPTION_NONCE_LEN: usize = 12;
@@ -3467,6 +3467,43 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_default_modules_include_cross_note() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        {
+            let conn = db.conn.lock().expect("lock db");
+            conn.execute(
+                "INSERT INTO notes (id, body, note_title, created_at, updated_at)
+                 VALUES ('defaulted', 'body', 'body', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+                [],
+            )
+            .expect("insert with sqlite defaults");
+        }
+
+        let note = db
+            .get_note("defaulted")
+            .expect("lookup succeeds")
+            .expect("note exists");
+        assert_eq!(note.modules, NoteModules::default());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn legacy_module_json_defaults_missing_cross_note_only() {
+        let modules = parse_note_modules_json(Some(
+            r#"{"math":false,"table":true,"variables":false,"style":true}"#.to_string(),
+        ));
+
+        assert!(!modules.math);
+        assert!(modules.table);
+        assert!(!modules.variables);
+        assert!(modules.style);
+        assert!(modules.cross_note);
+    }
+
+    #[test]
     fn list_notes_and_most_recent_follow_updated_at() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
@@ -3843,10 +3880,7 @@ mod tests {
             )
             .expect("welcome row exists");
         assert!(welcome.0.contains("# Welcome to Slate"));
-        assert_eq!(
-            welcome.1,
-            "{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}"
-        );
+        assert_eq!(welcome.1, DEFAULT_NOTE_MODULES_JSON);
         assert_eq!(welcome.2, "none");
 
         drop(db);

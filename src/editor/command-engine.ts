@@ -35,6 +35,8 @@ import {
 export type { CommandMode, CommandSuggestion };
 export type ExportCommandFormat = "pdf" | "md" | "txt";
 
+type NoteSecurityCommandAction = "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect";
+
 export interface CommandExecutionOptions {
   mode: CommandMode;
   dateFormat?: string;
@@ -65,7 +67,7 @@ export interface CommandExecutionOptions {
 async function tryExecuteNoteSecurityCommand(
   view: EditorView,
   parsed: {
-    action: "lock" | "unlock" | "encrypt" | "decrypt" | "unprotect";
+    action: NoteSecurityCommandAction;
     password: string;
   },
 ): Promise<string | null> {
@@ -93,11 +95,15 @@ async function tryExecuteNoteSecurityCommand(
     scrollIntoView: true,
   });
 
-  if (parsed.action === "lock") return "note locked";
-  if (parsed.action === "unlock") return "note unlocked";
-  if (parsed.action === "encrypt") return "note encrypted at rest";
-  if (parsed.action === "unprotect") return "note unprotected";
-  return "note decrypted";
+  return noteSecuritySuccessMessage(parsed.action);
+}
+
+function noteSecuritySuccessMessage(action: NoteSecurityCommandAction): string {
+  if (action === "lock") return "note session-locked; not encrypted at rest";
+  if (action === "unlock") return "note unlocked for this session";
+  if (action === "encrypt") return "note encrypted at rest";
+  if (action === "unprotect") return "note decrypted; at-rest encryption removed";
+  return "note decrypted; stored without at-rest encryption";
 }
 
 const CLIPBOARD_WATCH_POLL_MS = 400;

@@ -129,6 +129,7 @@ math = true
 table = true
 variables = true
 style = true
+cross_note = true
 
 [editor.security]
 # Encrypt newly created notes at rest by default.
@@ -1026,6 +1027,16 @@ mod tests {
     fn uses_defaults_when_theme_values_are_missing() {
         let cfg = parse_theme_config("").expect("empty config parsed");
         assert_eq!(cfg, ThemeConfig::default());
+    }
+
+    #[test]
+    fn generated_default_config_includes_all_note_modules() {
+        let cfg = parse_theme_config(DEFAULT_CONFIG).expect("default config parsed");
+        assert_eq!(cfg.default_modules, EditorModulesConfig::default());
+        assert!(
+            DEFAULT_CONFIG.contains("cross_note = true"),
+            "generated config must expose the cross-note default"
+        );
     }
 
     #[test]

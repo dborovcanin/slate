@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
     body TEXT NOT NULL DEFAULT '',
     note_title TEXT NOT NULL DEFAULT '',
-    modules_json TEXT NOT NULL DEFAULT '{"math":true,"table":true,"variables":true,"style":true}',
+    modules_json TEXT NOT NULL DEFAULT '{"math":true,"table":true,"variables":true,"style":true,"cross_note":true}',
     access_mode TEXT NOT NULL DEFAULT 'none',
     password_salt BLOB,
     password_hash BLOB,
@@ -96,7 +96,7 @@ tax_due := net * tax_rate
 | Fruit  |  2.25 |   4 | :=(3,2) * (3,3) |
 |        |       | Sum | :=sum_col() |',
     'Welcome to Slate',
-    '{"math":true,"table":true,"variables":true,"style":true}',
+    '{"math":true,"table":true,"variables":true,"style":true,"cross_note":true}',
     'none',
     strftime('%Y-%m-%dT%H:%M:%fZ','now'),
     strftime('%Y-%m-%dT%H:%M:%fZ','now')

@@ -346,12 +346,12 @@ function renderSwitcherItem(
   if (item.accessMode === "locked") {
     const badge = document.createElement("span");
     badge.className = "switcher-item-badge switcher-item-badge--locked";
-    badge.textContent = "locked (app)";
+    badge.textContent = "session lock";
     row.appendChild(badge);
   } else if (item.accessMode === "encrypted") {
     const badge = document.createElement("span");
     badge.className = "switcher-item-badge switcher-item-badge--encrypted";
-    badge.textContent = "encrypted";
+    badge.textContent = "encrypted at rest";
     row.appendChild(badge);
   }
 

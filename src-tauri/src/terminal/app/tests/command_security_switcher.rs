@@ -678,12 +678,12 @@ fn note_unprotect_command_removes_lock() {
 
     app.execute_terminal_command(&db, "note lock pass123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
-    assert_eq!(app.status, "note locked");
+    assert_eq!(app.status, "note session-locked; not encrypted at rest");
 
     app.execute_terminal_command(&db, "note unprotect pass123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
     assert_eq!(app.editor.lines, vec!["top secret".to_string()]);
-    assert_eq!(app.status, "note unprotected");
+    assert_eq!(app.status, "note decrypted; at-rest encryption removed");
 
     drop(app);
     drop(db);
@@ -701,7 +701,7 @@ fn note_unprotect_command_removes_at_rest_encryption() {
     app.execute_terminal_command(&db, "note unprotect enc123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
     assert_eq!(app.editor.lines, vec!["classified".to_string()]);
-    assert_eq!(app.status, "note unprotected");
+    assert_eq!(app.status, "note decrypted; at-rest encryption removed");
 
     drop(app);
     drop(db);
@@ -715,12 +715,12 @@ fn note_security_aliases_accept_password_arguments() {
     app.execute_terminal_command(&db, "lock-note pass123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
     assert!(!app.active_note.is_unlocked);
-    assert_eq!(app.status, "note locked");
+    assert_eq!(app.status, "note session-locked; not encrypted at rest");
 
     app.execute_terminal_command(&db, "unlock-note pass123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
     assert!(app.active_note.is_unlocked);
-    assert_eq!(app.status, "note unlocked");
+    assert_eq!(app.status, "note unlocked for this session");
 
     app.execute_terminal_command(&db, "encrypt-note enc123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
@@ -1339,13 +1339,14 @@ fn startup_with_locked_recent_note_prompts_for_password() {
 
     assert_eq!(app.active_note.id, "n2");
     assert_eq!(app.mode, UiMode::Switcher);
-    assert_eq!(app.status, "password required to open protected note");
+    assert_eq!(app.status, "password required to open session-locked note");
     let confirm = app
         .switcher
         .open_confirm
         .as_ref()
         .expect("startup should request password");
     assert_eq!(confirm.note_id, "n2");
+    assert_eq!(confirm.access_mode, NoteAccessMode::Locked);
     assert_eq!(confirm.password, "");
 
     drop(app);

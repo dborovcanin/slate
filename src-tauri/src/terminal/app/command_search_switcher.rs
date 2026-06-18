@@ -404,6 +404,7 @@ impl TerminalApp {
                         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
                             note_id: item.id,
                             note_title: item.title,
+                            access_mode: item.access_mode,
                             password: String::new(),
                             line_number: None,
                         });
@@ -608,7 +609,10 @@ impl TerminalApp {
             Key::Enter => {
                 if let Some(confirm) = self.switcher.delete_confirm.clone() {
                     if confirm.requires_password && confirm.password.trim().is_empty() {
-                        self.status = "password required to delete protected note".to_string();
+                        self.status = format!(
+                            "password required to delete {}",
+                            Self::access_mode_prompt_label(confirm.access_mode)
+                        );
                         return Ok(());
                     }
                     let password = if confirm.requires_password {
@@ -760,7 +764,10 @@ impl TerminalApp {
             Key::Enter => {
                 if let Some(confirm) = self.switcher.open_confirm.clone() {
                     if confirm.password.trim().is_empty() {
-                        self.status = "password required to open protected note".to_string();
+                        self.status = format!(
+                            "password required to open {}",
+                            Self::access_mode_prompt_label(confirm.access_mode)
+                        );
                         return Ok(());
                     }
                     match self.open_note_from_switcher(
@@ -853,21 +860,22 @@ impl TerminalApp {
                 self.switcher.delete_confirm = None;
                 return;
             }
-            let requires_password = match db.get_note_meta(&item.id) {
-                Ok(Some(note)) => matches!(
-                    note.access_mode,
-                    NoteAccessMode::Locked | NoteAccessMode::Encrypted
-                ),
-                Ok(None) => false,
+            let access_mode = match db.get_note_meta(&item.id) {
+                Ok(Some(note)) => note.access_mode,
+                Ok(None) => NoteAccessMode::None,
                 Err(error) => {
                     self.status = format!("delete check failed: {error}");
-                    false
+                    NoteAccessMode::None
                 }
             };
             self.switcher.delete_confirm = Some(SwitcherDeleteConfirm {
                 note_id: item.id.clone(),
                 note_title: item.title.clone(),
-                requires_password,
+                requires_password: matches!(
+                    access_mode,
+                    NoteAccessMode::Locked | NoteAccessMode::Encrypted
+                ),
+                access_mode,
                 password: String::new(),
             });
         }
@@ -1540,19 +1548,19 @@ impl TerminalApp {
                             }
                             self.status = match action {
                                 crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
-                                    "note locked".to_string()
+                                    "note session-locked; not encrypted at rest".to_string()
                                 }
                                 crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
-                                    "note unlocked".to_string()
+                                    "note unlocked for this session".to_string()
                                 }
                                 crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
                                     "note encrypted at rest".to_string()
                                 }
                                 crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
-                                    "note decrypted".to_string()
+                                    "note decrypted; stored without at-rest encryption".to_string()
                                 }
                                 crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
-                                    "note unprotected".to_string()
+                                    "note decrypted; at-rest encryption removed".to_string()
                                 }
                             };
                         }
@@ -2526,6 +2534,7 @@ impl TerminalApp {
                         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
                             note_id: result.id.clone(),
                             note_title: result.title.clone(),
+                            access_mode,
                             password: String::new(),
                             line_number: Some(result.line_number),
                         });

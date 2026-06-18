@@ -459,10 +459,20 @@ function findHeadingLineNumber(body: string, heading: string): number | null {
   return null;
 }
 
-async function unlockProtectedNoteWithRetry(noteId: string, title: string): Promise<Note | null> {
+function accessModeLabel(mode: Note["access_mode"]): string {
+  if (mode === "locked") return "session-locked note";
+  if (mode === "encrypted") return "encrypted-at-rest note";
+  return "note";
+}
+
+async function unlockProtectedNoteWithRetry(
+  noteId: string,
+  title: string,
+  accessMode: Note["access_mode"],
+): Promise<Note | null> {
   while (true) {
     const password = await promptPasswordInApp(
-      `Enter password to open "${title}".`,
+      `Enter password to open ${accessModeLabel(accessMode)} "${title}".`,
       "Open",
     );
     if (password === null) {
@@ -505,7 +515,7 @@ async function switchToNote(id: string, lineNumber?: number | null, heading?: st
 
   let note: Note | null = null;
   if (summary.access_mode !== "none" && !summary.is_unlocked) {
-    note = await unlockProtectedNoteWithRetry(id, summary.title);
+    note = await unlockProtectedNoteWithRetry(id, summary.title, summary.access_mode);
     if (!note) {
       openNoteSwitcher();
       return;
@@ -544,7 +554,7 @@ async function unlockStartupNoteIfNeeded(
     return note;
   }
   const title = summaries.find((entry) => entry.id === note.id)?.title ?? note.id;
-  const unlocked = await unlockProtectedNoteWithRetry(note.id, title);
+  const unlocked = await unlockProtectedNoteWithRetry(note.id, title, note.access_mode);
   if (!unlocked) {
     openNoteSwitcher();
     return note;
@@ -617,7 +627,7 @@ async function handleDeleteNoteById(noteId: string) {
   let deletePassword: string | null = null;
   if (noteEntry.accessMode !== "none") {
     deletePassword = await promptPasswordInApp(
-      `Enter password to delete "${noteEntry.title}".`,
+      `Enter password to delete ${accessModeLabel(noteEntry.accessMode)} "${noteEntry.title}".`,
       "Delete",
     );
     if (deletePassword === null) return;

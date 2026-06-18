@@ -252,6 +252,7 @@ struct SwitcherDeleteConfirm {
     note_id: String,
     note_title: String,
     requires_password: bool,
+    access_mode: NoteAccessMode,
     password: String,
 }
 
@@ -259,6 +260,7 @@ struct SwitcherDeleteConfirm {
 struct SwitcherOpenConfirm {
     note_id: String,
     note_title: String,
+    access_mode: NoteAccessMode,
     password: String,
     line_number: Option<usize>,
 }
@@ -720,9 +722,26 @@ impl TerminalApp {
         self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked
     }
 
+    fn access_mode_prompt_label(mode: NoteAccessMode) -> &'static str {
+        match mode {
+            NoteAccessMode::None => "note",
+            NoteAccessMode::Locked => "session-locked note",
+            NoteAccessMode::Encrypted => "encrypted-at-rest note",
+        }
+    }
+
     fn locked_note_status_message(&self) -> String {
-        "note is locked; unlock first (:note unlock <password> or unlock-note <password>)"
-            .to_string()
+        match self.active_note.access_mode {
+            NoteAccessMode::Encrypted => {
+                "note is encrypted at rest; unlock session first (:note unlock <password>)"
+                    .to_string()
+            }
+            NoteAccessMode::Locked => {
+                "note is session-locked, not encrypted at rest; unlock first (:note unlock <password>)"
+                    .to_string()
+            }
+            NoteAccessMode::None => "note is read-only until unlocked".to_string(),
+        }
     }
 
     fn set_locked_note_status(&mut self) {
@@ -819,11 +838,15 @@ impl TerminalApp {
         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
             note_id: self.active_note.id.clone(),
             note_title,
+            access_mode: self.active_note.access_mode,
             password: String::new(),
             line_number: None,
         });
         self.switcher.delete_confirm = None;
-        self.status = "password required to open protected note".to_string();
+        self.status = format!(
+            "password required to open {}",
+            Self::access_mode_prompt_label(self.active_note.access_mode)
+        );
     }
 
     fn new_with_startup_metrics(
