@@ -637,14 +637,6 @@ interface ResolvedImagePreview {
   broken?: boolean;
 }
 
-function absolutePathToFileUrl(path: string): string {
-  const normalized = path.replace(/\\/g, "/");
-  if (/^[A-Za-z]:\//.test(normalized)) {
-    return `file:///${encodeURI(normalized)}`;
-  }
-  return `file://${encodeURI(normalized)}`;
-}
-
 function dataUrlToObjectUrl(dataUrl: string): string | null {
   if (!dataUrl.startsWith(DATA_URL_PREFIX)) return null;
   const splitAt = dataUrl.indexOf(",");
@@ -2469,7 +2461,7 @@ const markdownRichPlugin = ViewPlugin.fromClass(
           }
           return {
             srcUrl: convertFileSrc(cached),
-            fallbackSrcUrl: absolutePathToFileUrl(cached),
+            fallbackSrcUrl: null,
           };
         }
         newImageSources.add(source);

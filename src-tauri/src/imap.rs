@@ -294,6 +294,7 @@ fn ingest_message(
 struct ImapClient {
     io: StreamOwned<ClientConnection, TcpStream>,
     next_tag: u32,
+    max_literal_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +330,7 @@ impl ImapClient {
         let mut client = Self {
             io: StreamOwned::new(connection, tcp),
             next_tag: 1,
+            max_literal_bytes: imap.max_message_bytes,
         };
         let greeting = read_imap_line(&mut client.io, MAX_IMAP_LINE_BYTES)?
             .ok_or_else(|| "IMAP server closed connection before greeting".to_string())?;
@@ -406,7 +408,8 @@ impl ImapClient {
             .flush()
             .map_err(|e| format!("IMAP flush failed: {e}"))?;
 
-        let (parts, tagged_line) = read_tagged_response(&mut self.io, &tag)?;
+        let (parts, tagged_line) =
+            read_tagged_response(&mut self.io, &tag, self.max_literal_bytes)?;
         let status = tagged_line[tag.len()..].trim_start();
         if !status.to_ascii_uppercase().starts_with("OK") {
             return Err(format!(
@@ -420,6 +423,7 @@ impl ImapClient {
 fn read_tagged_response(
     io: &mut (impl Read + Write),
     tag: &str,
+    max_literal_bytes: usize,
 ) -> Result<(Vec<ImapResponsePart>, String), String> {
     let mut parts = Vec::new();
     loop {
@@ -428,9 +432,15 @@ fn read_tagged_response(
 
         let literal_len = parse_imap_literal_size(&line);
         let literal = if let Some(literal_len) = literal_len {
-            let mut buf = vec![0u8; literal_len];
+            // Keep one byte beyond the configured limit so the ingest path can
+            // preserve its existing `message_truncated` signal. Discard the
+            // rest in a fixed-size buffer instead of trusting the server's
+            // announced literal length for an allocation.
+            let retained_len = literal_len.min(max_literal_bytes.saturating_add(1));
+            let mut buf = vec![0u8; retained_len];
             io.read_exact(&mut buf)
                 .map_err(|e| format!("Failed to read IMAP literal: {e}"))?;
+            discard_imap_literal_bytes(io, literal_len.saturating_sub(retained_len))?;
             Some(buf)
         } else {
             None
@@ -448,6 +458,17 @@ fn read_tagged_response(
 
         parts.push(ImapResponsePart { line, literal });
     }
+}
+
+fn discard_imap_literal_bytes(io: &mut impl Read, mut remaining: usize) -> Result<(), String> {
+    let mut discard = [0u8; 8192];
+    while remaining > 0 {
+        let chunk_len = remaining.min(discard.len());
+        io.read_exact(&mut discard[..chunk_len])
+            .map_err(|e| format!("Failed to discard oversized IMAP literal: {e}"))?;
+        remaining -= chunk_len;
+    }
+    Ok(())
 }
 
 fn read_imap_line(io: &mut impl Read, max_bytes: usize) -> Result<Option<String>, String> {
@@ -789,6 +810,19 @@ mod tests {
             Some(456)
         );
         assert_eq!(parse_imap_literal_size("* NO LITERAL"), None);
+    }
+
+    #[test]
+    fn tagged_response_discards_literal_bytes_beyond_limit() {
+        let response = b"* 1 FETCH (RFC822 {8}\r\nabcdefgh)\r\nA0001 OK done\r\n".to_vec();
+        let mut io = std::io::Cursor::new(response);
+        let (parts, tagged) =
+            read_tagged_response(&mut io, "A0001", 4).expect("response should parse");
+
+        assert_eq!(tagged, "A0001 OK done");
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0].literal.as_deref(), Some(b"abcde".as_slice()));
+        assert_eq!(parts[1].line, ")");
     }
 
     #[test]

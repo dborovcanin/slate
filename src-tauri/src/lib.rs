@@ -24,6 +24,8 @@ use std::sync::Mutex;
 use std::thread;
 #[cfg(feature = "imap")]
 use std::time::Duration;
+#[cfg(feature = "gui")]
+use tauri::Manager;
 use ulid::Ulid;
 
 #[cfg(test)]
@@ -89,6 +91,10 @@ struct TerminalOptions {
 #[cfg(feature = "gui")]
 fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result<(), String> {
     let core = AppCore::open_default()?;
+    let startup_asset_root = startup_file
+        .as_deref()
+        .map(app_core::note_sources::file_note_asset_root)
+        .transpose()?;
     if let Err(err) = config::ensure_config_file() {
         eprintln!("Config: {err}");
     }
@@ -160,7 +166,17 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
             commands::export::export_to_pdf,
             commands::clipboard::read_clipboard_text,
         ])
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(root) = startup_asset_root.as_ref() {
+                app.asset_protocol_scope()
+                    .allow_directory(root, true)
+                    .map_err(|error| {
+                        format!(
+                            "Failed to allow file-note asset directory '{}': {error}",
+                            root.display()
+                        )
+                    })?;
+            }
             server::start_ipc_server(app.handle().clone());
             Ok(())
         })

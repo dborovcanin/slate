@@ -109,6 +109,7 @@ dependencies = [
  "directories",
  "fend-core",
  "getrandom 0.3.4",
+ "image",
  "pbkdf2",
  "regex",
  "rusqlite",

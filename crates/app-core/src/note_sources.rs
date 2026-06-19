@@ -1,16 +1,20 @@
 use crate::storage::{Db, Note, NoteAccessMode, NoteModules, NoteSummary};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use image::{ImageFormat, ImageReader};
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::Cursor;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use ulid::Ulid;
 
 pub const MARKDOWN_NOTE_ID_PREFIX: &str = "mdfile:";
 pub const DB_IMAGE_MARKDOWN_PREFIX: &str = "slate-image://";
+pub const MAX_NOTE_IMAGE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_NOTE_IMAGE_DIMENSION: u32 = 16_384;
+pub const MAX_NOTE_IMAGE_PIXELS: u64 = 100_000_000;
 const NOTE_TITLE_MAX_CHARS: usize = 60;
 const DEFAULT_IMAGE_STEM: &str = "image";
-const DEFAULT_IMAGE_EXTENSION: &str = "png";
 const MAX_IMAGE_STEM_LEN: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,6 +45,12 @@ pub struct NoteSourceCapabilities {
 pub struct ImportedImage {
     pub image_id: String,
     pub markdown_path: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidatedImageMetadata {
+    extension: &'static str,
+    mime_type: &'static str,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -210,14 +220,19 @@ impl NoteSourceService {
         mime_type: Option<&str>,
         image_bytes: &[u8],
     ) -> Result<ImportedImage, String> {
-        if image_bytes.is_empty() {
-            return Err("Image payload is empty".to_string());
-        }
+        let metadata = validate_note_image(file_name, mime_type, image_bytes)?;
         let identity = self.parse_identity(note_id);
         if let NoteIdentity::DbNote(id) = &identity {
-            let image_id = self.db.reserve_note_image(id, file_name, mime_type)?;
-            self.db
-                .write_note_image_bytes(id, &image_id, file_name, mime_type, image_bytes)?;
+            let image_id = self
+                .db
+                .reserve_note_image(id, file_name, Some(metadata.mime_type))?;
+            self.db.write_note_image_bytes(
+                id,
+                &image_id,
+                file_name,
+                Some(metadata.mime_type),
+                image_bytes,
+            )?;
             return Ok(ImportedImage {
                 image_id: image_id.clone(),
                 markdown_path: markdown_path_for_db_image(&image_id),
@@ -231,7 +246,6 @@ impl NoteSourceService {
             return Err("note is locked; unlock first".to_string());
         }
 
-        let extension = select_image_extension(file_name, mime_type);
         let stem = select_image_stem(file_name);
         let (asset_dir, markdown_prefix) = image_asset_directory(self.parse_identity(note_id))?;
         fs::create_dir_all(&asset_dir).map_err(|e| {
@@ -241,7 +255,7 @@ impl NoteSourceService {
             )
         })?;
 
-        let target_path = unique_asset_file_path(&asset_dir, &stem, extension.as_str());
+        let target_path = unique_asset_file_path(&asset_dir, &stem, metadata.extension);
         fs::write(&target_path, image_bytes).map_err(|e| {
             format!(
                 "Failed to write image asset '{}': {e}",
@@ -276,12 +290,7 @@ impl NoteSourceService {
                 source_path.display()
             ));
         }
-        let bytes = fs::read(source_path).map_err(|e| {
-            format!(
-                "Failed to read image source file '{}': {e}",
-                source_path.display()
-            )
-        })?;
+        let bytes = read_image_file_bounded(source_path)?;
         let file_name = source_path.file_name().and_then(|name| name.to_str());
         self.import_image_bytes_by_id(note_id, file_name, None, &bytes)
     }
@@ -292,6 +301,7 @@ impl NoteSourceService {
         file_name: Option<&str>,
         mime_type: Option<&str>,
     ) -> Result<ImportedImage, String> {
+        validate_declared_image_type(file_name, mime_type)?;
         let identity = self.parse_identity(note_id);
         let NoteIdentity::DbNote(id) = identity else {
             return Err("image placeholders are only supported for database notes".to_string());
@@ -311,12 +321,18 @@ impl NoteSourceService {
         mime_type: Option<&str>,
         image_bytes: &[u8],
     ) -> Result<(), String> {
+        let metadata = validate_note_image(file_name, mime_type, image_bytes)?;
         let identity = self.parse_identity(note_id);
         let NoteIdentity::DbNote(id) = identity else {
             return Err("image placeholders are only supported for database notes".to_string());
         };
-        self.db
-            .write_note_image_bytes(&id, image_id, file_name, mime_type, image_bytes)
+        self.db.write_note_image_bytes(
+            &id,
+            image_id,
+            file_name,
+            Some(metadata.mime_type),
+            image_bytes,
+        )
     }
 
     pub fn write_image_path_to_placeholder_by_id(
@@ -337,12 +353,7 @@ impl NoteSourceService {
                 source_path.display()
             ));
         }
-        let bytes = fs::read(source_path).map_err(|e| {
-            format!(
-                "Failed to read image source file '{}': {e}",
-                source_path.display()
-            )
-        })?;
+        let bytes = read_image_file_bounded(source_path)?;
         let file_name = source_path.file_name().and_then(|name| name.to_str());
         self.write_image_bytes_to_placeholder_by_id(note_id, image_id, file_name, None, &bytes)
     }
@@ -373,6 +384,233 @@ impl NoteSourceService {
         Ok(resolve_image_markdown_path(identity, src)?
             .map(|path| path.to_string_lossy().to_string()))
     }
+}
+
+pub fn validate_note_image_payload_len(byte_len: usize) -> Result<(), String> {
+    if byte_len == 0 {
+        return Err("Image payload is empty".to_string());
+    }
+    if byte_len > MAX_NOTE_IMAGE_BYTES {
+        return Err(format!(
+            "Image payload exceeds the {} MiB limit",
+            MAX_NOTE_IMAGE_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(())
+}
+
+pub fn validate_declared_image_type(
+    file_name: Option<&str>,
+    mime_type: Option<&str>,
+) -> Result<(), String> {
+    declared_image_type(file_name, mime_type).map(|_| ())
+}
+
+fn validate_note_image(
+    file_name: Option<&str>,
+    mime_type: Option<&str>,
+    image_bytes: &[u8],
+) -> Result<ValidatedImageMetadata, String> {
+    validate_note_image_payload_len(image_bytes.len())?;
+    let (declared_extension, declared_mime) = declared_image_type(file_name, mime_type)?;
+    if looks_like_svg(image_bytes) {
+        return Err(
+            "SVG images are not supported because active SVG content is unsafe".to_string(),
+        );
+    }
+
+    let reader = ImageReader::new(Cursor::new(image_bytes))
+        .with_guessed_format()
+        .map_err(|error| format!("Failed to inspect image format: {error}"))?;
+    let format = reader
+        .format()
+        .ok_or_else(|| "Unsupported or unrecognized image format".to_string())?;
+    let actual = image_metadata_for_format(format)
+        .ok_or_else(|| format!("Unsupported image format: {format:?}"))?;
+
+    if let Some(extension) = declared_extension {
+        if extension != actual.extension {
+            return Err(format!(
+                "Image extension does not match detected {} content",
+                actual.extension
+            ));
+        }
+    }
+    if let Some(mime) = declared_mime {
+        if mime != actual.mime_type {
+            return Err(format!(
+                "Image MIME type does not match detected {} content",
+                actual.mime_type
+            ));
+        }
+    }
+
+    let (width, height) = reader
+        .into_dimensions()
+        .map_err(|error| format!("Failed to read image dimensions: {error}"))?;
+    validate_image_dimensions(width, height)?;
+    Ok(actual)
+}
+
+fn declared_image_type(
+    file_name: Option<&str>,
+    mime_type: Option<&str>,
+) -> Result<(Option<&'static str>, Option<&'static str>), String> {
+    let extension = file_name
+        .and_then(|name| Path::new(name).extension())
+        .and_then(|value| value.to_str())
+        .map(declared_image_extension)
+        .transpose()?
+        .flatten();
+    let mime = mime_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(declared_image_mime)
+        .transpose()?
+        .flatten();
+
+    if let (Some(extension), Some(mime)) = (extension, mime) {
+        let expected = image_metadata_for_extension(extension)
+            .expect("validated extension must have metadata");
+        if expected.mime_type != mime {
+            return Err("Image extension and MIME type do not match".to_string());
+        }
+    }
+    Ok((extension, mime))
+}
+
+fn declared_image_extension(raw: &str) -> Result<Option<&'static str>, String> {
+    let normalized = raw.trim().trim_start_matches('.').to_ascii_lowercase();
+    match normalized.as_str() {
+        "png" => Ok(Some("png")),
+        "jpg" | "jpeg" => Ok(Some("jpg")),
+        "gif" => Ok(Some("gif")),
+        "webp" => Ok(Some("webp")),
+        "bmp" => Ok(Some("bmp")),
+        "avif" => Err("AVIF image imports are not supported".to_string()),
+        "svg" | "svgz" => {
+            Err("SVG images are not supported because active SVG content is unsafe".to_string())
+        }
+        "" => Ok(None),
+        _ => Err(format!("Unsupported image extension: .{normalized}")),
+    }
+}
+
+fn declared_image_mime(raw: &str) -> Result<Option<&'static str>, String> {
+    let normalized = raw
+        .split(';')
+        .next()
+        .unwrap_or(raw)
+        .trim()
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "image/png" | "image/x-png" => Ok(Some("image/png")),
+        "image/jpeg" | "image/jpg" | "image/pjpeg" => Ok(Some("image/jpeg")),
+        "image/gif" => Ok(Some("image/gif")),
+        "image/webp" => Ok(Some("image/webp")),
+        "image/bmp" | "image/x-ms-bmp" => Ok(Some("image/bmp")),
+        "image/avif" => Err("AVIF image imports are not supported".to_string()),
+        "application/octet-stream" | "binary/octet-stream" => Ok(None),
+        "image/svg+xml" => {
+            Err("SVG images are not supported because active SVG content is unsafe".to_string())
+        }
+        "" => Ok(None),
+        _ => Err(format!("Unsupported image MIME type: {normalized}")),
+    }
+}
+
+fn image_metadata_for_extension(extension: &str) -> Option<ValidatedImageMetadata> {
+    match extension {
+        "png" => Some(ValidatedImageMetadata {
+            extension: "png",
+            mime_type: "image/png",
+        }),
+        "jpg" => Some(ValidatedImageMetadata {
+            extension: "jpg",
+            mime_type: "image/jpeg",
+        }),
+        "gif" => Some(ValidatedImageMetadata {
+            extension: "gif",
+            mime_type: "image/gif",
+        }),
+        "webp" => Some(ValidatedImageMetadata {
+            extension: "webp",
+            mime_type: "image/webp",
+        }),
+        "bmp" => Some(ValidatedImageMetadata {
+            extension: "bmp",
+            mime_type: "image/bmp",
+        }),
+        _ => None,
+    }
+}
+
+fn image_metadata_for_format(format: ImageFormat) -> Option<ValidatedImageMetadata> {
+    let extension = match format {
+        ImageFormat::Png => "png",
+        ImageFormat::Jpeg => "jpg",
+        ImageFormat::Gif => "gif",
+        ImageFormat::WebP => "webp",
+        ImageFormat::Bmp => "bmp",
+        _ => return None,
+    };
+    image_metadata_for_extension(extension)
+}
+
+fn validate_image_dimensions(width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err("Image dimensions must be greater than zero".to_string());
+    }
+    if width > MAX_NOTE_IMAGE_DIMENSION || height > MAX_NOTE_IMAGE_DIMENSION {
+        return Err(format!(
+            "Image dimensions exceed the {} pixel side limit",
+            MAX_NOTE_IMAGE_DIMENSION
+        ));
+    }
+    if u64::from(width).saturating_mul(u64::from(height)) > MAX_NOTE_IMAGE_PIXELS {
+        return Err(format!(
+            "Image dimensions exceed the {} megapixel limit",
+            MAX_NOTE_IMAGE_PIXELS / 1_000_000
+        ));
+    }
+    Ok(())
+}
+
+fn looks_like_svg(image_bytes: &[u8]) -> bool {
+    let prefix_len = image_bytes.len().min(4096);
+    let prefix = String::from_utf8_lossy(&image_bytes[..prefix_len]).to_ascii_lowercase();
+    let trimmed = prefix.trim_start_matches(['\u{feff}', ' ', '\t', '\r', '\n']);
+    trimmed.starts_with("<svg")
+        || ((trimmed.starts_with("<?xml") || trimmed.starts_with("<!--"))
+            && trimmed.contains("<svg"))
+}
+
+fn read_image_file_bounded(source_path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = fs::metadata(source_path).map_err(|e| {
+        format!(
+            "Failed to inspect image source file '{}': {e}",
+            source_path.display()
+        )
+    })?;
+    validate_note_image_payload_len(usize::try_from(metadata.len()).unwrap_or(usize::MAX))?;
+
+    let file = fs::File::open(source_path).map_err(|e| {
+        format!(
+            "Failed to read image source file '{}': {e}",
+            source_path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_NOTE_IMAGE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|e| {
+            format!(
+                "Failed to read image source file '{}': {e}",
+                source_path.display()
+            )
+        })?;
+    validate_note_image_payload_len(bytes.len())?;
+    Ok(bytes)
 }
 
 fn markdown_path_for_db_image(image_id: &str) -> String {
@@ -510,16 +748,18 @@ fn image_asset_directory(identity: NoteIdentity) -> Result<(PathBuf, String), St
             let root = crate::data_dir()?.join("assets").join(&safe_id);
             Ok((root, format!("./assets/{safe_id}")))
         }
-        NoteIdentity::FileNote(path) => {
-            let parent = path.parent().ok_or_else(|| {
-                format!(
-                    "Failed to determine markdown parent directory for '{}'",
-                    path.display()
-                )
-            })?;
-            Ok((parent.join("assets"), "./assets".to_string()))
-        }
+        NoteIdentity::FileNote(path) => Ok((file_note_asset_root(&path)?, "./assets".to_string())),
     }
+}
+
+pub fn file_note_asset_root(path: &Path) -> Result<PathBuf, String> {
+    let parent = path.parent().ok_or_else(|| {
+        format!(
+            "Failed to determine markdown parent directory for '{}'",
+            path.display()
+        )
+    })?;
+    Ok(parent.join("assets"))
 }
 
 fn resolve_image_markdown_path(
@@ -530,23 +770,20 @@ fn resolve_image_markdown_path(
     if raw.is_empty() {
         return Ok(None);
     }
-    let candidate = PathBuf::from(raw);
-    if candidate.is_absolute() {
-        if candidate.exists() && candidate.is_file() {
-            return Ok(Some(candidate));
-        }
-        return Ok(None);
-    }
-
     match identity {
         NoteIdentity::DbNote(_) => {
             let root = crate::data_dir()?;
-            let relative = if let Some(rest) = raw.strip_prefix("./") {
-                rest
+            let candidate = PathBuf::from(raw);
+            let joined = if candidate.is_absolute() {
+                candidate
             } else {
-                raw
+                let relative = if let Some(rest) = raw.strip_prefix("./") {
+                    rest
+                } else {
+                    raw
+                };
+                root.join(relative)
             };
-            let joined = root.join(relative);
             if !joined.exists() || !joined.is_file() {
                 return Ok(None);
             }
@@ -569,7 +806,12 @@ fn resolve_image_markdown_path(
                     path.display()
                 )
             })?;
-            let joined = parent.join(raw);
+            let candidate = PathBuf::from(raw);
+            let joined = if candidate.is_absolute() {
+                candidate
+            } else {
+                parent.join(candidate)
+            };
             if !joined.exists() || !joined.is_file() {
                 return Ok(None);
             }
@@ -579,6 +821,11 @@ fn resolve_image_markdown_path(
                     joined.display()
                 )
             })?;
+            let asset_root = file_note_asset_root(&path)?;
+            let canonical_asset_root = asset_root.canonicalize().unwrap_or(asset_root);
+            if !canonical.starts_with(&canonical_asset_root) {
+                return Ok(None);
+            }
             Ok(Some(canonical))
         }
     }
@@ -633,50 +880,6 @@ fn sanitize_image_stem(raw: &str) -> String {
         format!("{DEFAULT_IMAGE_STEM}-{}", Ulid::new())
     } else {
         trimmed.to_string()
-    }
-}
-
-fn select_image_extension(file_name: Option<&str>, mime_type: Option<&str>) -> String {
-    if let Some(name) = file_name {
-        if let Some(ext) = Path::new(name).extension().and_then(|value| value.to_str()) {
-            if let Some(allowed) = normalize_image_extension(ext) {
-                return allowed.to_string();
-            }
-        }
-    }
-    if let Some(mime) = mime_type {
-        if let Some(from_mime) = image_extension_from_mime(mime) {
-            return from_mime.to_string();
-        }
-    }
-    DEFAULT_IMAGE_EXTENSION.to_string()
-}
-
-fn normalize_image_extension(ext: &str) -> Option<&'static str> {
-    let normalized = ext.trim().trim_start_matches('.').to_ascii_lowercase();
-    match normalized.as_str() {
-        "png" => Some("png"),
-        "jpg" | "jpeg" => Some("jpg"),
-        "gif" => Some("gif"),
-        "webp" => Some("webp"),
-        "bmp" => Some("bmp"),
-        "svg" | "svgz" => Some("svg"),
-        "avif" => Some("avif"),
-        _ => None,
-    }
-}
-
-fn image_extension_from_mime(mime_type: &str) -> Option<&'static str> {
-    let normalized = mime_type.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "image/png" => Some("png"),
-        "image/jpeg" | "image/jpg" => Some("jpg"),
-        "image/gif" => Some("gif"),
-        "image/webp" => Some("webp"),
-        "image/bmp" => Some("bmp"),
-        "image/svg+xml" => Some("svg"),
-        "image/avif" => Some("avif"),
-        _ => None,
     }
 }
 
@@ -880,6 +1083,8 @@ fn note_summary_from_markdown_path(path: &Path) -> Result<NoteSummary, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::codecs::png::PngEncoder;
+    use image::{ColorType, ImageEncoder};
 
     fn temp_db_path() -> PathBuf {
         std::env::temp_dir().join(format!("note-sources-{}.db", Ulid::new()))
@@ -893,6 +1098,14 @@ mod tests {
         let shm = format!("{}-shm", path.display());
         let _ = fs::remove_file(wal);
         let _ = fs::remove_file(shm);
+    }
+
+    fn tiny_png_bytes() -> Vec<u8> {
+        let mut out = Vec::new();
+        PngEncoder::new(&mut out)
+            .write_image(&[255, 0, 0], 1, 1, ColorType::Rgb8.into())
+            .expect("png encode");
+        out
     }
 
     #[test]
@@ -1150,20 +1363,76 @@ mod tests {
     }
 
     #[test]
-    fn image_import_helpers_normalize_stem_and_extension() {
+    fn image_import_helpers_normalize_stem_and_validate_claims() {
         assert_eq!(
             sanitize_image_stem(" Plan v1.0 @ Draft "),
             "plan-v1-0-draft"
         );
-        assert_eq!(
-            select_image_extension(Some("pic.JPEG"), Some("image/png")),
-            "jpg"
-        );
-        assert_eq!(
-            select_image_extension(Some("pic.bad"), Some("image/webp")),
-            "webp"
-        );
-        assert_eq!(select_image_extension(None, Some("image/unknown")), "png");
+        assert!(validate_declared_image_type(Some("pic.JPEG"), Some("image/jpeg")).is_ok());
+        assert!(validate_declared_image_type(Some("pic.png"), Some("image/jpeg")).is_err());
+        assert!(validate_declared_image_type(Some("pic.bad"), Some("image/png")).is_err());
+        assert!(validate_declared_image_type(Some("pic.svg"), Some("image/svg+xml")).is_err());
+        assert!(validate_declared_image_type(Some("pic.avif"), Some("image/avif")).is_err());
+    }
+
+    #[test]
+    fn image_validation_accepts_matching_raster_metadata() {
+        let png = tiny_png_bytes();
+        let metadata =
+            validate_note_image(Some("pic.png"), Some("image/png; charset=binary"), &png)
+                .expect("valid png");
+        assert_eq!(metadata.extension, "png");
+        assert_eq!(metadata.mime_type, "image/png");
+    }
+
+    #[test]
+    fn image_validation_rejects_mismatched_or_unrecognized_content() {
+        let png = tiny_png_bytes();
+        let extension_error = validate_note_image(Some("pic.jpg"), None, &png)
+            .expect_err("extension mismatch should fail");
+        assert!(extension_error.contains("extension does not match"));
+
+        let mime_error = validate_note_image(Some("pic.png"), Some("image/jpeg"), &png)
+            .expect_err("mime mismatch should fail");
+        assert!(mime_error.contains("extension and MIME type do not match"));
+
+        let unknown = validate_note_image(None, None, b"not-an-image")
+            .expect_err("unrecognized bytes should fail");
+        assert!(unknown.contains("Unsupported or unrecognized"));
+    }
+
+    #[test]
+    fn image_validation_rejects_svg_content_and_oversized_dimensions() {
+        let svg = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"></svg>";
+        let svg_error = validate_note_image(None, None, svg).expect_err("svg should fail");
+        assert!(svg_error.contains("SVG images are not supported"));
+
+        assert!(validate_image_dimensions(MAX_NOTE_IMAGE_DIMENSION, 1).is_ok());
+        assert!(validate_image_dimensions(MAX_NOTE_IMAGE_DIMENSION + 1, 1).is_err());
+        assert!(validate_image_dimensions(10_001, 10_000).is_err());
+    }
+
+    #[test]
+    fn image_payload_size_limit_is_enforced_without_allocating_payload() {
+        assert!(validate_note_image_payload_len(1).is_ok());
+        assert!(validate_note_image_payload_len(MAX_NOTE_IMAGE_BYTES).is_ok());
+        let error = validate_note_image_payload_len(MAX_NOTE_IMAGE_BYTES + 1)
+            .expect_err("oversized image should fail");
+        assert!(error.contains("16 MiB"));
+    }
+
+    #[test]
+    fn bounded_image_file_read_rejects_oversized_sparse_file() {
+        let path = std::env::temp_dir().join(format!("note-source-oversized-{}.png", Ulid::new()));
+        let file = fs::File::create(&path).expect("create sparse image");
+        file.set_len((MAX_NOTE_IMAGE_BYTES + 1) as u64)
+            .expect("size sparse image");
+        drop(file);
+
+        let error = read_image_file_bounded(&path).expect_err("oversized file should fail");
+        assert!(error.contains("16 MiB"));
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -1195,7 +1464,8 @@ mod tests {
         fs::write(&note_path, "hello").expect("seed markdown");
         let source_path =
             std::env::temp_dir().join(format!("note-source-image-src-{}.png", Ulid::new()));
-        fs::write(&source_path, b"png-bytes").expect("seed image file");
+        let png = tiny_png_bytes();
+        fs::write(&source_path, &png).expect("seed image file");
         let note_id = note_id_for_markdown_file(&note_path);
 
         let imported = service
@@ -1213,7 +1483,7 @@ mod tests {
             .join("assets")
             .join(asset_file_name);
         assert!(copied.exists());
-        assert_eq!(fs::read(copied).expect("copied bytes"), b"png-bytes");
+        assert_eq!(fs::read(copied).expect("copied bytes"), png);
 
         let _ = fs::remove_file(source_path);
         let _ = fs::remove_file(note_path);
@@ -1249,6 +1519,30 @@ mod tests {
                 .to_string_lossy()
                 .to_string()
         );
+
+        let _ = fs::remove_dir_all(note_dir);
+        drop(db);
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn resolve_image_markdown_source_rejects_paths_outside_file_note_assets() {
+        let db_path = temp_db_path();
+        let db = Db::open(db_path.clone()).expect("db opens");
+        let service = NoteSourceService::new(db.clone());
+
+        let note_dir = std::env::temp_dir().join(format!("note-source-scope-{}", Ulid::new()));
+        fs::create_dir_all(&note_dir).expect("note dir");
+        let note_path = note_dir.join("note.md");
+        let outside_image = note_dir.join("outside.png");
+        fs::write(&note_path, "note").expect("seed note");
+        fs::write(&outside_image, b"img").expect("seed outside image");
+
+        let note_id = note_id_for_markdown_file(&note_path);
+        let resolved = service
+            .resolve_image_markdown_source_by_id(&note_id, "./outside.png")
+            .expect("resolve should not error");
+        assert!(resolved.is_none());
 
         let _ = fs::remove_dir_all(note_dir);
         drop(db);

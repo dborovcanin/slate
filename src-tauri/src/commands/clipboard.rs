@@ -71,7 +71,7 @@ fn is_likely_image_file(path: &PathBuf) -> bool {
     };
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "avif"
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
     )
 }
 

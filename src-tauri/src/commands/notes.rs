@@ -619,13 +619,25 @@ pub(crate) fn decode_image_bytes(encoded: &str) -> Result<Vec<u8>, String> {
     if payload.is_empty() {
         return Err("Image payload is empty".to_string());
     }
+    validate_encoded_image_payload_len(payload.len())?;
     let decoded = BASE64_STANDARD
         .decode(payload)
         .map_err(|e| format!("Invalid base64 image payload: {e}"))?;
-    if decoded.is_empty() {
-        return Err("Decoded image payload is empty".to_string());
-    }
+    app_core::note_sources::validate_note_image_payload_len(decoded.len())?;
     Ok(decoded)
+}
+
+fn validate_encoded_image_payload_len(payload_len: usize) -> Result<(), String> {
+    let max_encoded_len = app_core::note_sources::MAX_NOTE_IMAGE_BYTES
+        .div_ceil(3)
+        .saturating_mul(4);
+    if payload_len > max_encoded_len {
+        return Err(format!(
+            "Image payload exceeds the {} MiB limit",
+            app_core::note_sources::MAX_NOTE_IMAGE_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(())
 }
 
 fn clipboard_image_file_name_for_mime(mime_type: &str) -> &'static str {
@@ -634,8 +646,6 @@ fn clipboard_image_file_name_for_mime(mime_type: &str) -> &'static str {
         "image/webp" => "clipboard-image.webp",
         "image/gif" => "clipboard-image.gif",
         "image/bmp" => "clipboard-image.bmp",
-        "image/svg+xml" => "clipboard-image.svg",
-        "image/avif" => "clipboard-image.avif",
         _ => "clipboard-image.png",
     }
 }
@@ -648,5 +658,16 @@ mod tests {
     fn decode_image_bytes_accepts_data_url_prefix() {
         let decoded = decode_image_bytes("data:image/png;base64,aGVsbG8=").expect("decode");
         assert_eq!(decoded, b"hello");
+    }
+
+    #[test]
+    fn encoded_image_size_is_rejected_before_decode() {
+        let max_encoded_len = app_core::note_sources::MAX_NOTE_IMAGE_BYTES
+            .div_ceil(3)
+            .saturating_mul(4);
+        assert!(validate_encoded_image_payload_len(max_encoded_len).is_ok());
+        let error = validate_encoded_image_payload_len(max_encoded_len + 1)
+            .expect_err("oversized encoded payload should fail");
+        assert!(error.contains("16 MiB"));
     }
 }

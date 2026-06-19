@@ -13,12 +13,7 @@
     "security": {
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "$HOME/**",
-          "$APPDATA/**",
-          "$APPLOCALDATA/**",
-          "$TEMP/**"
-        ]
+        "scope": []
       }
     },
     "windows": [

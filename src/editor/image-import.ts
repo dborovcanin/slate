@@ -18,8 +18,6 @@ const IMAGE_EXTENSIONS = new Set([
   "gif",
   "webp",
   "bmp",
-  "svg",
-  "avif",
 ]);
 
 type PendingImageInsertion =
@@ -249,9 +247,7 @@ function fileNameFromMimeType(mimeType: string): string {
   if (lower.includes("jpeg") || lower.includes("jpg")) return "clipboard-image.jpg";
   if (lower.includes("webp")) return "clipboard-image.webp";
   if (lower.includes("gif")) return "clipboard-image.gif";
-  if (lower.includes("svg")) return "clipboard-image.svg";
   if (lower.includes("bmp")) return "clipboard-image.bmp";
-  if (lower.includes("avif")) return "clipboard-image.avif";
   return "clipboard-image.png";
 }
 
