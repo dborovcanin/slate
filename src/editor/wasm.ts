@@ -1888,6 +1888,12 @@ export function calcComputeRefresh(
   if (!ensureWasmReadyNonBlocking()) {
     return fallback;
   }
+  // The plan is built by iterating markers, so with none there is nothing to
+  // produce — and every argument below is document-sized. Committed trailers
+  // are the exception rather than the rule, so this is the usual path.
+  if (markers.length === 0) {
+    return fallback;
+  }
 
   const denseResults: (string | null)[] = [];
   for (let i = 0; i < lines.length; i++) {

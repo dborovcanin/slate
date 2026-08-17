@@ -1722,11 +1722,19 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
 
           const snapshotDoc = doc;
           const nextLines = linesForDoc(doc);
-          const lineStarts: number[] = new Array(nextLines.length);
-          for (let i = 0, pos = 0; i < nextLines.length; i++) {
-            lineStarts[i] = pos;
-            pos += nextLines[i].length + 1;
-          }
+          // Document-sized, and only the trailer refresh below needs it, which
+          // in turn only runs when a committed trailer exists. Build on demand.
+          let lineStartsCache: number[] | null = null;
+          const lineStartsForDoc = (): number[] => {
+            if (lineStartsCache) return lineStartsCache;
+            const starts: number[] = new Array(nextLines.length);
+            for (let i = 0, pos = 0; i < nextLines.length; i++) {
+              starts[i] = pos;
+              pos += nextLines[i].length + 1;
+            }
+            lineStartsCache = starts;
+            return starts;
+          };
 
           const plan = planIncrementalCalc(prevLines, prevResults, nextLines);
           const hasPrev = prevLines.length > 0;
@@ -1869,13 +1877,15 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
           });
 
           const sel = view.state.selection.main;
-          const refreshPlan = computeCalcRefresh(
-            markerLocs,
-            nextLines,
-            lineStarts,
-            nextMap,
-            { from: sel.from, to: sel.to },
-          );
+          const refreshPlan = markerLocs.length > 0
+            ? computeCalcRefresh(
+                markerLocs,
+                nextLines,
+                lineStartsForDoc(),
+                nextMap,
+                { from: sel.from, to: sel.to },
+              )
+            : { changes: [], prune: [], syncedLines: [] };
 
           // Drop results for lines whose committed trailer will carry the
           // value inline, otherwise the ghost widget renders on top of
@@ -1936,7 +1946,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             // lines as user edits.
             for (const change of refreshPlan.changes) {
               const lineText = nextLines[change.lineIdx];
-              const offsetInLine = change.from - lineStarts[change.lineIdx];
+              const offsetInLine = change.from - lineStartsForDoc()[change.lineIdx];
               nextLines[change.lineIdx] =
                 lineText.slice(0, offsetInLine) + change.insert;
             }
