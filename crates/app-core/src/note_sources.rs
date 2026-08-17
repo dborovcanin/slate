@@ -1,4 +1,4 @@
-use crate::storage::{Db, Note, NoteAccessMode, NoteModules, NoteSummary};
+use crate::storage::{Db, Note, NoteAccessMode, NoteModules, NoteRevision, NoteSummary};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use image::{ImageFormat, ImageReader};
 use std::fs::{self, OpenOptions};
@@ -114,6 +114,51 @@ impl NoteSourceService {
         options: SaveOptions,
     ) -> Result<Note, String> {
         self.save_note(&self.parse_identity(note_id), body, options)
+    }
+
+    pub fn save_note_revision_by_id(
+        &self,
+        note_id: &str,
+        body: &str,
+        options: SaveOptions,
+    ) -> Result<NoteRevision, String> {
+        self.save_note_revision(&self.parse_identity(note_id), body, options)
+    }
+
+    /// Same write and same conflict check as [`Self::save_note`], returning only
+    /// the new revision. Neither backing store re-reads what it just wrote.
+    pub fn save_note_revision(
+        &self,
+        identity: &NoteIdentity,
+        body: &str,
+        options: SaveOptions,
+    ) -> Result<NoteRevision, String> {
+        match identity {
+            NoteIdentity::DbNote(id) => {
+                let current_revision = self.db.get_note_updated_at(id)?;
+                ensure_revision_matches(
+                    current_revision.as_deref(),
+                    options.expected_revision.as_deref(),
+                    options.force,
+                    "note changed since last load",
+                )?;
+                self.db.save_note_revision(id, body)
+            }
+            NoteIdentity::FileNote(path) => {
+                let current_revision = revision_from_markdown_path(path)?;
+                ensure_revision_matches(
+                    current_revision.as_deref(),
+                    options.expected_revision.as_deref(),
+                    options.force,
+                    "file changed on disk",
+                )?;
+                write_markdown_file_atomically(path, body)?;
+                Ok(NoteRevision {
+                    id: note_id_for_markdown_file(path),
+                    updated_at: revision_from_markdown_path(path)?.unwrap_or_default(),
+                })
+            }
+        }
     }
 
     pub fn save_note(

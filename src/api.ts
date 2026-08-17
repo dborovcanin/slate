@@ -208,12 +208,18 @@ export function getOrCreateNote(): Promise<Note> {
   return invoke<Note>("get_or_create_note");
 }
 
+/// The body is not echoed back — the caller already has it.
+export interface NoteRevision {
+  id: string;
+  updated_at: string;
+}
+
 export function saveNote(
   id: string,
   body: string,
   options?: { expectedRevision?: string | null; force?: boolean },
-): Promise<Note> {
-  return invoke<Note>("save_note", {
+): Promise<NoteRevision> {
+  return invoke<NoteRevision>("save_note", {
     id,
     body,
     expectedRevision: options?.expectedRevision ?? null,

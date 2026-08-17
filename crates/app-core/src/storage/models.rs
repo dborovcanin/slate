@@ -40,6 +40,14 @@ impl Default for NoteModules {
     }
 }
 
+/// The outcome of a write, without the body the caller just sent.
+/// `updated_at` is the revision token used for optimistic concurrency.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NoteRevision {
+    pub id: String,
+    pub updated_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Note {
     pub id: String,

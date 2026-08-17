@@ -37,8 +37,21 @@ BEGIN
     DELETE FROM notes_fts WHERE rowid = old.rowid;
 END;
 
-CREATE TRIGGER IF NOT EXISTS notes_fts_au
-AFTER UPDATE ON notes
+-- Retokenizing the body is the most expensive thing a note write does, so the
+-- update trigger is scoped to the columns the index actually derives from.
+-- Writes that touch only modules_json/updated_at no longer reindex the note.
+--
+-- Every access-mode transition (lock, encrypt, decrypt) sets access_mode, so
+-- the guard still fires on all of them and protected content is still removed
+-- from the index. Dropped first because this file is replayed with
+-- `CREATE ... IF NOT EXISTS` on every open, which would otherwise leave
+-- databases created before this change on the old unscoped trigger.
+DROP TRIGGER IF EXISTS notes_fts_au;
+CREATE TRIGGER notes_fts_au
+AFTER UPDATE OF body, note_title, access_mode ON notes
+WHEN new.body IS NOT old.body
+    OR new.note_title IS NOT old.note_title
+    OR new.access_mode IS NOT old.access_mode
 BEGIN
     DELETE FROM notes_fts WHERE rowid = old.rowid;
     INSERT INTO notes_fts(rowid, note_id, note_title, body)

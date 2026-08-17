@@ -14,7 +14,8 @@ use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
 use super::models::{
-    Collection, Note, NoteAccessMode, NoteModules, NoteSearchResult, NoteSummary, Reminder,
+    Collection, Note, NoteAccessMode, NoteModules, NoteRevision, NoteSearchResult, NoteSummary,
+    Reminder,
 };
 use super::note_access::{NoteAccessGrant, NoteAccessService};
 use crate::note_sources::derive_note_title_from_body;
@@ -344,6 +345,77 @@ impl Db {
     pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
         let conn = self.conn.lock().unwrap();
         self.load_note_with_access(&conn, id)
+    }
+
+    /// Persist a body and return just the new revision.
+    ///
+    /// Callers that are writing back what they already hold in memory (the
+    /// editors' autosave paths) only need `updated_at` for optimistic
+    /// concurrency, so this skips the read-back that `save_note` performs to
+    /// assemble a full `Note`.
+    pub fn save_note_revision(&self, id: &str, body: &str) -> Result<NoteRevision, String> {
+        let conn = self.conn.lock().unwrap();
+        let now = now_iso();
+        let note_title = derive_note_title_from_body(body);
+
+        if let Some(security) = self.load_note_security(&conn, id)? {
+            match security.access_mode {
+                NoteAccessMode::None => {}
+                NoteAccessMode::Locked => {
+                    if !self.is_note_unlocked(id) {
+                        return Err("note is locked; unlock first".to_string());
+                    }
+                }
+                NoteAccessMode::Encrypted => {
+                    let encryption = self
+                        .unlocked_encryption_for(id)
+                        .ok_or_else(|| "note is locked; unlock first".to_string())?;
+                    let encrypted = encrypt_note_body_with_key(body, &encryption.key)?;
+                    let changed = conn
+                        .execute(
+                            "UPDATE notes
+                         SET body = '',
+                             note_title = ?2,
+                             encrypted_body = ?3,
+                             encryption_salt = ?4,
+                             encryption_nonce = ?5,
+                             updated_at = ?6
+                         WHERE id = ?1",
+                            rusqlite::params![
+                                id,
+                                note_title,
+                                encrypted.ciphertext,
+                                encryption.encryption_salt,
+                                encrypted.nonce,
+                                &now,
+                            ],
+                        )
+                        .map_err(|e| e.to_string())?;
+                    if changed == 0 {
+                        return Err("Note not found".to_string());
+                    }
+                    return Ok(NoteRevision {
+                        id: id.to_string(),
+                        updated_at: now,
+                    });
+                }
+            }
+        }
+
+        conn.execute(
+            "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 body = excluded.body,
+                 note_title = excluded.note_title,
+                 updated_at = excluded.updated_at",
+            rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
+        )
+        .map_err(|e| e.to_string())?;
+
+        Ok(NoteRevision {
+            id: id.to_string(),
+            updated_at: now,
+        })
     }
 
     pub fn save_note(&self, id: &str, body: &str) -> Result<Note, String> {
@@ -3064,6 +3136,67 @@ mod tests {
     }
 
     #[test]
+    fn save_note_revision_persists_body_and_matches_save_note() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        let created = db.save_note_revision("n1", "hello").expect("note saved");
+        assert_eq!(created.id, "n1");
+        assert_eq!(
+            db.get_note("n1").expect("lookup").map(|n| n.body),
+            Some("hello".to_string())
+        );
+
+        let updated = db.save_note_revision("n1", "updated").expect("note updated");
+        assert!(updated.updated_at >= created.updated_at);
+        assert_eq!(
+            db.get_note("n1").expect("lookup").map(|n| n.body),
+            Some("updated".to_string())
+        );
+        // The revision is the one a subsequent conflict check will compare against.
+        assert_eq!(
+            db.get_note_updated_at("n1").expect("revision"),
+            Some(updated.updated_at)
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn save_note_revision_encrypts_body_and_refuses_locked_notes() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("enc", "plain start").expect("seed note");
+        db.encrypt_note("enc", "pass").expect("encrypt note");
+        db.unlock_note("enc", "pass").expect("unlock note");
+        db.save_note_revision("enc", "secret body")
+            .expect("encrypted save");
+
+        // Body column stays empty; ciphertext carries the content.
+        let stored: String = Connection::open(&path)
+            .expect("raw connection")
+            .query_row("SELECT body FROM notes WHERE id = 'enc'", [], |r| r.get(0))
+            .expect("row");
+        assert_eq!(stored, "");
+        assert_eq!(
+            db.get_note("enc").expect("lookup").map(|n| n.body),
+            Some("secret body".to_string())
+        );
+
+        db.save_note("locked", "locked content").expect("seed note");
+        db.lock_note("locked", "pass").expect("lock note");
+        assert!(
+            db.save_note_revision("locked", "attempt").is_err(),
+            "a locked note must reject writes on the revision path too"
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn save_update_and_delete_note() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
@@ -4027,6 +4160,118 @@ mod tests {
             .expect("search after rebuild");
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "n1");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn opening_an_existing_database_replaces_the_unscoped_fts_update_trigger() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "canary body text").expect("save note");
+        drop(db);
+
+        // Put the pre-change trigger back to stand in for a database created
+        // before the update trigger was scoped. `CREATE ... IF NOT EXISTS`
+        // alone would leave it in place on reopen.
+        let conn = Connection::open(&path).expect("raw connection");
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS notes_fts_au;
+             CREATE TRIGGER notes_fts_au
+             AFTER UPDATE ON notes
+             BEGIN
+                 DELETE FROM notes_fts WHERE rowid = old.rowid;
+                 INSERT INTO notes_fts(rowid, note_id, note_title, body)
+                 SELECT new.rowid, new.id, new.note_title, new.body
+                 WHERE new.access_mode = 'none';
+             END;",
+        )
+        .expect("legacy trigger restored");
+        drop(conn);
+
+        let db = Db::open(path.clone()).expect("db reopens");
+        let conn = Connection::open(&path).expect("raw connection");
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'notes_fts_au'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("trigger exists");
+        assert!(
+            sql.contains("UPDATE OF"),
+            "reopening must upgrade the legacy trigger, got: {sql}"
+        );
+
+        // And the upgraded trigger still indexes correctly.
+        db.save_note("n1", "replaced sentinel").expect("resave");
+        assert_eq!(
+            db.search_notes_content("sentinel", 10)
+                .expect("search")
+                .len(),
+            1
+        );
+
+        drop(conn);
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_index_survives_writes_that_do_not_touch_indexed_columns() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "canary body text").expect("save note");
+        assert_eq!(
+            db.search_notes_content("canary", 10).expect("search").len(),
+            1
+        );
+
+        // Writes only modules_json/updated_at, so the update trigger is scoped
+        // out. The indexed row must survive untouched rather than go stale.
+        db.set_note_modules(
+            "n1",
+            NoteModules {
+                math: false,
+                table: false,
+                variables: false,
+                style: false,
+                cross_note: false,
+            },
+        )
+        .expect("update modules");
+
+        let after = db.search_notes_content("canary", 10).expect("search");
+        assert_eq!(after.len(), 1, "note must stay searchable after a modules write");
+        assert_eq!(after[0].id, "n1");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn search_index_follows_body_edits() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "original canary").expect("save note");
+        db.save_note("n1", "replaced sentinel").expect("resave note");
+
+        assert!(
+            db.search_notes_content("canary", 10)
+                .expect("search")
+                .is_empty(),
+            "replaced text must leave the index"
+        );
+        assert_eq!(
+            db.search_notes_content("sentinel", 10)
+                .expect("search")
+                .len(),
+            1,
+            "new text must be indexed"
+        );
 
         drop(db);
         let _ = fs::remove_file(path);

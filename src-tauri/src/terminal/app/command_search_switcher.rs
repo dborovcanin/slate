@@ -2279,7 +2279,7 @@ impl TerminalApp {
             .joined_text_cache
             .take()
             .unwrap_or_else(|| join_lines(&self.editor.lines));
-        let mut saved = note_sources(db).save_note_by_id(
+        let saved = note_sources(db).save_note_revision_by_id(
             &self.active_note.id,
             &body,
             app_core::note_sources::SaveOptions {
@@ -2287,10 +2287,10 @@ impl TerminalApp {
                 force,
             },
         )?;
-        // The returned body duplicates what we already hold in `self.editor.lines`;
-        // drop it to keep memory usage flat.
-        saved.body = String::new();
-        self.active_note = saved;
+        // Only the revision moves on; the document itself stays in
+        // `self.editor.lines` and is never round-tripped through the store.
+        self.active_note.id = saved.id;
+        self.active_note.updated_at = saved.updated_at;
         self.editor.joined_text_cache = Some(body);
         self.dirty = false;
         self.history.checkpoint(

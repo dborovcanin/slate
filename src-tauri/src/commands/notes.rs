@@ -1,4 +1,6 @@
-use app_core::storage::{Collection, Note, NoteModules, NoteSearchResult, NoteSummary};
+use app_core::storage::{
+    Collection, Note, NoteModules, NoteRevision, NoteSearchResult, NoteSummary,
+};
 use app_core::AppCore;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
@@ -102,8 +104,11 @@ pub fn save_note(
     body: String,
     expected_revision: Option<String>,
     force: Option<bool>,
-) -> Result<Note, String> {
-    let note = core.note_sources().save_note_by_id(
+) -> Result<NoteRevision, String> {
+    // Returns the revision rather than the note: the caller just sent this body
+    // and keeps its own copy, so echoing it back doubles the IPC cost of every
+    // autosave for a value nothing reads.
+    let revision = core.note_sources().save_note_revision_by_id(
         &id,
         &body,
         app_core::note_sources::SaveOptions {
@@ -111,8 +116,13 @@ pub fn save_note(
             force: force.unwrap_or(false),
         },
     )?;
-    emit_note_changed(&app, note.id.as_str(), Some(note.updated_at.clone()), false);
-    Ok(note)
+    emit_note_changed(
+        &app,
+        revision.id.as_str(),
+        Some(revision.updated_at.clone()),
+        false,
+    );
+    Ok(revision)
 }
 
 #[tauri::command]
