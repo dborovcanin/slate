@@ -158,6 +158,7 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
             commands::calc::sync_note_lines,
             commands::calc::evaluate_note_context_delta,
             commands::calc::get_cross_note_vars,
+            commands::calc::execute_math_command,
             commands::perf::append_startup_log,
             commands::config::get_theme_config,
             commands::config::get_runtime_flags,

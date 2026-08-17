@@ -3,8 +3,8 @@ import {
   decryptNote,
   encryptNote,
   deleteNoteReminder,
-  evaluateLines,
   lockNoteAccess,
+  executeMathCommand,
   readSystemClipboardText,
   unlockNoteAccess,
   upsertNoteReminder,
@@ -28,6 +28,7 @@ import {
 } from "../perf/editor-profiler.ts";
 import type { NoteModules } from "../api.ts";
 import {
+  decodeCommandExecutionResult,
   ensureWasmReady,
   planHostCommandFromWasm,
 } from "./wasm.ts";
@@ -355,6 +356,16 @@ export async function executeCommand(
     dateFormat: options.dateFormat,
     dateTimeFormat: options.dateTimeFormat,
     pickDate: (dateFormat) => openDatePicker(dateFormat),
+    executeMathCommand: async (mathSnapshot, mathInput, mathMode) => {
+      const raw = await executeMathCommand(
+        mathSnapshot.text,
+        mathSnapshot.selection.anchor,
+        mathSnapshot.selection.head,
+        mathInput,
+        mathMode,
+      );
+      return decodeCommandExecutionResult(raw, mathSnapshot.text);
+    },
     pickDateTime: (pickerOptions) => openDateTimePicker(pickerOptions),
     activeNoteId: state.activeNote?.id ?? null,
     upsertReminder: async (reminder) => {
@@ -373,10 +384,6 @@ export async function executeCommand(
         applyReminderDelete(view, reminder.noteId, reminder.lineNumber);
       }
       return deleted;
-    },
-    evaluateExpression: async (expression) => {
-      const [result] = await evaluateLines([expression]);
-      return result ?? null;
     },
     copyText,
     startClipboardWatch: canClipboardWatch

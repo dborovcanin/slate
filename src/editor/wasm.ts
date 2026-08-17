@@ -48,7 +48,6 @@ import init, {
   wasm_classify_command_dispatch,
   wasm_plan_host_command,
   wasm_execute_vim_action,
-  wasm_execute_math_command,
   wasm_parse_note_security_command,
   wasm_plan_module_command,
   wasm_try_execute_vim_substitute,
@@ -766,7 +765,9 @@ function decodeVimSubstituteExecutionResult(
   };
 }
 
-function decodeCommandExecutionResult(
+// Exported so host-executed commands decode through the same UTF-8 -> UTF-16
+// offset mapping as wasm-executed ones.
+export function decodeCommandExecutionResult(
   raw: unknown,
   sourceText: string,
 ): WasmCommandExecutionResult | null {
@@ -1184,23 +1185,6 @@ export function tryExecuteVimSubstituteFromWasm(
     mode,
   ) as unknown;
   return decodeVimSubstituteExecutionResult(raw, text);
-}
-
-export function executeMathCommandFromWasm(
-  snapshot: EditorContextSnapshot,
-  rawInput: string,
-  mode: CommandMode,
-): WasmCommandExecutionResult | null {
-  if (!ensureWasmReadyNonBlocking()) return null;
-  const [text, anchor, head] = snapshotToArgs(snapshot);
-  const raw = wasm_execute_math_command(
-    text,
-    anchor!,
-    head!,
-    rawInput,
-    mode,
-  ) as unknown;
-  return decodeCommandExecutionResult(raw, text);
 }
 
 export function executeVimActionFromWasm(

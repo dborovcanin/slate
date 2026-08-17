@@ -3,6 +3,11 @@ use app_core::calc::{
     VariableIndexEntry,
 };
 use app_core::AppCore;
+use editor_core::engine::EditorEngine;
+use editor_core::math_commands;
+use editor_core::types::{
+    CommandExecutionResult, CommandMode, EditorContextSnapshot, SelectionSnapshot,
+};
 use std::sync::Arc;
 use tauri::State;
 
@@ -43,6 +48,37 @@ fn narrow_to_eval_range(result: &mut NoteEvaluationResult, eval_range: Option<(u
     result.table_cell_results = result.table_cell_results[cell_from..cell_to].to_vec();
 
     result.result_from = from;
+}
+
+/// Execute a `:sum` / `:avg` command against the caller's snapshot.
+///
+/// The evaluator behind these commands is `fend-core`, which is large enough
+/// that shipping it in the UI's wasm bundle costs more than the round trip for
+/// a command the user types by hand. Both front ends therefore run the same
+/// shared-core implementation natively.
+#[tauri::command]
+pub fn execute_math_command(
+    text: String,
+    selection_anchor: usize,
+    selection_head: usize,
+    raw_input: String,
+    mode: String,
+) -> Result<Option<CommandExecutionResult>, String> {
+    let Some(mode) = CommandMode::from_wire_str(&mode) else {
+        return Err(format!("unknown command mode: {mode}"));
+    };
+    let Some(command) = EditorEngine::resolve_command(mode, &raw_input) else {
+        return Ok(None);
+    };
+    let snapshot = EditorContextSnapshot {
+        text,
+        selection: SelectionSnapshot {
+            anchor: selection_anchor,
+            head: selection_head,
+        },
+        changed_range: None,
+    };
+    Ok(math_commands::execute_math_command(&snapshot, command.id))
 }
 
 #[tauri::command]

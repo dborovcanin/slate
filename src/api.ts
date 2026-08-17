@@ -575,6 +575,26 @@ export function evaluateNoteContextDelta(
   });
 }
 
+/// Runs `:sum` / `:avg` on the host. The evaluator behind them is too large to
+/// carry in the wasm bundle for a command reached only from the command bar.
+/// Returns the raw wire payload; callers decode it through
+/// `decodeCommandExecutionResult` for UTF-8 -> UTF-16 offset mapping.
+export function executeMathCommand(
+  text: string,
+  selectionAnchor: number,
+  selectionHead: number,
+  rawInput: string,
+  mode: string,
+): Promise<unknown> {
+  return invoke<unknown>("execute_math_command", {
+    text,
+    selectionAnchor,
+    selectionHead,
+    rawInput,
+    mode,
+  });
+}
+
 export function getCrossNoteVars(shortId: string): Promise<VariableIndexEntry[]> {
   return invoke<VariableIndexEntry[]>("get_cross_note_vars", { shortId });
 }

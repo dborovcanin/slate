@@ -20,7 +20,6 @@ use crate::markdown_tokens::{
     self, CodeToken, InlineMarkerComponentRange, InlineToken, MarkdownAnalyzeResult,
     MarkdownLineInfo, WikiLinkMatch,
 };
-use crate::math_commands;
 use crate::substitute;
 use crate::table;
 use crate::text_rules::{
@@ -324,11 +323,7 @@ pub fn wasm_table_cursor_motion_target(
 }
 
 fn parse_mode(mode: &str) -> Option<CommandMode> {
-    match mode.trim().to_ascii_lowercase().as_str() {
-        "vim" => Some(CommandMode::Vim),
-        "editor" => Some(CommandMode::Editor),
-        _ => None,
-    }
+    CommandMode::from_wire_str(mode)
 }
 
 fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
@@ -504,28 +499,6 @@ pub fn wasm_plan_host_command(mode: &str, raw_input: &str) -> Option<JsValue> {
     let mode = parse_mode(mode)?;
     let plan = EditorEngine::plan_host_command(mode, raw_input)?;
     host_command_plan_to_js(plan)
-}
-
-#[wasm_bindgen]
-pub fn wasm_execute_math_command(
-    text: &str,
-    selection_anchor: usize,
-    selection_head: usize,
-    raw_input: &str,
-    mode: &str,
-) -> Option<JsValue> {
-    let mode = parse_mode(mode)?;
-    let command = EditorEngine::resolve_command(mode, raw_input)?;
-    let snapshot = EditorContextSnapshot {
-        text: text.to_string(),
-        selection: SelectionSnapshot {
-            anchor: selection_anchor,
-            head: selection_head,
-        },
-        changed_range: None,
-    };
-    let result = math_commands::execute_math_command(&snapshot, command.id)?;
-    command_execution_result_to_js(&result)
 }
 
 #[wasm_bindgen]

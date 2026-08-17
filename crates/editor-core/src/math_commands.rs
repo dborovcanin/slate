@@ -448,6 +448,78 @@ mod tests {
         );
     }
 
+    // The cases below moved here from the UI's command tests when math command
+    // execution stopped running in wasm. They are the behavioral contract for
+    // `:sum` / `:avg`, and both front ends now reach this code path.
+    #[test]
+    fn sum_paragraph_inserts_total_at_the_cursor() {
+        let doc = snapshot("10\n20", 0, 0);
+        let result = execute_math_command(&doc, CommandId::Sum).expect("math command");
+        assert!(
+            result.message.contains("sum(paragraph) = 30.00"),
+            "got: {}",
+            result.message
+        );
+        assert_eq!(result.operations.len(), 1);
+        let change = &result.operations[0].changes[0];
+        assert_eq!((change.from, change.to, change.insert.as_str()), (0, 0, "30.00"));
+        assert_eq!(
+            result.operations[0].selection.map(|s| s.anchor),
+            Some("30.00".len())
+        );
+    }
+
+    #[test]
+    fn avg_paragraph_inserts_mean_at_the_cursor() {
+        let doc = snapshot("10\n20\n30", 0, 0);
+        let result = execute_math_command(&doc, CommandId::Avg).expect("math command");
+        assert!(
+            result.message.contains("avg(paragraph) = 20"),
+            "got: {}",
+            result.message
+        );
+        assert_eq!(result.operations.len(), 1);
+        assert_eq!(result.operations[0].changes[0].insert, "20.00");
+    }
+
+    #[test]
+    fn avg_row_averages_unit_bearing_cells() {
+        let table = "| x | 3m | 4m |  |";
+        let cursor = table.rfind("|  |").expect("table cell") + 1;
+        let doc = snapshot(table, cursor, cursor);
+        let result = execute_math_command(&doc, CommandId::AvgRow).expect("math command");
+        assert_eq!(result.message, "avg(row) = 3.50 m");
+        assert_eq!(
+            result.operations[0].changes[0].insert.replace(' ', ""),
+            "3.50m"
+        );
+    }
+
+    #[test]
+    fn sum_column_skips_non_numeric_header_cells() {
+        let table =
+            "| header | number |\n| ------ | ------ |\n| a      | 3      |\n| b      | 4      |";
+        let cursor = table.rfind("4 ").expect("last value") + 1;
+        let doc = snapshot(table, cursor, cursor);
+        let result = execute_math_command(&doc, CommandId::SumColumn).expect("math command");
+        assert_eq!(result.message, "sum(column) = 3.00");
+        assert_eq!(result.operations[0].changes[0].insert.trim(), "3.00");
+    }
+
+    #[test]
+    fn normalize_evaluated_value_strips_approximation_wording_and_rounds() {
+        assert_eq!(
+            normalize_evaluated_value("approximately 2.004 km").as_deref(),
+            Some("2.00 km")
+        );
+        assert_eq!(
+            normalize_evaluated_value("approx. 1.239").as_deref(),
+            Some("1.24")
+        );
+        assert_eq!(normalize_evaluated_value("≈ 5 m").as_deref(), Some("5.00 m"));
+        assert_eq!(normalize_evaluated_value("not a number"), None);
+    }
+
     #[test]
     fn avg_column_skips_non_numeric_header_cells() {
         let table =

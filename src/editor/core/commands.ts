@@ -4,7 +4,6 @@ import type { TextChange } from "./types.ts";
 import {
   convertLineToList,
   convertLineToTitle,
-  executeMathCommandFromWasm,
   isWasmReady,
   listCommandSuggestionsFromWasm,
   normalizeCommand,
@@ -19,14 +18,12 @@ import type {
   EditOperation,
   EditorContextSnapshot,
 } from "./types.ts";
+import type { WasmCommandExecutionResult } from "../wasm.ts";
 import type { NoteModules } from "../../api.ts";
 
 export type { CommandMode, CommandSuggestion } from "./types.ts";
 
 export type FoldCommandAction = "fold" | "unfold" | "fold-toggle";
-export type SumExpressionEvaluator = (
-  expression: string,
-) => Promise<string | null> | string | null;
 
 export interface CommandRuntime {
   mode: CommandMode;
@@ -56,7 +53,13 @@ export interface CommandRuntime {
     noteId: string;
     lineNumber: number;
   }) => Promise<boolean> | boolean;
-  evaluateExpression?: SumExpressionEvaluator;
+  /// Host-executed `:sum` / `:avg`. Injected rather than called directly so
+  /// this module stays free of transport concerns.
+  executeMathCommand?: (
+    snapshot: EditorContextSnapshot,
+    rawInput: string,
+    mode: CommandMode,
+  ) => Promise<WasmCommandExecutionResult | null>;
   copyText?: (text: string) => Promise<void> | void;
   onWrite?: (options?: { force?: boolean }) => Promise<void> | void;
   onQuit?: () => Promise<void> | void;
@@ -213,8 +216,11 @@ async function runSumCommand(
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
+  if (!runtime.executeMathCommand) {
+    return { message: "sum unavailable", operations: [] };
+  }
   const selection = ctx.selection();
-  const result = executeMathCommandFromWasm({
+  const result = await runtime.executeMathCommand({
     text: ctx.text(),
     selection: {
       anchor: selection.anchor,
@@ -239,8 +245,11 @@ async function runAvgCommand(
   ctx: ResolvedContext,
   runtime: CommandRuntime,
 ): Promise<CommandExecutionResult> {
+  if (!runtime.executeMathCommand) {
+    return { message: "avg unavailable", operations: [] };
+  }
   const selection = ctx.selection();
-  const result = executeMathCommandFromWasm({
+  const result = await runtime.executeMathCommand({
     text: ctx.text(),
     selection: {
       anchor: selection.anchor,

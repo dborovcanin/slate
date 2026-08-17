@@ -85,6 +85,17 @@ pub enum CommandMode {
     Editor,
 }
 
+impl CommandMode {
+    /// Parse the mode string both front ends send across their host boundary.
+    pub fn from_wire_str(mode: &str) -> Option<Self> {
+        match mode.trim().to_ascii_lowercase().as_str() {
+            "vim" => Some(Self::Vim),
+            "editor" => Some(Self::Editor),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandSuggestion {
     pub value: String,

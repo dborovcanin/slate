@@ -14,85 +14,6 @@ function formatValue(value: number): string {
   return value.toFixed(10).replace(/\.?0+$/, "");
 }
 
-async function unitAwareEvaluator(expression: string): Promise<string | null> {
-  if (!/\d/.test(expression)) return null;
-  const compact = expression.replace(/\s+/g, "").replace(/[()]/g, "");
-  if (!compact) return null;
-
-  const divisionMatch = compact.match(/^(.+)\/([-+]?\d+(?:\.\d+)?)$/);
-  if (divisionMatch) {
-    const left = divisionMatch[1] ?? "";
-    const right = Number.parseFloat(divisionMatch[2] ?? "");
-    if (!left || !Number.isFinite(right) || right === 0) return null;
-
-    const leftMatch = left.match(/^([-+]?\d+(?:\.\d+)?)(km|m)?$/i);
-    if (!leftMatch) return null;
-    const value = Number.parseFloat(leftMatch[1] ?? "");
-    const unit = (leftMatch[2] ?? "").toLowerCase();
-    if (!Number.isFinite(value)) return null;
-    if (unit === "m") return `${formatValue(value / right)}m`;
-    if (unit === "km") return `${formatValue(value / right)}km`;
-    return formatValue(value / right);
-  }
-
-  const terms = compact.split("+").filter(Boolean);
-  if (terms.length === 0) return null;
-
-  let unitAnchor: "" | "m" | "km" = "";
-  let meterTotal = 0;
-  let numberTotal = 0;
-
-  for (const term of terms) {
-    const match = term.match(/^([-+]?\d+(?:\.\d+)?)(km|m)?$/i);
-    if (!match) return null;
-    const value = Number.parseFloat(match[1] ?? "");
-    const unit = (match[2] ?? "").toLowerCase();
-    if ((unit === "m" || unit === "km") && unitAnchor === "") {
-      unitAnchor = unit;
-    }
-    if (unit === "km") {
-      meterTotal += value * 1000;
-      continue;
-    }
-    if (unit === "m") {
-      meterTotal += value;
-      continue;
-    }
-
-    if (unitAnchor === "m") {
-      meterTotal += value;
-    } else if (unitAnchor === "km") {
-      meterTotal += value * 1000;
-    } else {
-      numberTotal += value;
-    }
-  }
-
-  if (unitAnchor === "m") return `${formatValue(meterTotal)}m`;
-  if (unitAnchor === "km") return `${formatValue(meterTotal / 1000)}km`;
-  return formatValue(numberTotal);
-}
-
-async function numberLeakingEvaluator(expression: string): Promise<string | null> {
-  const trimmed = expression.trim().toLowerCase();
-  if (trimmed === "number") return "28";
-
-  const compact = trimmed.replace(/\s+/g, "").replace(/[()]/g, "");
-  const divisionMatch = compact.match(/^(.+)\/([-+]?\d+(?:\.\d+)?)$/);
-  if (divisionMatch) {
-    const left = Number.parseFloat(divisionMatch[1] ?? "");
-    const right = Number.parseFloat(divisionMatch[2] ?? "");
-    if (!Number.isFinite(left) || !Number.isFinite(right) || right === 0) return null;
-    return formatValue(left / right);
-  }
-
-  if (!/\d/.test(trimmed)) return null;
-  const parts = trimmed.match(/[-+]?\d+(?:\.\d+)?/g) ?? [];
-  if (parts.length === 0) return null;
-  const total = parts.reduce((acc, token) => acc + Number.parseFloat(token), 0);
-  return formatValue(total);
-}
-
 test("core command suggestions are mode-aware", async () => {
   const editorValues = listCommandSuggestions("editor", "").map((entry) => entry.value);
   assert.deepEqual(editorValues, [
@@ -248,15 +169,52 @@ test("core executeCommand module on/off is idempotent and requires persistence r
   assert.equal(unavailable.message, "module unavailable");
 });
 
-test("core executeCommand computes sum and returns insertion operation", async () => {
+test("core executeCommand delegates sum and avg to the host capability", async () => {
+  const calls: Array<{ text: string; rawInput: string; mode: string }> = [];
+  const executeMathCommand = async (
+    mathSnapshot: { text: string },
+    rawInput: string,
+    mode: string,
+  ) => {
+    calls.push({ text: mathSnapshot.text, rawInput, mode });
+    return {
+      message: "sum(paragraph) = 30.00",
+      operations: [{ changes: [{ from: 0, to: 0, insert: "30.00" }], selection: { anchor: 5 } }],
+      clipboardText: "30.00",
+      quitRequested: false,
+    };
+  };
+
+  let copied: string | null = null;
   const result = await executeCommand(snapshot("10\n20", 0), "sum", {
     mode: "editor",
+    executeMathCommand: executeMathCommand as never,
+    copyText: (text: string) => {
+      copied = text;
+    },
   });
 
-  assert.equal(result.message.includes("sum(paragraph) = 30.00"), true);
-  assert.equal(result.operations.length, 1);
+  assert.deepEqual(calls, [{ text: "10\n20", rawInput: "sum", mode: "editor" }]);
+  assert.equal(result.message, "sum(paragraph) = 30.00");
   assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "30.00" });
-  assert.deepEqual(result.operations[0]?.selection, { anchor: 5 });
+  assert.equal(copied, "30.00");
+
+  await executeCommand(snapshot("1\n2", 0), "avg column", {
+    mode: "editor",
+    executeMathCommand: executeMathCommand as never,
+  });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.rawInput, "avg column");
+});
+
+test("core executeCommand reports sum and avg unavailable without the host capability", async () => {
+  const sumResult = await executeCommand(snapshot("10\n20", 0), "sum", { mode: "editor" });
+  assert.equal(sumResult.message, "sum unavailable");
+  assert.equal(sumResult.operations.length, 0);
+
+  const avgResult = await executeCommand(snapshot("10\n20", 0), "avg", { mode: "editor" });
+  assert.equal(avgResult.message, "avg unavailable");
+  assert.equal(avgResult.operations.length, 0);
 });
 
 test("core executeCommand handles date and mode-gated q", async () => {
@@ -492,69 +450,6 @@ test("core executeCommand handles fold/unfold/toggle via runtime", async () => {
   assert.deepEqual(actions, ["fold", "fold-toggle", "unfold"]);
 });
 
-test("core executeCommand supports unit-aware sum row", async () => {
-  const text = "| item | 2m | 2km |  |";
-  const cursor = text.lastIndexOf("|  |") + 1;
-  const result = await executeCommand(snapshot(text, cursor), "sum row", {
-    mode: "editor",
-    evaluateExpression: unitAwareEvaluator,
-  });
-
-  assert.equal(result.message, "sum(row) = 2002.00 m");
-  assert.equal(result.operations.length, 1);
-  assert.equal(
-    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
-    "2002.00m",
-  );
-});
-
-test("core executeCommand strips approximate wording and rounds unit totals", async () => {
-  const text = "| item | 2km |  |";
-  const cursor = text.lastIndexOf("|  |") + 1;
-  const result = await executeCommand(snapshot(text, cursor), "sum row", {
-    mode: "editor",
-    evaluateExpression: async (expression) => {
-      if (expression.trim() === "2km") return "approximately 2.004 km";
-      return null;
-    },
-  });
-
-  assert.equal(result.message, "sum(row) = 2.00 km");
-  assert.equal(result.operations.length, 1);
-  assert.equal(
-    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
-    "2.00km",
-  );
-});
-
-test("core executeCommand ignores non-numeric header cells for sum column", async () => {
-  const text = [
-    "| header | number |",
-    "| ------ | ------ |",
-    "| a      | 3      |",
-    "| b      | 4      |",
-  ].join("\n");
-  const cursor = text.lastIndexOf("4");
-  const result = await executeCommand(snapshot(text, cursor), "sum column", {
-    mode: "editor",
-    evaluateExpression: numberLeakingEvaluator,
-  });
-
-  assert.equal(result.message, "sum(column) = 3.00");
-  assert.equal(result.operations.length, 1);
-  assert.equal(result.operations[0]?.changes[0]?.insert.trim(), "3.00");
-});
-
-test("core executeCommand computes avg paragraph", async () => {
-  const result = await executeCommand(snapshot("10\n20\n30", 0), "avg", {
-    mode: "editor",
-  });
-
-  assert.equal(result.message.includes("avg(paragraph) = 20"), true);
-  assert.equal(result.operations.length, 1);
-  assert.deepEqual(result.operations[0]?.changes[0], { from: 0, to: 0, insert: "20.00" });
-});
-
 test("core executeCommand clist converts selected lines to checkboxes", async () => {
   const text = ["alpha", "- beta", "1. gamma", "tail"].join("\n");
   const tailStart = text.indexOf("\ntail");
@@ -667,36 +562,3 @@ test("core executeCommand title converts selected lines to headings", async () =
   });
 });
 
-test("core executeCommand supports unit-aware avg row", async () => {
-  const text = "| x | 3m | 4m |  |";
-  const cursor = text.lastIndexOf("|  |") + 1;
-  const result = await executeCommand(snapshot(text, cursor), "avg row", {
-    mode: "editor",
-    evaluateExpression: unitAwareEvaluator,
-  });
-
-  assert.equal(result.message, "avg(row) = 3.50 m");
-  assert.equal(result.operations.length, 1);
-  assert.equal(
-    result.operations[0]?.changes[0]?.insert.replace(/\s+/g, ""),
-    "3.50m",
-  );
-});
-
-test("core executeCommand ignores non-numeric header cells for avg column", async () => {
-  const text = [
-    "| header | number |",
-    "| ------ | ------ |",
-    "| a      | 3      |",
-    "| b      | 4      |",
-  ].join("\n");
-  const cursor = text.lastIndexOf("4");
-  const result = await executeCommand(snapshot(text, cursor), "avg column", {
-    mode: "editor",
-    evaluateExpression: numberLeakingEvaluator,
-  });
-
-  assert.equal(result.message, "avg(column) = 3.00");
-  assert.equal(result.operations.length, 1);
-  assert.equal(result.operations[0]?.changes[0]?.insert.trim(), "3.00");
-});
