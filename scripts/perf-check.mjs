@@ -9,6 +9,7 @@ function defaultConfig() {
     checks: {
       startup: { enabled: true, runs: 3, threshold_pct: 15 },
       table: { enabled: true, profile: "ci" },
+      wasm_size: { enabled: true, max_bytes: 1_600_000 },
     },
   };
 }
@@ -23,6 +24,7 @@ function loadConfig() {
       checks: {
         startup: { ...defaults.checks.startup, ...(parsed.checks?.startup ?? {}) },
         table: { ...defaults.checks.table, ...(parsed.checks?.table ?? {}) },
+        wasm_size: { ...defaults.checks.wasm_size, ...(parsed.checks?.wasm_size ?? {}) },
       },
     };
   } catch (error) {
@@ -115,6 +117,14 @@ if (bool(cfg.checks?.table?.enabled, true)) {
   };
   const run = runNodeScript(resolve("scripts/table-perf-check.mjs"), env);
   results.push({ name: "table", ...run });
+}
+
+if (bool(cfg.checks?.wasm_size?.enabled, true)) {
+  const env = {
+    NOTE_WASM_MAX_BYTES: String(cfg.checks.wasm_size.max_bytes ?? 1_600_000),
+  };
+  const run = runNodeScript(resolve("scripts/wasm-size-check.mjs"), env);
+  results.push({ name: "wasm-size", ...run });
 }
 
 printSection("Checks");
