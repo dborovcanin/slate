@@ -1202,15 +1202,19 @@ export function computeCalcRefresh(
   return calcComputeRefresh(markers, lines, lineStarts, nextResults, selection);
 }
 
+// `resultFrom` is the document line index that `lineResults[0]` holds. The
+// backend trims the array to the evaluated window on the partial path, so the
+// loop counter is a document index and the array index is relative to it.
 export function mergePartialCalcResults(
   baseResults: ReadonlyMap<number, string>,
   lineResults: readonly (string | null)[],
   evalFrom: number,
   evalTo: number,
+  resultFrom = 0,
 ): Map<number, string> {
   const next = new Map(baseResults);
   for (let i = evalFrom; i < evalTo; i++) {
-    const result = lineResults[i];
+    const result = lineResults[i - resultFrom];
     if (result != null) {
       next.set(i, result);
     } else {
@@ -1227,6 +1231,7 @@ export function mergeTableCellResults(
   evalFrom: number,
   evalTo: number,
   canUsePartial: boolean,
+  resultFrom = 0,
 ): Map<number, TableCellEvaluation[]> {
   const next = new Map(prevResults);
   const from = canUsePartial ? Math.max(0, evalFrom) : 0;
@@ -1239,7 +1244,7 @@ export function mergeTableCellResults(
     }
     const expected = new Set<number>(segments.map((s) => s.cellIndex));
     const previousLine = next.get(i) ?? [];
-    const cells = lineResults[i];
+    const cells = lineResults[i - resultFrom];
     if (cells && cells.length > 0) {
       const byCell = new Map<number, TableCellEvaluation>();
       for (const prev of previousLine) {
@@ -1814,12 +1819,20 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             continue;
           }
 
+          // Zero on the full path, where the backend returns document-length arrays.
+          const resultFrom = evaluated.result_from ?? 0;
           const nextMap = canUsePartial
-            ? mergePartialCalcResults(plan.baseResults, evaluated.line_results, evalFrom, evalTo)
+            ? mergePartialCalcResults(
+                plan.baseResults,
+                evaluated.line_results,
+                evalFrom,
+                evalTo,
+                resultFrom,
+              )
             : (() => {
                 const m = new Map<number, string>();
-                evaluated.line_results.forEach((result, lineIndex) => {
-                  if (result !== null) m.set(lineIndex, result);
+                evaluated.line_results.forEach((result, offset) => {
+                  if (result !== null) m.set(resultFrom + offset, result);
                 });
                 return m;
               })();
@@ -1837,6 +1850,7 @@ function buildCalcPlugin(options: CalcExtensionOptions) {
             evalFrom,
             evalTo,
             canUsePartial,
+            resultFrom,
           );
 
           // Compute refresh plan for committed trailers. Collect markers in

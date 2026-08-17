@@ -194,6 +194,10 @@ export type TableCellErrorKind =
   | "unknown";
 
 export interface NoteEvaluationResult {
+  /// Document line index that `line_results[0]` corresponds to. The backend
+  /// trims both per-line arrays to the evaluated window when a range was
+  /// requested, so they are no longer document-length on the partial path.
+  result_from?: number;
   line_results: (string | null)[];
   variables: VariableIndexEntry[];
   diagnostics?: NoteEvaluationDiagnostic[] | null;

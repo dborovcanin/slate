@@ -25,6 +25,26 @@ fn resolve_eval_range(
     }
 }
 
+/// Trim a full-document evaluation result down to the window that was actually
+/// evaluated, so a partial eval doesn't serialize one entry per document line
+/// (overwhelmingly `null` / `[]`) across the IPC boundary on every calc tick.
+/// The engine still allocates document-length vectors; this only bounds the
+/// wire payload. No-op when the caller did not request a range.
+fn narrow_to_eval_range(result: &mut NoteEvaluationResult, eval_range: Option<(usize, usize)>) {
+    let Some((from, to)) = eval_range else {
+        return;
+    };
+    let line_from = from.min(result.line_results.len());
+    let line_to = to.clamp(line_from, result.line_results.len());
+    result.line_results = result.line_results[line_from..line_to].to_vec();
+
+    let cell_from = from.min(result.table_cell_results.len());
+    let cell_to = to.clamp(cell_from, result.table_cell_results.len());
+    result.table_cell_results = result.table_cell_results[cell_from..cell_to].to_vec();
+
+    result.result_from = from;
+}
+
 #[tauri::command]
 pub async fn evaluate_lines(lines: Vec<String>) -> Result<Vec<Option<String>>, String> {
     let generation = start_eval_generation();
@@ -58,7 +78,7 @@ pub async fn evaluate_note_context(
     let generation = start_eval_generation();
     let fallback_lines = lines.clone();
     let fallback_options = options.clone();
-    let result = match tauri::async_runtime::spawn_blocking(move || {
+    let mut result = match tauri::async_runtime::spawn_blocking(move || {
         CalcEngine::new().evaluate_note_context_with_generation(&lines, options, generation)
     })
     .await
@@ -70,6 +90,7 @@ pub async fn evaluate_note_context(
             generation,
         ),
     };
+    narrow_to_eval_range(&mut result, eval_range);
     Ok(result)
 }
 
@@ -144,7 +165,7 @@ pub async fn evaluate_note_context_delta(
     // All blocking work — dep pre-loading (DB I/O + CalcEngine) and the main
     // evaluation — runs together in one spawn_blocking so the async executor
     // is never stalled.
-    let result = tauri::async_runtime::spawn_blocking(move || {
+    let mut result = tauri::async_runtime::spawn_blocking(move || {
         // Quick check: if no line contains "[[", there are no cross-note refs at all.
         // Avoids the full regex scan for the common case.
         let has_cross_note_syntax =
@@ -244,6 +265,7 @@ pub async fn evaluate_note_context_delta(
         }
     }
 
+    narrow_to_eval_range(&mut result, eval_range);
     Ok(result)
 }
 
@@ -306,4 +328,56 @@ pub async fn get_cross_note_vars(
     .await
     .unwrap_or_default();
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use app_core::calc::TableCellEvaluation;
+
+    fn result_with_lines(count: usize) -> NoteEvaluationResult {
+        NoteEvaluationResult {
+            result_from: 0,
+            line_results: (0..count).map(|i| Some(i.to_string())).collect(),
+            variables: Vec::new(),
+            diagnostics: None,
+            table_cell_results: vec![Vec::<TableCellEvaluation>::new(); count],
+            variable_values: Default::default(),
+            cross_note_refs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn narrow_trims_both_per_line_arrays_to_the_eval_window() {
+        let mut result = result_with_lines(100);
+        narrow_to_eval_range(&mut result, Some((10, 14)));
+        assert_eq!(result.result_from, 10);
+        assert_eq!(result.line_results.len(), 4);
+        assert_eq!(result.table_cell_results.len(), 4);
+        assert_eq!(result.line_results[0].as_deref(), Some("10"));
+        assert_eq!(result.line_results[3].as_deref(), Some("13"));
+    }
+
+    #[test]
+    fn narrow_is_a_no_op_without_a_range() {
+        let mut result = result_with_lines(12);
+        narrow_to_eval_range(&mut result, None);
+        assert_eq!(result.result_from, 0);
+        assert_eq!(result.line_results.len(), 12);
+        assert_eq!(result.table_cell_results.len(), 12);
+    }
+
+    #[test]
+    fn narrow_clamps_a_range_past_the_end_of_the_document() {
+        let mut result = result_with_lines(5);
+        narrow_to_eval_range(&mut result, Some((3, 99)));
+        assert_eq!(result.result_from, 3);
+        assert_eq!(result.line_results.len(), 2);
+        assert_eq!(result.table_cell_results.len(), 2);
+
+        let mut past_end = result_with_lines(5);
+        narrow_to_eval_range(&mut past_end, Some((40, 99)));
+        assert!(past_end.line_results.is_empty());
+        assert!(past_end.table_cell_results.is_empty());
+    }
 }

@@ -215,6 +215,39 @@ test("mergePartialCalcResults deletes entries when backend returns null in range
   assert.equal(merged.get(2), "9");
 });
 
+test("mergePartialCalcResults reads a window-trimmed backend array via resultFrom", () => {
+  const base = new Map<number, string>([
+    [0, "4"],
+    [1, "stale"],
+    [3, "9"],
+  ]);
+  // Same outcome as the document-length case above, but the backend returned
+  // only lines 1..3 because the eval was partial.
+  const windowResults: (string | null)[] = ["20", "30"];
+  const merged = mergePartialCalcResults(base, windowResults, 1, 3, 1);
+  assert.deepEqual(
+    [...merged.entries()].sort((a, b) => a[0] - b[0]),
+    [
+      [0, "4"],
+      [1, "20"],
+      [2, "30"],
+      [3, "9"],
+    ],
+  );
+});
+
+test("mergeTableCellResults reads a window-trimmed backend array via resultFrom", () => {
+  const previous = new Map<number, { cell_index: number; value: string; error_kind: null }[]>([
+    [1, [{ cell_index: 1, value: "stale", error_kind: null }]],
+  ]);
+  const lines = ["| a | b |", "| row | :=avg_col() |"];
+  const windowCells: { cell_index: number; value: string; error_kind: null }[][] = [
+    [{ cell_index: 1, value: "42", error_kind: null }],
+  ];
+  const merged = mergeTableCellResults(previous, lines, windowCells, 1, 2, true, 1);
+  assert.equal(merged.get(1)?.[0]?.value, "42");
+});
+
 test("mergeTableCellResults keeps previous formula cell values when partial result is temporarily empty", () => {
   const previous = new Map<number, { cell_index: number; value: string; error_kind: null }[]>([
     [1, [{ cell_index: 1, value: "42", error_kind: null }]],
