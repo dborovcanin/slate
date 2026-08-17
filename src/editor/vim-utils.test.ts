@@ -1,6 +1,37 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeBlockSpans } from "./vim-utils.ts";
+import { computeBlockSpans, vimCharClass } from "./vim-utils.ts";
+
+// Classes mirror `char_class` in crates/editor-core/src/vim_actions.rs:
+// 0 = whitespace, 1 = word (alphanumeric or underscore), 2 = everything else.
+test("vimCharClass classifies ASCII the same way the core classifier does", () => {
+  for (const ch of ["a", "Z", "0", "9", "_"]) {
+    assert.equal(vimCharClass(ch), 1, `${ch} should be a word character`);
+  }
+  for (const ch of [" ", "\t", "\n", "\r"]) {
+    assert.equal(vimCharClass(ch), 0, `${JSON.stringify(ch)} should be whitespace`);
+  }
+  for (const ch of ["-", ".", "|", "*", "("]) {
+    assert.equal(vimCharClass(ch), 2, `${ch} should be punctuation`);
+  }
+  assert.equal(vimCharClass(""), 0);
+});
+
+// Rust's char::is_alphanumeric is Unicode-aware. An ASCII-only classifier here
+// makes w/b/e stop in different columns in the UI than in the TUI.
+test("vimCharClass treats non-ASCII letters and digits as word characters", () => {
+  for (const ch of ["é", "ü", "ñ", "Ж", "日", "한", "α", "²"]) {
+    assert.equal(vimCharClass(ch), 1, `${ch} should be a word character`);
+  }
+});
+
+test("vimCharClass treats non-ASCII whitespace and symbols as non-word", () => {
+  assert.equal(vimCharClass(" "), 0, "no-break space is whitespace");
+  assert.equal(vimCharClass("　"), 0, "ideographic space is whitespace");
+  for (const ch of ["·", "—", "€", "→"]) {
+    assert.equal(vimCharClass(ch), 2, `${ch} should be punctuation`);
+  }
+});
 
 test("computeBlockSpans builds inclusive block over multiple lines", () => {
   const spans = computeBlockSpans(

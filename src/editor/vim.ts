@@ -46,7 +46,7 @@ import {
 } from "./wasm.ts";
 import { resolveWikiLink } from "../api.ts";
 import { runUiVimPipeline } from "./vim-adapter.ts";
-import { vimAppendInsertPos, vimNormalLineEndPos } from "./vim-utils.ts";
+import { vimAppendInsertPos, vimCharClass, vimNormalLineEndPos } from "./vim-utils.ts";
 
 type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
 
@@ -328,12 +328,6 @@ function copyToClipboard(text: string) {
   });
 }
 
-function getCharClass(char: string): number {
-  if (!char || /^\s$/.test(char)) return 0;
-  if (/[A-Za-z0-9_]/.test(char)) return 1;
-  return 2;
-}
-
 function vimMoveWordForward(view: EditorView): boolean {
   const head = view.state.selection.main.head;
   const line = view.state.doc.lineAt(head);
@@ -348,12 +342,12 @@ function vimMoveWordForward(view: EditorView): boolean {
     return true;
   }
 
-  const startClass = getCharClass(text[col]);
-  while (col < len && getCharClass(text[col]) === startClass) {
+  const startClass = vimCharClass(text[col]);
+  while (col < len && vimCharClass(text[col]) === startClass) {
     col++;
   }
   if (startClass !== 0) {
-    while (col < len && getCharClass(text[col]) === 0) {
+    while (col < len && vimCharClass(text[col]) === 0) {
       col++;
     }
   }
@@ -377,12 +371,12 @@ function vimMoveWordBackward(view: EditorView): boolean {
   }
 
   col -= 1;
-  while (col > 0 && getCharClass(text[col]) === 0) {
+  while (col > 0 && vimCharClass(text[col]) === 0) {
     col -= 1;
   }
 
-  const targetClass = getCharClass(text[col]);
-  while (col > 0 && getCharClass(text[col - 1]) === targetClass) {
+  const targetClass = vimCharClass(text[col]);
+  while (col > 0 && vimCharClass(text[col - 1]) === targetClass) {
     col -= 1;
   }
 
@@ -394,7 +388,7 @@ function runEndByClass(text: string, start: number, klass: number): number {
   let cursor = Math.max(0, Math.min(start, text.length));
   while (cursor < text.length) {
     const next = cursor + 1;
-    if (next >= text.length || getCharClass(text[next] ?? "") !== klass) {
+    if (next >= text.length || vimCharClass(text[next] ?? "") !== klass) {
       break;
     }
     cursor = next;
@@ -405,7 +399,7 @@ function runEndByClass(text: string, start: number, klass: number): number {
 function findNextNonWhitespace(text: string, start: number): number | null {
   let cursor = Math.max(0, Math.min(start, text.length));
   while (cursor < text.length) {
-    if (getCharClass(text[cursor] ?? "") !== 0) {
+    if (vimCharClass(text[cursor] ?? "") !== 0) {
       return cursor;
     }
     cursor += 1;
@@ -416,21 +410,21 @@ function findNextNonWhitespace(text: string, start: number): number | null {
 function moveWordEndPos(text: string, offset: number): number | null {
   if (text.length === 0) return null;
   const cursor = Math.max(0, Math.min(offset, text.length - 1));
-  const klass = getCharClass(text[cursor] ?? "");
+  const klass = vimCharClass(text[cursor] ?? "");
   if (klass !== 0) {
     const next = cursor + 1;
-    if (next < text.length && getCharClass(text[next] ?? "") === klass) {
+    if (next < text.length && vimCharClass(text[next] ?? "") === klass) {
       return runEndByClass(text, cursor, klass);
     }
     const nextWord = findNextNonWhitespace(text, next);
     if (nextWord !== null) {
-      return runEndByClass(text, nextWord, getCharClass(text[nextWord] ?? ""));
+      return runEndByClass(text, nextWord, vimCharClass(text[nextWord] ?? ""));
     }
     return cursor;
   }
   const nextWord = findNextNonWhitespace(text, cursor);
   if (nextWord !== null) {
-    return runEndByClass(text, nextWord, getCharClass(text[nextWord] ?? ""));
+    return runEndByClass(text, nextWord, vimCharClass(text[nextWord] ?? ""));
   }
   return runEndByClass(text, cursor, 0);
 }

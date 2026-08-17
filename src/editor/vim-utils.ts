@@ -37,6 +37,33 @@ export function computeBlockSpans(
   return spans;
 }
 
+// Word-motion character classes, matching `char_class` in
+// `crates/editor-core/src/vim_actions.rs`: whitespace / word / other.
+// The core classifier is Unicode-aware (`char::is_whitespace`,
+// `char::is_alphanumeric`), so this one has to be too or `w`/`b`/`e` land on
+// different columns in the UI than in the terminal on non-ASCII text.
+const WORD_CHAR_RE = /[\p{Alphabetic}\p{N}_]/u;
+const WHITESPACE_RE = /\s/u;
+
+export function vimCharClass(char: string): number {
+  if (!char) return 0;
+  // ASCII covers the overwhelming majority of characters a motion walks over,
+  // and these run per-character inside motion loops, so keep them off the
+  // RegExp path.
+  const code = char.charCodeAt(0);
+  if (code < 0x80) {
+    if (code === 0x20 || (code >= 0x09 && code <= 0x0d)) return 0;
+    const isWord =
+      (code >= 0x30 && code <= 0x39) ||
+      (code >= 0x41 && code <= 0x5a) ||
+      (code >= 0x61 && code <= 0x7a) ||
+      code === 0x5f;
+    return isWord ? 1 : 2;
+  }
+  if (WHITESPACE_RE.test(char)) return 0;
+  return WORD_CHAR_RE.test(char) ? 1 : 2;
+}
+
 export function vimNormalLineEndPos(lineFrom: number, lineTo: number): number {
   return lineTo > lineFrom ? lineTo - 1 : lineFrom;
 }
