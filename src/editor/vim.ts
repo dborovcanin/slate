@@ -612,93 +612,6 @@ export const __vimUndoRedoInternals = {
   runRedoLikeTui,
 };
 
-function findWordObjectRange(
-  view: EditorView,
-  around: boolean,
-): { from: number; to: number } | null {
-  const main = view.state.selection.main;
-  const line = view.state.doc.lineAt(main.head);
-  const text = line.text;
-  const len = text.length;
-  if (len === 0) return null;
-
-  const isWordChar = (char: string) => /[A-Za-z0-9_]/.test(char);
-
-  let rel = Math.max(0, Math.min(main.head - line.from, len));
-  if (rel >= len) rel = len - 1;
-
-  if (!isWordChar(text[rel] ?? "")) {
-    if (rel > 0 && isWordChar(text[rel - 1] ?? "")) {
-      rel -= 1;
-    } else {
-      while (rel < len && !isWordChar(text[rel] ?? "")) {
-        rel += 1;
-      }
-      if (rel >= len) return null;
-    }
-  }
-
-  let start = rel;
-  while (start > 0 && isWordChar(text[start - 1] ?? "")) {
-    start -= 1;
-  }
-  let end = rel + 1;
-  while (end < len && isWordChar(text[end] ?? "")) {
-    end += 1;
-  }
-
-  if (around) {
-    let aroundStart = start;
-    let aroundEnd = end;
-    while (aroundEnd < len && /\s/.test(text[aroundEnd] ?? "")) {
-      aroundEnd += 1;
-    }
-    if (aroundEnd === end) {
-      while (aroundStart > 0 && /\s/.test(text[aroundStart - 1] ?? "")) {
-        aroundStart -= 1;
-      }
-    }
-    start = aroundStart;
-    end = aroundEnd;
-  }
-
-  if (start >= end) return null;
-  return { from: line.from + start, to: line.from + end };
-}
-
-function findPipeObjectRange(
-  view: EditorView,
-  around: boolean,
-): { from: number; to: number } | null {
-  const main = view.state.selection.main;
-  const line = view.state.doc.lineAt(main.head);
-  const text = line.text;
-  if (text.length < 2) return null;
-
-  const pipes: number[] = [];
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "|") pipes.push(i);
-  }
-  if (pipes.length < 2) return null;
-
-  const rel = Math.max(0, Math.min(main.head - line.from, text.length));
-  let pair: [number, number] | null = null;
-  for (let i = 0; i < pipes.length - 1; i++) {
-    const left = pipes[i]!;
-    const right = pipes[i + 1]!;
-    if (rel === left || (rel > left && rel <= right)) {
-      pair = [left, right];
-      break;
-    }
-  }
-  if (!pair) return null;
-
-  const start = around ? pair[0] : pair[0] + 1;
-  const end = around ? pair[1] + 1 : pair[1];
-  if (start >= end) return null;
-  return { from: line.from + start, to: line.from + end };
-}
-
 export function vimModeExtension(options: VimOptions = {}) {
   const session = new VimSession("normal");
   let currentMode: VimUiMode = "normal";
@@ -989,52 +902,6 @@ export function vimModeExtension(options: VimOptions = {}) {
       })
       .catch(() => {});
     return true;
-  };
-
-  const applyTextObject = (
-    view: EditorView,
-    object: "word" | "pipe",
-    around: boolean,
-    shouldDelete: boolean,
-    count: number,
-  ): number => {
-    const steps = count > 0 ? count : 1;
-    const chunks: string[] = [];
-
-    for (let i = 0; i < steps; i++) {
-      const range =
-        object === "word"
-          ? findWordObjectRange(view, around)
-          : findPipeObjectRange(view, around);
-      if (!range) break;
-
-      const text = view.state.sliceDoc(range.from, range.to);
-      if (!text) break;
-      chunks.push(text);
-
-      if (shouldDelete) {
-        view.dispatch({
-          changes: { from: range.from, to: range.to, insert: "" },
-          selection: { anchor: range.from },
-          scrollIntoView: true,
-        });
-      } else {
-        view.dispatch({
-          selection: { anchor: range.to },
-          scrollIntoView: true,
-        });
-      }
-    }
-
-    if (chunks.length > 0) {
-      if (shouldDelete) {
-        setLocalRegister(chunks.join("\n"));
-      } else {
-        setSystemRegister(chunks.join("\n"));
-      }
-    }
-
-    return chunks.length;
   };
 
   const deleteRange = (view: EditorView, from: number, to: number) => {
@@ -1580,22 +1447,19 @@ export function vimModeExtension(options: VimOptions = {}) {
         return editorSearchNext(view);
       case VIM_INTENT.SEARCH_PREV:
         return editorSearchPrev(view);
+      // Word and pipe text objects are executed by the shared core above.
+      // Reaching here would mean the core returned no result for an intent it
+      // declares support for; do nothing rather than keep a second, divergent
+      // implementation of the bounds. Mirrors the terminal's no-op arm.
       case VIM_INTENT.DELETE_INSIDE_WORD:
-        return applyTextObject(view, "word", false, true, count) > 0;
       case VIM_INTENT.DELETE_AROUND_WORD:
-        return applyTextObject(view, "word", true, true, count) > 0;
       case VIM_INTENT.YANK_INSIDE_WORD:
-        return applyTextObject(view, "word", false, false, count) > 0;
       case VIM_INTENT.YANK_AROUND_WORD:
-        return applyTextObject(view, "word", true, false, count) > 0;
       case VIM_INTENT.DELETE_INSIDE_PIPE:
-        return applyTextObject(view, "pipe", false, true, count) > 0;
       case VIM_INTENT.DELETE_AROUND_PIPE:
-        return applyTextObject(view, "pipe", true, true, count) > 0;
       case VIM_INTENT.YANK_INSIDE_PIPE:
-        return applyTextObject(view, "pipe", false, false, count) > 0;
       case VIM_INTENT.YANK_AROUND_PIPE:
-        return applyTextObject(view, "pipe", true, false, count) > 0;
+        return true;
       case VIM_INTENT.SWALLOW:
         return true;
       case VIM_INTENT.DELETE_WORD_FORWARD:
