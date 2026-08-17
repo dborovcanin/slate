@@ -8,6 +8,7 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::OnceLock;
 use std::sync::Arc;
 use time::{Date, Duration, Month, OffsetDateTime};
 
@@ -635,7 +636,10 @@ fn normalize_message_id(raw: Option<String>) -> Option<String> {
 }
 
 fn extract_emails(raw: &str) -> Vec<String> {
-    let re = Regex::new(r"(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}").expect("email regex");
+    static EMAIL_RE: OnceLock<Regex> = OnceLock::new();
+    let re = EMAIL_RE.get_or_init(|| {
+        Regex::new(r"(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}").expect("email regex")
+    });
     let mut seen = FxHashSet::default();
     let mut out = Vec::new();
     for capture in re.find_iter(raw) {
@@ -713,19 +717,20 @@ fn walk_body(
 }
 
 fn strip_html_tags(html: &str) -> String {
-    let mut normalized = html.replace("\r\n", "\n");
-    normalized = Regex::new(r"(?i)<\s*br\s*/?\s*>")
-        .expect("br regex")
-        .replace_all(&normalized, "\n")
-        .to_string();
-    normalized = Regex::new(r"(?i)</\s*p\s*>")
-        .expect("p regex")
-        .replace_all(&normalized, "\n\n")
-        .to_string();
-    normalized = Regex::new(r"(?is)<[^>]+>")
-        .expect("tag regex")
-        .replace_all(&normalized, "")
-        .to_string();
+    // These run once per HTML message part during a sync; compiling them per
+    // call dominated the actual matching work.
+    static BR_RE: OnceLock<Regex> = OnceLock::new();
+    static CLOSING_P_RE: OnceLock<Regex> = OnceLock::new();
+    static TAG_RE: OnceLock<Regex> = OnceLock::new();
+    let br_re = BR_RE.get_or_init(|| Regex::new(r"(?i)<\s*br\s*/?\s*>").expect("br regex"));
+    let closing_p_re =
+        CLOSING_P_RE.get_or_init(|| Regex::new(r"(?i)</\s*p\s*>").expect("p regex"));
+    let tag_re = TAG_RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("tag regex"));
+
+    let normalized = html.replace("\r\n", "\n");
+    let normalized = br_re.replace_all(&normalized, "\n");
+    let normalized = closing_p_re.replace_all(&normalized, "\n\n");
+    let normalized = tag_re.replace_all(&normalized, "");
     normalized
         .replace("&nbsp;", " ")
         .replace("&amp;", "&")
