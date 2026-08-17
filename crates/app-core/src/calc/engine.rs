@@ -1,5 +1,6 @@
 use regex::{Regex, RegexBuilder};
 use rustc_hash::{FxHashMap, FxHasher};
+use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::cmp::Reverse;
@@ -637,28 +638,39 @@ impl CalcEngine {
             let refs = options
                 .precomputed_refs
                 .unwrap_or_else(|| scan_cross_note_refs(lines));
-            let mut preprocessed: Vec<String> = Vec::with_capacity(lines.len());
             let mut unresolved_set: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+            let mut rewritten: Vec<Cow<'_, str>> = Vec::with_capacity(lines.len());
+            let mut any_rewritten = false;
             for (idx, line) in lines.iter().enumerate() {
                 let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
                 if has_unresolved {
                     unresolved_set.insert(idx);
                 }
-                preprocessed.push(new_line);
+                any_rewritten |= matches!(new_line, Cow::Owned(_));
+                rewritten.push(new_line);
             }
-            (std::borrow::Cow::Owned(preprocessed), refs, unresolved_set)
+            // Only materialize a second copy of the document when a ref was
+            // actually substituted. With no resolvable refs — the common case —
+            // nothing above allocated a line and the originals are used as-is.
+            if any_rewritten {
+                let preprocessed: Vec<String> =
+                    rewritten.into_iter().map(Cow::into_owned).collect();
+                (Cow::Owned(preprocessed), refs, unresolved_set)
+            } else {
+                (Cow::Borrowed(lines), refs, unresolved_set)
+            }
         } else if options.cross_note_enabled {
             let refs = options
                 .precomputed_refs
                 .unwrap_or_else(|| scan_cross_note_refs(lines));
             (
-                std::borrow::Cow::Borrowed(lines),
+                Cow::Borrowed(lines),
                 refs,
                 rustc_hash::FxHashSet::default(),
             )
         } else {
             (
-                std::borrow::Cow::Borrowed(lines),
+                Cow::Borrowed(lines),
                 Vec::new(),
                 rustc_hash::FxHashSet::default(),
             )
@@ -2064,14 +2076,21 @@ pub fn scan_cross_note_refs(lines: &[String]) -> Vec<CrossNoteRef> {
 /// Replace `[[SHORTID]].var_name` tokens in a line with their resolved numeric values.
 /// Returns (preprocessed_line, has_unresolved) where has_unresolved is true if any
 /// ref in the line could not be resolved from extern_vars.
-fn preprocess_line_cross_note(
-    line: &str,
+fn preprocess_line_cross_note<'a>(
+    line: &'a str,
     extern_map: &FxHashMap<(String, String), f64>,
-) -> (String, bool) {
+) -> (Cow<'a, str>, bool) {
+    // The overwhelming majority of lines in a note carry no cross-note ref, and
+    // this runs over the whole document on every evaluation. Skip the regex and
+    // the allocation for them.
+    if !line.contains("[[") {
+        return (Cow::Borrowed(line), false);
+    }
+
     let re = cross_note_ref_regex();
     let mut has_unresolved = false;
-    let mut out = String::with_capacity(line.len());
     let mut cursor = 0usize;
+    let mut out: Option<String> = None;
 
     for cap in re.captures_iter(line) {
         let full = cap.get(0).unwrap();
@@ -2083,19 +2102,27 @@ fn preprocess_line_cross_note(
             .join(" ")
             .to_ascii_lowercase();
 
-        out.push_str(&line[cursor..full.start()]);
-
         let key = (short_id, var_normalized);
-        if let Some(&value) = extern_map.get(&key) {
-            out.push_str(&format_number(value));
-        } else {
+        let Some(&value) = extern_map.get(&key) else {
+            // Unresolved refs are left verbatim, so they cost no rewrite.
             has_unresolved = true;
-            out.push_str(full.as_str());
-        }
+            continue;
+        };
+
+        let out = out.get_or_insert_with(|| String::with_capacity(line.len()));
+        out.push_str(&line[cursor..full.start()]);
+        out.push_str(&format_number(value));
         cursor = full.end();
     }
-    out.push_str(&line[cursor..]);
-    (out, has_unresolved)
+
+    match out {
+        Some(mut out) => {
+            out.push_str(&line[cursor..]);
+            (Cow::Owned(out), has_unresolved)
+        }
+        // Every ref was unresolved (or there were none): the line is unchanged.
+        None => (Cow::Borrowed(line), has_unresolved),
+    }
 }
 
 fn build_variable_regex(names_sorted: &[String]) -> Option<Regex> {
@@ -3180,6 +3207,32 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(result.line_results[0], None);
         assert_eq!(result.cross_note_refs.len(), 1);
+    }
+
+    #[test]
+    fn preprocess_line_cross_note_borrows_lines_it_does_not_rewrite() {
+        let mut extern_map: FxHashMap<(String, String), f64> = FxHashMap::default();
+        extern_map.insert(("abcd1234".to_string(), "budget".to_string()), 90.0);
+
+        // No ref at all: no scan, no allocation.
+        let (plain, unresolved) = preprocess_line_cross_note("just some prose", &extern_map);
+        assert!(matches!(plain, Cow::Borrowed(_)));
+        assert!(!unresolved);
+
+        // A ref that cannot be resolved is left verbatim, so still no rewrite.
+        let (missing, unresolved) =
+            preprocess_line_cross_note("[[ABCD1234]].nope + 1", &extern_map);
+        assert!(matches!(missing, Cow::Borrowed(_)));
+        assert!(unresolved);
+        assert_eq!(missing, "[[ABCD1234]].nope + 1");
+
+        // A resolvable ref is substituted, which does require an owned line.
+        let (rewritten, unresolved) =
+            preprocess_line_cross_note("[[ABCD1234]].budget + 1", &extern_map);
+        assert!(matches!(rewritten, Cow::Owned(_)));
+        assert!(!unresolved);
+        assert!(rewritten.contains("90"), "got: {rewritten}");
+        assert!(rewritten.ends_with(" + 1"), "got: {rewritten}");
     }
 
     #[test]
