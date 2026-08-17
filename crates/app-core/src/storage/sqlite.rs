@@ -273,7 +273,7 @@ impl Db {
                 target.display()
             ));
         };
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         conn.execute("VACUUM INTO ?1", [target_text])
             .map_err(|e| format!("Failed to snapshot database '{}': {e}", target.display()))?;
         Ok(())
@@ -335,7 +335,7 @@ impl Db {
         if *checked {
             return Ok(());
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         check_and_heal_search_index(&conn)?;
         *checked = true;
         Ok(())
@@ -343,7 +343,7 @@ impl Db {
 
     #[allow(dead_code)]
     pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         self.load_note_with_access(&conn, id)
     }
 
@@ -354,7 +354,7 @@ impl Db {
     /// concurrency, so this skips the read-back that `save_note` performs to
     /// assemble a full `Note`.
     pub fn save_note_revision(&self, id: &str, body: &str) -> Result<NoteRevision, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
@@ -419,7 +419,7 @@ impl Db {
     }
 
     pub fn save_note(&self, id: &str, body: &str) -> Result<Note, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
@@ -501,7 +501,7 @@ impl Db {
         default_encryption_password: Option<&str>,
         working_collection_id: Option<&str>,
     ) -> Result<Note, String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
         let note_title = derive_note_title_from_body("");
@@ -598,7 +598,7 @@ impl Db {
     }
 
     pub fn set_note_modules(&self, id: &str, modules: NoteModules) -> Result<Note, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         let modules_json = serde_json::to_string(&modules)
             .map_err(|e| format!("Failed to encode note modules: {e}"))?;
@@ -621,7 +621,7 @@ impl Db {
 
     pub fn lock_note(&self, id: &str, password: &str) -> Result<Note, String> {
         let password = normalize_password(password)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let security = self
             .load_note_security(&conn, id)?
             .ok_or_else(|| "Note not found".to_string())?;
@@ -658,7 +658,7 @@ impl Db {
 
     pub fn unlock_note(&self, id: &str, password: &str) -> Result<Note, String> {
         let password = normalize_password(password)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let security = self
             .load_note_security(&conn, id)?
             .ok_or_else(|| "Note not found".to_string())?;
@@ -695,7 +695,7 @@ impl Db {
 
     pub fn encrypt_note(&self, id: &str, password: &str) -> Result<Note, String> {
         let password = normalize_password(password)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let security = self
             .load_note_security(&conn, id)?
             .ok_or_else(|| "Note not found".to_string())?;
@@ -757,7 +757,7 @@ impl Db {
 
     pub fn decrypt_note(&self, id: &str, password: &str) -> Result<Note, String> {
         let password = normalize_password(password)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let security = self
             .load_note_security(&conn, id)?
             .ok_or_else(|| "Note not found".to_string())?;
@@ -793,7 +793,7 @@ impl Db {
     }
 
     pub fn append_note_body(&self, id: &str, body_suffix: &str) -> Result<Note, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
 
         let security = self.load_note_security(&conn, id)?;
@@ -925,7 +925,7 @@ impl Db {
         body_truncated: bool,
         message_truncated: bool,
     ) -> Result<Option<Note>, String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         if let Some(security) = self.load_note_security(&conn, note_id)? {
             if security.access_mode != NoteAccessMode::None {
                 return Err("cannot ingest into protected note".to_string());
@@ -1004,7 +1004,7 @@ impl Db {
     }
 
     pub fn get_most_recent_note(&self) -> Result<Option<Note>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare("SELECT id FROM notes ORDER BY updated_at DESC LIMIT 1")
             .map_err(|e| e.to_string())?;
@@ -1028,7 +1028,7 @@ impl Db {
             return self.get_most_recent_note();
         }
 
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id
@@ -1051,7 +1051,7 @@ impl Db {
     }
 
     pub fn list_notes(&self) -> Result<Vec<Note>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let rows = self.load_note_access_rows(&conn)?;
         let mut notes = Vec::with_capacity(rows.len());
         for row in &rows {
@@ -1062,7 +1062,7 @@ impl Db {
 
     pub fn list_notes_meta(&self) -> Result<Vec<NoteSummary>, String> {
         let rows = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock()?;
             self.load_note_summary_rows(&conn)?
         };
         let mut notes = Vec::with_capacity(rows.len());
@@ -1075,7 +1075,7 @@ impl Db {
 
     pub fn get_note_meta(&self, id: &str) -> Result<Option<NoteSummary>, String> {
         let row = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock()?;
             self.load_note_summary_row(&conn, id)?
         };
         match row {
@@ -1100,7 +1100,7 @@ impl Db {
             })
         };
         let row = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock()?;
             if let Some(heading) = heading {
                 conn.query_row(
                     "SELECT access_mode, \
@@ -1143,7 +1143,7 @@ impl Db {
         collection_id: Option<&str>,
     ) -> Result<Vec<NoteSummary>, String> {
         let rows = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self.conn.lock()?;
             if let Some(collection_id) = collection_id {
                 self.load_note_summary_rows_for_collection(&conn, collection_id)?
             } else {
@@ -1158,7 +1158,7 @@ impl Db {
     }
 
     pub fn list_collections(&self) -> Result<Vec<Collection>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, name, description, created_at, updated_at
@@ -1183,7 +1183,7 @@ impl Db {
     }
 
     pub fn get_collection(&self, id: &str) -> Result<Option<Collection>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         conn.query_row(
             "SELECT id, name, description, created_at, updated_at
              FROM collections
@@ -1205,7 +1205,7 @@ impl Db {
 
     pub fn get_collection_by_name(&self, name: &str) -> Result<Option<Collection>, String> {
         let normalized = normalize_identifier_name(name)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         conn.query_row(
             "SELECT id, name, description, created_at, updated_at
              FROM collections
@@ -1228,7 +1228,7 @@ impl Db {
     pub fn create_collection(&self, name: &str, description: &str) -> Result<Collection, String> {
         let normalized_name = normalize_identifier_name(name)?;
         let normalized_display_name = normalize_display_name(name)?;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let id = ulid::Ulid::new().to_string();
         let now = now_iso();
@@ -1253,7 +1253,7 @@ impl Db {
     pub fn rename_collection(&self, id: &str, name: &str) -> Result<Collection, String> {
         let normalized_name = normalize_identifier_name(name)?;
         let normalized_display_name = normalize_display_name(name)?;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         let changed = conn
             .execute(
@@ -1275,7 +1275,7 @@ impl Db {
         id: &str,
         description: &str,
     ) -> Result<Collection, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         let changed = conn
             .execute(
@@ -1293,7 +1293,7 @@ impl Db {
     }
 
     pub fn delete_collection(&self, id: &str) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let changed = conn
             .execute("DELETE FROM collections WHERE id = ?1", [id])
             .map_err(|e| e.to_string())?;
@@ -1301,7 +1301,7 @@ impl Db {
     }
 
     pub fn purge_collection(&self, id: &str) -> Result<usize, String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let exists: Option<String> = tx
@@ -1347,7 +1347,7 @@ impl Db {
     }
 
     pub fn list_collection_default_tags(&self, collection_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT t.name
@@ -1371,7 +1371,7 @@ impl Db {
         tag_names: &[String],
     ) -> Result<Vec<String>, String> {
         let normalized = normalize_tag_name_list(tag_names)?;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let collection_exists: Option<String> = tx
@@ -1430,7 +1430,7 @@ impl Db {
     }
 
     pub fn list_note_tags(&self, note_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT t.name
@@ -1454,7 +1454,7 @@ impl Db {
         tag_names: &[String],
     ) -> Result<Vec<String>, String> {
         let normalized = normalize_tag_name_list(tag_names)?;
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
 
         let note_exists: Option<String> = tx
@@ -1508,7 +1508,7 @@ impl Db {
     }
 
     pub fn get_note_collection_ids(&self, note_id: &str) -> Result<Vec<String>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT collection_id
@@ -1530,7 +1530,7 @@ impl Db {
         note_id: &str,
         collection_ids: &[String],
     ) -> Result<Vec<String>, String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let note_exists: Option<String> = tx
             .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| {
@@ -1583,7 +1583,7 @@ impl Db {
     }
 
     pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, note_title, access_mode, updated_at
@@ -1597,7 +1597,7 @@ impl Db {
     }
 
     pub fn resolve_wiki_link_note(&self, short_id: &str) -> Result<Option<Note>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let pattern = format!("{}%", short_id);
         let note_id: Option<String> = conn
             .query_row(
@@ -1624,7 +1624,7 @@ impl Db {
         if short_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, note_title, access_mode, updated_at
@@ -1686,7 +1686,7 @@ impl Db {
     }
 
     pub fn get_note_updated_at(&self, id: &str) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT updated_at
@@ -1722,7 +1722,7 @@ impl Db {
         }
         self.ensure_search_index_checked()?;
         let bounded_limit = limit.clamp(1, SEARCH_LIMIT_MAX) as i64;
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let results = if let Some(collection_id) = collection_id {
             let mut stmt = conn
                 .prepare(
@@ -1807,12 +1807,12 @@ impl Db {
     }
 
     pub fn rebuild_note_search_index(&self) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         rebuild_note_search_index_inner(&conn)
     }
 
     pub fn delete_note(&self, id: &str, password: Option<&str>) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         if let Some(security) = self.load_note_security(&conn, id)? {
             if is_note_protected(security.access_mode) {
                 let provided = password.ok_or_else(|| {
@@ -1832,7 +1832,7 @@ impl Db {
     }
 
     pub fn list_reminders(&self, note_id: &str) -> Result<Vec<Reminder>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
@@ -1870,7 +1870,7 @@ impl Db {
         display_at: &str,
         line_text: &str,
     ) -> Result<Reminder, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
 
         conn.execute(
@@ -1905,7 +1905,7 @@ impl Db {
         line_number: i64,
         reminded_at_ms: i64,
     ) -> Result<Option<Reminder>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         conn.execute(
             "UPDATE reminders
@@ -1919,7 +1919,7 @@ impl Db {
     }
 
     pub fn delete_reminder(&self, note_id: &str, line_number: i64) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let changed = conn
             .execute(
                 "DELETE FROM reminders WHERE note_id = ?1 AND line_number = ?2",
@@ -1936,7 +1936,7 @@ impl Db {
         to_line_number: i64,
         line_text: &str,
     ) -> Result<bool, String> {
-        let mut conn = self.conn.lock().unwrap();
+        let mut conn = self.conn.lock()?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
 
@@ -1976,7 +1976,7 @@ impl Db {
     }
 
     pub fn has_ingest_message_id(&self, source: &str, message_id: &str) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT 1
@@ -2002,7 +2002,7 @@ impl Db {
         body_truncated: bool,
         message_truncated: bool,
     ) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
 
         let changed = conn
@@ -2031,7 +2031,7 @@ impl Db {
     }
 
     pub fn get_ingest_offset(&self, source_key: &str) -> Result<Option<i64>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let mut stmt = conn
             .prepare(
                 "SELECT last_uid
@@ -2047,7 +2047,7 @@ impl Db {
     }
 
     pub fn set_ingest_offset(&self, source_key: &str, last_uid: i64) -> Result<(), String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let now = now_iso();
         conn.execute(
             "INSERT INTO ingest_offsets (source_key, last_uid, updated_at)
@@ -2067,7 +2067,7 @@ impl Db {
         file_name: Option<&str>,
         mime_type: Option<&str>,
     ) -> Result<String, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         self.ensure_note_allows_image_mutation(&conn, note_id)?;
         let image_id = ulid::Ulid::new().to_string();
         let now = now_iso();
@@ -2093,7 +2093,7 @@ impl Db {
         if image_bytes.is_empty() {
             return Err("Image payload is empty".to_string());
         }
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         self.ensure_note_allows_image_mutation(&conn, note_id)?;
         let effective_mime = select_image_mime_type(file_name, mime_type);
         let now = now_iso();
@@ -2125,7 +2125,7 @@ impl Db {
     }
 
     pub fn delete_note_image(&self, note_id: &str, image_id: &str) -> Result<bool, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let deleted = conn
             .execute(
                 "DELETE FROM note_images WHERE id = ?1 AND note_id = ?2",
@@ -2140,7 +2140,7 @@ impl Db {
         note_id: &str,
         image_id: &str,
     ) -> Result<Option<String>, String> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self.conn.lock()?;
         let row = conn
             .query_row(
                 "SELECT mime_type, image_bytes, status

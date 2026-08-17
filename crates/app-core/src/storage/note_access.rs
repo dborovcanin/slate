@@ -25,6 +25,17 @@ pub(crate) struct NoteAccessService {
 }
 
 impl NoteAccessService {
+    /// Take the session map, recovering from a poisoned lock.
+    ///
+    /// The guarded value is a plain map and every critical section below is a
+    /// get/insert/remove plus an `Instant` comparison — nothing that can panic
+    /// and leave the map logically inconsistent. Recovering keeps a panic
+    /// elsewhere from permanently refusing every unlock for the rest of the
+    /// process, which is what unwrapping here would do.
+    fn sessions(&self) -> std::sync::MutexGuard<'_, FxHashMap<String, NoteAccessSession>> {
+        self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub(crate) fn new() -> Self {
         Self::with_ttl(DEFAULT_UNLOCK_TTL)
     }
@@ -42,7 +53,7 @@ impl NoteAccessService {
 
     pub(crate) fn session(&self, note_id: &str) -> Option<NoteAccessGrant> {
         let now = Instant::now();
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions();
         let entry = sessions.get_mut(note_id)?;
         if entry.expires_at <= now {
             sessions.remove(note_id);
@@ -69,11 +80,11 @@ impl NoteAccessService {
     }
 
     pub(crate) fn clear(&self, note_id: &str) {
-        self.sessions.lock().unwrap().remove(note_id);
+        self.sessions().remove(note_id);
     }
 
     fn set_session(&self, note_id: &str, grant: NoteAccessGrant) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.sessions();
         sessions.insert(
             note_id.to_string(),
             NoteAccessSession {
