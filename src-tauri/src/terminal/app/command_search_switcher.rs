@@ -2918,30 +2918,38 @@ impl TerminalApp {
     }
 
     pub(super) fn poll_web_search(&mut self) {
-        if let Some(rx) = self.web_search.rx.as_ref() {
-            if let Ok(resp) = rx.try_recv() {
-                match resp.result {
-                    Ok(search_result) => {
-                        self.web_search.answer = search_result.answer;
-                        self.web_search.summary = search_result.summary;
-                        self.web_search.results = search_result.items;
-                        self.web_search.pending = false;
-                        self.web_search.error = None;
-                        self.status = format!(
-                            "?{} ({} results)",
-                            self.web_search.query,
-                            self.web_search.results.len()
-                        );
-                    }
-                    Err(e) => {
-                        self.web_search.pending = false;
-                        self.web_search.error = Some(e.clone());
-                        self.status = format!("?web search error: {e}");
-                    }
+        let response = match self.web_search.rx.as_ref() {
+            Some(rx) => match rx.try_recv() {
+                Ok(resp) => resp.result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("web search worker stopped before returning a result".to_string())
                 }
-                self.web_search.rx = None;
+            },
+            None => return,
+        };
+
+        match response {
+            Ok(search_result) => {
+                self.web_search.answer = search_result.answer;
+                self.web_search.summary = search_result.summary;
+                self.web_search.results = search_result.items;
+                self.web_search.pending = false;
+                self.web_search.error = None;
+                self.status = format!(
+                    "?{} ({} results)",
+                    self.web_search.query,
+                    self.web_search.results.len()
+                );
+            }
+            Err(e) => {
+                self.web_search.pending = false;
+                self.web_search.error = Some(e.clone());
+                self.status = format!("?web search error: {e}");
             }
         }
+        self.web_search.rx = None;
+        self.render_state.dirty = true;
     }
 
     pub(super) fn handle_web_search_key(&mut self, key: Key) {

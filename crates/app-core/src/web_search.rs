@@ -210,11 +210,10 @@ pub fn search_duckduckgo(query: &str, max_results: usize) -> Result<WebSearchRes
         });
     }
 
-    if summary.is_none() && !items.is_empty() {
-        summary = (!items[0].snippet.is_empty()).then(|| items[0].snippet.clone());
-    }
-
     items.truncate(max_results);
+    if summary.is_none() {
+        summary = first_meaningful_snippet(&items);
+    }
 
     Ok(WebSearchResult {
         query: query.to_string(),
@@ -380,7 +379,7 @@ fn collect_ddg_topics(
             if u.is_empty() || t.is_empty() {
                 continue;
             }
-            let (title, snippet) = split_topic_text(t);
+            let (title, snippet) = split_topic_text(t, u);
             if let Some(item) = web_search_item(&title, u, &snippet) {
                 items.push(item);
             }
@@ -388,14 +387,59 @@ fn collect_ddg_topics(
     }
 }
 
-fn split_topic_text(text: &str) -> (String, String) {
+fn split_topic_text(text: &str, url: &str) -> (String, String) {
     if let Some((title, rest)) = text.split_once(" - ") {
         (title.trim().to_string(), rest.trim().to_string())
     } else if let Some((title, rest)) = text.split_once(" — ") {
         (title.trim().to_string(), rest.trim().to_string())
+    } else if let Some(title) = duckduckgo_topic_title(url) {
+        let Some(prefix) = text.get(..title.len()) else {
+            return (text.to_string(), String::new());
+        };
+        let remainder = text
+            .get(title.len()..)
+            .filter(|rest| {
+                rest.chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_whitespace() || matches!(ch, ':' | '-' | '—'))
+            })
+            .map(|rest| {
+                rest.trim_start_matches(|ch: char| {
+                    ch.is_whitespace() || matches!(ch, ':' | '-' | '—')
+                })
+            })
+            .unwrap_or_default();
+
+        if prefix.eq_ignore_ascii_case(&title) && !remainder.is_empty() {
+            (prefix.to_string(), remainder.to_string())
+        } else {
+            (text.to_string(), String::new())
+        }
     } else {
         (text.to_string(), String::new())
     }
+}
+
+fn duckduckgo_topic_title(url: &str) -> Option<String> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.trim_start_matches("www.");
+    if !host.eq_ignore_ascii_case("duckduckgo.com") {
+        return None;
+    }
+    let slug = parsed.path_segments()?.next_back()?.trim();
+    if slug.is_empty() {
+        return None;
+    }
+    let title = slug.replace('_', " ");
+    (!title.is_empty()).then_some(title)
+}
+
+fn first_meaningful_snippet(items: &[WebSearchItem]) -> Option<String> {
+    items
+        .iter()
+        .map(|item| item.snippet.trim())
+        .find(|snippet| !snippet.is_empty())
+        .map(ToString::to_string)
 }
 
 pub fn parse_duckduckgo_html(html: &str, max_results: usize) -> Vec<WebSearchItem> {
@@ -404,9 +448,10 @@ pub fn parse_duckduckgo_html(html: &str, max_results: usize) -> Vec<WebSearchIte
 
     let link_re =
         Regex::new(r#"<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="([^"]+)"[^>]*>(.*?)</a>"#).ok();
-    let snippet_re = Regex::new(r#"<a[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>"#).ok();
-    let snippet_tag_re =
-        Regex::new(r#"class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div|span)>"#).ok();
+    let snippet_re = Regex::new(
+        r#"(?s)<(?:a|div|span)[^>]+class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</(?:a|div|span)>"#,
+    )
+    .ok();
 
     if let Some(link_re) = link_re {
         for block in result_blocks.into_iter().skip(1) {
@@ -421,19 +466,12 @@ pub fn parse_duckduckgo_html(html: &str, max_results: usize) -> Vec<WebSearchIte
                 let url = decode_ddg_redirect_url(raw_href);
                 let title = strip_html_tags(raw_title);
 
-                let snippet = if let Some(ref sre) = snippet_re {
-                    sre.captures(block)
-                        .and_then(|c| c.get(1))
-                        .map(|m| strip_html_tags(m.as_str()))
-                        .unwrap_or_default()
-                } else if let Some(ref sre) = snippet_tag_re {
-                    sre.captures(block)
-                        .and_then(|c| c.get(1))
-                        .map(|m| strip_html_tags(m.as_str()))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                };
+                let snippet = snippet_re
+                    .as_ref()
+                    .and_then(|snippet_re| snippet_re.captures(block))
+                    .and_then(|c| c.get(1))
+                    .map(|m| strip_html_tags(m.as_str()))
+                    .unwrap_or_default();
 
                 if let Some(item) = web_search_item(&title, &url, &snippet) {
                     results.push(item);
@@ -518,11 +556,31 @@ fn normalize_http_url(raw: &str) -> Option<String> {
 }
 
 fn sanitize_result_text(raw: &str, max_chars: usize) -> String {
-    raw.trim()
-        .chars()
-        .map(|ch| if ch.is_control() { ' ' } else { ch })
-        .take(max_chars)
-        .collect()
+    let mut sanitized = String::with_capacity(raw.len().min(max_chars));
+    let mut pending_space = false;
+    let mut chars = 0usize;
+
+    for ch in raw.trim().chars() {
+        if ch.is_control() || ch.is_whitespace() {
+            pending_space = !sanitized.is_empty();
+            continue;
+        }
+        if pending_space {
+            if chars >= max_chars {
+                break;
+            }
+            sanitized.push(' ');
+            chars += 1;
+            pending_space = false;
+        }
+        if chars >= max_chars {
+            break;
+        }
+        sanitized.push(ch);
+        chars += 1;
+    }
+
+    sanitized
 }
 
 #[cfg(test)]
@@ -553,7 +611,9 @@ mod tests {
         </div>
         <div class="result results_links">
           <a class="result__a" href="https://doc.rust-lang.org/book/">The Rust Book</a>
-          <a class="result__snippet">Official documentation and book for Rust.</a>
+          <div class="result__snippet">
+            Official <b>documentation</b> and book for Rust.
+          </div>
         </div>
         "#;
         let items = parse_duckduckgo_html(html, 5);
@@ -566,6 +626,10 @@ mod tests {
         );
         assert_eq!(items[1].title, "The Rust Book");
         assert_eq!(items[1].url, "https://doc.rust-lang.org/book/");
+        assert_eq!(
+            items[1].snippet,
+            "Official documentation and book for Rust."
+        );
     }
 
     #[test]
@@ -622,9 +686,38 @@ mod tests {
 
     #[test]
     fn topic_text_splitting() {
-        let (title, snippet) = split_topic_text("Rust (programming language) - A systems language");
+        let (title, snippet) = split_topic_text(
+            "Rust (programming language) - A systems language",
+            "https://duckduckgo.com/Rust_(programming_language)",
+        );
         assert_eq!(title, "Rust (programming language)");
         assert_eq!(snippet, "A systems language");
+
+        let (title, snippet) = split_topic_text(
+            "Novak Djokovic A Serbian professional tennis player.",
+            "https://duckduckgo.com/Novak_Djokovic",
+        );
+        assert_eq!(title, "Novak Djokovic");
+        assert_eq!(snippet, "A Serbian professional tennis player.");
+    }
+
+    #[test]
+    fn summary_falls_back_to_first_non_empty_result_text() {
+        let items = vec![
+            web_search_item("Novak", "https://example.com/novak", "")
+                .expect("valid empty-snippet result"),
+            web_search_item(
+                "Novak Djokovic",
+                "https://example.com/djokovic",
+                "A Serbian professional tennis player.",
+            )
+            .expect("valid result with text"),
+        ];
+
+        assert_eq!(
+            first_meaningful_snippet(&items).as_deref(),
+            Some("A Serbian professional tennis player.")
+        );
     }
 
     #[test]

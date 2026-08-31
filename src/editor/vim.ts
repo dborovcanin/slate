@@ -45,7 +45,7 @@ import {
   type VimRegisterValue,
 } from "./wasm.ts";
 import { resolveWikiLink } from "../api.ts";
-import { runUiVimPipeline } from "./vim-adapter.ts";
+import { isUiWebSearchShortcut, runUiVimPipeline } from "./vim-adapter.ts";
 import { vimAppendInsertPos, vimCharClass, vimNormalLineEndPos } from "./vim-utils.ts";
 
 type VimUiMode = "insert" | "normal" | "visual" | "visual-line";
@@ -97,6 +97,7 @@ type MacroStep =
 
 const SHARED_VIM_FULL_DOC_MAX_BYTES = 200_000;
 const VIM_MACRO_REPLAY_STEP_BUDGET = 10_000;
+const VIM_MACRO_PENDING_NONE = 0;
 const VIM_MACRO_PENDING_RECORD = 1;
 const VIM_MACRO_PENDING_PLAY = 2;
 
@@ -1560,6 +1561,16 @@ export function vimModeExtension(options: VimOptions = {}) {
       }
 
       const plain = !event.ctrlKey && !event.altKey && !event.metaKey;
+      if (
+        activeMode === "normal"
+        && isUiWebSearchShortcut(event)
+        && macroPendingBefore === VIM_MACRO_PENDING_NONE
+        && !macroRecordingRegister
+      ) {
+        event.preventDefault();
+        void options.onWebSearchCommand?.(null);
+        return true;
+      }
       if (
         activeMode === "normal"
         && plain

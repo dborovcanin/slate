@@ -19,6 +19,9 @@ export interface UiVimPipelineContext {
   macroRecording: boolean;
 }
 
+export type UiWebSearchShortcutInput = Pick<KeyboardEvent, "key" | "code"> &
+  Partial<Pick<KeyboardEvent, "ctrlKey" | "altKey" | "metaKey" | "shiftKey">>;
+
 export type UiVimPipelineResult =
   | { kind: "no_intent" }
   | { kind: "no_step" }
@@ -29,6 +32,11 @@ function firstCodePoint(value: string): number | null {
   if (!value) return null;
   const codePoint = value.codePointAt(0);
   return typeof codePoint === "number" ? codePoint : null;
+}
+
+export function isUiWebSearchShortcut(event: UiWebSearchShortcutInput): boolean {
+  if (event.ctrlKey || event.altKey || event.metaKey) return false;
+  return event.key === "?" || (event.code === "Slash" && event.shiftKey === true);
 }
 
 export function toUiVimKeyInput(event: UiVimEventInput): VimKeyInput | null {

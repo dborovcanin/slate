@@ -24,8 +24,8 @@ export interface ListOverlayOptions<T> {
   onClose?: (query: string) => void;
   /** Text shown when the filtered list is empty. */
   emptyMessage?: string | (() => string);
-  /** Optional content rendered between the query input and result list. */
-  renderSupplement?: () => HTMLElement | null;
+  /** Optional content rendered between the query input and result list for the selected item. */
+  renderSupplement?: (selectedItem: T | undefined) => HTMLElement | null;
   /** Extra keydown handler on the input. Return true to prevent default navigation. */
   onKeydown?: (event: KeyboardEvent, state: ListOverlayState<T>) => boolean;
   /** Restore focus to the previously focused element when closing. Defaults to true. */
@@ -125,7 +125,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     if (!listEl) return;
     if (supplementEl) {
       supplementEl.replaceChildren();
-      const supplement = renderSupplement?.() ?? null;
+      const supplement = renderSupplement?.(items[selectedIndex]) ?? null;
       supplementEl.hidden = supplement === null;
       if (supplement) supplementEl.appendChild(supplement);
     }

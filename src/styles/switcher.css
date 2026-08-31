@@ -86,10 +86,13 @@
 
 .switcher-list {
   overflow-y: auto;
+  overflow-x: hidden;
   flex: 1;
+  min-width: 0;
 }
 
 .switcher-supplement {
+  min-width: 0;
   border-bottom: 1px solid var(--border);
   background: color-mix(in srgb, var(--bg-surface) 88%, var(--accent) 12%);
 }
@@ -110,6 +113,7 @@
 .web-search-text-content {
   max-height: 150px;
   overflow-y: auto;
+  overflow-wrap: anywhere;
   color: var(--fg);
   font-size: 13px;
   line-height: 1.5;
@@ -141,6 +145,7 @@
     transform var(--motion-duration-out) var(--motion-ease);
   animation: switcher-item-in var(--motion-duration-item) var(--motion-ease) both;
   animation-delay: calc(var(--item-index, 0) * var(--motion-stagger-step));
+  min-width: 0;
 }
 
 .switcher-item--active {
@@ -150,11 +155,30 @@
 
 .switcher-item-title {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--fg);
   font-size: 13px;
+}
+
+.web-search-result-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.web-search-result-url {
+  flex: 0 1 55%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .switcher-item-title b {

@@ -415,6 +415,11 @@ impl TerminalApp {
             return Ok(());
         }
 
+        if key == Key::Char('?') {
+            self.open_web_search(None);
+            return Ok(());
+        }
+
         if key == Key::Ctrl(']') {
             self.navigate_wiki_link_at_cursor(db);
             return Ok(());

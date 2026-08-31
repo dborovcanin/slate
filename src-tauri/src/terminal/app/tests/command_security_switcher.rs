@@ -1,5 +1,5 @@
 use super::*;
-use crate::terminal::app::WikiLinkSuggestion;
+use crate::terminal::app::{WebSearchResponse, WikiLinkSuggestion};
 
 #[test]
 fn apply_edit_operation_single_line_change_updates_in_place() {
@@ -2357,6 +2357,89 @@ fn web_search_query_editing_is_unicode_safe_and_invalidates_stale_results() {
 
     app.handle_web_search_key(Key::Delete);
     assert_eq!(app.web_search.query, "35 m");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn question_mark_opens_web_search_from_normal_mode() {
+    let (db, mut app, path) = app_with_note("base");
+    app.mode = UiMode::Normal;
+
+    app.handle_normal_key(&db, Key::Char('?'))
+        .expect("web search shortcut");
+
+    assert_eq!(app.mode, UiMode::WebSearch);
+    assert!(app.web_search.query.is_empty());
+    assert!(!app.web_search.pending);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn completed_web_search_marks_terminal_for_redraw_without_an_extra_key() {
+    let (db, mut app, path) = app_with_note("base");
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.open_web_search(None);
+    app.web_search.query = "Novak".to_string();
+    app.web_search.pending = true;
+    app.web_search.rx = Some(rx);
+    app.render_state.dirty = false;
+
+    tx.send(WebSearchResponse {
+        result: Ok(app_core::web_search::WebSearchResult {
+            query: "Novak".to_string(),
+            answer: None,
+            summary: Some("Novak Djokovic is a Serbian tennis player.".to_string()),
+            items: vec![app_core::web_search::WebSearchItem {
+                title: "Novak Djokovic".to_string(),
+                url: "https://example.com/novak".to_string(),
+                snippet: "Novak Djokovic is a Serbian tennis player.".to_string(),
+                markdown_link: "[Novak Djokovic](https://example.com/novak)".to_string(),
+            }],
+        }),
+    })
+    .expect("queued search response");
+
+    app.poll_web_search();
+
+    assert!(app.render_state.dirty);
+    assert!(!app.web_search.pending);
+    assert_eq!(app.web_search.results.len(), 1);
+    assert_eq!(
+        app.web_search.summary.as_deref(),
+        Some("Novak Djokovic is a Serbian tennis player.")
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn disconnected_web_search_worker_clears_searching_state_and_redraws() {
+    let (db, mut app, path) = app_with_note("base");
+    let (tx, rx) = std::sync::mpsc::channel::<WebSearchResponse>();
+    drop(tx);
+    app.open_web_search(None);
+    app.web_search.pending = true;
+    app.web_search.rx = Some(rx);
+    app.render_state.dirty = false;
+
+    app.poll_web_search();
+
+    assert!(app.render_state.dirty);
+    assert!(!app.web_search.pending);
+    assert!(app.web_search.rx.is_none());
+    assert!(app
+        .web_search
+        .error
+        .as_deref()
+        .is_some_and(|error| error.contains("worker stopped")));
 
     drop(app);
     drop(db);

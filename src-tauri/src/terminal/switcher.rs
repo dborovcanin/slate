@@ -977,20 +977,29 @@ pub fn draw_web_search(
         }
     }
 
-    // Keep provider-supplied text visible independently from the link selection.
+    // Keep direct answers visible; otherwise preview the selected result's text.
     let preview_start_row = y + box_h.saturating_sub(preview_lines_count + 1);
     let (preview_label, preview) = if let Some(answer) = view.answer {
         (" answer:", Some(answer))
-    } else if let Some(summary) = view.summary {
-        (" summary:", Some(summary))
     } else {
-        (
-            " result text:",
-            view.results
-                .get(view.selected)
-                .map(|item| item.snippet.as_str())
-                .filter(|snippet| !snippet.trim().is_empty()),
-        )
+        let selected_text = view
+            .results
+            .get(view.selected)
+            .map(|item| item.snippet.as_str())
+            .filter(|snippet| !snippet.trim().is_empty());
+        if selected_text.is_some() {
+            (" result text:", selected_text)
+        } else if view.summary.is_some() {
+            (" summary:", view.summary)
+        } else {
+            (
+                " result text:",
+                view.results
+                    .iter()
+                    .map(|item| item.snippet.as_str())
+                    .find(|snippet| !snippet.trim().is_empty()),
+            )
+        }
     };
     if let Some(preview) = preview {
         draw_row_at_styled(
@@ -1330,5 +1339,64 @@ mod tests {
         assert!(buf.contains("answer:"));
         assert!(buf.contains("35 cm = 13.7795 inches"));
         assert!(!buf.contains("ordinary result snippet"));
+    }
+
+    #[test]
+    fn draw_web_search_shows_selected_result_text_when_no_direct_answer_exists() {
+        let result = app_core::web_search::WebSearchItem {
+            title: "Novak Djokovic".to_string(),
+            url: "https://example.com/novak".to_string(),
+            snippet: "Novak Djokovic is a Serbian tennis player.".to_string(),
+            markdown_link: "[Novak Djokovic](https://example.com/novak)".to_string(),
+        };
+        let view = WebSearchView {
+            query: "Novak",
+            results: &[result],
+            answer: None,
+            summary: Some("fallback summary"),
+            selected: 0,
+            pending: false,
+            error: None,
+        };
+        let mut buf = String::new();
+
+        draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
+
+        assert!(buf.contains("result text:"));
+        assert!(buf.contains("Novak Djokovic is a Serbian tennis player."));
+        assert!(!buf.contains("fallback summary"));
+    }
+
+    #[test]
+    fn draw_web_search_falls_back_to_another_useful_result_text() {
+        let results = vec![
+            app_core::web_search::WebSearchItem {
+                title: "Novak".to_string(),
+                url: "https://example.com/novak".to_string(),
+                snippet: String::new(),
+                markdown_link: "[Novak](https://example.com/novak)".to_string(),
+            },
+            app_core::web_search::WebSearchItem {
+                title: "Novak Djokovic".to_string(),
+                url: "https://example.com/djokovic".to_string(),
+                snippet: "A Serbian professional tennis player.".to_string(),
+                markdown_link: "[Novak Djokovic](https://example.com/djokovic)".to_string(),
+            },
+        ];
+        let view = WebSearchView {
+            query: "Novak",
+            results: &results,
+            answer: None,
+            summary: None,
+            selected: 0,
+            pending: false,
+            error: None,
+        };
+        let mut buf = String::new();
+
+        draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
+
+        assert!(buf.contains("result text:"));
+        assert!(buf.contains("A Serbian professional tennis player."));
     }
 }

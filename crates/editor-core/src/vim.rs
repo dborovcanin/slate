@@ -1287,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_is_not_repurposed_for_web_search() {
+    fn question_mark_remains_available_to_the_host_shortcut_adapter() {
         let step = step_token(&VimState::default(), "char:?");
         assert!(step.handled);
         assert_eq!(step.actions[0].intent, VimIntent::Swallow);

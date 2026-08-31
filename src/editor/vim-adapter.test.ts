@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test, { before } from "node:test";
 import { VIM_INTENT, VIM_KEY_KIND, VimSession, ensureWasmReady } from "./wasm.ts";
-import { buildUiVimContext, runUiVimPipeline, toUiVimKeyInput } from "./vim-adapter.ts";
+import {
+  buildUiVimContext,
+  isUiWebSearchShortcut,
+  runUiVimPipeline,
+  toUiVimKeyInput,
+} from "./vim-adapter.ts";
 
 before(async () => {
   await ensureWasmReady();
@@ -26,6 +31,16 @@ function eventLike(overrides: EventLike): EventLike {
     ...overrides,
   };
 }
+
+test("question-mark shortcut recognizes Shift+Slash without modifiers", () => {
+  assert.equal(isUiWebSearchShortcut({ key: "?", code: "Slash", shiftKey: true }), true);
+  assert.equal(isUiWebSearchShortcut({ key: "/", code: "Slash", shiftKey: true }), true);
+  assert.equal(
+    isUiWebSearchShortcut({ key: "?", code: "Slash", shiftKey: true, ctrlKey: true }),
+    false,
+  );
+  assert.equal(isUiWebSearchShortcut({ key: "/", code: "Slash", shiftKey: false }), false);
+});
 
 test("toUiVimKeyInput maps navigation and control keys", () => {
   assert.deepEqual(toUiVimKeyInput(eventLike({ key: "Escape", code: "Escape" })), {

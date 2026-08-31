@@ -72,10 +72,7 @@ function renderWebSearchItem(item: WebSearchItem, selected: boolean): HTMLElemen
   row.setAttribute("aria-selected", selected ? "true" : "false");
 
   const titleRow = document.createElement("div");
-  titleRow.style.display = "flex";
-  titleRow.style.justifyContent = "space-between";
-  titleRow.style.alignItems = "center";
-  titleRow.style.gap = "8px";
+  titleRow.className = "web-search-result-heading";
 
   const title = document.createElement("span");
   title.className = "switcher-item-title";
@@ -83,11 +80,7 @@ function renderWebSearchItem(item: WebSearchItem, selected: boolean): HTMLElemen
   titleRow.appendChild(title);
 
   const url = document.createElement("span");
-  url.style.fontSize = "0.75rem";
-  url.style.opacity = "0.6";
-  url.style.overflow = "hidden";
-  url.style.textOverflow = "ellipsis";
-  url.style.whiteSpace = "nowrap";
+  url.className = "web-search-result-url";
   url.textContent = item.url;
   titleRow.appendChild(url);
 
@@ -96,9 +89,6 @@ function renderWebSearchItem(item: WebSearchItem, selected: boolean): HTMLElemen
   if (item.snippet && item.snippet.trim().length > 0) {
     const snippet = document.createElement("div");
     snippet.className = "switcher-item-snippet";
-    snippet.style.fontSize = "0.8rem";
-    snippet.style.opacity = "0.8";
-    snippet.style.marginTop = "2px";
     snippet.textContent = item.snippet;
     row.appendChild(snippet);
   }
@@ -106,21 +96,50 @@ function renderWebSearchItem(item: WebSearchItem, selected: boolean): HTMLElemen
   return row;
 }
 
-function renderWebSearchText(): HTMLElement | null {
-  const text = currentAnswer ?? currentSummary;
-  if (!text) return null;
+export interface WebSearchTextDisplay {
+  label: "Answer" | "Summary" | "Result text";
+  text: string;
+}
+
+export function selectWebSearchText(
+  answer: string | null,
+  summary: string | null,
+  results: WebSearchItem[],
+  selectedItem?: WebSearchItem,
+): WebSearchTextDisplay | null {
+  const directAnswer = answer?.trim();
+  if (directAnswer) return { label: "Answer", text: directAnswer };
+
+  const selectedText = selectedItem?.snippet.trim();
+  if (selectedText) return { label: "Result text", text: selectedText };
+
+  const providerSummary = summary?.trim();
+  if (providerSummary) return { label: "Summary", text: providerSummary };
+
+  const fallbackText = results.find((item) => item.snippet.trim().length > 0)?.snippet.trim();
+  return fallbackText ? { label: "Result text", text: fallbackText } : null;
+}
+
+function renderWebSearchText(selectedItem?: WebSearchItem): HTMLElement | null {
+  const display = selectWebSearchText(
+    currentAnswer,
+    currentSummary,
+    currentResults,
+    selectedItem,
+  );
+  if (!display) return null;
 
   const block = document.createElement("div");
   block.className = "web-search-text";
 
   const label = document.createElement("div");
   label.className = "web-search-text-label";
-  label.textContent = currentAnswer ? "Answer" : "Summary";
+  label.textContent = display.label;
   block.appendChild(label);
 
   const content = document.createElement("div");
   content.className = "web-search-text-content";
-  content.textContent = text;
+  content.textContent = display.text;
   block.appendChild(content);
 
   return block;
