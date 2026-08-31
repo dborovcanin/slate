@@ -152,6 +152,7 @@ enum UiMode {
     ContentSearch,
     CommandBar,
     Search,
+    WebSearch,
     DatePicker,
 }
 
@@ -581,6 +582,25 @@ struct SearchState {
     orig_scroll: usize,
 }
 
+/// Web search overlay state: the user query, async result receiver, fetched
+/// results, and the selected result index.
+#[derive(Default)]
+pub(super) struct WebSearchState {
+    pub(super) query: String,
+    pub(super) cursor_col: usize,
+    pub(super) results: Vec<app_core::web_search::WebSearchItem>,
+    pub(super) answer: Option<String>,
+    pub(super) summary: Option<String>,
+    pub(super) selected: usize,
+    pub(super) pending: bool,
+    pub(super) error: Option<String>,
+    pub(super) rx: Option<std::sync::mpsc::Receiver<WebSearchResponse>>,
+}
+
+pub(super) struct WebSearchResponse {
+    pub(super) result: Result<app_core::web_search::WebSearchResult, String>,
+}
+
 struct TerminalApp {
     active_note: Note,
     // Editable document model: line buffer + joined-text cache, cursor, viewport
@@ -641,6 +661,8 @@ struct TerminalApp {
     last_reminder_check: Instant,
     // In-note search overlay
     search: SearchState,
+    // Web search overlay
+    web_search: WebSearchState,
     // Auto format
     autosave_enabled: bool,
     format_on_save: bool,
@@ -1055,6 +1077,7 @@ impl TerminalApp {
             reminders_dirty: false,
             last_reminder_check: Instant::now(),
             search: SearchState::default(),
+            web_search: WebSearchState::default(),
             autosave_enabled,
             format_on_save,
             markdown_autoformat,
@@ -1178,6 +1201,7 @@ impl TerminalApp {
             // is applied promptly whether or not the user is pressing keys.
             self.maybe_finish_backup_op(db);
 
+            self.poll_web_search();
             self.maybe_clipboard_watch();
             self.maybe_collect_search_results(db);
             self.sync_reminder_ghosts_if_dirty(db)?;

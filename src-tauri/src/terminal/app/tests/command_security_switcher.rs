@@ -2307,3 +2307,58 @@ fn content_search_ctrl_l_toggles_fallback_results_between_working_collection_and
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn web_search_query_editing_is_unicode_safe_and_invalidates_stale_results() {
+    let (db, mut app, path) = app_with_note("base");
+    app.open_web_search(None);
+
+    app.handle_web_search_key(Key::Char('é'));
+    app.handle_web_search_key(Key::Char('界'));
+    assert_eq!(app.web_search.query, "é界");
+    assert_eq!(app.web_search.cursor_col, 2);
+
+    app.web_search
+        .results
+        .push(app_core::web_search::WebSearchItem {
+            title: "Old result".to_string(),
+            url: "https://example.com/old".to_string(),
+            snippet: String::new(),
+            markdown_link: "[Old result](https://example.com/old)".to_string(),
+        });
+    app.web_search.answer = Some("stale answer".to_string());
+    app.web_search.summary = Some("stale summary".to_string());
+    app.web_search.pending = true;
+    app.handle_web_search_key(Key::Char('!'));
+
+    assert_eq!(app.web_search.query, "é界!");
+    assert_eq!(app.web_search.cursor_col, 3);
+    assert!(app.web_search.results.is_empty());
+    assert!(app.web_search.answer.is_none());
+    assert!(app.web_search.summary.is_none());
+    assert!(!app.web_search.pending);
+
+    app.handle_web_search_key(Key::Backspace);
+    app.handle_web_search_key(Key::Backspace);
+    assert_eq!(app.web_search.query, "é");
+    assert_eq!(app.web_search.cursor_col, 1);
+
+    app.handle_web_search_key(Key::Home);
+    app.handle_web_search_key(Key::Delete);
+    assert!(app.web_search.query.is_empty());
+    assert_eq!(app.web_search.cursor_col, 0);
+
+    app.handle_web_search_key(Key::Paste("35\r\ncm".to_string()));
+    app.handle_web_search_key(Key::ArrowLeft);
+    app.handle_web_search_key(Key::ArrowLeft);
+    app.handle_web_search_key(Key::Char(' '));
+    assert_eq!(app.web_search.query, "35 cm");
+    assert_eq!(app.web_search.cursor_col, 3);
+
+    app.handle_web_search_key(Key::Delete);
+    assert_eq!(app.web_search.query, "35 m");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

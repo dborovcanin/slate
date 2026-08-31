@@ -57,6 +57,7 @@ import {
   closeCollectionSwitcher,
   isCollectionSwitcherOpen,
 } from "./switcher/collection-switcher";
+import { openWebSearch } from "./web-search/web-search";
 import { parseCollectionTagsInput } from "./collections/tags";
 import { state } from "./state";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -264,6 +265,7 @@ function editorOptionsForNote(note: Note | null) {
       void switchToNote(noteId, null, heading ?? null);
     },
     onCollectionCommand: handleCollectionCommand,
+    onWebSearchCommand: handleWebSearchCommand,
   };
 }
 
@@ -740,6 +742,15 @@ async function openCollectionPickerForSession() {
   });
 }
 
+function handleWebSearchCommand(query: string | null) {
+  openWebSearch({
+    prefillQuery: query,
+    onInsertLink: (linkMarkdown) => {
+      insertTextAtCursor(linkMarkdown);
+    },
+  });
+}
+
 async function handleCollectionCommand(options: {
   action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
   collection: string | null;
@@ -1113,6 +1124,7 @@ function editorCommandOptions() {
       appConfig ? modulesForNote(state.activeNote, appConfig) : null,
     setNoteModules: (modules: NoteModules) => persistActiveNoteModules(modules),
     onCollectionCommand: handleCollectionCommand,
+    onWebSearchCommand: handleWebSearchCommand,
   };
 }
 

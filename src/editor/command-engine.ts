@@ -59,6 +59,7 @@ export interface CommandExecutionOptions {
     action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
     collection: string | null;
   }) => Promise<string | void> | string | void;
+  onWebSearchCommand?: (query: string | null) => Promise<string | void> | string | void;
   selectionOverride?: {
     anchor: number;
     head: number;
@@ -340,6 +341,26 @@ export async function executeCommand(
             ? error
             : String(error);
       return `collection command failed: ${message}`;
+    }
+  }
+  if (hostPlan?.kind === "web_search") {
+    if (!options.onWebSearchCommand) {
+      return "web search unavailable";
+    }
+    try {
+      const message = await options.onWebSearchCommand(hostPlan.query ?? null);
+      if (typeof message === "string" && message.trim().length > 0) {
+        return message;
+      }
+      return "web search opened";
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : typeof error === "string"
+            ? error
+            : String(error);
+      return `web search failed: ${message}`;
     }
   }
 

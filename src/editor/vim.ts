@@ -66,6 +66,11 @@ interface VimOptions {
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
   setNoteModules?: (modules: NoteModules) => Promise<void> | void;
+  onCollectionCommand?: (options: {
+    action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
+    collection: string | null;
+  }) => Promise<string | void> | string | void;
+  onWebSearchCommand?: (query: string | null) => Promise<string | void> | string | void;
   onNavigateToNote?: (noteId: string, heading?: string) => void;
   onMacroRecordingChange?: (register: string | null) => void;
   onVimStatusMessage?: (message: string) => void;
@@ -1427,6 +1432,8 @@ export function vimModeExtension(options: VimOptions = {}) {
           onExitCommand: options.onExitCommand,
           onExportCommand: options.onExportCommand,
           onBackupCommand: options.onBackupCommand,
+          onCollectionCommand: options.onCollectionCommand,
+          onWebSearchCommand: options.onWebSearchCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,

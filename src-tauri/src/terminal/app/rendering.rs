@@ -1572,6 +1572,7 @@ impl TerminalApp {
             UiMode::Normal
             | UiMode::CommandBar
             | UiMode::Search
+            | UiMode::WebSearch
             | UiMode::Visual
             | UiMode::VisualLine => &self.status,
             UiMode::Switcher => switcher_status_owned.as_deref().unwrap_or(&self.status),
@@ -1714,6 +1715,24 @@ impl TerminalApp {
                     is_remind: self.date_picker.action == DatePickerAction::SetRemind,
                     date_format: &self.date_picker.format,
                     date_time_format: &self.date_picker.time_format,
+                },
+                &mut buf,
+                rows,
+                cols,
+                self.render_palette,
+            );
+        }
+
+        if self.mode == UiMode::WebSearch {
+            switcher::draw_web_search(
+                &switcher::WebSearchView {
+                    query: &self.web_search.query,
+                    results: &self.web_search.results,
+                    answer: self.web_search.answer.as_deref(),
+                    summary: self.web_search.summary.as_deref(),
+                    selected: self.web_search.selected,
+                    pending: self.web_search.pending,
+                    error: self.web_search.error.as_deref(),
                 },
                 &mut buf,
                 rows,
@@ -1927,6 +1946,13 @@ impl TerminalApp {
                 let prompt = " content: ";
                 let col = (x + 1 + prompt.chars().count() + self.content_search.cursor_col)
                     .min(cols.max(1));
+                (y + 1, col.max(1))
+            }
+            UiMode::WebSearch => {
+                let (x, y, _box_w, _box_h) = switcher::web_search_box_geometry(rows, cols);
+                let prompt = " web search: ";
+                let col =
+                    (x + 1 + prompt.chars().count() + self.web_search.cursor_col).min(cols.max(1));
                 (y + 1, col.max(1))
             }
         }

@@ -1287,6 +1287,13 @@ mod tests {
     }
 
     #[test]
+    fn question_mark_is_not_repurposed_for_web_search() {
+        let step = step_token(&VimState::default(), "char:?");
+        assert!(step.handled);
+        assert_eq!(step.actions[0].intent, VimIntent::Swallow);
+    }
+
+    #[test]
     fn colon_from_visual_switches_to_normal_without_exit_action() {
         let state = VimState {
             mode: VimMode::Visual,

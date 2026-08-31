@@ -3,6 +3,7 @@ pub mod config;
 pub mod cross_note;
 pub mod note_sources;
 pub mod storage;
+pub mod web_search;
 
 use calc::CalcEngine;
 use cross_note::CrossNoteVarIndex;

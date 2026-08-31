@@ -77,6 +77,7 @@ pub enum CommandDispatchKind {
     HostExport,
     HostBackupExport,
     HostBackupLoad,
+    HostWebSearch,
     HostModule,
     HostCollection,
     HostFold,
@@ -118,6 +119,9 @@ pub enum HostCommandPlan {
     Date,
     Remind,
     RemindToggle,
+    WebSearch {
+        query: Option<String>,
+    },
     Export {
         format: ExportFormat,
         path: Option<String>,
@@ -187,6 +191,7 @@ impl EditorEngine {
                 HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
                 HostCommandPlan::BackupExport { .. } => CommandDispatchKind::HostBackupExport,
                 HostCommandPlan::BackupLoad { .. } => CommandDispatchKind::HostBackupLoad,
+                HostCommandPlan::WebSearch { .. } => CommandDispatchKind::HostWebSearch,
                 HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
                 HostCommandPlan::Collection { .. } => CommandDispatchKind::HostCollection,
                 HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
@@ -204,6 +209,11 @@ impl EditorEngine {
     }
 
     pub fn plan_host_command(mode: CommandMode, raw_input: &str) -> Option<HostCommandPlan> {
+        if let Some(parsed) = command_catalog::parse_web_search_command(raw_input) {
+            return Some(HostCommandPlan::WebSearch {
+                query: parsed.query,
+            });
+        }
         if let Some(parsed) = command_catalog::parse_note_security_command(raw_input) {
             return Some(HostCommandPlan::NoteSecurity {
                 action: parsed.action,

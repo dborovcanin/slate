@@ -70,6 +70,7 @@ test("editor mode exposes only editing commands", async () => {
     "export txt",
     "backup export",
     "backup load",
+    "web",
   ]);
   assert.equal(values.includes("q"), false);
 });
@@ -172,6 +173,27 @@ test("backup load is rejected in GUI command engine", async () => {
     onBackupCommand: async () => "should-not-run",
   });
   assert.equal(message, "backup load is only available in terminal mode");
+});
+
+test("web search host command routes bare and prefilled queries", async () => {
+  const seen: Array<string | null> = [];
+  const withQuery = await executeCommand({} as any, "web rust ownership", {
+    mode: "editor",
+    onWebSearchCommand: async (query) => {
+      seen.push(query);
+      return "opened with query";
+    },
+  });
+  const bare = await executeCommand({} as any, "lookup", {
+    mode: "editor",
+    onWebSearchCommand: async (query) => {
+      seen.push(query);
+    },
+  });
+
+  assert.equal(withQuery, "opened with query");
+  assert.equal(bare, "web search opened");
+  assert.deepEqual(seen, ["rust ownership", null]);
 });
 
 test("collection host command routes choose/create/delete/update/purge/join/leave/clear", async () => {

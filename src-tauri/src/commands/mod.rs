@@ -12,3 +12,5 @@ pub mod notes;
 pub mod perf;
 #[cfg(feature = "gui")]
 pub mod reminders;
+#[cfg(feature = "gui")]
+pub mod web_search;

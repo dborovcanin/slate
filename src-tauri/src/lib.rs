@@ -166,6 +166,7 @@ fn run_gui(startup_file: Option<PathBuf>, theme: &config::ThemeConfig) -> Result
             commands::export::export_to_file,
             commands::export::export_to_pdf,
             commands::clipboard::read_clipboard_text,
+            commands::web_search::search_web,
         ])
         .setup(move |app| {
             if let Some(root) = startup_asset_root.as_ref() {

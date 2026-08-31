@@ -336,6 +336,7 @@ fn command_dispatch_kind_to_str(kind: CommandDispatchKind) -> &'static str {
         CommandDispatchKind::HostExport => "host_export",
         CommandDispatchKind::HostBackupExport => "host_backup_export",
         CommandDispatchKind::HostBackupLoad => "host_backup_load",
+        CommandDispatchKind::HostWebSearch => "host_web_search",
         CommandDispatchKind::HostModule => "host_module",
         CommandDispatchKind::HostCollection => "host_collection",
         CommandDispatchKind::HostFold => "host_fold",
@@ -373,6 +374,9 @@ enum HostCommandPlanWire {
     Date,
     Remind,
     RemindToggle,
+    WebSearch {
+        query: Option<String>,
+    },
     Write {
         quit: bool,
         force: bool,
@@ -414,6 +418,7 @@ fn host_command_plan_to_js(plan: HostCommandPlan) -> Option<JsValue> {
         HostCommandPlan::Date => HostCommandPlanWire::Date,
         HostCommandPlan::Remind => HostCommandPlanWire::Remind,
         HostCommandPlan::RemindToggle => HostCommandPlanWire::RemindToggle,
+        HostCommandPlan::WebSearch { query } => HostCommandPlanWire::WebSearch { query },
         HostCommandPlan::Write { quit, force } => HostCommandPlanWire::Write { quit, force },
         HostCommandPlan::Export { format, path } => HostCommandPlanWire::Export {
             format: format.as_str().to_string(),

@@ -50,6 +50,7 @@ impl TerminalApp {
             UiMode::ContentSearch => self.handle_content_search_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(db, key)?,
             UiMode::Search => self.handle_search_key(key)?,
+            UiMode::WebSearch => self.handle_web_search_key(key),
         }
         Ok(())
     }

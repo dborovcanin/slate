@@ -343,6 +343,7 @@ pub fn execute_command(
         CommandId::BackupExport | CommandId::BackupLoad => {
             result_with_message("backup command handled by host")
         }
+        CommandId::WebSearch => result_with_message("web search command handled by host"),
         CommandId::ChooseCollection
         | CommandId::ClearCollection
         | CommandId::CreateCollection
@@ -479,6 +480,7 @@ mod tests {
                 "export txt",
                 "backup export",
                 "backup load",
+                "web",
             ]
         );
 

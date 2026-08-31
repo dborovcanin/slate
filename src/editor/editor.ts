@@ -290,6 +290,7 @@ interface EditorMountOptions {
     action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
     collection: string | null;
   }) => Promise<string | void> | string | void;
+  onWebSearchCommand?: (query: string | null) => Promise<string | void> | string | void;
   onClipWatchStateChange?: (active: boolean) => void;
   onClipWatchPaste?: (text: string) => void;
   getNoteModules?: () => NoteModules | null;
@@ -538,6 +539,7 @@ function buildEditorExtensions(options: EditorMountOptions): {
         onExportCommand: options.onExportCommand,
         onBackupCommand: options.onBackupCommand,
         onCollectionCommand: options.onCollectionCommand,
+        onWebSearchCommand: options.onWebSearchCommand,
         onClipWatchStateChange: options.onClipWatchStateChange,
         onClipWatchPaste: options.onClipWatchPaste,
         getNoteModules: options.getNoteModules,
@@ -587,6 +589,8 @@ function buildEditorExtensions(options: EditorMountOptions): {
           onExitCommand: options.onExitCommand,
           onExportCommand: options.onExportCommand,
           onBackupCommand: options.onBackupCommand,
+          onCollectionCommand: options.onCollectionCommand,
+          onWebSearchCommand: options.onWebSearchCommand,
           onClipWatchStateChange: options.onClipWatchStateChange,
           onClipWatchPaste: options.onClipWatchPaste,
           getNoteModules: options.getNoteModules,

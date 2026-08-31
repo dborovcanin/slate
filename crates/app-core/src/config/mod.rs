@@ -56,6 +56,12 @@ const MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 1;
 const MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 100_000;
 const MIN_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 0;
 const MAX_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 3650;
+const DEFAULT_WEB_SEARCH_PROVIDER: &str = "duckduckgo";
+const DEFAULT_WEB_SEARCH_API_KEY: &str = "";
+const DEFAULT_WEB_SEARCH_ENGINE_ID: &str = "";
+const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 5;
+const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
+const MAX_WEB_SEARCH_MAX_RESULTS: usize = 10;
 const DEFAULT_CONFIG: &str = r#"# Slate configuration
 #
 # All settings are optional. Unknown keys are ignored.
@@ -176,6 +182,18 @@ enabled = false
 ui_log_path = ""
 tui_log_path = ""
 
+[web_search]
+# Online search provider: "duckduckgo" (zero-config default) or legacy "google"
+provider = "duckduckgo"
+# Google is available only to existing Custom Search JSON API customers and
+# that API is scheduled to shut down on 2027-01-01.
+# Google Custom Search API key (only needed if provider = "google")
+api_key = ""
+# Google Custom Search Engine ID / cx (only needed if provider = "google")
+search_engine_id = ""
+# Maximum search results to return (1..10, default 5)
+max_results = 5
+
 [startup]
 # Enable non-critical startup work asynchronously after first paint/edit
 # (prewarm/hydration/background sync loops).
@@ -293,6 +311,25 @@ impl Default for PerfConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WebSearchConfig {
+    pub provider: String,
+    pub api_key: String,
+    pub search_engine_id: String,
+    pub max_results: usize,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            provider: DEFAULT_WEB_SEARCH_PROVIDER.to_string(),
+            api_key: DEFAULT_WEB_SEARCH_API_KEY.to_string(),
+            search_engine_id: DEFAULT_WEB_SEARCH_ENGINE_ID.to_string(),
+            max_results: DEFAULT_WEB_SEARCH_MAX_RESULTS,
+        }
+    }
+}
+
 impl Default for ImapConfig {
     fn default() -> Self {
         Self {
@@ -400,7 +437,17 @@ struct FileConfig {
     #[serde(default)]
     perf: PerfSection,
     #[serde(default)]
+    web_search: WebSearchSection,
+    #[serde(default)]
     startup: StartupSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct WebSearchSection {
+    provider: Option<String>,
+    api_key: Option<String>,
+    search_engine_id: Option<String>,
+    max_results: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -630,6 +677,32 @@ pub fn load_perf_config() -> PerfConfig {
     }
 }
 
+pub fn load_web_search_config() -> WebSearchConfig {
+    let path = match ensure_config_file() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("Config: {err}");
+            return WebSearchConfig::default();
+        }
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("Config: failed to read {}: {err}", path.display());
+            return WebSearchConfig::default();
+        }
+    };
+
+    match parse_web_search_config(&text) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            WebSearchConfig::default()
+        }
+    }
+}
+
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     let date_format = normalize_date_format(raw.editor.date_format);
@@ -752,6 +825,22 @@ fn parse_perf_config(text: &str) -> Result<PerfConfig, String> {
         ui_log_path: normalize_optional_path(raw.perf.ui_log_path),
         tui_log_path: normalize_optional_path(raw.perf.tui_log_path),
     })
+}
+
+fn parse_web_search_config(text: &str) -> Result<WebSearchConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(WebSearchConfig {
+        provider: normalize_name(raw.web_search.provider, DEFAULT_WEB_SEARCH_PROVIDER),
+        api_key: normalize_optional_path(raw.web_search.api_key),
+        search_engine_id: normalize_optional_path(raw.web_search.search_engine_id),
+        max_results: normalize_web_search_max_results(raw.web_search.max_results),
+    })
+}
+
+fn normalize_web_search_max_results(value: Option<usize>) -> usize {
+    value
+        .map(|v| v.clamp(MIN_WEB_SEARCH_MAX_RESULTS, MAX_WEB_SEARCH_MAX_RESULTS))
+        .unwrap_or(DEFAULT_WEB_SEARCH_MAX_RESULTS)
 }
 
 fn normalize_name(value: Option<String>, fallback: &str) -> String {
@@ -1355,5 +1444,26 @@ mod tests {
         let offset = UtcOffset::from_hms(2, 0, 0).expect("offset");
         let note_id = resolve_email_note_id_with_offset(&special, now, offset);
         assert_eq!(note_id, "inbox-email-2024-05-01");
+    }
+
+    #[test]
+    fn parses_web_search_section_and_defaults() {
+        let defaults = parse_web_search_config("").expect("web_search config parsed");
+        assert_eq!(defaults, WebSearchConfig::default());
+
+        let parsed = parse_web_search_config(
+            r#"
+            [web_search]
+            provider = "google"
+            api_key = "test_key"
+            search_engine_id = "test_cx"
+            max_results = 8
+            "#,
+        )
+        .expect("web_search config parsed");
+        assert_eq!(parsed.provider, "google");
+        assert_eq!(parsed.api_key, "test_key");
+        assert_eq!(parsed.search_engine_id, "test_cx");
+        assert_eq!(parsed.max_results, 8);
     }
 }

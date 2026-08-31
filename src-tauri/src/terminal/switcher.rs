@@ -275,6 +275,16 @@ pub struct ContentSearchView<'a> {
     pub selected: usize,
 }
 
+pub struct WebSearchView<'a> {
+    pub query: &'a str,
+    pub results: &'a [app_core::web_search::WebSearchItem],
+    pub answer: Option<&'a str>,
+    pub summary: Option<&'a str>,
+    pub selected: usize,
+    pub pending: bool,
+    pub error: Option<&'a str>,
+}
+
 pub struct CollectionSwitcherView<'a> {
     pub query: &'a str,
     pub items: &'a [CollectionMeta],
@@ -804,6 +814,224 @@ pub fn draw_content_search(
     }
 }
 
+pub(crate) fn web_search_box_geometry(rows: usize, cols: usize) -> (usize, usize, usize, usize) {
+    let box_w = min(cols.saturating_sub(4).max(40), 86);
+    let box_h = min(rows.saturating_sub(4).max(10), 18);
+    let x = (cols.saturating_sub(box_w)) / 2 + 1;
+    let y = (rows.saturating_sub(box_h)) / 2 + 1;
+    (x, y, box_w, box_h)
+}
+
+pub fn draw_web_search(
+    view: &WebSearchView,
+    buf: &mut String,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    let (x, y, box_w, box_h) = web_search_box_geometry(rows, cols);
+    let surface_bg = palette.surface_bg();
+
+    let prompt_style = AnsiStyle {
+        fg: Some(palette.primary()),
+        bg: Some(surface_bg),
+        bold: true,
+        ..Default::default()
+    };
+    let label_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
+        dim: true,
+        ..Default::default()
+    };
+    let row_style = AnsiStyle {
+        fg: Some(palette.variable),
+        bg: Some(surface_bg),
+        ..Default::default()
+    };
+    let selected_bg = palette.primary();
+    let selected_style = AnsiStyle {
+        fg: Some(contrast_fg_for_bg(selected_bg)),
+        bg: Some(selected_bg),
+        bold: true,
+        ..Default::default()
+    };
+    let snippet_style = AnsiStyle {
+        fg: Some(palette.code_comment),
+        bg: Some(surface_bg),
+        dim: true,
+        ..Default::default()
+    };
+    let error_style = AnsiStyle {
+        fg: Some(palette.search_current),
+        bg: Some(surface_bg),
+        bold: true,
+        ..Default::default()
+    };
+
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        false,
+    );
+    fill_box_interior(buf, y, x, box_w, box_h, row_style);
+
+    let prompt = format!(" web search: {}", view.query);
+    draw_row_at_styled(
+        buf,
+        y + 1,
+        x + 1,
+        box_w.saturating_sub(2),
+        &prompt,
+        prompt_style,
+    );
+
+    let status_label_row = y + 2;
+    if view.pending {
+        draw_row_at_styled(
+            buf,
+            status_label_row,
+            x + 1,
+            box_w.saturating_sub(2),
+            " searching...",
+            label_style,
+        );
+    } else if let Some(err) = view.error {
+        let err_text = format!(" error: {err}");
+        draw_row_at_styled(
+            buf,
+            status_label_row,
+            x + 1,
+            box_w.saturating_sub(2),
+            &err_text,
+            error_style,
+        );
+    } else if view.results.is_empty() && view.answer.is_none() && view.summary.is_none() {
+        if !view.query.is_empty() {
+            draw_row_at_styled(
+                buf,
+                status_label_row,
+                x + 1,
+                box_w.saturating_sub(2),
+                " press Enter to search",
+                label_style,
+            );
+        } else {
+            draw_row_at_styled(
+                buf,
+                status_label_row,
+                x + 1,
+                box_w.saturating_sub(2),
+                " type a query and press Enter",
+                label_style,
+            );
+        }
+    } else {
+        let count_text = if view.answer.is_some() {
+            format!(" answer + {} link results:", view.results.len())
+        } else if view.summary.is_some() {
+            format!(" summary + {} link results:", view.results.len())
+        } else {
+            format!(" link results ({}):", view.results.len())
+        };
+        draw_row_at_styled(
+            buf,
+            status_label_row,
+            x + 1,
+            box_w.saturating_sub(2),
+            &count_text,
+            label_style,
+        );
+    }
+
+    let preview_lines_count = 4;
+    let layout_rows = 4; // prompt + label + preview + borders
+    let max_rows = box_h.saturating_sub(layout_rows + preview_lines_count);
+    let mut start = 0usize;
+    if view.selected >= max_rows && max_rows > 0 {
+        start = view.selected + 1 - max_rows;
+    }
+
+    for i in 0..max_rows {
+        let row = status_label_row + 1 + i;
+        if let Some(item) = view.results.get(start + i) {
+            let marker = if start + i == view.selected { ">" } else { " " };
+            let text = format!("{marker} {} ({})", item.title, item.url);
+            if start + i == view.selected {
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    x + 1,
+                    box_w.saturating_sub(2),
+                    &text,
+                    selected_style,
+                );
+            } else {
+                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
+            }
+        }
+    }
+
+    // Keep provider-supplied text visible independently from the link selection.
+    let preview_start_row = y + box_h.saturating_sub(preview_lines_count + 1);
+    let (preview_label, preview) = if let Some(answer) = view.answer {
+        (" answer:", Some(answer))
+    } else if let Some(summary) = view.summary {
+        (" summary:", Some(summary))
+    } else {
+        (
+            " result text:",
+            view.results
+                .get(view.selected)
+                .map(|item| item.snippet.as_str())
+                .filter(|snippet| !snippet.trim().is_empty()),
+        )
+    };
+    if let Some(preview) = preview {
+        draw_row_at_styled(
+            buf,
+            preview_start_row,
+            x + 1,
+            box_w.saturating_sub(2),
+            preview_label,
+            label_style,
+        );
+        let snippet_text = sanitize_preview_text(preview);
+        let wrapped = wrap_preview_lines(
+            &snippet_text,
+            box_w.saturating_sub(4),
+            preview_lines_count.saturating_sub(1),
+        );
+        for (idx, line) in wrapped.iter().enumerate() {
+            let text = format!("  {line}");
+            draw_row_at_styled(
+                buf,
+                preview_start_row + idx + 1,
+                x + 1,
+                box_w.saturating_sub(2),
+                &text,
+                snippet_style,
+            );
+        }
+    }
+
+    // Footnote
+    let footnote_row = y + box_h.saturating_sub(1);
+    draw_row_at_styled(
+        buf,
+        footnote_row,
+        x + 1,
+        box_w.saturating_sub(2),
+        " Enter: open | Shift+Enter: insert link | Esc: close",
+        label_style,
+    );
+}
+
 pub fn draw_delete_confirm(
     note_title: &str,
     requires_password: bool,
@@ -1076,5 +1304,31 @@ mod tests {
             !buf.contains("38;5;33"),
             "prompt should not use keyword color"
         );
+    }
+
+    #[test]
+    fn draw_web_search_prioritizes_direct_answer_over_selected_snippet() {
+        let result = app_core::web_search::WebSearchItem {
+            title: "Conversion result".to_string(),
+            url: "https://example.com/conversion".to_string(),
+            snippet: "ordinary result snippet".to_string(),
+            markdown_link: "[Conversion result](https://example.com/conversion)".to_string(),
+        };
+        let view = WebSearchView {
+            query: "35cm to inches",
+            results: &[result],
+            answer: Some("35 cm = 13.7795 inches"),
+            summary: Some("fallback summary"),
+            selected: 0,
+            pending: false,
+            error: None,
+        };
+        let mut buf = String::new();
+
+        draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
+
+        assert!(buf.contains("answer:"));
+        assert!(buf.contains("35 cm = 13.7795 inches"));
+        assert!(!buf.contains("ordinary result snippet"));
     }
 }

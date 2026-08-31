@@ -65,6 +65,7 @@ pub enum CommandId {
     ExportTxt,
     BackupExport,
     BackupLoad,
+    WebSearch,
     Write,
     WriteQuit,
     Quit,
@@ -306,6 +307,38 @@ pub fn parse_backup_command(input: &str) -> Option<ParsedBackupCommand> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParsedWebSearchCommand {
+    pub query: Option<String>,
+}
+
+pub fn parse_web_search_command(input: &str) -> Option<ParsedWebSearchCommand> {
+    let normalized = input.trim_start().trim_start_matches(':').trim_start();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let head_end = normalized
+        .find(char::is_whitespace)
+        .unwrap_or(normalized.len());
+    let head = &normalized[..head_end];
+    if !head.eq_ignore_ascii_case("web")
+        && !head.eq_ignore_ascii_case("search-web")
+        && !head.eq_ignore_ascii_case("lookup")
+    {
+        return None;
+    }
+
+    let rest = normalized[head_end..].trim();
+    let query = if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
+    };
+
+    Some(ParsedWebSearchCommand { query })
+}
+
 pub fn parse_collection_command(input: &str) -> Option<ParsedCollectionCommand> {
     let normalized = input.trim_start().trim_start_matches(':').trim_start();
     if normalized.is_empty() {
@@ -369,7 +402,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -875,6 +908,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 65] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
+        id: CommandId::WebSearch,
+        value: "web",
+        aliases: &["search-web", "lookup"],
+        description: "search the web or open web search prompt",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
         id: CommandId::Quit,
         value: "q",
         aliases: &["q!"],
@@ -924,6 +964,9 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
     }
     if let Some(parsed) = parse_collection_command(normalized_input) {
         return parsed.action.command_id() == def.id;
+    }
+    if parse_web_search_command(normalized_input).is_some() {
+        return def.id == CommandId::WebSearch;
     }
     false
 }
@@ -1345,6 +1388,28 @@ mod tests {
                 "format italic",
                 "format strike",
             ]
+        );
+    }
+
+    #[test]
+    fn parse_web_search_command_supports_query_and_bare_forms() {
+        let bare = parse_web_search_command("web").expect("parse bare web");
+        assert_eq!(bare.query, None);
+
+        let with_query =
+            parse_web_search_command(":web rust programming").expect("parse with query");
+        assert_eq!(with_query.query.as_deref(), Some("rust programming"));
+
+        let alias = parse_web_search_command("lookup sqlite fts5").expect("parse alias");
+        assert_eq!(alias.query.as_deref(), Some("sqlite fts5"));
+
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "web").map(|cmd| cmd.id),
+            Some(CommandId::WebSearch)
+        );
+        assert_eq!(
+            resolve_command(CommandMode::Editor, "web rust lang").map(|cmd| cmd.id),
+            Some(CommandId::WebSearch)
         );
     }
 }

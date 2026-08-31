@@ -10,6 +10,8 @@ export interface ListOverlayOptions<T> {
   classPrefix: string;
   /** Input placeholder text. */
   placeholder?: string;
+  /** Initial input value. */
+  initialQuery?: string;
   /** Whether to show a full-screen backdrop div that closes on click-outside. */
   backdrop?: boolean;
   /** Compute the item list from the current query string. */
@@ -21,7 +23,9 @@ export interface ListOverlayOptions<T> {
   /** Called when the overlay is closed without selecting. */
   onClose?: (query: string) => void;
   /** Text shown when the filtered list is empty. */
-  emptyMessage?: string;
+  emptyMessage?: string | (() => string);
+  /** Optional content rendered between the query input and result list. */
+  renderSupplement?: () => HTMLElement | null;
   /** Extra keydown handler on the input. Return true to prevent default navigation. */
   onKeydown?: (event: KeyboardEvent, state: ListOverlayState<T>) => boolean;
   /** Restore focus to the previously focused element when closing. Defaults to true. */
@@ -56,12 +60,14 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
     container,
     classPrefix: p,
     placeholder = "",
+    initialQuery = "",
     backdrop = false,
     getItems,
     renderItem,
     onSelect,
     onClose,
     emptyMessage = "No results",
+    renderSupplement,
     onKeydown,
     restoreFocus = true,
     debounceMs = 0,
@@ -69,6 +75,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
 
   let root: HTMLElement | null = null;
   let inputEl: HTMLInputElement | null = null;
+  let supplementEl: HTMLElement | null = null;
   let listEl: HTMLElement | null = null;
   let restoreTarget: HTMLElement | null = null;
   let closingRoot: HTMLElement | null = null;
@@ -116,13 +123,19 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
 
   function renderList() {
     if (!listEl) return;
+    if (supplementEl) {
+      supplementEl.replaceChildren();
+      const supplement = renderSupplement?.() ?? null;
+      supplementEl.hidden = supplement === null;
+      if (supplement) supplementEl.appendChild(supplement);
+    }
     listEl.replaceChildren();
 
     if (items.length === 0) {
       inputEl?.removeAttribute("aria-activedescendant");
       const empty = document.createElement("div");
       empty.className = `${p}-empty`;
-      empty.textContent = emptyMessage;
+      empty.textContent = typeof emptyMessage === "function" ? emptyMessage() : emptyMessage;
       listEl.appendChild(empty);
       return;
     }
@@ -255,6 +268,12 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
       listEl.setAttribute("role", "listbox");
 
       panel.appendChild(inputEl);
+      if (renderSupplement) {
+        supplementEl = document.createElement("div");
+        supplementEl.className = `${p}-supplement`;
+        supplementEl.setAttribute("aria-live", "polite");
+        panel.appendChild(supplementEl);
+      }
       panel.appendChild(listEl);
       parent.appendChild(root);
     } else {
@@ -282,10 +301,17 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
       listEl.setAttribute("role", "listbox");
 
       root.appendChild(inputEl);
+      if (renderSupplement) {
+        supplementEl = document.createElement("div");
+        supplementEl.className = `${p}-supplement`;
+        supplementEl.setAttribute("aria-live", "polite");
+        root.appendChild(supplementEl);
+      }
       root.appendChild(listEl);
       parent.appendChild(root);
     }
 
+    inputEl.value = initialQuery;
     inputEl.addEventListener("input", () => {
       if (!debounceMs) {
         selectedIndex = 0;
@@ -336,6 +362,7 @@ export function createListOverlay<T>(options: ListOverlayOptions<T>): ListOverla
 
     root = null;
     inputEl = null;
+    supplementEl = null;
     listEl = null;
     if (restoreFocus && restoreTarget && restoreTarget.isConnected) {
       restoreTarget.focus();

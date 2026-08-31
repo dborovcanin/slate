@@ -79,6 +79,7 @@ test("core command suggestions are mode-aware", async () => {
     "export txt",
     "backup export",
     "backup load",
+    "web",
   ]);
 
   const vimValues = listCommandSuggestions("vim", "").map((entry) => entry.value);
@@ -561,4 +562,3 @@ test("core executeCommand title converts selected lines to headings", async () =
     insert: "# task\n# follow-up",
   });
 });
-

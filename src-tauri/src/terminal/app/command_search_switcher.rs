@@ -2,9 +2,9 @@ use super::{
     line_char_len, load_note_reminder_ghosts, new_note_with_context, trim_trailing_word,
     CollectionEditDialogState, CommandCompletionMenuState, CommandCompletionOption,
     ContentSearchResponse, DatePickerAction, Db, Key, Note, NoteSearchResult,
-    SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, CALC_VIEWPORT_ONLY_MIN_LINES,
-    COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
-    CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
+    SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, WebSearchResponse,
+    WebSearchState, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
+    CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher};
@@ -1752,6 +1752,10 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::WebSearch { query } => {
+                    self.open_web_search(query);
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Fold { action } => {
                     match action {
                         crate::editor_core::engine::HostFoldAction::Fold => {
@@ -2880,5 +2884,238 @@ impl TerminalApp {
             (self.search.current + self.search.matches.len() - 1) % self.search.matches.len();
         self.jump_to_current_match();
         self.update_search_status();
+    }
+
+    // ── Web search overlay ──────────────────────────────────────────────
+
+    pub(super) fn open_web_search(&mut self, prefill_query: Option<String>) {
+        self.dismiss_variable_autocomplete_popup();
+        self.web_search = WebSearchState::default();
+        if let Some(q) = prefill_query {
+            self.web_search.query = q.clone();
+            self.web_search.cursor_col = self.web_search.query.chars().count();
+            self.fire_web_search(&q);
+        }
+        self.mode = UiMode::WebSearch;
+        self.status = "?web search".to_string();
+    }
+
+    fn fire_web_search(&mut self, query: &str) {
+        let q = query.trim().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.web_search.pending = true;
+        self.web_search.error = None;
+        self.web_search.results.clear();
+        self.web_search.answer = None;
+        self.web_search.summary = None;
+        self.web_search.selected = 0;
+        self.web_search.rx = Some(rx);
+        std::thread::spawn(move || {
+            let config = app_core::config::load_web_search_config();
+            let result = app_core::web_search::search_web(&q, &config);
+            let _ = tx.send(WebSearchResponse { result });
+        });
+    }
+
+    pub(super) fn poll_web_search(&mut self) {
+        if let Some(rx) = self.web_search.rx.as_ref() {
+            if let Ok(resp) = rx.try_recv() {
+                match resp.result {
+                    Ok(search_result) => {
+                        self.web_search.answer = search_result.answer;
+                        self.web_search.summary = search_result.summary;
+                        self.web_search.results = search_result.items;
+                        self.web_search.pending = false;
+                        self.web_search.error = None;
+                        self.status = format!(
+                            "?{} ({} results)",
+                            self.web_search.query,
+                            self.web_search.results.len()
+                        );
+                    }
+                    Err(e) => {
+                        self.web_search.pending = false;
+                        self.web_search.error = Some(e.clone());
+                        self.status = format!("?web search error: {e}");
+                    }
+                }
+                self.web_search.rx = None;
+            }
+        }
+    }
+
+    pub(super) fn handle_web_search_key(&mut self, key: Key) {
+        match key {
+            Key::Esc => {
+                self.web_search = WebSearchState::default();
+                self.mode = if self.vim_enabled {
+                    UiMode::Normal
+                } else {
+                    UiMode::Editor
+                };
+                self.status.clear();
+            }
+            Key::Enter => {
+                // Submit query if no results yet, or open selected link in browser
+                if self.web_search.pending {
+                    return;
+                }
+                if self.web_search.results.is_empty()
+                    && self.web_search.answer.is_none()
+                    && self.web_search.summary.is_none()
+                    && !self.web_search.query.trim().is_empty()
+                {
+                    let query = self.web_search.query.clone();
+                    self.fire_web_search(&query);
+                } else if let Some(item) = self.web_search.results.get(self.web_search.selected) {
+                    let url = item.url.clone();
+                    self.status = match open_browser_url(&url) {
+                        Ok(()) => "web result opened".to_string(),
+                        Err(err) => format!("web result open failed: {err}"),
+                    };
+                }
+            }
+            Key::ShiftEnter => {
+                // Insert markdown link at cursor
+                if let Some(item) = self.web_search.results.get(self.web_search.selected) {
+                    let link = item.markdown_link.clone();
+                    self.web_search = WebSearchState::default();
+                    self.mode = if self.vim_enabled {
+                        UiMode::Normal
+                    } else {
+                        UiMode::Editor
+                    };
+                    self.status.clear();
+                    self.insert_text(&link);
+                }
+            }
+            Key::ArrowUp => {
+                if self.web_search.selected > 0 {
+                    self.web_search.selected -= 1;
+                }
+            }
+            Key::ArrowDown => {
+                if !self.web_search.results.is_empty() {
+                    self.web_search.selected =
+                        (self.web_search.selected + 1).min(self.web_search.results.len() - 1);
+                }
+            }
+            Key::ArrowLeft => {
+                self.web_search.cursor_col = self.web_search.cursor_col.saturating_sub(1);
+            }
+            Key::ArrowRight => {
+                self.web_search.cursor_col =
+                    (self.web_search.cursor_col + 1).min(char_len(&self.web_search.query));
+            }
+            Key::Home => {
+                self.web_search.cursor_col = 0;
+            }
+            Key::End => {
+                self.web_search.cursor_col = char_len(&self.web_search.query);
+            }
+            Key::Ctrl('w') | Key::CtrlBackspace => {
+                if self.web_search.cursor_col == char_len(&self.web_search.query) {
+                    let old_len = self.web_search.query.len();
+                    trim_trailing_word(&mut self.web_search.query);
+                    if self.web_search.query.len() != old_len {
+                        self.invalidate_web_search_results();
+                        self.web_search.cursor_col = char_len(&self.web_search.query);
+                    }
+                } else if remove_char_before_char_col(
+                    &mut self.web_search.query,
+                    self.web_search.cursor_col,
+                ) {
+                    self.invalidate_web_search_results();
+                    self.web_search.cursor_col = self.web_search.cursor_col.saturating_sub(1);
+                }
+            }
+            Key::Backspace => {
+                if remove_char_before_char_col(
+                    &mut self.web_search.query,
+                    self.web_search.cursor_col,
+                ) {
+                    self.invalidate_web_search_results();
+                    self.web_search.cursor_col = self.web_search.cursor_col.saturating_sub(1);
+                }
+            }
+            Key::Delete => {
+                if remove_char_at_char_col(&mut self.web_search.query, self.web_search.cursor_col) {
+                    self.invalidate_web_search_results();
+                }
+            }
+            Key::Char(ch) => {
+                self.invalidate_web_search_results();
+                insert_str_at_char_col(
+                    &mut self.web_search.query,
+                    self.web_search.cursor_col,
+                    &ch.to_string(),
+                );
+                self.web_search.cursor_col += 1;
+            }
+            Key::Paste(text) => {
+                let sanitized = text
+                    .chars()
+                    .filter(|ch| *ch != '\n' && *ch != '\r')
+                    .collect::<String>();
+                if !sanitized.is_empty() {
+                    self.invalidate_web_search_results();
+                    let added = char_len(&sanitized);
+                    insert_str_at_char_col(
+                        &mut self.web_search.query,
+                        self.web_search.cursor_col,
+                        &sanitized,
+                    );
+                    self.web_search.cursor_col += added;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn invalidate_web_search_results(&mut self) {
+        self.web_search.results.clear();
+        self.web_search.answer = None;
+        self.web_search.summary = None;
+        self.web_search.selected = 0;
+        self.web_search.pending = false;
+        self.web_search.error = None;
+        self.web_search.rx = None;
+    }
+}
+
+fn open_browser_url(url: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(url).map_err(|err| format!("invalid URL: {err}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("only HTTP(S) URLs can be opened".to_string());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(parsed.as_str())
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("xdg-open failed: {err}"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(parsed.as_str())
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("open failed: {err}"))
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(parsed.as_str())
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| format!("browser launcher failed: {err}"))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    {
+        Err("opening browser links is unsupported on this platform".to_string())
     }
 }

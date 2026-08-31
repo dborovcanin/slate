@@ -651,3 +651,21 @@ export async function getRuntimeFlagsOrDefault(): Promise<RuntimeFlags> {
     return { ...DEFAULT_RUNTIME_FLAGS };
   }
 }
+
+export interface WebSearchItem {
+  title: string;
+  url: string;
+  snippet: string;
+  markdown_link: string;
+}
+
+export interface WebSearchResult {
+  query: string;
+  answer: string | null;
+  summary: string | null;
+  items: WebSearchItem[];
+}
+
+export function searchWeb(query: string): Promise<WebSearchResult> {
+  return invoke<WebSearchResult>("search_web", { query });
+}

@@ -27,6 +27,7 @@ interface CommandPickerOptions {
     action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
     collection: string | null;
   }) => Promise<string | void> | string | void;
+  onWebSearchCommand?: (query: string | null) => Promise<string | void> | string | void;
   source?: "vim-colon" | "shortcut";
   onCancel?: () => void;
   selectionOverride?: {
@@ -56,6 +57,7 @@ interface CommandModeExtensionOptions {
     action: "choose" | "clear" | "create" | "delete" | "update" | "purge" | "add" | "remove";
     collection: string | null;
   }) => Promise<string | void> | string | void;
+  onWebSearchCommand?: (query: string | null) => Promise<string | void> | string | void;
 }
 
 const COMMAND_PICKER_SELECTOR = ".command-picker-bar";
@@ -240,6 +242,7 @@ export function openCommandPicker(view: EditorView, options: CommandPickerOption
         onExportCommand: options.onExportCommand,
         onBackupCommand: options.onBackupCommand,
         onCollectionCommand: options.onCollectionCommand,
+        onWebSearchCommand: options.onWebSearchCommand,
         selectionOverride: options.selectionOverride,
       });
       if (message) showStatus(view, message);
@@ -335,6 +338,7 @@ export function commandModeExtension(options: CommandModeExtensionOptions = {}) 
         onExportCommand: options.onExportCommand,
         onBackupCommand: options.onBackupCommand,
         onCollectionCommand: options.onCollectionCommand,
+        onWebSearchCommand: options.onWebSearchCommand,
         source: "shortcut",
       });
       return true;

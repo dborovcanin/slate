@@ -518,6 +518,7 @@ export type CommandDispatchKind =
   | "host_export"
   | "host_backup_export"
   | "host_backup_load"
+  | "host_web_search"
   | "host_module"
   | "host_collection"
   | "host_fold"
@@ -532,6 +533,7 @@ export type HostCommandPlan =
   | { kind: "date" }
   | { kind: "remind" }
   | { kind: "remind_toggle" }
+  | { kind: "web_search"; query?: string | null }
   | { kind: "write"; quit: boolean; force: boolean }
   | { kind: "export"; format: "pdf" | "md" | "txt"; path?: string | null }
   | { kind: "backup_export"; path?: string | null }
