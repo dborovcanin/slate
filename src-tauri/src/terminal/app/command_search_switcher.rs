@@ -2908,6 +2908,7 @@ impl TerminalApp {
         self.web_search.results.clear();
         self.web_search.answer = None;
         self.web_search.summary = None;
+        self.web_search.answer_card = None;
         self.web_search.selected = 0;
         self.web_search.rx = Some(rx);
         std::thread::spawn(move || {
@@ -2933,6 +2934,7 @@ impl TerminalApp {
             Ok(search_result) => {
                 self.web_search.answer = search_result.answer;
                 self.web_search.summary = search_result.summary;
+                self.web_search.answer_card = search_result.answer_card;
                 self.web_search.results = search_result.items;
                 self.web_search.pending = false;
                 self.web_search.error = None;
@@ -2971,6 +2973,7 @@ impl TerminalApp {
                 if self.web_search.results.is_empty()
                     && self.web_search.answer.is_none()
                     && self.web_search.summary.is_none()
+                    && self.web_search.answer_card.is_none()
                     && !self.web_search.query.trim().is_empty()
                 {
                     let query = self.web_search.query.clone();
@@ -3084,6 +3087,7 @@ impl TerminalApp {
         self.web_search.results.clear();
         self.web_search.answer = None;
         self.web_search.summary = None;
+        self.web_search.answer_card = None;
         self.web_search.selected = 0;
         self.web_search.pending = false;
         self.web_search.error = None;

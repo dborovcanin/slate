@@ -280,6 +280,7 @@ pub struct WebSearchView<'a> {
     pub results: &'a [app_core::web_search::WebSearchItem],
     pub answer: Option<&'a str>,
     pub summary: Option<&'a str>,
+    pub answer_card: Option<&'a app_core::web_search::WebSearchAnswerCard>,
     pub selected: usize,
     pub pending: bool,
     pub error: Option<&'a str>,
@@ -911,7 +912,11 @@ pub fn draw_web_search(
             &err_text,
             error_style,
         );
-    } else if view.results.is_empty() && view.answer.is_none() && view.summary.is_none() {
+    } else if view.results.is_empty()
+        && view.answer.is_none()
+        && view.summary.is_none()
+        && view.answer_card.is_none()
+    {
         if !view.query.is_empty() {
             draw_row_at_styled(
                 buf,
@@ -932,7 +937,9 @@ pub fn draw_web_search(
             );
         }
     } else {
-        let count_text = if view.answer.is_some() {
+        let count_text = if view.answer_card.is_some() {
+            format!(" answer card + {} link results:", view.results.len())
+        } else if view.answer.is_some() {
             format!(" answer + {} link results:", view.results.len())
         } else if view.summary.is_some() {
             format!(" summary + {} link results:", view.results.len())
@@ -949,7 +956,7 @@ pub fn draw_web_search(
         );
     }
 
-    let preview_lines_count = 4;
+    let preview_lines_count = 5;
     let layout_rows = 4; // prompt + label + preview + borders
     let max_rows = box_h.saturating_sub(layout_rows + preview_lines_count);
     let mut start = 0usize;
@@ -977,10 +984,16 @@ pub fn draw_web_search(
         }
     }
 
-    // Keep direct answers visible; otherwise preview the selected result's text.
+    // Keep the shared answer card visible; otherwise preview selected result text.
     let preview_start_row = y + box_h.saturating_sub(preview_lines_count + 1);
-    let (preview_label, preview) = if let Some(answer) = view.answer {
-        (" answer:", Some(answer))
+    let (preview_label, preview, preview_source) = if let Some(card) = view.answer_card {
+        (
+            format!(" {}:", card.title.to_ascii_lowercase()),
+            Some(card.text.as_str()),
+            card.sources.first(),
+        )
+    } else if let Some(answer) = view.answer {
+        (" answer:".to_string(), Some(answer), None)
     } else {
         let selected_text = view
             .results
@@ -988,16 +1001,17 @@ pub fn draw_web_search(
             .map(|item| item.snippet.as_str())
             .filter(|snippet| !snippet.trim().is_empty());
         if selected_text.is_some() {
-            (" result text:", selected_text)
+            (" result text:".to_string(), selected_text, None)
         } else if view.summary.is_some() {
-            (" summary:", view.summary)
+            (" summary:".to_string(), view.summary, None)
         } else {
             (
-                " result text:",
+                " result text:".to_string(),
                 view.results
                     .iter()
                     .map(|item| item.snippet.as_str())
                     .find(|snippet| !snippet.trim().is_empty()),
+                None,
             )
         }
     };
@@ -1007,14 +1021,15 @@ pub fn draw_web_search(
             preview_start_row,
             x + 1,
             box_w.saturating_sub(2),
-            preview_label,
+            &preview_label,
             label_style,
         );
         let snippet_text = sanitize_preview_text(preview);
+        let source_lines = usize::from(preview_source.is_some());
         let wrapped = wrap_preview_lines(
             &snippet_text,
             box_w.saturating_sub(4),
-            preview_lines_count.saturating_sub(1),
+            preview_lines_count.saturating_sub(1 + source_lines),
         );
         for (idx, line) in wrapped.iter().enumerate() {
             let text = format!("  {line}");
@@ -1025,6 +1040,17 @@ pub fn draw_web_search(
                 box_w.saturating_sub(2),
                 &text,
                 snippet_style,
+            );
+        }
+        if let Some(source) = preview_source {
+            let source_text = format!(" source: {} ({})", source.title, source.url);
+            draw_row_at_styled(
+                buf,
+                preview_start_row + preview_lines_count.saturating_sub(1),
+                x + 1,
+                box_w.saturating_sub(2),
+                &source_text,
+                label_style,
             );
         }
     }
@@ -1328,6 +1354,7 @@ mod tests {
             results: &[result],
             answer: Some("35 cm = 13.7795 inches"),
             summary: Some("fallback summary"),
+            answer_card: None,
             selected: 0,
             pending: false,
             error: None,
@@ -1339,6 +1366,36 @@ mod tests {
         assert!(buf.contains("answer:"));
         assert!(buf.contains("35 cm = 13.7795 inches"));
         assert!(!buf.contains("ordinary result snippet"));
+    }
+
+    #[test]
+    fn draw_web_search_shows_shared_answer_card_with_source() {
+        let card = app_core::web_search::WebSearchAnswerCard {
+            title: "Best result".to_string(),
+            text: "The tallest building in Europe is the Lakhta Center.".to_string(),
+            sources: vec![app_core::web_search::WebSearchSource {
+                title: "List of tallest buildings in Europe".to_string(),
+                url: "https://example.com/tallest-buildings".to_string(),
+            }],
+        };
+        let view = WebSearchView {
+            query: "tallest building in Europe",
+            results: &[],
+            answer: None,
+            summary: None,
+            answer_card: Some(&card),
+            selected: 0,
+            pending: false,
+            error: None,
+        };
+        let mut buf = String::new();
+
+        draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
+
+        assert!(buf.contains("best result:"));
+        assert!(buf.contains("The tallest building in Europe is the Lakhta Center."));
+        assert!(buf.contains("source: List of tallest buildings in Europe"));
+        assert!(buf.contains("https://example.com/tallest-buildings"));
     }
 
     #[test]
@@ -1354,6 +1411,7 @@ mod tests {
             results: &[result],
             answer: None,
             summary: Some("fallback summary"),
+            answer_card: None,
             selected: 0,
             pending: false,
             error: None,
@@ -1388,6 +1446,7 @@ mod tests {
             results: &results,
             answer: None,
             summary: None,
+            answer_card: None,
             selected: 0,
             pending: false,
             error: None,

@@ -591,6 +591,7 @@ pub(super) struct WebSearchState {
     pub(super) results: Vec<app_core::web_search::WebSearchItem>,
     pub(super) answer: Option<String>,
     pub(super) summary: Option<String>,
+    pub(super) answer_card: Option<app_core::web_search::WebSearchAnswerCard>,
     pub(super) selected: usize,
     pub(super) pending: bool,
     pub(super) error: Option<String>,

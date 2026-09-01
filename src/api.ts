@@ -659,10 +659,22 @@ export interface WebSearchItem {
   markdown_link: string;
 }
 
+export interface WebSearchSource {
+  title: string;
+  url: string;
+}
+
+export interface WebSearchAnswerCard {
+  title: string;
+  text: string;
+  sources: WebSearchSource[];
+}
+
 export interface WebSearchResult {
   query: string;
   answer: string | null;
   summary: string | null;
+  answer_card: WebSearchAnswerCard | null;
   items: WebSearchItem[];
 }
 

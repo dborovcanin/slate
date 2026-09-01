@@ -56,10 +56,10 @@ const MIN_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 1;
 const MAX_IMAP_INITIAL_SYNC_MAX_MESSAGES: u32 = 100_000;
 const MIN_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 0;
 const MAX_IMAP_INITIAL_SYNC_PAST_DAYS: u16 = 3650;
-const DEFAULT_WEB_SEARCH_PROVIDER: &str = "duckduckgo";
+const DEFAULT_WEB_SEARCH_PROVIDER: &str = "auto";
 const DEFAULT_WEB_SEARCH_API_KEY: &str = "";
 const DEFAULT_WEB_SEARCH_ENGINE_ID: &str = "";
-const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 5;
+const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 10;
 const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
 const MAX_WEB_SEARCH_MAX_RESULTS: usize = 10;
 const DEFAULT_CONFIG: &str = r#"# Slate configuration
@@ -183,16 +183,25 @@ ui_log_path = ""
 tui_log_path = ""
 
 [web_search]
-# Online search provider: "duckduckgo" (zero-config default) or legacy "google"
-provider = "duckduckgo"
+# Online search provider:
+#   "auto"       pick the best configured provider, then fall back (default)
+#   "brave"      Brave Search API, needs api_key
+#   "google"     legacy Google Custom Search, needs api_key + search_engine_id
+#   "duckduckgo" key-free only; no API key is used
+# "auto" uses Google when api_key and search_engine_id are both set, Brave when
+# only api_key is set, and DuckDuckGo otherwise. Every keyed provider falls
+# back to DuckDuckGo if its request fails, so search keeps working either way.
+# DuckDuckGo has no search API: results are scraped and it now answers many
+# requests with an anti-bot challenge, so set an api_key for reliable results.
+provider = "auto"
+# Brave Search API key, or Google Custom Search API key
+api_key = ""
 # Google is available only to existing Custom Search JSON API customers and
 # that API is scheduled to shut down on 2027-01-01.
-# Google Custom Search API key (only needed if provider = "google")
-api_key = ""
-# Google Custom Search Engine ID / cx (only needed if provider = "google")
+# Google Custom Search Engine ID / cx (only needed for Google)
 search_engine_id = ""
-# Maximum search results to return (1..10, default 5)
-max_results = 5
+# Maximum search results to return (1..10, default 10)
+max_results = 10
 
 [startup]
 # Enable non-critical startup work asynchronously after first paint/edit

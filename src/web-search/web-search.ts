@@ -1,4 +1,10 @@
-import { searchWeb, type WebSearchItem, type WebSearchResult } from "../api.ts";
+import {
+  searchWeb,
+  type WebSearchAnswerCard,
+  type WebSearchItem,
+  type WebSearchResult,
+  type WebSearchSource,
+} from "../api.ts";
 import { createListOverlay, type ListOverlay } from "../overlays/overlay.ts";
 
 export interface OpenWebSearchOptions {
@@ -11,6 +17,7 @@ let activeQuery = "";
 let currentResults: WebSearchItem[] = [];
 let currentAnswer: string | null = null;
 let currentSummary: string | null = null;
+let currentAnswerCard: WebSearchAnswerCard | null = null;
 let isLoading = false;
 let errorMessage: string | null = null;
 let completedQuery: string | null = null;
@@ -30,6 +37,7 @@ function executeSearch(query: string, sessionId: number, refreshOverlay: () => v
     currentResults = [];
     currentAnswer = null;
     currentSummary = null;
+    currentAnswerCard = null;
     errorMessage = null;
     completedQuery = null;
     isLoading = false;
@@ -48,6 +56,7 @@ function executeSearch(query: string, sessionId: number, refreshOverlay: () => v
       currentResults = res.items || [];
       currentAnswer = res.answer || null;
       currentSummary = res.summary || null;
+      currentAnswerCard = res.answer_card || null;
       isLoading = false;
       errorMessage = null;
       completedQuery = trimmed;
@@ -58,6 +67,7 @@ function executeSearch(query: string, sessionId: number, refreshOverlay: () => v
       currentResults = [];
       currentAnswer = null;
       currentSummary = null;
+      currentAnswerCard = null;
       isLoading = false;
       errorMessage = err instanceof Error ? err.message : String(err);
       completedQuery = trimmed;
@@ -97,31 +107,43 @@ function renderWebSearchItem(item: WebSearchItem, selected: boolean): HTMLElemen
 }
 
 export interface WebSearchTextDisplay {
-  label: "Answer" | "Summary" | "Result text";
+  label: string;
   text: string;
+  sources: WebSearchSource[];
 }
 
 export function selectWebSearchText(
+  answerCard: WebSearchAnswerCard | null,
   answer: string | null,
   summary: string | null,
   results: WebSearchItem[],
   selectedItem?: WebSearchItem,
 ): WebSearchTextDisplay | null {
+  const cardText = answerCard?.text.trim();
+  if (answerCard && cardText) {
+    return {
+      label: answerCard.title.trim() || "Answer",
+      text: cardText,
+      sources: answerCard.sources,
+    };
+  }
+
   const directAnswer = answer?.trim();
-  if (directAnswer) return { label: "Answer", text: directAnswer };
+  if (directAnswer) return { label: "Answer", text: directAnswer, sources: [] };
 
   const selectedText = selectedItem?.snippet.trim();
-  if (selectedText) return { label: "Result text", text: selectedText };
+  if (selectedText) return { label: "Result text", text: selectedText, sources: [] };
 
   const providerSummary = summary?.trim();
-  if (providerSummary) return { label: "Summary", text: providerSummary };
+  if (providerSummary) return { label: "Summary", text: providerSummary, sources: [] };
 
   const fallbackText = results.find((item) => item.snippet.trim().length > 0)?.snippet.trim();
-  return fallbackText ? { label: "Result text", text: fallbackText } : null;
+  return fallbackText ? { label: "Result text", text: fallbackText, sources: [] } : null;
 }
 
 function renderWebSearchText(selectedItem?: WebSearchItem): HTMLElement | null {
   const display = selectWebSearchText(
+    currentAnswerCard,
     currentAnswer,
     currentSummary,
     currentResults,
@@ -141,6 +163,28 @@ function renderWebSearchText(selectedItem?: WebSearchItem): HTMLElement | null {
   content.className = "web-search-text-content";
   content.textContent = display.text;
   block.appendChild(content);
+
+  if (display.sources.length > 0) {
+    const sources = document.createElement("div");
+    sources.className = "web-search-text-sources";
+
+    const sourceLabel = document.createElement("span");
+    sourceLabel.className = "web-search-text-sources-label";
+    sourceLabel.textContent = display.sources.length === 1 ? "Source:" : "Sources:";
+    sources.appendChild(sourceLabel);
+
+    for (const source of display.sources) {
+      const sourceButton = document.createElement("button");
+      sourceButton.type = "button";
+      sourceButton.className = "web-search-text-source";
+      sourceButton.textContent = source.title;
+      sourceButton.title = source.url;
+      sourceButton.addEventListener("click", () => openWebResult(source.url));
+      sources.appendChild(sourceButton);
+    }
+
+    block.appendChild(sources);
+  }
 
   return block;
 }
@@ -182,6 +226,7 @@ export function openWebSearch(options?: OpenWebSearchOptions) {
   currentResults = [];
   currentAnswer = null;
   currentSummary = null;
+  currentAnswerCard = null;
   isLoading = false;
   errorMessage = null;
   completedQuery = null;
@@ -205,6 +250,7 @@ export function openWebSearch(options?: OpenWebSearchOptions) {
         currentResults = [];
         currentAnswer = null;
         currentSummary = null;
+        currentAnswerCard = null;
         errorMessage = null;
         completedQuery = null;
         isLoading = false;
@@ -252,7 +298,7 @@ export function openWebSearch(options?: OpenWebSearchOptions) {
           : activeQuery.length === 0
             ? "Type a query and press Enter"
             : completedQuery === activeQuery
-              ? currentAnswer || currentSummary
+              ? currentAnswerCard || currentAnswer || currentSummary
                 ? "No link results"
                 : "No web results"
               : "Press Enter to search",

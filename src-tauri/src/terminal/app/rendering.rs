@@ -1730,6 +1730,7 @@ impl TerminalApp {
                     results: &self.web_search.results,
                     answer: self.web_search.answer.as_deref(),
                     summary: self.web_search.summary.as_deref(),
+                    answer_card: self.web_search.answer_card.as_ref(),
                     selected: self.web_search.selected,
                     pending: self.web_search.pending,
                     error: self.web_search.error.as_deref(),

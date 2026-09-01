@@ -2328,6 +2328,11 @@ fn web_search_query_editing_is_unicode_safe_and_invalidates_stale_results() {
         });
     app.web_search.answer = Some("stale answer".to_string());
     app.web_search.summary = Some("stale summary".to_string());
+    app.web_search.answer_card = Some(app_core::web_search::WebSearchAnswerCard {
+        title: "Stale".to_string(),
+        text: "stale card".to_string(),
+        sources: Vec::new(),
+    });
     app.web_search.pending = true;
     app.handle_web_search_key(Key::Char('!'));
 
@@ -2336,6 +2341,7 @@ fn web_search_query_editing_is_unicode_safe_and_invalidates_stale_results() {
     assert!(app.web_search.results.is_empty());
     assert!(app.web_search.answer.is_none());
     assert!(app.web_search.summary.is_none());
+    assert!(app.web_search.answer_card.is_none());
     assert!(!app.web_search.pending);
 
     app.handle_web_search_key(Key::Backspace);
@@ -2395,6 +2401,14 @@ fn completed_web_search_marks_terminal_for_redraw_without_an_extra_key() {
             query: "Novak".to_string(),
             answer: None,
             summary: Some("Novak Djokovic is a Serbian tennis player.".to_string()),
+            answer_card: Some(app_core::web_search::WebSearchAnswerCard {
+                title: "Best result".to_string(),
+                text: "Novak Djokovic is a Serbian tennis player.".to_string(),
+                sources: vec![app_core::web_search::WebSearchSource {
+                    title: "Novak Djokovic".to_string(),
+                    url: "https://example.com/novak".to_string(),
+                }],
+            }),
             items: vec![app_core::web_search::WebSearchItem {
                 title: "Novak Djokovic".to_string(),
                 url: "https://example.com/novak".to_string(),
@@ -2413,6 +2427,13 @@ fn completed_web_search_marks_terminal_for_redraw_without_an_extra_key() {
     assert_eq!(
         app.web_search.summary.as_deref(),
         Some("Novak Djokovic is a Serbian tennis player.")
+    );
+    assert_eq!(
+        app.web_search
+            .answer_card
+            .as_ref()
+            .map(|card| card.title.as_str()),
+        Some("Best result")
     );
 
     drop(app);

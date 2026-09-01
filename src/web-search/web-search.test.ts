@@ -15,11 +15,42 @@ function result(title: string, snippet: string): WebSearchItem {
 test("web search text prioritizes direct answers", () => {
   assert.deepEqual(
     selectWebSearchText(
+      null,
       "35 cm = 13.7795 inches",
       "A centimetre is a unit of length.",
       [result("Centimetre", "A unit of length.")],
     ),
-    { label: "Answer", text: "35 cm = 13.7795 inches" },
+    { label: "Answer", text: "35 cm = 13.7795 inches", sources: [] },
+  );
+});
+
+test("web search text renders a shared source-backed answer card", () => {
+  assert.deepEqual(
+    selectWebSearchText(
+      {
+        title: "Best result",
+        text: "The tallest building in Europe is the Lakhta Center.",
+        sources: [
+          {
+            title: "List of tallest buildings in Europe",
+            url: "https://example.com/tallest-buildings",
+          },
+        ],
+      },
+      null,
+      null,
+      [],
+    ),
+    {
+      label: "Best result",
+      text: "The tallest building in Europe is the Lakhta Center.",
+      sources: [
+        {
+          title: "List of tallest buildings in Europe",
+          url: "https://example.com/tallest-buildings",
+        },
+      ],
+    },
   );
 });
 
@@ -29,21 +60,24 @@ test("web search text follows the selected result snippet", () => {
     result("Novak Djokovic", "A Serbian professional tennis player."),
   ];
 
-  assert.deepEqual(selectWebSearchText(null, null, results, results[1]), {
+  assert.deepEqual(selectWebSearchText(null, null, null, results, results[1]), {
     label: "Result text",
     text: "A Serbian professional tennis player.",
+    sources: [],
   });
 });
 
 test("web search text falls back to a provider summary or another useful snippet", () => {
   const results = [result("No text", ""), result("Useful", "Useful result text.")];
 
-  assert.deepEqual(selectWebSearchText(null, "Provider summary.", results, results[0]), {
+  assert.deepEqual(selectWebSearchText(null, null, "Provider summary.", results, results[0]), {
     label: "Summary",
     text: "Provider summary.",
+    sources: [],
   });
-  assert.deepEqual(selectWebSearchText(null, null, results, results[0]), {
+  assert.deepEqual(selectWebSearchText(null, null, null, results, results[0]), {
     label: "Result text",
     text: "Useful result text.",
+    sources: [],
   });
 });
