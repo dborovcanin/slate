@@ -4,12 +4,7 @@ This document explains Slate's runtime model and the core editing flow.
 
 ## Runtime model
 
-Slate has two user-facing frontends that share semantic logic:
-
-- GUI app (Tauri + CodeMirror)
-- TUI app (terminal runtime)
-
-Both use shared logic in `crates/editor-core` for:
+Slate is a terminal application (`slate`). Editing semantics live in `crates/editor-core`:
 
 - command parsing/suggestions
 - vim intent stepping
@@ -17,11 +12,11 @@ Both use shared logic in `crates/editor-core` for:
 - calc/variable semantics
 - fold range behavior
 
-Frontends are responsible for:
+The terminal app (`crates/tui`) is responsible for:
 
 - key/input capture
 - rendering
-- host side effects (save, export, clipboard, notifications, dialogs)
+- host side effects (save, export, clipboard, notifications)
 
 ## Data model and storage
 
@@ -33,8 +28,7 @@ Slate stores notes in SQLite with WAL mode.
 
 Markdown file notes are also supported:
 
-- GUI: `slate path/to/file.md`
-- TUI: `slight path/to/file.md` (or `slate --terminal path/to/file.md`)
+- `slate path/to/file.md`
 
 Edits sync back to the source markdown file.
 
@@ -44,7 +38,7 @@ At a high level:
 
 1. Load active note text and modules.
 2. User edits text.
-3. Frontend applies shared-core edits/rules where required.
+3. The terminal app applies editor-core edits/rules where required.
 4. Calc/variables refresh derived results.
 5. Wiki-link and image resolution refreshes derived inline display state.
 6. Autosave or explicit save writes note content.
@@ -52,29 +46,25 @@ At a high level:
 Save behavior:
 
 - `autosave = true`: idle debounce + flush on transitions
-- `autosave = false`: explicit write commands persist (`:w`, `:wq`, or non-vim save shortcuts)
+- `autosave = false`: explicit write commands persist (`:w`, `:wq`, or `Ctrl+S`)
 
 ## Command lifecycle
 
-Command input is normalized and resolved in shared core.
+Command input is normalized and resolved in the editor core.
 
 1. Raw command string comes from command bar.
-2. Shared core resolves command id and dispatch type.
+2. The editor core resolves command id and dispatch type.
 3. Dispatch goes one of two paths:
 - core command execution (pure text operations)
 - host command execution (save/export/date/reminder/module/clipboard/fold/security side effects)
-4. Frontend applies resulting operations or side effects and updates status.
-
-This keeps command semantics aligned between GUI and TUI while allowing frontend-specific I/O.
+4. The terminal app applies resulting operations or side effects and updates status.
 
 ## Vim lifecycle
 
 Vim behavior is split into two deterministic stages:
 
 1. `vim::step` converts key input + current vim state into actions/intents.
-2. Frontend applies actions with shared execution where available, then updates cursor/selection/mode.
-
-Both GUI and TUI consume this shared stepping contract.
+2. The terminal app applies actions with core execution where available, then updates cursor/selection/mode.
 
 ## Calc and variable flow
 
@@ -96,32 +86,30 @@ When math modules are enabled, Slate evaluates expressions from note content and
 
 ## Wiki-link flow
 
-Wiki-link syntax is parsed in shared core and resolved in frontend/runtime services.
+Wiki-link syntax is parsed in the editor core and resolved through note-source services.
 
 - syntax supports `[[shortid]]`, `[[shortid#heading]]`, `[[shortid|title]]`, `[[shortid#heading|title]]`
-- parser/tokenization and cursor-hit detection are shared-core owned
+- parser/tokenization and cursor-hit detection are editor-core owned
 - note/headings lookup is performed through note-source services
-- GUI and TUI render collapsed display for out-of-cursor links and keep full raw source while editing inside the link
-- navigation:
-  - GUI: Ctrl/Cmd+click and vim `gd`
-  - TUI: `Ctrl+]` and vim `gd`
+- links render collapsed when the cursor is outside and show full raw source while editing inside the link
+- navigation: `Ctrl+]` and vim `gd`
 
 ## Export flow
 
-Export is command-planned in shared core and executed in host runtime.
+Export is command-planned in the editor core and executed by the terminal app.
 
 - `export pdf <path>`
 - `export md [path]`
 - `export txt [path]`
 
-If `md/txt` path is omitted, Slate exports to clipboard (GUI and TUI).
+If `md/txt` path is omitted, Slate exports to clipboard.
 
 ## Architecture boundaries
 
-Slate prioritizes shared semantics and thin frontends.
+Slate prioritizes core-owned semantics and a thin terminal layer.
 
-- Editing semantics belong in shared core.
-- Rendering and I/O belong in frontend/runtime.
-- Performance-sensitive hot paths may remain adapter-local if needed.
+- Editing semantics belong in the editor core.
+- Rendering and I/O belong in the terminal app.
+- Performance-sensitive hot paths may remain terminal-local if measured.
 
 For module-level boundaries, see [Architecture](./architecture.md).

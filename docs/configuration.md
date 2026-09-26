@@ -13,18 +13,12 @@ The file is auto-generated on first run.
 [theme]
 color_scheme = "gruvbox-light"
 accent = "auto"
-background = "plain"
-font = "jetbrains-mono"
-font_size = 14
-animation_mode = "fast"
-animation_style = "pop-up"
 
 [editor]
 markdown_autoformat = true
 checklist_auto_reorder = true
 autosave = true
 format_on_save = false
-terminal_mode = false
 vim_mode = false
 date_format = "%Y-%m-%d"
 date_time_format = "%Y-%m-%d %H:%M"
@@ -64,11 +58,6 @@ max_body_bytes = 524288
 
 - `color_scheme`
 - `accent`
-- `background`
-- `font`
-- `font_size`
-- `animation_mode`
-- `animation_style`
 
 ### color_scheme values
 
@@ -98,39 +87,6 @@ max_body_bytes = 524288
 - `slate`
 - custom hex like `#4f7bd9`
 
-### background values
-
-- `plain`
-- `lines`
-- `squares`
-- `dots`
-- `diagonal`
-
-### font values
-
-- `jetbrains-mono`
-- `fira-code`
-- `cascadia-code`
-- `iosevka`
-- `hack`
-- `source-code-pro`
-
-`font_size` range: `11` to `28`.
-
-### animation_mode values
-
-- `fast`
-- `fade`
-- `smooth`
-- `spring`
-- compatibility mode: `none` (disables animations)
-
-### animation_style values
-
-- `slide-up`
-- `pop-up`
-- `none`
-
 ## Editor settings
 
 `[editor]` keys:
@@ -139,7 +95,6 @@ max_body_bytes = 524288
 - `checklist_auto_reorder`
 - `autosave`
 - `format_on_save`
-- `terminal_mode`
 - `vim_mode`
 - `date_format`
 - `date_time_format`
@@ -147,11 +102,10 @@ max_body_bytes = 524288
 
 Behavior notes:
 
-- `autosave = true` enables implicit save flows in GUI and TUI.
+- `autosave = true` enables implicit save flows (idle flush + save on exit/switch).
 - with `autosave = false`, explicit writes persist body changes.
 - `format_on_save = true` runs format before save.
-- `terminal_mode = true` makes `slate` default to terminal runtime when possible.
-- `vim_mode = true` enables GUI vim key mappings.
+- `vim_mode = true` starts the editor in vim normal mode.
 - `variable_autocomplete_min_chars` is clamped to `1..8`.
 
 ## Per-note module defaults

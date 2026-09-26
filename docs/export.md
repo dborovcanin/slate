@@ -1,6 +1,6 @@
 # Export Reference
 
-Slate supports clipboard and file export from GUI and TUI.
+Slate supports clipboard and file export from the command bar.
 It also supports full database backup and restore commands for moving all notes together.
 
 ## Export formats
@@ -30,13 +30,7 @@ Path behavior:
 - relative paths are resolved from the current process working directory
 - parent directory must already exist and be writable
 
-## GUI export entry points
-
-- `Ctrl+E`: export note body to clipboard
-- `Ctrl+Shift+E`: open file export dialog
-- command bar export via `export ...`
-
-## TUI export entry points
+## Export entry points
 
 - command bar export via `export ...`
 - clipboard fallback for `export md` / `export txt` with no path
@@ -88,7 +82,7 @@ The zip uses stored (uncompressed) entries so the file can be opened by any stan
 `backup load <path.zip>` restores notes from a Slate backup zip without requiring any manual file operations:
 
 1. Slate reads `notes.db` out of the zip and stages it at `<data_dir>/notes.db.staged-restore`.
-2. The TUI session exits.
+2. The terminal session exits.
 3. On exit, Slate atomically replaces the live `notes.db` with the staged file.
 4. Re-open Slate to use the restored notes.
 

@@ -92,17 +92,6 @@ impl CrossNoteVarIndex {
         result
     }
 
-    /// Return the full note_ids of all notes that depend on `short_id`.
-    /// Used to find which notes to re-evaluate after a note's exports change.
-    pub fn dependents_of(&self, short_id: &str) -> Vec<String> {
-        let short_id_lower = short_id.to_ascii_lowercase();
-        self.deps
-            .iter()
-            .filter(|(_, dep_ids)| dep_ids.contains(&short_id_lower))
-            .map(|(note_id, _)| note_id.clone())
-            .collect()
-    }
-
     /// Return exported variable entries for `short_id` (for cross-note autocomplete).
     pub fn exports_for_short_id(&self, short_id: &str) -> &[VariableIndexEntry] {
         self.export_entries

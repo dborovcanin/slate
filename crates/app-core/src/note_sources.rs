@@ -24,12 +24,6 @@ pub enum NoteIdentity {
 }
 
 impl NoteIdentity {
-    pub fn to_note_id(&self) -> String {
-        match self {
-            Self::DbNote(id) => id.clone(),
-            Self::FileNote(path) => note_id_for_markdown_file(path),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,81 +334,6 @@ impl NoteSourceService {
         self.import_image_bytes_by_id(note_id, file_name, None, &bytes)
     }
 
-    pub fn reserve_image_placeholder_by_id(
-        &self,
-        note_id: &str,
-        file_name: Option<&str>,
-        mime_type: Option<&str>,
-    ) -> Result<ImportedImage, String> {
-        validate_declared_image_type(file_name, mime_type)?;
-        let identity = self.parse_identity(note_id);
-        let NoteIdentity::DbNote(id) = identity else {
-            return Err("image placeholders are only supported for database notes".to_string());
-        };
-        let image_id = self.db.reserve_note_image(&id, file_name, mime_type)?;
-        Ok(ImportedImage {
-            image_id: image_id.clone(),
-            markdown_path: markdown_path_for_db_image(&image_id),
-        })
-    }
-
-    pub fn write_image_bytes_to_placeholder_by_id(
-        &self,
-        note_id: &str,
-        image_id: &str,
-        file_name: Option<&str>,
-        mime_type: Option<&str>,
-        image_bytes: &[u8],
-    ) -> Result<(), String> {
-        let metadata = validate_note_image(file_name, mime_type, image_bytes)?;
-        let identity = self.parse_identity(note_id);
-        let NoteIdentity::DbNote(id) = identity else {
-            return Err("image placeholders are only supported for database notes".to_string());
-        };
-        self.db.write_note_image_bytes(
-            &id,
-            image_id,
-            file_name,
-            Some(metadata.mime_type),
-            image_bytes,
-        )
-    }
-
-    pub fn write_image_path_to_placeholder_by_id(
-        &self,
-        note_id: &str,
-        image_id: &str,
-        source_path: &Path,
-    ) -> Result<(), String> {
-        if !source_path.exists() {
-            return Err(format!(
-                "Image source path does not exist: {}",
-                source_path.display()
-            ));
-        }
-        if !source_path.is_file() {
-            return Err(format!(
-                "Image source path is not a file: {}",
-                source_path.display()
-            ));
-        }
-        let bytes = read_image_file_bounded(source_path)?;
-        let file_name = source_path.file_name().and_then(|name| name.to_str());
-        self.write_image_bytes_to_placeholder_by_id(note_id, image_id, file_name, None, &bytes)
-    }
-
-    pub fn delete_image_placeholder_by_id(
-        &self,
-        note_id: &str,
-        image_id: &str,
-    ) -> Result<bool, String> {
-        let identity = self.parse_identity(note_id);
-        let NoteIdentity::DbNote(id) = identity else {
-            return Ok(false);
-        };
-        self.db.delete_note_image(&id, image_id)
-    }
-
     pub fn resolve_image_markdown_source_by_id(
         &self,
         note_id: &str,
@@ -690,10 +609,6 @@ pub fn markdown_file_path_from_note_id(note_id: &str) -> Option<PathBuf> {
         return None;
     }
     Some(path)
-}
-
-pub fn is_markdown_file_note_id(note_id: &str) -> bool {
-    markdown_file_path_from_note_id(note_id).is_some()
 }
 
 pub fn note_identity_from_id(note_id: &str) -> NoteIdentity {
@@ -1063,8 +978,7 @@ fn markdown_file_timestamps(path: &Path) -> Result<(String, String), String> {
 /// line, trims it, and truncates to `NOTE_TITLE_MAX_CHARS` chars (appending
 /// "..." when truncation occurs). Returns "Untitled" for empty bodies.
 ///
-/// This is the single source of truth for note titles in the workspace — the
-/// SQLite layer and the wasm bridge both delegate here.
+/// This is the single source of truth for note titles in the workspace.
 pub fn derive_note_title_from_body(body: &str) -> String {
     for line in body.lines() {
         let trimmed = line.trim();

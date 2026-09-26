@@ -1,0 +1,1446 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "clipboard_mode": "Linewise",
+        "clipboard_text": "two",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "one",
+          "three"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo\nthree",
+      "keys": [
+        "char:j",
+        "char:d",
+        "char:d"
+      ],
+      "name": "normal_j_dd_delete_line"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Linewise",
+        "clipboard_text": "alpha\nbeta",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "gamma",
+          "delta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha\nbeta\ngamma\ndelta",
+      "keys": [
+        "char:2",
+        "char:d",
+        "char:d"
+      ],
+      "name": "normal_2dd_deletes_two_lines"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 3,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc\nd",
+      "keys": [
+        "char:g",
+        "char:g"
+      ],
+      "name": "normal_gg_moves_to_first_line"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "a",
+          "",
+          "b",
+          "c"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc",
+      "keys": [
+        "char:o",
+        "esc"
+      ],
+      "name": "normal_o_then_esc_inserts_line_below"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "a",
+          "",
+          "b",
+          "c"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 1,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc",
+      "keys": [
+        "char:O",
+        "esc"
+      ],
+      "name": "normal_O_then_esc_inserts_line_above"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Linewise",
+        "clipboard_text": "beta",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "alpha",
+          "gamma"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 1,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha\nbeta\ngamma",
+      "keys": [
+        "char:$",
+        "char:d",
+        "char:d"
+      ],
+      "name": "normal_dollar_motion_then_dd"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "alpha",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          " beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 5,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha beta",
+      "keys": [
+        "char:d",
+        "char:0"
+      ],
+      "name": "normal_d0_deletes_to_line_start"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "foo bar ",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "baz qux"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz qux",
+      "keys": [
+        "char:d",
+        "char:2",
+        "char:w"
+      ],
+      "name": "normal_d2w_deletes_two_words_forward"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "foo bar ",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "baz"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 8,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz",
+      "keys": [
+        "char:d",
+        "char:2",
+        "char:b"
+      ],
+      "name": "normal_d2b_deletes_two_words_backward"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "zero one two three four five ",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "six"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "zero one two three four five six",
+      "keys": [
+        "char:2",
+        "char:d",
+        "char:3",
+        "char:w"
+      ],
+      "name": "normal_2d3w_multiplies_operator_and_motion_counts"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "foo",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          " bar baz"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz",
+      "keys": [
+        "char:d",
+        "char:e"
+      ],
+      "name": "normal_de_deletes_to_word_end_not_trailing_space"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "o bar",
+        "cursor_col": 2,
+        "cursor_line": 0,
+        "lines": [
+          "fo baz"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 2,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz",
+      "keys": [
+        "char:d",
+        "char:e"
+      ],
+      "name": "normal_de_from_word_end_crosses_to_next_word_end"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "foo bar baz",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          " qux quux"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz qux quux",
+      "keys": [
+        "char:d",
+        "char:3",
+        "char:e"
+      ],
+      "name": "normal_d3e_repeats_delete_to_word_end"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 1,
+        "cursor_line": 0,
+        "lines": [
+          "adef"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 1,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "abcdef",
+      "keys": [
+        "char:2",
+        "char:x"
+      ],
+      "name": "normal_2x_deletes_two_chars"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 3,
+        "lines": [
+          "a",
+          "b",
+          "c",
+          "d"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc\nd",
+      "keys": [
+        "char:G"
+      ],
+      "name": "normal_G_moves_to_last_line"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 4,
+        "lines": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc\nd\ne",
+      "keys": [
+        "char:3",
+        "char:0",
+        "char:G"
+      ],
+      "name": "normal_30G_clamps_to_last_line"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 3,
+        "lines": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc\nd\ne",
+      "keys": [
+        "char:3",
+        "char:j"
+      ],
+      "name": "normal_3j_moves_down_three_lines"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 2,
+        "lines": [
+          "a",
+          "b",
+          "c",
+          "d",
+          "e"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 4,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "a\nb\nc\nd\ne",
+      "keys": [
+        "char:2",
+        "char:k"
+      ],
+      "name": "normal_2k_moves_up_two_lines"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "alpha beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 7,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha beta",
+      "keys": [
+        "char:0"
+      ],
+      "name": "normal_0_moves_to_line_start"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 3,
+        "cursor_line": 0,
+        "lines": [
+          "abc",
+          "def"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 1,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "abc\ndef",
+      "keys": [
+        "char:h"
+      ],
+      "name": "normal_h_wraps_to_previous_line_end"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "line1",
+          "line2",
+          "line3",
+          "line4"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "line1\nline2\nline3\nline4",
+      "keys": [
+        "char:j",
+        "char:j",
+        "char:g",
+        "char:g"
+      ],
+      "name": "normal_gg_after_movement"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 1,
+        "cursor_line": 0,
+        "lines": [
+          "abc"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "abc",
+      "keys": [
+        "char:a",
+        "esc"
+      ],
+      "name": "normal_a_then_esc_switches_insert_and_back"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "alpha beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 7,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha beta",
+      "keys": [
+        "char:I",
+        "esc"
+      ],
+      "name": "normal_I_then_esc_moves_to_start"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 10,
+        "cursor_line": 0,
+        "lines": [
+          "alpha beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha beta",
+      "keys": [
+        "char:A",
+        "esc"
+      ],
+      "name": "normal_A_then_esc_moves_to_end"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "abc"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "\nabc",
+      "keys": [
+        "char:x"
+      ],
+      "name": "normal_x_on_empty_line_joins_next_line"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Linewise",
+        "clipboard_text": "one",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "one",
+          "one",
+          "two"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo",
+      "keys": [
+        "char:y",
+        "char:y",
+        "char:p"
+      ],
+      "name": "normal_yy_then_p_pastes_linewise_below"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Linewise",
+        "clipboard_text": "one\ntwo",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "one",
+          "one",
+          "two",
+          "one",
+          "two",
+          "two",
+          "three"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo\nthree",
+      "keys": [
+        "char:2",
+        "char:y",
+        "char:y",
+        "char:2",
+        "char:p"
+      ],
+      "name": "normal_2yy_then_2p_repeats_linewise_register"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "\n",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "alpha",
+          "",
+          "beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 5,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha\nbeta",
+      "keys": [
+        "char:y",
+        "char:w",
+        "char:p"
+      ],
+      "name": "normal_yw_then_p_charwise_newline_split"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "bar",
+        "cursor_col": 4,
+        "cursor_line": 0,
+        "lines": [
+          "foo  baz"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 5,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz",
+      "keys": [
+        "char:d",
+        "char:i",
+        "char:w"
+      ],
+      "name": "normal_diw_deletes_inside_word"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "bar ",
+        "cursor_col": 4,
+        "cursor_line": 0,
+        "lines": [
+          "foo baz"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 4,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz",
+      "keys": [
+        "char:d",
+        "char:a",
+        "char:w"
+      ],
+      "name": "normal_daw_deletes_around_word"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "bar \nbaz ",
+        "cursor_col": 4,
+        "cursor_line": 0,
+        "lines": [
+          "foo qux"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 4,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz qux",
+      "keys": [
+        "char:d",
+        "char:2",
+        "char:a",
+        "char:w"
+      ],
+      "name": "normal_d2aw_deletes_two_around_word_objects"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "bar",
+        "cursor_col": 9,
+        "cursor_line": 0,
+        "lines": [
+          "foo babarr baz"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 5,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "foo bar baz",
+      "keys": [
+        "char:y",
+        "char:i",
+        "char:w",
+        "char:p"
+      ],
+      "name": "normal_yiw_then_p_pastes_inner_word"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "left",
+        "cursor_col": 2,
+        "cursor_line": 0,
+        "lines": [
+          "|  | right |"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 2,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "| left | right |",
+      "keys": [
+        "char:d",
+        "char:i",
+        "char:|"
+      ],
+      "name": "normal_di_pipe_deletes_between_pipes"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "| left |",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          " right |"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 2,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "| left | right |",
+      "keys": [
+        "char:d",
+        "char:a",
+        "char:|"
+      ],
+      "name": "normal_da_pipe_deletes_with_pipe_markers"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "left",
+        "cursor_col": 7,
+        "cursor_line": 0,
+        "lines": [
+          "| llefteft | right |"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 2,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "| left | right |",
+      "keys": [
+        "char:y",
+        "char:i",
+        "char:|",
+        "char:p"
+      ],
+      "name": "normal_yi_pipe_then_p_pastes_pipe_contents"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "alpha ",
+        "cursor_col": 6,
+        "cursor_line": 0,
+        "lines": [
+          "alpha beta gamma"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 6,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha beta gamma",
+      "keys": [
+        "char:y",
+        "char:0"
+      ],
+      "name": "normal_y0_yanks_to_line_start"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "beta gamma",
+        "cursor_col": 6,
+        "cursor_line": 0,
+        "lines": [
+          "alpha beta gamma"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 6,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha beta gamma",
+      "keys": [
+        "char:y",
+        "char:$"
+      ],
+      "name": "normal_y_dollar_yanks_to_line_end"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "ab",
+        "cursor_col": 4,
+        "cursor_line": 0,
+        "lines": [
+          "ababcde"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "abcde",
+      "keys": [
+        "char:v",
+        "char:l",
+        "char:y",
+        "char:p"
+      ],
+      "name": "visual_mode_yank_then_p_charwise"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "ab",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "cde"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "abcde",
+      "keys": [
+        "char:v",
+        "char:l",
+        "char:d"
+      ],
+      "name": "visual_mode_delete_selection"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Linewise",
+        "clipboard_text": "one\ntwo",
+        "cursor_col": 0,
+        "cursor_line": 2,
+        "lines": [
+          "one",
+          "two",
+          "one",
+          "two",
+          "three"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo\nthree",
+      "keys": [
+        "char:V",
+        "char:j",
+        "char:y",
+        "char:p"
+      ],
+      "name": "visual_line_mode_yank_then_p_linewise"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 1,
+        "lines": [
+          "one",
+          "two",
+          "three"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo\nthree",
+      "keys": [
+        "char:v",
+        "char:j",
+        "esc"
+      ],
+      "name": "visual_mode_enter_move_exit"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 5,
+        "lines": [
+          "one",
+          "two",
+          "three",
+          "four",
+          "five",
+          "six"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo\nthree\nfour\nfive\nsix",
+      "keys": [
+        "char:v",
+        "char:1",
+        "char:0",
+        "char:j",
+        "esc"
+      ],
+      "name": "visual_mode_counted_down_motion"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 3,
+        "lines": [
+          "one",
+          "two",
+          "three",
+          "four",
+          "five",
+          "six"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 5,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "one\ntwo\nthree\nfour\nfive\nsix",
+      "keys": [
+        "char:V",
+        "char:2",
+        "char:k",
+        "esc"
+      ],
+      "name": "visual_line_mode_counted_up_motion"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "alpha",
+          "beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha\nbeta",
+      "keys": [
+        "char:v",
+        "char:v"
+      ],
+      "name": "visual_v_toggles_back_to_normal"
+    },
+    {
+      "expected": {
+        "clipboard_mode": "Charwise",
+        "clipboard_text": "",
+        "cursor_col": 0,
+        "cursor_line": 0,
+        "lines": [
+          "alpha",
+          "beta"
+        ],
+        "mode": "Normal",
+        "selection_anchor": null,
+        "vim_state": {
+          "count_buffer": "",
+          "mode": "normal",
+          "pending": null,
+          "pending_count": null
+        }
+      },
+      "initial_cursor_col": 0,
+      "initial_cursor_line": 0,
+      "initial_state": {
+        "mode": "normal"
+      },
+      "initial_text": "alpha\nbeta",
+      "keys": [
+        "char:V",
+        "char:V"
+      ],
+      "name": "visual_line_V_toggles_back_to_normal"
+    }
+  ]
+}

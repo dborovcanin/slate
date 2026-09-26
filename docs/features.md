@@ -30,15 +30,13 @@ This document lists major Slate capabilities and how they behave.
 - macros across normal + insert flows (`q<register>` start, `q` stop, `@<register>` replay, counted replay)
 - macro pending cancel: `Esc` cancels pending `q`/`@` register input
 - macro status summary: `Q` in normal mode shows recorded registers and step counts
-- undo/redo: vim mode uses TUI-like undo/redo semantics (`u`, `Ctrl+r`); non-vim shortcut handling remains native editor UX
+- undo/redo: `u`, `Ctrl+r`
 
-## Terminal mode (optional)
+## Terminal app
 
-- full-screen terminal app with editor + note switcher
-- dedicated TUI binary: `slight`
-- `slate --terminal` selector remains supported
-- supports opening and editing markdown files
-- command bar and module behavior aligned with GUI
+- full-screen terminal app with editor + note switcher: `slate`
+- supports opening and editing markdown files (`slate path/to/file.md`)
+- pipe append: `cmd | slate append [--id <note-id>]`
 - clipboard watch and command workflows
 - wiki-link navigation with `Ctrl+]` and `gd`
 - wiki-link autocomplete for note ids and headings
@@ -120,8 +118,7 @@ Details: [Export Reference](./export.md).
   - `[[shortid#heading|title]]`
 - short id is an 8-character alphanumeric note-id prefix
 - autocomplete suggestions for notes and headings
-- GUI navigation via Ctrl/Cmd+click and vim `gd`
-- TUI navigation via `Ctrl+]` and `gd`
+- navigation via `Ctrl+]` and vim `gd`
 - broken-link rendering with automatic re-resolution
 
 ## IMAP sync
@@ -129,14 +126,5 @@ Details: [Export Reference](./export.md).
 - one-off sync command and optional background polling
 - incremental UID checkpointing
 - daily special note rotation for imported mail
-
-## Frontend parity model
-
-Slate targets semantic parity between GUI and TUI for shared-core-owned behavior.
-
-- command parsing/planning: shared
-- vim stepping: shared
-- text semantics: shared
-- rendering and host side effects: frontend/runtime specific
 
 Planned features: see `roadmap/features.md`.

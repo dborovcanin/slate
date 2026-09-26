@@ -81,12 +81,6 @@ pub struct NoteEvaluationDiagnostic {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NoteEvaluationResult {
-    /// Document line index that `line_results[0]` / `table_cell_results[0]`
-    /// correspond to. Zero — and the vectors document-length — unless a caller
-    /// narrowed the result to an evaluated window (see
-    /// `narrow_to_eval_range` on the Tauri command boundary).
-    #[serde(default)]
-    pub result_from: usize,
     pub line_results: Vec<Option<String>>,
     pub variables: Vec<VariableIndexEntry>,
     pub diagnostics: Option<Vec<NoteEvaluationDiagnostic>>,
@@ -891,7 +885,6 @@ impl CalcEngine {
         };
 
         NoteEvaluationResult {
-            result_from: 0,
             line_results,
             variables,
             diagnostics: if diagnostics.is_empty() {

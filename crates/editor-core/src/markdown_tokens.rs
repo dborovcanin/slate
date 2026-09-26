@@ -2,7 +2,6 @@ use rustc_hash::FxHashSet;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MarkdownLineInfo {
     pub heading_level: Option<usize>,
     pub heading_marker_end: Option<usize>,
@@ -38,30 +37,6 @@ pub enum InlineTokenType {
 }
 
 impl InlineTokenType {
-    /// Stable numeric id for the flat wasm encoding (see `wasm.rs`
-    /// `markdown_analyze_result_to_flat_js`). Order MUST match the
-    /// `INLINE_TOKEN_TYPE_BY_ID` table on the TypeScript side.
-    pub fn id(self) -> u8 {
-        match self {
-            InlineTokenType::Strong => 0,
-            InlineTokenType::Emphasis => 1,
-            InlineTokenType::Strikethrough => 2,
-            InlineTokenType::Code => 3,
-            InlineTokenType::CodeMarker => 4,
-            InlineTokenType::ImageAlt => 5,
-            InlineTokenType::ImageSrc => 6,
-            InlineTokenType::ImageMarker => 7,
-            InlineTokenType::LinkText => 8,
-            InlineTokenType::LinkUrl => 9,
-            InlineTokenType::LinkMarker => 10,
-            InlineTokenType::WikiLinkMarker => 11,
-            InlineTokenType::WikiLinkId => 12,
-            InlineTokenType::WikiLinkSep => 13,
-            InlineTokenType::WikiLinkTitle => 14,
-            InlineTokenType::WikiLinkAnchor => 15,
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             InlineTokenType::Strong => "strong",
@@ -85,7 +60,6 @@ impl InlineTokenType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct InlineToken {
     pub from: usize,
     pub to: usize,
@@ -100,7 +74,6 @@ pub struct InlineMarkerComponentRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct WikiLinkMatch {
     pub from: usize,
     pub to: usize,
@@ -110,7 +83,6 @@ pub struct WikiLinkMatch {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MarkdownImageMatch {
     pub from: usize,
     pub to: usize,
@@ -132,19 +104,6 @@ pub enum CodeTokenType {
 }
 
 impl CodeTokenType {
-    /// Stable numeric id for the flat wasm encoding. Order MUST match the
-    /// `CODE_TOKEN_TYPE_BY_ID` table on the TypeScript side.
-    pub fn id(self) -> u8 {
-        match self {
-            CodeTokenType::Keyword => 0,
-            CodeTokenType::String => 1,
-            CodeTokenType::Number => 2,
-            CodeTokenType::Comment => 3,
-            CodeTokenType::Function => 4,
-            CodeTokenType::Type => 5,
-        }
-    }
-
     pub fn as_str(self) -> &'static str {
         match self {
             CodeTokenType::Keyword => "keyword",
@@ -158,7 +117,6 @@ impl CodeTokenType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CodeToken {
     pub from: usize,
     pub to: usize,
@@ -167,7 +125,6 @@ pub struct CodeToken {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct FenceState {
     pub in_code_block: bool,
     pub code_fence_lang: Option<String>,
@@ -183,7 +140,6 @@ impl Default for FenceState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MarkdownAnalyzedLine {
     pub info: MarkdownLineInfo,
     pub in_code_block: bool,
@@ -193,7 +149,6 @@ pub struct MarkdownAnalyzedLine {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct MarkdownAnalyzeResult {
     pub lines: Vec<MarkdownAnalyzedLine>,
     pub final_in_code_block: bool,
@@ -1529,48 +1484,6 @@ pub fn analyze_lines(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn token_type_ids_are_contiguous_and_match_as_str_order() {
-        // The flat wasm encoding (wasm.rs) and the TS decoder index token types
-        // by `id()`. Lock the mapping so reordering a variant can't silently
-        // shift decoded token types.
-        let inline = [
-            (InlineTokenType::Strong, 0u8, "strong"),
-            (InlineTokenType::Emphasis, 1, "emphasis"),
-            (InlineTokenType::Strikethrough, 2, "strikethrough"),
-            (InlineTokenType::Code, 3, "code"),
-            (InlineTokenType::CodeMarker, 4, "code-marker"),
-            (InlineTokenType::ImageAlt, 5, "image-alt"),
-            (InlineTokenType::ImageSrc, 6, "image-src"),
-            (InlineTokenType::ImageMarker, 7, "image-marker"),
-            (InlineTokenType::LinkText, 8, "link-text"),
-            (InlineTokenType::LinkUrl, 9, "link-url"),
-            (InlineTokenType::LinkMarker, 10, "link-marker"),
-            (InlineTokenType::WikiLinkMarker, 11, "wiki-link-marker"),
-            (InlineTokenType::WikiLinkId, 12, "wiki-link-id"),
-            (InlineTokenType::WikiLinkSep, 13, "wiki-link-sep"),
-            (InlineTokenType::WikiLinkTitle, 14, "wiki-link-title"),
-            (InlineTokenType::WikiLinkAnchor, 15, "wiki-link-anchor"),
-        ];
-        for (variant, id, label) in inline {
-            assert_eq!(variant.id(), id, "inline id for {label}");
-            assert_eq!(variant.as_str(), label);
-        }
-
-        let code = [
-            (CodeTokenType::Keyword, 0u8, "keyword"),
-            (CodeTokenType::String, 1, "string"),
-            (CodeTokenType::Number, 2, "number"),
-            (CodeTokenType::Comment, 3, "comment"),
-            (CodeTokenType::Function, 4, "function"),
-            (CodeTokenType::Type, 5, "type"),
-        ];
-        for (variant, id, label) in code {
-            assert_eq!(variant.id(), id, "code id for {label}");
-            assert_eq!(variant.as_str(), label);
-        }
-    }
 
     #[test]
     fn classify_line_detects_markers() {

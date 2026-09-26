@@ -1,6 +1,6 @@
 # Variables Specification (v1)
 
-This document defines the shared variable behavior used by the Tauri UI and Rust core.
+This document defines variable behavior implemented in the Rust core.
 
 ## Syntax
 
@@ -70,7 +70,7 @@ len + 2
 
 - Unresolved variable references produce no ghost output.
 - Cyclic dependencies produce no ghost output.
-- Diagnostics are available from Rust command output for tests/debugging but are not shown in the editor UI.
+- Diagnostics are available from Rust command output for tests/debugging but are not shown in the editor.
 - Table reference failures also emit structured diagnostics with `kind=table-ref-*` alongside inline `!ERROR#...` cell values.
 
 ## Autocomplete

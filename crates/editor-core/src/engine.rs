@@ -178,36 +178,6 @@ impl EditorEngine {
         command_catalog::parse_note_security_command(raw_input)
     }
 
-    pub fn classify_command_dispatch(
-        mode: CommandMode,
-        raw_input: &str,
-    ) -> Option<CommandDispatchKind> {
-        if let Some(host) = Self::plan_host_command(mode, raw_input) {
-            return Some(match host {
-                HostCommandPlan::Date => CommandDispatchKind::HostDate,
-                HostCommandPlan::Remind => CommandDispatchKind::HostRemind,
-                HostCommandPlan::RemindToggle => CommandDispatchKind::HostRemindToggle,
-                HostCommandPlan::Write { .. } => CommandDispatchKind::HostWrite,
-                HostCommandPlan::Export { .. } => CommandDispatchKind::HostExport,
-                HostCommandPlan::BackupExport { .. } => CommandDispatchKind::HostBackupExport,
-                HostCommandPlan::BackupLoad { .. } => CommandDispatchKind::HostBackupLoad,
-                HostCommandPlan::WebSearch { .. } => CommandDispatchKind::HostWebSearch,
-                HostCommandPlan::Module { .. } => CommandDispatchKind::HostModule,
-                HostCommandPlan::Collection { .. } => CommandDispatchKind::HostCollection,
-                HostCommandPlan::Fold { .. } => CommandDispatchKind::HostFold,
-                HostCommandPlan::ClipWatch { .. } => CommandDispatchKind::HostClipWatch,
-                HostCommandPlan::NoteSecurity { .. } => CommandDispatchKind::HostNoteSecurity,
-                HostCommandPlan::Quit { .. } => CommandDispatchKind::Quit,
-            });
-        }
-
-        let command = command_catalog::resolve_command(mode, raw_input)?;
-        Some(match command.id {
-            CommandId::Quit => CommandDispatchKind::Quit,
-            _ => CommandDispatchKind::Core,
-        })
-    }
-
     pub fn plan_host_command(mode: CommandMode, raw_input: &str) -> Option<HostCommandPlan> {
         if let Some(parsed) = command_catalog::parse_web_search_command(raw_input) {
             return Some(HostCommandPlan::WebSearch {
@@ -498,75 +468,6 @@ mod tests {
         assert_eq!(
             plan.message,
             "modules math=off table=on variables=off style=on cross_note=on"
-        );
-    }
-
-    #[test]
-    fn command_dispatch_classifies_host_and_core_commands() {
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "sum row"),
-            Some(CommandDispatchKind::Core)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "remind"),
-            Some(CommandDispatchKind::HostRemind)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "remind toggle"),
-            Some(CommandDispatchKind::HostRemindToggle)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(
-                CommandMode::Editor,
-                "export txt /tmp/note.txt"
-            ),
-            Some(CommandDispatchKind::HostExport)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(
-                CommandMode::Editor,
-                "backup export /tmp/slate.zip"
-            ),
-            Some(CommandDispatchKind::HostBackupExport)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(
-                CommandMode::Editor,
-                "backup load /tmp/slate.zip"
-            ),
-            Some(CommandDispatchKind::HostBackupLoad)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "module math on"),
-            Some(CommandDispatchKind::HostModule)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "collection choose Inbox",),
-            Some(CommandDispatchKind::HostCollection)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "fold"),
-            Some(CommandDispatchKind::HostFold)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "clip-watch on"),
-            Some(CommandDispatchKind::HostClipWatch)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Editor, "note lock pass"),
-            Some(CommandDispatchKind::HostNoteSecurity)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Vim, "q"),
-            Some(CommandDispatchKind::Quit)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Vim, "w"),
-            Some(CommandDispatchKind::HostWrite)
-        );
-        assert_eq!(
-            EditorEngine::classify_command_dispatch(CommandMode::Vim, "wq"),
-            Some(CommandDispatchKind::HostWrite)
         );
     }
 

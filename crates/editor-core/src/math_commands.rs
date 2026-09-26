@@ -448,9 +448,7 @@ mod tests {
         );
     }
 
-    // The cases below moved here from the UI's command tests when math command
-    // execution stopped running in wasm. They are the behavioral contract for
-    // `:sum` / `:avg`, and both front ends now reach this code path.
+    // Behavioral contract for `:sum` / `:avg`.
     #[test]
     fn sum_paragraph_inserts_total_at_the_cursor() {
         let doc = snapshot("10\n20", 0, 0);

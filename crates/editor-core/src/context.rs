@@ -94,29 +94,6 @@ impl ResolvedContext<'static> {
 }
 
 impl<'a> ResolvedContext<'a> {
-    /// Construct from borrowed text with owned selection/range metadata.
-    /// Used by wasm hot paths to avoid cloning full document text.
-    pub fn from_parts(
-        text: &'a str,
-        selection: crate::types::SelectionSnapshot,
-        changed_range: Option<TextRange>,
-    ) -> Self {
-        let parsed = parse_lines(text);
-        Self {
-            text: Cow::Borrowed(text),
-            selection,
-            changed_range,
-            parsed,
-        }
-    }
-
-    pub fn to_snapshot(&self) -> EditorContextSnapshot {
-        EditorContextSnapshot {
-            text: self.text().to_string(),
-            selection: self.selection,
-            changed_range: self.changed_range,
-        }
-    }
 
     pub fn text(&self) -> &str {
         self.text.as_ref()
@@ -304,11 +281,6 @@ impl<'a> ResolvedContext<'a> {
             to,
             text: String::from_utf8_lossy(&bytes[from..to]).into_owned(),
         })
-    }
-
-    pub fn position_for_line_column(&self, line_number: usize, column: usize) -> usize {
-        let line = self.line(line_number);
-        line.from + column.min(line.text.len())
     }
 
     fn line_from_index(&self, idx: usize) -> LineContext {

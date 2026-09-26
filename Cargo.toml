@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["src-tauri", "crates/editor-core", "crates/app-core"]
+members = ["crates/tui", "crates/editor-core", "crates/app-core"]
 
 # Thin LTO + single codegen unit pays a small build-time cost for noticeably
 # smaller binaries (native + wasm) and faster hot loops in editor-core and

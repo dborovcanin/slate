@@ -1,0 +1,112 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "line_results": [
+          null,
+          null,
+          null,
+          "30"
+        ],
+        "table_cell_results": [
+          [],
+          [],
+          [],
+          [
+            {
+              "cell_index": 2,
+              "error_kind": null,
+              "value": "30"
+            }
+          ]
+        ]
+      },
+      "initial_text": "| item | value | total |\n| --- | --- | --- |\n| a | 10 | |\n| b | 20 | :=(1,2) + (2,2) |",
+      "modules": {
+        "math": true,
+        "table": true,
+        "variables": true
+      },
+      "name": "table-coordinate-ref-full-modules"
+    },
+    {
+      "expected": {
+        "line_results": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "table_cell_results": [
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      },
+      "initial_text": "var := 0.5\n| value |\n| --- |\n| 10 |\n| :=sum_col() * var |",
+      "modules": {
+        "math": true,
+        "table": false,
+        "variables": true
+      },
+      "name": "table-formula-ignored-when-table-module-off"
+    },
+    {
+      "expected": {
+        "line_results": [
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "table_cell_results": [
+          [],
+          [],
+          [],
+          [],
+          []
+        ]
+      },
+      "initial_text": "x := 10\nx + 2\n| value |\n| --- |\n| :=(1,1) + 1 |",
+      "modules": {
+        "math": false,
+        "table": true,
+        "variables": true
+      },
+      "name": "all-calc-off-when-math-module-off"
+    },
+    {
+      "expected": {
+        "line_results": [
+          null,
+          null,
+          null,
+          "!ERROR#non_numeric"
+        ],
+        "table_cell_results": [
+          [],
+          [],
+          [],
+          [
+            {
+              "cell_index": 2,
+              "error_kind": "non_numeric",
+              "value": "!ERROR#non_numeric"
+            }
+          ]
+        ]
+      },
+      "initial_text": "| item | value | total |\n| --- | --- | --- |\n| abc | 10 | |\n| b | 20 | :=(1,1) |",
+      "modules": {
+        "math": true,
+        "table": true,
+        "variables": false
+      },
+      "name": "table-ref-non-numeric-error-without-variables"
+    }
+  ]
+}

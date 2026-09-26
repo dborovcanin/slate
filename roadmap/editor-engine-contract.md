@@ -10,10 +10,9 @@ This document defines the canonical shared-core contract for editor semantics.
   - note-security command parsing
   - vim key stepping (`VimState` + `VimContext` -> `VimStep`)
   - module-command planning (`CommandId` + current module state -> deterministic plan)
-- `crates/editor-core/src/wasm.rs` exposes batched markdown transaction execution for UI hot-path text rules.
 - `crates/editor-core/src/folding.rs` owns fold-range computation plus incremental line-edit mapping/rebuild decisions.
-- Frontends (Tauri UI and TUI) must call this contract for semantic decisions.
-- Frontends remain responsible for rendering, UI state, persistence side effects, and I/O.
+- The terminal app must call this contract for semantic decisions.
+- The terminal app remains responsible for rendering, UI state, persistence side effects, and I/O.
 
 ## Current input/output contracts
 
@@ -26,22 +25,22 @@ This document defines the canonical shared-core contract for editor semantics.
 - Module command contract:
   - input: `CommandId`, `ModuleState`
   - output: `ModuleCommandPlan` (`changed`, `next`, `message`)
-- Markdown transaction contract:
-  - input: `EditorContextSnapshot` + ordered markdown transaction requests
-  - output: first matching `{ kind, operation }` edit operation
+- Markdown rule contract:
+  - input: `ResolvedContext` + rule options
+  - output: optional `EditOperation`
 - Fold incremental contract:
   - input: existing fold ranges + line-edit deltas
   - output: mapped fold ranges plus rebuild-needed decision
 - Calc scope/trigger contract:
   - input: changed-line slices + previous-change metadata + eval context flags + calc feature mask (`math_enabled`, `table_enabled`, `variables_enabled`)
-  - output: deterministic eval-scope decision (`can_use_partial`, dependency flags) and shared trigger decision
+  - output: deterministic eval-window decision (`eval_from`, `eval_to`, dependency flags, `can_use_partial`)
 - Calc trailer-refresh eligibility contract:
   - input: previous/current line identity hash, previous result presence, selection guard
   - output: deterministic eligibility decision for commit-style trailer refresh
 
 ## Determinism requirements
 
-- For identical inputs, output must be identical across GUI and TUI.
+- For identical inputs, output must be identical.
 - Contract methods must avoid side effects.
 - Runtime side effects (db writes, clipboard, notifications) happen outside this contract.
 
@@ -53,10 +52,8 @@ Behavior is frozen by fixture-backed tests in `crates/editor-core/tests/golden_r
 - `golden/module_command_replay.json`
 - `golden/command_replay.json`
 
-Cross-frontend parity is enforced in `src-tauri/src/terminal/app.rs` tests by replaying:
+Terminal behavior is frozen by replay tests in `crates/tui/src/terminal/app/tests/replay.rs`, which drive the terminal app with key sequences and compare against expected snapshots in:
 
-- `src-tauri/src/terminal/tests/golden/vim_parity_replay.json`
-
-against both adapter paths:
-- TUI runtime adapter (`TerminalVimAdapter` + terminal action application)
-- GUI adapter simulation (shared-core step + UI action application model)
+- `crates/tui/src/terminal/tests/golden/vim_replay.json`
+- `crates/tui/src/terminal/tests/golden/markdown_replay.json`
+- `crates/tui/src/terminal/tests/golden/calc_replay.json`

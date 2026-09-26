@@ -73,27 +73,12 @@ pub struct EditOperation {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RuleTrigger {
-    DocChange,
-    KeyEnter,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum CommandMode {
     Vim,
     Editor,
 }
 
 impl CommandMode {
-    /// Parse the mode string both front ends send across their host boundary.
-    pub fn from_wire_str(mode: &str) -> Option<Self> {
-        match mode.trim().to_ascii_lowercase().as_str() {
-            "vim" => Some(Self::Vim),
-            "editor" => Some(Self::Editor),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,7 +88,6 @@ pub struct CommandSuggestion {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct CommandExecutionResult {
     pub message: String,
     pub operations: Vec<EditOperation>,

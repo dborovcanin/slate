@@ -3,7 +3,7 @@
 ## Scope
 
 This file is an operational/measurement reference.
-Execution backlog ownership for large-note performance lives in `roadmap/plan.md` (Architecture and Performance Review Backlog).
+Execution backlog ownership for large-note performance lives in `roadmap/plan.md` (Performance Backlog).
 
 
 This repository stores simple startup performance baselines in:
@@ -13,33 +13,20 @@ This repository stores simple startup performance baselines in:
 ## Record a new baseline
 
 ```sh
-npm run perf:startup:record
+node scripts/startup-record.mjs
 ```
 
-This runs the native probe binary (`note-startup`) for both `gui` and `tui` modes and writes median timings for each startup mark.
+This runs the native probe binary (`note-startup tui`) and writes median timings for each startup mark.
 
 ## Check for regressions
 
 ```sh
-npm run perf:startup:check
+node scripts/startup-check.mjs
 ```
 
 The check fails when a measured startup mark regresses more than the configured threshold (`threshold_pct`, default 15%).
 
-## UI startup marks
-
-GUI WebView startup marks are emitted in browser console when enabled.
-
-Enable with either:
-
-- query param `?startupMetrics=1`
-- local storage key `note.startup.metrics=1`
-
-When enabled, the app logs one line starting with:
-
-- `NOTE_UI_STARTUP_METRICS`
-
-## UI Runtime Tracing
+## Runtime Tracing
 
 Use the in-editor profiler for interaction latency and payload metrics.
 
@@ -48,7 +35,4 @@ Use the in-editor profiler for interaction latency and payload metrics.
 - Dump top buckets: `:perf dump`
 - Disable: `:perf off`
 
-Detailed naming/reason/metric conventions live in:
-
-- `docs/perf-tracing.md`
-- `docs/perf-multirow-table.md`
+Table scenario conventions live in `roadmap/perf-multirow-table.md`.
