@@ -318,10 +318,34 @@ pub(super) fn table_display_col_widths(block_lines: &[String]) -> Vec<usize> {
 /// The third element holds `(left_pipe_char, right_pipe_char)` in the output
 /// string for the cursor cell; callers use it to redraw `focused_pipe_ranges`
 /// from output positions rather than source positions.
+///
+/// Whitespace typed between the cursor cell's content and the cursor (or
+/// after the closing pipe) is kept, so the caret sits where the next typed
+/// character lands instead of snapping back onto content or a pipe.
 pub(super) fn reformat_table_row_for_display(
     line: &str,
     col_widths: &[usize],
     cursor_col: Option<usize>,
+) -> (String, Option<usize>, Option<(usize, usize)>) {
+    reformat_table_row_impl(line, col_widths, cursor_col, cursor_col.is_some())
+}
+
+/// Raw-marker reflow of the cursor row (markers kept for `render_line`
+/// styling). Keeps the same cursor-side whitespace as the collapsed reflow so
+/// both displays stay column-aligned.
+pub(super) fn reformat_table_cursor_row_raw(
+    line: &str,
+    col_widths: &[usize],
+    cursor_col: usize,
+) -> String {
+    reformat_table_row_impl(line, col_widths, Some(cursor_col), false).0
+}
+
+fn reformat_table_row_impl(
+    line: &str,
+    col_widths: &[usize],
+    cursor_col: Option<usize>,
+    collapse: bool,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
     use crate::editor_core::table::{
         is_delimiter_row, is_table_continuation_line, normalize_delimiter_cell_for_width,
@@ -390,8 +414,17 @@ pub(super) fn reformat_table_row_for_display(
             out.push_str(&dashes);
         } else {
             let cell_content = cells.get(ci).map(|s| s.as_str()).unwrap_or("");
+            // Spaces typed after the cell's content, up to the cursor.
+            let cursor_trailing_ws = match (cursor_cell_idx == Some(ci), cursor_byte_in_trimmed) {
+                (true, Some(cb)) if !cell_content.is_empty() => {
+                    let raw = &trimmed[left_pipe_byte + 1..right_pipe_byte];
+                    let content_end_byte = left_pipe_byte + 1 + raw.trim_end().len();
+                    cb.saturating_sub(content_end_byte)
+                }
+                _ => 0,
+            };
 
-            if cursor_cell_idx == Some(ci) {
+            if collapse && cursor_cell_idx == Some(ci) {
                 // Cursor cell: collapse with cursor-aware marker revealing.
                 let cb = cursor_byte_in_trimmed.unwrap_or(left_pipe_byte + 1);
                 // Byte offset of the trimmed cell content start within `trimmed`.
@@ -406,6 +439,13 @@ pub(super) fn reformat_table_row_for_display(
                     mapped_cursor = Some(out_chars);
                     let (c, _) = collapse_inline_markers(cell_content, None);
                     let w = c.chars().count();
+                    (c, w)
+                } else if cursor_trailing_ws > 0 {
+                    let rel_char = cell_content.chars().count();
+                    let (mut c, _) = collapse_inline_markers(cell_content, Some(rel_char));
+                    c.extend(std::iter::repeat_n(' ', cursor_trailing_ws));
+                    let w = c.chars().count();
+                    mapped_cursor = Some(out_chars + w);
                     (c, w)
                 } else {
                     let rel_byte = cb - content_start_byte;
@@ -427,14 +467,18 @@ pub(super) fn reformat_table_row_for_display(
                     out.push(' ');
                     out_chars += 1;
                 }
-            } else if cursor_col.is_none() {
+            } else if !collapse {
                 // Non-cursor line: keep raw cell content so render_line_full
                 // can apply inline styling (code, bold, etc.) after hiding
                 // markers. Pad based on visible width so columns align.
-                let visible_w = cell_visible_width(cell_content);
+                let visible_w = cell_visible_width(cell_content) + cursor_trailing_ws;
                 let raw_chars = cell_content.chars().count();
                 out.push_str(cell_content);
                 out_chars += raw_chars;
+                for _ in 0..cursor_trailing_ws {
+                    out.push(' ');
+                    out_chars += 1;
+                }
                 let pad = col_w.saturating_sub(visible_w);
                 for _ in 0..pad {
                     out.push(' ');
@@ -462,6 +506,17 @@ pub(super) fn reformat_table_row_for_display(
     // Trailing pipe.
     out_pipe_positions.push(out_chars);
     out.push('|');
+    out_chars += 1;
+
+    // Cursor past the closing pipe (starting the next cell by hand): keep the
+    // typed whitespace so the caret sits after the pipe, not on it.
+    if let (Some(cb), Some(&last_pipe)) = (cursor_byte_in_trimmed, pipes.last()) {
+        if cb > last_pipe {
+            let after = cb - last_pipe - 1;
+            out.extend(std::iter::repeat_n(' ', after));
+            mapped_cursor = Some(out_chars + after);
+        }
+    }
 
     // If cursor wasn't mapped (cursor is at a pipe or leading space), find the
     // nearest pipe position in the output.

@@ -1762,3 +1762,67 @@ fn typing_a_plain_expression_evaluates_it_on_idle() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn closing_a_hand_typed_cell_draws_cursor_after_the_pipe() {
+    let (db, mut app, path) = app_with_note("");
+    app.mode = UiMode::Editor;
+    type_text(&mut app, &db, "| sasa |");
+    let (_, cursor) = render_screen(&mut app);
+    assert_eq!(
+        usize::from(cursor.col),
+        app.gutter_width() + "| sasa |".len(),
+        "caret sits at the start of the next cell, not on the closing pipe"
+    );
+    type_text(&mut app, &db, " ");
+    let (_, cursor) = render_screen(&mut app);
+    assert_eq!(
+        usize::from(cursor.col),
+        app.gutter_width() + "| sasa | ".len()
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn typed_trailing_spaces_in_table_cell_render_before_next_word() {
+    let (db, mut app, path) = app_with_note("| aa  | bb  |\n| --- | --- |\n| x   | y   |");
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 3;
+    let base = app.gutter_width() + "| x".len();
+    for typed in 1..=2 {
+        app.handle_editor_key(&db, Key::Char(' ')).expect("space");
+        let (_, cursor) = render_screen(&mut app);
+        assert_eq!(usize::from(cursor.col), base + typed, "caret advances per space");
+    }
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn enter_in_a_middle_table_cell_opens_a_row_below_without_splitting() {
+    let (db, mut app, path) = app_with_note(
+        "| sasa | sasa | sasas |\n| ---- | ---- | ----- |\n| sas  |      |       |",
+    );
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 5;
+    app.handle_editor_key(&db, Key::Enter).expect("enter");
+    assert_eq!(
+        app.editor.lines,
+        vec![
+            "| sasa | sasa | sasas |",
+            "| ---- | ---- | ----- |",
+            "| sas  |      |       |",
+            "|      |      |       |",
+        ]
+    );
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (3, 2));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

@@ -2,7 +2,8 @@ use super::{
     contrast_fg_for_bg, cursor_render_char_col, display_cell_pipe_positions,
     display_cols_prefix_and_total, draw_framed_surface, draw_row_at_styled,
     find_table_formula_segments, format_formula_display_value, formula_marker_token,
-    is_markdown_table_line, line_display_cols, min, reformat_table_row_for_display,
+    is_markdown_table_line, line_display_cols, min, reformat_table_cursor_row_raw,
+    reformat_table_row_for_display,
     table_block_bounds_for_line, table_cell_info_at_char, table_cursor_cell_index,
     table_display_col_widths, viewport_col_for_display_col, TextStyle, DatePickerAction,
     SelectionStatsKey, TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
@@ -2003,16 +2004,16 @@ impl TerminalApp {
                     // Cursor-column positioning uses a separate
                     // cursor-aware collapsed reflow (markers removed),
                     // matching what `render_line` actually displays.
-                    let cursor = Some(line_cursor_col.unwrap_or(self.editor.cursor_col));
-                    let (raw_display, _, _) = reformat_table_row_for_display(
+                    let cursor = line_cursor_col.unwrap_or(self.editor.cursor_col);
+                    let raw_display = reformat_table_cursor_row_raw(
                         rendered_line.as_ref(),
                         &col_widths,
-                        None,
+                        cursor,
                     );
                     let (collapsed_display, mapped_col, _) = reformat_table_row_for_display(
                         rendered_line.as_ref(),
                         &col_widths,
-                        cursor,
+                        Some(cursor),
                     );
                     // Focused-cell pipe highlight in RAW display coords.
                     let cell_idx = table_cursor_cell_index(

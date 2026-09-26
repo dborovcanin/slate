@@ -945,7 +945,7 @@ pub fn run_enter_rules(
 
     // Try table continuation first when table handling is enabled.
     if options.table_enabled {
-        if let Some(op) = table_continuation_rule(&line, &selection) {
+        if let Some(op) = table_continuation_rule(ctx, &line, &selection) {
             return Some(op);
         }
     }
@@ -1003,6 +1003,7 @@ fn table_header_line_number_with_cache(
 }
 
 fn table_continuation_rule(
+    ctx: &ResolvedContext<'_>,
     line: &crate::types::LineContext,
     selection: &crate::types::SelectionContext,
 ) -> Option<EditOperation> {
@@ -1029,36 +1030,32 @@ fn table_continuation_rule(
         ));
     }
 
-    if selection.head != line.to {
-        let pipes = table::table_pipe_positions(&line.text);
-        if pipes.len() < 2 {
-            return None;
-        }
-        let head_col = selection
-            .head
-            .saturating_sub(line.from)
-            .min(line.text.len());
-        let Some(current_cell) = table::table_cell_index_for_column(&pipes, head_col) else {
-            return None;
-        };
-        let last_cell = pipes.len().saturating_sub(2);
-        if current_cell != last_cell {
-            return None;
-        }
-        let last_anchor = table::table_cell_navigation_anchor(&line.text, &pipes, last_cell);
-        if head_col < last_anchor {
-            return None;
-        }
+    // Enter anywhere inside the row opens a new row below; it never splits
+    // the row. Only a cursor at or before the opening pipe falls through to a
+    // plain newline (inserting a line above the row).
+    let pipes = table::table_pipe_positions(&line.text);
+    let head_col = selection.head.saturating_sub(line.from);
+    if pipes.first().is_none_or(|&first| head_col <= first) {
+        return None;
+    }
+
+    // The new row goes after the logical row, past its `|>` continuations.
+    let mut insert_at = line.to;
+    let mut number = line.number;
+    while number < ctx.line_count() && table::is_table_continuation_line(ctx.line_text(number + 1))
+    {
+        number += 1;
+        insert_at = ctx.line(number).to;
     }
 
     let empty_row = table::build_empty_table_row_like(&line.text)?;
     let insert = format!("\n{}", empty_row);
     let empty_pipes = table::table_pipe_positions(&empty_row);
     let first_cell_anchor = table::table_cell_navigation_anchor(&empty_row, &empty_pipes, 0);
-    let anchor = line.to + 1 + first_cell_anchor; // \n + in-row anchor
+    let anchor = insert_at + 1 + first_cell_anchor; // \n + in-row anchor
     Some(replace_range(
-        line.to,
-        line.to,
+        insert_at,
+        insert_at,
         insert,
         Some(OperationSelection { anchor, head: None }),
     ))
@@ -2458,6 +2455,35 @@ mod tests {
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
         assert_eq!(apply_operation(doc.text(), &op), "| a   | bbbb |\n|  |  |");
         assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
+    }
+
+    #[test]
+    fn run_enter_rules_inserts_table_row_from_middle_cell_without_splitting() {
+        let text = "| a   | bbbb | c |";
+        let head = text.find("bb").unwrap() + 1;
+        let doc = snapshot(text, head, head);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(apply_operation(doc.text(), &op), "| a   | bbbb | c |\n|  |  |  |");
+        assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
+    }
+
+    #[test]
+    fn run_enter_rules_inserts_table_row_after_continuation_rows() {
+        let text = "| a | b |\n|> a2 |  |\n| c | d |";
+        let head = 3;
+        let doc = snapshot(text, head, head);
+        let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(doc.text(), &op),
+            "| a | b |\n|> a2 |  |\n|  |  |\n| c | d |"
+        );
+    }
+
+    #[test]
+    fn run_enter_rules_before_opening_pipe_is_plain_newline() {
+        let text = "| a | b |";
+        let doc = snapshot(text, 0, 0);
+        assert!(run_enter_rules(&doc, TextRuleOptions::default()).is_none());
     }
 
     #[test]
