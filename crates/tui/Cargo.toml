@@ -1,0 +1,38 @@
+[package]
+name = "slate"
+version = "0.3.0"
+edition = "2021"
+
+[lib]
+name = "slate_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "slate"
+path = "src/main.rs"
+
+[dependencies]
+app-core = { path = "../app-core" }
+editor-core = { path = "../editor-core" }
+ulid = "1"
+regex = "1"
+libc = "0.2"
+arboard = "3.6.1"
+base64 = "0.22"
+flate2 = "1"
+image = { version = "0.25", default-features = true }
+time = { version = "0.3", features = ["formatting"] }
+rustls = { version = "0.23", optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+mailparse = { version = "0.15", optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+unicode-width = "0.2"
+url = "2"
+ttf-parser = "0.25"
+rustc-hash = "2"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }
+
+[features]
+default = ["imap"]
+imap = ["dep:rustls", "dep:rustls-native-certs", "dep:mailparse"]

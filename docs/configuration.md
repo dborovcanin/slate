@@ -13,19 +13,14 @@ The file is auto-generated on first run.
 [theme]
 color_scheme = "gruvbox-light"
 accent = "auto"
-background = "plain"
-font = "jetbrains-mono"
-font_size = 14
-animation_mode = "fast"
-animation_style = "pop-up"
 
 [editor]
 markdown_autoformat = true
 checklist_auto_reorder = true
 autosave = true
 format_on_save = false
-terminal_mode = false
 vim_mode = false
+wrap = true
 date_format = "%Y-%m-%d"
 date_time_format = "%Y-%m-%d %H:%M"
 variable_autocomplete_min_chars = 3
@@ -64,11 +59,6 @@ max_body_bytes = 524288
 
 - `color_scheme`
 - `accent`
-- `background`
-- `font`
-- `font_size`
-- `animation_mode`
-- `animation_style`
 
 ### color_scheme values
 
@@ -98,39 +88,6 @@ max_body_bytes = 524288
 - `slate`
 - custom hex like `#4f7bd9`
 
-### background values
-
-- `plain`
-- `lines`
-- `squares`
-- `dots`
-- `diagonal`
-
-### font values
-
-- `jetbrains-mono`
-- `fira-code`
-- `cascadia-code`
-- `iosevka`
-- `hack`
-- `source-code-pro`
-
-`font_size` range: `11` to `28`.
-
-### animation_mode values
-
-- `fast`
-- `fade`
-- `smooth`
-- `spring`
-- compatibility mode: `none` (disables animations)
-
-### animation_style values
-
-- `slide-up`
-- `pop-up`
-- `none`
-
 ## Editor settings
 
 `[editor]` keys:
@@ -139,19 +96,19 @@ max_body_bytes = 524288
 - `checklist_auto_reorder`
 - `autosave`
 - `format_on_save`
-- `terminal_mode`
 - `vim_mode`
+- `wrap`
 - `date_format`
 - `date_time_format`
 - `variable_autocomplete_min_chars`
 
 Behavior notes:
 
-- `autosave = true` enables implicit save flows in GUI and TUI.
+- `autosave = true` enables implicit save flows (idle flush + save on exit/switch).
 - with `autosave = false`, explicit writes persist body changes.
 - `format_on_save = true` runs format before save.
-- `terminal_mode = true` makes `slate` default to terminal runtime when possible.
-- `vim_mode = true` enables GUI vim key mappings.
+- `vim_mode = true` starts the editor in vim normal mode.
+- `wrap = true` (default) soft-wraps long lines at word boundaries. Tables, code fences, code blocks, and code files keep horizontal scrolling so columns stay aligned. With `wrap = false` every line scrolls horizontally.
 - `variable_autocomplete_min_chars` is clamped to `1..8`.
 
 ## Per-note module defaults
@@ -176,6 +133,15 @@ Behavior notes:
 
 - if `encrypt_notes = true`, `password_env` must resolve to a non-empty environment variable at runtime
 - note lock/encrypt commands are not supported for file-backed markdown notes (`slate path/to/file.md`)
+
+## Daily notes
+
+`[daily]` keys:
+
+- `note_prefix` (default `daily`): daily note ids are `<prefix>-YYYY-MM-DD`
+- `template` (default `"# {date}\n\n"`): body of a new daily note; `{date}` uses `[editor] date_format`
+
+Daily notes are opened with `:today` or `slate today`, and `slate capture <text>` (or piped stdin) appends a `- HH:MM text` entry without opening the editor.
 
 ## Special notes
 

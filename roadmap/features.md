@@ -6,14 +6,14 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 
 ## Capture and daily workflow
 
-- [ ] Global quick-capture: `slate capture "thought"` appends to today's inbox note without opening UI.
+- [x] Global quick-capture: `slate capture "thought"` appends to today's daily note without opening the editor.
 - [ ] Clipboard-watch into a named note/section.
-- [ ] Pipe-in mode: `cmd | slate append`.
 - [ ] Email forwarding address that ingests into inbox note.
 - [ ] Templates (`:template meeting`).
-- [ ] Daily notes — auto-create on open with a configurable template; optional Google Calendar / ICS integration pulls the day's events into the scaffold as a starting structure.
+- [x] Daily notes — `slate today` / `:today` create today's note from a configurable template. Still open: optional Google Calendar / ICS integration pulls the day's events into the scaffold as a starting structure.
 - [ ] "On this day" recall view.
 - [ ] Random note resurfacing.
+- [ ] MCP for AI tools
 
 ## Organization
 
@@ -62,25 +62,22 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 
 ## Extensibility
 
-- [ ] WASM plugin system — design in `roadmap/wasm-plugin-system.md`. Shared host runtime, `HostPlugin` command dispatch, capability prompts, lifecycle hooks, parity/conformance suites.
+- [ ] WASM plugin system — design in `roadmap/wasm-plugin-system.md`. Shared host runtime, `HostPlugin` command dispatch, capability prompts, lifecycle hooks, conformance suites.
 
 ## Variables
 
 - [ ] **Persistent variable name and dependency index** — store `note_variable_exports(note_id, variable_name)` and `note_cross_refs(from_note_id, to_short_id)` in the DB, populated by cheap text scans (`scan_variable_assignments`, `scan_cross_note_refs`) on note save. Load both into `CrossNoteVarIndex` on startup to warm name and dep maps without any `CalcEngine` work. Fixes cold-start autocomplete lag for cross-note variables. Values stay computed lazily in-memory as now — persisting values would require invalidation logic across concurrent edits.
 
-## Editor and UI
+## Editor
 
 - [ ] Multicursor support.
-- [ ] Context menu for formatting conversions.
-- [ ] Right-click conversion to checklist/ordered/unordered list.
 - [ ] Support variable assignment from formula helpers like `a := sum_column()`.
-- [ ] UI settings page.
 - [ ] Code folding UX improvements.
 - [ ] Add highlight.
 - [ ] Improve search style and content search.
 - [ ] Trie search.
 - [ ] Keyboard shortcut expansion and menu coverage.
-- [ ] Improve overflow to full soft-wrap.
+- [x] Improve overflow to full soft-wrap.
 - [ ] GD to go to link, header, tag.
 - [ ] Add `dt{char}`.
 - [ ] Consolidate commands autocompletion.

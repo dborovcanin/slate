@@ -5,11 +5,10 @@ Scope owner: backend/runtime + command surface, with shared-core integration poi
 
 ## 1) Goal
 
-Enable third-party extensibility with one plugin model that works in both GUI and TUI, without moving core editing semantics out of shared core.
+Enable third-party extensibility without moving core editing semantics out of the core crates.
 
 Primary outcomes:
 
-- same plugin behavior in GUI and TUI
 - no per-keystroke plugin execution in hot editing paths
 - bounded, capability-scoped side effects
 - deterministic, reviewable command/transform behavior
@@ -19,7 +18,7 @@ Primary outcomes:
 - plugins do not replace vim stepping, motion semantics, undo model, or markdown/table/list core rules
 - plugins do not run arbitrary host code
 - plugins do not get unrestricted filesystem/network access
-- plugins do not introduce frontend-specific behavior forks
+- plugins do not introduce terminal-specific behavior forks
 
 ## 3) Layer ownership
 
@@ -35,11 +34,11 @@ Plugin runtime (`crates/app-core` new `plugins` module):
 - WASM sandbox execution, capability checks, resource limits
 - plugin command registry and hook dispatch
 
-Frontends (GUI/TUI):
+Terminal app (`crates/tui`):
 
 - render plugin command suggestions and statuses
-- invoke shared host command/plugin dispatch path
-- never execute plugin semantics directly in frontend-specific code
+- invoke the host command/plugin dispatch path
+- never execute plugin semantics directly in terminal code
 
 ## 4) Runtime architecture
 
@@ -154,7 +153,7 @@ Permission UX:
 
 - first use prompt with exact capability + plugin id
 - one-shot allow, always allow, deny
-- stored in user config with revocation UI/command
+- stored in user config with a revocation command
 
 ## 7) Command and hook integration
 
@@ -166,7 +165,7 @@ Command resolution order:
 2. plugin commands (`<plugin-id>:<command>` canonical form)
 3. unique alias fallback (only if no builtin collision)
 
-Plugin commands are classified as host dispatch (`HostPlugin`) and executed by runtime layer. Resulting `EditOperation`s are applied by existing adapter pipelines.
+Plugin commands are classified as host dispatch (`HostPlugin`) and executed by runtime layer. Resulting `EditOperation`s are applied by the existing edit pipeline.
 
 ### 7.2 Hook policy
 
@@ -182,7 +181,7 @@ Not allowed in v1:
 - cursor-move hooks
 - render-frame hooks
 
-This preserves responsiveness and avoids semantic drift between frontends.
+This preserves responsiveness and keeps behavior deterministic.
 
 ## 8) Performance strategy
 
@@ -190,21 +189,21 @@ This preserves responsiveness and avoids semantic drift between frontends.
 - compile cache keyed by `(plugin_hash, runtime_version, api_version)`
 - keep one warm instance per active plugin, reset state between calls when needed
 - batch plugin command suggestions (single host call for list)
-- strict timeout/fuel defaults to prevent UI/TUI stalls
+- strict timeout/fuel defaults to prevent editor stalls
 
 Targets:
 
 - zero impact on typing path p95
 - command invocation overhead acceptable for explicit user actions
 
-## 9) Parity and correctness
+## 9) Correctness
 
-Parity requirement: plugin command on same snapshot must produce the same `CommandResult` in GUI and TUI.
+Determinism requirement: a plugin command on the same snapshot must produce the same `CommandResult`.
 
 Test plan:
 
 - plugin host conformance tests (manifest, capability denial, timeout)
-- cross-frontend parity fixtures for plugin command execution
+- replay fixtures for plugin command execution
 - malicious plugin fixtures (infinite loop, oversized output, invalid operation ranges)
 - regression tests for command collision and fallback behavior
 
@@ -230,7 +229,7 @@ Phase 2: ABI + command execution
 
 - define v1 WIT contract and guest SDK helpers
 - run `run_command` and map result to existing `EditOperation`
-- GUI/TUI both use same host dispatch entrypoint
+- the terminal uses the same host dispatch entrypoint as builtin host commands
 
 Phase 3: Hooks + permissions
 
@@ -241,14 +240,14 @@ Phase 3: Hooks + permissions
 Phase 4: hardening
 
 - compile cache, structured diagnostics, auto-disable policy
-- conformance and parity suites in CI
+- conformance and replay suites in CI
 - documentation and sample plugins
 
 ## 12) Architectural decisions and tradeoffs
 
-Decision: execute plugins in Rust host runtime, not frontend JS.
+Decision: execute plugins in the Rust host runtime (`app-core`), not in terminal code.
 
-- Why: keeps one canonical execution environment for GUI and TUI; avoids duplicating sandbox logic.
+- Why: keeps one canonical execution environment that any future front end can reuse.
 
 Decision: plugins return edit operations, not direct text mutation APIs.
 

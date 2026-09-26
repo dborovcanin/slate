@@ -47,6 +47,7 @@ Common aliases:
 
 | Command | Purpose |
 | --- | --- |
+| `today` (`daily`) | Open today's daily note, creating it from the `[daily]` template |
 | `date` | Insert picked date |
 | `notify` | Set reminder for current line |
 | `notify-delete` | Delete reminder on current line |

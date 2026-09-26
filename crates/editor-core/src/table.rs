@@ -858,28 +858,6 @@ pub fn serialize_table_row(cells: &[String]) -> String {
     format!("| {} |", parts.join(" | "))
 }
 
-pub fn normalize_table_row(line: &str) -> Option<String> {
-    let raw_cells = split_row_cells_raw(line)?;
-    let normalized_cells: Vec<String> = if is_delimiter_row(&raw_cells) {
-        raw_cells
-            .iter()
-            .map(|cell| {
-                if cell.trim().is_empty() {
-                    "---".to_string()
-                } else {
-                    normalize_delimiter_cell(cell)
-                }
-            })
-            .collect()
-    } else {
-        raw_cells
-            .iter()
-            .map(|cell| cell.trim().to_string())
-            .collect()
-    };
-    Some(serialize_table_row(&normalized_cells))
-}
-
 pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     let mut cache = TableFormatCache::default();
     format_table_lines_with_cache(lines, &mut cache)

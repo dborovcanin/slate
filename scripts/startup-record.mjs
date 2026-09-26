@@ -2,7 +2,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
-const MODES = ["gui", "tui"];
+const MODES = ["tui"];
 const RUNS = Number.parseInt(process.env.NOTE_STARTUP_RUNS ?? "5", 10);
 const BASELINE_PATH = resolve("perf/baselines/startup.json");
 

@@ -24,12 +24,6 @@ pub enum NoteIdentity {
 }
 
 impl NoteIdentity {
-    pub fn to_note_id(&self) -> String {
-        match self {
-            Self::DbNote(id) => id.clone(),
-            Self::FileNote(path) => note_id_for_markdown_file(path),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -340,81 +334,6 @@ impl NoteSourceService {
         self.import_image_bytes_by_id(note_id, file_name, None, &bytes)
     }
 
-    pub fn reserve_image_placeholder_by_id(
-        &self,
-        note_id: &str,
-        file_name: Option<&str>,
-        mime_type: Option<&str>,
-    ) -> Result<ImportedImage, String> {
-        validate_declared_image_type(file_name, mime_type)?;
-        let identity = self.parse_identity(note_id);
-        let NoteIdentity::DbNote(id) = identity else {
-            return Err("image placeholders are only supported for database notes".to_string());
-        };
-        let image_id = self.db.reserve_note_image(&id, file_name, mime_type)?;
-        Ok(ImportedImage {
-            image_id: image_id.clone(),
-            markdown_path: markdown_path_for_db_image(&image_id),
-        })
-    }
-
-    pub fn write_image_bytes_to_placeholder_by_id(
-        &self,
-        note_id: &str,
-        image_id: &str,
-        file_name: Option<&str>,
-        mime_type: Option<&str>,
-        image_bytes: &[u8],
-    ) -> Result<(), String> {
-        let metadata = validate_note_image(file_name, mime_type, image_bytes)?;
-        let identity = self.parse_identity(note_id);
-        let NoteIdentity::DbNote(id) = identity else {
-            return Err("image placeholders are only supported for database notes".to_string());
-        };
-        self.db.write_note_image_bytes(
-            &id,
-            image_id,
-            file_name,
-            Some(metadata.mime_type),
-            image_bytes,
-        )
-    }
-
-    pub fn write_image_path_to_placeholder_by_id(
-        &self,
-        note_id: &str,
-        image_id: &str,
-        source_path: &Path,
-    ) -> Result<(), String> {
-        if !source_path.exists() {
-            return Err(format!(
-                "Image source path does not exist: {}",
-                source_path.display()
-            ));
-        }
-        if !source_path.is_file() {
-            return Err(format!(
-                "Image source path is not a file: {}",
-                source_path.display()
-            ));
-        }
-        let bytes = read_image_file_bounded(source_path)?;
-        let file_name = source_path.file_name().and_then(|name| name.to_str());
-        self.write_image_bytes_to_placeholder_by_id(note_id, image_id, file_name, None, &bytes)
-    }
-
-    pub fn delete_image_placeholder_by_id(
-        &self,
-        note_id: &str,
-        image_id: &str,
-    ) -> Result<bool, String> {
-        let identity = self.parse_identity(note_id);
-        let NoteIdentity::DbNote(id) = identity else {
-            return Ok(false);
-        };
-        self.db.delete_note_image(&id, image_id)
-    }
-
     pub fn resolve_image_markdown_source_by_id(
         &self,
         note_id: &str,
@@ -690,10 +609,6 @@ pub fn markdown_file_path_from_note_id(note_id: &str) -> Option<PathBuf> {
         return None;
     }
     Some(path)
-}
-
-pub fn is_markdown_file_note_id(note_id: &str) -> bool {
-    markdown_file_path_from_note_id(note_id).is_some()
 }
 
 pub fn note_identity_from_id(note_id: &str) -> NoteIdentity {
@@ -1063,11 +978,32 @@ fn markdown_file_timestamps(path: &Path) -> Result<(String, String), String> {
 /// line, trims it, and truncates to `NOTE_TITLE_MAX_CHARS` chars (appending
 /// "..." when truncation occurs). Returns "Untitled" for empty bodies.
 ///
-/// This is the single source of truth for note titles in the workspace — the
-/// SQLite layer and the wasm bridge both delegate here.
+/// This is the single source of truth for note titles in the workspace.
+/// Title text of a line: trimmed, with a Markdown ATX heading marker
+/// (`# `..`###### ` and optional closing `#`s) removed. `#tag` and
+/// `#include` are left alone because no space follows the `#`.
+pub fn title_text_for_line(line: &str) -> &str {
+    let trimmed = line.trim();
+    let hashes = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if !(1..=6).contains(&hashes) {
+        return trimmed;
+    }
+    let rest = &trimmed[hashes..];
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return trimmed;
+    }
+    let content = rest.trim();
+    let without_closing = content.trim_end_matches('#');
+    if without_closing.len() != content.len() && without_closing.ends_with(char::is_whitespace) {
+        without_closing.trim_end()
+    } else {
+        content
+    }
+}
+
 pub fn derive_note_title_from_body(body: &str) -> String {
     for line in body.lines() {
-        let trimmed = line.trim();
+        let trimmed = title_text_for_line(line);
         if trimmed.is_empty() {
             continue;
         }
@@ -1128,6 +1064,24 @@ fn note_summary_from_markdown_path(path: &Path) -> Result<NoteSummary, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_text_strips_atx_heading_markers_only() {
+        assert_eq!(title_text_for_line("# 2026-09-26"), "2026-09-26");
+        assert_eq!(title_text_for_line("  ### Plan ###  "), "Plan");
+        assert_eq!(title_text_for_line("## C#"), "C#");
+        assert_eq!(title_text_for_line("#tag and text"), "#tag and text");
+        assert_eq!(title_text_for_line("####### seven"), "####### seven");
+        assert_eq!(title_text_for_line("#"), "");
+        assert_eq!(title_text_for_line("plain"), "plain");
+    }
+
+    #[test]
+    fn derived_title_skips_empty_headings_and_strips_markers() {
+        assert_eq!(derive_note_title_from_body("#\n\n# Weekly review\nbody"), "Weekly review");
+        assert_eq!(derive_note_title_from_body("First line"), "First line");
+        assert_eq!(derive_note_title_from_body("\n  \n"), "Untitled");
+    }
     use image::codecs::png::PngEncoder;
     use image::{ColorType, ImageEncoder};
 

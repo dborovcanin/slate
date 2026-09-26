@@ -9,10 +9,6 @@
     "table": {
       "enabled": true,
       "profile": "ci"
-    },
-    "wasm_size": {
-      "enabled": true,
-      "max_bytes": 1600000
     }
   }
 }

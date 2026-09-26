@@ -9,7 +9,6 @@ function defaultConfig() {
     checks: {
       startup: { enabled: true, runs: 3, threshold_pct: 15 },
       table: { enabled: true, profile: "ci" },
-      wasm_size: { enabled: true, max_bytes: 1_600_000 },
     },
   };
 }
@@ -24,7 +23,6 @@ function loadConfig() {
       checks: {
         startup: { ...defaults.checks.startup, ...(parsed.checks?.startup ?? {}) },
         table: { ...defaults.checks.table, ...(parsed.checks?.table ?? {}) },
-        wasm_size: { ...defaults.checks.wasm_size, ...(parsed.checks?.wasm_size ?? {}) },
       },
     };
   } catch (error) {
@@ -82,8 +80,7 @@ function printIndented(text) {
 const cfg = loadConfig();
 const runtimePerf = loadRuntimePerfConfig();
 const enabled = bool(runtimePerf.enabled, false);
-const uiLog = runtimePerf.ui_log_path ?? "";
-const tuiLog = runtimePerf.tui_log_path ?? "";
+const logPath = runtimePerf.log_path ?? "";
 const startedIso = new Date().toISOString();
 
 console.log("Slate unified perf check");
@@ -91,8 +88,7 @@ console.log(`time: ${startedIso}`);
 console.log(`config: ${CONFIG_PATH}`);
 console.log("runtime: config.toml [perf]");
 console.log(`enabled: ${enabled ? "true" : "false"} (${enabled ? "on" : "off"})`);
-console.log(`ui-log: ${uiLog}`);
-console.log(`tui-log: ${tuiLog}`);
+console.log(`log: ${logPath}`);
 
 if (!enabled) {
   printSection("Result");
@@ -117,14 +113,6 @@ if (bool(cfg.checks?.table?.enabled, true)) {
   };
   const run = runNodeScript(resolve("scripts/table-perf-check.mjs"), env);
   results.push({ name: "table", ...run });
-}
-
-if (bool(cfg.checks?.wasm_size?.enabled, true)) {
-  const env = {
-    NOTE_WASM_MAX_BYTES: String(cfg.checks.wasm_size.max_bytes ?? 1_600_000),
-  };
-  const run = runNodeScript(resolve("scripts/wasm-size-check.mjs"), env);
-  results.push({ name: "wasm-size", ...run });
 }
 
 printSection("Checks");

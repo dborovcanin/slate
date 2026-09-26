@@ -1,33 +1,8 @@
 # Keymaps
 
-This document summarizes GUI, terminal, and vim key mappings.
+This document summarizes terminal and vim key mappings.
 
-## GUI global shortcuts
-
-| Shortcut | Action |
-| --- | --- |
-| `Ctrl+N` | New note |
-| `Ctrl+P` | Open note switcher |
-| `Ctrl+G` | Open collection picker |
-| `Ctrl+Up` / `Ctrl+Down` | Previous / next note |
-| `Ctrl+Shift+;` | Open command picker |
-| `Ctrl+E` | Export active note to clipboard |
-| `Ctrl+Shift+E` | Export active note to file |
-| `Ctrl+Shift+D` | Open date picker |
-| `Ctrl+B` | Toggle bold markdown |
-| `Ctrl+I` | Toggle italic markdown |
-| `Ctrl+Shift+X` | Toggle strikethrough markdown |
-| `Ctrl+K` | Insert or wrap markdown link |
-| `Ctrl/Cmd+Alt+Z` | Toggle fold at cursor |
-| `Ctrl++` / `Ctrl+-` | Increase / decrease font size |
-| `Ctrl+Alt++` / `Ctrl+Alt+-` | Next / previous font family |
-| `Ctrl+W` | Hide window |
-| `Ctrl+Q` | Quit window |
-| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
-| `Tab` | Accept variable completion or apply calc result |
-| `Escape` | Close active overlay (switcher, picker, etc.) |
-
-## Switcher keys (GUI + TUI)
+## Switcher keys
 
 | Key | Action |
 | --- | --- |
@@ -36,7 +11,7 @@ This document summarizes GUI, terminal, and vim key mappings.
 | `Delete` or `Ctrl+Backspace` | Delete selected note (with confirmation) |
 | `Escape` | Close switcher |
 
-## Collection picker keys (GUI + TUI)
+## Collection picker keys
 
 | Key | Action |
 | --- | --- |
@@ -45,7 +20,7 @@ This document summarizes GUI, terminal, and vim key mappings.
 | `Ctrl+E` | Edit selected collection (name/description/default tags) |
 | `Escape` | Close picker |
 
-## Terminal mode shortcuts
+## Global shortcuts
 
 | Shortcut | Action |
 | --- | --- |
@@ -59,7 +34,7 @@ This document summarizes GUI, terminal, and vim key mappings.
 | hover wiki link | Preview linked note (popup) |
 | `Tab` | Accept variable completion or apply calc result |
 
-## Table editing keys (GUI + TUI editor input)
+## Table editing keys
 
 | Shortcut | Action |
 | --- | --- |
@@ -82,19 +57,31 @@ Vim mode is optional and starts in normal mode when enabled.
 Supported and tested core motions/actions include:
 
 - movement: `h`, `j`, `k`, `l`, `w`, `b`, `0`, `$`, `gg`, `G`
+- screen-row movement on soft-wrapped lines: `gj`, `gk` (with counts); in insert mode the arrow keys move by screen row on wrapped lines
 - edit actions: `x`, `dd`, `cw`, `cc`, `C`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 - yank/delete with counts: examples `yy`, `3yy`, `d2w`, `yaw`
 - macros (normal + insert flows): `q<register>` start, `q` stop, `@<register>` replay, `3@a` counted replay
 - macro pending cancel: `Esc` cancels pending register input after `q` or `@`
 - macro status summary: `Q` (normal mode) prints recorded macro registers + step counts
-- undo/redo semantics: in vim mode use `u` / `Ctrl+r` (TUI-style status + cursor behavior); outside vim, `Ctrl+z`/`Ctrl+y` remains native editor behavior
+- undo/redo: `u` / `Ctrl+r`
 - fold toggle: `za`
 - wiki-link navigation: `gd`
 - wiki-link preview (peek linked note): `K` (toggle; dismissed on cursor move)
 
+## Command bar and `/` search editing
+
+| Key | Action |
+| --- | --- |
+| `ArrowLeft` / `ArrowRight` | Move the cursor (cycle completions while the Tab menu is open) |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start / end of the input |
+| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight` | Previous / next word |
+| `Backspace` / `Delete` | Delete before / at the cursor |
+| `Ctrl+W`, `Ctrl+Backspace` / `Ctrl+Delete` | Delete word before / after the cursor |
+| `Ctrl+U` / `Ctrl+K` | Delete to start / end of the input |
+| `ArrowUp` / `ArrowDown` | Command history (command bar) or previous / next match (search) |
+
 ## Vim command bar entry
 
 - Vim mode: press `:` in normal/visual modes.
-- Non-vim editor mode: use `Ctrl+Shift+;`.
 
 For command syntax and aliases, see [Command Reference](./command-reference.md).

@@ -1448,65 +1448,6 @@ impl Db {
         Ok(rows)
     }
 
-    pub fn set_note_tags(
-        &self,
-        note_id: &str,
-        tag_names: &[String],
-    ) -> Result<Vec<String>, String> {
-        let normalized = normalize_tag_name_list(tag_names)?;
-        let mut conn = self.conn.lock()?;
-        let tx = conn.transaction().map_err(|e| e.to_string())?;
-
-        let note_exists: Option<String> = tx
-            .query_row("SELECT id FROM notes WHERE id = ?1", [note_id], |row| {
-                row.get(0)
-            })
-            .optional()
-            .map_err(|e| e.to_string())?;
-        if note_exists.is_none() {
-            return Err("note not found".to_string());
-        }
-
-        let now = now_iso();
-        let mut tag_ids = Vec::with_capacity(normalized.len());
-        for (display_name, normalized_name) in &normalized {
-            let existing_id: Option<String> = tx
-                .query_row(
-                    "SELECT id FROM tags WHERE normalized_name = ?1",
-                    [normalized_name],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?;
-            let tag_id = if let Some(id) = existing_id {
-                id
-            } else {
-                let new_id = ulid::Ulid::new().to_string();
-                tx.execute(
-                    "INSERT INTO tags (id, name, normalized_name, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![new_id, display_name, normalized_name, now, now],
-                )
-                .map_err(map_unique_constraint_error)?;
-                new_id
-            };
-            tag_ids.push(tag_id);
-        }
-
-        tx.execute("DELETE FROM note_tags WHERE note_id = ?1", [note_id])
-            .map_err(|e| e.to_string())?;
-        for tag_id in &tag_ids {
-            tx.execute(
-                "INSERT OR IGNORE INTO note_tags (note_id, tag_id, created_at)
-                 VALUES (?1, ?2, ?3)",
-                rusqlite::params![note_id, tag_id, now],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-        tx.commit().map_err(|e| e.to_string())?;
-        self.list_note_tags(note_id)
-    }
-
     pub fn get_note_collection_ids(&self, note_id: &str) -> Result<Vec<String>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn

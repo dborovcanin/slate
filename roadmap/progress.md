@@ -42,48 +42,34 @@ monthly_income := 5000
   - `update_exports(short_id, entries, values) -> bool` — updates exports, returns true if values changed
   - `update_deps(note_id, refs)` — updates dependency graph from scan results
   - `extern_vars_for(note_id) -> Vec<ExternVar>` — builds the extern_vars input for a note's next eval
-  - `dependents_of(short_id) -> Vec<String>` — which note_ids to re-eval after a change
   - `exports_for_short_id(short_id) -> &[VariableIndexEntry]` — for autocomplete queries
 
 **`crates/app-core/src/lib.rs`**
 - `cross_note_var_index: Mutex<CrossNoteVarIndex>` added to `AppCore`
-- `evaluate_note_with_cross_refs(note_id, short_id, lines, options)` — drop-in replacement for `calc_engine.evaluate_note_context` that handles extern var injection and index updates in one call
-- `cross_note_exports_for_autocomplete(short_id)` — returns exported variable entries for a given note short_id; ready for an IPC command to serve the UI autocomplete
+- `cross_note_exports_for_autocomplete(short_id)` — returns exported variable entries for a given note short_id
 
-**`src-tauri/src/commands/calc.rs`**
-- `note_short_id(note_id)` helper — extracts 8-char short ID from DB note IDs, returns `""` for `mdfile:` notes
-- `evaluate_note_context_delta` now goes through `CrossNoteVarIndex`: registers note, snapshots extern vars before `spawn_blocking`, updates exports and deps after
-- `get_cross_note_vars(short_id)` Tauri command — returns exported variable entries for a note; backed by `cross_note_exports_for_autocomplete`
-
-**`src/api.ts`**
-- `getCrossNoteVars(shortId)` IPC wrapper
-
-**`src/editor/variable-autocomplete.ts`**
-- `crossNoteCompletionSource` — async CodeMirror completion source; detects `[[SHORTID]].partial` before the cursor, calls `getCrossNoteVars`, suggests variable names with `[[SHORTID]]` as the detail label; stale-doc guard after await
-- `variableAutocompleteExtensions` updated to include both sources in the `override` array; cross-note source always active (even when local variable autocomplete is disabled)
-
-### What's done (TUI)
+### Terminal integration
 
 **`crates/app-core/src/lib.rs`**
 - `cross_note_var_index` changed from `Mutex<CrossNoteVarIndex>` to `Arc<Mutex<CrossNoteVarIndex>>`
 - Added `cross_note_var_index_arc()` accessor to clone the Arc
 
-**`src-tauri/src/terminal/app/calc_helpers.rs`**
+**`crates/tui/src/terminal/app/calc_helpers.rs`**
 - `tui_note_short_id(note_id)` helper — extracts 8-char short ID, returns `""` for `mdfile:` notes
 - `compute_calc_data_for_note(...)` — full-note eval that reads extern vars from the shared index before eval and updates exports/deps after; used for whole-document recomputes
 - `extract_cross_note_completion_prefix(line, cursor_col)` — detects `[[SHORTID]].partial` before the cursor, returns `(short_id, from_col, partial_query)` using a lazy-compiled Regex
 
-**`src-tauri/src/terminal/app/mod.rs`**
+**`crates/tui/src/terminal/app/mod.rs`**
 - Added `cross_note_var_index: Arc<Mutex<CrossNoteVarIndex>>` field to `TerminalApp`
 - `run_terminal_session` and `new_with_startup_metrics` accept and store the Arc
 - `std::sync::{Arc, Mutex}` and `app_core::cross_note::CrossNoteVarIndex` imported
 
-**`src-tauri/src/terminal/app/editing.rs`**
-- Stale full-recompute path (`if self.calc.stale { ... }`) uses `compute_calc_data_for_note` instead of `compute_calc_data` so the shared index is updated on every full TUI eval
+**`crates/tui/src/terminal/app/editing.rs`**
+- Stale full-recompute path (`if self.calc.stale { ... }`) uses `compute_calc_data_for_note` instead of `compute_calc_data` so the shared index is updated on every full eval
 - `variable_autocomplete_state` checks for `[[SHORTID]].partial` prefix first; on match, queries the index directly and returns cross-note variable suggestions using the existing popup infrastructure
 
-**`src-tauri/src/lib.rs`** and **`src-tauri/src/bin/slight.rs`**
-- Both call sites of `run_terminal_session` updated to pass `core.cross_note_var_index_arc()`
+**`crates/tui/src/lib.rs`**
+- `run_terminal_session` receives `core.cross_note_var_index_arc()`
 
 ### Deferred
 

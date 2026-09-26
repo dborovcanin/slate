@@ -123,7 +123,7 @@ The cross-note completion source is always active regardless of the local `varia
 - source: backend/shared evaluation variable index
 - default trigger threshold: 3 characters (`variable_autocomplete_min_chars`)
 
-TUI popup interactions:
+Popup interactions:
 
 - `Up/Down`: move selection
 - `Tab` or `Enter`: accept selection

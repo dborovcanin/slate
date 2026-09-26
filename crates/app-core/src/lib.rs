@@ -1,6 +1,7 @@
 pub mod calc;
 pub mod config;
 pub mod cross_note;
+pub mod daily;
 pub mod note_sources;
 pub mod storage;
 pub mod web_search;
@@ -96,41 +97,6 @@ impl AppCore {
 
     pub fn calc_engine(&self) -> &CalcEngine {
         &self.calc_engine
-    }
-
-    /// Evaluate a note with cross-note variable injection, then update the index.
-    ///
-    /// Returns the evaluation result. The caller is responsible for propagating
-    /// re-evaluation to dependent notes (see `cross_note_var_index.dependents_of`).
-    ///
-    /// `short_id` must be the 8-char wiki-link short ID for this note. Pass an
-    /// empty string if the note is not stored in the DB (e.g. markdown file notes).
-    pub fn evaluate_note_with_cross_refs(
-        &self,
-        note_id: &str,
-        short_id: &str,
-        lines: &[String],
-        mut options: calc::NoteEvaluationOptions,
-    ) -> calc::NoteEvaluationResult {
-        // Inject extern vars from previously evaluated dependencies.
-        if options.cross_note_enabled {
-            if let Ok(index) = self.cross_note_var_index.lock() {
-                options.extern_vars = index.extern_vars_for(note_id);
-            }
-        }
-
-        let result = self.calc_engine.evaluate_note_context(lines, options);
-
-        // Update the index with this note's latest exports and deps.
-        if let Ok(mut index) = self.cross_note_var_index.lock() {
-            if !short_id.is_empty() {
-                index.register_note(note_id, short_id);
-                index.update_exports(short_id, &result.variables, &result.variable_values);
-            }
-            index.update_deps(note_id, &result.cross_note_refs);
-        }
-
-        result
     }
 
     /// Return exported variable entries for a given note short_id.

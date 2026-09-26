@@ -1,6 +1,6 @@
 # Slate
 
-A minimal, fast, keyboard-first scratchpad for Linux. Inspired by [Antinote](https://antinote.io/).
+A minimal, fast, keyboard-first note-taking app for the terminal. Inspired by [Antinote](https://antinote.io/).
 
 Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no bloat.
 
@@ -22,83 +22,25 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 ## Features
 
 **Editor**
-- Plain-text editing powered by CodeMirror 6 (undo/redo, IME, clipboard — all browser-grade)
-- Autosave with 500ms debounce + flush on blur and close
-- Restores last-open note on startup
-- Multi-theme editor with live config reload (default: `gruvbox-light`)
-- Shared command panel in both Vim and non-Vim modes
-  - Vim mode: open with `:`
-  - Non-Vim mode: open with `Ctrl+Shift+;` (Ctrl+colon)
-  - Built-in commands include calc/date/reminder/list/module/fold/export/note-security flows (full list + aliases: `docs/command-reference.md`)
-- Per-note modules (`math`, `table`, `variables`, `style`)
-  - New notes start with defaults from `[editor.modules]` in config
-  - Module state is saved with each note and restored when that note is opened
-  - Status bar shows loaded modules (chip similar to clip-watch indicator)
-- Modular editor core (`src/editor/core`): snapshot-based context + operation-based command/rule engine, designed for GUI/terminal parity
-- Markdown-style rich editing (live visual styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable)
-- Checklist markdown (`- [ ]`, `- [x]`) gets dedicated visual styling (`☐` / crossed `☒` + done-item strike style)
-- Markdown editing helpers:
-  - `Ctrl/Cmd+B` bold, `Ctrl/Cmd+I` italic, `Ctrl/Cmd+Shift+X` strikethrough, `Ctrl/Cmd+K` link
-  - List continuation on Enter
-  - End a list/checklist line with ` /x` to toggle checkbox state (`- item /x` -> `- [x] item`, `- [x] item /x` -> `- [ ] item`)
-  - Checklist auto-reorder (when enabled): checking an item moves it to the bottom, unchecking moves it to the top
-  - Markdown table autoformat/alignment while editing
-  - Wiki-link authoring: type `[[` to auto-close to `[[]]`, then use autocomplete for notes/headings
-  - Wiki-link rendering: collapsed display when cursor is outside, full source shown when cursor is inside
-  - Rich table cursor behavior: Arrow keys stay cell-aware, `Ctrl+ArrowLeft/Right` jumps cells, `Shift+Enter` splits multiline cell content
-- Controlled by `[editor] markdown_autoformat` (defaults to `true`) and `[editor] checklist_auto_reorder` (defaults to `true`)
+- Full-screen terminal editor with note switcher and status bar
+- Autosave (idle flush + save on exit/switch) and restore of the last-open note
+- Multi-theme color schemes with live config reload (default: `gruvbox-light`)
+- Command bar (`:`) for calc/date/reminder/list/module/fold/export/note-security flows (full list + aliases: `docs/command-reference.md`)
+- Per-note modules (`math`, `table`, `variables`, `style`), persisted with each note
+- Markdown-style rich editing: live styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable
+- Checklist markdown (`- [ ]`, `- [x]`), optional checklist auto-reorder, ` /x` toggle suffix
+- List continuation on Enter, markdown table autoformat/alignment, table-aware cursor movement
+- Wiki links with autocomplete, collapsed rendering, `Ctrl+]` / `gd` navigation, and `K` preview
+- Open markdown files directly: `slate path/to/file.md` (`.md`, `.markdown`, `.mdown`, `.mkd`), saved back to the file
+- Pipe append: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
+- Daily notes and quick capture: `slate today` / `:today`, `slate capture buy milk`, `cmd | slate capture`
 
-**Themes and backgrounds**
-- 14 built-in color schemes: `slate`, `slate-dark`, `catppuccin-mocha`, `catppuccin-latte`, `gruvbox-dark`, `gruvbox-light`, `dracula`, `dark`, `white`, `solarized-dark`, `solarized-light`, `nord`, `tokyo-night`, `one-dark`
-- 5 background patterns: `plain`, `lines`, `squares`, `dots`, `diagonal`
-- Motion config: `[theme] animation_mode = fast|fade|smooth|spring` and `[theme] animation_style = slide-up|pop-up|none`
-- Configurable via TOML (`$XDG_CONFIG_HOME/slate/config.toml` or `~/.config/slate/config.toml`)
-- Live reload while the app is running (polls config changes automatically)
-
-**Optional Vim mode**
+**Vim mode (optional)**
 - Enable with `[editor] vim_mode = true`
-- Starts in normal mode
-- Insert/normal modes (`Esc` to normal, `i` to insert)
-- Cursor changes by mode (insert: bar cursor, normal: block cursor + `NORMAL` badge)
-- Count prefixes for movement/actions: `4k`, `2j`, `3w`, `5x`, `3dd`
-- Vim-like macros across normal + insert flows: `q<register>` start, `q` stop, `@<register>` replay, count support (`3@a`)
-- `Esc` cancels pending macro register input (`q`/`@` prefixes)
-- `Q` in normal mode shows macro register status (`@a:steps` summary)
-- Undo/redo semantics: Vim mode (`u`, `Ctrl+r`) follows TUI-style status/cursor behavior; non-vim `Ctrl+z`/`Ctrl+y` stays native CodeMirror UX.
-- Visual modes: `v` (visual), `V` (visual line), `Ctrl+v` (visual block)
-- Yanking to system clipboard: `y` in visual modes, `yy` in normal mode (supports counts like `3yy`)
-- Folding: `za` toggles fold at cursor (GUI headings/code fences)
-- Wiki-link navigation: `gd` opens the link under cursor (`[[shortid]]` / `[[shortid#heading]]`)
-- Ex commands: `:sum` (paragraph default), `:sum list`, `:sum row`, `:sum column`, `:sum doc`, `:avg`, `:avg list`, `:avg row`, `:avg column`, `:avg doc`, `:date`, `:format`, `:clip-watch on`, `:clip-watch off`, `:clist`, `:ulist`, `:olist`, `:module status`, `:module on <math|table|variables|style>`, `:module off <math|table|variables|style>`, `:module toggle <math|table|variables|style>`, `:w`, `:wq`, `:q`
-- `:sum` and `:avg` compute from the selected scope, insert only `<value>` at cursor/selection, and copy the value to clipboard
-- Supported motions/actions: `h j k l`, `w b`, `0 $`, `gg`, `G`, `x`, `dd`, `cw`, `cc`, `C`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
-
-**Optional terminal mode**
-- Enable with `[editor] terminal_mode = true`
-- Run TUI directly with `slight` (dedicated terminal binary)
-- `slate --terminal` remains available
-- Open markdown files with `slate path/to/file.md` (GUI), `slate --terminal path/to/file.md` (TUI), or `slight path/to/file.md` (TUI); supports `.md`, `.markdown`, `.mdown`, `.mkd` and saves edits back to that file
-- Runs as a standalone full-screen terminal app (no Tauri window)
-- Built-in editor with note list/switcher and status bar
-- Terminal flags (`slight`): `--new`, `--id <note-id>`, `--list`
-- Runtime selector flags (`slate`): `--gui`, `--terminal`
-- Pipe append mode: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
-- Terminal shortcuts: `Ctrl+N` new, `Ctrl+P` switch notes, `Ctrl+S` save (when `autosave = true`), `Ctrl+Q`/`Ctrl+W` quit
-- Terminal folding keymap (normal mode): `za` toggle fold at cursor
-- Terminal folding commands: `:fold`, `:unfold`, `:fold-toggle` (aliases: `:zc`, `:zo`, `:za`)
-- Wiki-link navigation in terminal: `Ctrl+]` (editor/normal mode) or `gd` (normal mode)
-- Wiki-link autocomplete in terminal: type `[[` to open note suggestions; type `#` after short id for heading suggestions
-- `vim_mode` is optional and independent (GUI-only behavior)
-
-**IMAP email sync (special notes)**
-- Run sync once: `slate imap-sync`
-- Enable background polling in app sessions: set `[imap] auto_sync_on_startup = true`
-- Pulls from configured IMAP folder and appends messages to daily notes (`inbox-email-YYYY-MM-DD` by default)
-- Works with any provider exposing IMAP over TLS
-- Uses incremental UID checkpointing to avoid reprocessing old messages
-- Fetches newest messages first by default
-- First sync defaults to recent mail only (`[imap] initial_sync_past_days = 1`) to avoid flooding
-- Shows a system notification when background sync appends new emails
+- Normal/insert/visual/visual-line/visual-block modes, counts, text objects
+- Macros (`q<register>`, `@<register>`, counted replay), `Q` register summary
+- Folding (`za`, `:fold`, `:unfold`, `:fold-toggle`)
+- Ex commands: `:w`, `:wq`, `:q`, `:sum`, `:avg`, `:date`, `:format`, `:clist`, `:ulist`, `:olist`, `:module ...`, and more
 
 **Inline calculations**
 - Type a math expression and see the result as a ghost annotation to the right of the line
@@ -128,67 +70,49 @@ sqrt(144) + 3^2         → 21
 ```
 
 **Wiki links**
-- Link syntax supports short-id notes and optional heading/title parts:
-  - `[[01HX4VHR]]`
-  - `[[01HX4VHR#Heading]]`
-  - `[[01HX4VHR|Display Title]]`
-  - `[[01HX4VHR#Heading|Display Title]]`
+- Syntax: `[[01HX4VHR]]`, `[[01HX4VHR#Heading]]`, `[[01HX4VHR|Display Title]]`, `[[01HX4VHR#Heading|Display Title]]`
 - Short ids are 8-character alphanumeric prefixes of note ids
-- GUI supports Ctrl/Cmd+click navigation; Vim normal mode supports `gd`
-- TUI supports `Ctrl+]` and `gd` navigation
+- Navigation with `Ctrl+]` or vim `gd`
 - Broken links are rendered distinctly and resolve automatically when notes become available
 
 **Multiple notes**
 - Create, switch, and delete notes with keyboard shortcuts
-- Fuzzy search switcher (Ctrl+P) with match highlighting
-- Collection picker (Ctrl+G) with Enter-to-choose and Ctrl+E edit
-- Titles derived from the first non-empty line — no extra fields to fill
+- Fuzzy search switcher (`Ctrl+P`) and collection picker (`Ctrl+G`)
+- Titles derived from the first non-empty line
 
 **Note protection**
 - `note lock` requires a password to open a note in the app, but the note body remains plaintext in SQLite
 - `note encrypt` requires a password and stores the note body encrypted at rest
 - Password arguments for note-security commands are redacted from command history entries
 
-**Export**
-- Ctrl+E copies the current note to clipboard
-- Ctrl+Shift+E opens a native file dialog to save as `.md`, `.txt`, or `.pdf`
-- PDF export renders markdown-aware output with support for headings/lists/code blocks, markdown tables, markdown images (`![alt](src)`), themed inline styling (bold/italic/variables/code tokens), and rendered checklist boxes
-- Command bar export supports `export pdf <path>`, `export md [path]`, and `export txt [path]` (`md/txt` without a path export to clipboard)
-- Command export paths support `~` home expansion (example: `export pdf ~/Downloads/test.pdf`)
-- Full database backup supports `backup <path.zip>` / `backup notes <path.zip>` and writes a portable zip containing `notes.db`
-- Toast feedback on export
+**Export and backup**
+- `export pdf <path>`, `export md [path]`, `export txt [path]` (`md`/`txt` without a path export to clipboard)
+- Markdown-aware PDF output (headings, lists, code blocks, tables, images, checklists)
+- Full database backup/restore: `backup export <path.zip>`, `backup load <path.zip>`
+
+**IMAP email sync (special notes)**
+- Run sync once: `slate imap-sync`
+- Enable background polling in app sessions: set `[imap] auto_sync_on_startup = true`
+- Pulls from configured IMAP folder and appends messages to daily notes (`inbox-email-YYYY-MM-DD` by default)
+- Works with any provider exposing IMAP over TLS
+- Uses incremental UID checkpointing to avoid reprocessing old messages
+- Fetches newest messages first by default
+- First sync defaults to recent mail only (`[imap] initial_sync_past_days = 1`) to avoid flooding
+- Shows a system notification when background sync appends new emails
 
 **Keyboard shortcuts**
 
-| Shortcut                | Action                        |
-| ----------------------- | ----------------------------- |
-| Ctrl+N                  | New note                      |
-| Ctrl+P                  | Fuzzy note switcher           |
-| Ctrl+G                  | Collection picker             |
-| Ctrl+↑ / Ctrl+↓         | Previous / next note          |
-| Ctrl+Backspace          | Delete previous word          |
-| Ctrl+Shift+Backspace    | Delete current note (confirm) |
-| Ctrl+Shift+;            | Open command picker           |
-| Tab                     | Accept variable completion or apply calc result |
-| Ctrl+E                  | Copy note to clipboard        |
-| Ctrl+Shift+E            | Export note to file           |
-| Ctrl+Shift+D            | Open calendar date picker     |
-| Ctrl+B                  | Toggle bold (`**...**`)       |
-| Ctrl+I                  | Toggle italic (`*...*`)       |
-| Ctrl+Shift+X            | Toggle strikethrough          |
-| Ctrl+K                  | Insert/wrap markdown link     |
-| Ctrl/Cmd+Alt+Z          | Toggle fold at cursor         |
-| Ctrl++ / Ctrl+-         | Increase / decrease font size |
-| Ctrl+Alt++ / Ctrl+Alt+- | Next / previous font family   |
-| Ctrl+W                  | Hide window                   |
-| Ctrl+Q                  | Quit window                   |
-| Ctrl+Z / Ctrl+Y         | Undo / redo                   |
-| Escape                  | Close switcher                |
+| Shortcut | Action |
+| --- | --- |
+| `Ctrl+N` | New note |
+| `Ctrl+P` | Fuzzy note switcher |
+| `Ctrl+G` | Collection picker |
+| `Ctrl+S` | Manual save |
+| `Ctrl+Q` / `Ctrl+W` | Quit |
+| `Ctrl+]` | Navigate wiki link at cursor |
+| `Tab` | Accept variable completion or apply calc result |
 
-- In the `Ctrl+P` switcher (GUI and terminal): `Delete` or `Ctrl+Backspace` prompts to delete the selected note.
-- In the collection picker: `Enter` sets the active working collection and `Ctrl+E` opens collection edit (name/description/default tags).
-- In table cells: Arrow keys stay table-aware, `Ctrl+ArrowLeft/Right` jumps cells, and `Shift+Enter` inserts table multiline continuation (`|>` row).
-- In Vim normal mode: `gd` navigates wiki links; in terminal, `Ctrl+]` also navigates wiki links.
+Full list: [docs/keymaps.md](docs/keymaps.md).
 
 **Storage**
 - SQLite with WAL mode in `~/.local/share/slate/notes.db`
@@ -196,365 +120,74 @@ sqrt(144) + 3^2         → 21
 
 ## Requirements
 
-- Arch Linux (primary target) or any Linux distro with:
-  - WebKitGTK 4.1+
-  - GTK 3
-- Sway / Wayland (tested) — X11 should work via XWayland
+- Linux (primary target) or macOS
+- Rust toolchain (stable)
+- Optional: `notify-send` for reminder/IMAP notifications
+- Optional: Node.js, only for the perf check scripts in `scripts/`
 
-## Build
-
-### Prerequisites
+## Build and install
 
 ```sh
-# Arch Linux
-sudo pacman -S webkit2gtk-4.1 gtk3 base-devel
-
-# Rust toolchain
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Node.js (v18+)
-# Use your preferred method (nvm, pacman, etc.)
-
-# Tauri CLI
-cargo install tauri-cli --version "^2"
+make build      # cargo build --release -p slate
+make install    # installs ~/.local/bin/slate, desktop entry, icon
 ```
 
-### Production build
+The binary is `target/release/slate`.
+
+Development:
 
 ```sh
-npm install
-cargo tauri build
+cargo run -p slate                  # run the terminal app
+cargo run -p slate -- --list        # list notes
+cargo build -p slate --no-default-features   # build without IMAP
 ```
 
-Output binary:
-- `src-tauri/target/release/slate` (14MB) — the app
+### Arch AUR build scripts
 
-Install them:
-
-```sh
-cp src-tauri/target/release/slate ~/.local/bin/
-```
-
-Or use:
-
-```sh
-make install
-```
-
-`make install` also installs the Linux desktop launcher to
-`~/.local/share/applications/slate.desktop` and the app icon to
-`~/.local/share/pixmaps/slate.png`.
-
-### Arch AUR Build Scripts
-
-This repo includes AUR packaging scripts under `packaging/aur/`:
-
-- `packaging/aur/slate-git/` (builds from latest GitHub `main`)
-- `packaging/aur/slate-bin/` (installs prebuilt Linux binary from GitHub releases)
-
-Build locally with:
-
-```sh
-cd packaging/aur/slate-git
-makepkg -si
-```
-
-Refresh package metadata with:
-
-```sh
-./packaging/aur/update-srcinfo.sh
-```
-
-CI can publish `slate-bin` to AUR via `.github/workflows/ci.yml` when the `GH_AUR_KEY`
-GitHub secret is configured with an SSH private key registered in your AUR account.
-
-### Cross-platform release artifacts
-
-```sh
-make release
-```
-
-`make release` writes artifacts into `build/`:
-- `slate-linux`
-- Windows NSIS installer (`*.exe`) when run on a native Windows host (MSVC toolchain)
-- macOS binaries when run on macOS, or when an osxcross toolchain is configured
-
-Notes:
-- Windows builds require `src-tauri/icons/icon.ico` (auto-generated from `icons/256x256.png` when `magick` is available).
-- Windows installer uses WebView2 `offlineInstaller` mode, so the runtime is bundled in the installer (larger installer size, no internet required at install time).
-- Build Windows installers from a native Windows shell with MSVC tools (`cl.exe`) available (e.g. "x64 Native Tools Command Prompt for VS"), not from Linux/WSL.
-- macOS cross-build from Linux is skipped unless `o64-clang` and `oa64-clang` are installed.
-
-### Development
-
-```sh
-npm install
-cargo tauri dev
-```
-
-This starts the Vite dev server with HMR for the frontend and compiles the Rust backend in debug mode. Changes to `.ts`/`.css` files hot-reload instantly. Rust changes trigger a recompile on save.
-
-### Debug build
-
-```sh
-# Rust backend only (fast iteration on backend changes)
-cd src-tauri && cargo check
-
-# TypeScript type-checking only
-npx tsc --noEmit
-
-# Full debug build (no optimizations, includes debug symbols)
-cargo tauri build --debug
-```
-
-Debug binary: `src-tauri/target/debug/slate`
-
-To see WebView devtools, right-click inside the app window during `cargo tauri dev`.
+See [`packaging/aur/README.md`](packaging/aur/README.md). `slate-git` builds from source; `slate-bin` installs the prebuilt Linux binary published by CI.
 
 ## Testing
 
-Run all tests:
-
 ```sh
-npm run test
+make test       # cargo test --workspace
+make perf       # startup + table perf checks (requires node; honors [perf].enabled)
 ```
 
-Run frontend-only tests:
+## Configuration
 
-```sh
-npm run test:ts
-```
-
-Run backend-only tests:
-
-```sh
-npm run test:rust
-```
-
-Record startup baseline metrics:
-
-```sh
-npm run perf:startup:record
-```
-
-Check startup regressions against the baseline:
-
-```sh
-npm run perf:startup:check
-```
-
-Current automated coverage:
-- TypeScript unit tests for fuzzy search scoring and app state updates
-- TypeScript unit tests for theme preset inventory
-- Rust unit tests for calc evaluation behavior
-- Rust integration-style unit tests for SQLite CRUD + ordering logic
-
-## Configuration (TOML)
-
-Config file location:
-- `$XDG_CONFIG_HOME/slate/config.toml`
-- fallback: `~/.config/slate/config.toml`
-
-The file is generated automatically on first run.
-Theme changes are picked up live while the app is running (typically within ~1-2 seconds).
-
-Example:
+See [docs/configuration.md](docs/configuration.md) for all keys. Minimal example:
 
 ```toml
 [theme]
 color_scheme = "gruvbox-light"
-accent = "auto"
-background = "plain"
-font = "jetbrains-mono"
-font_size = 14
 
 [editor]
-markdown_autoformat = true
-checklist_auto_reorder = true
 autosave = true
-format_on_save = false
-terminal_mode = false
 vim_mode = false
-date_format = "%Y-%m-%d"
-date_time_format = "%Y-%m-%d %H:%M"
-variable_autocomplete_min_chars = 3
 
 [editor.modules]
 math = true
 table = true
 variables = true
 style = true
-
-[special_notes]
-email_note_prefix = "inbox-email"
-email_rotation = "daily-local"
-
-[imap]
-host = "imap.example.com"
-port = 993
-username = ""
-password_env = "SLATE_IMAP_PASSWORD"
-folder = "INBOX"
-poll_seconds = 60
-auto_sync_on_startup = false
-initial_sync_max_messages = 200
-initial_sync_past_days = 1
-max_message_bytes = 8388608
-max_body_bytes = 524288
 ```
-
-Available `color_scheme` values:
-- `slate-light`
-- `slate-dark`
-- `catppuccin-mocha`
-- `catppuccin-latte`
-- `gruvbox-dark`
-- `gruvbox-light`
-- `dracula`
-- `dark`
-- `white`
-- `solarized-dark`
-- `solarized-light`
-- `nord`
-- `tokyo-night`
-- `one-dark`
-
-Available `accent` values:
-- `auto` (use the scheme default accent)
-- `amber`
-- `sage`
-- `rose`
-- `plum`
-- `cobalt`
-- `slate`
-- custom hex (example: `#4f7bd9`)
-
-Available `background` values:
-- `plain`
-- `lines`
-- `squares`
-- `dots`
-- `diagonal`
-
-Available `font` values:
-- `jetbrains-mono`
-- `fira-code`
-- `cascadia-code`
-- `iosevka`
-- `hack`
-- `source-code-pro`
-
-`font_size` range:
-- `11` to `28`
-
-Editor options:
-- `markdown_autoformat = true` enables Enter list continuation and table auto-alignment while editing markdown
-- `checklist_auto_reorder = true` automatically moves checked checklist items to the bottom and unchecked items to the top
-- `autosave = true` enables implicit saves in both GUI and terminal modes (idle flush + save-on-exit/switch flows)
-- when `autosave = false`, only explicit `:w` / `:wq` writes persist note body changes
-  - exception: `Ctrl+S` still performs a manual save in normal-mode/non-vim flows
-- `format_on_save = false` runs `:format` before save when enabled (Ctrl+S and autosave flush path)
-- `terminal_mode = true` makes `slate` default to terminal runtime (when launched from a TTY)
-- `vim_mode = true` enables modal Vim-style key mappings in GUI
-- `date_format` controls date insertion format for `Ctrl+Shift+D` and `:date`
-
-Variable options:
-- `[editor] variable_autocomplete_min_chars = 3` controls the minimum typed characters before variable suggestions appear
-
-Module defaults for new notes:
-- `[editor.modules] math = true` enables calc ghost/evaluation module
-- `[editor.modules] table = true` enables markdown table navigation/editing module
-- `[editor.modules] variables = true` enables variable features module
-- `[editor.modules] style = true` enables markdown styling/list helpers module
-- Active-note module state controls runtime behavior in both GUI and TUI
-
-Per-note module commands:
-- `:module status` shows current note module state
-- `:module on <math|table|variables|style>` enables one module for the active note
-- `:module off <math|table|variables|style>` disables one module for the active note
-- `:module toggle <math|table|variables|style>` toggles one module for the active note
-
-Special notes options:
-- `[special_notes] email_note_prefix` controls daily email note ids (default `inbox-email`)
-- `[special_notes] email_rotation` currently supports `daily-local`
-
-IMAP options:
-- `[imap] host` IMAP server host
-- `[imap] port` IMAP TLS port (typically `993`)
-- `[imap] username` account login name
-- `[imap] password_env` environment variable name containing IMAP password/app password
-- `[imap] folder` folder to sync (`INBOX` by default)
-- `[imap] poll_seconds` polling interval used by background sync loop
-- `[imap] auto_sync_on_startup` run IMAP polling in background during GUI/terminal sessions
-- `[imap] initial_sync_max_messages` first-run window: only last N messages are pulled before checkpoint exists
-- `[imap] initial_sync_past_days` first-run recency filter in days (`1` by default, `0` disables date filter)
-- `[imap] max_message_bytes` max raw message bytes stored in sidecar
-- `[imap] max_body_bytes` max message body bytes rendered into note content
-
-Supported `date_format` tokens:
-- `%Y` year (4 digit), `%y` year (2 digit)
-- `%m` month (01-12), `%d` day (01-31)
-- `%b` short month (`Jan`), `%B` full month (`January`)
 
 ## Architecture
 
-Tauri v2 app: Rust backend + vanilla TypeScript frontend.
-
-- **Frontend:** CodeMirror 6 editor, fuzzy switcher overlay, zero-framework vanilla TS
-- **Backend:** Rust with rusqlite (bundled SQLite, WAL mode), fend-core (calc engine), Tauri IPC commands, Unix socket IPC server
-- **Storage:** Single SQLite database, ULID-keyed notes, ISO 8601 timestamps
-
 ```
-                    Unix socket IPC
-┌─────────────────────────────────┐
-│          slate (Tauri v2)       │
-│                                 │
-│  Frontend        Backend        │
-│  ┌────────────┐  ┌────────────┐ │
-│  │ CodeMirror │  │ SQLite+WAL │ │
-│  │ Calc ghost │  │ fend-core  │ │
-│  │ Switcher   │  │ IPC server │ │
-│  │ Export     │  │ Export I/O │ │
-│  └────────────┘  └────────────┘ │
-└─────────────────────────────────┘
+crates/
+  editor-core/   # editing semantics: vim stepping, commands, markdown/table/list rules, folding, calc planning
+  app-core/      # SQLite storage, note sources, calc engine, cross-note index, config
+  tui/           # terminal app (package `slate`)
+    src/
+      lib.rs         # CLI parsing and mode selection (terminal, append, imap-sync)
+      terminal/      # editor runtime, rendering, input, overlays
+      commands/      # export (md/txt/pdf) and backup
+      imap.rs        # IMAP sync (feature `imap`)
+      bin/           # perf probes (note-startup, table-perf, perf-config)
 ```
 
-## Project structure
-
-```
-src/                          # Frontend (TypeScript)
-  main.ts                     # Entry point
-  app.ts                      # App shell, shortcuts, status bar, toast
-  api.ts                      # Typed Tauri invoke wrappers
-  state.ts                    # App state, note list, events
-  editor/
-    editor.ts                 # CodeMirror setup, autosave
-    calc-decoration.ts        # Inline calc ghost annotations
-  switcher/
-    switcher.ts               # Fuzzy search overlay
-    fuzzy.ts                  # Fuzzy match scoring
-  styles/                     # CSS (theme, editor, switcher, app)
-
-src-tauri/                    # Backend (Rust)
-  src/
-    lib.rs                    # Tauri app setup, plugin registration
-    main.rs                   # Binary entry point
-    commands/
-      notes.rs                # Note CRUD
-      calc.rs                 # Batch line evaluation
-      export.rs               # File export
-    calc/
-      engine.rs               # fend-core wrapper + heuristics
-    ipc/
-      server.rs               # Unix socket listener
-
-crates/app-core/              # Shared backend core
-  src/storage/
-    sqlite.rs                 # Connection pool, schema bootstrap, WAL, queries
-    models.rs                 # Note + reminder models
-  migrations/
-    0001_init.sql             # Canonical DB schema
-```
+Editing semantics live in `editor-core`; the terminal app is an input/rendering layer. See [docs/architecture.md](docs/architecture.md).
 
 ## License
 

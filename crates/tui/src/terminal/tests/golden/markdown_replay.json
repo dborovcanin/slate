@@ -1,0 +1,153 @@
+{
+  "cases": [
+    {
+      "expected": {
+        "cursor_col": 6,
+        "cursor_line": 1,
+        "lines": [
+          "- [ ] task",
+          "- [ ] "
+        ]
+      },
+      "initial_cursor_col": 10,
+      "initial_cursor_line": 0,
+      "initial_text": "- [ ] task",
+      "keys": [
+        "enter"
+      ],
+      "name": "checklist_enter_continues_with_unchecked_item"
+    },
+    {
+      "expected": {
+        "cursor_col": 4,
+        "cursor_line": 1,
+        "lines": [
+          "9. buy milk",
+          "10. "
+        ]
+      },
+      "initial_cursor_col": 11,
+      "initial_cursor_line": 0,
+      "initial_text": "9. buy milk",
+      "keys": [
+        "enter"
+      ],
+      "name": "ordered_enter_renumbers_next_item"
+    },
+    {
+      "expected": {
+        "cursor_col": 9,
+        "cursor_line": 1,
+        "lines": [
+          "- parent",
+          "  * child"
+        ]
+      },
+      "initial_cursor_col": 7,
+      "initial_cursor_line": 1,
+      "initial_text": "- parent\n- child",
+      "keys": [
+        "tab"
+      ],
+      "name": "tab_rewrites_unordered_marker_for_nested_depth"
+    },
+    {
+      "expected": {
+        "cursor_col": 8,
+        "cursor_line": 0,
+        "lines": [
+          "3. child"
+        ]
+      },
+      "initial_cursor_col": 11,
+      "initial_cursor_line": 0,
+      "initial_text": "  2.1 child",
+      "keys": [
+        "backtab"
+      ],
+      "name": "backtab_outdents_nested_ordered_marker"
+    },
+    {
+      "expected": {
+        "cursor_col": 8,
+        "cursor_line": 0,
+        "lines": [
+          "| a   |     | b   |",
+          "| --- | --- | --- |",
+          "| 1   |     | 2   |"
+        ]
+      },
+      "initial_cursor_col": 2,
+      "initial_cursor_line": 0,
+      "initial_text": "| a | b |\n| --- | --- |\n| 1 | 2 |",
+      "keys": [
+        "char:|"
+      ],
+      "name": "table_pipe_insert_column_in_header_block"
+    },
+    {
+      "expected": {
+        "cursor_col": 8,
+        "cursor_line": 0,
+        "lines": [
+          "| aaa bb |"
+        ]
+      },
+      "initial_cursor_col": 8,
+      "initial_cursor_line": 0,
+      "initial_text": "| aaa | bb |",
+      "keys": [
+        "ctrl-backspace"
+      ],
+      "name": "table_ctrl_backspace_structural_merge"
+    },
+    {
+      "expected": {
+        "cursor_col": 8,
+        "cursor_line": 0,
+        "lines": [
+          "| aaa bb |"
+        ]
+      },
+      "initial_cursor_col": 5,
+      "initial_cursor_line": 0,
+      "initial_text": "| aaa | bb |",
+      "keys": [
+        "ctrl-delete"
+      ],
+      "name": "table_ctrl_delete_structural_merge"
+    },
+    {
+      "expected": {
+        "cursor_col": 8,
+        "cursor_line": 0,
+        "lines": [
+          "| aaa |     | bb  |"
+        ]
+      },
+      "initial_cursor_col": 8,
+      "initial_cursor_line": 0,
+      "initial_text": "| aaa |     | bb  |",
+      "keys": [
+        "backspace"
+      ],
+      "name": "table_backspace_is_noop_in_empty_cell"
+    },
+    {
+      "expected": {
+        "cursor_col": 8,
+        "cursor_line": 0,
+        "lines": [
+          "| aaa |     | bb  |"
+        ]
+      },
+      "initial_cursor_col": 8,
+      "initial_cursor_line": 0,
+      "initial_text": "| aaa |     | bb  |",
+      "keys": [
+        "delete"
+      ],
+      "name": "table_delete_is_noop_in_empty_cell"
+    }
+  ]
+}
