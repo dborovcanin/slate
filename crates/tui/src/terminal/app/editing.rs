@@ -2179,9 +2179,7 @@ impl TerminalApp {
         if !is_markdown_table_line(&current_line) {
             return false;
         }
-        if crate::editor_core::table::is_delimiter_row(
-            &crate::editor_core::table::split_table_cells(&current_line),
-        ) {
+        if crate::editor_core::table::is_delimiter_line_in(&self.editor.lines, line_idx) {
             return false;
         }
 

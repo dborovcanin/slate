@@ -789,7 +789,8 @@ fn table_autoformat_rule(
             && cursor_line_no <= end_line
         {
             let source_idx = cursor_line_no.saturating_sub(start_line);
-            let had_delimiter = original_lines.iter().any(|line| is_table_separator(line));
+            let had_delimiter =
+                (0..original_lines.len()).any(|idx| table::is_delimiter_line_in(&original_lines, idx));
             let inserted_delimiter = !had_delimiter
                 && original_lines.len() >= 2
                 && formatted_lines.len() == original_lines.len() + 1;
@@ -966,23 +967,45 @@ fn is_table_line(text: &str) -> bool {
     table::is_table_line(text)
 }
 
-fn is_table_separator(text: &str) -> bool {
-    if !table::is_table_line(text) {
-        return false;
-    }
-    let cells = table::split_table_cells(text);
-    table::is_delimiter_row(&cells)
+/// Whether (1-based) `line_no` directly follows its table's header rows.
+pub(crate) fn follows_table_header(ctx: &ResolvedContext<'_>, line_no: usize) -> bool {
+    let line_count = ctx.line_count();
+    table::follows_table_header(line_no.saturating_sub(1), |idx| {
+        (idx < line_count).then(|| ctx.line_text(idx + 1))
+    })
 }
 
-fn is_table_separator_with_cache(
-    text: &str,
+fn is_table_separator_at(ctx: &ResolvedContext<'_>, line_no: usize) -> bool {
+    let text = ctx.line_text(line_no);
+    table::is_table_line(text)
+        && table::is_delimiter_row_at(
+            &table::split_table_cells(text),
+            follows_table_header(ctx, line_no),
+        )
+}
+
+fn is_table_separator_at_with_cache(
+    ctx: &ResolvedContext<'_>,
+    line_no: usize,
     table_format_cache: &mut table::TableFormatCache,
 ) -> bool {
-    if !table::is_table_line(text) {
-        return false;
-    }
-    let cells = table::split_table_cells_with_cache(text, table_format_cache);
-    table::is_delimiter_row(&cells)
+    let text = ctx.line_text(line_no);
+    table::is_table_line(text)
+        && table::is_delimiter_row_at(
+            &table::split_table_cells_with_cache(text, table_format_cache),
+            follows_table_header(ctx, line_no),
+        )
+}
+
+/// Line number of the delimiter row in table block `start_line..=end_line`.
+fn table_delimiter_line_number_with_cache(
+    ctx: &ResolvedContext<'_>,
+    start_line: usize,
+    end_line: usize,
+    table_format_cache: &mut table::TableFormatCache,
+) -> Option<usize> {
+    (start_line..=end_line)
+        .find(|&line_no| is_table_separator_at_with_cache(ctx, line_no, table_format_cache))
 }
 
 fn table_header_line_number_with_cache(
@@ -991,15 +1014,10 @@ fn table_header_line_number_with_cache(
     end_line: usize,
     table_format_cache: &mut table::TableFormatCache,
 ) -> usize {
-    for line_no in start_line..=end_line {
-        if is_table_separator_with_cache(ctx.line_text(line_no), table_format_cache) {
-            if line_no > start_line {
-                return line_no - 1;
-            }
-            break;
-        }
+    match table_delimiter_line_number_with_cache(ctx, start_line, end_line, table_format_cache) {
+        Some(line_no) if line_no > start_line => line_no - 1,
+        _ => start_line,
     }
-    start_line
 }
 
 fn table_continuation_rule(
@@ -1010,7 +1028,7 @@ fn table_continuation_rule(
     if !is_table_line(&line.text) {
         return None;
     }
-    if is_table_separator(&line.text) {
+    if is_table_separator_at(ctx, line.number) {
         return None;
     }
 
@@ -1159,7 +1177,7 @@ fn table_tab_rule(ctx: &ResolvedContext<'_>, options: &TabRuleOptions) -> Option
             break;
         }
 
-        if is_table_separator(&line.text) && current_line_idx != start_line_idx {
+        if is_table_separator_at(ctx, current_line_idx) && current_line_idx != start_line_idx {
             if outdent {
                 current_line_idx = current_line_idx.saturating_sub(1);
             } else {
@@ -1320,7 +1338,7 @@ pub fn run_table_multiline_break_rule_with_table_cache(
     if !is_table_line(&line.text) {
         return None;
     }
-    if is_table_separator_with_cache(&line.text, table_format_cache) {
+    if is_table_separator_at_with_cache(ctx, line.number, table_format_cache) {
         return None;
     }
     let block = ctx.table_range_at_line(line.number, 1)?;
@@ -1371,9 +1389,8 @@ pub fn run_table_multiline_break_rule_with_table_cache(
     row_cells.insert(relative_row + 1, next_row_cells);
     row_continuations.insert(relative_row + 1, true);
 
-    let had_delimiter_row = row_cells
-        .iter()
-        .any(|cells| table::is_delimiter_row(cells.as_slice()));
+    let had_delimiter_row =
+        table::table_block_delimiter_row(&row_cells, &row_continuations).is_some();
 
     let raw_lines: Vec<String> = row_cells
         .iter()
@@ -1501,8 +1518,8 @@ pub fn run_table_duplicate_delimiter_rule(ctx: &ResolvedContext<'_>) -> Option<E
     // still being typed (`| --- |` of `| --- | --- |`) is left alone.
     if !is_table_line(&previous.text)
         || cells.len() != previous_cells.len()
-        || !table::is_delimiter_row(&cells)
-        || !table::is_delimiter_row(&previous_cells)
+        || !table::is_delimiter_shaped_row(&cells)
+        || !table::is_delimiter_row_at(&previous_cells, follows_table_header(ctx, previous.number))
     {
         return None;
     }
@@ -1535,12 +1552,13 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
 
     // Only an established table (one with a `| --- |` delimiter row) gains a
     // column; while a header row is still being typed, `|` is plain text.
-    let has_delimiter_row = (block.start_line..=block.end_line).any(|line_no| {
-        table::is_delimiter_row(&table::split_table_cells_with_cache(
-            ctx.line_text(line_no),
-            table_format_cache,
-        ))
-    });
+    let has_delimiter_row = table_delimiter_line_number_with_cache(
+        ctx,
+        block.start_line,
+        block.end_line,
+        table_format_cache,
+    )
+    .is_some();
     if !has_delimiter_row {
         return None;
     }
@@ -1580,8 +1598,9 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
         }
     }
     let insert_at = (current_cell + 1).min(column_count);
-    for cells in row_cells.iter_mut() {
-        let placeholder = if table::is_delimiter_row(cells) {
+    let delimiter_row = table::table_block_delimiter_row(&row_cells, &row_continuations);
+    for (row_idx, cells) in row_cells.iter_mut().enumerate() {
+        let placeholder = if Some(row_idx) == delimiter_row {
             "---".to_string()
         } else {
             String::new()
@@ -1791,12 +1810,15 @@ fn table_noop_at(line_from: usize, col: usize) -> EditOperation {
 }
 
 fn merge_cells_on_line(
+    ctx: &ResolvedContext<'_>,
     line: &crate::types::LineContext,
     current_cell: usize,
     backward: bool,
 ) -> Option<EditOperation> {
     let mut cells = table::split_table_cells(&line.text);
-    if cells.is_empty() || table::is_delimiter_row(&cells) {
+    if cells.is_empty()
+        || table::is_delimiter_row_at(&cells, follows_table_header(ctx, line.number))
+    {
         return None;
     }
 
@@ -1887,7 +1909,7 @@ pub fn run_table_boundary_edit_rules(
                 return Some(table_noop_at(line.from, head_col));
             }
             return Some(
-                merge_cells_on_line(&line, current_cell, true)
+                merge_cells_on_line(ctx, &line, current_cell, true)
                     .unwrap_or_else(|| table_noop_at(line.from, edit_start)),
             );
         }
@@ -1896,7 +1918,7 @@ pub fn run_table_boundary_edit_rules(
             return Some(table_noop_at(line.from, head_col));
         }
         return Some(
-            merge_cells_on_line(&line, current_cell, false)
+            merge_cells_on_line(ctx, &line, current_cell, false)
                 .unwrap_or_else(|| table_noop_at(line.from, anchor_col)),
         );
     }
@@ -2168,6 +2190,18 @@ mod tests {
             "| a     | b   |\n| ----- | --- |\n| 12345 | 2   |"
         );
         assert!(op.selection.is_some());
+    }
+
+    #[test]
+    fn run_doc_change_rules_keeps_short_gfm_delimiter_as_the_delimiter() {
+        let text = "|a|b|\n|--|--|\n|1|2|";
+        let head = text.len();
+        let doc = snapshot_with_changed_range(text, head, head, text.find("|1").unwrap(), head);
+        let op = run_doc_change_rules(&doc, TextRuleOptions::default()).expect("operation");
+        assert_eq!(
+            apply_operation(doc.text(), &op),
+            "| a   | b   |\n| --- | --- |\n| 1   | 2   |"
+        );
     }
 
     #[test]

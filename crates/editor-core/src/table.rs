@@ -178,13 +178,6 @@ fn table_cursor_motion_navigation_anchor(cell: &TableCursorCellInfo) -> usize {
     }
 }
 
-fn is_table_delimiter_line(text: &str) -> bool {
-    is_table_line(text)
-        && text
-            .chars()
-            .all(|ch| ch == '|' || ch == ':' || ch == '-' || ch.is_whitespace())
-}
-
 fn table_cursor_motion_target_for_cell(
     lines: &[String],
     line_index: usize,
@@ -250,7 +243,7 @@ pub fn plan_table_cursor_motion(
             }
             for target_line in (0..line_index).rev() {
                 let target = lines.get(target_line)?;
-                if is_table_delimiter_line(target) {
+                if is_delimiter_line_in(lines, target_line) {
                     continue;
                 }
                 let pipes = table_pipe_positions(target);
@@ -291,8 +284,7 @@ pub fn plan_table_cursor_motion(
                 );
             }
             for target_line in (line_index + 1)..lines.len() {
-                let target = lines.get(target_line)?;
-                if is_table_delimiter_line(target) {
+                if is_delimiter_line_in(lines, target_line) {
                     continue;
                 }
                 return table_cursor_motion_target_for_cell(lines, target_line, 0, true);
@@ -304,8 +296,7 @@ pub fn plan_table_cursor_motion(
         }
         TableCursorMotionDirection::Up => {
             for target_line in (0..line_index).rev() {
-                let target = lines.get(target_line)?;
-                if is_table_delimiter_line(target) {
+                if is_delimiter_line_in(lines, target_line) {
                     continue;
                 }
                 if let Some(target) = table_cursor_motion_target_for_cell(
@@ -324,8 +315,7 @@ pub fn plan_table_cursor_motion(
         }
         TableCursorMotionDirection::Down => {
             for target_line in (line_index + 1)..lines.len() {
-                let target = lines.get(target_line)?;
-                if is_table_delimiter_line(target) {
+                if is_delimiter_line_in(lines, target_line) {
                     continue;
                 }
                 if let Some(target) = table_cursor_motion_target_for_cell(
@@ -594,12 +584,18 @@ fn build_logical_row_cache(
 ) -> Option<TableLogicalRowCache> {
     let mut delimiter_row: Option<usize> = None;
     let mut line_hashes = Vec::with_capacity(block_end.saturating_sub(block_start) + 1);
+    let after_header = after_header_row(block_end + 1 - block_start, |i| {
+        lines
+            .get(block_start + i)
+            .is_some_and(|line| is_table_continuation_line(line))
+    })
+    .map(|i| block_start + i);
     for idx in block_start..=block_end {
         let line = lines.get(idx)?;
         line_hashes.push(text_hash(line));
         if delimiter_row.is_none() {
             let row_cells = split_table_cells(line);
-            if is_delimiter_row(&row_cells) {
+            if is_delimiter_row_at(&row_cells, Some(idx) == after_header) {
                 delimiter_row = Some(idx);
             }
         }
@@ -772,34 +768,85 @@ pub fn table_column_count(line: &str) -> Option<usize> {
     Some(split_row_cells_raw(line)?.len().max(1))
 }
 
+/// Dash count of a delimiter-shaped cell (`:?-+:?`), or None.
+fn delimiter_cell_dashes(cell: &str) -> Option<usize> {
+    let trimmed = cell.trim();
+    let core = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    let core = core.strip_suffix(':').unwrap_or(core);
+    (!core.is_empty() && core.bytes().all(|b| b == b'-')).then_some(core.len())
+}
+
+/// A `---`-style delimiter cell (at least 3 dashes), recognized anywhere.
 pub fn is_delimiter_cell(cell: &str) -> bool {
-    let bytes = cell.trim().as_bytes();
-    if bytes.is_empty() {
+    delimiter_cell_dashes(cell).is_some_and(|dashes| dashes >= 3)
+}
+
+/// Whether `cells` form the table's delimiter row.
+///
+/// `---`-style rows count anywhere (empty cells allowed while one is being
+/// typed). Short GFM delimiters (`-`, `--`, `:-:`) count only when
+/// `after_header` — the row directly follows the header (and its `|>`
+/// continuation rows), where GFM requires the delimiter. Elsewhere a row of
+/// `-` cells is data, e.g. "n/a" placeholders.
+pub fn is_delimiter_row_at(cells: &[String], after_header: bool) -> bool {
+    is_delimiter_row(cells)
+        || (after_header
+            && !cells.is_empty()
+            && cells.iter().all(|cell| delimiter_cell_dashes(cell).is_some()))
+}
+
+/// Whether a row of delimiter-shaped cells (short or `---`-style).
+pub fn is_delimiter_shaped_row(cells: &[String]) -> bool {
+    is_delimiter_row_at(cells, true)
+}
+
+/// Whether table line `idx` sits where a short GFM delimiter is allowed: right
+/// after the block's header row and the header's continuation rows.
+/// `line_at(i)` yields line `i`, or None past the document bounds.
+pub fn follows_table_header<'a>(idx: usize, line_at: impl Fn(usize) -> Option<&'a str>) -> bool {
+    let mut i = idx;
+    while i > 0 {
+        i -= 1;
+        let Some(line) = line_at(i).filter(|line| is_table_line(line)) else {
+            return false;
+        };
+        if !is_table_continuation_line(line) {
+            return i == 0 || !line_at(i - 1).is_some_and(is_table_line);
+        }
+    }
+    false
+}
+
+/// Position-aware delimiter check for line `idx` of `lines`.
+pub fn is_delimiter_line_in(lines: &[String], idx: usize) -> bool {
+    let Some(line) = lines.get(idx) else {
         return false;
-    }
+    };
+    is_table_line(line)
+        && is_delimiter_row_at(
+            &split_table_cells(line),
+            follows_table_header(idx, |i| lines.get(i).map(String::as_str)),
+        )
+}
 
-    let mut i = 0usize;
-    if bytes[i] == b':' {
-        i += 1;
-    }
+/// Index of the row that may hold a short delimiter: the first row after the
+/// header that is not a `|>` continuation row.
+fn after_header_row(row_count: usize, continuation: impl Fn(usize) -> bool) -> Option<usize> {
+    (1..row_count).find(|&i| !continuation(i))
+}
 
-    let dash_start = i;
-    while i < bytes.len() && bytes[i] == b'-' {
-        i += 1;
-    }
-    if i.saturating_sub(dash_start) < 3 {
-        return false;
-    }
-
-    if i < bytes.len() && bytes[i] == b':' {
-        i += 1;
-    }
-
-    i == bytes.len()
+/// Index of the delimiter row among a whole table block's rows (cells plus
+/// continuation flags, one entry per line).
+pub fn table_block_delimiter_row(rows: &[Vec<String>], continuation: &[bool]) -> Option<usize> {
+    let after_header =
+        after_header_row(rows.len(), |i| continuation.get(i).copied().unwrap_or(false));
+    rows.iter()
+        .enumerate()
+        .position(|(i, row)| is_delimiter_row_at(row, Some(i) == after_header))
 }
 
 pub fn parse_align(cell: &str) -> TableAlign {
-    if !is_delimiter_cell(cell) {
+    if delimiter_cell_dashes(cell).is_none() {
         return TableAlign::None;
     }
     let trimmed = cell.trim();
@@ -892,18 +939,20 @@ pub fn format_table_lines_with_cache(
         })
         .collect();
 
-    let has_delimiter_row = normalized_rows.iter().any(|row| is_delimiter_row(row));
     let mut normalized_rows = normalized_rows;
     let mut row_cont = row_cont;
+    let mut after_header = after_header_row(normalized_rows.len(), |i| row_cont[i]);
+    let has_delimiter_row = table_block_delimiter_row(&normalized_rows, &row_cont).is_some();
     if !has_delimiter_row && normalized_rows.len() >= 2 {
         normalized_rows.insert(1, vec!["---".to_string(); column_count]);
         row_cont.insert(1, false);
+        after_header = Some(1);
     }
 
     let mut normalized_content: Vec<Vec<String>> = Vec::with_capacity(normalized_rows.len());
     let mut delimiter_flags: Vec<bool> = Vec::with_capacity(normalized_rows.len());
     for (row_idx, row) in normalized_rows.iter().enumerate() {
-        let delimiter = is_delimiter_row(row);
+        let delimiter = is_delimiter_row_at(row, Some(row_idx) == after_header);
         delimiter_flags.push(delimiter);
         let continuation = *row_cont.get(row_idx).unwrap_or(&false);
         let mut out = Vec::with_capacity(column_count);
@@ -930,8 +979,8 @@ pub fn format_table_lines_with_cache(
         for (row_idx, row) in normalized_content.iter().enumerate() {
             let cell = row.get(col).map_or("", String::as_str);
             if delimiter_flags.get(row_idx).copied().unwrap_or(false) {
-                let marker_len = cell.chars().filter(|c| *c == ':').count();
-                width = width.max(marker_len);
+                // Alignment colons widen the column (`:---:` needs 5).
+                width = width.max(min_delimiter_len(parse_align(cell)));
             } else {
                 width = width.max(table_cell_display_width(cell));
             }
@@ -980,8 +1029,7 @@ pub fn format_table_lines_with_cache(
     // Delimiter cells must render at least `---` (3 dashes), so enforce a
     // floor on every column width — but only when the table actually has
     // (or is about to get) a delimiter row.
-    let has_delimiter_after_normalization = normalized_rows.iter().any(|row| is_delimiter_row(row));
-    if has_delimiter_after_normalization {
+    if delimiter_flags.contains(&true) {
         for w in widths.iter_mut() {
             *w = (*w).max(3);
         }
@@ -996,7 +1044,7 @@ pub fn format_table_lines_with_cache(
         .zip(normalized_content.iter())
         .enumerate()
         .map(|(row_idx, (raw_row, normalized))| {
-            let delimiter = is_delimiter_row(raw_row);
+            let delimiter = delimiter_flags[row_idx];
             let continuation = *row_cont.get(row_idx).unwrap_or(&false);
             let mut out = String::new();
             if continuation {
@@ -1311,6 +1359,55 @@ mod tests {
             .expect("after");
         assert_eq!(after.line_index, 3);
         assert_eq!(after.col, 0);
+    }
+
+    fn owned(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|line| line.to_string()).collect()
+    }
+
+    #[test]
+    fn short_gfm_delimiter_counts_only_after_the_header() {
+        let lines = owned(&["before", "| a | b |", "|-|:--:|", "| - | - |", "| 1 | 2 |"]);
+        assert!(!is_delimiter_line_in(&lines, 1));
+        assert!(is_delimiter_line_in(&lines, 2));
+        assert!(!is_delimiter_line_in(&lines, 3), "`-` placeholders are data");
+
+        let with_cont = owned(&["| a | b |", "|> a2 | |", "|--|--|"]);
+        assert!(is_delimiter_line_in(&with_cont, 2), "header continuation rows are skipped");
+
+        let dashes = |cells: &[&str]| cells.iter().map(|c| c.to_string()).collect::<Vec<_>>();
+        assert!(is_delimiter_row_at(&dashes(&["---", ""]), false));
+        assert!(!is_delimiter_row_at(&dashes(&["--", ""]), true), "short needs every cell");
+        assert!(!is_delimiter_row_at(&dashes(&["", ""]), true));
+    }
+
+    #[test]
+    fn format_table_lines_normalizes_short_delimiter_without_adding_another() {
+        let out = format_table_lines(&owned(&["|a|b|c|", "|-|:-:|--:|", "|1|2|3|"]));
+        assert_eq!(
+            out,
+            owned(&["| a   | b     | c    |", "| --- | :---: | ---: |", "| 1   | 2     | 3    |"])
+        );
+        let out = format_table_lines(&owned(&["| a | b |", "| - | - |", "| 1 | 2 |"]));
+        assert_eq!(out[1], "| --- | --- |");
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn short_delimiter_keeps_later_dash_rows_as_data() {
+        let out = format_table_lines(&owned(&["| a | b |", "| --- | --- |", "| - | - |"]));
+        assert_eq!(out[2], "| -   | -   |");
+    }
+
+    #[test]
+    fn vertical_motion_does_not_skip_empty_data_rows() {
+        let lines = owned(&["| a   | b   |", "| --- | --- |", "| 1   | 2   |", "|     |     |", "| 3   | 4   |"]);
+        let target =
+            plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Down).expect("target");
+        assert_eq!(target.line_index, 3);
+        let target =
+            plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Up).expect("target");
+        assert_eq!(target.line_index, 0, "delimiter row is skipped");
     }
 
     #[test]

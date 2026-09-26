@@ -1352,20 +1352,6 @@ fn split_table_cells(line: &str) -> Vec<String> {
     table::split_table_cells(line)
 }
 
-fn is_table_delimiter_cell(cell: &str) -> bool {
-    let trimmed = cell.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
-    let core = without_left.strip_suffix(':').unwrap_or(without_left);
-    core.len() >= 3 && core.bytes().all(|byte| byte == b'-')
-}
-
-fn is_table_delimiter_row(cells: &[String]) -> bool {
-    !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
-}
-
 #[derive(Debug, Clone)]
 struct TableDataRows {
     rows: Vec<Vec<usize>>,
@@ -1374,17 +1360,8 @@ struct TableDataRows {
 }
 
 fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> TableDataRows {
-    let mut delimiter_row: Option<usize> = None;
-    for row_idx in table_start..=table_end {
-        let Some(line) = lines.get(row_idx) else {
-            continue;
-        };
-        let cells = split_table_cells(line);
-        if is_table_delimiter_row(&cells) {
-            delimiter_row = Some(row_idx);
-            break;
-        }
-    }
+    let delimiter_row =
+        (table_start..=table_end).find(|&row_idx| table::is_delimiter_line_in(lines, row_idx));
     let Some(data_start) = delimiter_row.map(|row| row.saturating_add(1)) else {
         return TableDataRows {
             rows: Vec::new(),
@@ -1401,9 +1378,6 @@ fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Ta
         };
         let cells = split_table_cells(line);
         col_count_for_line.insert(row_idx, cells.len());
-        if is_table_delimiter_row(&cells) {
-            continue;
-        }
         if table::is_table_continuation_line(line) {
             if rows.is_empty() {
                 rows.push(vec![row_idx]);

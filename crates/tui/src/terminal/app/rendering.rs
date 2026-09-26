@@ -1995,6 +1995,8 @@ impl TerminalApp {
             && is_markdown_table_line(rendered_line.as_ref())
         {
             let col_widths = self.table_display_col_widths_for_line(line_idx);
+            let delimiter =
+                crate::editor_core::table::is_delimiter_line_in(&self.editor.lines, line_idx);
             if !col_widths.is_empty() {
                 if is_cursor_line && cursor_line_override.is_none() {
                     // Cursor row: render from a RAW-marker reflow so
@@ -2008,11 +2010,13 @@ impl TerminalApp {
                     let raw_display = reformat_table_cursor_row_raw(
                         rendered_line.as_ref(),
                         &col_widths,
+                        delimiter,
                         cursor,
                     );
                     let (collapsed_display, mapped_col, _) = reformat_table_row_for_display(
                         rendered_line.as_ref(),
                         &col_widths,
+                        delimiter,
                         Some(cursor),
                     );
                     // Focused-cell pipe highlight in RAW display coords.
@@ -2030,6 +2034,7 @@ impl TerminalApp {
                     let (display_line, _, _) = reformat_table_row_for_display(
                         rendered_line.as_ref(),
                         &col_widths,
+                        delimiter,
                         None,
                     );
                     rendered_line = Cow::Owned(display_line);

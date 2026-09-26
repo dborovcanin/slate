@@ -229,9 +229,16 @@ impl TableEvalCache {
         let mut delimiter_row: Option<usize> = None;
         let mut data_rows: Vec<Vec<usize>> = Vec::new();
         let mut row_lookup: FxHashMap<usize, usize> = FxHashMap::default();
+        let after_header = ((start + 1)..=end).find(|&idx| {
+            !lines
+                .get(idx)
+                .is_some_and(|line| line.trim_start().starts_with("|>"))
+        });
         for row_idx in start..=end {
             let row_cells = self.cells_for_line(lines, row_idx)?.clone();
-            if delimiter_row.is_none() && is_table_delimiter_row(&row_cells) {
+            if delimiter_row.is_none()
+                && is_table_delimiter_row_at(&row_cells, Some(row_idx) == after_header)
+            {
                 delimiter_row = Some(row_idx);
                 continue;
             }
@@ -1258,19 +1265,25 @@ fn table_coordinate_ref_regex() -> &'static Regex {
     })
 }
 
-fn is_table_delimiter_cell(cell: &str) -> bool {
+/// Dash count of a delimiter-shaped cell (`:?-+:?`), or None.
+fn delimiter_cell_dashes(cell: &str) -> Option<usize> {
     let trimmed = cell.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-
-    let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
-    let core = without_left.strip_suffix(':').unwrap_or(without_left);
-    core.len() >= 3 && core.bytes().all(|byte| byte == b'-')
+    let core = trimmed.strip_prefix(':').unwrap_or(trimmed);
+    let core = core.strip_suffix(':').unwrap_or(core);
+    (!core.is_empty() && core.bytes().all(|b| b == b'-')).then_some(core.len())
 }
 
-fn is_table_delimiter_row(cells: &[String]) -> bool {
-    !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
+/// Mirrors `editor_core::table::is_delimiter_row_at`: `---`-style rows count
+/// anywhere (empty cells allowed); short GFM delimiters (`-`, `:-:`) only
+/// directly after the header rows.
+fn is_table_delimiter_row_at(cells: &[String], after_header: bool) -> bool {
+    let dashes: Vec<Option<usize>> = cells.iter().map(|c| delimiter_cell_dashes(c)).collect();
+    let strict = dashes.iter().any(|d| d.is_some_and(|n| n >= 3))
+        && cells
+            .iter()
+            .zip(&dashes)
+            .all(|(cell, d)| d.is_some_and(|n| n >= 3) || cell.trim().is_empty());
+    strict || (after_header && !cells.is_empty() && dashes.iter().all(Option::is_some))
 }
 
 fn logical_row_cell_text(
@@ -1472,7 +1485,7 @@ fn collect_table_formula_terms(
     table_eval_cache: &mut TableEvalCache,
 ) -> Option<Vec<String>> {
     let current_cells = table_eval_cache.cells_for_line(lines, line_idx)?.clone();
-    if is_table_delimiter_row(&current_cells) {
+    if is_table_delimiter_row_at(&current_cells, false) {
         return None;
     }
     if formula_col >= current_cells.len() {
@@ -1492,7 +1505,7 @@ fn collect_table_formula_terms(
                         continue;
                     };
                     let trimmed = cell.trim();
-                    if trimmed.is_empty() || is_table_delimiter_cell(&cell) {
+                    if trimmed.is_empty() || delimiter_cell_dashes(&cell).is_some() {
                         continue;
                     }
                     if !trimmed.chars().any(|c| c.is_ascii_digit()) {
@@ -1503,7 +1516,7 @@ fn collect_table_formula_terms(
             } else {
                 for cell in current_cells.iter().take(formula_col) {
                     let trimmed = cell.trim();
-                    if trimmed.is_empty() || is_table_delimiter_cell(cell) {
+                    if trimmed.is_empty() || delimiter_cell_dashes(cell).is_some() {
                         continue;
                     }
                     if !trimmed.chars().any(|c| c.is_ascii_digit()) {
@@ -2724,6 +2737,26 @@ mod tests {
             "| a | 10 | |".to_string(),
             "| b | 20 | |".to_string(),
             "| c | 0 | :=(1,2) + (2,2) |".to_string(),
+        ];
+        let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(
+            res.table_cell_results[4]
+                .iter()
+                .find(|c| c.cell_index == 2)
+                .map(|c| c.value.clone()),
+            Some("30".to_string())
+        );
+    }
+
+    #[test]
+    fn note_eval_table_coordinate_reference_accepts_short_gfm_delimiter() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "|item|value|total|".to_string(),
+            "|-|:--|--:|".to_string(),
+            "|a|10||".to_string(),
+            "|b|20||".to_string(),
+            "|c|0|:=(1,2) + (2,2)|".to_string(),
         ];
         let res = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(

@@ -286,11 +286,11 @@ pub(super) fn table_block_bounds_for_line(
 /// content). Each non-separator cell contributes its visible width (after
 /// inline marker collapsing). Columns are at least 3 wide to accommodate `---`.
 pub(super) fn table_display_col_widths(block_lines: &[String]) -> Vec<usize> {
-    use crate::editor_core::table::{is_delimiter_row, split_table_cells};
+    use crate::editor_core::table::{is_delimiter_line_in, split_table_cells};
     let mut col_widths: Vec<usize> = Vec::new();
-    for line in block_lines {
+    for (idx, line) in block_lines.iter().enumerate() {
         let cells = split_table_cells(line);
-        if cells.is_empty() || is_delimiter_row(&cells) {
+        if cells.is_empty() || is_delimiter_line_in(block_lines, idx) {
             continue;
         }
         for (i, cell) in cells.iter().enumerate() {
@@ -322,12 +322,16 @@ pub(super) fn table_display_col_widths(block_lines: &[String]) -> Vec<usize> {
 /// Whitespace typed between the cursor cell's content and the cursor (or
 /// after the closing pipe) is kept, so the caret sits where the next typed
 /// character lands instead of snapping back onto content or a pipe.
+///
+/// `delimiter` says whether the row is the table's delimiter row; that depends
+/// on the row's position in its block, which only the caller knows.
 pub(super) fn reformat_table_row_for_display(
     line: &str,
     col_widths: &[usize],
+    delimiter: bool,
     cursor_col: Option<usize>,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
-    reformat_table_row_impl(line, col_widths, cursor_col, cursor_col.is_some())
+    reformat_table_row_impl(line, col_widths, delimiter, cursor_col, cursor_col.is_some())
 }
 
 /// Raw-marker reflow of the cursor row (markers kept for `render_line`
@@ -336,19 +340,21 @@ pub(super) fn reformat_table_row_for_display(
 pub(super) fn reformat_table_cursor_row_raw(
     line: &str,
     col_widths: &[usize],
+    delimiter: bool,
     cursor_col: usize,
 ) -> String {
-    reformat_table_row_impl(line, col_widths, Some(cursor_col), false).0
+    reformat_table_row_impl(line, col_widths, delimiter, Some(cursor_col), false).0
 }
 
 fn reformat_table_row_impl(
     line: &str,
     col_widths: &[usize],
+    is_sep: bool,
     cursor_col: Option<usize>,
     collapse: bool,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
     use crate::editor_core::table::{
-        is_delimiter_row, is_table_continuation_line, normalize_delimiter_cell_for_width,
+        is_table_continuation_line, normalize_delimiter_cell_for_width,
         split_table_cells, table_pipe_positions,
     };
 
@@ -364,7 +370,6 @@ fn reformat_table_row_impl(
 
     let is_cont = is_table_continuation_line(trimmed);
     let cells = split_table_cells(trimmed);
-    let is_sep = is_delimiter_row(&cells);
 
     // Map cursor byte position into `trimmed`.
     let cursor_byte_in_trimmed: Option<usize> = cursor_col.map(|col| {
@@ -552,7 +557,7 @@ mod tests {
     #[test]
     fn reformat_plain_row_pads_to_col_widths() {
         let line = "| a | bc |".to_string();
-        let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[5, 5]), None);
+        let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[5, 5]), false, None);
         assert_eq!(out, "| a     | bc    |");
         assert_eq!(cur, None);
     }
@@ -561,7 +566,7 @@ mod tests {
     fn reformat_keeps_backtick_markers_on_non_cursor_line() {
         // Non-cursor lines keep raw content so render_line_full can style it.
         let line = "| `code` | plain |".to_string();
-        let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[4, 5]), None);
+        let (out, cur, _) = reformat_table_row_for_display(&line, &w(&[4, 5]), false, None);
         // col_w=4 (visible "code"), raw "`code`" = 6 chars; padding = 4-4 = 0
         assert!(
             out.contains("`code`"),
@@ -574,7 +579,7 @@ mod tests {
     fn reformat_cursor_in_cell_reveals_markers() {
         // cursor at char 3 (inside `code`)
         let line = "| `code` | plain |".to_string();
-        let (out, mc, pipes) = reformat_table_row_for_display(&line, &w(&[6, 5]), Some(3));
+        let (out, mc, pipes) = reformat_table_row_for_display(&line, &w(&[6, 5]), false, Some(3));
         assert!(
             out.contains("`code`"),
             "markers should be visible in cursor cell"
@@ -587,21 +592,21 @@ mod tests {
     fn reformat_cursor_at_leading_space_maps_to_edit_slot() {
         // cursor at char 1 (the space after the opening |, before cell content)
         let line = "| abc | def |".to_string();
-        let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[3, 3]), Some(1));
+        let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[3, 3]), false, Some(1));
         assert_eq!(mc, Some(2), "cursor at leading space maps inside the cell");
     }
 
     #[test]
     fn reformat_cursor_in_empty_cell_maps_to_edit_slot() {
         let line = "|      |        |".to_string();
-        let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[6, 8]), Some(2));
+        let (_, mc, _) = reformat_table_row_for_display(&line, &w(&[6, 8]), false, Some(2));
         assert_eq!(mc, Some(2), "empty cell cursor maps after the pipe padding");
     }
 
     #[test]
     fn reformat_delimiter_row_preserves_alignment_markers() {
         let line = "| :--- | ---: |".to_string();
-        let (out, _, _) = reformat_table_row_for_display(&line, &w(&[4, 4]), None);
+        let (out, _, _) = reformat_table_row_for_display(&line, &w(&[4, 4]), true, None);
         assert!(out.contains(":---"), "left-align marker preserved");
         assert!(out.contains("---:"), "right-align marker preserved");
     }

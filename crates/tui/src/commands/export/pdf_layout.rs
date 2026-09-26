@@ -1330,7 +1330,7 @@ fn collect_table_block(lines: &[&str], start: usize) -> (Vec<String>, usize) {
 fn is_table_delimiter(line: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")
+        Regex::new(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$")
             .expect("table delimiter regex must compile")
     })
     .is_match(line)

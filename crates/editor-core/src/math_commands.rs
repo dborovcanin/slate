@@ -83,21 +83,6 @@ fn normalize_evaluated_value(raw: &str) -> Option<String> {
     }
 }
 
-fn is_table_delimiter_cell(cell: &str) -> bool {
-    let trimmed = cell.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-
-    let without_left = trimmed.strip_prefix(':').unwrap_or(trimmed);
-    let core = without_left.strip_suffix(':').unwrap_or(without_left);
-    core.len() >= 3 && core.bytes().all(|byte| byte == b'-')
-}
-
-fn is_table_delimiter_row(cells: &[String]) -> bool {
-    !cells.is_empty() && cells.iter().all(|cell| is_table_delimiter_cell(cell))
-}
-
 fn evaluate_cell_term(cell: &str) -> Option<String> {
     let trimmed = cell.trim();
     if trimmed.is_empty() {
@@ -241,7 +226,7 @@ fn collect_table_terms(
         let mut terms = Vec::new();
         for line_no in range.start_line..cursor_line {
             let cells = table::split_table_cells(ctx.line_text(line_no));
-            if is_table_delimiter_row(&cells) {
+            if table::is_delimiter_row_at(&cells, crate::text_rules::follows_table_header(ctx, line_no)) {
                 continue;
             }
             if let Some(cell) = cells.get(cursor_col) {
