@@ -7,6 +7,7 @@ Slate is a terminal-only application. The Tauri GUI, CodeMirror front end, wasm 
 - `crates/tui` (package `slate`, binary `slate`): terminal app, CLI entry, host side effects.
 - `crates/editor-core`: editing semantics.
 - `crates/app-core`: storage, note sources, calc engine, config.
+- `crates/table-syntax`: markdown table structure (rows, cells, delimiter rows, blocks) shared by `editor-core` and `app-core`.
 
 Keeping semantics in the core crates remains a goal: it keeps behavior testable without a terminal and leaves room for another front end later (for example a ratatui buffer rendered in a native window).
 
@@ -71,6 +72,7 @@ Slate is a terminal notes application with:
 
 - `editor-core`: canonical editing semantics, vim intent resolution, markdown/table/list transforms, folding, calc/variable planning, command planning.
 - `app-core`: persistence, note sources, calc evaluation, cross-note index, config.
+- `table-syntax`: pure table parsing both cores depend on, so the editor and the calc engine read tables the same way.
 - `tui`: key/input mapping, terminal rendering, terminal UX, host side effects (export, backup, IMAP, notifications, clipboard).
 
 ### Ownership Rules

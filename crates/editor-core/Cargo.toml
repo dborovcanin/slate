@@ -7,6 +7,7 @@ edition = "2021"
 serde = { version = "1", features = ["derive"] }
 regex = "1"
 rustc-hash = "2"
+table-syntax = { path = "../table-syntax" }
 fend-core = "1"
 
 [dev-dependencies]

@@ -1,4 +1,5 @@
 use regex::{Regex, RegexBuilder};
+use table_syntax::{is_table_line, split_table_cells, table_pipe_positions};
 use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
@@ -200,54 +201,28 @@ impl TableEvalCache {
         if let Some(cached) = self.block_by_line.get(&line_idx) {
             return cached.clone();
         }
-        if lines
-            .get(line_idx)
-            .map(|line| !is_table_line(line))
-            .unwrap_or(true)
-        {
+        let Some((start, end)) = table_syntax::table_block_bounds(lines, line_idx) else {
             self.block_by_line.insert(line_idx, None);
             return None;
-        }
-
-        let mut start = line_idx;
-        while start > 0 {
-            let prev = start - 1;
-            if !is_table_line(lines.get(prev)?) {
-                break;
-            }
-            start = prev;
-        }
-
-        let mut end = line_idx;
-        while end + 1 < lines.len() {
-            if !is_table_line(lines.get(end + 1)?) {
-                break;
-            }
-            end += 1;
-        }
+        };
 
         let mut delimiter_row: Option<usize> = None;
         let mut data_rows: Vec<Vec<usize>> = Vec::new();
         let mut row_lookup: FxHashMap<usize, usize> = FxHashMap::default();
-        let after_header = ((start + 1)..=end).find(|&idx| {
-            !lines
-                .get(idx)
-                .is_some_and(|line| line.trim_start().starts_with("|>"))
-        });
+        let after_header = table_syntax::after_header_row(end + 1 - start, |idx| {
+            table_syntax::is_table_continuation_line(&lines[start + idx])
+        })
+        .map(|idx| start + idx);
         for row_idx in start..=end {
             let row_cells = self.cells_for_line(lines, row_idx)?.clone();
             if delimiter_row.is_none()
-                && is_table_delimiter_row_at(&row_cells, Some(row_idx) == after_header)
+                && table_syntax::is_delimiter_row_at(&row_cells, Some(row_idx) == after_header)
             {
                 delimiter_row = Some(row_idx);
                 continue;
             }
             if delimiter_row.is_some() {
-                let is_cont = lines
-                    .get(row_idx)
-                    .map(|line| line.trim_start().starts_with("|>"))
-                    .unwrap_or(false);
-                if is_cont {
+                if table_syntax::is_table_continuation_line(&lines[row_idx]) {
                     if let Some(last) = data_rows.last_mut() {
                         last.push(row_idx);
                         row_lookup.insert(row_idx, data_rows.len().saturating_sub(1));
@@ -1219,71 +1194,11 @@ fn parse_builtin_formula(expression: &str) -> Option<FormulaSpec> {
     }
 }
 
-fn split_table_cells(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    if !is_table_line(trimmed) {
-        return Vec::new();
-    }
-    let pipes = table_pipe_positions(trimmed);
-    if pipes.len() < 2 {
-        return Vec::new();
-    }
-    let mut out = Vec::with_capacity(pipes.len().saturating_sub(1));
-    for pair in pipes.windows(2) {
-        out.push(trimmed[pair[0] + 1..pair[1]].trim().to_string());
-    }
-    out
-}
-
-fn table_pipe_positions(line: &str) -> Vec<usize> {
-    let bytes = line.as_bytes();
-    let mut pipes = Vec::new();
-    for (idx, byte) in bytes.iter().enumerate() {
-        if *byte != b'|' {
-            continue;
-        }
-        let mut slash_count = 0usize;
-        let mut pos = idx;
-        while pos > 0 {
-            pos -= 1;
-            if bytes[pos] != b'\\' {
-                break;
-            }
-            slash_count += 1;
-        }
-        if slash_count % 2 == 0 {
-            pipes.push(idx);
-        }
-    }
-    pipes
-}
-
 fn table_coordinate_ref_regex() -> &'static Regex {
     TABLE_COORD_REF_RE.get_or_init(|| {
         Regex::new(r"\(\s*(\d+)\s*,\s*(\d+)\s*\)")
             .expect("table coordinate reference regex is valid")
     })
-}
-
-/// Dash count of a delimiter-shaped cell (`:?-+:?`), or None.
-fn delimiter_cell_dashes(cell: &str) -> Option<usize> {
-    let trimmed = cell.trim();
-    let core = trimmed.strip_prefix(':').unwrap_or(trimmed);
-    let core = core.strip_suffix(':').unwrap_or(core);
-    (!core.is_empty() && core.bytes().all(|b| b == b'-')).then_some(core.len())
-}
-
-/// Mirrors `editor_core::table::is_delimiter_row_at`: `---`-style rows count
-/// anywhere (empty cells allowed); short GFM delimiters (`-`, `:-:`) only
-/// directly after the header rows.
-fn is_table_delimiter_row_at(cells: &[String], after_header: bool) -> bool {
-    let dashes: Vec<Option<usize>> = cells.iter().map(|c| delimiter_cell_dashes(c)).collect();
-    let strict = dashes.iter().any(|d| d.is_some_and(|n| n >= 3))
-        && cells
-            .iter()
-            .zip(&dashes)
-            .all(|(cell, d)| d.is_some_and(|n| n >= 3) || cell.trim().is_empty());
-    strict || (after_header && !cells.is_empty() && dashes.iter().all(Option::is_some))
 }
 
 fn logical_row_cell_text(
@@ -1485,7 +1400,7 @@ fn collect_table_formula_terms(
     table_eval_cache: &mut TableEvalCache,
 ) -> Option<Vec<String>> {
     let current_cells = table_eval_cache.cells_for_line(lines, line_idx)?.clone();
-    if is_table_delimiter_row_at(&current_cells, false) {
+    if table_syntax::is_delimiter_row_at(&current_cells, false) {
         return None;
     }
     if formula_col >= current_cells.len() {
@@ -1505,7 +1420,7 @@ fn collect_table_formula_terms(
                         continue;
                     };
                     let trimmed = cell.trim();
-                    if trimmed.is_empty() || delimiter_cell_dashes(&cell).is_some() {
+                    if trimmed.is_empty() || table_syntax::delimiter_cell_dashes(&cell).is_some() {
                         continue;
                     }
                     if !trimmed.chars().any(|c| c.is_ascii_digit()) {
@@ -1516,7 +1431,7 @@ fn collect_table_formula_terms(
             } else {
                 for cell in current_cells.iter().take(formula_col) {
                     let trimmed = cell.trim();
-                    if trimmed.is_empty() || delimiter_cell_dashes(cell).is_some() {
+                    if trimmed.is_empty() || table_syntax::delimiter_cell_dashes(cell).is_some() {
                         continue;
                     }
                     if !trimmed.chars().any(|c| c.is_ascii_digit()) {
@@ -1840,11 +1755,6 @@ fn evaluate_table_formula(
         table_formula_cache.insert(key, value);
     }
     result
-}
-
-fn is_table_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
 }
 
 fn consume_ascii_whitespace(bytes: &[u8], mut idx: usize) -> usize {

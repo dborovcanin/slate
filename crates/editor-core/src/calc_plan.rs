@@ -1915,32 +1915,7 @@ fn formula_dependency_window_with_cached_index(
 }
 
 fn table_block_range(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
-    if lines
-        .get(line_idx)
-        .map(|line| !is_table_line(line))
-        .unwrap_or(true)
-    {
-        return None;
-    }
-
-    let mut start = line_idx;
-    while start > 0 {
-        let prev = start - 1;
-        if !is_table_line(lines.get(prev)?) {
-            break;
-        }
-        start = prev;
-    }
-
-    let mut end = line_idx;
-    while end + 1 < lines.len() {
-        if !is_table_line(lines.get(end + 1)?) {
-            break;
-        }
-        end += 1;
-    }
-
-    Some((start, end))
+    table::table_block_bounds(lines, line_idx)
 }
 
 fn variable_dependency_window(

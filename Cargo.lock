@@ -101,6 +101,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "subtle",
+ "table-syntax",
  "time",
  "toml",
  "ulid",
@@ -774,6 +775,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "table-syntax",
 ]
 
 [[package]]
@@ -3230,6 +3232,10 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "table-syntax"
+version = "0.3.0"
 
 [[package]]
 name = "termina"

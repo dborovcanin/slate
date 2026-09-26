@@ -1,8 +1,7 @@
 use crate::text_rules::format_table_lines;
 
 fn is_table_row(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
+    crate::table::is_table_line(line)
 }
 
 fn normalize_list_line(line: &str) -> String {

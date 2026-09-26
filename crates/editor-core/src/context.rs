@@ -65,8 +65,7 @@ fn is_list_line(line: &str) -> bool {
 }
 
 fn is_table_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    trimmed.starts_with('|') && trimmed.ends_with('|')
+    crate::table::is_table_line(line)
 }
 
 fn is_word_byte(byte: u8) -> bool {

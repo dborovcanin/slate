@@ -8,6 +8,7 @@ A terminal note-taking app with:
 - a terminal UI (`crates/tui`, binary `slate`)
 - a shared editing core (`crates/editor-core`)
 - an app/persistence core (`crates/app-core`)
+- shared markdown table structure (`crates/table-syntax`), used by both cores
 - vim-like editing behavior
 - markdown-style structured editing
 - Linux as the current focus
