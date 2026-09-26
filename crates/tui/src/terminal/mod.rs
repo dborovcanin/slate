@@ -15,6 +15,7 @@ pub mod render;
 mod render_styles;
 mod session;
 mod switcher;
+mod text_input;
 mod text_utils;
 pub mod theme;
 

@@ -12,7 +12,7 @@ use crate::terminal::render;
 use crate::terminal::text_utils::{
     compute_line_viewport, derive_title_from_lines, display_cols_for_prefix, line_char_len,
 };
-use crate::terminal::{date_picker, input, media_sources, notifications, switcher};
+use crate::terminal::{date_picker, input, media_sources, notifications, switcher, text_input};
 use crate::terminal::{
     date_picker::DatePickerView,
     switcher::{
@@ -1941,11 +1941,13 @@ impl TerminalApp {
     pub(super) fn cursor_position(&self, rows: usize, cols: usize) -> (usize, usize) {
         match self.mode {
             UiMode::CommandBar => {
-                let col = (1 + 1 + self.command_input.chars().count()).min(cols.max(1));
+                let at = text_input::cursor(&self.command_input, self.command_cursor);
+                let col = (1 + 1 + display_cols_for_prefix(&self.command_input, at)).min(cols.max(1));
                 (rows, col.max(1))
             }
             UiMode::Search => {
-                let col = (1 + 1 + self.search.query.chars().count()).min(cols.max(1));
+                let at = text_input::cursor(&self.search.query, self.search.cursor);
+                let col = (1 + 1 + display_cols_for_prefix(&self.search.query, at)).min(cols.max(1));
                 (rows, col.max(1))
             }
             UiMode::DatePicker => {

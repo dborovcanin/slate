@@ -7,7 +7,7 @@ use super::{
     CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
-use crate::terminal::{notifications, switcher};
+use crate::terminal::{notifications, switcher, text_input};
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::time::{Duration, Instant};
 
@@ -1063,6 +1063,7 @@ impl TerminalApp {
         if selected.has_more {
             self.command_input.push(' ');
         }
+        self.command_cursor = usize::MAX;
         self.command_history_index = None;
         self.dismiss_command_completion_menu();
         self.update_command_status();
@@ -1079,6 +1080,7 @@ impl TerminalApp {
         self.dismiss_command_completion_menu();
         self.command_history_index = Some(step.index);
         self.command_input = step.command;
+        self.command_cursor = usize::MAX;
         self.update_command_status();
     }
 
@@ -1092,6 +1094,7 @@ impl TerminalApp {
         self.dismiss_command_completion_menu();
         self.command_history_index = Some(step.index);
         self.command_input = step.command;
+        self.command_cursor = usize::MAX;
         self.update_command_status();
     }
 
@@ -1153,16 +1156,16 @@ impl TerminalApp {
                     self.open_command_completion_menu();
                 }
             }
-            Key::ArrowLeft => {
+            Key::ArrowLeft if self.command_completion.visible => {
                 self.move_command_completion_selection(-1);
             }
-            Key::ArrowRight => {
+            Key::ArrowRight if self.command_completion.visible => {
                 self.move_command_completion_selection(1);
             }
             Key::Backspace => {
                 self.command_history_index = None;
                 self.dismiss_command_completion_menu();
-                self.command_input.pop();
+                text_input::apply_key(&mut self.command_input, &mut self.command_cursor, &key);
                 if self.command_input.is_empty() {
                     self.mode = if self.command_bar_from_normal {
                         UiMode::Normal
@@ -1181,33 +1184,20 @@ impl TerminalApp {
                     self.update_command_status();
                 }
             }
-            Key::Ctrl('w') => {
-                self.command_history_index = None;
-                self.dismiss_command_completion_menu();
-                trim_trailing_word(&mut self.command_input);
-                self.update_command_status();
-            }
             Key::ArrowUp => {
                 self.cycle_command_history_prev();
             }
             Key::ArrowDown => {
                 self.cycle_command_history_next();
             }
-            Key::Char(ch) => {
-                self.command_history_index = None;
-                self.dismiss_command_completion_menu();
-                self.command_input.push(ch);
-                self.update_command_status();
-            }
-            Key::Paste(text) => {
-                self.command_history_index = None;
-                self.dismiss_command_completion_menu();
-                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
-                    self.command_input.push(ch);
+            other => {
+                if text_input::apply_key(&mut self.command_input, &mut self.command_cursor, &other)
+                {
+                    self.command_history_index = None;
+                    self.dismiss_command_completion_menu();
+                    self.update_command_status();
                 }
-                self.update_command_status();
             }
-            _ => {}
         }
         Ok(())
     }
@@ -2780,25 +2770,14 @@ impl TerminalApp {
             Key::ArrowUp | Key::Ctrl('p') | Key::BackTab => {
                 self.search_prev();
             }
-            Key::Backspace => {
-                self.search.query.pop();
-                self.recompute_search();
-            }
-            Key::Ctrl('w') => {
-                trim_trailing_word(&mut self.search.query);
-                self.recompute_search();
-            }
-            Key::Char(ch) => {
-                self.search.query.push(ch);
-                self.recompute_search();
-            }
-            Key::Paste(text) => {
-                for ch in text.chars().filter(|c| *c != '\n' && *c != '\r') {
-                    self.search.query.push(ch);
+            other => {
+                let before = self.search.query.clone();
+                if text_input::apply_key(&mut self.search.query, &mut self.search.cursor, &other)
+                    && self.search.query != before
+                {
+                    self.recompute_search();
                 }
-                self.recompute_search();
             }
-            _ => {}
         }
         Ok(())
     }

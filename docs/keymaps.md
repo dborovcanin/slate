@@ -68,6 +68,18 @@ Supported and tested core motions/actions include:
 - wiki-link navigation: `gd`
 - wiki-link preview (peek linked note): `K` (toggle; dismissed on cursor move)
 
+## Command bar and `/` search editing
+
+| Key | Action |
+| --- | --- |
+| `ArrowLeft` / `ArrowRight` | Move the cursor (cycle completions while the Tab menu is open) |
+| `Home` / `End`, `Ctrl+A` / `Ctrl+E` | Start / end of the input |
+| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight` | Previous / next word |
+| `Backspace` / `Delete` | Delete before / at the cursor |
+| `Ctrl+W`, `Ctrl+Backspace` / `Ctrl+Delete` | Delete word before / after the cursor |
+| `Ctrl+U` / `Ctrl+K` | Delete to start / end of the input |
+| `ArrowUp` / `ArrowDown` | Command history (command bar) or previous / next match (search) |
+
 ## Vim command bar entry
 
 - Vim mode: press `:` in normal/visual modes.

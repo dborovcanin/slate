@@ -575,6 +575,8 @@ struct ContentSearchState {
 #[derive(Default)]
 struct SearchState {
     query: String,
+    /// Char index of the query cursor; `usize::MAX` means at the end.
+    cursor: usize,
     matches: Vec<(usize, usize, usize)>, // (line_idx, start_col, end_col)
     current: usize,
     orig_line: usize,
@@ -630,6 +632,8 @@ struct TerminalApp {
     last_edit: Instant,
     status: String,
     command_input: String,
+    /// Char index of the command-bar cursor; `usize::MAX` means at the end.
+    command_cursor: usize,
     command_completion: CommandCompletionMenuState,
     command_history: Vec<String>,
     command_history_index: Option<usize>,
@@ -1030,6 +1034,7 @@ impl TerminalApp {
             last_edit: Instant::now(),
             status: initial_status,
             command_input: String::new(),
+            command_cursor: usize::MAX,
             command_completion: CommandCompletionMenuState::default(),
             command_history: Vec::new(),
             command_history_index: None,

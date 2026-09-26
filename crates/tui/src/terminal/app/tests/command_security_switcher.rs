@@ -2466,3 +2466,31 @@ fn disconnected_web_search_worker_clears_searching_state_and_redraws() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn command_bar_arrows_edit_mid_command() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.mode = UiMode::CommandBar;
+    for ch in "note lck".chars() {
+        app.handle_command_bar_key(&db, Key::Char(ch)).expect("type");
+    }
+    app.handle_command_bar_key(&db, Key::ArrowLeft).expect("left");
+    app.handle_command_bar_key(&db, Key::ArrowLeft).expect("left");
+    app.handle_command_bar_key(&db, Key::Char('o')).expect("insert");
+    assert_eq!(app.command_input, "note lock");
+
+    // Cursor sits after the inserted char: ":" + "note lo" -> column 9.
+    let (_, col) = app.cursor_position(24, 80);
+    assert_eq!(col, 9);
+
+    app.handle_command_bar_key(&db, Key::Home).expect("home");
+    app.handle_command_bar_key(&db, Key::Delete).expect("delete");
+    assert_eq!(app.command_input, "ote lock");
+    app.handle_command_bar_key(&db, Key::End).expect("end");
+    app.handle_command_bar_key(&db, Key::Char('s')).expect("append");
+    assert_eq!(app.command_input, "ote locks");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
