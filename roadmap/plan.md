@@ -10,19 +10,42 @@ Slate is a terminal-only application. The Tauri GUI, CodeMirror front end, wasm 
 
 Keeping semantics in the core crates remains a goal: it keeps behavior testable without a terminal and leaves room for another front end later (for example a ratatui buffer rendered in a native window).
 
+### Positioning
+
+Slate is a **computational notebook for the terminal**: a fast scratchpad where notes calculate. Its distinctive pieces are live inline calculation with units, variables shared across notes, spreadsheet-style table formulas, styled-in-place markdown editing (no split preview), and instant capture.
+
+Full knowledge-base apps (for example ZenNotes TUI: vault of Markdown files, panes and tabs, kanban tasks, CSV databases, preview pane, MCP) cover organisation breadth. Slate should not chase that feature list. New work should either strengthen the computational notebook or remove friction from everyday editing.
+
+Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`.
+
 ### Next steps (ordered)
 
-1. **Ratatui + crossterm port of `crates/tui`.** Done: crossterm input, ratatui terminal/diff, renderer paints buffer cells, soft wrap. Remaining: move overlays to ratatui widgets where it simplifies code, per-line render caching (frame composition is ~4 ms at 200x60), sticky goal column for screen-row motions.
-2. **Features** (candidates, see `roadmap/features.md`):
-   - templates beyond the daily note (`:template meeting`)
-   - tags, backlinks panel, ghost notes
-   - live query blocks (TODO aggregation, saved searches over FTS)
-   - runnable code blocks with captured output
-   - charts/sparklines from table data
-   - inline images via `ratatui-image` (kitty/sixel/half-blocks)
-   - fuzzy switcher via `nucleo`
-   - per-note history/diff view
-3. **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; replace the Node perf scripts with a Rust or shell runner.
+1. **Editing papercuts** (first impressions)
+   - Typing a table row char by char inserts extra columns: each `|` triggers the pipe-insert-column rule. Only insert a column when the pipe is typed inside an existing cell, not while the row is being written.
+   - Variable autocomplete does not trigger at the end of a prose line (`then pri`): the prefix extractor treats the whole space-separated run as a multi-word variable name. Fall back to the last word when the long prefix has no matches.
+   - Note titles keep the heading marker in lists (`# 2026-09-26`); strip markdown prefix markers when deriving titles.
+2. **Selection statistics** - while a visual selection or table cells are selected, show `sum`, `avg`, `count` of the numbers in the status bar (spreadsheet-style). Reuse the `:sum` / `:avg` scope logic in `editor-core`.
+3. **Segmented status bar** - mode pill, note title, dirty mark, module chips, calc/selection result, working collection; transient messages ("autosaved ...") become short-lived toasts instead of overwriting the status line.
+4. **Discoverability**
+   - Which-key popup after a prefix (`g`, `z`, leader) listing the possible next keys, drawn with the dialog frame.
+   - Command menu shows the catalog descriptions next to each command, with fuzzy matching.
+   - `?` help overlay (keys and commands) and `:themes` picker with live preview.
+5. **Inline images (sixel, kitty, iTerm2)** - see "Image Support" below.
+6. **Charts from tables** - a fenced `chart` block (`chart bar col=B`, `chart spark col=Total`) renders a bar chart or sparkline from a table in the same note, using ratatui chart widgets; the block shows its source when the cursor is inside it.
+7. **Computing query blocks** - a fenced `query` block that computes over notes, e.g. `sum(expense) where #food month:this` or open TODOs by tag. Builds on FTS and the cross-note variable index; results render as ghost rows and refresh off the input path.
+8. **Dates, money, time**
+   - Date arithmetic: `next friday + 3 days`, `deadline - today`.
+   - Currency conversion with a local rate cache refreshed in the background.
+   - Time tracking: `09:10-11:45` ranges summed per day.
+9. **`slate calc "..."`** - one-shot evaluation from the shell (and `cmd | slate calc`), with access to exported note variables.
+10. **Dependency view** - for the value under the cursor, list the lines and notes that use it and the values it depends on, so cross-note calculations are easy to trust.
+11. **Outline and backlinks panel** - toggleable side panel (heading outline + notes linking here) using ratatui layout.
+12. **Mouse support** - click to place the cursor, wheel scroll, click rows in lists (crossterm already reports mouse events).
+
+Also on the list:
+- **Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
+- **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; replace the Node perf scripts with a Rust or shell runner; sticky goal column for screen-row motions.
+- **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, per-note history and diff view.
 
 ## Product Intent
 
@@ -154,6 +177,27 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 
 Measurement references: `roadmap/performance.md`, `roadmap/perf-multirow-table.md`.
 
+## Architecture and Hardening Backlog
+
+Merged from the former `todo.md` (verified against the code on 2026-09-26; done and GUI-only items dropped). Impact and difficulty are 1-10.
+
+| Action | Status | Description | Impact | Difficulty |
+| --- | --- | --- | ---: | ---: |
+| Move remaining table delete semantics into `editor-core` | Partial | Boundary edits, structural merges, header deletion, and cursor movement are shared. Table word-delete and continuation-row cleanup (`prune_empty_table_continuation_row_at_cursor` and friends in `crates/tui/src/terminal/app/editing.rs`) are still terminal-local. | 10 | 8 |
+| Consolidate pure command execution | Backlog | Move inline format, list conversion, format clear, and date insertion execution from `crates/tui/src/editor_core/commands.rs` into `editor-core`; keep only side effects in the terminal layer. | 9 | 7 |
+| Command catalog conformance check | Backlog | Test that every `CommandId` in `command_catalog.rs` has a core executor, a terminal host handler, or an explicit unsupported state. | 9 | 5 |
+| Versioned SQLite migrations | Postponed | Only `migrations/0001_init.sql` exists. Introduce `PRAGMA user_version` (or a `schema_migrations` table), ordered migrations, migration tests, and backup guidance for schema changes. | 10 | 6 |
+| Backup restore validation | Backlog | Run `PRAGMA integrity_check` and verify the expected schema on a staged backup before restore; guard restore around open notes and background work. | 8 | 5 |
+| Zeroize sensitive memory | Backlog | Zeroize passwords and derived encryption keys after use; avoid cloning key material. | 8 | 6 |
+| Move cross-note preload off the event loop | Backlog | The terminal still waits (`wait_timeout_while` in `editing.rs`) for cross-note dependency evaluation; evaluate asynchronously and show pending/stale state instead. | 7 | 6 |
+| Reduce undo memory spikes | Partial | Span-based history paths exist; extend them so remaining large-note edits avoid full line-vector snapshots. | 8 | 7 |
+| Performance budgets in CI | Partial | CI runs the startup and table perf checks. Add budgets for frame render, calc delta evaluation, save, and large-note opening. | 8 | 6 |
+| Large-note degradation | Backlog | See "Performance Backlog": replace the all-or-nothing 30,000-line cutoff with per-feature budgets and visible degraded-state indicators. | 8 | 7 |
+| Unambiguous wiki-link resolution | Backlog | Resolve exact ids, aliases, or ask to disambiguate instead of taking the most recent note matching an 8-char prefix. | 6 | 5 |
+| File-note trust boundary | Partial | Asset access is constrained in `app-core`; the terminal should make clear that a file-backed note is an external file saved directly to its path (e.g. a title-bar badge). | 7 | 4 |
+| Terminal-layer semantics guardrail | Backlog | A check that flags new table/list/vim semantic helpers added under `crates/tui` unless allowlisted. | 7 | 5 |
+| Host capability contract | Backlog | A small typed contract for host capabilities used by command planning: save, quit, export, backup, note security, collections, reminders, clipboard. | 6 | 4 |
+
 ## Bugs and Fixes Backlog
 
 - [ ] Allow multiple rows in table cell
@@ -229,11 +273,27 @@ Open: heading scroll after navigation; unambiguous resolution when short-id pref
 
 ## Image Support
 
-Syntax: `![alt](./assets/image.png)`. Import copies files into note-scoped assets and inserts a relative markdown link; `app-core` owns path normalization, size/format limits, and traversal protection.
+Syntax: `![alt](./assets/image.png)`. Import copies files into note-scoped assets and inserts a relative markdown link; `app-core` owns path normalization, size/format limits, and traversal protection. Today the terminal collapses image links to a `[image: alt]` placeholder when the cursor is outside them.
+
+### Inline rendering (sixel, kitty, iTerm2)
+
+Goal: show images inline in terminals that support a graphics protocol, and keep the text placeholder everywhere else.
+
+- **Protocol detection:** query the terminal once at startup (after entering raw mode) for sixel support (device attributes), the kitty graphics protocol, and iTerm2; honour a `[terminal] images = "auto" | "sixel" | "kitty" | "iterm2" | "off"` config override. Inside tmux, use passthrough when enabled, otherwise fall back to the placeholder.
+- **Library:** use `ratatui-image` (sixel/kitty/iTerm2/half-block backends) if its release for ratatui 0.30 is usable; otherwise encode sixel ourselves with a small encoder crate and write it through the crossterm backend.
+- **Layout:** an image line reserves N rows below it (N from image aspect ratio and a `max_rows` cap), counted by the wrap layout and the scroll fit-up like continuation rows, so cursor placement and scrolling stay exact. The markdown line stays editable; the cursor never enters the image rows.
+- **Rendering:** images are drawn after the ratatui diff flush (graphics are not cells), only for images fully inside the viewport. When the frame changes under an image, clear and redraw it; skip redraws when the image rect and scroll position are unchanged.
+- **Caching:** decode and resize off the input path into a per-path cache keyed by (path, mtime, cell size); show the placeholder until the image is ready.
+- **Fallbacks:** unsupported terminal, missing file, or `images = "off"` keeps the current `[image: alt]` placeholder. Remote URLs are not fetched.
+
+### Checklist
 
 - [ ] Image token/match helpers in `editor-core` with tokenizer tests
 - [ ] Path sanitization and traversal protection tests
-- [ ] Terminal placeholder rendering outside the caret, raw markdown inside the caret
+- [x] Terminal placeholder rendering outside the caret, raw markdown inside the caret
+- [ ] Protocol detection + `[terminal] images` config
+- [ ] Reserved image rows in the wrap layout and scroll fit-up
+- [ ] Sixel rendering (then kitty and iTerm2) after the frame flush, viewport-only
+- [ ] Background decode/resize cache
 - [ ] Open-image-at-cursor action (external viewer)
-- [ ] Inline rendering via `ratatui-image` (kitty/sixel/half-blocks), viewport-only and cached
 - [ ] Perf checks for notes with many image references
