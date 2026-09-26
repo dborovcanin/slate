@@ -432,7 +432,7 @@ fn execute_yank_word_forward(
     let mut cursor = origin;
     let mut yanked = Vec::new();
     for _ in 0..count {
-        let next = move_word_forward(text, &spans, cursor);
+        let next = clamp_to_table_cell(text, &spans, origin, move_word_forward(text, &spans, cursor));
         if next == cursor {
             break;
         }
@@ -464,7 +464,7 @@ fn execute_yank_word_backward(
     let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
-        let next = move_word_backward(text, &spans, cursor);
+        let next = clamp_to_table_cell(text, &spans, origin, move_word_backward(text, &spans, cursor));
         if next == cursor {
             break;
         }
@@ -495,7 +495,7 @@ fn execute_delete_word_forward(
     let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
-        let next = move_word_forward(text, &spans, cursor);
+        let next = clamp_to_table_cell(text, &spans, origin, move_word_forward(text, &spans, cursor));
         if next == cursor {
             break;
         }
@@ -535,7 +535,7 @@ fn execute_delete_word_backward(
     let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
-        let next = move_word_backward(text, &spans, cursor);
+        let next = clamp_to_table_cell(text, &spans, origin, move_word_backward(text, &spans, cursor));
         if next == cursor {
             break;
         }
@@ -586,7 +586,12 @@ fn execute_delete_word_end(
         return VimActionExecutionResult::default();
     }
 
-    let delete_to = next_char_boundary(text, cursor);
+    let delete_to = clamp_to_table_cell(
+        text,
+        &line_spans(text),
+        origin,
+        next_char_boundary(text, cursor),
+    );
     if delete_to <= origin {
         return VimActionExecutionResult::default();
     }
@@ -926,6 +931,25 @@ fn execute_delete_char(
 
 fn clamp_offset(text: &str, offset: usize) -> usize {
     offset.min(text.len())
+}
+
+/// On a table row, word operators stay inside the cursor's cell: `target` is
+/// clamped between the start of that cell's content and its right pipe, so a
+/// cell border is never deleted, changed or yanked.
+fn clamp_to_table_cell(text: &str, spans: &[(usize, usize)], origin: usize, target: usize) -> usize {
+    if spans.is_empty() {
+        return target;
+    }
+    let (from, to) = spans[line_index_for_offset(spans, origin)];
+    let line = &text[from..to];
+    if !crate::table::is_table_line(line) {
+        return target;
+    }
+    let Some(cell) = crate::table::table_cell_info_in_line(line, origin - from) else {
+        return target;
+    };
+    let lower = from + cell.edit_start().min(origin - from);
+    target.clamp(lower, from + cell.right_pipe)
 }
 
 fn line_spans(text: &str) -> Vec<(usize, usize)> {

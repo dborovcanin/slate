@@ -512,14 +512,23 @@ impl TerminalApp {
             self.status = "-- NORMAL --".to_string();
         }
 
+        // A change operator (`cw`, `ciw`, ...) that leaves insert mode on a
+        // table row keeps the cell as is: the cursor may sit in the space left
+        // by the deleted word, and the row reformats once typing starts.
+        let changing_table_cell = self.mode == UiMode::Editor
+            && self.note_table_module_enabled()
+            && is_markdown_table_line(self.current_line());
         if preserve_vertical_column {
             self.clamp_cursor_to_line_bounds();
         } else {
-            self.adjust_cursor();
+            self.adjust_cursor_with_table_padding_guard(!changing_table_cell);
         }
         self.adjust_scroll();
 
-        if doc_mutated && Self::line_might_trigger_doc_change_rules(self.current_line()) {
+        if doc_mutated
+            && !changing_table_cell
+            && Self::line_might_trigger_doc_change_rules(self.current_line())
+        {
             let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
             let (ctx, scope_start_offset) =
                 self.build_scoped_context_for_line_span(start_line, end_line, None);

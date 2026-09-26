@@ -2921,6 +2921,13 @@ impl TerminalApp {
         Some(changed)
     }
 
+    /// Clamps the cursor after applying `op`. An explicit selection is where
+    /// the operation meant the cursor to be (e.g. the gap `ciw` leaves in a
+    /// table cell), so only an inferred position is kept out of cell padding.
+    fn adjust_cursor_after_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
+        self.adjust_cursor_with_table_padding_guard(op.selection.is_none());
+    }
+
     pub(super) fn apply_edit_operation(&mut self, op: &crate::editor_core::types::EditOperation) {
         if !self.active_note_is_editable() && !op.changes.is_empty() {
             self.set_locked_note_status();
@@ -2934,7 +2941,7 @@ impl TerminalApp {
                     self.editor.cursor_line = line_idx;
                     self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
                 }
-                self.adjust_cursor();
+                self.adjust_cursor_after_operation(op);
                 self.adjust_scroll();
             }
             return;
@@ -3026,7 +3033,7 @@ impl TerminalApp {
                 from_line,
                 Some((from_line, old_line_span, new_line_span)),
             );
-            self.adjust_cursor();
+            self.adjust_cursor_after_operation(op);
             self.adjust_scroll();
             return;
         }
@@ -3098,7 +3105,7 @@ impl TerminalApp {
             changed_from_line,
             Some((changed_from_line, old_line_span, new_line_span)),
         );
-        self.adjust_cursor();
+        self.adjust_cursor_after_operation(op);
         self.adjust_scroll();
     }
 

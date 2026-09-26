@@ -1060,3 +1060,31 @@ fn w_and_b_step_through_table_cells_and_rows() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn word_operators_stay_inside_the_table_cell() {
+    let body = "| name  | qty     | x   |\n| ----- | ------- | --- |\n| dusan | as dasd | y   |";
+    let run = |keys: &str, at: &str| {
+        let (db, mut app, path) = app_with_note(body);
+        app.mode = UiMode::Normal;
+        app.editor.cursor_line = 2;
+        app.editor.cursor_col = app.editor.lines[2].find(at).unwrap();
+        for ch in keys.chars() {
+            app.handle_key(&db, Key::Char(ch)).expect("key");
+        }
+        let line = app.editor.lines[2].clone();
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+        line
+    };
+    let cells = |line: &str| crate::editor_core::table::split_table_cells(line);
+
+    // `db` never deletes the cell's left border.
+    assert_eq!(cells(&run("db", "as")), vec!["dusan", "as dasd", "y"]);
+    assert_eq!(cells(&run("db", "dasd")), vec!["dusan", "dasd", "y"]);
+    // A count cannot run past the cell either.
+    assert_eq!(cells(&run("3dw", "as")), vec!["dusan", "", "y"]);
+    // `ciw` keeps the space before the replaced word.
+    assert_eq!(cells(&run("ciwZ", "dasd")), vec!["dusan", "as Z", "y"]);
+}
