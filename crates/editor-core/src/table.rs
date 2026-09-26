@@ -836,21 +836,31 @@ pub fn table_cell_cursor_info_in_document_cached(
             .flatten()
     };
 
-    let pipes = table_pipe_positions(current);
+    Some(TableCursorCellInfo {
+        logical_row_index: logical_row_index_for_line,
+        logical_row_count: cache.logical_row_count,
+        ..table_cell_info_in_line(current, col)?
+    })
+}
+
+/// Cell containing byte column `col` of table row `line`, from the row alone
+/// (no logical-row numbering). None past the closing pipe, where the cursor
+/// is starting a new cell rather than sitting in one.
+pub fn table_cell_info_in_line(line: &str, col: usize) -> Option<TableCursorCellInfo> {
+    let pipes = table_pipe_positions(line);
     if pipes.len() < 2 {
         return None;
     }
-    let col_in_line = col.min(current.len());
+    let col_in_line = col.min(line.len());
     if col_in_line > *pipes.last()? {
-        // Past the closing pipe: the cursor is starting a new cell, not in one.
         return None;
     }
     let cell_index = table_cell_index_for_column(&pipes, col_in_line)?;
     let left_pipe = *pipes.get(cell_index)?;
     let right_pipe = *pipes.get(cell_index + 1)?;
-    let raw = &current[left_pipe + 1..right_pipe];
-    let (trim_start, trim_end) =
-        logical_trim_offsets(raw, is_table_continuation_line(current) && cell_index == 0);
+    let raw = &line[left_pipe + 1..right_pipe];
+    let continuation = is_table_continuation_line(line);
+    let (trim_start, trim_end) = logical_trim_offsets(raw, continuation && cell_index == 0);
     Some(TableCursorCellInfo {
         column_index: cell_index,
         column_count: pipes.len().saturating_sub(1),
@@ -858,9 +868,9 @@ pub fn table_cell_cursor_info_in_document_cached(
         right_pipe,
         trim_start,
         trim_end,
-        logical_row_index: logical_row_index_for_line,
-        logical_row_count: cache.logical_row_count,
-        is_continuation_row: is_table_continuation_line(current),
+        logical_row_index: None,
+        logical_row_count: 0,
+        is_continuation_row: continuation,
     })
 }
 
@@ -1481,6 +1491,102 @@ pub fn table_row_prev_word_start(line: &str, col: usize) -> Option<usize> {
     Some(c)
 }
 
+/// Where the cursor may rest after a typed character (see
+/// [`plan_table_typed_char`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableTypingCursor {
+    /// Keep it inside a cell's content, out of the alignment padding.
+    InCellContent,
+    /// Allow the cell's right padding: spaces are being typed at the end of
+    /// the content and are kept until the next non-space edit.
+    InCellPadding,
+    /// Leave it past the row's closing pipe, where the next cell is typed.
+    PastRowEnd,
+}
+
+/// How typing one character in insert mode behaves around tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TableTypingPlan {
+    /// Insert a space before the character: the first character of a new
+    /// cell typed right after a closing pipe gets the cell's left pad.
+    pub pad_before: bool,
+    /// Run the table autoformat after inserting.
+    pub autoformat: bool,
+    pub cursor: TableTypingCursor,
+    /// The character is a `|` that closed the row at the end of the line; the
+    /// duplicate-delimiter rule applies.
+    pub closes_row: bool,
+}
+
+impl Default for TableTypingPlan {
+    /// Plain text: insert, autoformat, keep the cursor in cell content.
+    fn default() -> Self {
+        Self {
+            pad_before: false,
+            autoformat: true,
+            cursor: TableTypingCursor::InCellContent,
+            closes_row: false,
+        }
+    }
+}
+
+/// Plans typing `ch` at char column `col` of `lines[line_idx]` (before it is
+/// inserted), for rows composed by hand and for spaces typed in cells:
+/// - past a row's closing pipe the next cell is being typed: no reformat, the
+///   cursor stays past the pipe, and the first character gets a pad space;
+/// - a `|` closing the row keeps the cursor after it, and the row is left
+///   unformatted while it has fewer cells than the row above;
+/// - spaces at the end of a cell's content are kept (no reformat) until the
+///   next non-space edit.
+pub fn plan_table_typed_char(lines: &[String], line_idx: usize, col: usize, ch: char) -> TableTypingPlan {
+    let mut plan = TableTypingPlan::default();
+    let Some(line) = lines.get(line_idx) else {
+        return plan;
+    };
+    if !line.trim_start().starts_with('|') {
+        return plan;
+    }
+    let byte = line
+        .char_indices()
+        .nth(col)
+        .map_or(line.len(), |(byte, _)| byte);
+    let pipes = table_pipe_positions(line);
+    let extending_row = pipes.last().is_some_and(|&last| byte > last);
+    let defer_space = ch == ' '
+        && is_table_line(line)
+        && table_cell_info_in_line(line, byte).is_some_and(|cell| {
+            let anchor = if cell.is_empty() {
+                table_cursor_motion_edit_start(&cell)
+            } else {
+                cell.navigation_anchor()
+            };
+            byte >= anchor && byte < cell.right_pipe
+        });
+
+    plan.pad_before = extending_row && ch != ' ' && ch != '|' && line[..byte].ends_with('|');
+    plan.closes_row = ch == '|' && byte == line.len();
+    plan.autoformat = !defer_space && !(extending_row && ch != '|');
+    if plan.closes_row && plan.autoformat {
+        // A row still shorter than the one above is left as typed.
+        let mut typed = line.clone();
+        typed.push('|');
+        let above = line_idx.checked_sub(1).and_then(|idx| lines.get(idx));
+        if let Some(above) = above.filter(|above| is_table_line(above)) {
+            if split_table_cells(&typed).len() < split_table_cells(above).len() {
+                plan.autoformat = false;
+            }
+        }
+    }
+    plan.cursor = if extending_row || plan.closes_row {
+        TableTypingCursor::PastRowEnd
+    } else if defer_space {
+        TableTypingCursor::InCellPadding
+    } else {
+        TableTypingCursor::InCellContent
+    };
+    plan
+}
+
 /// Replacement of lines `start..=end` with `lines`, and where the cursor
 /// lands (`cursor_line` absolute, `cursor_byte` within that line).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1948,6 +2054,41 @@ mod tests {
             let actual = cache.layout(&lines, start, end, width).clone();
             assert_eq!(actual, expected, "step {step}");
         }
+    }
+
+    #[test]
+    fn typing_plan_covers_hand_typed_rows_and_cell_spaces() {
+        let plan = |lines: &[&str], col: usize, ch: char| {
+            plan_table_typed_char(&owned(lines), lines.len() - 1, col, ch)
+        };
+        let row = "| sasa |";
+
+        // First char of the next cell after the closing pipe: padded, no
+        // reformat, cursor stays past the pipe.
+        let next = plan(&[row], row.len(), 'b');
+        assert!(next.pad_before && !next.autoformat);
+        assert_eq!(next.cursor, TableTypingCursor::PastRowEnd);
+        // A space there fills the pad itself.
+        assert!(!plan(&[row], row.len(), ' ').pad_before);
+
+        // Closing a row: cursor stays after the pipe; reformat unless the row
+        // is still shorter than the one above.
+        let close = plan(&["| sasa | b "], 11, '|');
+        assert!(close.closes_row && close.autoformat);
+        assert_eq!(close.cursor, TableTypingCursor::PastRowEnd);
+        let short = plan(&["| a | b | c |", "| --- | --- | --- |", "| 1 | 2 "], 8, '|');
+        assert!(short.closes_row && !short.autoformat, "row shorter than the one above");
+
+        // Space after a cell's content is kept literally.
+        let space = plan(&["| aaa  | b |"], 5, ' ');
+        assert!(!space.autoformat);
+        assert_eq!(space.cursor, TableTypingCursor::InCellPadding);
+        // Space inside content reformats normally.
+        let inner = plan(&["| aa aa | b |"], 3, ' ');
+        assert_eq!(inner, TableTypingPlan::default());
+
+        // Plain text is untouched.
+        assert_eq!(plan(&["hello"], 5, '|'), TableTypingPlan::default());
     }
 
     #[test]

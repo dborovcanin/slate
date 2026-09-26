@@ -2177,29 +2177,6 @@ impl TerminalApp {
         self.mark_edited_current_line();
     }
 
-    pub(super) fn should_defer_table_space_autoformat(&self) -> bool {
-        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
-            return false;
-        }
-        let line_idx = self
-            .editor
-            .cursor_line
-            .min(self.editor.lines.len().saturating_sub(1));
-        let Some(cell) =
-            table_cell_info_at_char(&self.editor.lines, line_idx, self.editor.cursor_col)
-        else {
-            return false;
-        };
-        let line = self.current_line();
-        let anchor = table_cell_navigation_anchor(line, &cell);
-        let right_pipe = line[..cell.right_pipe.min(line.len())].chars().count();
-        // Defer table autoformat only when typing at/after the content anchor
-        // (inside right padding). This preserves intended intra-word spaces at
-        // the end of a cell while keeping canonical reflow active for regular
-        // in-cell edits, including middle-of-cell typing.
-        self.editor.cursor_col >= anchor && self.editor.cursor_col < right_pipe
-    }
-
     pub(super) fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -3574,38 +3551,6 @@ impl TerminalApp {
 
     /// True when the cursor line is a table row with fewer cells than the
     /// table's header row, i.e. a row still being typed by hand.
-    pub(super) fn cursor_table_row_is_incomplete(&self) -> bool {
-        let line_idx = self.editor.cursor_line;
-        if !is_markdown_table_line(&self.editor.lines[line_idx]) {
-            return false;
-        }
-        let mut header = line_idx;
-        while header > 0 && is_markdown_table_line(&self.editor.lines[header - 1]) {
-            header -= 1;
-        }
-        if header == line_idx {
-            return false;
-        }
-        let cells = crate::editor_core::table::split_table_cells(&self.editor.lines[line_idx]).len();
-        let header_cells =
-            crate::editor_core::table::split_table_cells(&self.editor.lines[header]).len();
-        cells < header_cells
-    }
-
-    /// True when the cursor sits after the last `|` of a line that starts
-    /// as a table row, i.e. the user is typing the next cell of a new row.
-    pub(super) fn cursor_after_last_table_pipe(&self) -> bool {
-        let line = self.current_line();
-        if !line.trim_start().starts_with('|') {
-            return false;
-        }
-        line.chars()
-            .enumerate()
-            .filter(|(_, ch)| *ch == '|')
-            .last()
-            .is_some_and(|(idx, _)| self.editor.cursor_col > idx)
-    }
-
     pub(super) fn adjust_cursor_with_table_padding_guard(&mut self, clamp_table_padding: bool) {
         self.adjust_cursor_line_and_col_bounds();
         let table_anchor = if self.note_table_module_enabled() {

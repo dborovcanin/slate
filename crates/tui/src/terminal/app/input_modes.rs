@@ -326,8 +326,16 @@ impl TerminalApp {
                 }
             }
             Key::Char(ch) => {
-                let defer_table_space_autoformat =
-                    ch == ' ' && self.should_defer_table_space_autoformat();
+                let plan = if self.note_table_module_enabled() {
+                    crate::editor_core::table::plan_table_typed_char(
+                        &self.editor.lines,
+                        self.editor.cursor_line,
+                        self.editor.cursor_col,
+                        ch,
+                    )
+                } else {
+                    crate::editor_core::table::TableTypingPlan::default()
+                };
                 if ch == '|' && self.try_table_manual_row_start_rule() {
                     // Blank row replaced by `|`: keep composing the row by hand.
                     should_autoformat = false;
@@ -336,38 +344,19 @@ impl TerminalApp {
                     should_autoformat = false;
                     clamp_table_padding = false;
                 } else {
-                    let extending_row = self.cursor_after_last_table_pipe();
-                    if extending_row
-                        && ch != ' '
-                        && ch != '|'
-                        && self.editor.cursor_col > 0
-                        && self
-                            .current_line()
-                            .chars()
-                            .nth(self.editor.cursor_col - 1)
-                            == Some('|')
-                    {
-                        // First char of the next cell: add the cell's left pad
-                        // (the caret is already drawn past it).
+                    use crate::editor_core::table::TableTypingCursor;
+                    if plan.pad_before {
                         self.insert_char(' ');
                     }
                     self.insert_char(ch);
-                    should_autoformat = !defer_table_space_autoformat;
-                    if extending_row && ch != '|' {
-                        // Typing past a row's closing pipe starts the next
-                        // cell; do not reformat the row under the cursor.
-                        should_autoformat = false;
+                    should_autoformat = plan.autoformat;
+                    match plan.cursor {
+                        TableTypingCursor::InCellContent => {}
+                        TableTypingCursor::InCellPadding => clamp_table_padding = false,
+                        TableTypingCursor::PastRowEnd => cursor_after_row_end = true,
                     }
-                    cursor_after_row_end = extending_row
-                        || (ch == '|' && self.editor.cursor_col == line_char_len(self.current_line()));
-                    if ch == '|' && cursor_after_row_end {
-                        if self.try_table_duplicate_delimiter_rule()
-                            || self.cursor_table_row_is_incomplete()
-                        {
-                            // Duplicate removed, or the row is still shorter
-                            // than the header: leave it as typed.
-                            should_autoformat = false;
-                        }
+                    if plan.closes_row && self.try_table_duplicate_delimiter_rule() {
+                        should_autoformat = false;
                     }
                     // Auto-close [[ → [[]] and open wiki-link picker.
                     if ch == '[' && self.editor.cursor_col >= 2 {
@@ -387,15 +376,6 @@ impl TerminalApp {
                     }
                 }
                 refresh_variable_popup = true;
-                if defer_table_space_autoformat {
-                    // Keep space typing in table cells literal while the user
-                    // is still composing content; shared table reflow applies
-                    // on the next non-space edit.
-                    should_autoformat = false;
-                    // Relax right-padding clamp for this keystroke so cursor
-                    // does not snap back into trimmed content.
-                    clamp_table_padding = false;
-                }
             }
             Key::Esc => {
                 if self.wiki_link_autocomplete_popup.visible {
