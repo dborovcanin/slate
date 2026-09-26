@@ -1491,6 +1491,50 @@ pub fn table_row_prev_word_start(line: &str, col: usize) -> Option<usize> {
     Some(c)
 }
 
+/// What Backspace/Delete does inside a table cell (see
+/// [`plan_table_char_delete`]). Columns are char columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TableCharDelete {
+    /// Remove the character at `at`; the cursor lands on `cursor`.
+    Remove { at: usize, cursor: usize },
+    /// Nothing to remove (at the cell's edge); the cursor moves to `cursor`.
+    Stay { cursor: usize },
+}
+
+/// Plans Backspace (`backward`) or Delete at char column `col` of table row
+/// `line`: only the cell's editable text is removed, never a border pipe or
+/// the cell's left pad. None when the cursor is not in a cell.
+pub fn plan_table_char_delete(line: &str, col: usize, backward: bool) -> Option<TableCharDelete> {
+    if !is_table_line(line) {
+        return None;
+    }
+    let byte = line.char_indices().nth(col).map_or(line.len(), |(byte, _)| byte);
+    let cell = table_cell_info_in_line(line, byte)?;
+    let chars = |byte: usize| line[..byte.min(line.len())].chars().count();
+    let edit_start_byte = table_cursor_motion_edit_start(&cell);
+    let edit_start = chars(edit_start_byte);
+    let edit_end = if cell.is_empty() {
+        edit_start
+    } else {
+        chars(cell.navigation_anchor())
+    };
+    Some(if backward {
+        if col <= edit_start {
+            TableCharDelete::Stay { cursor: col }
+        } else if col > edit_end {
+            TableCharDelete::Stay { cursor: edit_end }
+        } else {
+            TableCharDelete::Remove { at: col - 1, cursor: col - 1 }
+        }
+    } else if col < edit_start {
+        TableCharDelete::Stay { cursor: edit_start }
+    } else if col >= edit_end {
+        TableCharDelete::Stay { cursor: col }
+    } else {
+        TableCharDelete::Remove { at: col, cursor: col }
+    })
+}
+
 /// Where the cursor may rest after a typed character (see
 /// [`plan_table_typed_char`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2089,6 +2133,25 @@ mod tests {
 
         // Plain text is untouched.
         assert_eq!(plan(&["hello"], 5, '|'), TableTypingPlan::default());
+    }
+
+    #[test]
+    fn char_delete_stays_inside_the_cell_text() {
+        let line = "| éa  | bc |";
+        let a = line.chars().position(|c| c == 'a').unwrap();
+        let backspace = |col| plan_table_char_delete(line, col, true);
+        let delete = |col| plan_table_char_delete(line, col, false);
+        assert_eq!(backspace(a + 1), Some(TableCharDelete::Remove { at: a, cursor: a }));
+        assert_eq!(backspace(2), Some(TableCharDelete::Stay { cursor: 2 }), "at the left pad");
+        assert_eq!(backspace(a + 3), Some(TableCharDelete::Stay { cursor: a + 1 }), "from padding");
+        assert_eq!(delete(1), Some(TableCharDelete::Stay { cursor: 2 }));
+        assert_eq!(delete(a), Some(TableCharDelete::Remove { at: a, cursor: a }));
+        assert_eq!(delete(a + 1), Some(TableCharDelete::Stay { cursor: a + 1 }), "at content end");
+        // Multi-byte text before a cell: columns are chars, not bytes.
+        let b = line.chars().position(|c| c == 'b').unwrap();
+        assert_eq!(backspace(b), Some(TableCharDelete::Stay { cursor: b }));
+        assert_eq!(backspace(b + 1), Some(TableCharDelete::Remove { at: b, cursor: b }));
+        assert_eq!(plan_table_char_delete("plain", 2, true), None);
     }
 
     #[test]

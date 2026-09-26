@@ -3151,36 +3151,33 @@ impl TerminalApp {
         true
     }
 
-    pub(super) fn backspace(&mut self) {
-        if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                let edit_start = table_cell_edit_start(&cell);
-                let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-                if self.editor.cursor_col <= edit_start {
-                    self.prune_empty_table_continuation_row_at_cursor();
-                    return;
-                }
-                if self.editor.cursor_col > edit_end {
-                    self.editor.cursor_col = edit_end;
-                    self.prune_empty_table_continuation_row_at_cursor();
-                    return;
-                }
-                let new_col = self.editor.cursor_col - 1;
-                if new_col < edit_start {
-                    self.prune_empty_table_continuation_row_at_cursor();
-                    return;
-                }
-                remove_char_at(&mut self.editor.lines[self.editor.cursor_line], new_col);
-                self.editor.cursor_col = new_col;
+    /// Backspace/Delete inside a table cell: removes only the cell's text
+    /// (see `table::plan_table_char_delete`). False when not in a cell.
+    fn try_table_char_delete(&mut self, backward: bool) -> bool {
+        use crate::editor_core::table::{plan_table_char_delete, TableCharDelete};
+        if !self.note_table_module_enabled() {
+            return false;
+        }
+        let Some(plan) = plan_table_char_delete(self.current_line(), self.editor.cursor_col, backward)
+        else {
+            return false;
+        };
+        match plan {
+            TableCharDelete::Stay { cursor } => self.editor.cursor_col = cursor,
+            TableCharDelete::Remove { at, cursor } => {
+                remove_char_at(&mut self.editor.lines[self.editor.cursor_line], at);
+                self.editor.cursor_col = cursor;
                 self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                self.mark_edited();
-                self.prune_empty_table_continuation_row_at_cursor();
-                return;
+                self.mark_edited_current_line();
             }
+        }
+        self.prune_empty_table_continuation_row_at_cursor();
+        true
+    }
+
+    pub(super) fn backspace(&mut self) {
+        if self.try_table_char_delete(true) {
+            return;
         }
 
         if self.editor.cursor_col > 0 {
@@ -3210,30 +3207,8 @@ impl TerminalApp {
     }
 
     pub(super) fn delete_forward(&mut self) {
-        if self.note_table_module_enabled() {
-            if let Some(cell) = table_cell_info_at_char(
-                &self.editor.lines,
-                self.editor.cursor_line,
-                self.editor.cursor_col,
-            ) {
-                let edit_start = table_cell_edit_start(&cell);
-                let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-                if self.editor.cursor_col < edit_start {
-                    self.editor.cursor_col = edit_start;
-                    self.prune_empty_table_continuation_row_at_cursor();
-                    return;
-                }
-                if self.editor.cursor_col >= edit_end {
-                    self.prune_empty_table_continuation_row_at_cursor();
-                    return;
-                }
-                let col = self.editor.cursor_col;
-                remove_char_at(&mut self.editor.lines[self.editor.cursor_line], col);
-                self.refresh_calc_line_metadata_at(self.editor.cursor_line);
-                self.mark_edited_current_line();
-                self.prune_empty_table_continuation_row_at_cursor();
-                return;
-            }
+        if self.try_table_char_delete(false) {
+            return;
         }
 
         let line_len = line_char_len(self.current_line());

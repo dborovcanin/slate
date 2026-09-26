@@ -104,7 +104,7 @@ Action points:
 - Markdown/table/list transforms live in `editor-core`; the terminal applies them natively.
 - Table block structure (bounds, delimiter row, column widths) comes from `editor_core::table::TableBlockLayout`; the renderer measures visible widths through it.
 - Insert-mode typing on table rows is planned by `editor_core::table::plan_table_typed_char`; the terminal applies the plan.
-- Still terminal-local in `crates/tui/src/terminal/app/editing.rs`: the in-cell backspace/delete clamps and the padding cursor guard.
+- In-cell Backspace/Delete is planned by `editor_core::table::plan_table_char_delete`. The padding cursor guard (keeping the cursor out of alignment padding) stays in the terminal as presentation of the core cell bounds.
 
 Action points:
 
@@ -182,7 +182,7 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 
 | Action | Status | Description | Impact | Difficulty |
 | --- | --- | --- | ---: | ---: |
-| Move remaining table delete semantics into `editor-core` | Partial | Boundary edits, structural merges, header deletion, cursor movement, word-delete range, empty continuation-row detection, and multiline paste into a cell are shared. The in-cell backspace/delete clamps and the padding cursor guard in `crates/tui/src/terminal/app/editing.rs` are still terminal-local. | 10 | 8 |
+| Move remaining table delete semantics into `editor-core` | Done | Boundary edits, structural merges, header deletion, cursor movement, word motions and operators, in-cell Backspace/Delete, empty continuation-row detection, multiline paste, and hand-typed rows are planned in `editor_core::table`. | 10 | 8 |
 | Consolidate pure command execution | Backlog | Move inline format, list conversion, format clear, and date insertion execution from `crates/tui/src/editor_core/commands.rs` into `editor-core`; keep only side effects in the terminal layer. | 9 | 7 |
 | Command catalog conformance check | Backlog | Test that every `CommandId` in `command_catalog.rs` has a core executor, a terminal host handler, or an explicit unsupported state. | 9 | 5 |
 | Versioned SQLite migrations | Postponed | Only `migrations/0001_init.sql` exists. Introduce `PRAGMA user_version` (or a `schema_migrations` table), ordered migrations, migration tests, and backup guidance for schema changes. | 10 | 6 |
