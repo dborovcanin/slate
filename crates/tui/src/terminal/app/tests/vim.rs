@@ -1012,3 +1012,51 @@ fn vim_macros_capture_and_replay_insert_mode_input() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn w_and_b_step_through_table_cells_and_rows() {
+    let body = "intro\n| sas   | sasa    | x   |\n| ----- | ------- | --- |\n| dusan | as dasd | y   |\n| ab    | cd      | ef  |\noutro";
+    let (db, mut app, path) = app_with_note(body);
+    let lines = app.editor.lines.clone();
+    let word = |line: usize, text: &str| (line, lines[line].find(text).unwrap());
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 3;
+    app.editor.cursor_col = 2;
+    let forward = vec![
+        word(3, "as"),
+        word(3, "dasd"),
+        word(3, "y"),
+        word(4, "ab"),
+        word(4, "cd"),
+        word(4, "ef"),
+        (5, 0),
+    ];
+    let mut trace = Vec::new();
+    for _ in 0..forward.len() {
+        app.handle_key(&db, Key::Char('w')).expect("w");
+        trace.push((app.editor.cursor_line, app.editor.cursor_col));
+    }
+    assert_eq!(trace, forward);
+
+    app.editor.cursor_line = 4;
+    app.editor.cursor_col = lines[4].find("ef").unwrap();
+    let backward = vec![
+        word(4, "cd"),
+        word(4, "ab"),
+        word(3, "y"),
+        word(3, "dasd"),
+        word(3, "as"),
+        word(3, "dusan"),
+        word(1, "x"),
+    ];
+    let mut trace = Vec::new();
+    for _ in 0..backward.len() {
+        app.handle_key(&db, Key::Char('b')).expect("b");
+        trace.push((app.editor.cursor_line, app.editor.cursor_col));
+    }
+    assert_eq!(trace, backward, "b skips the delimiter row");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

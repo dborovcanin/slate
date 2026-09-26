@@ -1190,6 +1190,56 @@ pub fn table_cell_word_delete_start(
     (col != cursor).then_some(col)
 }
 
+/// Per-char word classes of a table row for `w`/`b`: 0 for whitespace and
+/// structural pipes (so motions step over cell borders), 1 for word chars,
+/// 2 for other punctuation. Escaped `\|` stays punctuation.
+fn table_row_word_classes(line: &str) -> Vec<u8> {
+    let pipes = table_pipe_positions(line);
+    line.char_indices()
+        .map(|(byte, ch)| {
+            if ch.is_whitespace() || pipes.binary_search(&byte).is_ok() {
+                0
+            } else if ch.is_alphanumeric() || ch == '_' {
+                1
+            } else {
+                2
+            }
+        })
+        .collect()
+}
+
+/// Char column of the next word start after `col` in table row `line`, or
+/// None when no word follows on this row.
+pub fn table_row_next_word_start(line: &str, col: usize) -> Option<usize> {
+    let classes = table_row_word_classes(line);
+    let len = classes.len();
+    let mut c = col.min(len);
+    if let Some(&start) = classes.get(c).filter(|&&class| class != 0) {
+        while c < len && classes[c] == start {
+            c += 1;
+        }
+    }
+    while c < len && classes[c] == 0 {
+        c += 1;
+    }
+    (c < len).then_some(c)
+}
+
+/// Char column of the word start before `col` in table row `line`, or None
+/// when no word precedes it on this row.
+pub fn table_row_prev_word_start(line: &str, col: usize) -> Option<usize> {
+    let classes = table_row_word_classes(line);
+    let mut c = col.min(classes.len());
+    while c > 0 && classes[c - 1] == 0 {
+        c -= 1;
+    }
+    let class = *classes.get(c.checked_sub(1)?)?;
+    while c > 0 && classes[c - 1] == class {
+        c -= 1;
+    }
+    Some(c)
+}
+
 /// Replacement of lines `start..=end` with `lines`, and where the cursor
 /// lands (`cursor_line` absolute, `cursor_byte` within that line).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1614,6 +1664,34 @@ mod tests {
         let target =
             plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Up).expect("target");
         assert_eq!(target.line_index, 0, "delimiter row is skipped");
+    }
+
+    #[test]
+    fn table_row_word_motions_step_over_cell_borders() {
+        let line = "| dusan | as dasd | y |";
+        let starts: Vec<usize> = ["dusan", "as", "dasd", "y"]
+            .iter()
+            .map(|word| line.find(word).unwrap())
+            .collect();
+        assert_eq!(table_row_next_word_start(line, 0), Some(starts[0]));
+        assert_eq!(table_row_next_word_start(line, starts[0]), Some(starts[1]));
+        assert_eq!(table_row_next_word_start(line, starts[0] + 2), Some(starts[1]));
+        assert_eq!(table_row_next_word_start(line, starts[1]), Some(starts[2]));
+        assert_eq!(table_row_next_word_start(line, starts[2]), Some(starts[3]));
+        assert_eq!(table_row_next_word_start(line, starts[3]), None);
+
+        assert_eq!(table_row_prev_word_start(line, starts[3]), Some(starts[2]));
+        assert_eq!(table_row_prev_word_start(line, starts[2]), Some(starts[1]));
+        assert_eq!(table_row_prev_word_start(line, starts[1]), Some(starts[0]));
+        assert_eq!(table_row_prev_word_start(line, starts[0] + 3), Some(starts[0]));
+        assert_eq!(table_row_prev_word_start(line, starts[0]), None);
+
+        let escaped = r"| a\|b | c |";
+        assert_eq!(
+            table_row_next_word_start(escaped, escaped.find('a').unwrap()),
+            escaped.find('\\'),
+            "escaped pipe is punctuation, not a border"
+        );
     }
 
     #[test]

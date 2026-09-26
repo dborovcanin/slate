@@ -1938,7 +1938,70 @@ impl TerminalApp {
 
     // --- Search ---
 
+    /// `w`/`b` on a table row: cell borders count as whitespace, so the
+    /// motion steps into the neighbouring cell, and past the row's first or
+    /// last word it continues on the adjacent row (skipping the delimiter).
+    /// Returns false when the cursor is not on a table row.
+    fn move_cursor_word_in_table(&mut self, forward: bool) -> bool {
+        use crate::editor_core::table::{
+            is_delimiter_line_in, table_row_next_word_start, table_row_prev_word_start,
+        };
+        if !self.note_table_module_enabled() || !is_markdown_table_line(self.current_line()) {
+            return false;
+        }
+        let on_row = if forward {
+            table_row_next_word_start(self.current_line(), self.editor.cursor_col)
+        } else {
+            table_row_prev_word_start(self.current_line(), self.editor.cursor_col)
+        };
+        if let Some(col) = on_row {
+            self.editor.cursor_col = col;
+            return true;
+        }
+
+        let mut virtual_line = self.current_virtual_line();
+        loop {
+            let next_virtual = if forward {
+                virtual_line + 1
+            } else {
+                let Some(prev) = virtual_line.checked_sub(1) else {
+                    return true;
+                };
+                prev
+            };
+            if next_virtual >= self.visible_line_count() {
+                return true;
+            }
+            let Some(line_idx) = self.real_line_for_virtual(next_virtual) else {
+                return true;
+            };
+            virtual_line = next_virtual;
+            let line = &self.editor.lines[line_idx];
+            if !is_markdown_table_line(line) {
+                self.editor.cursor_line = line_idx;
+                self.editor.cursor_col = if forward { 0 } else { line_char_len(line) };
+                return true;
+            }
+            if is_delimiter_line_in(&self.editor.lines, line_idx) {
+                continue;
+            }
+            let col = if forward {
+                table_row_next_word_start(line, 0)
+            } else {
+                table_row_prev_word_start(line, line_char_len(line))
+            };
+            self.editor.cursor_line = line_idx;
+            // An empty row has no word; land on it and let the cursor guard
+            // place the cursor in its first cell.
+            self.editor.cursor_col = col.unwrap_or(0);
+            return true;
+        }
+    }
+
     pub(super) fn move_cursor_left_word(&mut self) {
+        if self.move_cursor_word_in_table(false) {
+            return;
+        }
         if self.editor.cursor_col == 0 {
             let current_virtual = self.current_virtual_line();
             if current_virtual > 0 {
@@ -1994,6 +2057,9 @@ impl TerminalApp {
     }
 
     pub(super) fn move_cursor_right_word(&mut self) {
+        if self.move_cursor_word_in_table(true) {
+            return;
+        }
         let line = self.current_line();
         let chars: Vec<char> = line.chars().collect();
         let len = chars.len();
