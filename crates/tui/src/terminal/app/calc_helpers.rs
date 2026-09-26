@@ -226,6 +226,30 @@ pub(super) fn extract_variable_completion_prefix(
     })
 }
 
+/// Candidate queries for a completion prefix, longest first: the whole run
+/// (variable names may contain spaces, e.g. `tax ra` -> `tax rate`) and then
+/// each shorter run starting after a space (`then pri` -> `pri`).
+pub(super) fn variable_completion_candidates(
+    prefix: &VariableCompletionPrefix,
+) -> Vec<VariableCompletionPrefix> {
+    let chars: Vec<char> = prefix.query.chars().collect();
+    let mut candidates = vec![VariableCompletionPrefix {
+        from_col: prefix.from_col,
+        to_col: prefix.to_col,
+        query: prefix.query.clone(),
+    }];
+    for (idx, ch) in chars.iter().enumerate() {
+        if *ch == ' ' && idx + 1 < chars.len() && chars[idx + 1] != ' ' {
+            candidates.push(VariableCompletionPrefix {
+                from_col: prefix.from_col + idx + 1,
+                to_col: prefix.to_col,
+                query: chars[idx + 1..].iter().collect(),
+            });
+        }
+    }
+    candidates
+}
+
 pub(super) fn build_variable_suggestions(
     variable_names: &[String],
     query: &str,

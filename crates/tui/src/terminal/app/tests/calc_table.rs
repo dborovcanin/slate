@@ -204,6 +204,50 @@ fn variable_completion_prefix_resolves_current_query_span() {
 }
 
 #[test]
+fn variable_completion_candidates_try_word_boundary_suffixes_longest_first() {
+    let run = extract_variable_completion_prefix("then pri", 8).expect("prefix exists");
+    let queries: Vec<(usize, String)> =
+        super::super::calc_helpers::variable_completion_candidates(&run)
+            .into_iter()
+            .map(|candidate| (candidate.from_col, candidate.query))
+            .collect();
+    assert_eq!(
+        queries,
+        vec![(0, "then pri".to_string()), (5, "pri".to_string())]
+    );
+}
+
+#[test]
+fn variable_autocomplete_suggests_from_the_last_word_of_a_prose_line() {
+    let (_db, mut app, path) = app_with_note("price := 5\nthen pri");
+    app.mode = UiMode::Editor;
+    app.run_calc_recompute();
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 8;
+    let state = app.variable_autocomplete_state().expect("suggestions");
+    assert_eq!(state.suggestions, vec!["price".to_string()]);
+    assert_eq!(state.from_col, 5);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn variable_autocomplete_still_prefers_multi_word_names() {
+    let (_db, mut app, path) = app_with_note("tax rate := 0.2\ntax ra");
+    app.mode = UiMode::Editor;
+    app.run_calc_recompute();
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 6;
+    let state = app.variable_autocomplete_state().expect("suggestions");
+    assert_eq!(state.suggestions, vec!["tax rate".to_string()]);
+    assert_eq!(state.from_col, 0);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn variable_completion_prefix_skips_leading_spaces_and_rejects_trailing_space() {
     let prefix = extract_variable_completion_prefix("   total", 8).expect("prefix exists");
     assert_eq!(prefix.from_col, 3);
@@ -1603,7 +1647,10 @@ fn typing_a_table_row_by_hand_keeps_its_cells() {
     app.mode = UiMode::Editor;
     type_text(&mut app, &db, "| a | b |");
     assert_eq!(app.editor.lines, vec!["| a | b |"]);
-    assert_eq!(app.editor.cursor_col, 9, "cursor stays after the closing pipe");
+    assert_eq!(
+        app.editor.cursor_col, 9,
+        "cursor stays after the closing pipe"
+    );
 
     drop(app);
     drop(db);

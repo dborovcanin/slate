@@ -3,6 +3,7 @@ use super::{
     compute_calc_trailer_refresh, contains_assignment_operator,
     cross_note_exports_for_autocomplete, display_cols_for_prefix,
     extract_cross_note_completion_prefix, extract_variable_completion_prefix,
+    variable_completion_candidates,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
     table_block_bounds_for_line, table_cell_edit_start, table_cell_info_at_char,
@@ -2473,16 +2474,19 @@ impl TerminalApp {
         if self.calc.variable_names.is_empty() {
             return None;
         }
-        let prefix = extract_variable_completion_prefix(line, self.editor.cursor_col)?;
-        let suggestions = build_variable_suggestions(
-            &self.calc.variable_names,
-            &prefix.query,
-            self.variable_autocomplete_min_chars,
-            VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
-        );
-        if suggestions.is_empty() {
-            return None;
-        }
+        let run = extract_variable_completion_prefix(line, self.editor.cursor_col)?;
+        let (prefix, suggestions) = variable_completion_candidates(&run)
+            .into_iter()
+            .map(|candidate| {
+                let suggestions = build_variable_suggestions(
+                    &self.calc.variable_names,
+                    &candidate.query,
+                    self.variable_autocomplete_min_chars,
+                    VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
+                );
+                (candidate, suggestions)
+            })
+            .find(|(_, suggestions)| !suggestions.is_empty())?;
         Some(VariableAutocompleteState {
             popup_anchor_col: prefix.from_col,
             from_col: prefix.from_col,
