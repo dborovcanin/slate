@@ -1145,6 +1145,143 @@ pub fn format_table_lines_with_cache(
         .collect()
 }
 
+/// Whether `line` is a `|>` continuation row with no content left, which
+/// editing removes so a multiline cell does not leave blank rows behind.
+pub fn is_empty_table_continuation_row(line: &str) -> bool {
+    if !is_table_continuation_line(line) {
+        return false;
+    }
+    split_table_cells(line).iter().enumerate().all(|(idx, cell)| {
+        let cell = cell.trim();
+        if idx == 0 {
+            cell.trim_start_matches(|c: char| c == '>' || c.is_whitespace())
+                .is_empty()
+        } else {
+            cell.is_empty()
+        }
+    })
+}
+
+/// Char column where deleting the word before `cursor` stops inside a table
+/// cell whose editable text spans `edit_start..=edit_end` (char columns):
+/// trailing non-word chars, then the word, never past the cell start. None
+/// when nothing would be deleted.
+pub fn table_cell_word_delete_start(
+    line: &str,
+    cursor: usize,
+    edit_start: usize,
+    edit_end: usize,
+) -> Option<usize> {
+    if cursor <= edit_start {
+        return None;
+    }
+    let chars: Vec<char> = line.chars().collect();
+    let mut col = cursor.min(edit_end);
+    while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
+        col -= 1;
+    }
+    while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
+        col -= 1;
+    }
+    (col != cursor).then_some(col)
+}
+
+/// Replacement of lines `start..=end` with `lines`, and where the cursor
+/// lands (`cursor_line` absolute, `cursor_byte` within that line).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableBlockEdit {
+    pub start: usize,
+    pub end: usize,
+    pub lines: Vec<String>,
+    pub cursor_line: usize,
+    pub cursor_byte: usize,
+}
+
+/// Pastes multiline `text` into the table cell at (`line_idx`, `cursor_byte`):
+/// the first line joins the cell before the cursor, each further line goes
+/// into the same column of a new `|>` continuation row, and the text after
+/// the cursor follows the last pasted line. None outside a data cell or for
+/// single-line text.
+pub fn plan_table_cell_multiline_paste(
+    lines: &[String],
+    line_idx: usize,
+    cursor_byte: usize,
+    text: &str,
+    cache: &mut TableFormatCache,
+) -> Option<TableBlockEdit> {
+    let parts: Vec<&str> = text.split('\n').collect();
+    if parts.len() < 2 || is_delimiter_line_in(lines, line_idx) {
+        return None;
+    }
+    let (block_start, block_end) = table_block_bounds(lines, line_idx)?;
+    let current_line = lines.get(line_idx)?;
+    let pipes = table_pipe_positions(current_line);
+    let column_index = table_cell_index_for_column(&pipes, cursor_byte)?;
+    let span = table_cell_span(current_line, &pipes, column_index)?;
+
+    let mut row_cells: Vec<Vec<String>> = lines[block_start..=block_end]
+        .iter()
+        .map(|line| split_table_cells(line))
+        .collect();
+    let mut row_continuations: Vec<bool> = lines[block_start..=block_end]
+        .iter()
+        .map(|line| is_table_continuation_line(line))
+        .collect();
+    let relative_row = line_idx - block_start;
+    let column_count = row_cells[relative_row]
+        .len()
+        .max(pipes.len().saturating_sub(1))
+        .max(column_index + 1);
+    for row in &mut row_cells {
+        row.resize(column_count, String::new());
+    }
+
+    let content_start = (span.left_pipe + 1 + span.trim_start).min(current_line.len());
+    let content_end = (span.left_pipe + 1 + span.trim_end).min(current_line.len());
+    let split = cursor_byte.clamp(content_start, content_end);
+    let left_existing = &current_line[content_start..split];
+    let right_existing = &current_line[split..content_end];
+
+    row_cells[relative_row][column_index] = format!("{left_existing}{}", parts[0]);
+    for (idx, part) in parts.iter().enumerate().skip(1) {
+        let mut next_row = vec![String::new(); column_count];
+        next_row[column_index] = if idx + 1 == parts.len() {
+            format!("{part}{right_existing}")
+        } else {
+            (*part).to_string()
+        };
+        row_cells.insert(relative_row + idx, next_row);
+        row_continuations.insert(relative_row + idx, true);
+    }
+
+    let raw_lines: Vec<String> = row_cells
+        .iter()
+        .zip(&row_continuations)
+        .map(|(cells, &continuation)| serialize_table_row_with_kind(cells, continuation))
+        .collect();
+    let formatted = format_table_lines_with_cache(&raw_lines, cache);
+
+    let target_relative_row = relative_row + parts.len() - 1;
+    let cursor_line = (block_start + target_relative_row).min(block_start + formatted.len() - 1);
+    let target_line = &formatted[cursor_line - block_start];
+    let target_pipes = table_pipe_positions(target_line);
+    let cursor_byte = table_cell_span(target_line, &target_pipes, column_index)
+        .map(|target_span| {
+            let anchor = target_span.navigation_anchor();
+            let start = target_span.edit_start().min(anchor);
+            let last_len = parts.last().map_or(0, |part| part.len());
+            start.saturating_add(last_len).min(anchor)
+        })
+        .unwrap_or(0);
+    Some(TableBlockEdit {
+        start: block_start,
+        end: block_end,
+        lines: formatted,
+        cursor_line,
+        cursor_byte,
+    })
+}
+
 pub fn build_empty_table_row_like(line_text: &str) -> Option<String> {
     let column_count = table_column_count(line_text)?;
     let cells = vec![String::new(); column_count];
@@ -1467,6 +1604,40 @@ mod tests {
         let target =
             plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Up).expect("target");
         assert_eq!(target.line_index, 0, "delimiter row is skipped");
+    }
+
+    #[test]
+    fn empty_continuation_row_detection_ignores_marker_and_padding() {
+        assert!(is_empty_table_continuation_row("|>   |    |"));
+        assert!(is_empty_table_continuation_row("|> > |  |"));
+        assert!(!is_empty_table_continuation_row("|> a |  |"));
+        assert!(!is_empty_table_continuation_row("|    |  |"), "not a continuation row");
+    }
+
+    #[test]
+    fn word_delete_start_stays_inside_the_cell() {
+        let line = "| ab cd  | x |";
+        assert_eq!(table_cell_word_delete_start(line, 7, 2, 7), Some(5));
+        assert_eq!(table_cell_word_delete_start(line, 5, 2, 7), Some(2));
+        assert_eq!(table_cell_word_delete_start(line, 2, 2, 7), None);
+    }
+
+    #[test]
+    fn multiline_paste_fills_continuation_rows_in_the_same_column() {
+        let lines = owned(&["| a   | b   |", "| --- | --- |", "| xy  | z   |"]);
+        let cursor = lines[2].find('y').unwrap();
+        let mut cache = TableFormatCache::default();
+        let edit = plan_table_cell_multiline_paste(&lines, 2, cursor, "1\n2", &mut cache)
+            .expect("paste plan");
+        assert_eq!((edit.start, edit.end), (0, 2));
+        assert_eq!(
+            edit.lines,
+            owned(&["| a   | b   |", "| --- | --- |", "| x1  | z   |", "|>2y  |     |"])
+        );
+        assert_eq!(edit.cursor_line, 3);
+        assert_eq!(edit.cursor_byte, edit.lines[3].find('y').unwrap(), "after the pasted text");
+        assert!(plan_table_cell_multiline_paste(&lines, 1, 3, "1\n2", &mut cache).is_none());
+        assert!(plan_table_cell_multiline_paste(&lines, 2, cursor, "1", &mut cache).is_none());
     }
 
     #[test]

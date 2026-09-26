@@ -2058,23 +2058,14 @@ impl TerminalApp {
                 self.editor.cursor_line,
                 self.editor.cursor_col,
             ) {
-                let edit_start = table_cell_edit_start(&cell);
-                let edit_end = table_cell_navigation_anchor(self.current_line(), &cell);
-                if self.editor.cursor_col <= edit_start {
+                let Some(col) = crate::editor_core::table::table_cell_word_delete_start(
+                    self.current_line(),
+                    self.editor.cursor_col,
+                    table_cell_edit_start(&cell),
+                    table_cell_navigation_anchor(self.current_line(), &cell),
+                ) else {
                     return false;
-                }
-                let mut col = self.editor.cursor_col.min(edit_end);
-                let line = self.current_line();
-                let chars: Vec<char> = line.chars().collect();
-                while col > edit_start && chars.get(col - 1).is_some_and(|c| !c.is_alphanumeric()) {
-                    col -= 1;
-                }
-                while col > edit_start && chars.get(col - 1).is_some_and(|c| c.is_alphanumeric()) {
-                    col -= 1;
-                }
-                if col == self.editor.cursor_col {
-                    return false;
-                }
+                };
                 let start_byte = byte_index(self.current_line(), col);
                 let end_byte = byte_index(self.current_line(), self.editor.cursor_col);
                 let text = self.current_line_mut();
@@ -2157,151 +2148,35 @@ impl TerminalApp {
     }
 
     fn try_insert_table_cell_multiline_paste(&mut self, normalized: &str) -> bool {
-        if !self.note_table_module_enabled()
-            || !normalized.contains('\n')
-            || self.editor.lines.is_empty()
-        {
+        if !self.note_table_module_enabled() || self.editor.lines.is_empty() {
             return false;
         }
-
         let line_idx = self
             .editor
             .cursor_line
             .min(self.editor.lines.len().saturating_sub(1));
-        let Some(cell_info) =
-            table_cell_info_at_char(&self.editor.lines, line_idx, self.editor.cursor_col)
-        else {
-            return false;
-        };
-        let Some(current_line) = self.editor.lines.get(line_idx).cloned() else {
-            return false;
-        };
-        if !is_markdown_table_line(&current_line) {
-            return false;
-        }
-        if crate::editor_core::table::is_delimiter_line_in(&self.editor.lines, line_idx) {
-            return false;
-        }
-
-        let mut block_start = line_idx;
-        while block_start > 0 && is_markdown_table_line(&self.editor.lines[block_start - 1]) {
-            block_start -= 1;
-        }
-        let mut block_end = line_idx;
-        while block_end + 1 < self.editor.lines.len()
-            && is_markdown_table_line(&self.editor.lines[block_end + 1])
-        {
-            block_end += 1;
-        }
-
-        let parts: Vec<&str> = normalized.split('\n').collect();
-        if parts.len() < 2 {
-            return false;
-        }
-
-        let mut row_cells: Vec<Vec<String>> = (block_start..=block_end)
-            .map(|ln| crate::editor_core::table::split_table_cells(&self.editor.lines[ln]))
-            .collect();
-        let mut row_continuations: Vec<bool> = (block_start..=block_end)
-            .map(|ln| crate::editor_core::table::is_table_continuation_line(&self.editor.lines[ln]))
-            .collect();
-        let relative_row = line_idx.saturating_sub(block_start);
-        let Some(current_row_len) = row_cells.get(relative_row).map(|row| row.len()) else {
-            return false;
-        };
-        let column_count = current_row_len
-            .max(cell_info.column_count)
-            .max(cell_info.column_index + 1)
-            .max(1);
-        for row in &mut row_cells {
-            while row.len() < column_count {
-                row.push(String::new());
-            }
-        }
-
-        let pipes = crate::editor_core::table::table_pipe_positions(&current_line);
-        let Some(span) = crate::editor_core::table::table_cell_span(
-            &current_line,
-            &pipes,
-            cell_info.column_index,
+        let cursor_byte = byte_index(&self.editor.lines[line_idx], self.editor.cursor_col);
+        let Some(edit) = crate::editor_core::table::plan_table_cell_multiline_paste(
+            &self.editor.lines,
+            line_idx,
+            cursor_byte,
+            normalized,
+            &mut self.table_format_cache,
         ) else {
             return false;
         };
-        let content_start = (span.left_pipe + 1 + span.trim_start).min(current_line.len());
-        let content_end = (span.left_pipe + 1 + span.trim_end).min(current_line.len());
-        let cursor_byte =
-            byte_index(&current_line, self.editor.cursor_col).clamp(content_start, content_end);
-        let left_existing = current_line[content_start..cursor_byte].to_string();
-        let right_existing = current_line[cursor_byte..content_end].to_string();
 
-        if let Some(cell) = row_cells
-            .get_mut(relative_row)
-            .and_then(|row| row.get_mut(cell_info.column_index))
-        {
-            *cell = format!("{left_existing}{}", parts[0]);
-        }
+        let replaced_count = edit.end - edit.start + 1;
+        let inserted_count = edit.lines.len();
+        self.editor.lines.splice(edit.start..=edit.end, edit.lines);
+        self.editor.cursor_line = edit.cursor_line;
+        let target_line = &self.editor.lines[edit.cursor_line];
+        self.editor.cursor_col = target_line[..edit.cursor_byte.min(target_line.len())]
+            .chars()
+            .count();
 
-        for (idx, part) in parts.iter().enumerate().skip(1) {
-            let mut next_row = vec![String::new(); column_count];
-            if let Some(cell) = next_row.get_mut(cell_info.column_index) {
-                if idx + 1 == parts.len() {
-                    *cell = format!("{part}{right_existing}");
-                } else {
-                    *cell = (*part).to_string();
-                }
-            }
-            row_cells.insert(relative_row + idx, next_row);
-            row_continuations.insert(relative_row + idx, true);
-        }
-
-        let raw_lines: Vec<String> = row_cells
-            .iter()
-            .enumerate()
-            .map(|(idx, cells)| {
-                crate::editor_core::table::serialize_table_row_with_kind(
-                    cells,
-                    row_continuations[idx],
-                )
-            })
-            .collect();
-        let formatted = crate::editor_core::table::format_table_lines_with_cache(
-            &raw_lines,
-            &mut self.table_format_cache,
-        );
-
-        let replaced_count = block_end.saturating_sub(block_start) + 1;
-        self.editor
-            .lines
-            .splice(block_start..=block_end, formatted.clone());
-
-        let target_relative_row = relative_row + parts.len() - 1;
-        self.editor.cursor_line =
-            (block_start + target_relative_row).min(self.editor.lines.len().saturating_sub(1));
-        if let Some(target_line) = self.editor.lines.get(self.editor.cursor_line) {
-            let target_pipes = crate::editor_core::table::table_pipe_positions(target_line);
-            if let Some(target_span) = crate::editor_core::table::table_cell_span(
-                target_line,
-                &target_pipes,
-                cell_info.column_index,
-            ) {
-                let target_start = target_span
-                    .edit_start()
-                    .min(target_span.navigation_anchor());
-                let mut target_byte =
-                    target_start.saturating_add(parts.last().map(|part| part.len()).unwrap_or(0));
-                if target_byte > target_span.navigation_anchor() {
-                    target_byte = target_span.navigation_anchor();
-                }
-                self.editor.cursor_col = target_line[..target_byte].chars().count();
-            } else {
-                self.editor.cursor_col = 0;
-            }
-        } else {
-            self.editor.cursor_col = 0;
-        }
-
-        self.splice_calc_line_metadata(block_start, replaced_count, formatted.len());
-        self.mark_edited_from_line(block_start);
+        self.splice_calc_line_metadata(edit.start, replaced_count, inserted_count);
+        self.mark_edited_from_line(edit.start);
         true
     }
 
@@ -3193,19 +3068,7 @@ impl TerminalApp {
         if self.editor.cursor_line >= self.editor.lines.len() {
             return false;
         }
-        let current = self.current_line();
-        if !crate::editor_core::table::is_table_continuation_line(current) {
-            return false;
-        }
-        let mut cells = crate::editor_core::table::split_table_cells(current);
-        if let Some(first) = cells.first_mut() {
-            let mut cleaned = first.trim().to_string();
-            while let Some(rest) = cleaned.strip_prefix('>') {
-                cleaned = rest.trim_start().to_string();
-            }
-            *first = cleaned;
-        }
-        if cells.iter().any(|cell| !cell.trim().is_empty()) {
+        if !crate::editor_core::table::is_empty_table_continuation_row(self.current_line()) {
             return false;
         }
 

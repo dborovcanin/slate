@@ -102,7 +102,8 @@ Action points:
 ### Markdown/Table/List
 
 - Markdown/table/list transforms live in `editor-core`; the terminal applies them natively.
-- Table word-delete and continuation-row cleanup still live in `crates/tui/src/terminal/app/editing.rs`.
+- Table block structure (bounds, delimiter row, column widths) comes from `editor_core::table::TableBlockLayout`; the renderer measures visible widths through it.
+- Still terminal-local in `crates/tui/src/terminal/app/editing.rs`: the in-cell backspace/delete clamps, the space-autoformat deferral, the padding cursor guard, and the row-completeness checks used while hand-typing a row.
 
 Action points:
 
@@ -180,7 +181,7 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 
 | Action | Status | Description | Impact | Difficulty |
 | --- | --- | --- | ---: | ---: |
-| Move remaining table delete semantics into `editor-core` | Partial | Boundary edits, structural merges, header deletion, and cursor movement are shared. Table word-delete and continuation-row cleanup (`prune_empty_table_continuation_row_at_cursor` and friends in `crates/tui/src/terminal/app/editing.rs`) are still terminal-local. | 10 | 8 |
+| Move remaining table delete semantics into `editor-core` | Partial | Boundary edits, structural merges, header deletion, cursor movement, word-delete range, empty continuation-row detection, and multiline paste into a cell are shared. The in-cell backspace/delete clamps and hand-typing guards in `crates/tui/src/terminal/app/editing.rs` are still terminal-local. | 10 | 8 |
 | Consolidate pure command execution | Backlog | Move inline format, list conversion, format clear, and date insertion execution from `crates/tui/src/editor_core/commands.rs` into `editor-core`; keep only side effects in the terminal layer. | 9 | 7 |
 | Command catalog conformance check | Backlog | Test that every `CommandId` in `command_catalog.rs` has a core executor, a terminal host handler, or an explicit unsupported state. | 9 | 5 |
 | Versioned SQLite migrations | Postponed | Only `migrations/0001_init.sql` exists. Introduce `PRAGMA user_version` (or a `schema_migrations` table), ordered migrations, migration tests, and backup guidance for schema changes. | 10 | 6 |
