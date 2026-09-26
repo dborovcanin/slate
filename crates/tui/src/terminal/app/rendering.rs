@@ -321,9 +321,8 @@ impl TerminalApp {
         &mut self,
         line_idx: usize,
     ) -> Option<crate::editor_core::table::TableBlockLayout> {
-        use crate::editor_core::table::{table_block_bounds, TableBlockLayout};
-        use std::hash::{Hash, Hasher};
-        const TABLE_LAYOUT_CACHE_CAP: usize = 64;
+        use crate::editor_core::table::table_block_bounds;
+        const TABLE_LAYOUT_CACHE_CAP: usize = 16;
 
         if let Some(pass) = &self.render_caches.table_layout_pass {
             if let Some(layout) = pass.iter().find(|layout| layout.contains(line_idx)) {
@@ -331,22 +330,15 @@ impl TerminalApp {
             }
         }
         let (start, end) = table_block_bounds(&self.editor.lines, line_idx)?;
-        let mut hasher = rustc_hash::FxHasher::default();
-        self.editor.lines[start..=end].hash(&mut hasher);
-        let key = (start, hasher.finish());
-        let mut layout = match self.render_caches.table_layout_cache.get(&key) {
-            Some(cached) => cached.clone(),
-            None => {
-                let layout =
-                    TableBlockLayout::build(&self.editor.lines, start, end, cell_visible_width);
-                let cache = &mut self.render_caches.table_layout_cache;
-                if cache.len() >= TABLE_LAYOUT_CACHE_CAP {
-                    cache.clear();
-                }
-                cache.insert(key, layout.clone());
-                layout
-            }
-        };
+        let caches = &mut self.render_caches.table_layout_cache;
+        if caches.len() >= TABLE_LAYOUT_CACHE_CAP && !caches.contains_key(&start) {
+            caches.clear();
+        }
+        let mut layout = caches
+            .entry(start)
+            .or_default()
+            .layout(&self.editor.lines, start, end, cell_visible_width)
+            .clone();
         // Spaces being typed at the end of the cursor cell widen its column
         // for this frame, so the other rows stay aligned with it.
         let cursor_line = self.editor.cursor_line;

@@ -618,6 +618,107 @@ impl TableBlockLayout {
     }
 }
 
+/// Keeps a table block's [`TableBlockLayout`] current across edits: remembers
+/// each row's text and cell widths, so after a keystroke only the changed rows
+/// are re-measured (measuring can be costly, e.g. collapsing inline markers).
+#[derive(Debug, Clone, Default)]
+pub struct TableLayoutCache {
+    lines: Vec<String>,
+    row_widths: Vec<Vec<usize>>,
+    counts: ColumnWidthCounts,
+    layout: Option<TableBlockLayout>,
+}
+
+impl TableLayoutCache {
+    /// Layout of block `start..=end` of `lines`; see [`TableBlockLayout::build`].
+    pub fn layout(
+        &mut self,
+        lines: &[String],
+        start: usize,
+        end: usize,
+        cell_width: impl Fn(&str) -> usize,
+    ) -> &TableBlockLayout {
+        let block = &lines[start..=end];
+        if !self.update(block, start, &cell_width) {
+            self.rebuild(block, start, &cell_width);
+        }
+        self.layout.as_ref().expect("layout built")
+    }
+
+    fn rebuild(&mut self, block: &[String], start: usize, cell_width: &impl Fn(&str) -> usize) {
+        let layout = TableBlockLayout::build(block, 0, block.len() - 1, cell_width);
+        let delimiter = layout.delimiter_row;
+        self.row_widths = block
+            .iter()
+            .enumerate()
+            .map(|(idx, line)| {
+                if Some(idx) == delimiter {
+                    Vec::new()
+                } else {
+                    split_table_cells(line).iter().map(|cell| cell_width(cell)).collect()
+                }
+            })
+            .collect();
+        self.counts = ColumnWidthCounts::default();
+        for widths in &self.row_widths {
+            self.counts.add(widths);
+        }
+        self.lines = block.to_vec();
+        self.layout = Some(TableBlockLayout {
+            start,
+            end: start + block.len() - 1,
+            delimiter_row: delimiter.map(|row| start + row),
+            col_widths: layout.col_widths,
+        });
+    }
+
+    /// Re-measures only changed rows. False when the block's shape may have
+    /// changed (row count, a row's cell count, the header or delimiter rows)
+    /// and a rebuild is needed.
+    fn update(&mut self, block: &[String], start: usize, cell_width: &impl Fn(&str) -> usize) -> bool {
+        let Some(layout) = self.layout.as_mut() else {
+            return false;
+        };
+        if block.len() != self.lines.len() {
+            return false;
+        }
+        // Rows up to the delimiter decide where the delimiter is.
+        let structural_rows = layout.delimiter_row.map_or(block.len(), |row| row - layout.start + 1);
+        let mut changed = Vec::new();
+        for (idx, line) in block.iter().enumerate() {
+            if *line == self.lines[idx] {
+                continue;
+            }
+            if idx < structural_rows
+                || changed.len() >= INCREMENTAL_FORMAT_MAX_ROWS
+                || is_table_continuation_line(line) != is_table_continuation_line(&self.lines[idx])
+            {
+                return false;
+            }
+            let widths: Vec<usize> = split_table_cells(line).iter().map(|cell| cell_width(cell)).collect();
+            if widths.len() != self.row_widths[idx].len() {
+                return false;
+            }
+            changed.push((idx, widths));
+        }
+        for (idx, widths) in changed {
+            self.counts.remove(&self.row_widths[idx]);
+            self.counts.add(&widths);
+            self.row_widths[idx] = widths;
+            self.lines[idx].clone_from(&block[idx]);
+        }
+        let column_count = layout.col_widths.len();
+        layout.col_widths = self.counts.widths(column_count, true);
+        let shift = start as isize - layout.start as isize;
+        if shift != 0 {
+            layout.start = start;
+            layout.end = start + block.len() - 1;
+            layout.delimiter_row = layout.delimiter_row.map(|row| (row as isize + shift) as usize);
+        }
+        true
+    }
+}
+
 /// Inclusive line bounds of the table block containing `line_idx`.
 pub fn table_block_bounds(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
     let current = lines.get(line_idx)?;
@@ -1806,6 +1907,47 @@ mod tests {
             let _ = format_table_block(&lines, &mut cache);
         }
         assert!(incremental_rows > 50, "per-row path used ({incremental_rows})");
+    }
+
+    #[test]
+    fn incremental_layout_matches_a_fresh_build() {
+        let mut lines = owned(&[
+            "text above",
+            "| name | qty | note |",
+            "| :--- | --: | --- |",
+            "| apple | 3 | red |",
+            "|> green | | |",
+            "| kiwi | 12 | |",
+            "| plum | 7 | ripe |",
+        ]);
+        let width = |cell: &str| cell.chars().count();
+        let mut cache = TableLayoutCache::default();
+        let words = ["", "a", "bb", "cccc", "dddddddd", "---", "é"];
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        for step in 0..300 {
+            let table_start = lines.iter().position(|line| is_table_line(line)).unwrap();
+            let row = table_start + 2 + next(lines.len() - table_start - 2);
+            let continuation = is_table_continuation_line(&lines[row]);
+            let mut cells = split_table_cells(&lines[row]);
+            let col = next(cells.len());
+            cells[col] = words[next(words.len())].to_string();
+            lines[row] = serialize_table_row_with_kind(&cells, continuation);
+            if step % 50 == 49 {
+                // Shift the block down, like a line inserted above it.
+                lines.insert(0, "more text".to_string());
+            }
+            let start = lines.iter().position(|line| is_table_line(line)).unwrap();
+            let end = lines.len() - 1;
+            let expected = TableBlockLayout::build(&lines, start, end, width);
+            let actual = cache.layout(&lines, start, end, width).clone();
+            assert_eq!(actual, expected, "step {step}");
+        }
     }
 
     #[test]
