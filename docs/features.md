@@ -38,6 +38,7 @@ This document lists major Slate capabilities and how they behave.
 - full-screen terminal app with editor + note switcher: `slate`
 - supports opening and editing markdown files (`slate path/to/file.md`)
 - pipe append: `cmd | slate append [--id <note-id>]`
+- daily notes: `slate today` / `:today` open today's note from a template; `slate capture <text>` (or piped stdin) adds a timestamped entry without opening the editor
 - clipboard watch and command workflows
 - wiki-link navigation with `Ctrl+]` and `gd`
 - wiki-link autocomplete for note ids and headings

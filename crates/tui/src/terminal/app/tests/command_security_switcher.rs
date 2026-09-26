@@ -202,6 +202,7 @@ fn write_command_syncs_markdown_file_backed_note() {
         note_id: Some(note_id.clone()),
         list_only: false,
         open_switcher: false,
+        open_at_end: false,
     };
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
@@ -292,6 +293,7 @@ fn write_command_detects_conflict_and_w_bang_forces_file_save() {
         note_id: Some(note_id),
         list_only: false,
         open_switcher: false,
+        open_at_end: false,
     };
     let (mut app, _) = TerminalApp::new_with_startup_metrics(
         &db,
@@ -1316,6 +1318,7 @@ fn startup_with_locked_recent_note_prompts_for_password() {
         note_id: None,
         list_only: false,
         open_switcher: false,
+        open_at_end: false,
     };
 
     let (app, _) = TerminalApp::new_with_startup_metrics(
@@ -1885,6 +1888,7 @@ fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
         note_id: Some("n-active".to_string()),
         list_only: false,
         open_switcher: false,
+        open_at_end: false,
     };
     let (app, _) = TerminalApp::new_with_startup_metrics(
         &db,
@@ -2489,6 +2493,28 @@ fn command_bar_arrows_edit_mid_command() {
     app.handle_command_bar_key(&db, Key::End).expect("end");
     app.handle_command_bar_key(&db, Key::Char('s')).expect("append");
     assert_eq!(app.command_input, "ote locks");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn today_command_opens_the_daily_note_with_cursor_at_the_end() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.execute_terminal_command(&db, "today");
+    assert!(
+        app.active_note.id.starts_with("daily-"),
+        "active note: {}",
+        app.active_note.id
+    );
+    assert!(app.editor.lines[0].starts_with("# "), "template heading: {:?}", app.editor.lines);
+    assert_eq!(app.editor.cursor_line, app.editor.lines.len() - 1);
+
+    // Running it again returns to the same note instead of creating another.
+    let first_id = app.active_note.id.clone();
+    app.execute_terminal_command(&db, "daily");
+    assert_eq!(app.active_note.id, first_id);
 
     drop(app);
     drop(db);

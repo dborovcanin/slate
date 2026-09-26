@@ -134,6 +134,15 @@ Behavior notes:
 - if `encrypt_notes = true`, `password_env` must resolve to a non-empty environment variable at runtime
 - note lock/encrypt commands are not supported for file-backed markdown notes (`slate path/to/file.md`)
 
+## Daily notes
+
+`[daily]` keys:
+
+- `note_prefix` (default `daily`): daily note ids are `<prefix>-YYYY-MM-DD`
+- `template` (default `"# {date}\n\n"`): body of a new daily note; `{date}` uses `[editor] date_format`
+
+Daily notes are opened with `:today` or `slate today`, and `slate capture <text>` (or piped stdin) appends a `- HH:MM text` entry without opening the editor.
+
 ## Special notes
 
 `[special_notes]` keys:

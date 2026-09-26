@@ -6,11 +6,11 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 
 ## Capture and daily workflow
 
-- [ ] Global quick-capture: `slate capture "thought"` appends to today's inbox note without opening the editor.
+- [x] Global quick-capture: `slate capture "thought"` appends to today's daily note without opening the editor.
 - [ ] Clipboard-watch into a named note/section.
 - [ ] Email forwarding address that ingests into inbox note.
 - [ ] Templates (`:template meeting`).
-- [ ] Daily notes — auto-create on open with a configurable template; optional Google Calendar / ICS integration pulls the day's events into the scaffold as a starting structure.
+- [x] Daily notes — `slate today` / `:today` create today's note from a configurable template. Still open: optional Google Calendar / ICS integration pulls the day's events into the scaffold as a starting structure.
 - [ ] "On this day" recall view.
 - [ ] Random note resurfacing.
 

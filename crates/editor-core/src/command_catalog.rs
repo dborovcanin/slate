@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandId {
+    Today,
     Sum,
     SumList,
     SumRow,
@@ -402,7 +403,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 67] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -471,6 +472,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
         value: "avg doc",
         aliases: &[],
         description: "average whole document",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::Today,
+        value: "today",
+        aliases: &["daily"],
+        description: "open today's daily note",
         modes: &MODES_BOTH,
     },
     CommandDefinition {

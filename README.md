@@ -33,6 +33,7 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 - Wiki links with autocomplete, collapsed rendering, `Ctrl+]` / `gd` navigation, and `K` preview
 - Open markdown files directly: `slate path/to/file.md` (`.md`, `.markdown`, `.mdown`, `.mkd`), saved back to the file
 - Pipe append: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
+- Daily notes and quick capture: `slate today` / `:today`, `slate capture buy milk`, `cmd | slate capture`
 
 **Vim mode (optional)**
 - Enable with `[editor] vim_mode = true`

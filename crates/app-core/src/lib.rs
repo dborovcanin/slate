@@ -1,6 +1,7 @@
 pub mod calc;
 pub mod config;
 pub mod cross_note;
+pub mod daily;
 pub mod note_sources;
 pub mod storage;
 pub mod web_search;

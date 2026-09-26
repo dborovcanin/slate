@@ -116,6 +116,7 @@ pub enum HostCollectionAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostCommandPlan {
+    Today,
     Date,
     Remind,
     RemindToggle,
@@ -221,6 +222,7 @@ impl EditorEngine {
         let normalized = command_catalog::normalize_command(raw_input);
         let command = command_catalog::resolve_command(mode, raw_input)?;
         match command.id {
+            CommandId::Today => Some(HostCommandPlan::Today),
             CommandId::Date => Some(HostCommandPlan::Date),
             CommandId::Remind => Some(HostCommandPlan::Remind),
             CommandId::RemindToggle => Some(HostCommandPlan::RemindToggle),

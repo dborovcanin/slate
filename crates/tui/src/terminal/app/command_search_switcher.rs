@@ -1594,6 +1594,12 @@ impl TerminalApp {
                     .unwrap_or_else(|error| format!("collection command failed: {error}"));
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::Today => {
+                    if let Err(error) = self.open_today_note(db) {
+                        self.status = format!("today: {error}");
+                    }
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Date => {
                     self.open_date_picker(DatePickerAction::InsertDate, false);
                     return;
@@ -2631,6 +2637,25 @@ impl TerminalApp {
         } else if self.mode == UiMode::CollectionSwitcher {
             self.refresh_collection_switcher_items(db)?;
         }
+        Ok(())
+    }
+
+    /// Opens today's daily note (creating it from the `[daily]` template)
+    /// with the cursor at the end, ready to type.
+    pub(super) fn open_today_note(&mut self, db: &Db) -> Result<(), String> {
+        if self.autosave_enabled {
+            self.save(db)?;
+        }
+        let stamp = crate::terminal::local_stamp();
+        let label = crate::terminal::daily_date_label(stamp, &self.note_creation_theme.date_format);
+        let note = app_core::daily::ensure_daily_note(db, &self.daily_config, stamp, &label)?;
+        self.set_active_note(db, note)?;
+        self.editor.cursor_line = self.editor.lines.len().saturating_sub(1);
+        self.editor.cursor_col = line_char_len(self.current_line());
+        self.adjust_cursor();
+        self.adjust_scroll();
+        self.refresh_switcher_items(db)?;
+        self.status = format!("today {}", self.active_note.id);
         Ok(())
     }
 

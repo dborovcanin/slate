@@ -8,6 +8,8 @@ const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_ACCENT: &str = "auto";
 const DEFAULT_VIM_MODE: bool = false;
 const DEFAULT_WRAP: bool = true;
+const DEFAULT_DAILY_NOTE_PREFIX: &str = "daily";
+const DEFAULT_DAILY_TEMPLATE: &str = "# {date}\n\n";
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
 const DEFAULT_AUTOSAVE: bool = true;
@@ -54,7 +56,7 @@ const DEFAULT_WEB_SEARCH_ENGINE_ID: &str = "";
 const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 10;
 const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
 const MAX_WEB_SEARCH_MAX_RESULTS: usize = 10;
-const DEFAULT_CONFIG: &str = r#"# Slate configuration
+const DEFAULT_CONFIG: &str = r##"# Slate configuration
 #
 # All settings are optional. Unknown keys are ignored.
 # Update only values you want to override.
@@ -118,6 +120,13 @@ email_note_prefix = "inbox-email"
 # Rotation strategy for email capture notes.
 email_rotation = "daily-local"
 
+[daily]
+# Prefix for daily note ids (`slate today`, `:today`, `slate capture`).
+note_prefix = "daily"
+# Body of a new daily note. {date} is replaced with the date formatted by
+# [editor] date_format.
+template = "# {date}\n\n"
+
 [imap]
 # IMAP server host.
 host = "imap.example.com"
@@ -177,7 +186,7 @@ max_results = 10
 background_tasks_enabled = true
 # Alias for the same behavior:
 # async_enabled = true
-"#;
+"##;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EditorModulesConfig {
@@ -232,6 +241,21 @@ impl Default for NoteSecurityConfig {
         Self {
             encrypt_notes: DEFAULT_ENCRYPT_NOTES,
             password_env: DEFAULT_NOTES_PASSWORD_ENV.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DailyNotesConfig {
+    pub note_prefix: String,
+    pub template: String,
+}
+
+impl Default for DailyNotesConfig {
+    fn default() -> Self {
+        Self {
+            note_prefix: DEFAULT_DAILY_NOTE_PREFIX.to_string(),
+            template: DEFAULT_DAILY_TEMPLATE.to_string(),
         }
     }
 }
@@ -398,6 +422,8 @@ struct FileConfig {
     #[serde(default)]
     special_notes: SpecialNotesSection,
     #[serde(default)]
+    daily: DailySection,
+    #[serde(default)]
     imap: ImapSection,
     #[serde(default)]
     perf: PerfSection,
@@ -451,6 +477,12 @@ struct ModulesSection {
 struct SecuritySection {
     encrypt_notes: Option<bool>,
     password_env: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct DailySection {
+    note_prefix: Option<String>,
+    template: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -552,6 +584,19 @@ pub fn resolve_default_note_encryption_password(
         ));
     }
     Ok(Some(password))
+}
+
+pub fn load_daily_notes_config() -> DailyNotesConfig {
+    let Ok(path) = ensure_config_file() else {
+        return DailyNotesConfig::default();
+    };
+    fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| parse_daily_notes_config(&text))
+        .unwrap_or_else(|err| {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            DailyNotesConfig::default()
+        })
 }
 
 pub fn load_special_notes_config() -> SpecialNotesConfig {
@@ -722,6 +767,17 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
             raw.editor.security.password_env,
             DEFAULT_NOTES_PASSWORD_ENV,
         ),
+    })
+}
+
+fn parse_daily_notes_config(text: &str) -> Result<DailyNotesConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    Ok(DailyNotesConfig {
+        note_prefix: normalize_nonempty(raw.daily.note_prefix, DEFAULT_DAILY_NOTE_PREFIX),
+        template: raw
+            .daily
+            .template
+            .unwrap_or_else(|| DEFAULT_DAILY_TEMPLATE.to_string()),
     })
 }
 
@@ -1215,6 +1271,27 @@ mod tests {
         assert_eq!(imap.initial_sync_past_days, 3);
         assert_eq!(imap.max_message_bytes, 4096);
         assert_eq!(imap.max_body_bytes, 2048);
+    }
+
+    #[test]
+    fn parses_daily_notes_section_and_defaults() {
+        assert_eq!(parse_daily_notes_config("").expect("defaults"), DailyNotesConfig::default());
+        assert_eq!(
+            parse_daily_notes_config(DEFAULT_CONFIG).expect("generated config"),
+            DailyNotesConfig::default()
+        );
+        let parsed = parse_daily_notes_config(
+            "[daily]\nnote_prefix = \"journal\"\ntemplate = \"## {date}\\n- \"",
+        )
+        .expect("daily config");
+        assert_eq!(parsed.note_prefix, "journal");
+        assert_eq!(parsed.template, "## {date}\n- ");
+        assert_eq!(
+            parse_daily_notes_config("[daily]\nnote_prefix = \"  \"")
+                .expect("blank prefix")
+                .note_prefix,
+            "daily"
+        );
     }
 
     #[test]

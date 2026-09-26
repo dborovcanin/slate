@@ -14,7 +14,7 @@ Keeping semantics in the core crates remains a goal: it keeps behavior testable 
 
 1. **Ratatui + crossterm port of `crates/tui`.** Done: crossterm input, ratatui terminal/diff, renderer paints buffer cells, soft wrap. Remaining: move overlays to ratatui widgets where it simplifies code, per-line render caching (frame composition is ~4 ms at 200x60), sticky goal column for screen-row motions.
 2. **Features** (candidates, see `roadmap/features.md`):
-   - quick capture (`slate capture`), daily notes, templates
+   - templates beyond the daily note (`:template meeting`)
    - tags, backlinks panel, ghost notes
    - live query blocks (TODO aggregation, saved searches over FTS)
    - runnable code blocks with captured output

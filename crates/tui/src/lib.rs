@@ -24,11 +24,15 @@ use app_core::storage::NoteAccessMode;
 
 use terminal::TerminalOptions;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Mode {
     Terminal,
+    /// Open today's daily note.
+    Today,
     ImapSync,
     Append,
+    /// Append a timestamped entry to today's daily note; `None` reads stdin.
+    Capture(Option<String>),
 }
 
 pub(crate) fn note_id_for_file(path: &Path) -> String {
@@ -54,11 +58,16 @@ fn print_help() {
         "slate usage:
   slate [--new] [--id <note-id>] [--list]
   slate <file>
+  slate today
+  slate capture [text...]
   slate append [--id <note-id>]
   slate imap-sync
 
 Modes:
   <file>      Open a text/code file
+  today       Open today's daily note (created from [daily] template)
+  capture     Add a timestamped entry to today's daily note and exit
+              (text from arguments, or piped stdin)
   append      Append stdin to a note and exit
   imap-sync   Pull messages from configured IMAP inbox once
 
@@ -76,6 +85,8 @@ Append mode:
 fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions), String> {
     let mut force_imap = false;
     let mut force_append = false;
+    let mut force_today = false;
+    let mut capture: Option<Option<String>> = None;
     let mut saw_note_flag = false;
     let mut opts = TerminalOptions::default();
     let mut startup_file: Option<PathBuf> = None;
@@ -88,6 +99,13 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
                 return Err(String::new());
             }
             "imap-sync" | "--imap-sync" => force_imap = true,
+            "today" => force_today = true,
+            "capture" => {
+                // Everything after `capture` is the text to capture.
+                let text = args[i + 1..].join(" ");
+                capture = Some((!text.trim().is_empty()).then_some(text));
+                break;
+            }
             "append" | "--append" => force_append = true,
             "--new" | "-n" => {
                 opts.create_new = true;
@@ -136,15 +154,38 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
         return Err("Cannot combine imap-sync with note selection flags".to_string());
     }
 
+    let subcommands = [force_append, force_imap, force_today, capture.is_some()]
+        .iter()
+        .filter(|set| **set)
+        .count();
+    if subcommands > 1 {
+        return Err("Use only one of append, imap-sync, today, capture".to_string());
+    }
+    if (force_today || capture.is_some())
+        && (saw_note_flag || opts.note_id.is_some() || startup_file.is_some())
+    {
+        return Err("today and capture cannot be combined with note selection".to_string());
+    }
+    if let Some(text) = capture {
+        if text.is_none() && stdin_tty {
+            return Err(
+                "Nothing to capture: pass text (slate capture buy milk) or pipe it in.".to_string(),
+            );
+        }
+        return Ok((Mode::Capture(text), opts));
+    }
+
     let mode = if force_append {
         Mode::Append
     } else if force_imap {
         Mode::ImapSync
+    } else if force_today {
+        Mode::Today
     } else {
         Mode::Terminal
     };
 
-    if mode == Mode::Terminal && !stdin_tty && !opts.list_only {
+    if matches!(mode, Mode::Terminal | Mode::Today) && !stdin_tty && !opts.list_only {
         return Err(
             "Terminal edit mode requires a TTY. Run inside a terminal emulator.".to_string(),
         );
@@ -201,6 +242,34 @@ fn run_append(note_id: Option<&str>) -> Result<(), String> {
         "Appended {bytes} byte{} to note {target_id}",
         if bytes == 1 { "" } else { "s" }
     );
+    Ok(())
+}
+
+/// Resolves today's daily note (creating it when missing) and returns its id.
+fn ensure_today_note(db: &app_core::storage::Db, theme: &config::ThemeConfig) -> Result<String, String> {
+    let stamp = terminal::local_stamp();
+    let label = terminal::daily_date_label(stamp, &theme.date_format);
+    let daily = config::load_daily_notes_config();
+    Ok(app_core::daily::ensure_daily_note(db, &daily, stamp, &label)?.id)
+}
+
+fn run_capture(text: Option<String>, theme: &config::ThemeConfig) -> Result<(), String> {
+    let text = match text {
+        Some(text) => text,
+        None => {
+            let mut input = String::new();
+            std::io::stdin()
+                .read_to_string(&mut input)
+                .map_err(|e| format!("Failed reading stdin: {e}"))?;
+            input
+        }
+    };
+    let core = AppCore::open_default()?;
+    let stamp = terminal::local_stamp();
+    let label = terminal::daily_date_label(stamp, &theme.date_format);
+    let daily = config::load_daily_notes_config();
+    let note = app_core::daily::capture_to_daily_note(core.db(), &daily, stamp, &label, &text)?;
+    println!("Captured to {}", note.id);
     Ok(())
 }
 
@@ -292,6 +361,14 @@ pub fn run() {
     let result = match parse_args(&args, stdin_is_tty()) {
         Ok((Mode::ImapSync, _)) => run_imap_sync(),
         Ok((Mode::Append, opts)) => run_append(opts.note_id.as_deref()),
+        Ok((Mode::Capture(text), _)) => run_capture(text, &cfg),
+        Ok((Mode::Today, mut opts)) => AppCore::open_default()
+            .and_then(|core| ensure_today_note(core.db(), &cfg))
+            .and_then(|id| {
+                opts.note_id = Some(id);
+                opts.open_at_end = true;
+                run_terminal(&opts, &cfg)
+            }),
         Ok((Mode::Terminal, opts)) => run_terminal(&opts, &cfg),
         Err(err) => {
             if err.is_empty() {
@@ -390,6 +467,36 @@ mod tests {
     fn parse_rejects_file_with_note_selection_flags() {
         let err = parse_args(&args(&["notes.md", "--new"]), true).expect_err("expected err");
         assert!(err.contains("Cannot combine file open"));
+    }
+
+    #[test]
+    fn parse_today_opens_terminal_mode() {
+        let (mode, _) = parse_args(&args(&["today"]), true).expect("parsed");
+        assert_eq!(mode, Mode::Today);
+        let err = parse_args(&args(&["today"]), false).expect_err("needs tty");
+        assert!(err.contains("requires a TTY"));
+    }
+
+    #[test]
+    fn parse_capture_takes_the_remaining_args_as_text() {
+        let (mode, _) =
+            parse_args(&args(&["capture", "call", "--new", "Ana"]), true).expect("parsed");
+        assert_eq!(mode, Mode::Capture(Some("call --new Ana".to_string())));
+    }
+
+    #[test]
+    fn parse_capture_without_text_reads_piped_stdin() {
+        let (mode, _) = parse_args(&args(&["capture"]), false).expect("parsed");
+        assert_eq!(mode, Mode::Capture(None));
+        let err = parse_args(&args(&["capture"]), true).expect_err("tty without text");
+        assert!(err.contains("Nothing to capture"));
+    }
+
+    #[test]
+    fn parse_rejects_combining_subcommands_or_note_selection() {
+        assert!(parse_args(&args(&["append", "capture", "x"]), false).is_err());
+        assert!(parse_args(&args(&["today", "--new"]), true).is_err());
+        assert!(parse_args(&args(&["--id", "n1", "capture", "x"]), true).is_err());
     }
 
     #[test]

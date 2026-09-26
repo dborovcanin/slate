@@ -139,6 +139,8 @@ pub struct TerminalOptions {
     pub list_only: bool,
     /// Open the note switcher immediately on startup instead of the last-used note.
     pub open_switcher: bool,
+    /// Start with the cursor at the end of the note (daily notes).
+    pub open_at_end: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -628,6 +630,8 @@ struct TerminalApp {
     startup_reminder_hydration_retry_count: u32,
     background_tasks_enabled: bool,
     note_creation_theme: ThemeConfig,
+    /// `[daily]` settings used by `:today`.
+    daily_config: app_core::config::DailyNotesConfig,
     dirty: bool,
     last_edit: Instant,
     status: String,
@@ -1030,6 +1034,7 @@ impl TerminalApp {
             startup_reminder_hydration_retry_count: 0,
             background_tasks_enabled,
             note_creation_theme,
+            daily_config: app_core::config::DailyNotesConfig::default(),
             dirty: false,
             last_edit: Instant::now(),
             status: initial_status,
@@ -1673,6 +1678,13 @@ pub fn run_terminal_session(
     }
 
     app.render_state.wrap_lines = config.wrap;
+    app.daily_config = crate::config::load_daily_notes_config();
+    if opts.open_at_end {
+        app.editor.cursor_line = app.editor.lines.len().saturating_sub(1);
+        app.editor.cursor_col = crate::terminal::text_utils::line_char_len(app.current_line());
+        app.adjust_cursor();
+        app.adjust_scroll();
+    }
     if opts.open_switcher {
         app.open_switcher(db)?;
     }
