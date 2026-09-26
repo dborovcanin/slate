@@ -4,8 +4,8 @@ use super::{
     find_table_formula_segments, format_formula_display_value, formula_marker_token,
     is_markdown_table_line, line_display_cols, min, reformat_table_cursor_row_raw,
     reformat_table_row_for_display,
-    table_block_bounds_for_line, table_cell_info_at_char, table_cursor_cell_index,
-    table_display_col_widths, viewport_col_for_display_col, TextStyle, DatePickerAction,
+    cell_visible_width, table_cell_info_at_char, table_cursor_cell_index,
+    viewport_col_for_display_col, TextStyle, DatePickerAction,
     SelectionStatsKey, TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
@@ -315,36 +315,42 @@ impl TerminalApp {
         segments
     }
 
-    /// Returns per-column visible display widths for the table block containing
-    /// `line_idx`. Results are cached by `(block_start, block_hash)`.
-    fn table_display_col_widths_for_line(&mut self, line_idx: usize) -> Vec<usize> {
-        let Some((block_start, block_end)) =
-            table_block_bounds_for_line(&self.editor.lines, line_idx)
-        else {
-            return Vec::new();
-        };
-        let block_lines = &self.editor.lines[block_start..=block_end];
-        // Hash the block content for cache validation.
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    /// Layout of the table block containing `line_idx`, measured with visible
+    /// (marker-collapsed) cell widths.
+    fn table_layout_for_line(
+        &mut self,
+        line_idx: usize,
+    ) -> Option<crate::editor_core::table::TableBlockLayout> {
+        use crate::editor_core::table::{table_block_bounds, TableBlockLayout};
         use std::hash::{Hash, Hasher};
-        block_start.hash(&mut hasher);
-        for l in block_lines {
-            l.hash(&mut hasher);
+        const TABLE_LAYOUT_CACHE_CAP: usize = 64;
+
+        if let Some(pass) = &self.render_caches.table_layout_pass {
+            if let Some(layout) = pass.iter().find(|layout| layout.contains(line_idx)) {
+                return Some(layout.clone());
+            }
         }
-        let block_hash = hasher.finish();
-        let key = (block_start, block_hash);
-        if let Some(cached) = self.render_caches.table_display_col_width_cache.get(&key) {
-            return cached.clone();
+        let (start, end) = table_block_bounds(&self.editor.lines, line_idx)?;
+        let mut hasher = rustc_hash::FxHasher::default();
+        self.editor.lines[start..=end].hash(&mut hasher);
+        let key = (start, hasher.finish());
+        let layout = match self.render_caches.table_layout_cache.get(&key) {
+            Some(cached) => cached.clone(),
+            None => {
+                let layout =
+                    TableBlockLayout::build(&self.editor.lines, start, end, cell_visible_width);
+                let cache = &mut self.render_caches.table_layout_cache;
+                if cache.len() >= TABLE_LAYOUT_CACHE_CAP {
+                    cache.clear();
+                }
+                cache.insert(key, layout.clone());
+                layout
+            }
+        };
+        if let Some(pass) = &mut self.render_caches.table_layout_pass {
+            pass.push(layout.clone());
         }
-        let widths = table_display_col_widths(&self.editor.lines[block_start..=block_end]);
-        self.render_caches
-            .table_display_col_width_cache
-            .insert(key, widths.clone());
-        // Evict any stale entries for this block_start (different block content).
-        self.render_caches
-            .table_display_col_width_cache
-            .retain(|k, _| k.0 != block_start || k.1 == block_hash);
-        widths
+        Some(layout)
     }
 
     fn render_wiki_link_display_line(&mut self, line_text: &str) -> (String, Vec<(usize, usize)>) {
@@ -1234,6 +1240,13 @@ impl TerminalApp {
 
     /// Paints the whole screen into `buf`, which must cover the terminal area.
     pub(super) fn render_to_buffer(&mut self, buf: &mut Buffer) -> CursorPlacement {
+        self.render_caches.table_layout_pass = Some(Vec::new());
+        let placement = self.render_to_buffer_pass(buf);
+        self.render_caches.table_layout_pass = None;
+        placement
+    }
+
+    fn render_to_buffer_pass(&mut self, buf: &mut Buffer) -> CursorPlacement {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
         let editor_bg = self.render_palette.surface_bg();
@@ -1994,9 +2007,9 @@ impl TerminalApp {
             && formula_segments.is_empty()
             && is_markdown_table_line(rendered_line.as_ref())
         {
-            let col_widths = self.table_display_col_widths_for_line(line_idx);
-            let delimiter =
-                crate::editor_core::table::is_delimiter_line_in(&self.editor.lines, line_idx);
+            let layout = self.table_layout_for_line(line_idx);
+            let delimiter = layout.as_ref().is_some_and(|l| l.is_delimiter(line_idx));
+            let col_widths = layout.map(|l| l.col_widths).unwrap_or_default();
             if !col_widths.is_empty() {
                 if is_cursor_line && cursor_line_override.is_none() {
                     // Cursor row: render from a RAW-marker reflow so

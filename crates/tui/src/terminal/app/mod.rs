@@ -414,8 +414,13 @@ struct RenderCaches {
     wiki_link_line_render_cache_order: VecDeque<String>,
     table_formula_segment_cache: FxHashMap<String, TableFormulaSegmentCacheEntry>,
     table_formula_segment_cache_order: VecDeque<String>,
-    /// Maps (block_start_line, block_hash) → per-column display widths.
-    table_display_col_width_cache: FxHashMap<(usize, u64), Vec<usize>>,
+    /// (block_start_line, block_hash) → table layout, so cell widths are not
+    /// re-measured every frame. Bounded by `TABLE_LAYOUT_CACHE_CAP`.
+    table_layout_cache: FxHashMap<(usize, u64), crate::editor_core::table::TableBlockLayout>,
+    /// Layouts resolved during the current render pass (`Some` only inside
+    /// `render_to_buffer`, where lines cannot change): each visible table
+    /// block is bounded and hashed once per frame, not once per line.
+    table_layout_pass: Option<Vec<crate::editor_core::table::TableBlockLayout>>,
 }
 
 /// Background-backup thread handle + the status-bar dot animation that runs

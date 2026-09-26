@@ -6,7 +6,7 @@ use super::{
     variable_completion_candidates,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
-    table_block_bounds_for_line, table_cell_edit_start, table_cell_info_at_char,
+    table_cell_edit_start, table_cell_info_at_char,
     table_cell_is_empty, table_cell_navigation_anchor, tui_note_short_id, Db, FoldKind,
     LineReminderGhost, ReminderUndoEntry, TerminalApp, UiMode, UndoAction,
     VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
@@ -3356,7 +3356,7 @@ impl TerminalApp {
             return false;
         }
         let Some((block_start, block_end)) =
-            table_block_bounds_for_line(&self.editor.lines, self.editor.cursor_line)
+            crate::editor_core::table::table_block_bounds(&self.editor.lines, self.editor.cursor_line)
         else {
             return false;
         };

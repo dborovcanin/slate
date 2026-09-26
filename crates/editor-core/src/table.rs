@@ -560,7 +560,66 @@ fn text_hash(text: &str) -> u64 {
     hasher.finish()
 }
 
-fn table_block_bounds(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
+/// Structure of one table block shared by the formatter-facing rules and
+/// front-end rendering: bounds, delimiter row, and per-column widths measured
+/// with a caller-supplied cell width (raw text for the formatter, visible
+/// text after marker collapsing for a renderer).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableBlockLayout {
+    /// First and last line index of the block (inclusive).
+    pub start: usize,
+    pub end: usize,
+    /// Absolute line index of the delimiter row, if any.
+    pub delimiter_row: Option<usize>,
+    /// Column widths; at least 3 so `---` delimiters fit.
+    pub col_widths: Vec<usize>,
+}
+
+impl TableBlockLayout {
+    pub fn contains(&self, line_idx: usize) -> bool {
+        (self.start..=self.end).contains(&line_idx)
+    }
+
+    pub fn is_delimiter(&self, line_idx: usize) -> bool {
+        self.delimiter_row == Some(line_idx)
+    }
+
+    /// Builds the layout of block `start..=end` (see [`table_block_bounds`]).
+    /// `cell_width` measures a trimmed cell.
+    pub fn build(
+        lines: &[String],
+        start: usize,
+        end: usize,
+        cell_width: impl Fn(&str) -> usize,
+    ) -> Self {
+        let block = &lines[start..=end];
+        let rows: Vec<Vec<String>> = block.iter().map(|line| split_table_cells(line)).collect();
+        let continuation: Vec<bool> =
+            block.iter().map(|line| is_table_continuation_line(line)).collect();
+        let delimiter_row = table_block_delimiter_row(&rows, &continuation);
+        let mut col_widths: Vec<usize> = Vec::new();
+        for (idx, cells) in rows.iter().enumerate() {
+            if Some(idx) == delimiter_row {
+                continue;
+            }
+            if col_widths.len() < cells.len() {
+                col_widths.resize(cells.len(), 3);
+            }
+            for (width, cell) in col_widths.iter_mut().zip(cells) {
+                *width = (*width).max(cell_width(cell));
+            }
+        }
+        Self {
+            start,
+            end,
+            delimiter_row: delimiter_row.map(|idx| start + idx),
+            col_widths,
+        }
+    }
+}
+
+/// Inclusive line bounds of the table block containing `line_idx`.
+pub fn table_block_bounds(lines: &[String], line_idx: usize) -> Option<(usize, usize)> {
     let current = lines.get(line_idx)?;
     if !is_table_line(current) {
         return None;

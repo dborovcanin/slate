@@ -253,55 +253,10 @@ pub(super) fn format_formula_display_value(raw: &str) -> String {
 
 /// Returns the visible display width of a trimmed cell string after collapsing
 /// inline markdown markers (backticks, bold, italic, etc.).
-fn cell_visible_width(trimmed_cell: &str) -> usize {
+pub(super) fn cell_visible_width(trimmed_cell: &str) -> usize {
     let (collapsed, _) = collapse_inline_markers(trimmed_cell, None);
     // Reuse the same <br>-aware width logic that the raw formatter uses.
     crate::editor_core::table::table_cell_display_width(&collapsed)
-}
-
-/// Returns the line bounds `(block_start, block_end)` for the table block
-/// that contains `line_idx`.
-pub(super) fn table_block_bounds_for_line(
-    lines: &[String],
-    line_idx: usize,
-) -> Option<(usize, usize)> {
-    use crate::editor_core::table::is_table_line;
-    if !lines.get(line_idx).is_some_and(|l| is_table_line(l)) {
-        return None;
-    }
-    let mut start = line_idx;
-    while start > 0 && lines.get(start - 1).is_some_and(|l| is_table_line(l)) {
-        start -= 1;
-    }
-    let mut end = line_idx;
-    while lines.get(end + 1).is_some_and(|l| is_table_line(l)) {
-        end += 1;
-    }
-    Some((start, end))
-}
-
-/// Computes per-column visible display widths for a table block.
-///
-/// Separator rows are skipped for width computation (they don't carry data
-/// content). Each non-separator cell contributes its visible width (after
-/// inline marker collapsing). Columns are at least 3 wide to accommodate `---`.
-pub(super) fn table_display_col_widths(block_lines: &[String]) -> Vec<usize> {
-    use crate::editor_core::table::{is_delimiter_line_in, split_table_cells};
-    let mut col_widths: Vec<usize> = Vec::new();
-    for (idx, line) in block_lines.iter().enumerate() {
-        let cells = split_table_cells(line);
-        if cells.is_empty() || is_delimiter_line_in(block_lines, idx) {
-            continue;
-        }
-        for (i, cell) in cells.iter().enumerate() {
-            let w = cell_visible_width(cell).max(1);
-            if i >= col_widths.len() {
-                col_widths.resize(i + 1, 3);
-            }
-            col_widths[i] = col_widths[i].max(w).max(3);
-        }
-    }
-    col_widths
 }
 
 /// Re-renders a table row for display, adjusting column widths so cells align
@@ -611,46 +566,44 @@ mod tests {
         assert!(out.contains("---:"), "right-align marker preserved");
     }
 
+    fn visible_widths(block: &[String]) -> Vec<usize> {
+        crate::editor_core::table::TableBlockLayout::build(
+            block,
+            0,
+            block.len() - 1,
+            cell_visible_width,
+        )
+        .col_widths
+    }
+
     #[test]
-    fn table_display_col_widths_skips_delimiter_rows() {
+    fn table_layout_widths_skip_delimiter_rows() {
         let block = vec![
             "| Header | Long header |".to_string(),
             "| --- | --- |".to_string(),
             "| a | b |".to_string(),
         ];
-        let widths = table_display_col_widths(&block);
-        assert_eq!(widths[0], 6); // "Header"
-        assert_eq!(widths[1], 11); // "Long header"
+        assert_eq!(visible_widths(&block), vec![6, 11]);
     }
 
     #[test]
-    fn table_display_col_widths_collapses_inline_markers_for_width() {
+    fn table_layout_widths_collapse_inline_markers() {
         let block = vec![
             "| `code` | plain |".to_string(),
             "| --- | --- |".to_string(),
             "| b | c |".to_string(),
         ];
-        let widths = table_display_col_widths(&block);
         // `code` collapses to "code" (4 chars), not 6 raw chars
-        assert_eq!(widths[0], 4);
+        assert_eq!(visible_widths(&block)[0], 4);
     }
 
     #[test]
-    fn table_block_bounds_finds_contiguous_lines() {
-        let lines: Vec<String> = vec![
-            "text".into(),
-            "| a | b |".into(),
-            "| --- | --- |".into(),
-            "| c | d |".into(),
-            "more text".into(),
+    fn table_layout_widths_ignore_short_delimiter_but_not_dash_data() {
+        let block = vec![
+            "| a | b |".to_string(),
+            "|--------|-|".to_string(),
+            "| ------ | - |".to_string(),
         ];
-        let bounds = table_block_bounds_for_line(&lines, 2);
-        assert_eq!(bounds, Some((1, 3)));
-    }
-
-    #[test]
-    fn table_block_bounds_returns_none_for_non_table_line() {
-        let lines: Vec<String> = vec!["plain text".into()];
-        assert_eq!(table_block_bounds_for_line(&lines, 0), None);
+        assert_eq!(visible_widths(&block), vec![6, 3]);
     }
 }
