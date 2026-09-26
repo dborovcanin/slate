@@ -6,9 +6,9 @@ const TABLE_PARSE_CACHE_MAX_ENTRIES: usize = 512;
 
 #[derive(Debug, Clone, Default)]
 pub struct TableFormatCache {
-    row_cells: Vec<Vec<String>>,
-    delimiter_flags: Vec<bool>,
-    widths: Vec<usize>,
+    /// The table block formatted last; lets the next format of the same block
+    /// re-parse only the rows that changed since.
+    formatted: Option<FormattedTable>,
     parsed_rows: FxHashMap<String, CachedTableRowParse>,
     parsed_rows_hits: usize,
     parsed_rows_misses: usize,
@@ -973,180 +973,320 @@ pub fn format_table_lines(lines: &[String]) -> Vec<String> {
     format_table_lines_with_cache(lines, &mut cache)
 }
 
-pub fn format_table_lines_with_cache(
-    lines: &[String],
+pub fn format_table_lines_with_cache<S: AsRef<str>>(
+    lines: &[S],
     cache: &mut TableFormatCache,
 ) -> Vec<String> {
-    if lines.is_empty() {
-        return Vec::new();
-    }
-
-    let mut rows: Vec<Vec<String>> = Vec::with_capacity(lines.len());
-    let mut row_cont: Vec<bool> = Vec::with_capacity(lines.len());
-    for line in lines {
-        let Some((raw, continuation)) = split_row_cells_raw_with_kind(line) else {
-            return lines.to_vec();
-        };
-        rows.push(raw);
-        row_cont.push(continuation);
-    }
-
-    let column_count = rows.iter().map(|row| row.len()).max().unwrap_or(1).max(1);
-    let normalized_rows: Vec<Vec<String>> = rows
-        .into_iter()
-        .map(|mut row| {
-            while row.len() < column_count {
-                row.push(String::new());
-            }
-            row
-        })
-        .collect();
-
-    let mut normalized_rows = normalized_rows;
-    let mut row_cont = row_cont;
-    let mut after_header = after_header_row(normalized_rows.len(), |i| row_cont[i]);
-    let has_delimiter_row = table_block_delimiter_row(&normalized_rows, &row_cont).is_some();
-    if !has_delimiter_row && normalized_rows.len() >= 2 {
-        normalized_rows.insert(1, vec!["---".to_string(); column_count]);
-        row_cont.insert(1, false);
-        after_header = Some(1);
-    }
-
-    let mut normalized_content: Vec<Vec<String>> = Vec::with_capacity(normalized_rows.len());
-    let mut delimiter_flags: Vec<bool> = Vec::with_capacity(normalized_rows.len());
-    for (row_idx, row) in normalized_rows.iter().enumerate() {
-        let delimiter = is_delimiter_row_at(row, Some(row_idx) == after_header);
-        delimiter_flags.push(delimiter);
-        let continuation = *row_cont.get(row_idx).unwrap_or(&false);
-        let mut out = Vec::with_capacity(column_count);
-        for col in 0..column_count {
-            let raw = row.get(col).map_or("", |cell| cell.as_str());
-            let cell = if delimiter {
-                if raw.trim().is_empty() {
-                    "---".to_string()
-                } else {
-                    normalize_delimiter_cell(raw)
-                }
-            } else if continuation && col == 0 {
-                normalize_continuation_first_cell_content(raw)
-            } else {
-                raw.trim().to_string()
-            };
-            out.push(cell);
-        }
-        normalized_content.push(out);
-    }
-
-    let compute_col_width = |col: usize| -> usize {
-        let mut width = 0usize;
-        for (row_idx, row) in normalized_content.iter().enumerate() {
-            let cell = row.get(col).map_or("", String::as_str);
-            if delimiter_flags.get(row_idx).copied().unwrap_or(false) {
-                // Alignment colons widen the column (`:---:` needs 5).
-                width = width.max(min_delimiter_len(parse_align(cell)));
-            } else {
-                width = width.max(table_cell_display_width(cell));
-            }
-        }
-        width
-    };
-
-    let mut widths = {
-        let cache_reusable = cache.row_cells.len() == normalized_content.len()
-            && cache.delimiter_flags.len() == delimiter_flags.len()
-            && cache.widths.len() == column_count
-            && cache.row_cells.iter().all(|row| row.len() == column_count);
-
-        if !cache_reusable {
-            (0..column_count).map(compute_col_width).collect::<Vec<_>>()
-        } else {
-            let mut dirty_cols = vec![false; column_count];
-            let mut any_change = false;
-            for row_idx in 0..normalized_content.len() {
-                if cache.delimiter_flags[row_idx] != delimiter_flags[row_idx] {
-                    dirty_cols.fill(true);
-                    any_change = true;
-                    break;
-                }
-                for col in 0..column_count {
-                    if cache.row_cells[row_idx][col] != normalized_content[row_idx][col] {
-                        dirty_cols[col] = true;
-                        any_change = true;
-                    }
-                }
-            }
-
-            if !any_change {
-                cache.widths.clone()
-            } else {
-                let mut next_widths = cache.widths.clone();
-                for col in 0..column_count {
-                    if dirty_cols[col] {
-                        next_widths[col] = compute_col_width(col);
-                    }
-                }
-                next_widths
-            }
-        }
-    };
-    // Delimiter cells must render at least `---` (3 dashes), so enforce a
-    // floor on every column width — but only when the table actually has
-    // (or is about to get) a delimiter row.
-    if delimiter_flags.contains(&true) {
-        for w in widths.iter_mut() {
-            *w = (*w).max(3);
-        }
-    }
-
-    cache.row_cells = normalized_content.clone();
-    cache.delimiter_flags = delimiter_flags.clone();
-    cache.widths = widths.clone();
-
-    normalized_rows
-        .iter()
-        .zip(normalized_content.iter())
-        .enumerate()
-        .map(|(row_idx, (raw_row, normalized))| {
-            let delimiter = delimiter_flags[row_idx];
-            let continuation = *row_cont.get(row_idx).unwrap_or(&false);
-            let mut out = String::new();
-            if continuation {
-                out.push_str("|>");
-            } else {
-                out.push('|');
-            }
-            for (col, cell) in normalized.iter().enumerate() {
-                let content = if delimiter {
-                    normalize_delimiter_cell_for_width(
-                        raw_row.get(col).map_or("---", |v| {
-                            let trimmed = v.trim();
-                            if trimmed.is_empty() {
-                                "---"
-                            } else {
-                                trimmed
-                            }
-                        }),
-                        widths[col],
-                    )
-                } else {
-                    cell.clone()
-                };
-                let content_width = if delimiter {
-                    content.chars().count()
-                } else {
-                    table_cell_display_width(&content)
-                };
-                let pad_right = widths[col].saturating_sub(content_width) + 1;
-                if !(continuation && col == 0) {
-                    out.push(' ');
-                }
-                out.push_str(&content);
-                out.push_str(&" ".repeat(pad_right));
-                out.push('|');
+    match format_table_block(lines, cache) {
+        TableFormatOutcome::Unchanged => lines.iter().map(|line| line.as_ref().to_string()).collect(),
+        TableFormatOutcome::Rows(rows) => {
+            let mut out: Vec<String> = lines.iter().map(|line| line.as_ref().to_string()).collect();
+            for (idx, text) in rows {
+                out[idx] = text;
             }
             out
+        }
+        TableFormatOutcome::Full(out) => out,
+    }
+}
+
+/// How a table block's formatted form differs from its current lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableFormatOutcome {
+    /// Every line is already formatted.
+    Unchanged,
+    /// Only these rows change (block-relative index, formatted text); the
+    /// block keeps its line count.
+    Rows(Vec<(usize, String)>),
+    /// The whole block is rewritten (a column width or the table structure
+    /// changed); the line count may differ (an inserted delimiter row).
+    Full(Vec<String>),
+}
+
+/// Rows edited since the last format beyond which a full reformat is cheaper
+/// than per-row updates.
+const INCREMENTAL_FORMAT_MAX_ROWS: usize = 16;
+
+/// Last formatted table block (see [`TableFormatCache`]).
+#[derive(Debug, Clone)]
+struct FormattedTable {
+    /// Formatted lines as last produced; the document holds these once the
+    /// edit is applied.
+    output: Vec<String>,
+    /// Normalized cells per row, padded to the column count.
+    cells: Vec<Vec<String>>,
+    delimiter: Vec<bool>,
+    continuation: Vec<bool>,
+    widths: Vec<usize>,
+    column_widths: ColumnWidthCounts,
+}
+
+/// Per-column multiset of cell widths, so a column's width follows row edits
+/// without rescanning the table.
+#[derive(Debug, Clone, Default)]
+struct ColumnWidthCounts(Vec<std::collections::BTreeMap<usize, u32>>);
+
+impl ColumnWidthCounts {
+    fn add(&mut self, row: &[usize]) {
+        if self.0.len() < row.len() {
+            self.0.resize_with(row.len(), Default::default);
+        }
+        for (counts, &width) in self.0.iter_mut().zip(row) {
+            *counts.entry(width).or_default() += 1;
+        }
+    }
+
+    fn remove(&mut self, row: &[usize]) {
+        for (counts, &width) in self.0.iter_mut().zip(row) {
+            if let Some(count) = counts.get_mut(&width) {
+                *count -= 1;
+                if *count == 0 {
+                    counts.remove(&width);
+                }
+            }
+        }
+    }
+
+    /// Column widths; at least 3 (for `---`) when the table has a delimiter.
+    fn widths(&self, column_count: usize, has_delimiter: bool) -> Vec<usize> {
+        let floor = if has_delimiter { 3 } else { 0 };
+        (0..column_count)
+            .map(|col| {
+                let widest = self
+                    .0
+                    .get(col)
+                    .and_then(|counts| counts.keys().next_back().copied())
+                    .unwrap_or(0);
+                widest.max(floor)
+            })
+            .collect()
+    }
+}
+
+/// Width each normalized cell of a row needs in its column.
+fn formatted_row_widths(cells: &[String], delimiter: bool) -> Vec<usize> {
+    cells
+        .iter()
+        .map(|cell| {
+            if delimiter {
+                // Alignment colons widen the column (`:---:` needs 5).
+                min_delimiter_len(parse_align(cell))
+            } else {
+                table_cell_display_width(cell)
+            }
         })
         .collect()
+}
+
+fn normalize_row_cells(raw: &[String], delimiter: bool, continuation: bool) -> Vec<String> {
+    raw.iter()
+        .enumerate()
+        .map(|(col, cell)| {
+            if delimiter {
+                if cell.trim().is_empty() {
+                    "---".to_string()
+                } else {
+                    normalize_delimiter_cell(cell)
+                }
+            } else if continuation && col == 0 {
+                normalize_continuation_first_cell_content(cell)
+            } else {
+                cell.trim().to_string()
+            }
+        })
+        .collect()
+}
+
+fn serialize_formatted_row(
+    cells: &[String],
+    delimiter: bool,
+    continuation: bool,
+    widths: &[usize],
+) -> String {
+    let mut out = String::with_capacity(widths.iter().sum::<usize>() + 3 * widths.len() + 2);
+    out.push_str(if continuation { "|>" } else { "|" });
+    for (col, cell) in cells.iter().enumerate() {
+        let width = widths.get(col).copied().unwrap_or(0);
+        let (content, content_width) = if delimiter {
+            let content = normalize_delimiter_cell_for_width(cell, width);
+            let content_width = content.chars().count();
+            (std::borrow::Cow::Owned(content), content_width)
+        } else {
+            (std::borrow::Cow::Borrowed(cell.as_str()), table_cell_display_width(cell))
+        };
+        if !(continuation && col == 0) {
+            out.push(' ');
+        }
+        out.push_str(&content);
+        out.extend(std::iter::repeat_n(' ', width.saturating_sub(content_width) + 1));
+        out.push('|');
+    }
+    out
+}
+
+impl FormattedTable {
+    /// Formats a whole block from scratch; None when a line is not a table row.
+    fn build<S: AsRef<str>>(lines: &[S]) -> Option<Self> {
+        let mut rows: Vec<Vec<String>> = Vec::with_capacity(lines.len() + 1);
+        let mut continuation: Vec<bool> = Vec::with_capacity(lines.len() + 1);
+        for line in lines {
+            let (raw, is_continuation) = split_row_cells_raw_with_kind(line.as_ref())?;
+            rows.push(raw);
+            continuation.push(is_continuation);
+        }
+        let column_count = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        for row in &mut rows {
+            row.resize(column_count, String::new());
+        }
+
+        let mut after_header = after_header_row(rows.len(), |i| continuation[i]);
+        if table_block_delimiter_row(&rows, &continuation).is_none() && rows.len() >= 2 {
+            rows.insert(1, vec!["---".to_string(); column_count]);
+            continuation.insert(1, false);
+            after_header = Some(1);
+        }
+
+        let delimiter: Vec<bool> = rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| is_delimiter_row_at(row, Some(idx) == after_header))
+            .collect();
+        let cells: Vec<Vec<String>> = rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| normalize_row_cells(row, delimiter[idx], continuation[idx]))
+            .collect();
+        let mut column_widths = ColumnWidthCounts::default();
+        for (idx, row) in cells.iter().enumerate() {
+            column_widths.add(&formatted_row_widths(row, delimiter[idx]));
+        }
+        let widths = column_widths.widths(column_count, delimiter.contains(&true));
+        let mut table = Self {
+            output: Vec::new(),
+            cells,
+            delimiter,
+            continuation,
+            widths,
+            column_widths,
+        };
+        table.output = table.serialize_all();
+        Some(table)
+    }
+
+    fn serialize_all(&self) -> Vec<String> {
+        (0..self.cells.len())
+            .map(|idx| {
+                serialize_formatted_row(
+                    &self.cells[idx],
+                    self.delimiter[idx],
+                    self.continuation[idx],
+                    &self.widths,
+                )
+            })
+            .collect()
+    }
+
+    /// Re-formats only the rows of `lines` that differ from the last output.
+    /// None when the edit touches table structure (row count, column count,
+    /// delimiter or continuation rows) or too many rows; a full format then
+    /// applies.
+    fn update<S: AsRef<str>>(&mut self, lines: &[S]) -> Option<TableFormatOutcome> {
+        if lines.len() != self.output.len() {
+            return None;
+        }
+        let changed: Vec<usize> = (0..lines.len())
+            .filter(|&idx| lines[idx].as_ref() != self.output[idx])
+            .collect();
+        if changed.is_empty() {
+            return Some(TableFormatOutcome::Unchanged);
+        }
+        if changed.len() > INCREMENTAL_FORMAT_MAX_ROWS {
+            return None;
+        }
+
+        let column_count = self.widths.len();
+        let after_header = after_header_row(lines.len(), |i| self.continuation[i]);
+        let mut updates = Vec::with_capacity(changed.len());
+        for &idx in &changed {
+            let (mut raw, continuation) = split_row_cells_raw_with_kind(lines[idx].as_ref())?;
+            if raw.len() > column_count
+                || continuation != self.continuation[idx]
+                || self.delimiter[idx]
+            {
+                return None;
+            }
+            raw.resize(column_count, String::new());
+            if is_delimiter_row_at(&raw, Some(idx) == after_header) {
+                return None;
+            }
+            updates.push((idx, normalize_row_cells(&raw, false, continuation)));
+        }
+
+        for (idx, cells) in updates {
+            self.column_widths.remove(&formatted_row_widths(&self.cells[idx], false));
+            self.column_widths.add(&formatted_row_widths(&cells, false));
+            self.cells[idx] = cells;
+        }
+        let widths = self
+            .column_widths
+            .widths(column_count, self.delimiter.contains(&true));
+        if widths != self.widths {
+            self.widths = widths;
+            self.output = self.serialize_all();
+            return Some(TableFormatOutcome::Full(self.output.clone()));
+        }
+
+        let rows = changed
+            .into_iter()
+            .map(|idx| {
+                let text = serialize_formatted_row(
+                    &self.cells[idx],
+                    false,
+                    self.continuation[idx],
+                    &self.widths,
+                );
+                self.output[idx] = text.clone();
+                (idx, text)
+            })
+            .collect();
+        Some(TableFormatOutcome::Rows(rows))
+    }
+}
+
+/// Formats table block `lines`. Re-formats only the rows changed since the
+/// cache last formatted this block; rewrites the whole block when a column
+/// width or the table structure changes.
+pub fn format_table_block<S: AsRef<str>>(
+    lines: &[S],
+    cache: &mut TableFormatCache,
+) -> TableFormatOutcome {
+    if lines.is_empty() {
+        return TableFormatOutcome::Unchanged;
+    }
+    if let Some(outcome) = cache
+        .formatted
+        .as_mut()
+        .and_then(|formatted| formatted.update(lines))
+    {
+        return outcome;
+    }
+    let Some(formatted) = FormattedTable::build(lines) else {
+        cache.formatted = None;
+        return TableFormatOutcome::Unchanged;
+    };
+    let unchanged = formatted.output.len() == lines.len()
+        && formatted
+            .output
+            .iter()
+            .zip(lines)
+            .all(|(out, line)| out == line.as_ref());
+    let outcome = if unchanged {
+        TableFormatOutcome::Unchanged
+    } else {
+        TableFormatOutcome::Full(formatted.output.clone())
+    };
+    cache.formatted = Some(formatted);
+    outcome
 }
 
 /// Whether `line` is a `|>` continuation row with no content left, which
@@ -1619,6 +1759,53 @@ mod tests {
 
     fn owned(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| line.to_string()).collect()
+    }
+
+    #[test]
+    fn incremental_format_matches_formatting_from_scratch() {
+        let mut lines = owned(&[
+            "| name | qty | note |",
+            "| :--- | --: | :-: |",
+            "| apple | 3 | red |",
+            "|> green | | |",
+            "| kiwi | 12 | |",
+            "| - | - | n/a |",
+            "| plum | 7 | **ripe** |",
+        ]);
+        let mut cache = TableFormatCache::default();
+        lines = format_table_lines_with_cache(&lines, &mut cache);
+        let words = ["", "a", "bb", "cccc", "dddddddd", "`x`", "é"];
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound as u64) as usize
+        };
+        let mut incremental_rows = 0;
+        for step in 0..400 {
+            // Rewrite one or two cells of data rows (never the header or
+            // delimiter), like typing does.
+            let mut edited = lines.clone();
+            for _ in 0..1 + next(2) {
+                let row = 2 + next(edited.len() - 2);
+                let continuation = is_table_continuation_line(&edited[row]);
+                let mut cells = split_table_cells(&edited[row]);
+                let col = next(cells.len());
+                cells[col] = words[next(words.len())].to_string();
+                edited[row] = serialize_table_row_with_kind(&cells, continuation);
+            }
+            let expected = format_table_lines(&edited);
+            if let TableFormatOutcome::Rows(_) = format_table_block(&edited, &mut cache) {
+                incremental_rows += 1;
+            }
+            let actual = format_table_lines_with_cache(&edited, &mut cache);
+            assert_eq!(actual, expected, "step {step}: {edited:?}");
+            lines = actual;
+            // Keep the cache on the applied lines, like the editor.
+            let _ = format_table_block(&lines, &mut cache);
+        }
+        assert!(incremental_rows > 50, "per-row path used ({incremental_rows})");
     }
 
     #[test]

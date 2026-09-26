@@ -759,14 +759,34 @@ fn table_autoformat_rule(
     let mut mapped_selection: Option<OperationSelection> = None;
 
     for (start_line, end_line) in blocks {
-        let original_lines = (start_line..=end_line)
-            .map(|line_no| ctx.line_text(line_no).to_string())
-            .collect::<Vec<_>>();
-        let formatted_lines =
-            table::format_table_lines_with_cache(&original_lines, table_format_cache);
-        if formatted_lines == original_lines {
-            continue;
-        }
+        let block_lines: Vec<&str> = (start_line..=end_line)
+            .map(|line_no| ctx.line_text(line_no))
+            .collect();
+        let formatted_lines = match table::format_table_block(&block_lines, table_format_cache) {
+            table::TableFormatOutcome::Unchanged => continue,
+            table::TableFormatOutcome::Rows(rows) => {
+                // Per-row edit (the common keystroke): touch only those rows.
+                let mut shift = 0isize;
+                for (idx, text) in rows {
+                    let line = ctx.line(start_line + idx);
+                    let line_no = start_line + idx;
+                    if mapped_selection.is_none() && selection.empty && line_no == cursor_line_no {
+                        let col = table::map_table_cursor_column(&line.text, &text, cursor_col);
+                        let anchor = (line.from as isize + shift) as usize + col;
+                        mapped_selection = Some(OperationSelection { anchor, head: None });
+                    }
+                    shift += text.len() as isize - line.text.len() as isize;
+                    changes.push(TextChange {
+                        from: line.from,
+                        to: line.to,
+                        insert: text,
+                    });
+                }
+                continue;
+            }
+            table::TableFormatOutcome::Full(formatted_lines) => formatted_lines,
+        };
+        let original_lines: Vec<String> = block_lines.iter().map(|line| line.to_string()).collect();
         let start = ctx.line(start_line).from;
         if !push_incremental_table_block_changes(
             ctx,

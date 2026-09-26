@@ -234,7 +234,7 @@ fn bench_doc_change_rule(scenario: Scenario, widen: bool) -> BenchStat {
         table_enabled: true,
     };
     // Data rows (skipping continuation rows) whose first cell is short
-    // (`r1c1`..) or, for `widen`, the widest one (`r{rows}c1`).
+    // (`r1c1`..; spread over 32 rows so none outgrows its column) or, for `widen`, the widest one (`r{rows}c1`).
     let data_rows: Vec<usize> = table_lines
         .iter()
         .enumerate()
@@ -247,7 +247,7 @@ fn bench_doc_change_rule(scenario: Scenario, widen: bool) -> BenchStat {
         let row = if widen {
             *data_rows.last().expect("data rows")
         } else {
-            data_rows[i % data_rows.len().min(8)]
+            data_rows[i % data_rows.len().min(32)]
         };
         let line_idx = filler + row;
         let line_start: usize = note.split('\n').take(line_idx).map(|l| l.len() + 1).sum();

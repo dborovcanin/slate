@@ -3046,7 +3046,12 @@ impl TerminalApp {
                 self.editor.cursor_line = line_idx;
                 self.editor.cursor_col = line[..line_byte.min(line.len())].chars().count();
             }
-            self.folds.rescan_pending = true;
+            // A rewrite of the cursor line alone (e.g. a table row reformatted
+            // after a keystroke) is covered by the incremental fold update in
+            // `mark_edited_*`; anything wider needs the O(N) rescan.
+            if !(old_line_span == 1 && new_line_span == 1 && from_line == self.editor.cursor_line) {
+                self.folds.rescan_pending = true;
+            }
             self.mark_edited_from_line_with_span(
                 from_line,
                 Some((from_line, old_line_span, new_line_span)),
