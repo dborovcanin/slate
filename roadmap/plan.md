@@ -12,13 +12,7 @@ Keeping semantics in the core crates remains a goal: it keeps behavior testable 
 
 ### Next steps (ordered)
 
-1. **Ratatui + crossterm port of `crates/tui`.**
-   - Input: replace `terminal/input.rs` (libc termios, hand-parsed escape sequences, SIGWINCH flag) with crossterm events. Gains kitty keyboard protocol, mouse, focus, bracketed paste, and portability.
-   - Overlays: port switcher, date picker, command completion, autocomplete, and preview popups to ratatui widgets.
-   - Editor view: a custom `EditorView` widget that paints cached per-line style runs directly into the ratatui `Buffer`. Do not build `Paragraph`/`Line`/`Span` trees for editor text on every frame.
-   - Loop: `crossterm::event::poll(timeout)` plus channels for background work; no async runtime.
-   - Output: use synchronized updates (DEC 2026) to avoid tearing.
-   - Tests: replace ANSI golden output with `TestBackend` buffer assertions.
+1. **Ratatui + crossterm port of `crates/tui`.** Done: crossterm input, ratatui terminal/diff, renderer paints buffer cells, soft wrap. Remaining: move overlays to ratatui widgets where it simplifies code, per-line render caching (frame composition is ~4 ms at 200x60), `gj`/`gk` visual-line motions, sub-line scrolling for lines taller than the screen.
 2. **Features** (candidates, see `roadmap/features.md`):
    - quick capture (`slate capture`), daily notes, templates
    - tags, backlinks panel, ghost notes

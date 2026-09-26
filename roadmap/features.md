@@ -76,7 +76,7 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 - [ ] Improve search style and content search.
 - [ ] Trie search.
 - [ ] Keyboard shortcut expansion and menu coverage.
-- [ ] Improve overflow to full soft-wrap.
+- [x] Improve overflow to full soft-wrap.
 - [ ] GD to go to link, header, tag.
 - [ ] Add `dt{char}`.
 - [ ] Consolidate commands autocompletion.

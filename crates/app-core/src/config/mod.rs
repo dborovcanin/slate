@@ -7,6 +7,7 @@ use time::{Month, OffsetDateTime, UtcOffset};
 const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_ACCENT: &str = "auto";
 const DEFAULT_VIM_MODE: bool = false;
+const DEFAULT_WRAP: bool = true;
 const DEFAULT_MARKDOWN_AUTOFORMAT: bool = true;
 const DEFAULT_CHECKLIST_AUTO_REORDER: bool = true;
 const DEFAULT_AUTOSAVE: bool = true;
@@ -86,6 +87,8 @@ autosave = true
 format_on_save = false
 # Start the editor in Vim normal mode.
 vim_mode = false
+# Soft-wrap long lines. Tables and code blocks always scroll horizontally.
+wrap = true
 # Date format used by :date and date picker insert.
 date_format = "%Y-%m-%d"
 # Date+time format used by :date (with time) and :remind.
@@ -206,6 +209,7 @@ pub struct ThemeConfig {
     pub autosave: bool,
     pub format_on_save: bool,
     pub vim_mode: bool,
+    pub wrap: bool,
     pub background_tasks_enabled: bool,
     pub date_format: String,
     pub date_time_format: String,
@@ -373,6 +377,7 @@ impl Default for ThemeConfig {
             autosave: DEFAULT_AUTOSAVE,
             format_on_save: DEFAULT_FORMAT_ON_SAVE,
             vim_mode: DEFAULT_VIM_MODE,
+            wrap: DEFAULT_WRAP,
             background_tasks_enabled: DEFAULT_BACKGROUND_TASKS_ENABLED,
             date_format: DEFAULT_DATE_FORMAT.to_string(),
             date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
@@ -423,6 +428,7 @@ struct EditorSection {
     autosave: Option<bool>,
     format_on_save: Option<bool>,
     vim_mode: Option<bool>,
+    wrap: Option<bool>,
     date_format: Option<String>,
     date_time_format: Option<String>,
     variable_autocomplete_min_chars: Option<u16>,
@@ -669,6 +675,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         autosave: raw.editor.autosave.unwrap_or(DEFAULT_AUTOSAVE),
         format_on_save: raw.editor.format_on_save.unwrap_or(DEFAULT_FORMAT_ON_SAVE),
         vim_mode: raw.editor.vim_mode.unwrap_or(DEFAULT_VIM_MODE),
+        wrap: raw.editor.wrap.unwrap_or(DEFAULT_WRAP),
         background_tasks_enabled: raw
             .startup
             .async_enabled
@@ -952,6 +959,7 @@ mod tests {
             autosave = false
             format_on_save = true
             vim_mode = true
+            wrap = false
             date_format = "%d.%m.%Y"
             date_time_format = "%d.%m.%Y. %H:%M"
             variable_autocomplete_min_chars = 5
@@ -972,6 +980,7 @@ mod tests {
         assert!(!cfg.autosave);
         assert!(cfg.format_on_save);
         assert!(cfg.vim_mode);
+        assert!(!cfg.wrap);
         assert!(cfg.background_tasks_enabled);
         assert_eq!(cfg.date_format, "%d.%m.%Y");
         assert_eq!(cfg.date_time_format, "%d.%m.%Y. %H:%M");
@@ -1015,6 +1024,7 @@ mod tests {
         assert!(cfg.autosave);
         assert!(!cfg.format_on_save);
         assert!(!cfg.vim_mode);
+        assert!(cfg.wrap);
         assert!(cfg.background_tasks_enabled);
         assert_eq!(cfg.date_format, "%Y-%m-%d");
         assert_eq!(cfg.date_time_format, "%Y-%m-%d %H:%M");

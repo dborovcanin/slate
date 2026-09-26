@@ -487,3 +487,7 @@ mod replay;
 #[cfg(test)]
 #[path = "tests/vim.rs"]
 mod vim;
+
+#[cfg(test)]
+#[path = "tests/wrap.rs"]
+mod wrap;

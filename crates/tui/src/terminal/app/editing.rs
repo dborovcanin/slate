@@ -3564,6 +3564,17 @@ impl TerminalApp {
         gutter_width_for_visible_lines(self.visible_line_count())
     }
 
+    /// True when soft wrap is on and the cursor line wraps rather than
+    /// scrolling horizontally.
+    pub(super) fn cursor_line_wraps(&mut self) -> bool {
+        if !self.render_state.wrap_lines {
+            return false;
+        }
+        let ctx = self.render_context_at(self.editor.cursor_line);
+        let line = self.current_line().to_string();
+        super::rendering::line_wraps(&ctx, &line)
+    }
+
     pub(super) fn adjust_scroll(&mut self) {
         let height = self.editor_height();
         let cursor_virtual = self.current_virtual_line();
@@ -3579,7 +3590,7 @@ impl TerminalApp {
 
         let (_, cols) = input::terminal_size();
         let available = cols.saturating_sub(self.gutter_width());
-        if available == 0 {
+        if available == 0 || self.cursor_line_wraps() {
             self.editor.scroll_col = 0;
             return;
         }

@@ -55,6 +55,7 @@ fn cached_inline_tokens(text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
     INLINE_TOKEN_CACHE.with(|cache| cache.borrow_mut().get(text))
 }
 
+#[derive(Clone)]
 pub struct RenderContext {
     in_code_block: bool,
     code_fence_lang: Option<String>,
@@ -113,6 +114,16 @@ impl RenderContext {
     }
 
     /// Skip ahead through `lines` without rendering — just track code fence state.
+    /// Whether the next rendered line sits inside a fenced code block.
+    pub fn in_code_block(&self) -> bool {
+        self.in_code_block
+    }
+
+    /// Whether every line renders as plain code (code files, large notes).
+    pub fn renders_plain_code(&self) -> bool {
+        self.render_as_plain_code
+    }
+
     pub fn advance_lines(&mut self, lines: &[String]) {
         if self.render_as_plain_code {
             return;
@@ -155,10 +166,78 @@ impl RenderContext {
         x: u16,
         y: u16,
     ) {
+        let line = self.style_line(text, deco);
+        let mut painter = RowPainter {
+            buf,
+            x,
+            y,
+            emitted: 0,
+            stream_col: 0,
+            width,
+            window_col,
+            window_end: window_col.saturating_add(width),
+            selection_ranges: deco.selection_ranges,
+            selection_style: line.selection_style,
+            style_cache: None,
+        };
+        painter.paint_line(
+            &line.chars,
+            &line.styles,
+            &line.hidden_ranges,
+            line.ghosts(deco, self.palette.code_comment),
+            line.base_style,
+        );
+    }
+
+    /// Soft-wraps one line into rows of `width` cells. Paints at most
+    /// `max_rows` rows into `target` (when given) and reports the total row
+    /// count plus the cell of the `track_char`-th visible character, which
+    /// callers use to place the cursor. With `target` = `None` it only measures.
+    pub fn render_line_wrapped(
+        &mut self,
+        text: &str,
+        width: usize,
+        max_rows: usize,
+        track_char: Option<usize>,
+        deco: &LineDecorations<'_>,
+        target: Option<(&mut Buffer, u16, u16)>,
+    ) -> WrapOutcome {
+        let line = self.style_line(text, deco);
+        let (cells, visible_count) = build_wrap_cells(
+            &line,
+            line.ghosts(deco, self.palette.code_comment),
+            deco.selection_ranges,
+        );
+        let width = width.max(1);
+        let layout = layout_wrap_rows(&cells, width);
+        let tracked = track_char.map(|ordinal| locate_ordinal(&cells, &layout, ordinal.min(visible_count), width));
+        let mut rows = layout.rows.len();
+        if let Some((row, _)) = tracked {
+            rows = rows.max(row + 1);
+        }
+        if let Some((buf, x, y)) = target {
+            paint_wrap_rows(
+                buf,
+                x,
+                y,
+                width,
+                max_rows,
+                &cells,
+                &layout,
+                &line,
+                deco.selection_ranges,
+            );
+        }
+        WrapOutcome { rows, tracked }
+    }
+
+    /// Computes per-char styles, hidden marker ranges and ghost prefix for a
+    /// line, advancing fenced-code state.
+    fn style_line(&mut self, text: &str, deco: &LineDecorations<'_>) -> StyledLine {
         let LineDecorations {
             calc_ghost,
-            reminder_ghost,
-            reminder_strikethrough,
+            reminder_ghost: _,
+            reminder_strikethrough: _,
             search_ranges,
             current_search_ranges,
             variable_names,
@@ -335,33 +414,46 @@ impl RenderContext {
             " → "
         };
 
-        let mut painter = RowPainter {
-            buf,
-            x,
-            y,
-            emitted: 0,
-            stream_col: 0,
-            width,
-            window_col,
-            window_end: window_col.saturating_add(width),
-            selection_ranges: reverse_ranges,
-            selection_style,
-            style_cache: None,
-        };
-        painter.paint_line(
-            &chars,
-            &styles,
-            &hidden_ranges,
-            Ghosts {
-                calc: calc_ghost,
-                calc_prefix,
-                reminder: reminder_ghost,
-                reminder_strikethrough,
-                fg: self.palette.code_comment,
-            },
+        StyledLine {
+            chars,
+            styles,
+            hidden_ranges,
             base_style,
-        );
+            selection_style,
+            calc_prefix,
+        }
     }
+}
+
+/// A line after styling, before it is laid out into cells.
+struct StyledLine {
+    chars: Vec<char>,
+    styles: Vec<CharStyle>,
+    hidden_ranges: Vec<(usize, usize)>,
+    base_style: CharStyle,
+    selection_style: Option<SelectionStyle>,
+    calc_prefix: &'static str,
+}
+
+impl StyledLine {
+    fn ghosts<'a>(&self, deco: &LineDecorations<'a>, fg: u8) -> Ghosts<'a> {
+        Ghosts {
+            calc: deco.calc_ghost,
+            calc_prefix: self.calc_prefix,
+            reminder: deco.reminder_ghost,
+            reminder_strikethrough: deco.reminder_strikethrough,
+            fg,
+        }
+    }
+}
+
+/// Result of `RenderContext::render_line_wrapped`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WrapOutcome {
+    /// Rows the whole line needs (may exceed the painted `max_rows`).
+    pub rows: usize,
+    /// (row, col) cell offset of the tracked character, relative to the line.
+    pub tracked: Option<(usize, usize)>,
 }
 
 /// Per-line overlays and highlights passed to `RenderContext::render_line`.
@@ -503,6 +595,255 @@ fn apply_selection_overlay(style: &mut CharStyle, selection: SelectionStyle) {
     style.reverse = false;
     if style.fg.is_none() || style.fg == Some(selection.plain_fg) {
         style.fg = Some(selection.fg);
+    }
+}
+
+/// One display cell of a soft-wrapped line.
+struct WrapCell {
+    ch: char,
+    width: usize,
+    style: CharStyle,
+    /// Index among visible source chars; `None` for tab padding and ghosts.
+    ordinal: Option<usize>,
+}
+
+/// Row boundaries of a wrapped line as half-open cell index ranges. Cells
+/// between rows (a space the break consumed) belong to no row.
+struct WrapLayout {
+    rows: Vec<(usize, usize)>,
+}
+
+/// Expands a styled line into display cells: hidden markers dropped, tabs
+/// expanded, ghosts appended, selection applied. Returns the cells and the
+/// number of visible source chars.
+fn build_wrap_cells(
+    line: &StyledLine,
+    ghosts: Ghosts<'_>,
+    selection_ranges: &[(usize, usize)],
+) -> (Vec<WrapCell>, usize) {
+    use unicode_width::UnicodeWidthChar;
+    let mut cells = Vec::with_capacity(line.chars.len() + 16);
+    let mut stream_col = 0usize;
+    let mut ordinal = 0usize;
+    let push = |cells: &mut Vec<WrapCell>,
+                stream_col: &mut usize,
+                ch: char,
+                style: CharStyle,
+                ord: Option<usize>| {
+        let width = ch.width().unwrap_or(0).max(1);
+        let mut style = style;
+        if let Some(selection) = line.selection_style {
+            if selection_intersects_cell(selection_ranges, *stream_col, *stream_col + width) {
+                apply_selection_overlay(&mut style, selection);
+            }
+        }
+        cells.push(WrapCell {
+            ch,
+            width,
+            style,
+            ordinal: ord,
+        });
+        *stream_col += width;
+    };
+
+    let mut hidden_iter = line.hidden_ranges.iter().peekable();
+    for (i, &ch) in line.chars.iter().enumerate() {
+        while let Some((_, end)) = hidden_iter.peek() {
+            if i >= *end {
+                hidden_iter.next();
+            } else {
+                break;
+            }
+        }
+        if let Some((start, end)) = hidden_iter.peek() {
+            if i >= *start && i < *end {
+                continue;
+            }
+        }
+        let style = line.styles[i];
+        if ch == '\t' {
+            let tab_spaces = TAB_WIDTH - (stream_col % TAB_WIDTH);
+            for n in 0..tab_spaces {
+                push(&mut cells, &mut stream_col, ' ', style, (n == 0).then_some(ordinal));
+            }
+        } else {
+            push(&mut cells, &mut stream_col, ch, style, Some(ordinal));
+        }
+        ordinal += 1;
+    }
+
+    let base_bg = line.base_style.bg;
+    if let Some(ghost) = ghosts.calc {
+        let style = CharStyle {
+            dim: true,
+            italic: true,
+            fg: Some(ghosts.fg),
+            bg: base_bg,
+            ..Default::default()
+        };
+        for ch in ghosts.calc_prefix.chars().chain(ghost.chars()) {
+            push(&mut cells, &mut stream_col, ch, style, None);
+        }
+    }
+    if let Some(ghost) = ghosts.reminder {
+        let style = CharStyle {
+            dim: true,
+            italic: true,
+            strikethrough: ghosts.reminder_strikethrough,
+            fg: Some(ghosts.fg),
+            bg: base_bg,
+            ..Default::default()
+        };
+        let prefix = if ghosts.calc.is_some() { "  " } else { " " };
+        for ch in prefix.chars().chain(ghost.chars()) {
+            push(&mut cells, &mut stream_col, ch, style, None);
+        }
+    }
+    (cells, ordinal)
+}
+
+/// Breaks cells into rows of at most `width` columns, preferring to break
+/// after a space. A space that would overflow a row is consumed by the
+/// break; words longer than a row are split; a wide char never straddles.
+fn layout_wrap_rows(cells: &[WrapCell], width: usize) -> WrapLayout {
+    let mut rows = Vec::new();
+    let mut row_start = 0usize;
+    let mut row_width = 0usize;
+    let mut last_break: Option<usize> = None;
+    let mut i = 0usize;
+    while i < cells.len() {
+        let cell_width = cells[i].width;
+        if row_width + cell_width > width && row_width > 0 {
+            if cells[i].ch == ' ' {
+                rows.push((row_start, i));
+                i += 1;
+                row_start = i;
+                row_width = 0;
+                last_break = None;
+                continue;
+            }
+            match last_break.filter(|&at| at > row_start) {
+                Some(at) => {
+                    rows.push((row_start, at));
+                    row_start = at;
+                    row_width = cells[at..i].iter().map(|cell| cell.width).sum();
+                    last_break = cells[at..i]
+                        .iter()
+                        .rposition(|cell| cell.ch == ' ')
+                        .map(|offset| at + offset + 1);
+                }
+                None => {
+                    rows.push((row_start, i));
+                    row_start = i;
+                    row_width = 0;
+                    last_break = None;
+                }
+            }
+            continue;
+        }
+        row_width += cell_width;
+        if cells[i].ch == ' ' {
+            last_break = Some(i + 1);
+        }
+        i += 1;
+    }
+    rows.push((row_start, cells.len()));
+    WrapLayout { rows }
+}
+
+/// Cell position of the `ordinal`-th visible char; `ordinal` equal to the
+/// visible count means the slot just after the last visible char.
+fn locate_ordinal(
+    cells: &[WrapCell],
+    layout: &WrapLayout,
+    ordinal: usize,
+    width: usize,
+) -> (usize, usize) {
+    // Slot after the char preceding `ordinal`, used when `ordinal` itself has
+    // no cell (end of line) or was consumed by a break.
+    let mut after_prev = (0usize, 0usize);
+    for (row, &(start, end)) in layout.rows.iter().enumerate() {
+        let mut col = 0usize;
+        for cell in &cells[start..end] {
+            match cell.ordinal {
+                Some(ord) if ord == ordinal => return (row, col),
+                Some(ord) if ord > ordinal => return after_prev,
+                Some(_) => after_prev = (row, col + cell.width),
+                None => {}
+            }
+            col += cell.width;
+        }
+        // A consumed break space right after this row.
+        if let Some(cell) = cells.get(end).filter(|_| layout.rows.get(row + 1).is_some_and(|next| next.0 > end)) {
+            match cell.ordinal {
+                Some(ord) if ord == ordinal => return (row, col.min(width - 1)),
+                Some(_) => after_prev = (row, col.min(width - 1)),
+                None => {}
+            }
+        }
+    }
+    if after_prev.1 >= width {
+        (after_prev.0 + 1, 0)
+    } else {
+        after_prev
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_wrap_rows(
+    buf: &mut Buffer,
+    x: u16,
+    y: u16,
+    width: usize,
+    max_rows: usize,
+    cells: &[WrapCell],
+    layout: &WrapLayout,
+    line: &StyledLine,
+    selection_ranges: &[(usize, usize)],
+) {
+    let area = buf.area;
+    let last_row = layout.rows.len().saturating_sub(1);
+    for (row, &(start, end)) in layout.rows.iter().enumerate().take(max_rows) {
+        let row_y = y.saturating_add(row as u16);
+        if row_y >= area.bottom() {
+            break;
+        }
+        let mut col = 0usize;
+        for cell in &cells[start..end] {
+            let cell_x = x.saturating_add(col as u16);
+            if cell_x < area.right() && col + cell.width <= width {
+                let style = cell.style.to_style();
+                buf[(cell_x, row_y)].set_char(cell.ch).set_style(style);
+                for offset in 1..cell.width {
+                    let cx = cell_x.saturating_add(offset as u16);
+                    if cx < area.right() {
+                        buf[(cx, row_y)].reset();
+                        buf[(cx, row_y)].set_style(style);
+                    }
+                }
+            }
+            col += cell.width;
+        }
+        // Pad the row. Past the end of a fully selected line the padding
+        // keeps the selection background (linewise selection).
+        let mut filler = line.base_style;
+        if row == last_row {
+            if let Some(selection) = line.selection_style {
+                let line_cols: usize = cells.iter().map(|cell| cell.width).sum();
+                if selection_intersects_cell(selection_ranges, line_cols, line_cols + 1) {
+                    apply_selection_overlay(&mut filler, selection);
+                }
+            }
+        }
+        let filler = filler.to_style();
+        while col < width {
+            let cell_x = x.saturating_add(col as u16);
+            if cell_x >= area.right() {
+                break;
+            }
+            buf[(cell_x, row_y)].set_char(' ').set_style(filler);
+            col += 1;
+        }
     }
 }
 
@@ -1029,5 +1370,126 @@ mod tests {
         let code = render(&mut ctx, "**bold** and `code`", 32, 0, with_cursor(Some(14))).text;
         assert!(code.starts_with("bold and `code`"));
         assert!(!code.contains("**bold**"));
+    }
+
+    fn render_wrapped(
+        ctx: &mut RenderContext,
+        text: &str,
+        width: usize,
+        track: Option<usize>,
+        deco: LineDecorations<'_>,
+    ) -> (Vec<String>, WrapOutcome) {
+        let mut buf = Buffer::empty(Rect::new(0, 0, width as u16, 8));
+        let outcome = ctx.render_line_wrapped(text, width, 8, track, &deco, Some((&mut buf, 0, 0)));
+        let rows = (0..outcome.rows.min(8) as u16)
+            .map(|y| row_text(&buf, y).trim_end().to_string())
+            .collect();
+        (rows, outcome)
+    }
+
+    #[test]
+    fn wrap_breaks_after_spaces_and_consumes_the_overflowing_space() {
+        let mut ctx = RenderContext::new();
+        let (rows, outcome) =
+            render_wrapped(&mut ctx, "hello world foo", 11, None, LineDecorations::default());
+        assert_eq!(rows, vec!["hello world", "foo"]);
+        assert_eq!(outcome.rows, 2);
+    }
+
+    #[test]
+    fn wrap_keeps_words_whole_when_a_break_exists() {
+        let mut ctx = RenderContext::new();
+        let (rows, _) =
+            render_wrapped(&mut ctx, "alpha beta gamma", 12, None, LineDecorations::default());
+        assert_eq!(rows, vec!["alpha beta", "gamma"]);
+    }
+
+    #[test]
+    fn wrap_splits_words_longer_than_a_row() {
+        let mut ctx = RenderContext::new();
+        let (rows, _) = render_wrapped(&mut ctx, "abcdefghij", 4, None, LineDecorations::default());
+        assert_eq!(rows, vec!["abcd", "efgh", "ij"]);
+    }
+
+    #[test]
+    fn wrap_never_splits_a_wide_char_across_rows() {
+        let mut ctx = RenderContext::new();
+        let (rows, _) = render_wrapped(&mut ctx, "ab漢字", 3, None, LineDecorations::default());
+        assert_eq!(rows, vec!["ab", "漢", "字"]);
+    }
+
+    #[test]
+    fn wrap_measures_hidden_markers_out_of_the_width() {
+        let mut ctx = RenderContext::new();
+        let (rows, outcome) =
+            render_wrapped(&mut ctx, "**bold** text", 9, None, LineDecorations::default());
+        assert_eq!(rows, vec!["bold text"]);
+        assert_eq!(outcome.rows, 1);
+    }
+
+    #[test]
+    fn wrap_includes_calc_ghost_in_the_layout() {
+        let mut ctx = RenderContext::new();
+        let deco = LineDecorations {
+            calc_ghost: Some("40"),
+            ..LineDecorations::default()
+        };
+        let (rows, _) = render_wrapped(&mut ctx, "x + 4", 6, None, deco);
+        assert_eq!(rows, vec!["x + 4", "→ 40"]);
+    }
+
+    #[test]
+    fn wrap_tracks_cursor_on_continuation_rows() {
+        let mut ctx = RenderContext::new();
+        // 'f' of "foo" is visible char 12.
+        let (_, outcome) =
+            render_wrapped(&mut ctx, "hello world foo", 11, Some(12), LineDecorations::default());
+        assert_eq!(outcome.tracked, Some((1, 0)));
+        // The consumed break space stays on the first row, clamped to its edge.
+        let (_, outcome) =
+            render_wrapped(&mut ctx, "hello world foo", 11, Some(11), LineDecorations::default());
+        assert_eq!(outcome.tracked, Some((0, 10)));
+    }
+
+    #[test]
+    fn wrap_end_of_full_row_moves_cursor_to_a_new_row() {
+        let mut ctx = RenderContext::new();
+        let (_, outcome) = render_wrapped(&mut ctx, "abcd", 4, Some(4), LineDecorations::default());
+        assert_eq!(outcome.tracked, Some((1, 0)));
+        assert_eq!(outcome.rows, 2);
+        let (_, outcome) = render_wrapped(&mut ctx, "abc", 4, Some(3), LineDecorations::default());
+        assert_eq!(outcome.tracked, Some((0, 3)));
+        assert_eq!(outcome.rows, 1);
+    }
+
+    #[test]
+    fn wrap_tracks_visible_chars_not_hidden_markers() {
+        let mut ctx = RenderContext::new();
+        // Off-cursor markers are hidden: visible text is "bold text", 't' is 5.
+        let (_, outcome) =
+            render_wrapped(&mut ctx, "**bold** text", 6, Some(5), LineDecorations::default());
+        assert_eq!(outcome.tracked, Some((1, 0)));
+    }
+
+    #[test]
+    fn wrap_measure_mode_reports_rows_without_painting() {
+        let mut ctx = RenderContext::new();
+        let outcome = ctx.render_line_wrapped(
+            "abcdefghij",
+            4,
+            8,
+            None,
+            &LineDecorations::default(),
+            None,
+        );
+        assert_eq!(outcome.rows, 3);
+    }
+
+    #[test]
+    fn wrap_empty_line_takes_one_row() {
+        let mut ctx = RenderContext::new();
+        let (_, outcome) = render_wrapped(&mut ctx, "", 10, Some(0), LineDecorations::default());
+        assert_eq!(outcome.rows, 1);
+        assert_eq!(outcome.tracked, Some((0, 0)));
     }
 }

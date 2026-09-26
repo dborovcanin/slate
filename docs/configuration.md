@@ -20,6 +20,7 @@ checklist_auto_reorder = true
 autosave = true
 format_on_save = false
 vim_mode = false
+wrap = true
 date_format = "%Y-%m-%d"
 date_time_format = "%Y-%m-%d %H:%M"
 variable_autocomplete_min_chars = 3
@@ -96,6 +97,7 @@ max_body_bytes = 524288
 - `autosave`
 - `format_on_save`
 - `vim_mode`
+- `wrap`
 - `date_format`
 - `date_time_format`
 - `variable_autocomplete_min_chars`
@@ -106,6 +108,7 @@ Behavior notes:
 - with `autosave = false`, explicit writes persist body changes.
 - `format_on_save = true` runs format before save.
 - `vim_mode = true` starts the editor in vim normal mode.
+- `wrap = true` (default) soft-wraps long lines at word boundaries. Tables, code fences, code blocks, and code files keep horizontal scrolling so columns stay aligned. With `wrap = false` every line scrolls horizontally.
 - `variable_autocomplete_min_chars` is clamped to `1..8`.
 
 ## Per-note module defaults

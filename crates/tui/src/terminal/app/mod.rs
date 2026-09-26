@@ -489,6 +489,10 @@ struct CalcRuntime {
 /// checkpoints used during `draw()`, and the file-render flags. Render-path
 /// only; disjoint from the document/calc fields it reads.
 struct RenderState {
+    /// Soft-wrap long lines (tables and code stay horizontally scrolled).
+    wrap_lines: bool,
+    /// Screen cell (1-based row, col) of the editor cursor in the last frame.
+    editor_cursor_cell: Option<(usize, usize)>,
     plain_text_file: bool,
     file_language: Option<String>,
     /// Fence state checkpoints for draw(). Entry k = fence state BEFORE line
@@ -1092,6 +1096,8 @@ impl TerminalApp {
                 file_language: render_file_language,
                 fence_checkpoints: vec![(false, None)],
                 fence_checkpoints_valid_through: 0,
+                wrap_lines: false,
+                editor_cursor_cell: None,
                 dirty: true,
             },
             folds: FoldingState::empty(Vec::new(), Vec::new()),
@@ -1658,6 +1664,7 @@ pub fn run_terminal_session(
         eprintln!("Startup diagnostics: {err}");
     }
 
+    app.render_state.wrap_lines = config.wrap;
     if opts.open_switcher {
         app.open_switcher(db)?;
     }

@@ -5,6 +5,7 @@ This document lists major Slate capabilities and how they behave.
 ## Core editing
 
 - fast plain-text editing with markdown-aware visual behavior
+- soft wrap for prose (`[editor] wrap`); tables and code scroll horizontally
 - undo/redo
 - command bar in both editor and vim command modes
 - per-note module toggles (`math`, `table`, `variables`, `style`)

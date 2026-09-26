@@ -9,7 +9,9 @@ use super::{
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::render;
-use crate::terminal::text_utils::{compute_line_viewport, derive_title_from_lines};
+use crate::terminal::text_utils::{
+    compute_line_viewport, derive_title_from_lines, display_cols_for_prefix, line_char_len,
+};
 use crate::terminal::{date_picker, input, media_sources, notifications, switcher};
 use crate::terminal::{
     date_picker::DatePickerView,
@@ -23,7 +25,9 @@ use crate::terminal::render::LineDecorations;
 use crate::terminal::session::CursorPlacement;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
+use crate::editor_core::markdown_tokens;
 use std::borrow::Cow;
+use std::collections::VecDeque;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
@@ -735,21 +739,20 @@ impl TerminalApp {
         let box_width = (inner_width + 2).min(cols.max(1));
         let box_height = visible_count + 2;
 
-        let mut x = self.variable_autocomplete_popup.anchor_col.min(cols.max(1));
+        let (anchor_row, anchor_col) = self.popup_anchor(
+            self.variable_autocomplete_popup.anchor_row,
+            self.variable_autocomplete_popup.anchor_col,
+            self.variable_autocomplete_popup.from_col,
+        );
+        let mut x = anchor_col.min(cols.max(1));
         if x + box_width > cols + 1 {
             x = cols.saturating_sub(box_width).saturating_add(1).max(1);
         }
 
-        let preferred_top = self
-            .variable_autocomplete_popup
-            .anchor_row
-            .saturating_add(1);
+        let preferred_top = anchor_row.saturating_add(1);
         let mut y = preferred_top;
         if y + box_height > max_editor_row + 1 {
-            y = self
-                .variable_autocomplete_popup
-                .anchor_row
-                .saturating_sub(box_height);
+            y = anchor_row.saturating_sub(box_height);
         }
         y = y
             .max(EDITOR_TOP_ROW)
@@ -843,14 +846,16 @@ impl TerminalApp {
             .min(cols.saturating_sub(2).max(1));
         let box_width = (inner_width + 2).min(cols.max(1));
         let box_height = visible_count + 2;
-        let mut x = popup.anchor_col.min(cols.max(1));
+        let (anchor_row, anchor_col) =
+            self.popup_anchor(popup.anchor_row, popup.anchor_col, popup.from_col);
+        let mut x = anchor_col.min(cols.max(1));
         if x + box_width > cols + 1 {
             x = cols.saturating_sub(box_width).saturating_add(1).max(1);
         }
-        let preferred_top = popup.anchor_row.saturating_add(1);
+        let preferred_top = anchor_row.saturating_add(1);
         let mut y = preferred_top;
         if y + box_height > max_editor_row + 1 {
-            y = popup.anchor_row.saturating_sub(box_height);
+            y = anchor_row.saturating_sub(box_height);
         }
         y = y
             .max(EDITOR_TOP_ROW)
@@ -889,6 +894,25 @@ impl TerminalApp {
         }
     }
 
+    /// Screen anchor for an autocomplete popup whose token starts at source
+    /// char `from_col` of the cursor line. With soft wrap the stored anchor
+    /// (computed during key handling assuming one row per line) can be off,
+    /// so it is re-derived from the cursor cell painted this frame.
+    fn popup_anchor(&self, stored_row: usize, stored_col: usize, from_col: usize) -> (usize, usize) {
+        let Some((row, col)) = self
+            .render_state
+            .editor_cursor_cell
+            .filter(|_| self.render_state.wrap_lines)
+        else {
+            return (stored_row, stored_col);
+        };
+        let line = self.current_line();
+        let len = line_char_len(line);
+        let back = display_cols_for_prefix(line, self.editor.cursor_col.min(len))
+            .saturating_sub(display_cols_for_prefix(line, from_col.min(len)));
+        (row, col.saturating_sub(back).max(self.gutter_width() + 1))
+    }
+
     pub(super) fn draw_wiki_link_preview_popup(&self, buf: &mut Buffer, rows: usize, cols: usize) {
         let preview = &self.wiki_link_preview;
         if !preview.visible
@@ -914,10 +938,15 @@ impl TerminalApp {
         let box_height = 3 + shown_body;
 
         let cursor_screen_row = self
-            .editor
-            .cursor_line
-            .saturating_sub(self.editor.scroll_line)
-            + EDITOR_TOP_ROW;
+            .render_state
+            .editor_cursor_cell
+            .map(|(row, _)| row)
+            .unwrap_or_else(|| {
+                self.editor
+                    .cursor_line
+                    .saturating_sub(self.editor.scroll_line)
+                    + EDITOR_TOP_ROW
+            });
         let y = if cursor_screen_row >= EDITOR_TOP_ROW + box_height {
             cursor_screen_row.saturating_sub(box_height)
         } else {
@@ -1003,27 +1032,33 @@ impl TerminalApp {
             },
         );
 
+        let editor_bottom = EDITOR_TOP_ROW + editor_height;
+        let text_width = cols.saturating_sub(gutter_width);
+        let editor_cursor_mode = matches!(
+            self.mode,
+            UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+        );
+        let now_ms = notifications::now_epoch_ms();
+        let mut prepared = if self.render_state.wrap_lines {
+            self.fit_cursor_rows(editor_height, text_width, now_ms)
+        } else {
+            VecDeque::new()
+        };
+
         let first_real_line = self
             .real_line_for_virtual(self.editor.scroll_line)
             .unwrap_or(self.editor.lines.len());
-        let (fence_in_code_block, fence_lang) = self.fence_state_before_line(first_real_line);
-        let mut ctx = render::RenderContext::with_syntax_mode(
-            fence_in_code_block,
-            fence_lang,
-            self.render_state.plain_text_file || self.large_note_reduced_features(),
-            self.render_state.file_language.clone(),
-            self.render_palette,
-        );
-        let mut last_rendered_real = if first_real_line > 0 {
-            Some(first_real_line - 1)
-        } else {
-            None
-        };
+        let mut ctx = self.render_context_at(first_real_line);
+        let mut last_rendered_real = first_real_line.checked_sub(1);
         let mut cursor_line_override: Option<(String, usize)> = None;
-        let now_ms = notifications::now_epoch_ms();
+        // Screen row of the cursor line's first row, and the exact cursor cell
+        // when the painter placed it (soft-wrapped cursor line).
+        let mut cursor_line_row: Option<usize> = None;
+        let mut wrapped_cursor_cell: Option<(usize, usize)> = None;
 
-        for i in 0..editor_height {
-            let row = EDITOR_TOP_ROW + i;
+        let mut row = EDITOR_TOP_ROW;
+        let mut virtual_line = self.editor.scroll_line;
+        while row < editor_bottom {
             draw_row_at_styled(
                 buf,
                 row,
@@ -1035,7 +1070,6 @@ impl TerminalApp {
                     ..Default::default()
                 },
             );
-            let virtual_line = self.editor.scroll_line + i;
             if let Some(line_idx) = self.real_line_for_virtual(virtual_line) {
                 if let Some(prev_real) = last_rendered_real {
                     if line_idx > prev_real + 1 {
@@ -1045,388 +1079,127 @@ impl TerminalApp {
                 last_rendered_real = Some(line_idx);
 
                 let line_no = virtual_line + 1;
-                let available = cols.saturating_sub(gutter_width);
-                let is_cursor_line = line_idx == self.editor.cursor_line;
-                let mut line_cursor_col = if is_cursor_line {
-                    Some(self.editor.cursor_col)
-                } else {
-                    None
+                let available = text_width;
+                let display = match prepared.front() {
+                    Some((v, _)) if *v == virtual_line => prepared.pop_front().expect("front").1,
+                    _ => self.prepare_display_line(line_idx, now_ms),
                 };
-                let mut calc_ghost = self
-                    .calc
-                    .results
-                    .get(line_idx)
-                    .and_then(|r| r.as_ref().map(|value| value.to_string()));
-                let mut calc_ghost_override: Option<String> = None;
-                let mut reminder_ghost_override: Option<String> = None;
-                let mut reminder_strikethrough = false;
-                let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
-                let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
-                let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
-                let mut formula_segment_char_delta_prefix: Vec<isize> = Vec::new();
-                // Set by table reflow when cursor line is reformatted; holds
-                // output char positions of (left_pipe, right_pipe) for the
-                // cursor cell in the reformatted string.
-                let mut table_reflow_cell_pipes: Option<(usize, usize)> = None;
-                let line_text = self.editor.lines[line_idx].clone();
-                let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
-                let collapsed_hidden_count = self
-                    .folds
-                    .placeholder_hidden_lines
-                    .get(line_idx)
-                    .and_then(|entry| *entry);
-                let is_fold_placeholder = collapsed_hidden_count.is_some();
-
-                if let Some(hidden_count) = collapsed_hidden_count {
-                    let suffix = if hidden_count == 1 { "" } else { "s" };
-                    rendered_line = Cow::Borrowed(line_text.as_str());
-                    calc_ghost = None;
-                    reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
-                } else {
-                    if !is_cursor_line {
-                        let (rendered, underlines) = self.render_wiki_link_display_line(&line_text);
-                        rendered_line = Cow::Owned(rendered);
-                        wiki_link_underline_ranges = underlines;
-                    }
-                    if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
-                        reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
-                        reminder_strikethrough = reminder.remind_at_ms <= now_ms;
-                    }
-
-                    formula_segments = self.table_formula_segments_cached(&line_text);
-                    if !formula_segments.is_empty() {
-                        // Formula rows render a marker in-cell (`value*`,
-                        // `value**`, …) and keep the detailed per-formula
-                        // explanation as a line-end ghost. Per-cell values
-                        // come from `cell_results`.
-                        calc_ghost = None;
-
-                        let cell_results = self
-                            .calc
-                            .cell_results
-                            .get(line_idx)
-                            .map(Vec::as_slice)
-                            .unwrap_or(&[]);
-                        let mut cell_result_by_index: Vec<
-                            Option<&app_core::calc::TableCellEvaluation>,
-                        > = Vec::new();
-                        for entry in cell_results {
-                            if entry.cell_index >= cell_result_by_index.len() {
-                                cell_result_by_index.resize(entry.cell_index + 1, None);
-                            }
-                            cell_result_by_index[entry.cell_index] = Some(entry);
-                        }
-                        let value_for_cell = |cell_index: usize| {
-                            cell_result_by_index
-                                .get(cell_index)
-                                .and_then(|entry| *entry)
-                        };
-
-                        let mut out = String::with_capacity(line_text.len() + 16);
-                        let mut last_byte = 0usize;
-                        let mut char_delta: isize = 0;
-                        let mut trailer_parts: Vec<String> = Vec::new();
-                        formula_segment_char_delta_prefix.clear();
-                        formula_segment_char_delta_prefix.push(0);
-                        // Char position of the cursor in the rendered line; we
-                        // collect this only when the cursor sits inside a
-                        // focused (un-masked) formula cell.
-                        let mut focused_cursor_col: Option<usize> = None;
-
-                        for (fi, seg) in formula_segments.iter().enumerate() {
-                            let marker = formula_marker_token(fi);
-                            let eval = value_for_cell(seg.cell_index);
-                            let value = eval
-                                .map(|entry| format_formula_display_value(&entry.value))
-                                .unwrap_or_else(|| String::from("…"));
-                            let has_error =
-                                eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
-                            let source_text =
-                                line_text[seg.from_byte..seg.to_byte].trim().to_string();
-
-                            let is_focused = is_cursor_line
-                                && self.editor.cursor_col >= seg.cell_from_char
-                                && self.editor.cursor_col < seg.cell_to_char;
-
-                            // Ghost trailer: focused cell shows the value
-                            // (so the user can see the result while editing),
-                            // resting cells show the formula source.
-                            let trailer_text = if let Some(err) = Self::table_error_text(
-                                eval.and_then(|entry| entry.error_kind.as_ref()),
-                                eval.map(|entry| entry.value.as_str()).unwrap_or(""),
-                            ) {
-                                err
-                            } else if is_focused && !has_error {
-                                value.clone()
-                            } else {
-                                source_text
-                            };
-                            if !trailer_text.is_empty() {
-                                trailer_parts.push(format!("{marker} ➜ {trailer_text}"));
-                            }
-
-                            out.push_str(&line_text[last_byte..seg.from_byte]);
-
-                            if is_focused {
-                                out.push_str(&line_text[seg.from_byte..seg.to_byte]);
-                                let mapped =
-                                    (self.editor.cursor_col as isize + char_delta).max(0) as usize;
-                                focused_cursor_col = Some(mapped);
-                                formula_segment_char_delta_prefix.push(char_delta);
-                            } else {
-                                let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                                let replacement = Self::fit_formula_marker_replacement(
-                                    &value, &marker, old_chars, has_error,
-                                );
-                                let rendered_chars = replacement.chars().count();
-                                let marker_char = ((seg.from_char as isize) + char_delta) as usize
-                                    + rendered_chars.saturating_sub(marker.chars().count());
-                                let marker_end = marker_char + marker.chars().count();
-                                ghost_dim_ranges.push((marker_char, marker_end));
-                                char_delta += rendered_chars as isize - old_chars as isize;
-                                formula_segment_char_delta_prefix.push(char_delta);
-                                out.push_str(&replacement);
-                            }
-                            last_byte = seg.to_byte;
-                        }
-                        out.push_str(&line_text[last_byte..]);
-                        rendered_line = Cow::Owned(out);
-
-                        calc_ghost_override = Some(trailer_parts.join("  "));
-
-                        if is_cursor_line {
-                            let mapped_col = focused_cursor_col.unwrap_or_else(|| {
-                                // Cursor is outside every formula cell. Walk
-                                // the segments that lie entirely before the
-                                // cursor and accumulate their rendered-vs-
-                                // source char delta.
-                                let seg_count = formula_segments
-                                    .iter()
-                                    .take_while(|seg| seg.cell_to_char <= self.editor.cursor_col)
-                                    .count();
-                                let delta = formula_segment_char_delta_prefix
-                                    .get(seg_count)
-                                    .copied()
-                                    .unwrap_or(0);
-                                ((self.editor.cursor_col as isize) + delta).max(0) as usize
-                            });
-                            line_cursor_col = Some(mapped_col);
-                            cursor_line_override =
-                                Some((rendered_line.as_ref().to_string(), mapped_col));
-                        }
-                    }
+                let is_cursor_line = display.is_cursor_line;
+                if is_cursor_line {
+                    cursor_line_row = Some(row);
                 }
-
-                // Table display reflow: collapse inline markers per cell and
-                // align columns to visible widths. Skipped for formula rows
-                // (already transformed above) and fold placeholders.
-                if !is_fold_placeholder
-                    && formula_segments.is_empty()
-                    && is_markdown_table_line(rendered_line.as_ref())
-                {
-                    let col_widths = self.table_display_col_widths_for_line(line_idx);
-                    if !col_widths.is_empty() {
-                        if is_cursor_line && cursor_line_override.is_none() {
-                            // Cursor row: render from a RAW-marker reflow so
-                            // `render_line` still applies inline styles (bold,
-                            // italic, code) and reveals markers near the cursor —
-                            // collapsing here would strip `**` and lose bold.
-                            // Cursor-column positioning uses a separate
-                            // cursor-aware collapsed reflow (markers removed),
-                            // matching what `render_line` actually displays.
-                            let cursor = Some(line_cursor_col.unwrap_or(self.editor.cursor_col));
-                            let (raw_display, _, _) = reformat_table_row_for_display(
-                                rendered_line.as_ref(),
-                                &col_widths,
-                                None,
-                            );
-                            let (collapsed_display, mapped_col, _) = reformat_table_row_for_display(
-                                rendered_line.as_ref(),
-                                &col_widths,
-                                cursor,
-                            );
-                            // Focused-cell pipe highlight in RAW display coords.
-                            let cell_idx = table_cursor_cell_index(
-                                rendered_line.as_ref(),
-                                self.editor.cursor_col,
-                            );
-                            table_reflow_cell_pipes = cell_idx
-                                .and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
-                            let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
-                            line_cursor_col = Some(mc);
-                            cursor_line_override = Some((collapsed_display, mc));
-                            rendered_line = Cow::Owned(raw_display);
-                        } else {
-                            let (display_line, _, _) = reformat_table_row_for_display(
-                                rendered_line.as_ref(),
-                                &col_widths,
-                                None,
-                            );
-                            rendered_line = Cow::Owned(display_line);
-                        }
-                    }
+                if display.cursor_override.is_some() {
+                    cursor_line_override = display.cursor_override.clone();
                 }
-
-                if !is_fold_placeholder && (!is_cursor_line || cursor_line_override.is_none()) {
-                    let media_transform = media_sources::collapse_media_sources_for_display(
-                        rendered_line.as_ref(),
-                        line_cursor_col,
+                let wraps = self.render_state.wrap_lines && line_wraps(&ctx, &display.text);
+                if wraps {
+                    let gutter_style = if is_cursor_line {
+                        TextStyle {
+                            fg: Some(self.render_palette.variable),
+                            bg: Some(editor_bg),
+                            bold: true,
+                            ..Default::default()
+                        }
+                    } else {
+                        TextStyle {
+                            fg: Some(self.render_palette.code_comment),
+                            bg: Some(editor_bg),
+                            dim: true,
+                            ..Default::default()
+                        }
+                    };
+                    let col = put_str(
+                        buf,
+                        row,
+                        1,
+                        &format!("{line_no:>line_number_width$}  "),
+                        gutter_style.to_style(),
                     );
-                    if media_transform.changed {
-                        rendered_line = Cow::Owned(media_transform.rendered_line);
-                        line_cursor_col = media_transform.mapped_cursor_col;
-                    }
-                }
-
-                let (search_ranges, current_search_ranges) = if is_fold_placeholder {
-                    (Vec::new(), Vec::new())
-                } else {
-                    self.search_highlights_for_line(line_idx)
-                };
-                let mut visual_highlight_ranges = Vec::new();
-                if is_fold_placeholder {
-                    if self.line_is_in_visual_selection(line_idx) {
-                        visual_highlight_ranges
-                            .push((0, rendered_line.as_ref().chars().count().max(1)));
-                    }
-                } else {
-                    self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
-                }
-
-                if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
-                    let source_cursor_col = line_cursor_col.unwrap_or(self.editor.cursor_col);
-                    let force_formatting_boundary_exit = self
-                        .editor
-                        .markdown_formatting_right_boundary_exit
-                        .is_some_and(|(line, _)| line == line_idx);
-                    let (collapsed_line, mapped_col) =
-                        render::collapse_markdown_line_for_cursor_with_formatting_boundary_exit(
-                            rendered_line.as_ref(),
-                            source_cursor_col,
-                            force_formatting_boundary_exit,
+                    let track = (is_cursor_line && editor_cursor_mode)
+                        .then(|| self.cursor_display_char(&display));
+                    let max_rows = editor_bottom - row;
+                    let (line_x, line_y) = (buf_x(buf, col), buf_y(buf, row));
+                    let outcome = ctx.render_line_wrapped(
+                        &display.text,
+                        text_width,
+                        max_rows,
+                        track,
+                        &display.decorations(&self.calc.variable_names),
+                        Some((buf, line_x, line_y)),
+                    );
+                    let used = outcome.rows.clamp(1, max_rows);
+                    for extra in 1..used {
+                        draw_row_at_styled(
+                            buf,
+                            row + extra,
+                            1,
+                            gutter_width,
+                            "",
+                            TextStyle {
+                                bg: Some(editor_bg),
+                                ..Default::default()
+                            },
                         );
-                    if collapsed_line != rendered_line.as_ref() || mapped_col != source_cursor_col {
-                        cursor_line_override = Some((collapsed_line, mapped_col));
                     }
-                }
-
-                if is_cursor_line
-                    && cursor_line_override.is_none()
-                    && (rendered_line.as_ref() != line_text.as_str()
-                        || line_cursor_col.unwrap_or(self.editor.cursor_col)
-                            != self.editor.cursor_col)
-                {
-                    cursor_line_override = Some((
-                        rendered_line.as_ref().to_string(),
-                        line_cursor_col.unwrap_or(self.editor.cursor_col),
-                    ));
-                }
-
-                let effective_calc_ghost = calc_ghost_override.as_deref().or(calc_ghost.as_deref());
-                let effective_reminder_ghost = reminder_ghost_override.as_deref();
-                let render_cursor_col = if is_cursor_line {
-                    line_cursor_col
+                    if let Some((track_row, track_col)) = outcome.tracked {
+                        if track_row < max_rows {
+                            wrapped_cursor_cell = Some((row + track_row, col + track_col));
+                        }
+                    }
+                    row += used;
                 } else {
-                    None
-                };
-                let line_scroll_col = self.editor.scroll_col;
-                let line_width = line_display_cols(rendered_line.as_ref());
-                let viewport = compute_line_viewport(line_width, line_scroll_col, available);
-
-                // Highlight the focused table cell's pipe characters in accent so
-                // the active cell is obvious.
-                //
-                // When table reflow ran, pipe positions in `rendered_line` differ
-                // from the source — use the output positions returned by the
-                // reflow. Otherwise fall back to source positions translated by
-                // the formula-mask delta.
-                let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
-                if self.note_table_module_enabled() && is_cursor_line && !is_fold_placeholder {
-                    if let Some((lp, rp)) = table_reflow_cell_pipes {
-                        focused_pipe_ranges.push((lp, lp + 1));
-                        focused_pipe_ranges.push((rp, rp + 1));
-                    } else if let Some(info) = table_cell_info_at_char(
-                        &self.editor.lines,
-                        line_idx,
-                        self.editor.cursor_col,
-                    ) {
-                        let left_pipe_char = line_text[..info.left_pipe].chars().count();
-                        let right_pipe_char = line_text[..info.right_pipe].chars().count();
-                        let translate = |src_col: usize| -> usize {
-                            let seg_count = formula_segments
-                                .iter()
-                                .take_while(|seg| seg.cell_to_char <= src_col)
-                                .count();
-                            let delta = formula_segment_char_delta_prefix
-                                .get(seg_count)
-                                .copied()
-                                .unwrap_or(0);
-                            ((src_col as isize) + delta).max(0) as usize
-                        };
-                        let lp = translate(left_pipe_char);
-                        let rp = translate(right_pipe_char);
-                        focused_pipe_ranges.push((lp, lp + 1));
-                        focused_pipe_ranges.push((rp, rp + 1));
-                    }
-                }
-
-                let gutter_style = if is_cursor_line {
-                    TextStyle {
-                        fg: Some(self.render_palette.variable),
-                        bg: Some(editor_bg),
-                        bold: true,
-                        ..Default::default()
-                    }
-                } else {
-                    TextStyle {
+                    let viewport = compute_line_viewport(
+                        line_display_cols(&display.text),
+                        self.editor.scroll_col,
+                        available,
+                    );
+                    let gutter_style = if is_cursor_line {
+                        TextStyle {
+                            fg: Some(self.render_palette.variable),
+                            bg: Some(editor_bg),
+                            bold: true,
+                            ..Default::default()
+                        }
+                    } else {
+                        TextStyle {
+                            fg: Some(self.render_palette.code_comment),
+                            bg: Some(editor_bg),
+                            dim: true,
+                            ..Default::default()
+                        }
+                    };
+                    let indicator_style = TextStyle {
                         fg: Some(self.render_palette.code_comment),
                         bg: Some(editor_bg),
                         dim: true,
                         ..Default::default()
                     }
-                };
-                let indicator_style = TextStyle {
-                    fg: Some(self.render_palette.code_comment),
-                    bg: Some(editor_bg),
-                    dim: true,
-                    ..Default::default()
-                }
-                .to_style();
-                let mut col = put_str(
-                    buf,
-                    row,
-                    1,
-                    &format!("{line_no:>line_number_width$}  "),
-                    gutter_style.to_style(),
-                );
-                if viewport.has_left_overflow {
-                    put_char(buf, row, col, OVERFLOW_LEFT_MARKER, indicator_style);
-                    col += 1;
-                }
-                ctx.render_line(
-                    rendered_line.as_ref(),
-                    viewport.text_width,
-                    viewport.text_window_col,
-                    &LineDecorations {
-                        calc_ghost: effective_calc_ghost,
-                        reminder_ghost: effective_reminder_ghost,
-                        reminder_strikethrough,
-                        search_ranges: &search_ranges,
-                        current_search_ranges: &current_search_ranges,
-                        variable_names: &self.calc.variable_names,
-                        dim_ranges: &ghost_dim_ranges,
-                        selection_ranges: &visual_highlight_ranges,
-                        accent_ranges: &focused_pipe_ranges,
-                        underline_ranges: &wiki_link_underline_ranges,
-                        active_cursor_col: render_cursor_col,
-                    },
-                    buf,
-                    buf_x(buf, col),
-                    buf_y(buf, row),
-                );
-                col += viewport.text_width;
-                if viewport.has_right_overflow {
-                    put_char(buf, row, col, OVERFLOW_RIGHT_MARKER, indicator_style);
+                    .to_style();
+                    let mut col = put_str(
+                        buf,
+                        row,
+                        1,
+                        &format!("{line_no:>line_number_width$}  "),
+                        gutter_style.to_style(),
+                    );
+                    if viewport.has_left_overflow {
+                        put_char(buf, row, col, OVERFLOW_LEFT_MARKER, indicator_style);
+                        col += 1;
+                    }
+                    ctx.render_line(
+                        &display.text,
+                        viewport.text_width,
+                        viewport.text_window_col,
+                        &display.decorations(&self.calc.variable_names),
+                        buf,
+                        buf_x(buf, col),
+                        buf_y(buf, row),
+                    );
+                    col += viewport.text_width;
+                    if viewport.has_right_overflow {
+                        put_char(buf, row, col, OVERFLOW_RIGHT_MARKER, indicator_style);
+                    }
+                    row += 1;
                 }
             } else {
                 draw_row_at_styled(
@@ -1442,7 +1215,9 @@ impl TerminalApp {
                         ..Default::default()
                     },
                 );
+                row += 1;
             }
+            virtual_line += 1;
         }
 
         let editor_status_owned = if self.mode == UiMode::Editor {
@@ -1651,11 +1426,7 @@ impl TerminalApp {
                 self.render_palette,
             );
         }
-        self.draw_variable_autocomplete_popup(buf, rows, cols);
-        self.draw_wiki_link_autocomplete_popup(buf, rows, cols);
-        self.draw_wiki_link_preview_popup(buf, rows, cols);
-
-        let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
+        let (mut cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
         if let Some((line_text, mapped_col)) = cursor_line_override {
             if matches!(
                 self.mode,
@@ -1681,6 +1452,21 @@ impl TerminalApp {
                 cursor_col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
             }
         }
+        if editor_cursor_mode {
+            if let Some((cell_row, cell_col)) = wrapped_cursor_cell {
+                cursor_row = cell_row;
+                cursor_col = cell_col.min(cols.max(1));
+            } else if let Some(line_row) = cursor_line_row {
+                cursor_row = line_row;
+            }
+            self.render_state.editor_cursor_cell = Some((cursor_row, cursor_col));
+        } else {
+            self.render_state.editor_cursor_cell = None;
+        }
+        self.draw_variable_autocomplete_popup(buf, rows, cols);
+        self.draw_wiki_link_autocomplete_popup(buf, rows, cols);
+        self.draw_wiki_link_preview_popup(buf, rows, cols);
+
         let cursor_block = matches!(
             self.mode,
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine
@@ -1689,6 +1475,438 @@ impl TerminalApp {
             row: u16::try_from(cursor_row.saturating_sub(1)).unwrap_or(u16::MAX),
             col: u16::try_from(cursor_col.saturating_sub(1)).unwrap_or(u16::MAX),
             block: cursor_block,
+        }
+    }
+
+    /// Render context positioned before `line_idx` (fenced-code state and
+    /// syntax mode applied).
+    pub(super) fn render_context_at(&mut self, line_idx: usize) -> render::RenderContext {
+        let (in_code_block, fence_lang) = self.fence_state_before_line(line_idx);
+        render::RenderContext::with_syntax_mode(
+            in_code_block,
+            fence_lang,
+            self.render_state.plain_text_file || self.large_note_reduced_features(),
+            self.render_state.file_language.clone(),
+            self.render_palette,
+        )
+    }
+
+    /// Index of the cursor among the visible chars of the displayed line.
+    fn cursor_display_char(&self, display: &DisplayLine) -> usize {
+        let (text, col) = match display.cursor_override.as_ref() {
+            Some((text, col)) => (text.as_str(), *col),
+            None => (display.text.as_str(), self.editor.cursor_col),
+        };
+        cursor_render_char_col(
+            text,
+            col,
+            matches!(
+                self.mode,
+                UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+            ),
+        )
+    }
+
+    /// Soft-wrap scroll fix-up: `adjust_scroll` keeps the cursor line within
+    /// `editor_height` lines of the top, but wrapped lines take several rows.
+    /// Measures lines from the top through the cursor line and scrolls down
+    /// until the cursor line's rows fit. Returns the prepared lines that stay
+    /// on screen so painting does not prepare them twice.
+    fn fit_cursor_rows(
+        &mut self,
+        editor_height: usize,
+        text_width: usize,
+        now_ms: i64,
+    ) -> VecDeque<(usize, DisplayLine)> {
+        let mut prepared = VecDeque::new();
+        let cursor_virtual = self.current_virtual_line();
+        let top = self.editor.scroll_line;
+        if cursor_virtual < top || cursor_virtual >= top + editor_height {
+            return prepared;
+        }
+        let first_real = self.real_line_for_virtual(top).unwrap_or(0);
+        let mut ctx = self.render_context_at(first_real);
+        let mut last_real = first_real.checked_sub(1);
+        let mut heights = VecDeque::new();
+        let mut total = 0usize;
+        for virtual_line in top..=cursor_virtual {
+            let Some(line_idx) = self.real_line_for_virtual(virtual_line) else {
+                break;
+            };
+            if let Some(prev) = last_real {
+                if line_idx > prev + 1 {
+                    ctx.advance_lines(&self.editor.lines[(prev + 1)..line_idx]);
+                }
+            }
+            last_real = Some(line_idx);
+            let display = self.prepare_display_line(line_idx, now_ms);
+            let rows = if line_wraps(&ctx, &display.text) {
+                let track = display
+                    .is_cursor_line
+                    .then(|| self.cursor_display_char(&display));
+                ctx.render_line_wrapped(
+                    &display.text,
+                    text_width,
+                    usize::MAX,
+                    track,
+                    &display.decorations(&self.calc.variable_names),
+                    None,
+                )
+                .rows
+            } else {
+                ctx.advance_lines(std::slice::from_ref(&display.text));
+                1
+            };
+            total += rows;
+            heights.push_back(rows);
+            prepared.push_back((virtual_line, display));
+        }
+        while total > editor_height && self.editor.scroll_line < cursor_virtual {
+            total -= heights.pop_front().unwrap_or(0);
+            prepared.pop_front();
+            self.editor.scroll_line += 1;
+        }
+        prepared
+    }
+
+    /// Resolves what one document line looks like on screen: display text
+    /// (after formula masking, table reflow, link and media collapsing),
+    /// ghosts, highlight ranges, and the cursor mapping for the cursor line.
+    fn prepare_display_line(&mut self, line_idx: usize, now_ms: i64) -> DisplayLine {
+        let mut cursor_line_override: Option<(String, usize)> = None;
+        let is_cursor_line = line_idx == self.editor.cursor_line;
+        let mut line_cursor_col = if is_cursor_line {
+            Some(self.editor.cursor_col)
+        } else {
+            None
+        };
+        let mut calc_ghost = self
+            .calc
+            .results
+            .get(line_idx)
+            .and_then(|r| r.as_ref().map(|value| value.to_string()));
+        let mut calc_ghost_override: Option<String> = None;
+        let mut reminder_ghost_override: Option<String> = None;
+        let mut reminder_strikethrough = false;
+        let mut ghost_dim_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
+        let mut formula_segment_char_delta_prefix: Vec<isize> = Vec::new();
+        // Set by table reflow when cursor line is reformatted; holds
+        // output char positions of (left_pipe, right_pipe) for the
+        // cursor cell in the reformatted string.
+        let mut table_reflow_cell_pipes: Option<(usize, usize)> = None;
+        let line_text = self.editor.lines[line_idx].clone();
+        let mut rendered_line: Cow<'_, str> = Cow::Borrowed(line_text.as_str());
+        let collapsed_hidden_count = self
+            .folds
+            .placeholder_hidden_lines
+            .get(line_idx)
+            .and_then(|entry| *entry);
+        let is_fold_placeholder = collapsed_hidden_count.is_some();
+
+        if let Some(hidden_count) = collapsed_hidden_count {
+            let suffix = if hidden_count == 1 { "" } else { "s" };
+            rendered_line = Cow::Borrowed(line_text.as_str());
+            calc_ghost = None;
+            reminder_ghost_override = Some(format!("{hidden_count} line{suffix} folded"));
+        } else {
+            if !is_cursor_line {
+                let (rendered, underlines) = self.render_wiki_link_display_line(&line_text);
+                rendered_line = Cow::Owned(rendered);
+                wiki_link_underline_ranges = underlines;
+            }
+            if let Some(reminder) = self.reminder_ghosts.get(&line_idx) {
+                reminder_ghost_override = Some(format!("⏰ {}", reminder.display_at));
+                reminder_strikethrough = reminder.remind_at_ms <= now_ms;
+            }
+
+            formula_segments = self.table_formula_segments_cached(&line_text);
+            if !formula_segments.is_empty() {
+                // Formula rows render a marker in-cell (`value*`,
+                // `value**`, …) and keep the detailed per-formula
+                // explanation as a line-end ghost. Per-cell values
+                // come from `cell_results`.
+                calc_ghost = None;
+
+                let cell_results = self
+                    .calc
+                    .cell_results
+                    .get(line_idx)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let mut cell_result_by_index: Vec<
+                    Option<&app_core::calc::TableCellEvaluation>,
+                > = Vec::new();
+                for entry in cell_results {
+                    if entry.cell_index >= cell_result_by_index.len() {
+                        cell_result_by_index.resize(entry.cell_index + 1, None);
+                    }
+                    cell_result_by_index[entry.cell_index] = Some(entry);
+                }
+                let value_for_cell = |cell_index: usize| {
+                    cell_result_by_index
+                        .get(cell_index)
+                        .and_then(|entry| *entry)
+                };
+
+                let mut out = String::with_capacity(line_text.len() + 16);
+                let mut last_byte = 0usize;
+                let mut char_delta: isize = 0;
+                let mut trailer_parts: Vec<String> = Vec::new();
+                formula_segment_char_delta_prefix.clear();
+                formula_segment_char_delta_prefix.push(0);
+                // Char position of the cursor in the rendered line; we
+                // collect this only when the cursor sits inside a
+                // focused (un-masked) formula cell.
+                let mut focused_cursor_col: Option<usize> = None;
+
+                for (fi, seg) in formula_segments.iter().enumerate() {
+                    let marker = formula_marker_token(fi);
+                    let eval = value_for_cell(seg.cell_index);
+                    let value = eval
+                        .map(|entry| format_formula_display_value(&entry.value))
+                        .unwrap_or_else(|| String::from("…"));
+                    let has_error =
+                        eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
+                    let source_text =
+                        line_text[seg.from_byte..seg.to_byte].trim().to_string();
+
+                    let is_focused = is_cursor_line
+                        && self.editor.cursor_col >= seg.cell_from_char
+                        && self.editor.cursor_col < seg.cell_to_char;
+
+                    // Ghost trailer: focused cell shows the value
+                    // (so the user can see the result while editing),
+                    // resting cells show the formula source.
+                    let trailer_text = if let Some(err) = Self::table_error_text(
+                        eval.and_then(|entry| entry.error_kind.as_ref()),
+                        eval.map(|entry| entry.value.as_str()).unwrap_or(""),
+                    ) {
+                        err
+                    } else if is_focused && !has_error {
+                        value.clone()
+                    } else {
+                        source_text
+                    };
+                    if !trailer_text.is_empty() {
+                        trailer_parts.push(format!("{marker} ➜ {trailer_text}"));
+                    }
+
+                    out.push_str(&line_text[last_byte..seg.from_byte]);
+
+                    if is_focused {
+                        out.push_str(&line_text[seg.from_byte..seg.to_byte]);
+                        let mapped =
+                            (self.editor.cursor_col as isize + char_delta).max(0) as usize;
+                        focused_cursor_col = Some(mapped);
+                        formula_segment_char_delta_prefix.push(char_delta);
+                    } else {
+                        let old_chars = seg.to_char.saturating_sub(seg.from_char);
+                        let replacement = Self::fit_formula_marker_replacement(
+                            &value, &marker, old_chars, has_error,
+                        );
+                        let rendered_chars = replacement.chars().count();
+                        let marker_char = ((seg.from_char as isize) + char_delta) as usize
+                            + rendered_chars.saturating_sub(marker.chars().count());
+                        let marker_end = marker_char + marker.chars().count();
+                        ghost_dim_ranges.push((marker_char, marker_end));
+                        char_delta += rendered_chars as isize - old_chars as isize;
+                        formula_segment_char_delta_prefix.push(char_delta);
+                        out.push_str(&replacement);
+                    }
+                    last_byte = seg.to_byte;
+                }
+                out.push_str(&line_text[last_byte..]);
+                rendered_line = Cow::Owned(out);
+
+                calc_ghost_override = Some(trailer_parts.join("  "));
+
+                if is_cursor_line {
+                    let mapped_col = focused_cursor_col.unwrap_or_else(|| {
+                        // Cursor is outside every formula cell. Walk
+                        // the segments that lie entirely before the
+                        // cursor and accumulate their rendered-vs-
+                        // source char delta.
+                        let seg_count = formula_segments
+                            .iter()
+                            .take_while(|seg| seg.cell_to_char <= self.editor.cursor_col)
+                            .count();
+                        let delta = formula_segment_char_delta_prefix
+                            .get(seg_count)
+                            .copied()
+                            .unwrap_or(0);
+                        ((self.editor.cursor_col as isize) + delta).max(0) as usize
+                    });
+                    line_cursor_col = Some(mapped_col);
+                    cursor_line_override =
+                        Some((rendered_line.as_ref().to_string(), mapped_col));
+                }
+            }
+        }
+
+        // Table display reflow: collapse inline markers per cell and
+        // align columns to visible widths. Skipped for formula rows
+        // (already transformed above) and fold placeholders.
+        if !is_fold_placeholder
+            && formula_segments.is_empty()
+            && is_markdown_table_line(rendered_line.as_ref())
+        {
+            let col_widths = self.table_display_col_widths_for_line(line_idx);
+            if !col_widths.is_empty() {
+                if is_cursor_line && cursor_line_override.is_none() {
+                    // Cursor row: render from a RAW-marker reflow so
+                    // `render_line` still applies inline styles (bold,
+                    // italic, code) and reveals markers near the cursor —
+                    // collapsing here would strip `**` and lose bold.
+                    // Cursor-column positioning uses a separate
+                    // cursor-aware collapsed reflow (markers removed),
+                    // matching what `render_line` actually displays.
+                    let cursor = Some(line_cursor_col.unwrap_or(self.editor.cursor_col));
+                    let (raw_display, _, _) = reformat_table_row_for_display(
+                        rendered_line.as_ref(),
+                        &col_widths,
+                        None,
+                    );
+                    let (collapsed_display, mapped_col, _) = reformat_table_row_for_display(
+                        rendered_line.as_ref(),
+                        &col_widths,
+                        cursor,
+                    );
+                    // Focused-cell pipe highlight in RAW display coords.
+                    let cell_idx = table_cursor_cell_index(
+                        rendered_line.as_ref(),
+                        self.editor.cursor_col,
+                    );
+                    table_reflow_cell_pipes = cell_idx
+                        .and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
+                    let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
+                    line_cursor_col = Some(mc);
+                    cursor_line_override = Some((collapsed_display, mc));
+                    rendered_line = Cow::Owned(raw_display);
+                } else {
+                    let (display_line, _, _) = reformat_table_row_for_display(
+                        rendered_line.as_ref(),
+                        &col_widths,
+                        None,
+                    );
+                    rendered_line = Cow::Owned(display_line);
+                }
+            }
+        }
+
+        if !is_fold_placeholder && (!is_cursor_line || cursor_line_override.is_none()) {
+            let media_transform = media_sources::collapse_media_sources_for_display(
+                rendered_line.as_ref(),
+                line_cursor_col,
+            );
+            if media_transform.changed {
+                rendered_line = Cow::Owned(media_transform.rendered_line);
+                line_cursor_col = media_transform.mapped_cursor_col;
+            }
+        }
+
+        let (search_ranges, current_search_ranges) = if is_fold_placeholder {
+            (Vec::new(), Vec::new())
+        } else {
+            self.search_highlights_for_line(line_idx)
+        };
+        let mut visual_highlight_ranges = Vec::new();
+        if is_fold_placeholder {
+            if self.line_is_in_visual_selection(line_idx) {
+                visual_highlight_ranges
+                    .push((0, rendered_line.as_ref().chars().count().max(1)));
+            }
+        } else {
+            self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
+        }
+
+        if is_cursor_line && cursor_line_override.is_none() && !is_fold_placeholder {
+            let source_cursor_col = line_cursor_col.unwrap_or(self.editor.cursor_col);
+            let force_formatting_boundary_exit = self
+                .editor
+                .markdown_formatting_right_boundary_exit
+                .is_some_and(|(line, _)| line == line_idx);
+            let (collapsed_line, mapped_col) =
+                render::collapse_markdown_line_for_cursor_with_formatting_boundary_exit(
+                    rendered_line.as_ref(),
+                    source_cursor_col,
+                    force_formatting_boundary_exit,
+                );
+            if collapsed_line != rendered_line.as_ref() || mapped_col != source_cursor_col {
+                cursor_line_override = Some((collapsed_line, mapped_col));
+            }
+        }
+
+        if is_cursor_line
+            && cursor_line_override.is_none()
+            && (rendered_line.as_ref() != line_text.as_str()
+                || line_cursor_col.unwrap_or(self.editor.cursor_col)
+                    != self.editor.cursor_col)
+        {
+            cursor_line_override = Some((
+                rendered_line.as_ref().to_string(),
+                line_cursor_col.unwrap_or(self.editor.cursor_col),
+            ));
+        }
+
+        let render_cursor_col = if is_cursor_line {
+            line_cursor_col
+        } else {
+            None
+        };
+
+        // Highlight the focused table cell's pipe characters in accent so
+        // the active cell is obvious.
+        //
+        // When table reflow ran, pipe positions in `rendered_line` differ
+        // from the source — use the output positions returned by the
+        // reflow. Otherwise fall back to source positions translated by
+        // the formula-mask delta.
+        let mut focused_pipe_ranges: Vec<(usize, usize)> = Vec::new();
+        if self.note_table_module_enabled() && is_cursor_line && !is_fold_placeholder {
+            if let Some((lp, rp)) = table_reflow_cell_pipes {
+                focused_pipe_ranges.push((lp, lp + 1));
+                focused_pipe_ranges.push((rp, rp + 1));
+            } else if let Some(info) = table_cell_info_at_char(
+                &self.editor.lines,
+                line_idx,
+                self.editor.cursor_col,
+            ) {
+                let left_pipe_char = line_text[..info.left_pipe].chars().count();
+                let right_pipe_char = line_text[..info.right_pipe].chars().count();
+                let translate = |src_col: usize| -> usize {
+                    let seg_count = formula_segments
+                        .iter()
+                        .take_while(|seg| seg.cell_to_char <= src_col)
+                        .count();
+                    let delta = formula_segment_char_delta_prefix
+                        .get(seg_count)
+                        .copied()
+                        .unwrap_or(0);
+                    ((src_col as isize) + delta).max(0) as usize
+                };
+                let lp = translate(left_pipe_char);
+                let rp = translate(right_pipe_char);
+                focused_pipe_ranges.push((lp, lp + 1));
+                focused_pipe_ranges.push((rp, rp + 1));
+            }
+        }
+
+        DisplayLine {
+            text: rendered_line.into_owned(),
+            is_cursor_line,
+            calc_ghost: calc_ghost_override.or(calc_ghost),
+            reminder_ghost: reminder_ghost_override,
+            reminder_strikethrough,
+            search_ranges,
+            current_search_ranges,
+            dim_ranges: ghost_dim_ranges,
+            selection_ranges: visual_highlight_ranges,
+            accent_ranges: focused_pipe_ranges,
+            underline_ranges: wiki_link_underline_ranges,
+            cursor_col: render_cursor_col,
+            cursor_override: cursor_line_override,
         }
     }
 
@@ -1844,4 +2062,50 @@ fn buf_x(buf: &Buffer, col: usize) -> u16 {
 /// Buffer y coordinate of 1-based screen row `row`.
 fn buf_y(buf: &Buffer, row: usize) -> u16 {
     buf.area.y.saturating_add(u16::try_from(row.saturating_sub(1)).unwrap_or(u16::MAX))
+}
+
+/// One document line resolved for display; see `prepare_display_line`.
+struct DisplayLine {
+    text: String,
+    is_cursor_line: bool,
+    calc_ghost: Option<String>,
+    reminder_ghost: Option<String>,
+    reminder_strikethrough: bool,
+    search_ranges: Vec<(usize, usize)>,
+    current_search_ranges: Vec<(usize, usize)>,
+    dim_ranges: Vec<(usize, usize)>,
+    selection_ranges: Vec<(usize, usize)>,
+    accent_ranges: Vec<(usize, usize)>,
+    underline_ranges: Vec<(usize, usize)>,
+    cursor_col: Option<usize>,
+    /// Displayed cursor-line text and cursor char index into it, when the
+    /// display differs from the source line.
+    cursor_override: Option<(String, usize)>,
+}
+
+impl DisplayLine {
+    fn decorations<'a>(&'a self, variable_names: &'a [String]) -> LineDecorations<'a> {
+        LineDecorations {
+            calc_ghost: self.calc_ghost.as_deref(),
+            reminder_ghost: self.reminder_ghost.as_deref(),
+            reminder_strikethrough: self.reminder_strikethrough,
+            search_ranges: &self.search_ranges,
+            current_search_ranges: &self.current_search_ranges,
+            variable_names,
+            dim_ranges: &self.dim_ranges,
+            selection_ranges: &self.selection_ranges,
+            accent_ranges: &self.accent_ranges,
+            underline_ranges: &self.underline_ranges,
+            active_cursor_col: self.cursor_col,
+        }
+    }
+}
+
+/// Whether a displayed line soft-wraps. Tables, code fences and code block
+/// contents keep horizontal scrolling so their columns stay aligned.
+pub(super) fn line_wraps(ctx: &render::RenderContext, text: &str) -> bool {
+    !ctx.renders_plain_code()
+        && !ctx.in_code_block()
+        && !markdown_tokens::is_code_fence(text)
+        && !is_markdown_table_line(text)
 }
