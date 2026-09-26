@@ -160,7 +160,7 @@ pub fn put_char(buf: &mut Buffer, row: usize, col: usize, ch: char, style: Style
     }
 }
 
-/// Draws a dialog surface: drop shadow, cleared interior filled with `bg`,
+/// Draws a dialog surface: cleared interior filled with `bg`,
 /// rounded border in `border_fg`, and optional `title` (top border) and
 /// `footer` (bottom border, typically key hints).
 #[allow(clippy::too_many_arguments)]
@@ -179,7 +179,6 @@ pub fn draw_framed_surface(
     let Some(area) = cell_rect(buf, row, col, width, height) else {
         return;
     };
-    draw_shadow(buf, area, bg);
     Clear.render(area, buf);
     let surface = cell_style(None, Some(bg), Modifier::empty());
     let border = TextStyle {
@@ -227,31 +226,6 @@ pub fn draw_separator(
         let text = format!(" {label} ");
         let dim = cell_style(Some(border_fg), Some(bg), Modifier::DIM);
         put_str_width(buf, row, col + 2, &text, width.saturating_sub(4), dim);
-    }
-}
-
-/// Darkens the cells one column right of and one row below `area`.
-fn draw_shadow(buf: &mut Buffer, area: Rect, surface_bg: u8) {
-    let shadow = if contrast_fg_for_bg(surface_bg) == 16 {
-        Color::Indexed(247)
-    } else {
-        Color::Indexed(233)
-    };
-    let bounds = buf.area;
-    let right = area.right();
-    let bottom = area.bottom();
-    let mut shade = |x: u16, y: u16| {
-        if x < bounds.right() && y < bounds.bottom() {
-            let cell = &mut buf[(x, y)];
-            cell.set_bg(shadow);
-            cell.modifier.insert(Modifier::DIM);
-        }
-    };
-    for y in area.y.saturating_add(1)..=bottom {
-        shade(right, y);
-    }
-    for x in area.x.saturating_add(1)..=right {
-        shade(x, bottom);
     }
 }
 
