@@ -205,43 +205,82 @@ fn bench_cursor_lookup(scenario: Scenario) -> BenchStat {
     summarize("table_cell_cursor_info_cached", scenario, samples, None)
 }
 
-fn bench_doc_change_rule(scenario: Scenario) -> BenchStat {
-    let mut table_lines = make_table(scenario.rows, scenario.cols, scenario.continuation_every);
+/// Applies `op` (changes in original-document offsets) to `text`.
+fn apply_operation(text: &str, op: &editor_core::types::EditOperation) -> String {
+    let mut out = text.to_string();
+    let mut changes = op.changes.clone();
+    changes.sort_by_key(|change| std::cmp::Reverse(change.from));
+    for change in changes {
+        out.replace_range(change.from..change.to, &change.insert);
+    }
+    out
+}
+
+/// Per-keystroke autoformat cost while typing in a formatted table: each
+/// iteration inserts one char at the end of a cell's content, runs the doc
+/// change rules like the editor does, and applies the result so the next
+/// keystroke sees the edited, reformatted document. `widen` types into the
+/// widest cell of a column (every key reflows that column); otherwise the
+/// cell stays narrower than its column.
+fn bench_doc_change_rule(scenario: Scenario, widen: bool) -> BenchStat {
+    let filler = 200;
+    let raw_table = make_table(scenario.rows, scenario.cols, scenario.continuation_every);
     let mut table_cache = TableFormatCache::default();
-    table_cache.reset_parsed_row_cache_stats();
+    let table_lines = format_table_lines_with_cache(&raw_table, &mut table_cache);
+    let mut note = build_note_with_table(&table_lines, filler);
+    let opts = TextRuleOptions {
+        markdown_autoformat: true,
+        checklist_auto_reorder: true,
+        table_enabled: true,
+    };
+    // Data rows (skipping continuation rows) whose first cell is short
+    // (`r1c1`..) or, for `widen`, the widest one (`r{rows}c1`).
+    let data_rows: Vec<usize> = table_lines
+        .iter()
+        .enumerate()
+        .skip(2)
+        .filter(|(_, line)| !line.trim_start().starts_with("|>"))
+        .map(|(idx, _)| idx)
+        .collect();
     let mut samples = Vec::with_capacity(scenario.doc_change_iters);
     for i in 0..scenario.doc_change_iters {
-        let target = 2 + (i % scenario.rows.max(1));
-        if let Some(line) = table_lines.get_mut(target) {
-            let insert_at = line.rfind('|').unwrap_or(line.len().saturating_sub(1));
-            line.insert_str(insert_at.saturating_sub(1), " x");
-        }
-        let note = build_note_with_table(&table_lines, 200);
-        let anchor = note.find("x").unwrap_or(note.len().saturating_sub(1));
+        let row = if widen {
+            *data_rows.last().expect("data rows")
+        } else {
+            data_rows[i % data_rows.len().min(8)]
+        };
+        let line_idx = filler + row;
+        let line_start: usize = note.split('\n').take(line_idx).map(|l| l.len() + 1).sum();
+        let line = note.split('\n').nth(line_idx).expect("table line");
+        let cell_end = line[1..].find(" |").map(|idx| idx + 1).expect("first cell");
+        let content_end = line[..cell_end].trim_end().len();
+        let anchor = line_start + content_end;
+        note.insert(anchor, 'x');
         let snapshot = EditorContextSnapshot {
-            text: note,
+            text: note.clone(),
             selection: SelectionSnapshot {
-                anchor,
-                head: anchor,
+                anchor: anchor + 1,
+                head: anchor + 1,
             },
             changed_range: Some(TextRange {
-                from: anchor.saturating_sub(1),
-                to: anchor,
+                from: anchor,
+                to: anchor + 1,
             }),
         };
         let ctx = ResolvedContext::new(snapshot);
-        let opts = TextRuleOptions {
-            markdown_autoformat: true,
-            checklist_auto_reorder: true,
-            table_enabled: true,
-        };
         let start = Instant::now();
-        let _ = run_doc_change_rules_with_table_cache(&ctx, opts, &mut table_cache);
+        let op = run_doc_change_rules_with_table_cache(&ctx, opts, &mut table_cache);
         samples.push(start.elapsed().as_secs_f64() * 1000.0);
+        let op = op.expect("typing in a table cell reformats its row");
+        note = apply_operation(&note, &op);
     }
     let (hits, misses) = table_cache.parsed_row_cache_stats();
     summarize(
-        "run_doc_change_rules_with_cache",
+        if widen {
+            "run_doc_change_rules_with_cache_widen"
+        } else {
+            "run_doc_change_rules_with_cache"
+        },
         scenario,
         samples,
         Some((hits, misses, table_cache.parsed_row_cache_size())),
@@ -352,17 +391,20 @@ fn main() {
 
         let format_stat = bench_format(scenario);
         let cursor_stat = bench_cursor_lookup(scenario);
-        let doc_change_stat = bench_doc_change_rule(scenario);
+        let doc_change_stat = bench_doc_change_rule(scenario, false);
+        let widen_stat = bench_doc_change_rule(scenario, true);
 
         if !output_json {
             print_stat(&format_stat);
             print_stat(&cursor_stat);
             print_stat(&doc_change_stat);
+            print_stat(&widen_stat);
         }
 
         stats.push(format_stat);
         stats.push(cursor_stat);
         stats.push(doc_change_stat);
+        stats.push(widen_stat);
     }
 
     if output_json {
