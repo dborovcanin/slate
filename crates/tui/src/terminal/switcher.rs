@@ -1,10 +1,10 @@
 use std::cmp::min;
 
-use super::ansi::{
-    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, goto, pad_right, AnsiStyle,
+use super::canvas::{
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, pad_right, put_str, TextStyle,
 };
+use ratatui::buffer::Buffer;
 use super::render::RenderPalette;
-use crate::terminal::render;
 use app_core::storage::{Collection, NoteAccessMode, NoteSearchResult};
 
 const CONTENT_SEARCH_MIN_H: usize = 9;
@@ -12,12 +12,12 @@ const CONTENT_SEARCH_MAX_H: usize = 14;
 const CONTENT_SEARCH_PREVIEW_LINES: usize = 3;
 
 fn fill_box_interior(
-    buf: &mut String,
+    buf: &mut Buffer,
     row: usize,
     col: usize,
     width: usize,
     height: usize,
-    style: AnsiStyle,
+    style: TextStyle,
 ) {
     if width < 2 || height < 2 {
         return;
@@ -168,7 +168,7 @@ pub struct SwitcherView<'a> {
 
 pub fn draw_switcher(
     view: &SwitcherView,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -179,25 +179,25 @@ pub fn draw_switcher(
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
 
-    let prompt_style = AnsiStyle {
+    let prompt_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let label_style = AnsiStyle {
+    let label_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let row_style = AnsiStyle {
+    let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
-    let selected_style = AnsiStyle {
+    let selected_style = TextStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
         bold: true,
@@ -296,7 +296,7 @@ pub struct CollectionSwitcherView<'a> {
 
 pub fn draw_collection_switcher(
     view: &CollectionSwitcherView,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -307,25 +307,25 @@ pub fn draw_collection_switcher(
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
 
-    let prompt_style = AnsiStyle {
+    let prompt_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let label_style = AnsiStyle {
+    let label_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let row_style = AnsiStyle {
+    let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
-    let selected_style = AnsiStyle {
+    let selected_style = TextStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
         bold: true,
@@ -418,7 +418,7 @@ pub struct CollectionEditView<'a> {
 
 pub fn draw_collection_edit_dialog(
     view: &CollectionEditView,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -428,19 +428,19 @@ pub fn draw_collection_edit_dialog(
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
-    let normal_style = AnsiStyle {
+    let normal_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
         ..Default::default()
     };
-    let label_style = AnsiStyle {
+    let label_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
     let active_bg = palette.primary();
-    let active_style = AnsiStyle {
+    let active_style = TextStyle {
         fg: Some(contrast_fg_for_bg(active_bg)),
         bg: Some(active_bg),
         bold: true,
@@ -465,7 +465,7 @@ pub fn draw_collection_edit_dialog(
         x + 1,
         box_w.saturating_sub(2),
         " Edit collection",
-        AnsiStyle {
+        TextStyle {
             fg: Some(palette.primary()),
             bg: Some(surface_bg),
             bold: true,
@@ -621,13 +621,13 @@ fn highlight_ranges_for_terms(text: &str, terms: &[String]) -> Vec<(usize, usize
 }
 
 fn draw_row_with_highlights(
-    buf: &mut String,
+    buf: &mut Buffer,
     row: usize,
     col: usize,
     width: usize,
     text: &str,
-    base_style: AnsiStyle,
-    highlight_style: AnsiStyle,
+    base_style: TextStyle,
+    highlight_style: TextStyle,
     terms: &[String],
 ) {
     let display = pad_right(text, width);
@@ -640,27 +640,23 @@ fn draw_row_with_highlights(
         }
     }
 
-    buf.push_str(&goto(row, col));
-    let mut current_highlight = false;
-    base_style.write_to(buf);
+    let base_style = base_style.to_style();
+    let highlight_style = highlight_style.to_style();
+    let mut draw_col = col;
+    let mut encoded = [0u8; 4];
     for (idx, ch) in chars.into_iter().enumerate() {
-        let next_highlight = highlighted.get(idx).copied().unwrap_or(false);
-        if next_highlight != current_highlight {
-            if next_highlight {
-                highlight_style.write_to(buf);
-            } else {
-                base_style.write_to(buf);
-            }
-            current_highlight = next_highlight;
-        }
-        buf.push(ch);
+        let style = if highlighted.get(idx).copied().unwrap_or(false) {
+            highlight_style
+        } else {
+            base_style
+        };
+        draw_col = put_str(buf, row, draw_col, ch.encode_utf8(&mut encoded), style);
     }
-    buf.push_str(render::RESET);
 }
 
 pub fn draw_content_search(
     view: &ContentSearchView,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -668,37 +664,37 @@ pub fn draw_content_search(
     let (x, y, box_w, box_h) = content_search_box_geometry(rows, cols);
     let surface_bg = palette.surface_bg();
 
-    let prompt_style = AnsiStyle {
+    let prompt_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let label_style = AnsiStyle {
+    let label_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let row_style = AnsiStyle {
+    let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
-    let selected_style = AnsiStyle {
+    let selected_style = TextStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
         bold: true,
         ..Default::default()
     };
-    let snippet_style = AnsiStyle {
+    let snippet_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let match_style = AnsiStyle {
+    let match_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
@@ -825,7 +821,7 @@ pub(crate) fn web_search_box_geometry(rows: usize, cols: usize) -> (usize, usize
 
 pub fn draw_web_search(
     view: &WebSearchView,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -833,37 +829,37 @@ pub fn draw_web_search(
     let (x, y, box_w, box_h) = web_search_box_geometry(rows, cols);
     let surface_bg = palette.surface_bg();
 
-    let prompt_style = AnsiStyle {
+    let prompt_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let label_style = AnsiStyle {
+    let label_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let row_style = AnsiStyle {
+    let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
-    let selected_style = AnsiStyle {
+    let selected_style = TextStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
         bold: true,
         ..Default::default()
     };
-    let snippet_style = AnsiStyle {
+    let snippet_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let error_style = AnsiStyle {
+    let error_style = TextStyle {
         fg: Some(palette.search_current),
         bg: Some(surface_bg),
         bold: true,
@@ -1071,7 +1067,7 @@ pub fn draw_delete_confirm(
     note_title: &str,
     requires_password: bool,
     password_len: usize,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -1104,13 +1100,13 @@ pub fn draw_delete_confirm(
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
 
-    let message_style = AnsiStyle {
+    let message_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let hint_style = AnsiStyle {
+    let hint_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
@@ -1150,7 +1146,7 @@ pub fn draw_delete_confirm(
 pub fn draw_open_confirm(
     note_title: &str,
     password_len: usize,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -1170,7 +1166,7 @@ fn draw_confirm(
     message: &str,
     password_len: Option<usize>,
     hint: &str,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -1194,13 +1190,13 @@ fn draw_confirm(
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
 
-    let message_style = AnsiStyle {
+    let message_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let hint_style = AnsiStyle {
+    let hint_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
@@ -1253,6 +1249,7 @@ fn truncate_title_for_confirm(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::canvas::test_support::{buffer_text, has_fg, has_styled_symbol, screen};
     use crate::terminal::render::RenderPalette;
 
     #[test]
@@ -1280,12 +1277,12 @@ mod tests {
             matches: &[],
             selected: 0,
         };
-        let mut buf = String::new();
+        let mut buf = screen(24, 80);
         draw_switcher(&view, &mut buf, 24, 80, palette);
 
-        assert!(buf.contains("38;5;201"), "prompt should use accent primary");
+        assert!(has_fg(&buf, 201), "prompt should use accent primary");
         assert!(
-            !buf.contains("38;5;33"),
+            !has_fg(&buf, 33),
             "prompt should not use keyword color"
         );
     }
@@ -1303,10 +1300,10 @@ mod tests {
             matches: &[],
             selected: 0,
         };
-        let mut buf = String::new();
+        let mut buf = screen(24, 80);
         draw_switcher(&view, &mut buf, 24, 80, palette);
         assert!(
-            buf.contains("38;5;201;48;5;250m┌"),
+            has_styled_symbol(&buf, "┌", 201, 250),
             "switcher border should use accent fg with surface bg"
         );
     }
@@ -1331,12 +1328,12 @@ mod tests {
             results: &[],
             selected: 0,
         };
-        let mut buf = String::new();
+        let mut buf = screen(24, 80);
         draw_content_search(&view, &mut buf, 24, 80, palette);
 
-        assert!(buf.contains("38;5;201"), "prompt should use accent primary");
+        assert!(has_fg(&buf, 201), "prompt should use accent primary");
         assert!(
-            !buf.contains("38;5;33"),
+            !has_fg(&buf, 33),
             "prompt should not use keyword color"
         );
     }
@@ -1359,13 +1356,12 @@ mod tests {
             pending: false,
             error: None,
         };
-        let mut buf = String::new();
-
+        let mut buf = screen(24, 100);
         draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
 
-        assert!(buf.contains("answer:"));
-        assert!(buf.contains("35 cm = 13.7795 inches"));
-        assert!(!buf.contains("ordinary result snippet"));
+        assert!(buffer_text(&buf).contains("answer:"));
+        assert!(buffer_text(&buf).contains("35 cm = 13.7795 inches"));
+        assert!(!buffer_text(&buf).contains("ordinary result snippet"));
     }
 
     #[test]
@@ -1388,14 +1384,13 @@ mod tests {
             pending: false,
             error: None,
         };
-        let mut buf = String::new();
-
+        let mut buf = screen(24, 100);
         draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
 
-        assert!(buf.contains("best result:"));
-        assert!(buf.contains("The tallest building in Europe is the Lakhta Center."));
-        assert!(buf.contains("source: List of tallest buildings in Europe"));
-        assert!(buf.contains("https://example.com/tallest-buildings"));
+        assert!(buffer_text(&buf).contains("best result:"));
+        assert!(buffer_text(&buf).contains("The tallest building in Europe is the Lakhta Center."));
+        assert!(buffer_text(&buf).contains("source: List of tallest buildings in Europe"));
+        assert!(buffer_text(&buf).contains("https://example.com/tallest-buildings"));
     }
 
     #[test]
@@ -1416,13 +1411,12 @@ mod tests {
             pending: false,
             error: None,
         };
-        let mut buf = String::new();
-
+        let mut buf = screen(24, 100);
         draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
 
-        assert!(buf.contains("result text:"));
-        assert!(buf.contains("Novak Djokovic is a Serbian tennis player."));
-        assert!(!buf.contains("fallback summary"));
+        assert!(buffer_text(&buf).contains("result text:"));
+        assert!(buffer_text(&buf).contains("Novak Djokovic is a Serbian tennis player."));
+        assert!(!buffer_text(&buf).contains("fallback summary"));
     }
 
     #[test]
@@ -1451,11 +1445,10 @@ mod tests {
             pending: false,
             error: None,
         };
-        let mut buf = String::new();
-
+        let mut buf = screen(24, 100);
         draw_web_search(&view, &mut buf, 24, 100, RenderPalette::default());
 
-        assert!(buf.contains("result text:"));
-        assert!(buf.contains("A Serbian professional tennis player."));
+        assert!(buffer_text(&buf).contains("result text:"));
+        assert!(buffer_text(&buf).contains("A Serbian professional tennis player."));
     }
 }

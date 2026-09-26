@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn render_palette_uses_light_surface_background_for_light_schemes() {
-        use crate::terminal::ansi::contrast_fg_for_bg;
+        use crate::terminal::canvas::contrast_fg_for_bg;
 
         let light = RenderPalette::for_color_scheme("gruvbox-light");
         let dark = RenderPalette::for_color_scheme("gruvbox-dark");

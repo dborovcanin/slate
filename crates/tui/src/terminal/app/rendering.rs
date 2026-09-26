@@ -1,10 +1,10 @@
 use super::{
     contrast_fg_for_bg, cursor_render_char_col, display_cell_pipe_positions,
     display_cols_prefix_and_total, draw_framed_surface, draw_row_at_styled,
-    find_table_formula_segments, format_formula_display_value, formula_marker_token, goto,
-    is_markdown_table_line, line_display_cols, min, pad_right, reformat_table_row_for_display,
+    find_table_formula_segments, format_formula_display_value, formula_marker_token,
+    is_markdown_table_line, line_display_cols, min, reformat_table_row_for_display,
     table_block_bounds_for_line, table_cell_info_at_char, table_cursor_cell_index,
-    table_display_col_widths, viewport_col_for_display_col, AnsiStyle, DatePickerAction,
+    table_display_col_widths, viewport_col_for_display_col, TextStyle, DatePickerAction,
     TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
@@ -18,7 +18,8 @@ use crate::terminal::{
         SwitcherView,
     },
 };
-use crate::terminal::ansi_bridge;
+use crate::terminal::canvas::{put_char, put_str, put_str_width};
+use crate::terminal::render::LineDecorations;
 use crate::terminal::session::CursorPlacement;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
@@ -422,12 +423,12 @@ impl TerminalApp {
     }
 
     pub(super) fn draw_status_segment(
-        buf: &mut String,
+        buf: &mut Buffer,
         row: usize,
         col: &mut usize,
         cols: usize,
         text: &str,
-        style: AnsiStyle,
+        style: TextStyle,
     ) {
         if *col > cols || text.is_empty() {
             return;
@@ -436,20 +437,12 @@ impl TerminalApp {
         if remaining == 0 {
             return;
         }
-        let clipped: String = text.chars().take(remaining).collect();
-        if clipped.is_empty() {
-            return;
-        }
-        buf.push_str(&goto(row, *col));
-        style.write_to(buf);
-        buf.push_str(&clipped);
-        buf.push_str(render::RESET);
-        *col += clipped.chars().count();
+        *col = put_str_width(buf, row, *col, text, remaining, style.to_style());
     }
 
     pub(super) fn draw_command_completion_status_row(
         &self,
-        buf: &mut String,
+        buf: &mut Buffer,
         row: usize,
         cols: usize,
         status_bg: u8,
@@ -467,12 +460,12 @@ impl TerminalApp {
             .min(self.command_completion.options.len().saturating_sub(1));
 
         let base_fg = contrast_fg_for_bg(status_bg);
-        let base_style = AnsiStyle {
+        let base_style = TextStyle {
             fg: Some(base_fg),
             bg: Some(status_bg),
             ..Default::default()
         };
-        let selected_style = AnsiStyle {
+        let selected_style = TextStyle {
             fg: Some(status_bg),
             bg: Some(base_fg),
             bold: true,
@@ -484,7 +477,7 @@ impl TerminalApp {
         let viewport_width = cols.saturating_sub(sticky_width);
         if viewport_width > 0 {
             let suffix_text = "]";
-            let mut spans: Vec<(&str, AnsiStyle)> =
+            let mut spans: Vec<(&str, TextStyle)> =
                 Vec::with_capacity(self.command_completion.options.len().saturating_mul(2) + 2);
             let prefix_text = format!(":{}  [", self.command_input);
             spans.push((prefix_text.as_str(), base_style));
@@ -584,12 +577,12 @@ impl TerminalApp {
 
     fn draw_status_row_with_right_sticky(
         &self,
-        buf: &mut String,
+        buf: &mut Buffer,
         row: usize,
         cols: usize,
         left_text: &str,
         right_sticky_text: &str,
-        style: AnsiStyle,
+        style: TextStyle,
     ) {
         draw_row_at_styled(buf, row, 1, cols, "", style);
         let sticky_width = right_sticky_text.chars().count().min(cols);
@@ -702,7 +695,7 @@ impl TerminalApp {
 
     pub(super) fn draw_variable_autocomplete_popup(
         &self,
-        buf: &mut String,
+        buf: &mut Buffer,
         rows: usize,
         cols: usize,
     ) {
@@ -762,13 +755,13 @@ impl TerminalApp {
             .max(EDITOR_TOP_ROW)
             .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
 
-        let row_style = AnsiStyle {
+        let row_style = TextStyle {
             fg: Some(self.render_palette.variable),
             bg: Some(self.render_palette.surface_bg()),
             ..Default::default()
         };
         let selected_bg = self.render_palette.primary();
-        let selected_style = AnsiStyle {
+        let selected_style = TextStyle {
             fg: Some(contrast_fg_for_bg(selected_bg)),
             bg: Some(selected_bg),
             bold: true,
@@ -813,7 +806,7 @@ impl TerminalApp {
 
     pub(super) fn draw_wiki_link_autocomplete_popup(
         &self,
-        buf: &mut String,
+        buf: &mut Buffer,
         rows: usize,
         cols: usize,
     ) {
@@ -862,13 +855,13 @@ impl TerminalApp {
         y = y
             .max(EDITOR_TOP_ROW)
             .min(max_editor_row.saturating_sub(box_height.saturating_sub(1)));
-        let row_style = AnsiStyle {
+        let row_style = TextStyle {
             fg: Some(self.render_palette.variable),
             bg: Some(self.render_palette.surface_bg()),
             ..Default::default()
         };
         let selected_bg = self.render_palette.primary();
-        let selected_style = AnsiStyle {
+        let selected_style = TextStyle {
             fg: Some(contrast_fg_for_bg(selected_bg)),
             bg: Some(selected_bg),
             bold: true,
@@ -896,7 +889,7 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn draw_wiki_link_preview_popup(&self, buf: &mut String, rows: usize, cols: usize) {
+    pub(super) fn draw_wiki_link_preview_popup(&self, buf: &mut Buffer, rows: usize, cols: usize) {
         let preview = &self.wiki_link_preview;
         if !preview.visible
             || !matches!(
@@ -949,7 +942,7 @@ impl TerminalApp {
         let border_fg = self.render_palette.primary();
         draw_framed_surface(buf, y, x, box_width, box_height, bg, border_fg, false);
 
-        let title_style = AnsiStyle {
+        let title_style = TextStyle {
             fg: Some(self.render_palette.text_fg()),
             bg: Some(bg),
             bold: true,
@@ -958,7 +951,7 @@ impl TerminalApp {
         let title_text = format!(" {}", preview_truncate(&preview.title, inner_width));
         draw_row_at_styled(buf, y + 1, x + 1, inner_width, &title_text, title_style);
 
-        let body_style = AnsiStyle {
+        let body_style = TextStyle {
             fg: Some(self.render_palette.variable),
             bg: Some(bg),
             ..Default::default()
@@ -975,22 +968,14 @@ impl TerminalApp {
         Ok(self.render_to_buffer(frame.buffer_mut()))
     }
 
+    /// Paints the whole screen into `buf`, which must cover the terminal area.
     pub(super) fn render_to_buffer(&mut self, buf: &mut Buffer) -> CursorPlacement {
-        let cursor = self.compose_frame();
-        ansi_bridge::paint(&self.render_state.draw_buf, buf);
-        cursor
-    }
-
-    /// Composes the frame as an ANSI string into `render_state.draw_buf`.
-    pub(super) fn compose_frame(&mut self) -> CursorPlacement {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
         let editor_bg = self.render_palette.surface_bg();
         self.ensure_calc_for_viewport(editor_height, false);
         let gutter_width = self.gutter_width();
         let line_number_width = gutter_width.saturating_sub(2);
-        let mut buf = std::mem::take(&mut self.render_state.draw_buf);
-        buf.clear();
 
         let title = derive_title_from_lines(&self.editor.lines);
         let dirty_mark = if self.dirty { " [+]" } else { "" };
@@ -1005,12 +990,12 @@ impl TerminalApp {
         );
         let title_bg = self.render_palette.primary();
         draw_row_at_styled(
-            &mut buf,
+            buf,
             TITLE_ROW,
             1,
             cols,
             &title_line,
-            AnsiStyle {
+            TextStyle {
                 fg: Some(contrast_fg_for_bg(title_bg)),
                 bg: Some(title_bg),
                 bold: true,
@@ -1040,12 +1025,12 @@ impl TerminalApp {
         for i in 0..editor_height {
             let row = EDITOR_TOP_ROW + i;
             draw_row_at_styled(
-                &mut buf,
+                buf,
                 row,
                 1,
                 cols,
                 "",
-                AnsiStyle {
+                TextStyle {
                     bg: Some(editor_bg),
                     ..Default::default()
                 },
@@ -1385,99 +1370,78 @@ impl TerminalApp {
                     }
                 }
 
-                let rendered_text = if ghost_dim_ranges.is_empty()
-                    && visual_highlight_ranges.is_empty()
-                    && focused_pipe_ranges.is_empty()
-                    && wiki_link_underline_ranges.is_empty()
-                {
-                    ctx.render_line_window_with_reminder_cursor(
-                        &rendered_line,
-                        viewport.text_width,
-                        viewport.text_window_col,
-                        effective_calc_ghost,
-                        effective_reminder_ghost,
-                        reminder_strikethrough,
-                        &search_ranges,
-                        &current_search_ranges,
-                        &self.calc.variable_names,
-                        render_cursor_col,
-                    )
-                } else {
-                    ctx.render_line_full(
-                        rendered_line.as_ref(),
-                        viewport.text_width,
-                        viewport.text_window_col,
-                        effective_calc_ghost,
-                        effective_reminder_ghost,
-                        reminder_strikethrough,
-                        &search_ranges,
-                        &current_search_ranges,
-                        &self.calc.variable_names,
-                        &ghost_dim_ranges,
-                        &visual_highlight_ranges,
-                        &focused_pipe_ranges,
-                        &wiki_link_underline_ranges,
-                        render_cursor_col,
-                    )
-                };
-                buf.push_str(&goto(row, 1));
                 let gutter_style = if is_cursor_line {
-                    AnsiStyle {
+                    TextStyle {
                         fg: Some(self.render_palette.variable),
                         bg: Some(editor_bg),
                         bold: true,
                         ..Default::default()
                     }
                 } else {
-                    AnsiStyle {
+                    TextStyle {
                         fg: Some(self.render_palette.code_comment),
                         bg: Some(editor_bg),
                         dim: true,
                         ..Default::default()
                     }
                 };
-                gutter_style.write_to(&mut buf);
-                buf.push_str(&format!("{line_no:>line_number_width$}  "));
-                buf.push_str(render::RESET);
-                if viewport.has_left_overflow {
-                    let indicator_style = AnsiStyle {
-                        fg: Some(self.render_palette.code_comment),
-                        bg: Some(editor_bg),
-                        dim: true,
-                        ..Default::default()
-                    };
-                    indicator_style.write_to(&mut buf);
-                    buf.push(OVERFLOW_LEFT_MARKER);
-                    buf.push_str(render::RESET);
-                }
-                AnsiStyle {
-                    bg: Some(editor_bg),
-                    ..Default::default()
-                }
-                .write_to(&mut buf);
-                buf.push_str(&rendered_text);
-                if viewport.has_right_overflow {
-                    let indicator_style = AnsiStyle {
-                        fg: Some(self.render_palette.code_comment),
-                        bg: Some(editor_bg),
-                        dim: true,
-                        ..Default::default()
-                    };
-                    indicator_style.write_to(&mut buf);
-                    buf.push(OVERFLOW_RIGHT_MARKER);
-                    buf.push_str(render::RESET);
-                }
-            } else {
-                buf.push_str(&goto(row, 1));
-                AnsiStyle {
+                let indicator_style = TextStyle {
                     fg: Some(self.render_palette.code_comment),
                     bg: Some(editor_bg),
                     dim: true,
                     ..Default::default()
                 }
-                .write_to(&mut buf);
-                buf.push_str(&pad_right("~", cols));
-                buf.push_str(render::RESET);
+                .to_style();
+                let mut col = put_str(
+                    buf,
+                    row,
+                    1,
+                    &format!("{line_no:>line_number_width$}  "),
+                    gutter_style.to_style(),
+                );
+                if viewport.has_left_overflow {
+                    put_char(buf, row, col, OVERFLOW_LEFT_MARKER, indicator_style);
+                    col += 1;
+                }
+                ctx.render_line(
+                    rendered_line.as_ref(),
+                    viewport.text_width,
+                    viewport.text_window_col,
+                    &LineDecorations {
+                        calc_ghost: effective_calc_ghost,
+                        reminder_ghost: effective_reminder_ghost,
+                        reminder_strikethrough,
+                        search_ranges: &search_ranges,
+                        current_search_ranges: &current_search_ranges,
+                        variable_names: &self.calc.variable_names,
+                        dim_ranges: &ghost_dim_ranges,
+                        selection_ranges: &visual_highlight_ranges,
+                        accent_ranges: &focused_pipe_ranges,
+                        underline_ranges: &wiki_link_underline_ranges,
+                        active_cursor_col: render_cursor_col,
+                    },
+                    buf,
+                    buf_x(buf, col),
+                    buf_y(buf, row),
+                );
+                col += viewport.text_width;
+                if viewport.has_right_overflow {
+                    put_char(buf, row, col, OVERFLOW_RIGHT_MARKER, indicator_style);
+                }
+            } else {
+                draw_row_at_styled(
+                    buf,
+                    row,
+                    1,
+                    cols,
+                    "~",
+                    TextStyle {
+                        fg: Some(self.render_palette.code_comment),
+                        bg: Some(editor_bg),
+                        dim: true,
+                        ..Default::default()
+                    },
+                );
             }
         }
 
@@ -1536,20 +1500,20 @@ impl TerminalApp {
         };
         let collection_sticky = self.working_collection_status_suffix();
         let status_bg = self.render_palette.primary();
-        let status_style = AnsiStyle {
+        let status_style = TextStyle {
             fg: Some(contrast_fg_for_bg(status_bg)),
             bg: Some(status_bg),
             ..Default::default()
         };
         if !self.draw_command_completion_status_row(
-            &mut buf,
+            buf,
             rows,
             cols,
             status_bg,
             &collection_sticky,
         ) {
             self.draw_status_row_with_right_sticky(
-                &mut buf,
+                buf,
                 rows,
                 cols,
                 status_base,
@@ -1566,7 +1530,7 @@ impl TerminalApp {
                     matches: &self.switcher.matches,
                     selected: self.switcher.selected,
                 },
-                &mut buf,
+                buf,
                 rows,
                 cols,
                 self.render_palette,
@@ -1576,7 +1540,7 @@ impl TerminalApp {
                     &confirm.note_title,
                     confirm.requires_password,
                     confirm.password.chars().count(),
-                    &mut buf,
+                    buf,
                     rows,
                     cols,
                     self.render_palette,
@@ -1586,7 +1550,7 @@ impl TerminalApp {
                 switcher::draw_open_confirm(
                     &confirm.note_title,
                     confirm.password.chars().count(),
-                    &mut buf,
+                    buf,
                     rows,
                     cols,
                     self.render_palette,
@@ -1603,7 +1567,7 @@ impl TerminalApp {
                     selected: self.collection_switcher.selected,
                     working_collection_id: self.working_collection_id.as_deref(),
                 },
-                &mut buf,
+                buf,
                 rows,
                 cols,
                 self.render_palette,
@@ -1616,7 +1580,7 @@ impl TerminalApp {
                         default_tags: &dialog.default_tags,
                         selected_field: dialog.selected_field,
                     },
-                    &mut buf,
+                    buf,
                     rows,
                     cols,
                     self.render_palette,
@@ -1631,7 +1595,7 @@ impl TerminalApp {
                     results: &self.content_search.results,
                     selected: self.content_search.selected,
                 },
-                &mut buf,
+                buf,
                 rows,
                 cols,
                 self.render_palette,
@@ -1640,7 +1604,7 @@ impl TerminalApp {
                 switcher::draw_open_confirm(
                     &confirm.note_title,
                     confirm.password.chars().count(),
-                    &mut buf,
+                    buf,
                     rows,
                     cols,
                     self.render_palette,
@@ -1662,7 +1626,7 @@ impl TerminalApp {
                     date_format: &self.date_picker.format,
                     date_time_format: &self.date_picker.time_format,
                 },
-                &mut buf,
+                buf,
                 rows,
                 cols,
                 self.render_palette,
@@ -1681,15 +1645,15 @@ impl TerminalApp {
                     pending: self.web_search.pending,
                     error: self.web_search.error.as_deref(),
                 },
-                &mut buf,
+                buf,
                 rows,
                 cols,
                 self.render_palette,
             );
         }
-        self.draw_variable_autocomplete_popup(&mut buf, rows, cols);
-        self.draw_wiki_link_autocomplete_popup(&mut buf, rows, cols);
-        self.draw_wiki_link_preview_popup(&mut buf, rows, cols);
+        self.draw_variable_autocomplete_popup(buf, rows, cols);
+        self.draw_wiki_link_autocomplete_popup(buf, rows, cols);
+        self.draw_wiki_link_preview_popup(buf, rows, cols);
 
         let (cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
         if let Some((line_text, mapped_col)) = cursor_line_override {
@@ -1721,7 +1685,6 @@ impl TerminalApp {
             self.mode,
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine
         );
-        self.render_state.draw_buf = buf;
         CursorPlacement {
             row: u16::try_from(cursor_row.saturating_sub(1)).unwrap_or(u16::MAX),
             col: u16::try_from(cursor_col.saturating_sub(1)).unwrap_or(u16::MAX),
@@ -1871,4 +1834,14 @@ fn preview_truncate(s: &str, max_chars: usize) -> String {
         let truncated: String = chars[..max_chars.saturating_sub(1)].iter().collect();
         format!("{truncated}…")
     }
+}
+
+/// Buffer x coordinate of 1-based screen column `col`.
+fn buf_x(buf: &Buffer, col: usize) -> u16 {
+    buf.area.x.saturating_add(u16::try_from(col.saturating_sub(1)).unwrap_or(u16::MAX))
+}
+
+/// Buffer y coordinate of 1-based screen row `row`.
+fn buf_y(buf: &Buffer, row: usize) -> u16 {
+    buf.area.y.saturating_add(u16::try_from(row.saturating_sub(1)).unwrap_or(u16::MAX))
 }

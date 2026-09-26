@@ -1,6 +1,5 @@
 mod adapter;
-mod ansi;
-mod ansi_bridge;
+mod canvas;
 mod app;
 mod calc_cache;
 mod clipboard;

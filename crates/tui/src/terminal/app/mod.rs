@@ -1,6 +1,6 @@
 use super::adapter::TerminalVimAdapter;
-use super::ansi::{
-    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, goto, pad_right, AnsiStyle,
+use super::canvas::{
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle,
 };
 use super::calc_cache::CalcCache;
 use super::clipboard::{self, ClipboardWriteBackend};
@@ -496,7 +496,6 @@ struct RenderState {
     /// highest index whose entry is current; all higher indices are stale.
     fence_checkpoints: Vec<(bool, Option<String>)>,
     fence_checkpoints_valid_through: usize,
-    draw_buf: String,
     dirty: bool,
 }
 
@@ -1093,7 +1092,6 @@ impl TerminalApp {
                 file_language: render_file_language,
                 fence_checkpoints: vec![(false, None)],
                 fence_checkpoints_valid_through: 0,
-                draw_buf: String::new(),
                 dirty: true,
             },
             folds: FoldingState::empty(Vec::new(), Vec::new()),

@@ -1,7 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::ansi::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, goto, AnsiStyle};
-use super::render::{self, RenderPalette};
+use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, put_str, TextStyle};
+use ratatui::buffer::Buffer;
+use super::render::RenderPalette;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatePickerAction {
@@ -190,7 +191,7 @@ pub struct DatePickerView<'a> {
 
 pub fn draw_date_picker(
     view: &DatePickerView,
-    buf: &mut String,
+    buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
@@ -201,42 +202,42 @@ pub fn draw_date_picker(
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
 
-    let title_style = AnsiStyle {
+    let title_style = TextStyle {
         fg: Some(palette.primary()),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let header_style = AnsiStyle {
+    let header_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
         ..Default::default()
     };
-    let day_style = AnsiStyle {
+    let day_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
         ..Default::default()
     };
     let selected_bg = palette.primary();
-    let selected_day_style = AnsiStyle {
+    let selected_day_style = TextStyle {
         fg: Some(contrast_fg_for_bg(selected_bg)),
         bg: Some(selected_bg),
         bold: true,
         ..Default::default()
     };
-    let footer_style = AnsiStyle {
+    let footer_style = TextStyle {
         fg: Some(palette.search_match),
         bg: Some(surface_bg),
         bold: true,
         ..Default::default()
     };
-    let time_style = AnsiStyle {
+    let time_style = TextStyle {
         fg: Some(palette.code_string),
         bg: Some(surface_bg),
         ..Default::default()
     };
-    let hint_style = AnsiStyle {
+    let hint_style = TextStyle {
         fg: Some(palette.code_comment),
         bg: Some(surface_bg),
         dim: true,
@@ -284,13 +285,10 @@ pub fn draw_date_picker(
     let calendar_block_w = CAL_COLS * CAL_CELL_W;
     let calendar_x = x + 1 + inner_w.saturating_sub(calendar_block_w) / 2;
     let weekday_labels = ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
-    header_style.write_to(buf);
     for (idx, label) in weekday_labels.iter().enumerate() {
         let col = calendar_x + idx * CAL_CELL_W + (CAL_CELL_W.saturating_sub(label.len())) / 2;
-        buf.push_str(&goto(header_row, col));
-        buf.push_str(label);
+        put_str(buf, header_row, col, label, header_style.to_style());
     }
-    buf.push_str(render::RESET);
 
     // Calendar grid
     let first_dow = day_of_week(view.year, view.month, 1);
@@ -304,14 +302,12 @@ pub fn draw_date_picker(
         let grid_col = calendar_x + col_idx * CAL_CELL_W + (CAL_CELL_W.saturating_sub(2) / 2);
 
         if grid_row < y + box_h - 1 {
-            buf.push_str(&goto(grid_row, grid_col));
-            if day == view.day {
-                selected_day_style.write_to(buf);
+            let style = if day == view.day {
+                selected_day_style
             } else {
-                day_style.write_to(buf);
-            }
-            buf.push_str(&format!("{:>2}", day));
-            buf.push_str(render::RESET);
+                day_style
+            };
+            put_str(buf, grid_row, grid_col, &format!("{:>2}", day), style.to_style());
         }
 
         col_idx += 1;
@@ -368,15 +364,13 @@ pub fn draw_date_picker(
         hint_style,
     );
     let footer_x = x + 1 + inner_w.saturating_sub(selected.chars().count()) / 2;
-    buf.push_str(&goto(footer_row, footer_x));
-    footer_style.write_to(buf);
-    buf.push_str(&selected);
-    buf.push_str(render::RESET);
+    put_str(buf, footer_row, footer_x, &selected, footer_style.to_style());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terminal::canvas::test_support::{has_styled_symbol, screen};
     use crate::terminal::render::RenderPalette;
 
     #[test]
@@ -398,10 +392,10 @@ mod tests {
             date_format: "YYYY-MM-DD",
             date_time_format: "YYYY-MM-DD HH:mm",
         };
-        let mut buf = String::new();
+        let mut buf = screen(24, 80);
         draw_date_picker(&view, &mut buf, 24, 80, palette);
         assert!(
-            buf.contains("38;5;201;48;5;250m┌"),
+            has_styled_symbol(&buf, "┌", 201, 250),
             "date picker border should use accent fg with surface bg"
         );
     }

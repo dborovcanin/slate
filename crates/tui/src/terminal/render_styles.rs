@@ -1,4 +1,5 @@
-use std::fmt::Write as _;
+use crate::terminal::canvas::cell_style;
+use ratatui::style::{Modifier, Style};
 
 use crate::editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType, MarkdownLineInfo};
 use crate::terminal::markdown_view::{
@@ -19,46 +20,17 @@ pub(super) struct CharStyle {
 }
 
 impl CharStyle {
-    pub(super) fn write_ansi(&self, buf: &mut String) {
-        // Emit a single combined SGR sequence: \x1b[0;1;2;...m
-        buf.push_str("\x1b[0");
-        if self.bold {
-            buf.push_str(";1");
-        }
-        if self.dim {
-            buf.push_str(";2");
-        }
-        if self.italic {
-            buf.push_str(";3");
-        }
-        if self.underline {
-            buf.push_str(";4");
-        }
-        if self.reverse {
-            buf.push_str(";7");
-        }
-        if self.strikethrough {
-            buf.push_str(";9");
-        }
-        if let Some(color) = self.fg {
-            let _ = write!(buf, ";38;5;{color}");
-        }
-        if let Some(color) = self.bg {
-            let _ = write!(buf, ";48;5;{color}");
-        }
-        buf.push('m');
+    pub(super) fn to_style(self) -> Style {
+        let mut modifiers = Modifier::empty();
+        modifiers.set(Modifier::BOLD, self.bold);
+        modifiers.set(Modifier::DIM, self.dim);
+        modifiers.set(Modifier::ITALIC, self.italic);
+        modifiers.set(Modifier::UNDERLINED, self.underline);
+        modifiers.set(Modifier::REVERSED, self.reverse);
+        modifiers.set(Modifier::CROSSED_OUT, self.strikethrough);
+        cell_style(self.fg, self.bg, modifiers)
     }
 
-    pub(super) fn is_plain(&self) -> bool {
-        !self.bold
-            && !self.italic
-            && !self.dim
-            && !self.strikethrough
-            && !self.underline
-            && !self.reverse
-            && self.fg.is_none()
-            && self.bg.is_none()
-    }
 }
 
 fn is_variable_word_byte(byte: u8) -> bool {
