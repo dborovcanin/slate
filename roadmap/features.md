@@ -13,6 +13,7 @@ Planned and candidate features across all tracks. Implementation backlog and arc
 - [x] Daily notes — `slate today` / `:today` create today's note from a configurable template. Still open: optional Google Calendar / ICS integration pulls the day's events into the scaffold as a starting structure.
 - [ ] "On this day" recall view.
 - [ ] Random note resurfacing.
+- [ ] MCP for AI tools
 
 ## Organization
 
