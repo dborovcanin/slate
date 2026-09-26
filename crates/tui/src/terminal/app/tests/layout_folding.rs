@@ -697,3 +697,49 @@ fn enter_from_overflowing_table_row_repositions_cursor_and_resets_horizontal_scr
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn status_bar_shows_mode_pill_position_and_fresh_messages() {
+    let (db, mut app, path) = app_with_note("alpha\nbeta");
+    app.vim_enabled = true;
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = 2;
+    app.status = "saved n1".to_string();
+
+    let rows = screen_rows(&mut app);
+    let status = rows.last().expect("status row");
+    assert!(status.starts_with(" NORMAL "), "status: {status:?}");
+    assert!(status.contains("saved n1"));
+    assert!(status.trim_end().ends_with("Ln 2, Col 3"), "status: {status:?}");
+
+    // Messages expire; the idle loop is told to redraw once.
+    let shown = app.render_state.status_shown.clone().expect("tracked");
+    app.render_state.status_shown =
+        Some((shown.0, Instant::now() - std::time::Duration::from_secs(6)));
+    assert!(app.status_message_expired());
+    let rows = screen_rows(&mut app);
+    assert!(!rows.last().expect("status row").contains("saved n1"));
+    assert!(!app.status_message_expired());
+
+    // Mode banners are not repeated next to the pill.
+    app.status = "-- NORMAL --".to_string();
+    let rows = screen_rows(&mut app);
+    assert!(!rows.last().expect("status row").contains("-- NORMAL --"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn title_bar_shows_title_first_and_dirty_marker() {
+    let (db, mut app, path) = app_with_note("# Weekly review\nbody");
+    app.dirty = true;
+    let rows = screen_rows(&mut app);
+    assert!(rows[0].starts_with(" Weekly review •  n1"), "title: {:?}", rows[0]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

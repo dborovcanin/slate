@@ -45,7 +45,7 @@ pub struct CollectionMeta {
     pub is_clear: bool,
 }
 
-fn note_identity_label(note_id: &str) -> String {
+pub(crate) fn note_identity_label(note_id: &str) -> String {
     if let Some(path) = crate::file_path_from_note_id(note_id) {
         path.display().to_string()
     } else {

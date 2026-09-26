@@ -27,6 +27,10 @@ use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use crate::editor_core::{markdown_tokens, sum};
 use std::borrow::Cow;
+use std::time::{Duration, Instant};
+
+/// How long a status message stays visible in the editor status bar.
+const STATUS_MESSAGE_TTL: Duration = Duration::from_secs(5);
 use std::collections::VecDeque;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
@@ -398,6 +402,186 @@ impl TerminalApp {
         );
         self.insert_wiki_link_line_cache(line_text, &out, &underline_ranges);
         (out, underline_ranges)
+    }
+
+    /// Top bar: note title (bold), unsaved marker, dim note id, and badges for
+    /// external file notes and large-note mode on the right.
+    fn draw_title_bar(&self, buf: &mut Buffer, cols: usize) {
+        let bg = self.render_palette.primary();
+        let fg = contrast_fg_for_bg(bg);
+        let base = TextStyle {
+            fg: Some(fg),
+            bg: Some(bg),
+            ..Default::default()
+        };
+        draw_row_at_styled(buf, TITLE_ROW, 1, cols, "", base);
+        let title = derive_title_from_lines(&self.editor.lines);
+        let dirty = if self.dirty { " •" } else { "" };
+        let mut badges = Vec::new();
+        if crate::file_path_from_note_id(&self.active_note.id).is_some() {
+            badges.push("FILE");
+        }
+        if self.large_note_reduced_features() {
+            badges.push("LARGE NOTE");
+        }
+        let right = badges
+            .iter()
+            .map(|badge| format!(" {badge} "))
+            .collect::<String>();
+        let right_width = right.chars().count();
+        let left_width = cols.saturating_sub(right_width + 1);
+        let col = put_str_width(
+            buf,
+            TITLE_ROW,
+            1,
+            &format!(" {title}{dirty}"),
+            left_width,
+            TextStyle { bold: true, ..base }.to_style(),
+        );
+        let id_width = left_width.saturating_sub(col - 1);
+        let id = format!(
+            "  {}",
+            shorten_from_left(
+                &display_note_identity(&self.active_note.id),
+                id_width.saturating_sub(2)
+            )
+        );
+        put_str_width(
+            buf,
+            TITLE_ROW,
+            col,
+            &id,
+            id_width,
+            TextStyle { dim: true, ..base }.to_style(),
+        );
+        if right_width > 0 && right_width < cols {
+            put_str(
+                buf,
+                TITLE_ROW,
+                cols + 1 - right_width,
+                &right,
+                TextStyle {
+                    bold: true,
+                    reverse: true,
+                    ..base
+                }
+                .to_style(),
+            );
+        }
+    }
+
+    /// Editor status bar: vim mode pill and the latest message on the left
+    /// (hidden after `STATUS_MESSAGE_TTL`); selection statistics, cursor
+    /// position and working collection on the right.
+    fn draw_editor_status_bar(
+        &mut self,
+        buf: &mut Buffer,
+        row: usize,
+        cols: usize,
+        selection_stats: Option<sum::NumberStats>,
+    ) {
+        let palette = self.render_palette;
+        let bar_bg = palette.code_block_bg;
+        let text = TextStyle {
+            fg: Some(palette.text_fg()),
+            bg: Some(bar_bg),
+            ..Default::default()
+        };
+        let dim = TextStyle {
+            fg: Some(palette.code_comment),
+            bg: Some(bar_bg),
+            ..Default::default()
+        };
+        draw_row_at_styled(buf, row, 1, cols, "", text);
+
+        let mut col = 1usize;
+        if self.vim_enabled {
+            let (label, pill_bg) = match self.mode {
+                UiMode::Normal => ("NORMAL", palette.primary()),
+                UiMode::Visual => ("VISUAL", palette.search_current),
+                UiMode::VisualLine => ("V-LINE", palette.search_current),
+                _ => ("INSERT", palette.code_string),
+            };
+            col = put_str(
+                buf,
+                row,
+                col,
+                &format!(" {label} "),
+                TextStyle {
+                    fg: Some(contrast_fg_for_bg(pill_bg)),
+                    bg: Some(pill_bg),
+                    bold: true,
+                    ..Default::default()
+                }
+                .to_style(),
+            );
+        }
+
+        let mut right = Vec::new();
+        if let Some(stats) = selection_stats {
+            right.push(format!(
+                "Σ {} · avg {} · n {}",
+                sum::format_stat_value(stats.sum),
+                sum::format_stat_value(stats.average().unwrap_or(0.0)),
+                stats.count
+            ));
+        }
+        right.push(format!(
+            "Ln {}, Col {}",
+            self.editor.cursor_line + 1,
+            self.editor.cursor_col + 1
+        ));
+        if let Some(name) = self
+            .working_collection_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+        {
+            right.push(name.to_string());
+        }
+        let right_text = format!("{} ", right.join("  │  "));
+        let right_width = right_text.chars().count();
+        let right_col = (cols + 1).saturating_sub(right_width).max(col);
+
+        if let Some(message) = self.visible_status_message() {
+            let width = right_col.saturating_sub(col + 1);
+            put_str_width(buf, row, col, &format!(" {message}"), width, text.to_style());
+        }
+        put_str_width(buf, row, right_col, &right_text, cols + 1 - right_col, dim.to_style());
+    }
+
+    /// The status message to show in the editor status bar: `None` for mode
+    /// banners (the pill shows the mode) and once it is older than
+    /// `STATUS_MESSAGE_TTL`.
+    fn visible_status_message(&mut self) -> Option<String> {
+        let message = self.status.trim();
+        // Mode banners duplicate the pill; autosave confirmations duplicate the
+        // title bar's unsaved marker.
+        let is_banner = message.starts_with("-- ")
+            || message == format!("editing {}", self.active_note.id)
+            || message.starts_with("autosaved ")
+            || message.is_empty();
+        let shown_at = match self.render_state.status_shown.as_ref() {
+            Some((text, at)) if text == &self.status => *at,
+            _ => {
+                let now = Instant::now();
+                self.render_state.status_shown = Some((self.status.clone(), now));
+                now
+            }
+        };
+        let visible = !is_banner && shown_at.elapsed() < STATUS_MESSAGE_TTL;
+        self.render_state.status_visible = visible;
+        visible.then(|| message.to_string())
+    }
+
+    /// True when a displayed status message has just expired and the screen
+    /// needs a redraw to clear it.
+    pub(super) fn status_message_expired(&self) -> bool {
+        self.render_state.status_visible
+            && self
+                .render_state
+                .status_shown
+                .as_ref()
+                .is_some_and(|(_, at)| at.elapsed() >= STATUS_MESSAGE_TTL)
     }
 
     pub(super) fn update_command_status(&mut self) {
@@ -1056,31 +1240,7 @@ impl TerminalApp {
         let gutter_width = self.gutter_width();
         let line_number_width = gutter_width.saturating_sub(2);
 
-        let title = derive_title_from_lines(&self.editor.lines);
-        let dirty_mark = if self.dirty { " [+]" } else { "" };
-        let large_note_label = if self.large_note_reduced_features() {
-            " LARGE-NOTE"
-        } else {
-            ""
-        };
-        let title_line = format!(
-            " note  {}  {}{}{}",
-            self.active_note.id, title, dirty_mark, large_note_label
-        );
-        let title_bg = self.render_palette.primary();
-        draw_row_at_styled(
-            buf,
-            TITLE_ROW,
-            1,
-            cols,
-            &title_line,
-            TextStyle {
-                fg: Some(contrast_fg_for_bg(title_bg)),
-                bg: Some(title_bg),
-                bold: true,
-                ..Default::default()
-            },
-        );
+        self.draw_title_bar(buf, cols);
 
         let editor_bottom = EDITOR_TOP_ROW + editor_height;
         let text_width = cols.saturating_sub(gutter_width);
@@ -1330,23 +1490,20 @@ impl TerminalApp {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
         };
-        let collection_sticky = match selection_stats {
-            Some(stats) => format!(
-                " Σ {} · avg {} · n {} {}",
-                sum::format_stat_value(stats.sum),
-                sum::format_stat_value(stats.average().unwrap_or(0.0)),
-                stats.count,
-                self.working_collection_status_suffix()
-            ),
-            None => self.working_collection_status_suffix(),
-        };
+        let collection_sticky = self.working_collection_status_suffix();
         let status_bg = self.render_palette.primary();
         let status_style = TextStyle {
             fg: Some(contrast_fg_for_bg(status_bg)),
             bg: Some(status_bg),
             ..Default::default()
         };
-        if !self.draw_command_completion_status_row(
+        if matches!(
+            self.mode,
+            UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+        ) && !(self.mode == UiMode::Editor && editor_status_owned.is_some())
+        {
+            self.draw_editor_status_bar(buf, rows, cols, selection_stats);
+        } else if !self.draw_command_completion_status_row(
             buf,
             rows,
             cols,
@@ -2194,4 +2351,29 @@ pub(super) fn line_wraps(ctx: &render::RenderContext, text: &str) -> bool {
         && !ctx.in_code_block()
         && !markdown_tokens::is_code_fence(text)
         && !is_markdown_table_line(text)
+}
+
+/// Note id for the title bar: file notes show their path with `~` for home.
+fn display_note_identity(note_id: &str) -> String {
+    let label = switcher::note_identity_label(note_id);
+    match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && label.starts_with(&home) => {
+            format!("~{}", &label[home.len()..])
+        }
+        _ => label,
+    }
+}
+
+/// Keeps the end of `text` (e.g. a file name) when it does not fit `width`
+/// chars, marking the cut with a leading `…`.
+fn shorten_from_left(text: &str, width: usize) -> String {
+    let count = text.chars().count();
+    if count <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let tail: String = text.chars().skip(count - (width - 1)).collect();
+    format!("…{tail}")
 }

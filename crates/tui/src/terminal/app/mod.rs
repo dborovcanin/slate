@@ -507,6 +507,11 @@ struct RenderState {
     /// Number statistics for the current visual selection, keyed by the
     /// selection and the last edit so large selections are scanned once.
     selection_stats: Option<(SelectionStatsKey, Option<crate::editor_core::sum::NumberStats>)>,
+    /// Status message currently displayed and when it first appeared; the
+    /// editor status bar hides it after `STATUS_MESSAGE_TTL`.
+    status_shown: Option<(String, Instant)>,
+    /// Whether the last drawn frame showed the status message.
+    status_visible: bool,
     plain_text_file: bool,
     file_language: Option<String>,
     /// Fence state checkpoints for draw(). Entry k = fence state BEFORE line
@@ -1126,6 +1131,8 @@ impl TerminalApp {
                 wrap_lines: false,
                 editor_cursor_cell: None,
                 selection_stats: None,
+                status_shown: None,
+                status_visible: false,
                 dirty: true,
             },
             folds: FoldingState::empty(Vec::new(), Vec::new()),
@@ -1186,6 +1193,9 @@ impl TerminalApp {
                 }
                 None => {
                     if input::take_resize() {
+                        self.render_state.dirty = true;
+                    }
+                    if self.status_message_expired() {
                         self.render_state.dirty = true;
                     }
                     let idle_start = Instant::now();
