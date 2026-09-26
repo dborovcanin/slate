@@ -29,6 +29,10 @@ pub struct LineMetadata {
 pub struct CalcSignalFlags {
     pub has_variable_assignment: bool,
     pub has_builtin_formula: bool,
+    /// Some line looks like a calculation (`2 + 2`, `5 kg to lbs`), so the
+    /// note has results to show even without assignments or formulas.
+    #[serde(default)]
+    pub has_expression: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +122,9 @@ pub fn merge_incremental_signal_flags(
             && contains_builtin_formula_with_mask(std::slice::from_ref(text), mask)
         {
             flags.has_builtin_formula = true;
+        }
+        if !flags.has_expression && mask.math_enabled && has_calc_signal(text) {
+            flags.has_expression = true;
         }
     };
 
@@ -787,7 +794,10 @@ pub fn detect_calc_signal_flags_with_mask(
         if !flags.has_builtin_formula && line_has_builtin_formula_with_mask(line, mask) {
             flags.has_builtin_formula = true;
         }
-        if flags.has_variable_assignment && flags.has_builtin_formula {
+        if !flags.has_expression && has_calc_signal(line) {
+            flags.has_expression = true;
+        }
+        if flags.has_variable_assignment && flags.has_builtin_formula && flags.has_expression {
             break;
         }
     }
@@ -2914,6 +2924,25 @@ mod tests {
     }
 
     #[test]
+    fn signal_flags_report_plain_expressions() {
+        let mask = CalcFeatureMask::default();
+        let flags = detect_calc_signal_flags_with_mask(&["2 + 2".to_string()], mask);
+        assert!(flags.has_expression);
+        assert!(!flags.has_variable_assignment && !flags.has_builtin_formula);
+        let prose = detect_calc_signal_flags_with_mask(&["just words".to_string()], mask);
+        assert!(!prose.has_expression);
+        let off = CalcFeatureMask {
+            math_enabled: false,
+            ..mask
+        };
+        assert!(!detect_calc_signal_flags_with_mask(&["2 + 2".to_string()], off).has_expression);
+
+        let mut flags = CalcSignalFlags::default();
+        merge_incremental_signal_flags(&mut flags, &["12 * 3".to_string()], 1, 0, mask);
+        assert!(flags.has_expression, "typing an expression sets the flag");
+    }
+
+    #[test]
     fn merge_incremental_signal_flags_never_clears_on_delete() {
         let mask = CalcFeatureMask::default();
         // Document shrank (delete); flags must not flip true → false even though
@@ -2922,6 +2951,7 @@ mod tests {
         let mut flags = CalcSignalFlags {
             has_variable_assignment: true,
             has_builtin_formula: true,
+            has_expression: true,
         };
         merge_incremental_signal_flags(&mut flags, &lines, 2, 0, mask);
         assert!(flags.has_variable_assignment);

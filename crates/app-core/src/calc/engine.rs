@@ -992,7 +992,10 @@ fn evaluate_expression_with_variables(
         expr.to_string()
     };
 
-    let text = resolver.eval_raw(&substituted, ctx)?;
+    let text = match resolver.eval_raw(&substituted, ctx) {
+        Some(text) => text,
+        None => evaluate_leading_expression(&substituted, |prefix| resolver.eval_raw(prefix, ctx))?,
+    };
     if text == expr {
         return None;
     }
@@ -1016,7 +1019,10 @@ fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> 
     }
 
     let (expr, applied_result) = split_applied_result(trimmed);
-    let text = evaluate_raw_expression(expr, ctx)?;
+    let text = match evaluate_raw_expression(expr, ctx) {
+        Some(text) => text,
+        None => evaluate_leading_expression(expr, |prefix| evaluate_raw_expression(prefix, ctx))?,
+    };
     if text == expr {
         return None;
     }
@@ -1028,6 +1034,38 @@ fn evaluate_single(input: &str, ctx: &mut fend_core::Context) -> Option<String> 
     }
 
     Some(text)
+}
+
+/// Most attempts `evaluate_leading_expression` makes on one line.
+const MAX_LABEL_PREFIX_ATTEMPTS: usize = 8;
+
+/// Evaluates the calculation at the start of a line that begins with a
+/// number and ends in a text label, e.g. `100 - 20 groceries` -> `80`. Only
+/// called after the whole line failed to evaluate. Tries the prefixes that end
+/// right before a word starting with a letter, longest first, and accepts the
+/// first one that has a calculation in it and evaluates to something other
+/// than itself (so `3 days ago` and `2 kids and 3 dogs` stay silent).
+fn evaluate_leading_expression(
+    expr: &str,
+    mut evaluate: impl FnMut(&str) -> Option<String>,
+) -> Option<String> {
+    let trimmed = expr.trim();
+    if !trimmed.starts_with(|ch: char| ch.is_ascii_digit()) {
+        return None;
+    }
+    let mut label_starts: Vec<usize> = trimmed
+        .char_indices()
+        .zip(trimmed.chars().skip(1))
+        .filter(|((_, ch), next)| ch.is_whitespace() && next.is_alphabetic())
+        .map(|((idx, _), _)| idx)
+        .collect();
+    label_starts.reverse();
+    label_starts
+        .into_iter()
+        .map(|end| trimmed[..end].trim_end())
+        .filter(|prefix| has_calc_signal(prefix))
+        .take(MAX_LABEL_PREFIX_ATTEMPTS)
+        .find_map(|prefix| evaluate(prefix).filter(|value| value != prefix))
 }
 
 fn evaluate_raw_expression(expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
@@ -2283,6 +2321,38 @@ fn split_applied_result(s: &str) -> (&str, Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn evaluates_leading_expression_before_a_text_label() {
+        let engine = CalcEngine::new();
+        assert_eq!(engine.evaluate("100 - 20 groceries"), Some("80".to_string()));
+        assert_eq!(engine.evaluate("12 * 3 apples for the party"), Some("36".to_string()));
+        assert_eq!(engine.evaluate("1,200 + 300 rent and power"), Some("1500".to_string()));
+    }
+
+    #[test]
+    fn leading_expression_ignores_prose_and_plain_counts() {
+        let engine = CalcEngine::new();
+        assert_eq!(engine.evaluate("3 items bought"), None);
+        assert_eq!(engine.evaluate("2 kids and 3 dogs"), None);
+        assert_eq!(engine.evaluate("3 days ago"), None);
+        assert_eq!(engine.evaluate("groceries 100 - 20"), None, "must start with a number");
+    }
+
+    #[test]
+    fn leading_expression_in_note_context_respects_applied_results() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "100 - 20 groceries".to_string(),
+            "100 - 20 groceries = 80".to_string(),
+            "budget := 500".to_string(),
+            "2 * 50 snacks".to_string(),
+        ];
+        let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        assert_eq!(result.line_results[0].as_deref(), Some("80"));
+        assert_eq!(result.line_results[1], None, "already applied");
+        assert_eq!(result.line_results[3].as_deref(), Some("100"));
+    }
 
     #[test]
     fn evaluates_basic_arithmetic() {

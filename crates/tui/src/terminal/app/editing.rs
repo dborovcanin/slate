@@ -401,6 +401,7 @@ impl TerminalApp {
         );
         self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
         self.calc.cached_has_variable_assignment = flags.has_variable_assignment;
+        self.calc.cached_has_expression = flags.has_expression;
     }
 
     pub(super) fn update_calc_flags_incremental(&mut self) {
@@ -409,6 +410,7 @@ impl TerminalApp {
         let mut flags = crate::editor_core::calc_plan::CalcSignalFlags {
             has_variable_assignment: self.calc.cached_has_variable_assignment,
             has_builtin_formula: self.calc.cached_has_builtin_formula,
+            has_expression: self.calc.cached_has_expression,
         };
         crate::editor_core::calc_plan::merge_incremental_signal_flags(
             &mut flags,
@@ -419,6 +421,7 @@ impl TerminalApp {
         );
         self.calc.cached_has_variable_assignment = flags.has_variable_assignment;
         self.calc.cached_has_builtin_formula = flags.has_builtin_formula;
+        self.calc.cached_has_expression = flags.has_expression;
     }
 
     fn rebuild_calc_line_metadata(&mut self) {
@@ -540,13 +543,14 @@ impl TerminalApp {
     }
 
     pub(super) fn can_skip_calc_recompute(&self) -> bool {
-        // If neither builtin formulas nor variable assignments exist anywhere
-        // in the doc, `compute_calc_data` would produce all-None results for
-        // every line — matching the current state. Safe to skip regardless of
+        // If no line holds a formula, an assignment, or anything that looks
+        // like a calculation, `compute_calc_data` would produce all-None
+        // results — matching the current state. Safe to skip regardless of
         // doc size, which is the biggest input-latency win for notes that
         // don't use calc at all.
         !self.calc.cached_has_builtin_formula
             && !self.active_has_variable_assignments()
+            && !self.calc.cached_has_expression
             && !self.calc.stale
     }
 

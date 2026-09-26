@@ -2700,7 +2700,9 @@ impl TerminalApp {
             && !self.calc.cached_has_builtin_formula;
         self.calc_runtime.last_view_eval_range = None;
         if self.calc_runtime.viewport_only
-            || (!self.calc.cached_has_builtin_formula && !self.active_has_variable_assignments())
+            || (!self.calc.cached_has_builtin_formula
+                && !self.active_has_variable_assignments()
+                && !self.calc.cached_has_expression)
         {
             self.calc.results = vec![None; self.editor.lines.len()];
             self.calc.cell_results = vec![Vec::new(); self.editor.lines.len()];

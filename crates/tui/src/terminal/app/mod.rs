@@ -948,6 +948,7 @@ impl TerminalApp {
             );
         let initial_has_builtin_formula = initial_calc_signals.has_builtin_formula;
         let initial_has_variable_assignment = initial_calc_signals.has_variable_assignment;
+        let active_has_expression = note_math_enabled && initial_calc_signals.has_expression;
         let active_has_builtin_formula = note_math_enabled && initial_has_builtin_formula;
         let active_has_variable_assignment =
             note_math_enabled && note_variables_enabled && initial_has_variable_assignment;
@@ -955,8 +956,8 @@ impl TerminalApp {
             && lines.len() >= CALC_VIEWPORT_ONLY_MIN_LINES
             && active_has_variable_assignment
             && !active_has_builtin_formula;
-        let skip_initial_calc =
-            calc_viewport_only || (!active_has_builtin_formula && !active_has_variable_assignment);
+        let skip_initial_calc = calc_viewport_only
+            || (!active_has_builtin_formula && !active_has_variable_assignment && !active_has_expression);
         // Keep startup responsive for larger notes by deferring full calc
         // evaluation to the first idle ticks after initial paint.
         let defer_initial_full_calc = note_math_enabled
@@ -1085,6 +1086,7 @@ impl TerminalApp {
                 stale: defer_initial_full_calc,
                 cached_has_builtin_formula: initial_has_builtin_formula,
                 cached_has_variable_assignment: initial_has_variable_assignment,
+                cached_has_expression: initial_calc_signals.has_expression,
                 pathological_window_streak: 0,
                 forced_full_recompute_remaining: 0,
             },

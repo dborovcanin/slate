@@ -13,6 +13,8 @@ pub struct CalcCache {
     pub prev_line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,
     pub stale: bool,
     pub cached_has_builtin_formula: bool,
+    /// Some line looks like a calculation (see `CalcSignalFlags::has_expression`).
+    pub cached_has_expression: bool,
     pub cached_has_variable_assignment: bool,
     pub pathological_window_streak: usize,
     pub forced_full_recompute_remaining: usize,

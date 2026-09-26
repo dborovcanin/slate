@@ -1714,3 +1714,51 @@ fn charwise_selection_counts_only_selected_numbers() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn label_line_shows_leading_result_and_tab_appends_it() {
+    let (db, mut app, path) = app_with_note("100 - 20 groceries");
+    app.mode = UiMode::Editor;
+    app.run_calc_recompute();
+    assert_eq!(app.calc.results[0].as_deref(), Some("80"));
+
+    app.editor.cursor_col = line_char_len(&app.editor.lines[0]);
+    app.handle_editor_key(&db, Key::Tab).expect("tab");
+    assert_eq!(app.editor.lines[0], "100 - 20 groceries = 80");
+    app.run_calc_recompute();
+    assert_eq!(app.calc.results[0], None, "applied result is not repeated");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn plain_expressions_evaluate_when_opening_a_note_without_assignments() {
+    let (_db, app, path) = app_with_note("2 + 2\n100 - 20 groceries\nplain text");
+    assert_eq!(app.calc.results[0].as_deref(), Some("4"));
+    assert_eq!(app.calc.results[1].as_deref(), Some("80"));
+    assert_eq!(app.calc.results[2], None);
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn typing_a_plain_expression_evaluates_it_on_idle() {
+    let (db, mut app, path) = app_with_note("");
+    app.mode = UiMode::Editor;
+    for ch in "12 * 3".chars() {
+        app.handle_editor_key(&db, Key::Char(ch)).expect("type");
+    }
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while app.calc.results.first().cloned().flatten().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+        app.maybe_recompute_calc_after_idle();
+    }
+    assert_eq!(app.calc.results[0].as_deref(), Some("36"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
