@@ -1,48 +1,9 @@
 use crate::terminal::markdown_view::collapse_inline_markers;
 use crate::terminal::text_utils::byte_index;
-use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::VecDeque;
-use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub(super) struct TableCellInfo {
-    pub(super) column_index: usize,
-    pub(super) column_count: usize,
-    pub(super) logical_row_index: Option<usize>,
-    pub(super) logical_row_count: usize,
-    pub(super) is_continuation_row: bool,
-    pub(super) left_pipe: usize,
-    pub(super) right_pipe: usize,
-    pub(super) trim_start: usize,
-    pub(super) trim_end: usize,
-}
-
-#[derive(Debug, Clone)]
-struct TableCellInfoCacheEntry {
-    line_idx: usize,
-    col_char: usize,
-    cur_hash: u64,
-    prev_hash: u64,
-    next_hash: u64,
-    info: Option<TableCellInfo>,
-}
-
-const TABLE_CELL_INFO_CACHE_CAP: usize = 256;
-
-thread_local! {
-    static TABLE_CELL_INFO_CACHE: RefCell<VecDeque<TableCellInfoCacheEntry>> = const { RefCell::new(VecDeque::new()) };
-    static TABLE_LOGICAL_ROW_CACHE: RefCell<crate::editor_core::table::TableLogicalRowCache> = RefCell::new(
-        crate::editor_core::table::TableLogicalRowCache::default()
-    );
-}
-
-fn line_hash(text: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
-}
+/// Cell under a cursor; the logical-row fields are not filled in by
+/// [`table_cell_info_at_char`].
+pub(super) type TableCellInfo = crate::editor_core::table::TableCursorCellInfo;
 
 /// 0-based table cell index containing `cursor_char` (a char offset into
 /// `line`), using the same pipe-window rule as the reformatter. None if the
@@ -91,6 +52,8 @@ pub(super) fn is_markdown_table_line(line: &str) -> bool {
     crate::editor_core::table::is_table_line(line)
 }
 
+/// Cell of table row `lines[line_idx]` containing char column `col_char`.
+/// Looks at that row alone, so it stays cheap on the per-key cursor path.
 pub(super) fn table_cell_info_at_char(
     lines: &[String],
     line_idx: usize,
@@ -100,72 +63,7 @@ pub(super) fn table_cell_info_at_char(
     if !is_markdown_table_line(line) {
         return None;
     }
-
-    let cur_hash = line_hash(line);
-    let prev_hash = line_idx
-        .checked_sub(1)
-        .and_then(|idx| lines.get(idx))
-        .map(|line| line_hash(line))
-        .unwrap_or(0);
-    let next_hash = lines
-        .get(line_idx.saturating_add(1))
-        .map(|line| line_hash(line))
-        .unwrap_or(0);
-
-    if let Some(cached) = TABLE_CELL_INFO_CACHE.with(|cache| {
-        cache
-            .borrow()
-            .iter()
-            .rev()
-            .find(|entry| {
-                entry.line_idx == line_idx
-                    && entry.col_char == col_char
-                    && entry.cur_hash == cur_hash
-                    && entry.prev_hash == prev_hash
-                    && entry.next_hash == next_hash
-            })
-            .cloned()
-    }) {
-        return cached.info;
-    }
-
-    let col_byte = byte_index(line, col_char);
-    let info = TABLE_LOGICAL_ROW_CACHE.with(|row_cache| {
-        crate::editor_core::table::table_cell_cursor_info_in_document_cached(
-            lines,
-            line_idx,
-            col_byte,
-            &mut row_cache.borrow_mut(),
-        )
-    })?;
-    let resolved = Some(TableCellInfo {
-        column_index: info.column_index,
-        column_count: info.column_count,
-        logical_row_index: info.logical_row_index,
-        logical_row_count: info.logical_row_count,
-        is_continuation_row: info.is_continuation_row,
-        left_pipe: info.left_pipe,
-        right_pipe: info.right_pipe,
-        trim_start: info.trim_start,
-        trim_end: info.trim_end,
-    });
-
-    TABLE_CELL_INFO_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        cache.push_back(TableCellInfoCacheEntry {
-            line_idx,
-            col_char,
-            cur_hash,
-            prev_hash,
-            next_hash,
-            info: resolved.clone(),
-        });
-        while cache.len() > TABLE_CELL_INFO_CACHE_CAP {
-            cache.pop_front();
-        }
-    });
-
-    resolved
+    crate::editor_core::table::table_cell_info_in_line(line, byte_index(line, col_char))
 }
 
 pub(super) fn table_cell_is_empty(cell: &TableCellInfo) -> bool {

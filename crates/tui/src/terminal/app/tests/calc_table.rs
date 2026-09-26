@@ -149,21 +149,6 @@ fn table_cell_navigation_anchor_uses_padding_for_empty_and_word_end_for_non_empt
 }
 
 #[test]
-fn table_cell_info_tracks_logical_row_index_for_continuation_lines() {
-    let lines = vec![
-        "| name | value |".to_string(),
-        "| --- | --- |".to_string(),
-        "| alpha | one |".to_string(),
-        "|> beta | two |".to_string(),
-    ];
-    let base = table_cell_info_at_char(&lines, 2, 3).expect("base row");
-    let cont = table_cell_info_at_char(&lines, 3, 3).expect("continuation row");
-    assert_eq!(base.logical_row_index, Some(0));
-    assert_eq!(cont.logical_row_index, Some(0));
-    assert!(cont.is_continuation_row);
-}
-
-#[test]
 fn find_calc_segment_range_detects_list_body() {
     let line = "- [ ] subtotal + tax";
     let Some((from, to)) = find_calc_segment_range(line) else {

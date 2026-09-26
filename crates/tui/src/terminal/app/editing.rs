@@ -2685,19 +2685,12 @@ impl TerminalApp {
             return (0, 0);
         }
         let center = center_line.min(self.editor.lines.len().saturating_sub(1));
-        let current = self.editor.lines[center].as_str();
-        if self.note_table_module_enabled() && is_markdown_table_line(current) {
-            let mut start = center;
-            let mut end = center;
-            while start > 0 && is_markdown_table_line(self.editor.lines[start - 1].as_str()) {
-                start -= 1;
-            }
-            while end + 1 < self.editor.lines.len()
-                && is_markdown_table_line(self.editor.lines[end + 1].as_str())
+        if self.note_table_module_enabled() {
+            if let Some(bounds) =
+                crate::editor_core::table::table_block_bounds(&self.editor.lines, center)
             {
-                end += 1;
+                return bounds;
             }
-            return (start, end);
         }
         let window = 96usize;
         (
