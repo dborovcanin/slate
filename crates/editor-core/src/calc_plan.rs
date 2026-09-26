@@ -1218,18 +1218,23 @@ pub fn sync_variable_dependency_graph(
         return;
     }
 
-    let can_patch_in_place = graph
-        .as_mut()
-        .map(|cached| {
-            try_patch_variable_dependency_graph_in_place(
-                cached,
-                lines,
-                changed_from,
-                changed_to,
-                mask,
-            )
-        })
-        .unwrap_or(false);
+    let Some(cached) = graph.as_mut() else {
+        // No assignment anywhere before this edit: a graph only appears if
+        // the changed lines add one.
+        if changed_lines_match(lines, changed_from, changed_to, |line| {
+            line_assignment_def(line, mask).0.is_some()
+        }) {
+            *graph = build_variable_dependency_graph(lines, mask);
+        }
+        return;
+    };
+    let can_patch_in_place = try_patch_variable_dependency_graph_in_place(
+        cached,
+        lines,
+        changed_from,
+        changed_to,
+        mask,
+    );
 
     if !can_patch_in_place {
         *graph = build_variable_dependency_graph(lines, mask);
@@ -1423,6 +1428,12 @@ pub struct TableFormulaDependencyIndex {
     blocks: Vec<TableFormulaDependencyBlock>,
 }
 
+/// Formula index of a note that has no table formulas.
+static NO_TABLE_FORMULAS: TableFormulaDependencyIndex = TableFormulaDependencyIndex {
+    line_count: 0,
+    blocks: Vec::new(),
+};
+
 #[derive(Debug, Clone)]
 pub struct CalcDependencyIndex {
     mask: CalcFeatureMask,
@@ -1435,7 +1446,6 @@ fn build_table_formula_dependency_block(
     table_start: usize,
     table_end: usize,
 ) -> Option<TableFormulaDependencyBlock> {
-    let data_rows = table_data_rows(lines, table_start, table_end);
     let mut formula_lines = Vec::new();
     let mut formula_nodes: FxHashMap<(usize, usize), usize> = FxHashMap::default();
     let mut reverse_refs: FxHashMap<(usize, usize), FxHashSet<(usize, usize)>> =
@@ -1468,7 +1478,13 @@ fn build_table_formula_dependency_block(
             has_col_formula,
         });
     }
+    // Formula nodes live on formula lines, so a table without any has
+    // nothing to index; skip parsing its rows.
+    if formula_lines.is_empty() {
+        return None;
+    }
 
+    let data_rows = table_data_rows(lines, table_start, table_end);
     if !data_rows.rows.is_empty() {
         for (logical_idx, row_line_idxs) in data_rows.rows.iter().enumerate() {
             let row_1based = logical_idx.saturating_add(1);
@@ -1552,13 +1568,17 @@ pub fn sync_table_formula_dependency_index(
         return;
     }
 
-    let needs_rebuild = index
-        .as_ref()
-        .map(|cached| {
+    let needs_rebuild = match index.as_ref() {
+        Some(cached) => {
             cached.line_count != lines.len()
                 || table_range_maybe_impacts_formulas(lines, changed_from, changed_to, mask)
-        })
-        .unwrap_or(true);
+        }
+        // No formula anywhere before this edit: an index only appears if the
+        // changed lines add one.
+        None => changed_lines_match(lines, changed_from, changed_to, |line| {
+            is_table_line(line) && !find_table_formula_segments(line).is_empty()
+        }),
+    };
     if needs_rebuild {
         *index = build_table_formula_dependency_index(lines, mask);
     }
@@ -1571,17 +1591,20 @@ pub fn build_calc_dependency_index(
     if !mask.math_enabled {
         return None;
     }
-    let variable_graph = build_variable_dependency_graph(lines, mask);
-    let table_formula_index = build_table_formula_dependency_index(lines, mask);
-    if variable_graph.is_none() && table_formula_index.is_none() {
-        None
-    } else {
-        Some(CalcDependencyIndex {
-            mask,
-            variable_graph,
-            table_formula_index,
-        })
-    }
+    // Built even when both parts are empty: `None` means "not built yet",
+    // and a note without variables or formulas must not rebuild per edit.
+    Some(CalcDependencyIndex {
+        mask,
+        variable_graph: build_variable_dependency_graph(lines, mask),
+        table_formula_index: build_table_formula_dependency_index(lines, mask),
+    })
+}
+
+/// Whether any of `lines[from..to]` satisfies `pred`.
+fn changed_lines_match(lines: &[String], from: usize, to: usize, pred: impl Fn(&str) -> bool) -> bool {
+    lines
+        .get(from.min(lines.len())..to.min(lines.len()))
+        .is_some_and(|changed| changed.iter().any(|line| pred(line)))
 }
 
 pub fn sync_calc_dependency_index(
@@ -1620,9 +1643,6 @@ pub fn sync_calc_dependency_index(
             changed_to,
             mask,
         );
-        if cached.variable_graph.is_none() && cached.table_formula_index.is_none() {
-            *index = None;
-        }
     } else {
         *index = build_calc_dependency_index(lines, mask);
     }
@@ -1993,7 +2013,10 @@ impl<'a> DecideEvalWindowParams<'a> {
         dep_index: Option<&'a CalcDependencyIndex>,
     ) -> Self {
         self.variable_graph = dep_index.and_then(|d| d.variable_graph.as_ref());
-        self.table_formula_index = dep_index.and_then(|d| d.table_formula_index.as_ref());
+        // A built index without formulas says "no formula dependencies";
+        // passing None instead would make the window scan every table line.
+        self.table_formula_index = dep_index
+            .map(|d| d.table_formula_index.as_ref().unwrap_or(&NO_TABLE_FORMULAS));
         self
     }
 }
@@ -2780,6 +2803,36 @@ mod tests {
             table_formula_index: None,
         });
         assert_eq!(decision_cached, decision_uncached);
+    }
+
+    #[test]
+    fn dependency_index_of_a_calc_free_note_is_kept_until_an_edit_adds_calc() {
+        let mask = CalcFeatureMask::default();
+        let mut lines: Vec<String> = vec![
+            "| a | b |".into(),
+            "| --- | --- |".into(),
+            "| 1 | 2 |".into(),
+            "plain text".into(),
+        ];
+        let mut index = build_calc_dependency_index(&lines, mask);
+        let parts = |index: &Option<CalcDependencyIndex>| {
+            let index = index.as_ref().expect("built index is kept");
+            (index.variable_graph.is_some(), index.table_formula_index.is_some())
+        };
+        assert_eq!(parts(&index), (false, false));
+
+        // Typing a value in a cell adds no dependency.
+        lines[2] = "| 12 | 2 |".into();
+        sync_calc_dependency_index(&mut index, &lines, 2, 3, mask);
+        assert_eq!(parts(&index), (false, false));
+
+        // A formula or an assignment in the changed lines builds that part.
+        lines[2] = "| 12 | :=sum_row() |".into();
+        sync_calc_dependency_index(&mut index, &lines, 2, 3, mask);
+        assert_eq!(parts(&index), (false, true));
+        lines[3] = "total := 5".into();
+        sync_calc_dependency_index(&mut index, &lines, 3, 4, mask);
+        assert_eq!(parts(&index), (true, true));
     }
 
     #[test]
