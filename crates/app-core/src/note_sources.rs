@@ -979,9 +979,31 @@ fn markdown_file_timestamps(path: &Path) -> Result<(String, String), String> {
 /// "..." when truncation occurs). Returns "Untitled" for empty bodies.
 ///
 /// This is the single source of truth for note titles in the workspace.
+/// Title text of a line: trimmed, with a Markdown ATX heading marker
+/// (`# `..`###### ` and optional closing `#`s) removed. `#tag` and
+/// `#include` are left alone because no space follows the `#`.
+pub fn title_text_for_line(line: &str) -> &str {
+    let trimmed = line.trim();
+    let hashes = trimmed.chars().take_while(|ch| *ch == '#').count();
+    if !(1..=6).contains(&hashes) {
+        return trimmed;
+    }
+    let rest = &trimmed[hashes..];
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return trimmed;
+    }
+    let content = rest.trim();
+    let without_closing = content.trim_end_matches('#');
+    if without_closing.len() != content.len() && without_closing.ends_with(char::is_whitespace) {
+        without_closing.trim_end()
+    } else {
+        content
+    }
+}
+
 pub fn derive_note_title_from_body(body: &str) -> String {
     for line in body.lines() {
-        let trimmed = line.trim();
+        let trimmed = title_text_for_line(line);
         if trimmed.is_empty() {
             continue;
         }
@@ -1042,6 +1064,24 @@ fn note_summary_from_markdown_path(path: &Path) -> Result<NoteSummary, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn title_text_strips_atx_heading_markers_only() {
+        assert_eq!(title_text_for_line("# 2026-09-26"), "2026-09-26");
+        assert_eq!(title_text_for_line("  ### Plan ###  "), "Plan");
+        assert_eq!(title_text_for_line("## C#"), "C#");
+        assert_eq!(title_text_for_line("#tag and text"), "#tag and text");
+        assert_eq!(title_text_for_line("####### seven"), "####### seven");
+        assert_eq!(title_text_for_line("#"), "");
+        assert_eq!(title_text_for_line("plain"), "plain");
+    }
+
+    #[test]
+    fn derived_title_skips_empty_headings_and_strips_markers() {
+        assert_eq!(derive_note_title_from_body("#\n\n# Weekly review\nbody"), "Weekly review");
+        assert_eq!(derive_note_title_from_body("First line"), "First line");
+        assert_eq!(derive_note_title_from_body("\n  \n"), "Untitled");
+    }
     use image::codecs::png::PngEncoder;
     use image::{ColorType, ImageEncoder};
 

@@ -45,8 +45,8 @@ pub fn remove_char_at(text: &mut String, char_idx: usize) {
 pub fn derive_title_from_lines(lines: &[String]) -> String {
     let line = lines
         .iter()
-        .find(|l| !l.trim().is_empty())
-        .map(|s| s.trim())
+        .map(|line| app_core::note_sources::title_text_for_line(line))
+        .find(|line| !line.is_empty())
         .unwrap_or("Untitled");
     if line.chars().count() > 70 {
         let truncated: String = line.chars().take(70).collect();

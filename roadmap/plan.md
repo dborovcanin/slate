@@ -20,10 +20,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 
 ### Next steps (ordered)
 
-1. **Editing papercuts** (first impressions)
-   - Typing a table row char by char inserts extra columns: each `|` triggers the pipe-insert-column rule. Only insert a column when the pipe is typed inside an existing cell, not while the row is being written.
-   - Variable autocomplete does not trigger at the end of a prose line (`then pri`): the prefix extractor treats the whole space-separated run as a multi-word variable name. Fall back to the last word when the long prefix has no matches.
-   - Note titles keep the heading marker in lists (`# 2026-09-26`); strip markdown prefix markers when deriving titles.
+1. **Editing papercuts** - done: hand-typed tables keep their cells, variable autocomplete falls back to the last word on prose lines, titles drop heading markers (existing notes pick up the clean title on their next save).
 2. **Selection statistics** - while a visual selection or table cells are selected, show `sum`, `avg`, `count` of the numbers in the status bar (spreadsheet-style). Reuse the `:sum` / `:avg` scope logic in `editor-core`.
 3. **Segmented status bar** - mode pill, note title, dirty mark, module chips, calc/selection result, working collection; transient messages ("autosaved ...") become short-lived toasts instead of overwriting the status line.
 4. **Discoverability**
