@@ -337,6 +337,20 @@ impl TerminalApp {
                     clamp_table_padding = false;
                 } else {
                     let extending_row = self.cursor_after_last_table_pipe();
+                    if extending_row
+                        && ch != ' '
+                        && ch != '|'
+                        && self.editor.cursor_col > 0
+                        && self
+                            .current_line()
+                            .chars()
+                            .nth(self.editor.cursor_col - 1)
+                            == Some('|')
+                    {
+                        // First char of the next cell: add the cell's left pad
+                        // (the caret is already drawn past it).
+                        self.insert_char(' ');
+                    }
                     self.insert_char(ch);
                     should_autoformat = !defer_table_space_autoformat;
                     if extending_row && ch != '|' {

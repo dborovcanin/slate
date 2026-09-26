@@ -1764,22 +1764,33 @@ fn typing_a_plain_expression_evaluates_it_on_idle() {
 }
 
 #[test]
-fn closing_a_hand_typed_cell_draws_cursor_after_the_pipe() {
+fn closing_a_hand_typed_cell_moves_cursor_into_the_next_cell() {
+    for typed in ["| sasa |", "|sasa|"] {
+        let (db, mut app, path) = app_with_note("");
+        app.mode = UiMode::Editor;
+        type_text(&mut app, &db, typed);
+        let next_cell = app.gutter_width() + "| sasa | ".len();
+        let (_, cursor) = render_screen(&mut app);
+        assert_eq!(
+            usize::from(cursor.col),
+            next_cell,
+            "{typed:?}: caret sits at the start of the next cell"
+        );
+        // A space fills the drawn pad instead of moving the caret.
+        type_text(&mut app, &db, " ");
+        let (_, cursor) = render_screen(&mut app);
+        assert_eq!(usize::from(cursor.col), next_cell, "{typed:?}");
+
+        drop(app);
+        drop(db);
+        cleanup_db_files(&path);
+    }
+
+    // Typing straight after the pipe gets the pad inserted.
     let (db, mut app, path) = app_with_note("");
     app.mode = UiMode::Editor;
-    type_text(&mut app, &db, "| sasa |");
-    let (_, cursor) = render_screen(&mut app);
-    assert_eq!(
-        usize::from(cursor.col),
-        app.gutter_width() + "| sasa |".len(),
-        "caret sits at the start of the next cell, not on the closing pipe"
-    );
-    type_text(&mut app, &db, " ");
-    let (_, cursor) = render_screen(&mut app);
-    assert_eq!(
-        usize::from(cursor.col),
-        app.gutter_width() + "| sasa | ".len()
-    );
+    type_text(&mut app, &db, "|a|b|");
+    assert_eq!(app.editor.lines, vec!["| a | b |"]);
 
     drop(app);
     drop(db);
@@ -1821,6 +1832,26 @@ fn enter_in_a_middle_table_cell_opens_a_row_below_without_splitting() {
         ]
     );
     assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (3, 2));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn typing_a_compact_markdown_table_by_hand_builds_a_clean_table() {
+    let (db, mut app, path) = app_with_note("");
+    app.mode = UiMode::Editor;
+    type_text(&mut app, &db, "|a|b|");
+    app.handle_editor_key(&db, Key::Enter).expect("enter");
+    type_text(&mut app, &db, "|-|-|");
+    app.handle_editor_key(&db, Key::Enter).expect("enter");
+    type_text(&mut app, &db, "|1|2|");
+
+    assert_eq!(
+        app.editor.lines,
+        vec!["| a   | b   |", "| --- | --- |", "| 1   | 2   |"]
+    );
 
     drop(app);
     drop(db);

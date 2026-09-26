@@ -740,6 +740,10 @@ pub fn table_cell_cursor_info_in_document_cached(
         return None;
     }
     let col_in_line = col.min(current.len());
+    if col_in_line > *pipes.last()? {
+        // Past the closing pipe: the cursor is starting a new cell, not in one.
+        return None;
+    }
     let cell_index = table_cell_index_for_column(&pipes, col_in_line)?;
     let left_pipe = *pipes.get(cell_index)?;
     let right_pipe = *pipes.get(cell_index + 1)?;
@@ -1305,6 +1309,12 @@ pub fn map_table_cursor_column(source_line: &str, target_line: &str, source_col:
     if source_pipes.len() < 2 || target_pipes.len() < 2 {
         return source_col.min(target_line.len());
     }
+    // Past the closing pipe (starting the next cell by hand): stay past it.
+    if let (Some(&source_last), Some(&target_last)) = (source_pipes.last(), target_pipes.last()) {
+        if source_col > source_last {
+            return (target_last + (source_col - source_last)).min(target_line.len());
+        }
+    }
 
     let Some(source_cell_index) = table_cell_index_for_column(&source_pipes, source_col) else {
         return source_col.min(target_line.len());
@@ -1638,6 +1648,12 @@ mod tests {
         assert_eq!(edit.cursor_byte, edit.lines[3].find('y').unwrap(), "after the pasted text");
         assert!(plan_table_cell_multiline_paste(&lines, 1, 3, "1\n2", &mut cache).is_none());
         assert!(plan_table_cell_multiline_paste(&lines, 2, cursor, "1", &mut cache).is_none());
+    }
+
+    #[test]
+    fn map_table_cursor_column_keeps_cursor_after_closing_pipe() {
+        assert_eq!(map_table_cursor_column("|sasa|", "| sasa |", 6), 8);
+        assert_eq!(map_table_cursor_column("|a|b|", "| a | b |", 5), 9);
     }
 
     #[test]

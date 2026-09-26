@@ -469,12 +469,14 @@ fn reformat_table_row_impl(
     out_chars += 1;
 
     // Cursor past the closing pipe (starting the next cell by hand): keep the
-    // typed whitespace so the caret sits after the pipe, not on it.
+    // typed whitespace, and draw the caret at least one column past the pipe,
+    // where the next cell's content starts (`| a | ▌`). The first typed
+    // character there gets that pad space inserted in front of it.
     if let (Some(cb), Some(&last_pipe)) = (cursor_byte_in_trimmed, pipes.last()) {
         if cb > last_pipe {
-            let after = cb - last_pipe - 1;
-            out.extend(std::iter::repeat_n(' ', after));
-            mapped_cursor = Some(out_chars + after);
+            let shown = (cb - last_pipe - 1).max(1);
+            out.extend(std::iter::repeat_n(' ', shown));
+            mapped_cursor = Some(out_chars + shown);
         }
     }
 
