@@ -259,6 +259,26 @@ pub(super) fn cell_visible_width(trimmed_cell: &str) -> usize {
     crate::editor_core::table::table_cell_display_width(&collapsed)
 }
 
+/// While spaces are typed after a cell's content, the cursor row draws them
+/// (see `reformat_table_row_for_display`), so that cell is wider than its
+/// column. Returns `(cell_index, width)` the column needs to keep the whole
+/// table aligned, or None when the cursor is not past a cell's content.
+pub(super) fn cursor_cell_typing_width(line: &str, cursor_char: usize) -> Option<(usize, usize)> {
+    use crate::editor_core::table::{split_table_cells, table_pipe_positions};
+    let lead = line.len() - line.trim_start().len();
+    let trimmed = &line[lead..];
+    let pipes = table_pipe_positions(trimmed);
+    let cb = byte_index(line, cursor_char).checked_sub(lead)?;
+    let ci = pipes.windows(2).position(|w| cb > w[0] && cb <= w[1])?;
+    let raw = &trimmed[pipes[ci] + 1..pipes[ci + 1]];
+    let content_end = pipes[ci] + 1 + raw.trim_end().len();
+    let trailing = cb.checked_sub(content_end).filter(|&n| n > 0)?;
+    let cells = split_table_cells(trimmed);
+    let content = cells.get(ci).filter(|cell| !cell.is_empty())?;
+    let (collapsed, _) = collapse_inline_markers(content, Some(content.chars().count()));
+    Some((ci, collapsed.chars().count() + trailing))
+}
+
 /// Re-renders a table row for display, adjusting column widths so cells align
 /// to their visible widths (after inline markers are collapsed).
 ///

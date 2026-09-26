@@ -4,7 +4,7 @@ use super::{
     find_table_formula_segments, format_formula_display_value, formula_marker_token,
     is_markdown_table_line, line_display_cols, min, reformat_table_cursor_row_raw,
     reformat_table_row_for_display,
-    cell_visible_width, table_cell_info_at_char, table_cursor_cell_index,
+    cell_visible_width, cursor_cell_typing_width, table_cell_info_at_char, table_cursor_cell_index,
     viewport_col_for_display_col, TextStyle, DatePickerAction,
     SelectionStatsKey, TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
@@ -334,7 +334,7 @@ impl TerminalApp {
         let mut hasher = rustc_hash::FxHasher::default();
         self.editor.lines[start..=end].hash(&mut hasher);
         let key = (start, hasher.finish());
-        let layout = match self.render_caches.table_layout_cache.get(&key) {
+        let mut layout = match self.render_caches.table_layout_cache.get(&key) {
             Some(cached) => cached.clone(),
             None => {
                 let layout =
@@ -347,6 +347,18 @@ impl TerminalApp {
                 layout
             }
         };
+        // Spaces being typed at the end of the cursor cell widen its column
+        // for this frame, so the other rows stay aligned with it.
+        let cursor_line = self.editor.cursor_line;
+        if layout.contains(cursor_line) && !layout.is_delimiter(cursor_line) {
+            if let Some((cell, width)) =
+                cursor_cell_typing_width(&self.editor.lines[cursor_line], self.editor.cursor_col)
+            {
+                if let Some(col_width) = layout.col_widths.get_mut(cell) {
+                    *col_width = (*col_width).max(width);
+                }
+            }
+        }
         if let Some(pass) = &mut self.render_caches.table_layout_pass {
             pass.push(layout.clone());
         }

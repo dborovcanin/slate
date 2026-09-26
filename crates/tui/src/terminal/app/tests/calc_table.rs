@@ -1815,6 +1815,32 @@ fn typed_trailing_spaces_in_table_cell_render_before_next_word() {
 }
 
 #[test]
+fn typed_trailing_spaces_widen_the_column_for_every_row() {
+    let (db, mut app, path) = app_with_note(
+        "| sas   | sasa    | x   |\n| ----- | ------- | --- |\n| dusan | as dasd | y   |",
+    );
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = app.editor.lines[2].find("dasd").unwrap() + 4;
+    for _ in 0..2 {
+        app.handle_editor_key(&db, Key::Char(' ')).expect("space");
+        let rows = screen_rows(&mut app);
+        let pipes = |line_no: usize| -> Vec<usize> {
+            first_editor_row_for(&rows, line_no)
+                .char_indices()
+                .filter(|(_, c)| *c == '|')
+                .map(|(i, _)| i)
+                .collect()
+        };
+        assert_eq!(pipes(1), pipes(3), "header and cursor row stay aligned");
+        assert_eq!(pipes(2), pipes(3), "delimiter and cursor row stay aligned");
+    }
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn enter_in_a_middle_table_cell_opens_a_row_below_without_splitting() {
     let (db, mut app, path) = app_with_note(
         "| sasa | sasa | sasas |\n| ---- | ---- | ----- |\n| sas  |      |       |",
