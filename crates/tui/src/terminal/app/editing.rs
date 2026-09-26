@@ -2902,6 +2902,41 @@ impl TerminalApp {
         true
     }
 
+    /// Runs a table text rule scoped to the cursor line's block and applies
+    /// its edit. Returns whether the rule fired.
+    fn try_scoped_table_rule(
+        &mut self,
+        rule: fn(&crate::editor_core::context::ResolvedContext<'_>) -> Option<crate::editor_core::types::EditOperation>,
+    ) -> bool {
+        if !self.note_table_module_enabled() {
+            return false;
+        }
+        let (start_line, end_line) = self.scoped_rule_line_span(self.editor.cursor_line);
+        let (ctx, scope_start_offset) =
+            self.build_scoped_context_for_line_span(start_line, end_line, None);
+        let Some(op) = rule(&ctx) else {
+            return false;
+        };
+        let mapped = Self::remap_operation_from_scope(&op, scope_start_offset);
+        self.apply_edit_operation(&mapped);
+        true
+    }
+
+    pub(super) fn try_table_manual_row_start_rule(&mut self) -> bool {
+        self.try_scoped_table_rule(crate::editor_core::text_rules::run_table_manual_row_start_rule)
+    }
+
+    pub(super) fn try_table_duplicate_delimiter_rule(&mut self) -> bool {
+        let fired = self
+            .try_scoped_table_rule(crate::editor_core::text_rules::run_table_duplicate_delimiter_rule);
+        if fired {
+            // End of the kept delimiter row, so Enter starts the first data row
+            // (the padding guard in apply would pull it into the last cell).
+            self.editor.cursor_col = line_char_len(self.current_line());
+        }
+        fired
+    }
+
     pub(super) fn try_table_pipe_insert_column_rule(&mut self) -> bool {
         if !self.note_table_module_enabled() {
             return false;
@@ -3595,6 +3630,40 @@ impl TerminalApp {
 
     pub(super) fn clamp_cursor_to_line_bounds(&mut self) {
         self.adjust_cursor_line_and_col_bounds();
+    }
+
+    /// True when the cursor line is a table row with fewer cells than the
+    /// table's header row, i.e. a row still being typed by hand.
+    pub(super) fn cursor_table_row_is_incomplete(&self) -> bool {
+        let line_idx = self.editor.cursor_line;
+        if !is_markdown_table_line(&self.editor.lines[line_idx]) {
+            return false;
+        }
+        let mut header = line_idx;
+        while header > 0 && is_markdown_table_line(&self.editor.lines[header - 1]) {
+            header -= 1;
+        }
+        if header == line_idx {
+            return false;
+        }
+        let cells = crate::editor_core::table::split_table_cells(&self.editor.lines[line_idx]).len();
+        let header_cells =
+            crate::editor_core::table::split_table_cells(&self.editor.lines[header]).len();
+        cells < header_cells
+    }
+
+    /// True when the cursor sits after the last `|` of a line that starts
+    /// as a table row, i.e. the user is typing the next cell of a new row.
+    pub(super) fn cursor_after_last_table_pipe(&self) -> bool {
+        let line = self.current_line();
+        if !line.trim_start().starts_with('|') {
+            return false;
+        }
+        line.chars()
+            .enumerate()
+            .filter(|(_, ch)| *ch == '|')
+            .last()
+            .is_some_and(|(idx, _)| self.editor.cursor_col > idx)
     }
 
     pub(super) fn adjust_cursor_with_table_padding_guard(&mut self, clamp_table_padding: bool) {

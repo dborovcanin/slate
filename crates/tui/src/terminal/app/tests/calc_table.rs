@@ -1590,3 +1590,43 @@ fn tab_accepts_variable_autocomplete_for_active_prefix() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+fn type_text(app: &mut TerminalApp, db: &Db, text: &str) {
+    for ch in text.chars() {
+        app.handle_editor_key(db, Key::Char(ch)).expect("type");
+    }
+}
+
+#[test]
+fn typing_a_table_row_by_hand_keeps_its_cells() {
+    let (db, mut app, path) = app_with_note("");
+    app.mode = UiMode::Editor;
+    type_text(&mut app, &db, "| a | b |");
+    assert_eq!(app.editor.lines, vec!["| a | b |"]);
+    assert_eq!(app.editor.cursor_col, 9, "cursor stays after the closing pipe");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn typing_a_whole_markdown_table_by_hand_builds_a_clean_table() {
+    let (db, mut app, path) = app_with_note("");
+    app.mode = UiMode::Editor;
+    type_text(&mut app, &db, "| a | b |");
+    app.handle_editor_key(&db, Key::Enter).expect("enter");
+    // Enter already added the delimiter row; typing it again is absorbed.
+    type_text(&mut app, &db, "| --- | --- |");
+    app.handle_editor_key(&db, Key::Enter).expect("enter");
+    type_text(&mut app, &db, "| 1 | 2 |");
+
+    assert_eq!(
+        app.editor.lines,
+        vec!["| a   | b   |", "| --- | --- |", "| 1   | 2   |"]
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

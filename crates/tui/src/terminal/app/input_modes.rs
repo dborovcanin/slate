@@ -62,6 +62,9 @@ impl TerminalApp {
         self.maybe_record_vim_insert_macro_key(&key);
         let mut should_autoformat = false;
         let mut clamp_table_padding = true;
+        // Set when a typed `|` closes a table row at the end of the line: the
+        // cursor stays after the pipe so the next cell can be typed.
+        let mut cursor_after_row_end = false;
         let mut moved_cursor = false;
         let mut preserve_table_column = false;
         let mut refresh_variable_popup = false;
@@ -325,12 +328,33 @@ impl TerminalApp {
             Key::Char(ch) => {
                 let defer_table_space_autoformat =
                     ch == ' ' && self.should_defer_table_space_autoformat();
-                if ch == '|' && self.try_table_pipe_insert_column_rule() {
+                if ch == '|' && self.try_table_manual_row_start_rule() {
+                    // Blank row replaced by `|`: keep composing the row by hand.
+                    should_autoformat = false;
+                    cursor_after_row_end = true;
+                } else if ch == '|' && self.try_table_pipe_insert_column_rule() {
                     should_autoformat = false;
                     clamp_table_padding = false;
                 } else {
+                    let extending_row = self.cursor_after_last_table_pipe();
                     self.insert_char(ch);
                     should_autoformat = !defer_table_space_autoformat;
+                    if extending_row && ch != '|' {
+                        // Typing past a row's closing pipe starts the next
+                        // cell; do not reformat the row under the cursor.
+                        should_autoformat = false;
+                    }
+                    cursor_after_row_end = extending_row
+                        || (ch == '|' && self.editor.cursor_col == line_char_len(self.current_line()));
+                    if ch == '|' && cursor_after_row_end {
+                        if self.try_table_duplicate_delimiter_rule()
+                            || self.cursor_table_row_is_incomplete()
+                        {
+                            // Duplicate removed, or the row is still shorter
+                            // than the header: leave it as typed.
+                            should_autoformat = false;
+                        }
+                    }
                     // Auto-close [[ → [[]] and open wiki-link picker.
                     if ch == '[' && self.editor.cursor_col >= 2 {
                         let prev = self
@@ -374,7 +398,7 @@ impl TerminalApp {
             Key::Ctrl(_) => {}
         }
 
-        if preserve_table_column {
+        if preserve_table_column || cursor_after_row_end {
             self.clamp_cursor_to_line_bounds();
         } else {
             self.adjust_cursor_with_table_padding_guard(clamp_table_padding);

@@ -1445,6 +1445,81 @@ pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<Ed
     run_table_pipe_insert_column_rule_with_table_cache(ctx, &mut table_format_cache)
 }
 
+/// Typing `|` into a blank table row (every cell empty, not the header) with
+/// the cursor in its first cell means the user is writing the row by hand,
+/// e.g. after Enter auto-inserted an empty row. The row is replaced with `|`
+/// so the typed pipes build the row instead of splitting empty cells.
+pub fn run_table_manual_row_start_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+    let line = ctx.current_line();
+    if line.number < 2
+        || !is_table_line(&line.text)
+        || table::is_table_continuation_line(&line.text)
+        || !is_table_line(ctx.line_text(line.number - 1))
+    {
+        return None;
+    }
+    if !table::split_table_cells(&line.text)
+        .iter()
+        .all(|cell| cell.trim().is_empty())
+    {
+        return None;
+    }
+    let first_pipe = line.text.find('|')?;
+    let second_pipe = first_pipe + 1 + line.text[first_pipe + 1..].find('|')?;
+    let cursor_col = selection.head.saturating_sub(line.from);
+    if cursor_col <= first_pipe || cursor_col > second_pipe {
+        return None;
+    }
+    Some(replace_range(
+        line.from,
+        line.to,
+        "|",
+        Some(OperationSelection {
+            anchor: line.from + 1,
+            head: None,
+        }),
+    ))
+}
+
+/// When a delimiter row typed by hand is closed directly below an existing
+/// delimiter row (Enter after the header already added one), the duplicate is
+/// removed and the cursor moves to the end of the existing delimiter row.
+pub fn run_table_duplicate_delimiter_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
+    let selection = ctx.selection();
+    if !selection.empty {
+        return None;
+    }
+    let line = ctx.current_line();
+    if line.number < 2 || selection.head != line.to || !is_table_line(&line.text) {
+        return None;
+    }
+    let previous = ctx.line(line.number - 1);
+    let cells = table::split_table_cells(&line.text);
+    let previous_cells = table::split_table_cells(&previous.text);
+    // Only a complete duplicate (same column count) is removed; a row
+    // still being typed (`| --- |` of `| --- | --- |`) is left alone.
+    if !is_table_line(&previous.text)
+        || cells.len() != previous_cells.len()
+        || !table::is_delimiter_row(&cells)
+        || !table::is_delimiter_row(&previous_cells)
+    {
+        return None;
+    }
+    Some(replace_range(
+        previous.to,
+        line.to,
+        "",
+        Some(OperationSelection {
+            anchor: previous.to,
+            head: None,
+        }),
+    ))
+}
+
 pub fn run_table_pipe_insert_column_rule_with_table_cache(
     ctx: &ResolvedContext<'_>,
     table_format_cache: &mut table::TableFormatCache,
@@ -1460,6 +1535,18 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
     }
 
     let block = ctx.table_range_at_line(line.number, 1)?;
+
+    // Only an established table (one with a `| --- |` delimiter row) gains a
+    // column; while a header row is still being typed, `|` is plain text.
+    let has_delimiter_row = (block.start_line..=block.end_line).any(|line_no| {
+        table::is_delimiter_row(&table::split_table_cells_with_cache(
+            ctx.line_text(line_no),
+            table_format_cache,
+        ))
+    });
+    if !has_delimiter_row {
+        return None;
+    }
 
     let header_line = table_header_line_number_with_cache(
         &ctx,
@@ -2406,6 +2493,65 @@ mod tests {
         let head = text.find("1").unwrap();
         let snap = snapshot(text, head, head);
         assert!(run_table_pipe_insert_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn run_table_pipe_insert_column_ignores_a_header_still_being_typed() {
+        // No delimiter row yet: the new `|` just ends the cell being written.
+        let text = "| a | b";
+        let snap = snapshot(text, text.len(), text.len());
+        assert!(run_table_pipe_insert_column_rule(&snap).is_none());
+        let text = "| a |\nplain";
+        let snap = snapshot(text, 5, 5);
+        assert!(run_table_pipe_insert_column_rule(&snap).is_none());
+    }
+
+    #[test]
+    fn manual_row_start_replaces_a_blank_row_when_pipe_is_typed_in_its_first_cell() {
+        let text = "| a | b |\n| --- | --- |\n|   |   |";
+        let head = text.rfind("|   |   |").unwrap() + 2;
+        let op = run_table_manual_row_start_rule(&snapshot(text, head, head)).expect("fires");
+        let result = apply_operation(text, &op);
+        assert_eq!(result, "| a | b |\n| --- | --- |\n|");
+        assert_eq!(op.selection.expect("selection").anchor, result.len());
+    }
+
+    #[test]
+    fn manual_row_start_ignores_rows_with_content_or_other_cells() {
+        let text = "| a | b |\n| --- | --- |\n| 1 |   |";
+        let head = text.rfind("| 1").unwrap() + 2;
+        assert!(run_table_manual_row_start_rule(&snapshot(text, head, head)).is_none());
+        let text = "| a | b |\n| --- | --- |\n|   |   |";
+        let head = text.len() - 2;
+        assert!(
+            run_table_manual_row_start_rule(&snapshot(text, head, head)).is_none(),
+            "second cell"
+        );
+        let text = "|   |   |";
+        assert!(run_table_manual_row_start_rule(&snapshot(text, 2, 2)).is_none(), "header");
+    }
+
+    #[test]
+    fn duplicate_delimiter_is_removed_and_cursor_kept_on_the_first() {
+        let text = "| a | b |\n| --- | --- |\n| --- | --- |";
+        let head = text.len();
+        let op = run_table_duplicate_delimiter_rule(&snapshot(text, head, head)).expect("fires");
+        let result = apply_operation(text, &op);
+        assert_eq!(result, "| a | b |\n| --- | --- |");
+        assert_eq!(op.selection.expect("selection").anchor, result.len());
+    }
+
+    #[test]
+    fn duplicate_delimiter_rule_ignores_data_rows_and_mid_line_cursor() {
+        let text = "| a | b |\n| --- | --- |\n| 1 | 2 |";
+        assert!(run_table_duplicate_delimiter_rule(&snapshot(text, text.len(), text.len())).is_none());
+        let text = "| a | b |\n| --- | --- |\n| --- | --- |";
+        let head = text.len() - 2;
+        assert!(run_table_duplicate_delimiter_rule(&snapshot(text, head, head)).is_none());        let text = "| a | b |\n| --- | --- |\n| --- |";
+        assert!(
+            run_table_duplicate_delimiter_rule(&snapshot(text, text.len(), text.len())).is_none(),
+            "partial delimiter row"
+        );
     }
 
     #[test]
