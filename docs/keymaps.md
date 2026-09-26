@@ -57,6 +57,7 @@ Vim mode is optional and starts in normal mode when enabled.
 Supported and tested core motions/actions include:
 
 - movement: `h`, `j`, `k`, `l`, `w`, `b`, `0`, `$`, `gg`, `G`
+- screen-row movement on soft-wrapped lines: `gj`, `gk` (with counts); in insert mode the arrow keys move by screen row on wrapped lines
 - edit actions: `x`, `dd`, `cw`, `cc`, `C`, `u`, `Ctrl+r`, `o`, `O`, `a`, `A`, `I`
 - yank/delete with counts: examples `yy`, `3yy`, `d2w`, `yaw`
 - macros (normal + insert flows): `q<register>` start, `q` stop, `@<register>` replay, `3@a` counted replay

@@ -516,6 +516,9 @@ struct EditorModel {
     cursor_line: usize,
     cursor_col: usize, // char index
     scroll_line: usize,
+    /// Rows of the soft-wrapped top line scrolled past; only nonzero when the
+    /// cursor line is taller than the editor area.
+    scroll_row_offset: usize,
     scroll_col: usize,
     selection_anchor: Option<(usize, usize)>, // (line, col)
     markdown_formatting_right_boundary_exit: Option<(usize, usize)>,

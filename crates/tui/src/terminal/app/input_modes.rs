@@ -129,8 +129,12 @@ impl TerminalApp {
                     if !self.try_shared_table_cursor_motion(
                         crate::editor_core::table::TableCursorMotionDirection::Up,
                     ) {
-                        self.move_cursor_up(1);
-                        preserve_table_column = true;
+                        if self.cursor_line_wraps() {
+                            self.move_cursor_screen(true, 1);
+                        } else {
+                            self.move_cursor_up(1);
+                            preserve_table_column = true;
+                        }
                     }
                     moved_cursor = true;
                 }
@@ -142,8 +146,12 @@ impl TerminalApp {
                     if !self.try_shared_table_cursor_motion(
                         crate::editor_core::table::TableCursorMotionDirection::Down,
                     ) {
-                        self.move_cursor_down(1);
-                        preserve_table_column = true;
+                        if self.cursor_line_wraps() {
+                            self.move_cursor_screen(false, 1);
+                        } else {
+                            self.move_cursor_down(1);
+                            preserve_table_column = true;
+                        }
                     }
                     moved_cursor = true;
                 }

@@ -189,14 +189,17 @@ impl RenderContext {
         );
     }
 
-    /// Soft-wraps one line into rows of `width` cells. Paints at most
-    /// `max_rows` rows into `target` (when given) and reports the total row
+    /// Soft-wraps one line into rows of `width` cells. Skips the first
+    /// `skip_rows` rows, paints at most `max_rows` rows into `target` (when
+    /// given) and reports the total row
     /// count plus the cell of the `track_char`-th visible character, which
     /// callers use to place the cursor. With `target` = `None` it only measures.
+    #[allow(clippy::too_many_arguments)]
     pub fn render_line_wrapped(
         &mut self,
         text: &str,
         width: usize,
+        skip_rows: usize,
         max_rows: usize,
         track_char: Option<usize>,
         deco: &LineDecorations<'_>,
@@ -221,6 +224,7 @@ impl RenderContext {
                 x,
                 y,
                 width,
+                skip_rows,
                 max_rows,
                 &cells,
                 &layout,
@@ -229,6 +233,43 @@ impl RenderContext {
             );
         }
         WrapOutcome { rows, tracked }
+    }
+
+    /// Cell position (row, col) of every char of a soft-wrapped line, plus
+    /// the end-of-line slot at index `chars.len()`. Hidden chars map to `None`.
+    /// Returns the positions and the number of rows.
+    pub fn wrap_char_positions(
+        &mut self,
+        text: &str,
+        width: usize,
+        deco: &LineDecorations<'_>,
+    ) -> (Vec<Option<(usize, usize)>>, usize) {
+        let line = self.style_line(text, deco);
+        let (cells, visible_count) = build_wrap_cells(
+            &line,
+            line.ghosts(deco, self.palette.code_comment),
+            deco.selection_ranges,
+        );
+        let width = width.max(1);
+        let layout = layout_wrap_rows(&cells, width);
+        let mut positions = vec![None; line.chars.len() + 1];
+        let mut hidden = vec![false; line.chars.len()];
+        for &(start, end) in &line.hidden_ranges {
+            for flag in hidden.iter_mut().take(end).skip(start) {
+                *flag = true;
+            }
+        }
+        let mut ordinal = 0usize;
+        for (idx, is_hidden) in hidden.iter().enumerate() {
+            if !is_hidden {
+                positions[idx] = Some(locate_ordinal(&cells, &layout, ordinal, width));
+                ordinal += 1;
+            }
+        }
+        let end = locate_ordinal(&cells, &layout, visible_count, width);
+        positions[line.chars.len()] = Some(end);
+        let rows = layout.rows.len().max(end.0 + 1);
+        (positions, rows)
     }
 
     /// Computes per-char styles, hidden marker ranges and ghost prefix for a
@@ -795,6 +836,7 @@ fn paint_wrap_rows(
     x: u16,
     y: u16,
     width: usize,
+    skip_rows: usize,
     max_rows: usize,
     cells: &[WrapCell],
     layout: &WrapLayout,
@@ -803,8 +845,8 @@ fn paint_wrap_rows(
 ) {
     let area = buf.area;
     let last_row = layout.rows.len().saturating_sub(1);
-    for (row, &(start, end)) in layout.rows.iter().enumerate().take(max_rows) {
-        let row_y = y.saturating_add(row as u16);
+    for (row, &(start, end)) in layout.rows.iter().enumerate().skip(skip_rows).take(max_rows) {
+        let row_y = y.saturating_add((row - skip_rows) as u16);
         if row_y >= area.bottom() {
             break;
         }
@@ -1380,7 +1422,7 @@ mod tests {
         deco: LineDecorations<'_>,
     ) -> (Vec<String>, WrapOutcome) {
         let mut buf = Buffer::empty(Rect::new(0, 0, width as u16, 8));
-        let outcome = ctx.render_line_wrapped(text, width, 8, track, &deco, Some((&mut buf, 0, 0)));
+        let outcome = ctx.render_line_wrapped(text, width, 0, 8, track, &deco, Some((&mut buf, 0, 0)));
         let rows = (0..outcome.rows.min(8) as u16)
             .map(|y| row_text(&buf, y).trim_end().to_string())
             .collect();
@@ -1477,6 +1519,7 @@ mod tests {
         let outcome = ctx.render_line_wrapped(
             "abcdefghij",
             4,
+            0,
             8,
             None,
             &LineDecorations::default(),
@@ -1491,5 +1534,43 @@ mod tests {
         let (_, outcome) = render_wrapped(&mut ctx, "", 10, Some(0), LineDecorations::default());
         assert_eq!(outcome.rows, 1);
         assert_eq!(outcome.tracked, Some((0, 0)));
+    }
+
+    #[test]
+    fn wrap_char_positions_map_source_chars_to_cells() {
+        let mut ctx = RenderContext::new();
+        let (positions, rows) =
+            ctx.wrap_char_positions("hello world foo", 11, &LineDecorations::default());
+        assert_eq!(rows, 2);
+        assert_eq!(positions[0], Some((0, 0)));
+        assert_eq!(positions[12], Some((1, 0)));
+        assert_eq!(positions[15], Some((1, 3)));
+    }
+
+    #[test]
+    fn wrap_char_positions_mark_hidden_markers() {
+        let mut ctx = RenderContext::new();
+        let (positions, _) =
+            ctx.wrap_char_positions("**bold** x", 20, &LineDecorations::default());
+        assert_eq!(positions[0], None);
+        assert_eq!(positions[2], Some((0, 0)));
+        assert_eq!(positions[9], Some((0, 5)));
+    }
+
+    #[test]
+    fn wrap_skip_rows_paints_from_a_later_row() {
+        let mut ctx = RenderContext::new();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 4, 2));
+        ctx.render_line_wrapped(
+            "abcdefghij",
+            4,
+            1,
+            2,
+            None,
+            &LineDecorations::default(),
+            Some((&mut buf, 0, 0)),
+        );
+        assert_eq!(row_text(&buf, 0), "efgh");
+        assert_eq!(row_text(&buf, 1), "ij  ");
     }
 }

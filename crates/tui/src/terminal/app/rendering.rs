@@ -1118,16 +1118,22 @@ impl TerminalApp {
                     let track = (is_cursor_line && editor_cursor_mode)
                         .then(|| self.cursor_display_char(&display));
                     let max_rows = editor_bottom - row;
+                    let skip = if virtual_line == self.editor.scroll_line {
+                        self.editor.scroll_row_offset
+                    } else {
+                        0
+                    };
                     let (line_x, line_y) = (buf_x(buf, col), buf_y(buf, row));
                     let outcome = ctx.render_line_wrapped(
                         &display.text,
                         text_width,
+                        skip,
                         max_rows,
                         track,
                         &display.decorations(&self.calc.variable_names),
                         Some((buf, line_x, line_y)),
                     );
-                    let used = outcome.rows.clamp(1, max_rows);
+                    let used = outcome.rows.saturating_sub(skip).clamp(1, max_rows);
                     for extra in 1..used {
                         draw_row_at_styled(
                             buf,
@@ -1142,8 +1148,8 @@ impl TerminalApp {
                         );
                     }
                     if let Some((track_row, track_col)) = outcome.tracked {
-                        if track_row < max_rows {
-                            wrapped_cursor_cell = Some((row + track_row, col + track_col));
+                        if track_row >= skip && track_row - skip < max_rows {
+                            wrapped_cursor_cell = Some((row + track_row - skip, col + track_col));
                         }
                     }
                     row += used;
@@ -1522,8 +1528,10 @@ impl TerminalApp {
         let cursor_virtual = self.current_virtual_line();
         let top = self.editor.scroll_line;
         if cursor_virtual < top || cursor_virtual >= top + editor_height {
+            self.editor.scroll_row_offset = 0;
             return prepared;
         }
+        let mut cursor_row_in_line = 0usize;
         let first_real = self.real_line_for_virtual(top).unwrap_or(0);
         let mut ctx = self.render_context_at(first_real);
         let mut last_real = first_real.checked_sub(1);
@@ -1544,15 +1552,19 @@ impl TerminalApp {
                 let track = display
                     .is_cursor_line
                     .then(|| self.cursor_display_char(&display));
-                ctx.render_line_wrapped(
+                let outcome = ctx.render_line_wrapped(
                     &display.text,
                     text_width,
+                    0,
                     usize::MAX,
                     track,
                     &display.decorations(&self.calc.variable_names),
                     None,
-                )
-                .rows
+                );
+                if let Some((row, _)) = outcome.tracked {
+                    cursor_row_in_line = row;
+                }
+                outcome.rows
             } else {
                 ctx.advance_lines(std::slice::from_ref(&display.text));
                 1
@@ -1566,13 +1578,25 @@ impl TerminalApp {
             prepared.pop_front();
             self.editor.scroll_line += 1;
         }
+        // Sub-line scrolling: only the cursor line itself can be taller than
+        // the editor area; keep its cursor row visible by skipping rows.
+        if self.editor.scroll_line == cursor_virtual {
+            let offset = &mut self.editor.scroll_row_offset;
+            if cursor_row_in_line < *offset {
+                *offset = cursor_row_in_line;
+            } else if cursor_row_in_line >= *offset + editor_height {
+                *offset = cursor_row_in_line + 1 - editor_height;
+            }
+        } else {
+            self.editor.scroll_row_offset = 0;
+        }
         prepared
     }
 
     /// Resolves what one document line looks like on screen: display text
     /// (after formula masking, table reflow, link and media collapsing),
     /// ghosts, highlight ranges, and the cursor mapping for the cursor line.
-    fn prepare_display_line(&mut self, line_idx: usize, now_ms: i64) -> DisplayLine {
+    pub(super) fn prepare_display_line(&mut self, line_idx: usize, now_ms: i64) -> DisplayLine {
         let mut cursor_line_override: Option<(String, usize)> = None;
         let is_cursor_line = line_idx == self.editor.cursor_line;
         let mut line_cursor_col = if is_cursor_line {
@@ -2065,8 +2089,8 @@ fn buf_y(buf: &Buffer, row: usize) -> u16 {
 }
 
 /// One document line resolved for display; see `prepare_display_line`.
-struct DisplayLine {
-    text: String,
+pub(super) struct DisplayLine {
+    pub(super) text: String,
     is_cursor_line: bool,
     calc_ghost: Option<String>,
     reminder_ghost: Option<String>,
@@ -2084,7 +2108,7 @@ struct DisplayLine {
 }
 
 impl DisplayLine {
-    fn decorations<'a>(&'a self, variable_names: &'a [String]) -> LineDecorations<'a> {
+    pub(super) fn decorations<'a>(&'a self, variable_names: &'a [String]) -> LineDecorations<'a> {
         LineDecorations {
             calc_ghost: self.calc_ghost.as_deref(),
             reminder_ghost: self.reminder_ghost.as_deref(),

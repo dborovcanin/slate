@@ -78,6 +78,9 @@ pub enum VimIntent {
     MoveRight,
     MoveUp,
     MoveDown,
+    /// Move by display rows of a soft-wrapped line (`gk` / `gj`).
+    MoveScreenUp,
+    MoveScreenDown,
     MoveWordForward,
     MoveWordBackward,
     MoveLineStart,
@@ -357,7 +360,22 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
 
         if let Some(pending) = next.pending.take() {
             match (pending, key) {
-                (VimPending::Go, VimKey::Char('g')) => {
+                (VimPending::Go, VimKey::Char(ch @ ('j' | 'k'))) => {
+                    let count = consume_count(&mut next);
+                    let intent = if ch == 'j' {
+                        VimIntent::MoveScreenDown
+                    } else {
+                        VimIntent::MoveScreenUp
+                    };
+                    actions.push(make_action(intent, count));
+                    handled = true;
+                    return VimStep {
+                        state: next,
+                        actions,
+                        handled,
+                    };
+                }
+            (VimPending::Go, VimKey::Char('g')) => {
                     let count = consume_count(&mut next);
                     if count > 1 {
                         actions.push(make_action(
@@ -765,6 +783,21 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
             (VimPending::Change, VimKey::Char('a')) => {
                 next.pending_count = None;
                 next.pending = Some(VimPending::ChangeAround);
+                handled = true;
+                return VimStep {
+                    state: next,
+                    actions,
+                    handled,
+                };
+            }
+            (VimPending::Go, VimKey::Char(ch @ ('j' | 'k'))) => {
+                let count = consume_count(&mut next);
+                let intent = if ch == 'j' {
+                    VimIntent::MoveScreenDown
+                } else {
+                    VimIntent::MoveScreenUp
+                };
+                actions.push(make_action(intent, count));
                 handled = true;
                 return VimStep {
                     state: next,
@@ -1277,6 +1310,30 @@ mod tests {
         let three = step_token(&two.state, "char:g");
         assert_eq!(three.actions[0].intent, VimIntent::MoveToLine);
         assert_eq!(three.actions[0].count, 3);
+    }
+
+    #[test]
+    fn gj_and_gk_emit_screen_motions_with_counts() {
+        let start = VimState::default();
+        let g = step_token(&start, "char:g");
+        let j = step_token(&g.state, "char:j");
+        assert_eq!(j.actions[0].intent, VimIntent::MoveScreenDown);
+        assert_eq!(j.actions[0].count, 1);
+
+        let two = step_token(&start, "char:2");
+        let g = step_token(&two.state, "char:g");
+        let k = step_token(&g.state, "char:k");
+        assert_eq!(k.actions[0].intent, VimIntent::MoveScreenUp);
+        assert_eq!(k.actions[0].count, 2);
+    }
+
+    #[test]
+    fn gj_in_visual_mode_emits_screen_motion() {
+        let visual = step_token(&VimState::default(), "char:v");
+        let g = step_token(&visual.state, "char:g");
+        let j = step_token(&g.state, "char:j");
+        assert_eq!(j.actions[0].intent, VimIntent::MoveScreenDown);
+        assert_eq!(j.state.mode, VimMode::Visual);
     }
 
     #[test]

@@ -3471,6 +3471,85 @@ impl TerminalApp {
         self.editor.markdown_formatting_right_boundary_exit = boundary_exit_anchor;
     }
 
+    /// Cell positions of the cursor line's chars (see
+    /// `RenderContext::wrap_char_positions`) when it soft-wraps and its display
+    /// text is the source text; `None` when screen rows cannot be mapped back.
+    fn cursor_line_wrap_positions(&mut self) -> Option<Vec<Option<(usize, usize)>>> {
+        if !self.cursor_line_wraps() {
+            return None;
+        }
+        let line_idx = self.editor.cursor_line;
+        let display =
+            self.prepare_display_line(line_idx, crate::terminal::notifications::now_epoch_ms());
+        if display.text != self.editor.lines[line_idx] {
+            return None;
+        }
+        let (_, cols) = input::terminal_size();
+        let width = cols.saturating_sub(self.gutter_width()).max(1);
+        let mut ctx = self.render_context_at(line_idx);
+        let (positions, _) = ctx.wrap_char_positions(
+            &display.text,
+            width,
+            &display.decorations(&self.calc.variable_names),
+        );
+        Some(positions)
+    }
+
+    /// Moves the cursor `count` screen rows up or down (`gk` / `gj`, and
+    /// arrow keys on wrapped lines), keeping its screen column. Falls back to
+    /// logical line moves where lines do not wrap.
+    pub(super) fn move_cursor_screen(&mut self, up: bool, count: usize) {
+        let allow_end = self.mode == UiMode::Editor;
+        for _ in 0..count {
+            let Some(positions) = self.cursor_line_wrap_positions() else {
+                if up {
+                    self.move_cursor_up(1);
+                } else {
+                    self.move_cursor_down(1);
+                }
+                continue;
+            };
+            let col = self.editor.cursor_col.min(positions.len() - 1);
+            let (row, screen_col) = positions[col..]
+                .iter()
+                .flatten()
+                .next()
+                .copied()
+                .unwrap_or((0, 0));
+            let rows = positions.iter().flatten().map(|(r, _)| r + 1).max().unwrap_or(1);
+            let target_row = if up {
+                row.checked_sub(1)
+            } else {
+                (row + 1 < rows).then_some(row + 1)
+            };
+            if let Some(target_row) = target_row {
+                self.editor.cursor_col =
+                    column_on_screen_row(&positions, target_row, screen_col, allow_end);
+                continue;
+            }
+            let before = self.editor.cursor_line;
+            if up {
+                self.move_cursor_up(1);
+            } else {
+                self.move_cursor_down(1);
+            }
+            if self.editor.cursor_line == before {
+                break;
+            }
+            match self.cursor_line_wrap_positions() {
+                Some(next) => {
+                    let next_rows = next.iter().flatten().map(|(r, _)| r + 1).max().unwrap_or(1);
+                    let row = if up { next_rows - 1 } else { 0 };
+                    self.editor.cursor_col =
+                        column_on_screen_row(&next, row, screen_col, allow_end);
+                }
+                None => self.editor.cursor_col = screen_col,
+            }
+        }
+        self.editor.markdown_formatting_right_boundary_exit = None;
+        self.clamp_cursor_to_line_bounds();
+    }
+
     pub(super) fn move_cursor_up(&mut self, count: usize) {
         if count == 0 {
             return;
@@ -4347,4 +4426,29 @@ fn extract_preview_content(body: &str, max_lines: usize) -> String {
         }
     }
     result.join("\n")
+}
+
+/// Char index on screen `row` whose column is the closest at or before
+/// `screen_col` (the first char of the row when none is). The end-of-line
+/// slot is only a candidate when `allow_end` (insert mode).
+fn column_on_screen_row(
+    positions: &[Option<(usize, usize)>],
+    row: usize,
+    screen_col: usize,
+    allow_end: bool,
+) -> usize {
+    let end_slot = positions.len() - 1;
+    let mut best: Option<(usize, usize)> = None;
+    let mut first: Option<usize> = None;
+    for (idx, pos) in positions.iter().enumerate() {
+        let Some((r, c)) = *pos else { continue };
+        if r != row || (idx == end_slot && !allow_end) {
+            continue;
+        }
+        first.get_or_insert(idx);
+        if c <= screen_col && best.is_none_or(|(_, best_col)| c >= best_col) {
+            best = Some((idx, c));
+        }
+    }
+    best.map(|(idx, _)| idx).or(first).unwrap_or(0)
 }

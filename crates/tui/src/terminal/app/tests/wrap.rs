@@ -131,3 +131,93 @@ fn nowrap_mode_keeps_horizontal_scrolling() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+// In the 80-column test screen the text area is 74 columns, so a line of
+// "wordNN" tokens puts word00..word09 on row 0 and word10.. on row 1.
+const ROW1_START: usize = 70;
+
+#[test]
+fn gj_and_gk_move_between_screen_rows_keeping_the_column() {
+    let body = format!("{}\nnext", long_line("word", 20));
+    let (db, mut app, path) = wrapped_app(&body);
+    app.mode = UiMode::Normal;
+    app.editor.cursor_col = 7;
+
+    app.move_cursor_screen(false, 1);
+    assert_eq!(app.editor.cursor_line, 0);
+    assert_eq!(app.editor.cursor_col, ROW1_START + 7);
+
+    app.move_cursor_screen(true, 1);
+    assert_eq!(app.editor.cursor_col, 7);
+
+    app.move_cursor_screen(false, 2);
+    assert_eq!(app.editor.cursor_line, 1, "gj past the last row enters the next line");
+
+    app.move_cursor_screen(true, 1);
+    assert_eq!(app.editor.cursor_line, 0, "gk from the next line lands on the last row");
+    assert!(app.editor.cursor_col >= ROW1_START);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn gj_keys_route_to_screen_motion_in_vim_mode() {
+    let body = long_line("word", 20);
+    let (db, mut app, path) = wrapped_app(&body);
+    app.vim_enabled = true;
+    app.mode = UiMode::Normal;
+    app.editor.cursor_col = 3;
+    run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('j')]);
+    assert_eq!(app.editor.cursor_col, ROW1_START + 3);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn arrow_keys_move_by_screen_row_on_wrapped_lines_in_editor_mode() {
+    let body = format!("{}\nnext", long_line("word", 20));
+    let (db, mut app, path) = wrapped_app(&body);
+    app.mode = UiMode::Editor;
+    app.editor.cursor_col = 3;
+
+    app.handle_editor_key(&db, Key::ArrowDown).expect("arrow down");
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, ROW1_START + 3));
+    app.handle_editor_key(&db, Key::ArrowUp).expect("arrow up");
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, 3));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn line_taller_than_the_screen_scrolls_by_rows_to_the_cursor() {
+    // ~250 words wrap to more rows than the 22-row editor area.
+    let body = format!("intro\n{}", long_line("w", 250).replace("w", "word"));
+    let (db, mut app, path) = wrapped_app(&body);
+    app.mode = UiMode::Editor;
+    app.editor.cursor_line = 1;
+    app.editor.cursor_col = line_char_len(&app.editor.lines[1]);
+    app.adjust_scroll();
+
+    let (rows, cursor) = render_screen(&mut app);
+    assert_eq!(app.editor.scroll_line, 1, "the tall cursor line becomes the top line");
+    assert!(app.editor.scroll_row_offset > 0, "rows above the cursor are skipped");
+    let cursor_row = usize::from(cursor.row);
+    assert!(cursor_row >= 1 && cursor_row < rows.len() - 1);
+    assert!(rows[cursor_row].contains("word249"), "cursor row: {:?}", rows[cursor_row]);
+
+    // Moving back to the start scrolls the offset back to zero.
+    app.editor.cursor_col = 0;
+    app.adjust_scroll();
+    render_screen(&mut app);
+    assert_eq!(app.editor.scroll_row_offset, 0);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

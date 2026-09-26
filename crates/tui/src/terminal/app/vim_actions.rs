@@ -721,6 +721,12 @@ impl TerminalApp {
                 }
                 crate::editor_core::vim::VimIntent::MoveUp => self.move_cursor_up(count),
                 crate::editor_core::vim::VimIntent::MoveDown => self.move_cursor_down(count),
+                crate::editor_core::vim::VimIntent::MoveScreenUp => {
+                    self.move_cursor_screen(true, count)
+                }
+                crate::editor_core::vim::VimIntent::MoveScreenDown => {
+                    self.move_cursor_screen(false, count)
+                }
                 crate::editor_core::vim::VimIntent::MoveWordForward => {
                     for _ in 0..count {
                         self.move_cursor_right_word();
