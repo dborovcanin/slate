@@ -1,4 +1,8 @@
 use super::input::Key;
+use crate::terminal::session::CursorPlacement;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 use super::{
     build_variable_suggestions, builtin_formula_label, compute_calc_results,
     compute_calc_trailer_refresh, extract_variable_completion_prefix, find_calc_segment_range,
@@ -61,45 +65,36 @@ fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
     (db, app, path)
 }
 
-fn strip_ansi_control_sequences(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len());
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        let b = bytes[idx];
-        if b == 0x1b {
-            idx += 1;
-            if idx < bytes.len() && bytes[idx] == b'[' {
-                idx += 1;
-                while idx < bytes.len() {
-                    let c = bytes[idx];
-                    idx += 1;
-                    if (0x40..=0x7e).contains(&c) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        if b != b'\r' {
-            out.push(b as char);
-        }
-        idx += 1;
-    }
-    out
+/// Renders the app into an off-screen ratatui buffer sized like the terminal.
+fn render_screen(app: &mut TerminalApp) -> (Vec<String>, CursorPlacement) {
+    let (rows, cols) = super::input::terminal_size();
+    let mut buf = Buffer::empty(Rect::new(0, 0, cols as u16, rows as u16));
+    let cursor = app.render_to_buffer(&mut buf);
+    (buffer_rows(&buf), cursor)
 }
 
-fn frame_rows_without_ansi(app: &TerminalApp) -> Vec<String> {
-    let text = strip_ansi_control_sequences(&app.render_state.draw_buf);
-    let (_, cols) = super::input::terminal_size();
-    if cols == 0 {
-        return vec![text];
-    }
-    let chars: Vec<char> = text.chars().collect();
-    chars
-        .chunks(cols)
-        .map(|chunk| chunk.iter().collect::<String>())
+fn buffer_rows(buf: &Buffer) -> Vec<String> {
+    let area = buf.area;
+    (area.top()..area.bottom())
+        .map(|y| {
+            let mut row = String::new();
+            let mut x = area.left();
+            while x < area.right() {
+                let symbol = buf[(x, y)].symbol();
+                row.push_str(symbol);
+                x += (UnicodeWidthStr::width(symbol) as u16).max(1);
+            }
+            row
+        })
         .collect()
+}
+
+fn screen_rows(app: &mut TerminalApp) -> Vec<String> {
+    render_screen(app).0
+}
+
+fn screen_text(app: &mut TerminalApp) -> String {
+    screen_rows(app).join("\n")
 }
 
 fn first_editor_row_for(rows: &[String], line_no: usize) -> String {
@@ -157,10 +152,7 @@ fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
     let (db, mut app, path) = app_with_note(line);
     app.editor.cursor_col = "Capability is **an action**".chars().count();
 
-    let mut frame = Vec::new();
-    app.draw(&mut frame)
-        .expect("initial draw at right boundary");
-    let revealed = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
+    let revealed = first_editor_row_for(&screen_rows(&mut app), 1);
     assert!(
         revealed.contains("**an action**"),
         "expected right boundary reveal before exit, got:\n{revealed}"
@@ -168,9 +160,7 @@ fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
 
     app.handle_editor_key(&db, Key::ArrowRight)
         .expect("right exits boundary");
-    frame.clear();
-    app.draw(&mut frame).expect("draw after first right");
-    let snapped_after_first = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
+    let snapped_after_first = first_editor_row_for(&screen_rows(&mut app), 1);
     assert!(
         snapped_after_first.contains("an action linked"),
         "expected markers snapped after first right, got:\n{snapped_after_first}"
@@ -187,9 +177,7 @@ fn editor_right_boundary_exit_snaps_closing_strong_markers_before_next_right() {
         app.editor.cursor_col > col_after_first,
         "second right should advance source cursor forward"
     );
-    frame.clear();
-    app.draw(&mut frame).expect("draw after second right");
-    let snapped_after_second = first_editor_row_for(&frame_rows_without_ansi(&app), 1);
+    let snapped_after_second = first_editor_row_for(&screen_rows(&mut app), 1);
     assert!(
         snapped_after_second.contains("an action linked"),
         "markers should stay snapped after second right, got:\n{snapped_after_second}"

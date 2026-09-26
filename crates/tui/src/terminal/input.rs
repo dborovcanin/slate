@@ -1,15 +1,24 @@
-use std::io::{self, Write};
-use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicBool, Ordering};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::time::Duration;
 
-static SIGWINCH_FIRED: AtomicBool = AtomicBool::new(false);
+/// How long `read_key` waits for input before returning `None` so the event
+/// loop can run idle work (autosave, background results, animations).
+const IDLE_POLL: Duration = Duration::from_millis(100);
 
-extern "C" fn sigwinch_handler(_: libc::c_int) {
-    SIGWINCH_FIRED.store(true, Ordering::Relaxed);
-}
+const DEFAULT_ROWS: u32 = 24;
+const DEFAULT_COLS: u32 = 80;
 
-pub fn take_resize() -> bool {
-    SIGWINCH_FIRED.swap(false, Ordering::Relaxed)
+static TERMINAL_ROWS: AtomicU32 = AtomicU32::new(DEFAULT_ROWS);
+static TERMINAL_COLS: AtomicU32 = AtomicU32::new(DEFAULT_COLS);
+static RESIZED: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    // Keys decoded from a single event that expands to several (Alt+x is
+    // delivered as Esc followed by x).
+    static PENDING: RefCell<VecDeque<Key>> = const { RefCell::new(VecDeque::new()) };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,327 +47,174 @@ pub enum Key {
     Ctrl(char),
 }
 
+/// Last known terminal size as `(rows, cols)`. Updated at session start and on
+/// resize events; defaults to 24x80 when no terminal session is active.
 pub fn terminal_size() -> (usize, usize) {
-    let mut ws = MaybeUninit::<libc::winsize>::zeroed();
-    let ok = unsafe {
-        libc::ioctl(
-            libc::STDOUT_FILENO,
-            libc::TIOCGWINSZ,
-            ws.as_mut_ptr() as *mut libc::c_void,
-        )
-    };
-    if ok == 0 {
-        let ws = unsafe { ws.assume_init() };
-        let rows = usize::from(ws.ws_row.max(1));
-        let cols = usize::from(ws.ws_col.max(1));
-        (rows, cols)
-    } else {
-        (24, 80)
-    }
+    (
+        TERMINAL_ROWS.load(Ordering::Relaxed) as usize,
+        TERMINAL_COLS.load(Ordering::Relaxed) as usize,
+    )
 }
 
+pub fn set_terminal_size(rows: u16, cols: u16) {
+    TERMINAL_ROWS.store(u32::from(rows.max(1)), Ordering::Relaxed);
+    TERMINAL_COLS.store(u32::from(cols.max(1)), Ordering::Relaxed);
+}
+
+pub fn take_resize() -> bool {
+    RESIZED.swap(false, Ordering::Relaxed)
+}
+
+/// Waits up to `IDLE_POLL` for the next key. Returns `None` on timeout or for
+/// events that do not map to a key (resizes set the resize flag instead).
 pub fn read_key() -> Result<Option<Key>, String> {
-    let Some(first) = read_byte()? else {
-        return Ok(None);
-    };
-
-    if first == b'\x1b' {
-        return parse_escape_sequence();
+    if let Some(key) = PENDING.with(|pending| pending.borrow_mut().pop_front()) {
+        return Ok(Some(key));
     }
-    if first == b'\r' || first == b'\n' {
-        return Ok(Some(Key::Enter));
-    }
-    if first == b'\t' {
-        return Ok(Some(Key::Tab));
-    }
-    if first == 127 || first == 8 {
-        let erase = terminal_erase_byte().unwrap_or(127);
-        return Ok(Some(classify_backspace_byte(first, erase)));
-    }
-    if (1..=26).contains(&first) {
-        let c = (b'a' + (first - 1)) as char;
-        return Ok(Some(Key::Ctrl(c)));
-    }
-    // Map Ctrl+\ (28), Ctrl+] (29), Ctrl+^ (30), Ctrl+_ (31)
-    // Ctrl+[ (27) is already handled as ESC above.
-    if (28..=31).contains(&first) {
-        let c = (b'\\' + (first - 28)) as char;
-        return Ok(Some(Key::Ctrl(c)));
-    }
-    if first.is_ascii() {
-        return Ok(Some(Key::Char(first as char)));
-    }
-
-    let needed = utf8_continuation_count(first);
-    if needed == 0 {
+    let ready = event::poll(IDLE_POLL).map_err(|e| format!("Failed to poll input: {e}"))?;
+    if !ready {
         return Ok(None);
     }
-
-    let mut bytes = vec![first];
-    for _ in 0..needed {
-        if let Some(b) = read_byte()? {
-            bytes.push(b);
-        } else {
-            return Ok(None);
-        }
-    }
-    if let Ok(text) = std::str::from_utf8(&bytes) {
-        if let Some(ch) = text.chars().next() {
-            return Ok(Some(Key::Char(ch)));
-        }
-    }
-    Ok(None)
-}
-
-pub struct TerminalGuard {
-    original: libc::termios,
-}
-
-impl TerminalGuard {
-    pub fn enter() -> Result<Self, String> {
-        let mut term = MaybeUninit::<libc::termios>::zeroed();
-        let ok = unsafe { libc::tcgetattr(libc::STDIN_FILENO, term.as_mut_ptr()) };
-        if ok != 0 {
-            return Err(format!(
-                "Failed to read terminal attributes: {}",
-                io::Error::last_os_error()
-            ));
-        }
-        let original = unsafe { term.assume_init() };
-        let mut raw = original;
-
-        raw.c_iflag &= !(libc::BRKINT | libc::ICRNL | libc::INPCK | libc::ISTRIP | libc::IXON);
-        raw.c_oflag &= !(libc::OPOST);
-        raw.c_cflag |= libc::CS8;
-        raw.c_lflag &= !(libc::ECHO | libc::ICANON | libc::IEXTEN | libc::ISIG);
-        raw.c_cc[libc::VMIN] = 0;
-        raw.c_cc[libc::VTIME] = 1;
-
-        let ok = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &raw) };
-        if ok != 0 {
-            return Err(format!(
-                "Failed to enable raw terminal mode: {}",
-                io::Error::last_os_error()
-            ));
-        }
-
-        unsafe {
-            let mut sa: libc::sigaction = std::mem::zeroed();
-            sa.sa_sigaction = sigwinch_handler as *const () as libc::sighandler_t;
-            sa.sa_flags = libc::SA_RESTART;
-            libc::sigaction(libc::SIGWINCH, &sa, std::ptr::null_mut());
-        }
-
-        let mut out = io::stdout();
-        out.write_all(b"\x1b[?1049h\x1b[?2004h\x1b[?7l\x1b[?25l\x1b[H\x1b[2J")
-            .and_then(|_| out.flush())
-            .map_err(|e| format!("Failed to initialize terminal screen: {e}"))?;
-
-        Ok(Self { original })
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        let _ = unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &self.original) };
-        let mut out = io::stdout();
-        let _ = out.write_all(b"\x1b[0m\x1b[?7h\x1b[?2004l\x1b[?25h\x1b[?1049l\x1b[0 q");
-        let _ = out.flush();
-    }
-}
-
-fn read_byte() -> Result<Option<u8>, String> {
-    let mut buf = [0u8; 1];
-    let n = unsafe { libc::read(libc::STDIN_FILENO, buf.as_mut_ptr() as *mut libc::c_void, 1) };
-    if n == 0 {
-        return Ok(None);
-    }
-    if n < 0 {
-        let err = io::Error::last_os_error();
-        if err.kind() == io::ErrorKind::WouldBlock || err.kind() == io::ErrorKind::Interrupted {
-            return Ok(None);
-        }
-        return Err(format!("Failed to read stdin: {err}"));
-    }
-    Ok(Some(buf[0]))
-}
-
-fn utf8_continuation_count(first: u8) -> usize {
-    if first & 0b1110_0000 == 0b1100_0000 {
-        1
-    } else if first & 0b1111_0000 == 0b1110_0000 {
-        2
-    } else if first & 0b1111_1000 == 0b1111_0000 {
-        3
-    } else {
-        0
-    }
-}
-
-fn read_bracketed_paste_payload() -> Result<String, String> {
-    const END: &[u8] = b"\x1b[201~";
-    let mut payload = Vec::new();
-    let mut idle_ticks = 0usize;
-
-    loop {
-        match read_byte()? {
-            Some(byte) => {
-                idle_ticks = 0;
-                payload.push(byte);
-                if payload.len() >= END.len() && payload.ends_with(END) {
-                    payload.truncate(payload.len() - END.len());
-                    break;
-                }
+    let event = event::read().map_err(|e| format!("Failed to read input: {e}"))?;
+    match event {
+        Event::Key(key_event) => {
+            let mut keys = map_key_event(key_event);
+            if keys.is_empty() {
+                return Ok(None);
             }
-            None => {
-                idle_ticks += 1;
-                if idle_ticks >= 8 {
-                    break;
-                }
+            let first = keys.remove(0);
+            if !keys.is_empty() {
+                PENDING.with(|pending| pending.borrow_mut().extend(keys));
             }
+            Ok(Some(first))
         }
+        Event::Paste(text) => Ok(Some(Key::Paste(text))),
+        Event::Resize(cols, rows) => {
+            set_terminal_size(rows, cols);
+            RESIZED.store(true, Ordering::Relaxed);
+            Ok(None)
+        }
+        _ => Ok(None),
     }
-
-    Ok(String::from_utf8_lossy(&payload).into_owned())
 }
 
-fn parse_escape_sequence() -> Result<Option<Key>, String> {
-    let Some(second) = read_byte()? else {
-        return Ok(Some(Key::Esc));
+/// Translates a crossterm key event into editor keys. Most events map to one
+/// key; Alt+key expands to `Esc` followed by the key so fast `Esc j` typing
+/// (which terminals deliver as a single Alt sequence) is not lost.
+fn map_key_event(event: KeyEvent) -> Vec<Key> {
+    if event.kind == KeyEventKind::Release {
+        return Vec::new();
+    }
+    let mods = event.modifiers;
+    let ctrl = mods.contains(KeyModifiers::CONTROL);
+    let alt = mods.contains(KeyModifiers::ALT);
+    let shift = mods.contains(KeyModifiers::SHIFT);
+
+    let key = match event.code {
+        KeyCode::Char(c) if ctrl => match ctrl_char(c) {
+            // ^H is what most terminals send for Ctrl+Backspace.
+            'h' => Key::CtrlBackspace,
+            other => Key::Ctrl(other),
+        },
+        KeyCode::Char(c) => Key::Char(c),
+        KeyCode::Enter if shift => Key::ShiftEnter,
+        KeyCode::Enter => Key::Enter,
+        KeyCode::Backspace if ctrl || alt => return vec![Key::CtrlBackspace],
+        KeyCode::Backspace => Key::Backspace,
+        KeyCode::Delete if ctrl => Key::CtrlDelete,
+        KeyCode::Delete => Key::Delete,
+        KeyCode::Tab if shift => Key::BackTab,
+        KeyCode::Tab => Key::Tab,
+        KeyCode::BackTab => Key::BackTab,
+        KeyCode::Esc => Key::Esc,
+        KeyCode::Up => Key::ArrowUp,
+        KeyCode::Down => Key::ArrowDown,
+        KeyCode::Left if ctrl => Key::CtrlArrowLeft,
+        KeyCode::Right if ctrl => Key::CtrlArrowRight,
+        KeyCode::Left => Key::ArrowLeft,
+        KeyCode::Right => Key::ArrowRight,
+        KeyCode::Home => Key::Home,
+        KeyCode::End => Key::End,
+        KeyCode::PageUp => Key::PageUp,
+        KeyCode::PageDown => Key::PageDown,
+        _ => return Vec::new(),
     };
-    if second == 127 || second == 8 {
-        return Ok(Some(Key::CtrlBackspace));
-    }
-    if second != b'[' && second != b'O' {
-        return Ok(Some(Key::Esc));
-    }
-
-    let mut seq = Vec::new();
-    loop {
-        let Some(b) = read_byte()? else {
-            break;
-        };
-        seq.push(b);
-        if b.is_ascii_alphabetic() || b == b'~' {
-            break;
-        }
-    }
-
-    if seq.is_empty() {
-        return Ok(Some(Key::Esc));
-    }
-
-    let last = seq[seq.len() - 1];
-    if seq.len() == 1 {
-        match last {
-            b'A' => return Ok(Some(Key::ArrowUp)),
-            b'B' => return Ok(Some(Key::ArrowDown)),
-            b'C' => return Ok(Some(Key::ArrowRight)),
-            b'D' => return Ok(Some(Key::ArrowLeft)),
-            b'H' => return Ok(Some(Key::Home)),
-            b'F' => return Ok(Some(Key::End)),
-            b'Z' => return Ok(Some(Key::BackTab)),
-            _ => return Ok(Some(Key::Esc)),
-        }
+    if alt {
+        vec![Key::Esc, key]
     } else {
-        let s = std::str::from_utf8(&seq).unwrap_or("");
-        if s == "200~" {
-            let pasted = read_bracketed_paste_payload()?;
-            return Ok(Some(Key::Paste(pasted)));
-        }
-        if s == "201~" {
-            return Ok(None);
-        }
-        if let Some(key) = parse_csi_key(s) {
-            return Ok(Some(key));
-        }
-    }
-
-    Ok(Some(Key::Esc))
-}
-
-fn terminal_erase_byte() -> Option<u8> {
-    let mut term = MaybeUninit::<libc::termios>::zeroed();
-    let ok = unsafe { libc::tcgetattr(libc::STDIN_FILENO, term.as_mut_ptr()) };
-    if ok != 0 {
-        return None;
-    }
-    let term = unsafe { term.assume_init() };
-    Some(term.c_cc[libc::VERASE] as u8)
-}
-
-fn classify_backspace_byte(byte: u8, erase: u8) -> Key {
-    if byte == erase {
-        Key::Backspace
-    } else {
-        Key::CtrlBackspace
+        vec![key]
     }
 }
 
-fn parse_csi_key(s: &str) -> Option<Key> {
-    match s {
-        "13;2u" | "27;2;13~" => return Some(Key::ShiftEnter),
-        "1;5C" | "5C" => return Some(Key::CtrlArrowRight),
-        "1;5D" | "5D" => return Some(Key::CtrlArrowLeft),
-        "1~" | "7~" => return Some(Key::Home),
-        "4~" | "8~" => return Some(Key::End),
-        "3~" => return Some(Key::Delete),
-        "3;5~" => return Some(Key::CtrlDelete),
-        "5~" => return Some(Key::PageUp),
-        "6~" => return Some(Key::PageDown),
-        _ => {}
+/// Normalizes the character of a Ctrl chord. Legacy terminals encode
+/// Ctrl+\ ] ^ _ as bytes 0x1C..0x1F, which crossterm reports as Ctrl+4..7.
+fn ctrl_char(c: char) -> char {
+    match c {
+        '4' => '\\',
+        '5' => ']',
+        '6' => '^',
+        '7' => '_',
+        other => other.to_ascii_lowercase(),
     }
-    if is_ctrl_backspace_csi_sequence(s) {
-        return Some(Key::CtrlBackspace);
-    }
-    None
-}
-
-fn is_ctrl_backspace_csi_sequence(s: &str) -> bool {
-    let Some(body) = s.strip_suffix('u').or_else(|| s.strip_suffix('~')) else {
-        return false;
-    };
-    if let Some(code) = body.strip_prefix("27;5;") {
-        return code == "8" || code == "127";
-    }
-    let mut fields = body.split(';');
-    let Some(codepoint) = fields.next() else {
-        return false;
-    };
-    let Some(mods) = fields.next() else {
-        return false;
-    };
-    let primary_mod = mods.split(':').next().unwrap_or("");
-    (codepoint == "8" || codepoint == "127") && primary_mod == "5"
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn classify_backspace_byte_uses_erase_value() {
-        assert_eq!(classify_backspace_byte(127, 127), Key::Backspace);
-        assert_eq!(classify_backspace_byte(8, 127), Key::CtrlBackspace);
-        assert_eq!(classify_backspace_byte(8, 8), Key::Backspace);
-        assert_eq!(classify_backspace_byte(127, 8), Key::CtrlBackspace);
+    fn press(code: KeyCode, modifiers: KeyModifiers) -> Vec<Key> {
+        map_key_event(KeyEvent::new(code, modifiers))
     }
 
     #[test]
-    fn parse_csi_key_maps_common_ctrl_backspace_variants() {
-        assert_eq!(parse_csi_key("127;5u"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("8;5u"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("127;5:1u"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("8;5:1u"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("127;5~"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("8;5~"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("27;5;8~"), Some(Key::CtrlBackspace));
-        assert_eq!(parse_csi_key("27;5;127~"), Some(Key::CtrlBackspace));
+    fn maps_plain_and_shifted_chars() {
+        assert_eq!(press(KeyCode::Char('j'), KeyModifiers::NONE), vec![Key::Char('j')]);
+        assert_eq!(press(KeyCode::Char('J'), KeyModifiers::SHIFT), vec![Key::Char('J')]);
     }
 
     #[test]
-    fn parse_csi_key_maps_shift_enter_variants() {
-        assert_eq!(parse_csi_key("13;2u"), Some(Key::ShiftEnter));
-        assert_eq!(parse_csi_key("27;2;13~"), Some(Key::ShiftEnter));
+    fn maps_ctrl_chords_including_legacy_punctuation() {
+        assert_eq!(press(KeyCode::Char('p'), KeyModifiers::CONTROL), vec![Key::Ctrl('p')]);
+        assert_eq!(press(KeyCode::Char('5'), KeyModifiers::CONTROL), vec![Key::Ctrl(']')]);
+        assert_eq!(press(KeyCode::Char(']'), KeyModifiers::CONTROL), vec![Key::Ctrl(']')]);
+        assert_eq!(press(KeyCode::Char('4'), KeyModifiers::CONTROL), vec![Key::Ctrl('\\')]);
+    }
+
+    #[test]
+    fn maps_ctrl_backspace_variants() {
+        assert_eq!(press(KeyCode::Char('h'), KeyModifiers::CONTROL), vec![Key::CtrlBackspace]);
+        assert_eq!(press(KeyCode::Backspace, KeyModifiers::CONTROL), vec![Key::CtrlBackspace]);
+        assert_eq!(press(KeyCode::Backspace, KeyModifiers::ALT), vec![Key::CtrlBackspace]);
+        assert_eq!(press(KeyCode::Backspace, KeyModifiers::NONE), vec![Key::Backspace]);
+    }
+
+    #[test]
+    fn maps_shift_enter_and_back_tab() {
+        assert_eq!(press(KeyCode::Enter, KeyModifiers::SHIFT), vec![Key::ShiftEnter]);
+        assert_eq!(press(KeyCode::BackTab, KeyModifiers::SHIFT), vec![Key::BackTab]);
+        assert_eq!(press(KeyCode::Tab, KeyModifiers::SHIFT), vec![Key::BackTab]);
+    }
+
+    #[test]
+    fn maps_ctrl_arrows_and_delete() {
+        assert_eq!(press(KeyCode::Left, KeyModifiers::CONTROL), vec![Key::CtrlArrowLeft]);
+        assert_eq!(press(KeyCode::Right, KeyModifiers::CONTROL), vec![Key::CtrlArrowRight]);
+        assert_eq!(press(KeyCode::Delete, KeyModifiers::CONTROL), vec![Key::CtrlDelete]);
+    }
+
+    #[test]
+    fn alt_chord_expands_to_escape_then_key() {
+        assert_eq!(
+            press(KeyCode::Char('j'), KeyModifiers::ALT),
+            vec![Key::Esc, Key::Char('j')]
+        );
+    }
+
+    #[test]
+    fn ignores_release_events_and_unmapped_keys() {
+        let mut release = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert!(map_key_event(release).is_empty());
+        assert!(press(KeyCode::F(5), KeyModifiers::NONE).is_empty());
     }
 }

@@ -1,33 +1,5 @@
 use super::*;
 
-fn strip_ansi_control_sequences(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len());
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        let b = bytes[idx];
-        if b == 0x1b {
-            idx += 1;
-            if idx < bytes.len() && bytes[idx] == b'[' {
-                idx += 1;
-                while idx < bytes.len() {
-                    let c = bytes[idx];
-                    idx += 1;
-                    if (0x40..=0x7e).contains(&c) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        if b != b'\r' {
-            out.push(b as char);
-        }
-        idx += 1;
-    }
-    out
-}
-
 #[test]
 fn find_calc_segment_range_detects_single_table_expression_cell() {
     let line = "| name | 4+2 |";
@@ -124,9 +96,7 @@ fn formula_cell_stays_masked_and_updates_after_dependent_cell_edit() {
     app.editor.cursor_col = 0;
     app.run_calc_recompute();
 
-    let mut frame_before = Vec::new();
-    app.draw(&mut frame_before).expect("draw before edit");
-    let rendered_before = strip_ansi_control_sequences(&String::from_utf8_lossy(&frame_before));
+    let rendered_before = screen_text(&mut app);
     assert!(
         rendered_before.contains("20*"),
         "expected masked computed value before edit, got:\n{rendered_before}"
@@ -146,9 +116,7 @@ fn formula_cell_stays_masked_and_updates_after_dependent_cell_edit() {
 
     app.run_calc_recompute();
 
-    let mut frame_after = Vec::new();
-    app.draw(&mut frame_after).expect("draw after edit");
-    let rendered_after = strip_ansi_control_sequences(&String::from_utf8_lossy(&frame_after));
+    let rendered_after = screen_text(&mut app);
     assert!(
         rendered_after.contains("40*"),
         "expected masked computed value after edit, got:\n{rendered_after}"
@@ -345,8 +313,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
     app.editor.cursor_col = line_char_len(app.current_line());
     app.adjust_cursor();
     app.adjust_scroll();
-    let mut out = Vec::new();
-    app.draw(&mut out).expect("draw after jump to end");
+    render_screen(&mut app);
 
     let end_range = app
         .calc_runtime
@@ -604,8 +571,7 @@ fn viewport_calc_evaluates_new_window_after_scroll() {
     app.editor.cursor_line = last_idx;
     app.adjust_cursor();
     app.adjust_scroll();
-    let mut out = Vec::new();
-    app.draw(&mut out).expect("draw after scroll");
+    render_screen(&mut app);
 
     assert_eq!(
         app.calc
@@ -637,9 +603,7 @@ fn non_cursor_image_line_stays_collapsed_when_cursor_line_has_override_mapping()
     app.adjust_cursor();
     app.adjust_scroll();
 
-    let mut out = Vec::new();
-    app.draw(&mut out).expect("draw with formula + image");
-    let rendered = strip_ansi_control_sequences(&String::from_utf8_lossy(&out));
+    let rendered = screen_text(&mut app);
 
     assert!(
         rendered.contains("[image: slate full]"),
@@ -1069,12 +1033,12 @@ fn empty_table_row_draws_cursor_inside_editable_cell_slot() {
     app.editor.cursor_line = 2;
     app.editor.cursor_col = 2;
 
-    let mut out = Vec::new();
-    app.draw(&mut out).expect("draw empty table row");
+    let (_, cursor) = render_screen(&mut app);
 
     let expected_screen_col = app.gutter_width() + 3;
     assert_eq!(
-        app.render_state.last_cursor_col, expected_screen_col,
+        usize::from(cursor.col) + 1,
+        expected_screen_col,
         "cursor should render after the opening pipe and padding, not on the pipe"
     );
 

@@ -1,33 +1,5 @@
 use super::*;
 
-fn strip_ansi_control_sequences(raw: &str) -> String {
-    let bytes = raw.as_bytes();
-    let mut out = String::with_capacity(raw.len());
-    let mut idx = 0usize;
-    while idx < bytes.len() {
-        let b = bytes[idx];
-        if b == 0x1b {
-            idx += 1;
-            if idx < bytes.len() && bytes[idx] == b'[' {
-                idx += 1;
-                while idx < bytes.len() {
-                    let c = bytes[idx];
-                    idx += 1;
-                    if (0x40..=0x7e).contains(&c) {
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        if b != b'\r' {
-            out.push(b as char);
-        }
-        idx += 1;
-    }
-    out
-}
-
 #[test]
 fn load_note_reminder_ghosts_reconciles_shift_without_dropping_adjacent_reminders() {
     let path = temp_db_path();
@@ -254,8 +226,7 @@ fn large_doc_structural_edits_near_eof_keep_fold_maps_and_scroll_stable() {
     assert!(app.editor.scroll_line > 0);
     assert!(app.editor.scroll_line >= delete_scroll_before.saturating_sub(2));
 
-    let mut out = Vec::new();
-    app.draw(&mut out).expect("draw after large-file EOF edits");
+    render_screen(&mut app);
 
     drop(app);
     drop(db);
@@ -338,15 +309,11 @@ fn large_doc_random_tail_edit_stress_keeps_state_consistent() {
         );
 
         if step_idx % 4 == 0 {
-            let mut out = Vec::new();
-            app.draw(&mut out)
-                .expect("draw during large random tail edit stress");
+            render_screen(&mut app);
         }
     }
 
-    let mut out = Vec::new();
-    app.draw(&mut out)
-        .expect("draw after large random tail edit stress");
+    render_screen(&mut app);
 
     drop(app);
     drop(db);
@@ -482,9 +449,7 @@ fn heading_fold_keeps_title_and_preserves_separator_blank_line() {
     assert_eq!(app.folds.placeholder_hidden_lines[0], Some(1));
     assert_eq!(app.folds.visible_to_real, vec![0, 2, 3, 4]);
 
-    let mut out = Vec::new();
-    app.draw(&mut out).expect("draw folded heading");
-    let rendered = strip_ansi_control_sequences(&String::from_utf8_lossy(&out));
+    let rendered = screen_text(&mut app);
     assert!(rendered.contains("## 13.05.2026."));
     assert!(rendered.contains("1 line folded"));
 

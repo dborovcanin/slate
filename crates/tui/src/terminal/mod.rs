@@ -1,5 +1,6 @@
 mod adapter;
 mod ansi;
+mod ansi_bridge;
 mod app;
 mod calc_cache;
 mod clipboard;
@@ -13,6 +14,7 @@ mod media_sources;
 mod notifications;
 pub mod render;
 mod render_styles;
+mod session;
 mod switcher;
 mod text_utils;
 pub mod theme;

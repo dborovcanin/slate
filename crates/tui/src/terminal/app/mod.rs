@@ -8,7 +8,8 @@ use super::date_picker::DatePickerAction;
 use super::folding::FoldKind;
 use super::folding_state::FoldingState;
 use super::history::LineHistory;
-use super::input::{self, Key, TerminalGuard};
+use super::input::{self, Key};
+use super::session::TerminalSession;
 use super::render;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
@@ -22,7 +23,6 @@ use app_core::storage::{NoteAccessMode, NoteModules, NoteSearchResult};
 use rustc_hash::FxHashMap;
 use std::cmp::min;
 use std::collections::VecDeque;
-use std::io;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -497,12 +497,6 @@ struct RenderState {
     fence_checkpoints: Vec<(bool, Option<String>)>,
     fence_checkpoints_valid_through: usize,
     draw_buf: String,
-    last_drawn_rows: Vec<String>,
-    last_drawn_rows_dim: (usize, usize),
-    last_cursor_row: usize,
-    last_cursor_col: usize,
-    last_cursor_block: bool,
-    last_draw_had_overlay: bool,
     dirty: bool,
 }
 
@@ -1100,12 +1094,6 @@ impl TerminalApp {
                 fence_checkpoints: vec![(false, None)],
                 fence_checkpoints_valid_through: 0,
                 draw_buf: String::new(),
-                last_drawn_rows: Vec::new(),
-                last_drawn_rows_dim: (0, 0),
-                last_cursor_row: 0,
-                last_cursor_col: 0,
-                last_cursor_block: false,
-                last_draw_had_overlay: false,
                 dirty: true,
             },
             folds: FoldingState::empty(Vec::new(), Vec::new()),
@@ -1144,14 +1132,13 @@ impl TerminalApp {
     }
 
     fn run(&mut self, db: &Db) -> Result<(), String> {
-        let _guard = TerminalGuard::enter()?;
-        let mut stdout = io::stdout();
+        let mut session = TerminalSession::enter()?;
 
         loop {
             if self.render_state.dirty {
                 let draw_start = Instant::now();
                 self.render_state.dirty = false;
-                self.draw(&mut stdout)?;
+                session.draw(|frame| self.render(frame))?;
                 self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
             }
             if self.quit {

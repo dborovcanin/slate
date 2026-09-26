@@ -18,8 +18,11 @@ use crate::terminal::{
         SwitcherView,
     },
 };
+use crate::terminal::ansi_bridge;
+use crate::terminal::session::CursorPlacement;
+use ratatui::buffer::Buffer;
+use ratatui::Frame;
 use std::borrow::Cow;
-use std::io::Write;
 
 // Ownership: status/popup composition and terminal rendering/cursor placement.
 impl TerminalApp {
@@ -966,77 +969,20 @@ impl TerminalApp {
         }
     }
 
-    fn parse_goto_sequence(bytes: &[u8], start: usize) -> Option<(usize, usize)> {
-        if bytes.get(start).copied()? != 0x1b || bytes.get(start + 1).copied()? != b'[' {
-            return None;
-        }
-
-        let mut idx = start + 2;
-        let row_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        if idx == row_start || idx >= bytes.len() || bytes[idx] != b';' {
-            return None;
-        }
-        let row = std::str::from_utf8(&bytes[row_start..idx])
-            .ok()?
-            .parse::<usize>()
-            .ok()?;
-        idx += 1;
-
-        let col_start = idx;
-        while idx < bytes.len() && bytes[idx].is_ascii_digit() {
-            idx += 1;
-        }
-        if idx == col_start || idx >= bytes.len() || bytes[idx] != b'H' {
-            return None;
-        }
-        let _col = std::str::from_utf8(&bytes[col_start..idx])
-            .ok()?
-            .parse::<usize>()
-            .ok()?;
-        idx += 1;
-
-        Some((idx - start, row))
+    /// Paints the current state into a ratatui frame and returns where the
+    /// terminal cursor belongs.
+    pub(super) fn render(&mut self, frame: &mut Frame) -> Result<CursorPlacement, String> {
+        Ok(self.render_to_buffer(frame.buffer_mut()))
     }
 
-    fn split_frame_rows(frame: &str, row_count: usize) -> Vec<String> {
-        let mut rows = vec![String::new(); row_count];
-        if frame.is_empty() || row_count == 0 {
-            return rows;
-        }
-
-        let bytes = frame.as_bytes();
-        let mut idx = 0usize;
-        let mut segment_start = 0usize;
-        let mut active_row: Option<usize> = None;
-
-        while idx < bytes.len() {
-            if let Some((seq_len, row)) = Self::parse_goto_sequence(bytes, idx) {
-                if let Some(target_row) = active_row {
-                    if segment_start < idx {
-                        rows[target_row].push_str(&frame[segment_start..idx]);
-                    }
-                }
-                active_row = row.checked_sub(1).filter(|r| *r < row_count);
-                segment_start = idx;
-                idx += seq_len;
-                continue;
-            }
-            idx += 1;
-        }
-
-        if let Some(target_row) = active_row {
-            if segment_start < frame.len() {
-                rows[target_row].push_str(&frame[segment_start..]);
-            }
-        }
-
-        rows
+    pub(super) fn render_to_buffer(&mut self, buf: &mut Buffer) -> CursorPlacement {
+        let cursor = self.compose_frame();
+        ansi_bridge::paint(&self.render_state.draw_buf, buf);
+        cursor
     }
 
-    pub(super) fn draw(&mut self, out: &mut impl Write) -> Result<(), String> {
+    /// Composes the frame as an ANSI string into `render_state.draw_buf`.
+    pub(super) fn compose_frame(&mut self) -> CursorPlacement {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
         let editor_bg = self.render_palette.surface_bg();
@@ -1775,86 +1721,12 @@ impl TerminalApp {
             self.mode,
             UiMode::Normal | UiMode::Visual | UiMode::VisualLine
         );
-        let cursor_style = if cursor_block {
-            "\x1b[1 q" // Blinking Block
-        } else {
-            "\x1b[5 q" // Blinking Bar
-        };
-
-        let row_chunks = Self::split_frame_rows(&buf, rows);
-        let dims_changed = self.render_state.last_drawn_rows_dim != (rows, cols)
-            || self.render_state.last_drawn_rows.len() != row_chunks.len();
-        let overlay_active = matches!(
-            self.mode,
-            UiMode::Switcher
-                | UiMode::CollectionSwitcher
-                | UiMode::ContentSearch
-                | UiMode::DatePicker
-        ) || self.switcher.open_confirm.is_some()
-            || self.switcher.delete_confirm.is_some();
-        // Full-screen repaint only on overlay transitions (open/close) so
-        // content search remains stable while typing.
-        let overlay_transition = overlay_active != self.render_state.last_draw_had_overlay;
-        let force_full_redraw = dims_changed || overlay_transition;
-
-        let mut changed_rows = Vec::new();
-        if force_full_redraw {
-            changed_rows.extend(0..row_chunks.len());
-        } else {
-            for (row_idx, row_text) in row_chunks.iter().enumerate() {
-                if self
-                    .render_state
-                    .last_drawn_rows
-                    .get(row_idx)
-                    .map(|prev| prev != row_text)
-                    .unwrap_or(true)
-                {
-                    changed_rows.push(row_idx);
-                }
-            }
-        }
-
-        let cursor_changed = dims_changed
-            || self.render_state.last_cursor_row != cursor_row
-            || self.render_state.last_cursor_col != cursor_col
-            || self.render_state.last_cursor_block != cursor_block;
-
-        if changed_rows.is_empty() && !cursor_changed {
-            self.render_state.last_draw_had_overlay = overlay_active;
-            self.render_state.draw_buf = buf;
-            return Ok(());
-        }
-
-        let mut out_buf = String::new();
-        out_buf.push_str("\x1b[?25l");
-        if force_full_redraw {
-            out_buf.push_str("\x1b[2J\x1b[H");
-        }
-        for row_idx in changed_rows {
-            if let Some(chunk) = row_chunks.get(row_idx) {
-                out_buf.push_str(&goto(row_idx + 1, 1));
-                out_buf.push_str("\x1b[2K");
-                out_buf.push_str(chunk);
-            }
-        }
-        out_buf.push_str(&goto(cursor_row, cursor_col));
-        out_buf.push_str(cursor_style);
-        out_buf.push_str("\x1b[?25h");
-
-        let result = out
-            .write_all(out_buf.as_bytes())
-            .and_then(|_| out.flush())
-            .map_err(|e| format!("Failed to draw terminal UI: {e}"));
-        if result.is_ok() {
-            self.render_state.last_drawn_rows = row_chunks;
-            self.render_state.last_drawn_rows_dim = (rows, cols);
-            self.render_state.last_cursor_row = cursor_row;
-            self.render_state.last_cursor_col = cursor_col;
-            self.render_state.last_cursor_block = cursor_block;
-            self.render_state.last_draw_had_overlay = overlay_active;
-        }
         self.render_state.draw_buf = buf;
-        result
+        CursorPlacement {
+            row: u16::try_from(cursor_row.saturating_sub(1)).unwrap_or(u16::MAX),
+            col: u16::try_from(cursor_col.saturating_sub(1)).unwrap_or(u16::MAX),
+            block: cursor_block,
+        }
     }
 
     pub(super) fn cursor_position(&self, rows: usize, cols: usize) -> (usize, usize) {

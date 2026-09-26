@@ -31,6 +31,7 @@ unicode-width = "0.2"
 url = "2"
 ttf-parser = "0.25"
 rustc-hash = "2"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29", "layout-cache", "underline-color"] }
 
 [features]
 default = ["imap"]
