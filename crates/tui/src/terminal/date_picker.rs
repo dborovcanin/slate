@@ -253,6 +253,8 @@ pub fn draw_date_picker(
         surface_bg,
         palette.primary(),
         false,
+        Some(if view.is_remind { "Set reminder" } else { "Insert date" }),
+        None,
     );
 
     let inner_w = box_w.saturating_sub(2);
@@ -395,7 +397,7 @@ mod tests {
         let mut buf = screen(24, 80);
         draw_date_picker(&view, &mut buf, 24, 80, palette);
         assert!(
-            has_styled_symbol(&buf, "┌", 201, 250),
+            has_styled_symbol(&buf, "╭", 201, 250),
             "date picker border should use accent fg with surface bg"
         );
     }

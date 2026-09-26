@@ -780,6 +780,8 @@ impl TerminalApp {
             self.render_palette.surface_bg(),
             self.render_palette.primary(),
             false,
+            None,
+            None,
         );
 
         for (idx, suggestion) in suggestions.iter().enumerate() {
@@ -881,6 +883,8 @@ impl TerminalApp {
             self.render_palette.surface_bg(),
             self.render_palette.primary(),
             false,
+            None,
+            None,
         );
         for (idx, suggestion) in visible_suggestions.iter().enumerate() {
             let row = y + 1 + idx;
@@ -969,7 +973,7 @@ impl TerminalApp {
 
         let bg = self.render_palette.surface_bg();
         let border_fg = self.render_palette.primary();
-        draw_framed_surface(buf, y, x, box_width, box_height, bg, border_fg, false);
+        draw_framed_surface(buf, y, x, box_width, box_height, bg, border_fg, false, None, None);
 
         let title_style = TextStyle {
             fg: Some(self.render_palette.text_fg()),
@@ -1981,7 +1985,7 @@ impl TerminalApp {
                 let box_h = min(rows.saturating_sub(4).max(8), 14);
                 let x = (cols.saturating_sub(box_w)) / 2 + 1;
                 let y = (rows.saturating_sub(box_h)) / 2 + 1;
-                let prompt = " search: ";
+                let prompt = switcher::PROMPT_PREFIX;
                 let col = (x + 1 + prompt.chars().count() + self.switcher.query.chars().count())
                     .min(cols.max(1));
                 (y + 1, col.max(1))
@@ -2010,7 +2014,7 @@ impl TerminalApp {
                     let row = edit_y + 4 + dialog.selected_field.min(2);
                     (row.max(1), col.max(1))
                 } else {
-                    let prompt = " collections: ";
+                    let prompt = switcher::PROMPT_PREFIX;
                     let col = (x
                         + 1
                         + prompt.chars().count()
@@ -2021,14 +2025,14 @@ impl TerminalApp {
             }
             UiMode::ContentSearch => {
                 let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);
-                let prompt = " content: ";
+                let prompt = switcher::PROMPT_PREFIX;
                 let col = (x + 1 + prompt.chars().count() + self.content_search.cursor_col)
                     .min(cols.max(1));
                 (y + 1, col.max(1))
             }
             UiMode::WebSearch => {
                 let (x, y, _box_w, _box_h) = switcher::web_search_box_geometry(rows, cols);
-                let prompt = " web search: ";
+                let prompt = switcher::PROMPT_PREFIX;
                 let col =
                     (x + 1 + prompt.chars().count() + self.web_search.cursor_col).min(cols.max(1));
                 (y + 1, col.max(1))

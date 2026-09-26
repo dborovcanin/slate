@@ -1,7 +1,8 @@
 use std::cmp::min;
 
 use super::canvas::{
-    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, pad_right, put_str, TextStyle,
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, draw_separator, pad_right, put_str,
+    TextStyle,
 };
 use ratatui::buffer::Buffer;
 use super::render::RenderPalette;
@@ -185,12 +186,6 @@ pub fn draw_switcher(
         bold: true,
         ..Default::default()
     };
-    let label_style = TextStyle {
-        fg: Some(palette.code_comment),
-        bg: Some(surface_bg),
-        dim: true,
-        ..Default::default()
-    };
     let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
@@ -213,25 +208,29 @@ pub fn draw_switcher(
         surface_bg,
         palette.primary(),
         false,
+        Some("Notes"),
+        None,
     );
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
-    let prompt = format!(" search: {}", view.query);
-    draw_row_at_styled(
+    draw_prompt(
         buf,
         y + 1,
         x + 1,
         box_w.saturating_sub(2),
-        &prompt,
+        view.query,
+        "type to filter notes",
         prompt_style,
+        palette,
     );
-    draw_row_at_styled(
+    draw_separator(
         buf,
         y + 2,
-        x + 1,
-        box_w.saturating_sub(2),
-        " results:",
-        label_style,
+        x,
+        box_w,
+        surface_bg,
+        palette.primary(),
+        Some(&count_label(view.matches.len(), "note", "notes")),
     );
 
     let max_rows = box_h.saturating_sub(4);
@@ -245,7 +244,7 @@ pub fn draw_switcher(
         if let Some(match_idx) = view.matches.get(start + i).copied() {
             let item = &view.items[match_idx];
             let note_label = note_identity_label(&item.id);
-            let marker = if start + i == view.selected { ">" } else { " " };
+            let marker = " ";
             let text = if let Some(badge) = access_badge(item) {
                 format!("{marker} {}  {} {}", note_label, badge, item.title)
             } else {
@@ -313,12 +312,6 @@ pub fn draw_collection_switcher(
         bold: true,
         ..Default::default()
     };
-    let label_style = TextStyle {
-        fg: Some(palette.code_comment),
-        bg: Some(surface_bg),
-        dim: true,
-        ..Default::default()
-    };
     let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
@@ -341,25 +334,29 @@ pub fn draw_collection_switcher(
         surface_bg,
         palette.primary(),
         false,
+        Some("Collections"),
+        None,
     );
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
-    let prompt = format!(" collections: {}", view.query);
-    draw_row_at_styled(
+    draw_prompt(
         buf,
         y + 1,
         x + 1,
         box_w.saturating_sub(2),
-        &prompt,
+        view.query,
+        "type to filter collections",
         prompt_style,
+        palette,
     );
-    draw_row_at_styled(
+    draw_separator(
         buf,
         y + 2,
-        x + 1,
-        box_w.saturating_sub(2),
-        " results:",
-        label_style,
+        x,
+        box_w,
+        surface_bg,
+        palette.primary(),
+        Some(&count_label(view.matches.len(), "collection", "collections")),
     );
 
     let max_rows = box_h.saturating_sub(4);
@@ -372,7 +369,7 @@ pub fn draw_collection_switcher(
         let row = y + 3 + i;
         if let Some(match_idx) = view.matches.get(start + i).copied() {
             let item = &view.items[match_idx];
-            let marker = if start + i == view.selected { ">" } else { " " };
+            let marker = " ";
             let badge = if item.is_clear {
                 "[clear]"
             } else if item.id.as_deref() == view.working_collection_id {
@@ -456,6 +453,8 @@ pub fn draw_collection_edit_dialog(
         surface_bg,
         palette.primary(),
         false,
+        Some("Edit collection"),
+        None,
     );
     fill_box_interior(buf, y, x, box_w, box_h, normal_style);
 
@@ -670,12 +669,6 @@ pub fn draw_content_search(
         bold: true,
         ..Default::default()
     };
-    let label_style = TextStyle {
-        fg: Some(palette.code_comment),
-        bg: Some(surface_bg),
-        dim: true,
-        ..Default::default()
-    };
     let row_style = TextStyle {
         fg: Some(palette.variable),
         bg: Some(surface_bg),
@@ -711,26 +704,30 @@ pub fn draw_content_search(
         surface_bg,
         palette.primary(),
         false,
+        Some("Search notes"),
+        None,
     );
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
-    let prompt = format!(" content: {}", view.query);
-    draw_row_at_styled(
+    draw_prompt(
         buf,
         y + 1,
         x + 1,
         box_w.saturating_sub(2),
-        &prompt,
+        view.query,
+        "search note contents",
         prompt_style,
+        palette,
     );
     let results_label_row = y + 2;
-    draw_row_at_styled(
+    draw_separator(
         buf,
         results_label_row,
-        x + 1,
-        box_w.saturating_sub(2),
-        " results:",
-        label_style,
+        x,
+        box_w,
+        surface_bg,
+        palette.primary(),
+        Some(&count_label(view.results.len(), "match", "matches")),
     );
 
     // Reserve preview rows at the bottom; result rows fill the rest.
@@ -744,7 +741,7 @@ pub fn draw_content_search(
     for i in 0..max_rows {
         let row = results_label_row + 1 + i;
         if let Some(result) = view.results.get(start + i) {
-            let marker = if start + i == view.selected { ">" } else { " " };
+            let marker = " ";
             let text = format!("{marker} L{}  {}", result.line_number.max(1), result.title);
             if start + i == view.selected {
                 draw_row_at_styled(
@@ -875,17 +872,20 @@ pub fn draw_web_search(
         surface_bg,
         palette.primary(),
         false,
+        Some("Web search"),
+        None,
     );
     fill_box_interior(buf, y, x, box_w, box_h, row_style);
 
-    let prompt = format!(" web search: {}", view.query);
-    draw_row_at_styled(
+    draw_prompt(
         buf,
         y + 1,
         x + 1,
         box_w.saturating_sub(2),
-        &prompt,
+        view.query,
+        "search the web",
         prompt_style,
+        palette,
     );
 
     let status_label_row = y + 2;
@@ -963,7 +963,7 @@ pub fn draw_web_search(
     for i in 0..max_rows {
         let row = status_label_row + 1 + i;
         if let Some(item) = view.results.get(start + i) {
-            let marker = if start + i == view.selected { ">" } else { " " };
+            let marker = " ";
             let text = format!("{marker} {} ({})", item.title, item.url);
             if start + i == view.selected {
                 draw_row_at_styled(
@@ -1094,7 +1094,7 @@ pub fn draw_delete_confirm(
         inner_w = inner_w.max(password_prompt.chars().count());
     }
     let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
-    let target_h = if requires_password { 6 } else { 5 };
+    let target_h = if requires_password { 4 } else { 3 };
     let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
@@ -1106,14 +1106,19 @@ pub fn draw_delete_confirm(
         bold: true,
         ..Default::default()
     };
-    let hint_style = TextStyle {
-        fg: Some(palette.code_comment),
-        bg: Some(surface_bg),
-        dim: true,
-        ..Default::default()
-    };
 
-    draw_framed_surface(buf, y, x, box_w, box_h, surface_bg, palette.primary(), true);
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        true,
+        Some("Delete note"),
+        Some(hint.trim()),
+    );
 
     draw_row_at_styled(
         buf,
@@ -1133,14 +1138,6 @@ pub fn draw_delete_confirm(
             message_style,
         );
     }
-    draw_row_at_styled(
-        buf,
-        y + if requires_password { 3 } else { 2 },
-        x + 1,
-        box_w.saturating_sub(2),
-        &hint,
-        hint_style,
-    );
 }
 
 pub fn draw_open_confirm(
@@ -1152,6 +1149,7 @@ pub fn draw_open_confirm(
     palette: RenderPalette,
 ) {
     draw_confirm(
+        "Unlock note",
         &format!(" Open \"{}\" ", truncate_title_for_confirm(note_title)),
         Some(password_len),
         " Enter confirm, Esc cancel ",
@@ -1163,6 +1161,7 @@ pub fn draw_open_confirm(
 }
 
 fn draw_confirm(
+    title: &str,
     message: &str,
     password_len: Option<usize>,
     hint: &str,
@@ -1184,7 +1183,7 @@ fn draw_confirm(
         inner_w = inner_w.max(prompt.chars().count());
     }
     let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
-    let target_h = if password_prompt.is_some() { 6 } else { 5 };
+    let target_h = if password_prompt.is_some() { 4 } else { 3 };
     let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
@@ -1196,14 +1195,19 @@ fn draw_confirm(
         bold: true,
         ..Default::default()
     };
-    let hint_style = TextStyle {
-        fg: Some(palette.code_comment),
-        bg: Some(surface_bg),
-        dim: true,
-        ..Default::default()
-    };
 
-    draw_framed_surface(buf, y, x, box_w, box_h, surface_bg, palette.primary(), true);
+    draw_framed_surface(
+        buf,
+        y,
+        x,
+        box_w,
+        box_h,
+        surface_bg,
+        palette.primary(),
+        true,
+        Some(title),
+        Some(hint.trim()),
+    );
 
     draw_row_at_styled(
         buf,
@@ -1223,14 +1227,6 @@ fn draw_confirm(
             message_style,
         );
     }
-    draw_row_at_styled(
-        buf,
-        y + if password_prompt.is_some() { 3 } else { 2 },
-        x + 1,
-        box_w.saturating_sub(2),
-        hint,
-        hint_style,
-    );
 }
 
 fn truncate_title_for_confirm(value: &str) -> String {
@@ -1244,6 +1240,46 @@ fn truncate_title_for_confirm(value: &str) -> String {
         out.push(ch);
     }
     out
+}
+
+/// Text before the query in overlay prompts; the cursor sits after it.
+pub const PROMPT_PREFIX: &str = " › ";
+
+/// Draws an overlay prompt row: accent `›`, the query, and a dim placeholder
+/// while the query is empty.
+#[allow(clippy::too_many_arguments)]
+fn draw_prompt(
+    buf: &mut Buffer,
+    row: usize,
+    col: usize,
+    width: usize,
+    query: &str,
+    placeholder: &str,
+    prompt_style: TextStyle,
+    palette: RenderPalette,
+) {
+    draw_row_at_styled(buf, row, col, width, PROMPT_PREFIX, prompt_style);
+    let text_col = col + PROMPT_PREFIX.chars().count();
+    let text_width = width.saturating_sub(PROMPT_PREFIX.chars().count());
+    if query.is_empty() {
+        let hint = TextStyle {
+            fg: Some(palette.code_comment),
+            bg: prompt_style.bg,
+            dim: true,
+            ..Default::default()
+        };
+        draw_row_at_styled(buf, row, text_col, text_width, placeholder, hint);
+    } else {
+        let text = TextStyle {
+            bold: false,
+            ..prompt_style
+        };
+        draw_row_at_styled(buf, row, text_col, text_width, query, text);
+    }
+}
+
+fn count_label(count: usize, singular: &str, plural: &str) -> String {
+    format!("{count} {}", if count == 1 { singular } else { plural })
 }
 
 #[cfg(test)]
@@ -1303,7 +1339,7 @@ mod tests {
         let mut buf = screen(24, 80);
         draw_switcher(&view, &mut buf, 24, 80, palette);
         assert!(
-            has_styled_symbol(&buf, "┌", 201, 250),
+            has_styled_symbol(&buf, "╭", 201, 250),
             "switcher border should use accent fg with surface bg"
         );
     }

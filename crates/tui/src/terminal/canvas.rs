@@ -3,7 +3,10 @@
 //! the buffer are clipped.
 
 use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, BorderType, Clear, Widget};
 
 /// A fully specified cell style: unset colors mean the terminal default, and
 /// unset attributes are cleared rather than inherited from the cell.
@@ -157,6 +160,10 @@ pub fn put_char(buf: &mut Buffer, row: usize, col: usize, ch: char, style: Style
     }
 }
 
+/// Draws a dialog surface: drop shadow, cleared interior filled with `bg`,
+/// rounded border in `border_fg`, and optional `title` (top border) and
+/// `footer` (bottom border, typically key hints).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_framed_surface(
     buf: &mut Buffer,
     row: usize,
@@ -166,64 +173,99 @@ pub fn draw_framed_surface(
     bg: u8,
     border_fg: u8,
     border_bold: bool,
+    title: Option<&str>,
+    footer: Option<&str>,
 ) {
-    if width == 0 || height == 0 {
+    let Some(area) = cell_rect(buf, row, col, width, height) else {
         return;
-    }
-    let fill_style = TextStyle {
-        bg: Some(bg),
-        ..Default::default()
     };
-    for dy in 0..height {
-        draw_row_at_styled(buf, row + dy, col, width, "", fill_style);
-    }
-    let border_style = TextStyle {
+    draw_shadow(buf, area, bg);
+    Clear.render(area, buf);
+    let surface = cell_style(None, Some(bg), Modifier::empty());
+    let border = TextStyle {
         fg: Some(border_fg),
         bg: Some(bg),
         bold: border_bold,
         ..Default::default()
-    };
-    draw_box_border(buf, row, col, width, height, border_style);
+    }
+    .to_style();
+    let mut block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(border)
+        .style(surface);
+    if let Some(title) = title.filter(|title| !title.is_empty()) {
+        block = block.title(Line::from(format!(" {title} ")).style(border.add_modifier(Modifier::BOLD)));
+    }
+    if let Some(footer) = footer.filter(|footer| !footer.is_empty()) {
+        let hint = cell_style(Some(border_fg), Some(bg), Modifier::DIM);
+        block = block.title_bottom(Line::from(format!(" {footer} ")).style(hint).right_aligned());
+    }
+    block.render(area, buf);
 }
 
-pub fn draw_box_border(
+/// Horizontal rule across a framed surface at `row`, joining its side
+/// borders (`├──┤`), with an optional dim label near the left.
+pub fn draw_separator(
     buf: &mut Buffer,
     row: usize,
     col: usize,
     width: usize,
-    height: usize,
-    style: TextStyle,
+    bg: u8,
+    border_fg: u8,
+    label: Option<&str>,
 ) {
-    if width == 0 || height == 0 {
+    if width < 2 {
         return;
     }
-    let style = style.to_style();
-    let row = row.max(1);
-    let col = col.max(1);
-    if width == 1 || height == 1 {
-        for dx in 0..width {
-            put_char(buf, row, col + dx, '─', style);
+    let line = cell_style(Some(border_fg), Some(bg), Modifier::empty());
+    put_char(buf, row, col, '├', line);
+    for dx in 1..width - 1 {
+        put_char(buf, row, col + dx, '─', line);
+    }
+    put_char(buf, row, col + width - 1, '┤', line);
+    if let Some(label) = label.filter(|label| !label.is_empty()) {
+        let text = format!(" {label} ");
+        let dim = cell_style(Some(border_fg), Some(bg), Modifier::DIM);
+        put_str_width(buf, row, col + 2, &text, width.saturating_sub(4), dim);
+    }
+}
+
+/// Darkens the cells one column right of and one row below `area`.
+fn draw_shadow(buf: &mut Buffer, area: Rect, surface_bg: u8) {
+    let shadow = if contrast_fg_for_bg(surface_bg) == 16 {
+        Color::Indexed(247)
+    } else {
+        Color::Indexed(233)
+    };
+    let bounds = buf.area;
+    let right = area.right();
+    let bottom = area.bottom();
+    let mut shade = |x: u16, y: u16| {
+        if x < bounds.right() && y < bounds.bottom() {
+            let cell = &mut buf[(x, y)];
+            cell.set_bg(shadow);
+            cell.modifier.insert(Modifier::DIM);
         }
-        return;
+    };
+    for y in area.y.saturating_add(1)..=bottom {
+        shade(right, y);
     }
+    for x in area.x.saturating_add(1)..=right {
+        shade(x, bottom);
+    }
+}
 
-    put_char(buf, row, col, '┌', style);
-    for dx in 1..width.saturating_sub(1) {
-        put_char(buf, row, col + dx, '─', style);
+/// Buffer rectangle for a 1-based (`row`, `col`) box, clipped to the buffer.
+fn cell_rect(buf: &Buffer, row: usize, col: usize, width: usize, height: usize) -> Option<Rect> {
+    if width == 0 || height == 0 {
+        return None;
     }
-    put_char(buf, row, col + width - 1, '┐', style);
-
-    let bottom = row + height - 1;
-    put_char(buf, bottom, col, '└', style);
-    for dx in 1..width.saturating_sub(1) {
-        put_char(buf, bottom, col + dx, '─', style);
-    }
-    put_char(buf, bottom, col + width - 1, '┘', style);
-
-    for dy in 1..height.saturating_sub(1) {
-        put_char(buf, row + dy, col, '│', style);
-        put_char(buf, row + dy, col + width - 1, '│', style);
-    }
+    let x = cell_x(buf.area.x, col.max(1))?;
+    let y = cell_y(buf.area.y, row.max(1))?;
+    let width = u16::try_from(width).unwrap_or(u16::MAX);
+    let height = u16::try_from(height).unwrap_or(u16::MAX);
+    let rect = Rect::new(x, y, width, height).intersection(buf.area);
+    (!rect.is_empty()).then_some(rect)
 }
 
 fn cell_x(origin: u16, col: usize) -> Option<u16> {

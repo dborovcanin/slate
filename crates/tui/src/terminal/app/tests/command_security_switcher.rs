@@ -1255,7 +1255,7 @@ fn content_search_cursor_stays_on_prompt_row_with_fixed_overlay_height() {
     let box_h = std::cmp::min(rows.saturating_sub(4).max(9), 14);
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
-    let prompt = " content: ";
+    let prompt = crate::terminal::switcher::PROMPT_PREFIX;
     let expected_col = x + 1 + prompt.chars().count() + app.content_search.query.chars().count();
 
     assert_eq!(cursor_row, y + 1);
