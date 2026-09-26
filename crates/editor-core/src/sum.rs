@@ -24,6 +24,57 @@ pub fn parse_numbers(text: &str) -> Vec<f64> {
         .collect()
 }
 
+/// Running count / sum / min / max over the numbers in some text, used for
+/// live selection statistics. Feed it selected text piece by piece.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NumberStats {
+    pub count: usize,
+    pub sum: f64,
+    pub min: f64,
+    pub max: f64,
+}
+
+impl NumberStats {
+    /// Adds the numbers of one line of text. A leading list marker (`1.`,
+    /// `2)`, `-`) is skipped so ordered-list numbering does not count.
+    pub fn add_text(&mut self, line: &str) {
+        let body = match crate::markdown_tokens::list_marker_end(line) {
+            Some(end) => line.get(end..).unwrap_or(""),
+            None => line,
+        };
+        for value in parse_numbers(body) {
+            if self.count == 0 {
+                self.min = value;
+                self.max = value;
+            } else {
+                self.min = self.min.min(value);
+                self.max = self.max.max(value);
+            }
+            self.count += 1;
+            self.sum += value;
+        }
+    }
+
+    pub fn average(&self) -> Option<f64> {
+        (self.count > 0).then(|| self.sum / self.count as f64)
+    }
+}
+
+/// Compact number for status display: at most two decimals, trailing zeros
+/// dropped (`12`, `12.5`, `0.33`).
+pub fn format_stat_value(value: f64) -> String {
+    if !value.is_finite() {
+        return "0".to_string();
+    }
+    let text = format!("{value:.2}");
+    let text = text.trim_end_matches('0').trim_end_matches('.');
+    if text == "-0" {
+        "0".to_string()
+    } else {
+        text.to_string()
+    }
+}
+
 pub fn format_sum_result(value: f64) -> String {
     if !value.is_finite() {
         return "0.00".to_string();
@@ -67,6 +118,29 @@ mod tests {
             vec![10.0, -2.5, 1200.0, 0.75]
         );
         assert_eq!(parse_numbers("no values"), Vec::<f64>::new());
+    }
+
+    #[test]
+    fn number_stats_accumulate_across_lines_and_skip_list_markers() {
+        let mut stats = NumberStats::default();
+        stats.add_text("1. rent 1,200");
+        stats.add_text("2. food 350.5");
+        stats.add_text("- misc -50");
+        stats.add_text("no numbers here");
+        assert_eq!(stats.count, 3);
+        assert_eq!(stats.sum, 1500.5);
+        assert_eq!((stats.min, stats.max), (-50.0, 1200.0));
+        assert_eq!(stats.average(), Some(1500.5 / 3.0));
+        assert_eq!(NumberStats::default().average(), None);
+    }
+
+    #[test]
+    fn format_stat_value_trims_trailing_zeros() {
+        assert_eq!(format_stat_value(12.0), "12");
+        assert_eq!(format_stat_value(12.5), "12.5");
+        assert_eq!(format_stat_value(1.0 / 3.0), "0.33");
+        assert_eq!(format_stat_value(-0.001), "0");
+        assert_eq!(format_stat_value(f64::NAN), "0");
     }
 
     #[test]

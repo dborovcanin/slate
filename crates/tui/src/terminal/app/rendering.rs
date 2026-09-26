@@ -5,7 +5,7 @@ use super::{
     is_markdown_table_line, line_display_cols, min, reformat_table_row_for_display,
     table_block_bounds_for_line, table_cell_info_at_char, table_cursor_cell_index,
     table_display_col_widths, viewport_col_for_display_col, TextStyle, DatePickerAction,
-    TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
+    SelectionStatsKey, TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::terminal::render;
@@ -25,7 +25,7 @@ use crate::terminal::render::LineDecorations;
 use crate::terminal::session::CursorPlacement;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
-use crate::editor_core::markdown_tokens;
+use crate::editor_core::{markdown_tokens, sum};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
@@ -629,6 +629,52 @@ impl TerminalApp {
         (matches, current)
     }
 
+    /// Count / sum / average of the numbers in the visual selection (charwise
+    /// selections include the char under the cursor, as when yanking).
+    /// `None` outside visual modes or when the selection has no numbers.
+    pub(super) fn selection_number_stats(&mut self) -> Option<sum::NumberStats> {
+        if !matches!(self.mode, UiMode::Visual | UiMode::VisualLine) {
+            return None;
+        }
+        let anchor = self.editor.selection_anchor?;
+        let key = SelectionStatsKey {
+            linewise: self.mode == UiMode::VisualLine,
+            anchor,
+            cursor: (self.editor.cursor_line, self.editor.cursor_col),
+            last_edit: self.last_edit,
+        };
+        if let Some((cached_key, stats)) = self.render_state.selection_stats {
+            if cached_key == key {
+                return stats;
+            }
+        }
+        let last_line = self.editor.lines.len().saturating_sub(1);
+        let (start, end) = if anchor <= key.cursor {
+            (anchor, key.cursor)
+        } else {
+            (key.cursor, anchor)
+        };
+        let mut stats = sum::NumberStats::default();
+        for line_idx in start.0.min(last_line)..=end.0.min(last_line) {
+            let line = self.editor.lines[line_idx].as_str();
+            if key.linewise {
+                stats.add_text(line);
+                continue;
+            }
+            let from = if line_idx == start.0 { start.1 } else { 0 };
+            let to = if line_idx == end.0 {
+                end.1.saturating_add(1)
+            } else {
+                usize::MAX
+            };
+            let segment: String = line.chars().skip(from).take(to.saturating_sub(from)).collect();
+            stats.add_text(&segment);
+        }
+        let stats = (stats.count > 0).then_some(stats);
+        self.render_state.selection_stats = Some((key, stats));
+        stats
+    }
+
     pub(super) fn line_is_in_visual_selection(&self, line_idx: usize) -> bool {
         let Some(anchor) = self.editor.selection_anchor else {
             return false;
@@ -1230,6 +1276,7 @@ impl TerminalApp {
             virtual_line += 1;
         }
 
+        let selection_stats = self.selection_number_stats();
         let editor_status_owned = if self.mode == UiMode::Editor {
             // Keep status bar stable during wiki-link popup usage; the popup
             // itself already renders suggestions and selection state.
@@ -1283,7 +1330,16 @@ impl TerminalApp {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
         };
-        let collection_sticky = self.working_collection_status_suffix();
+        let collection_sticky = match selection_stats {
+            Some(stats) => format!(
+                " Σ {} · avg {} · n {} {}",
+                sum::format_stat_value(stats.sum),
+                sum::format_stat_value(stats.average().unwrap_or(0.0)),
+                stats.count,
+                self.working_collection_status_suffix()
+            ),
+            None => self.working_collection_status_suffix(),
+        };
         let status_bg = self.render_palette.primary();
         let status_style = TextStyle {
             fg: Some(contrast_fg_for_bg(status_bg)),

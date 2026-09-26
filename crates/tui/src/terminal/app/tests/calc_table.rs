@@ -1677,3 +1677,40 @@ fn typing_a_whole_markdown_table_by_hand_builds_a_clean_table() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn visual_line_selection_shows_number_stats_in_status_bar() {
+    let (db, mut app, path) = app_with_note("1. rent 1200\n2. food 300\nlater 7");
+    app.mode = UiMode::VisualLine;
+    app.editor.selection_anchor = Some((0, 0));
+    app.editor.cursor_line = 1;
+
+    let rows = screen_rows(&mut app);
+    let status = rows.last().expect("status row");
+    assert!(status.contains("Σ 1500 · avg 750 · n 2"), "status: {status:?}");
+
+    app.mode = UiMode::Normal;
+    app.editor.selection_anchor = None;
+    let rows = screen_rows(&mut app);
+    assert!(!rows.last().expect("status row").contains('Σ'));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn charwise_selection_counts_only_selected_numbers() {
+    let (db, mut app, path) = app_with_note("a 10 b 20 c 30");
+    app.mode = UiMode::Visual;
+    // Select "10 b 20" (inclusive of the char under the cursor).
+    app.editor.selection_anchor = Some((0, 2));
+    app.editor.cursor_col = 8;
+
+    let stats = app.selection_number_stats().expect("stats");
+    assert_eq!((stats.count, stats.sum), (2, 30.0));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

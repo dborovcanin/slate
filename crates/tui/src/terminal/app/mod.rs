@@ -490,11 +490,23 @@ struct CalcRuntime {
 /// last-frame diff snapshot, cached cursor placement, the fence-state
 /// checkpoints used during `draw()`, and the file-render flags. Render-path
 /// only; disjoint from the document/calc fields it reads.
+/// Identifies a visual selection for `RenderState::selection_stats`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SelectionStatsKey {
+    linewise: bool,
+    anchor: (usize, usize),
+    cursor: (usize, usize),
+    last_edit: Instant,
+}
+
 struct RenderState {
     /// Soft-wrap long lines (tables and code stay horizontally scrolled).
     wrap_lines: bool,
     /// Screen cell (1-based row, col) of the editor cursor in the last frame.
     editor_cursor_cell: Option<(usize, usize)>,
+    /// Number statistics for the current visual selection, keyed by the
+    /// selection and the last edit so large selections are scanned once.
+    selection_stats: Option<(SelectionStatsKey, Option<crate::editor_core::sum::NumberStats>)>,
     plain_text_file: bool,
     file_language: Option<String>,
     /// Fence state checkpoints for draw(). Entry k = fence state BEFORE line
@@ -1111,6 +1123,7 @@ impl TerminalApp {
                 fence_checkpoints_valid_through: 0,
                 wrap_lines: false,
                 editor_cursor_cell: None,
+                selection_stats: None,
                 dirty: true,
             },
             folds: FoldingState::empty(Vec::new(), Vec::new()),
