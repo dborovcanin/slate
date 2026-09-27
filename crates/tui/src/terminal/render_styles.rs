@@ -3,7 +3,8 @@ use ratatui::style::{Modifier, Style};
 
 use crate::editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType, MarkdownLineInfo};
 use crate::terminal::markdown_view::{
-    image_hidden_token_ranges, should_reveal_inline_marker, wiki_link_hidden_token_ranges,
+    image_hidden_token_ranges, markdown_link_hidden_token_ranges, should_reveal_inline_marker,
+    wiki_link_hidden_token_ranges,
 };
 use crate::terminal::theme::RenderPalette;
 
@@ -30,7 +31,6 @@ impl CharStyle {
         modifiers.set(Modifier::CROSSED_OUT, self.strikethrough);
         cell_style(self.fg, self.bg, modifiers)
     }
-
 }
 
 fn is_variable_word_byte(byte: u8) -> bool {
@@ -186,6 +186,7 @@ pub(super) fn apply_inline_token_styles(
     let len = styles.len();
     let component_ranges = markdown_tokens::inline_marker_component_ranges_from_tokens(tokens);
     hidden_ranges.extend(image_hidden_token_ranges(tokens, active_cursor_col));
+    hidden_ranges.extend(markdown_link_hidden_token_ranges(tokens, active_cursor_col));
     hidden_ranges.extend(wiki_link_hidden_token_ranges(tokens, active_cursor_col));
     for (index, token) in tokens.iter().enumerate() {
         let from = token.from.min(len);

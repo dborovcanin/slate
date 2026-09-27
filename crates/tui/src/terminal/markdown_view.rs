@@ -154,12 +154,62 @@ fn hidden_inline_marker_ranges(
             .filter(|(from, to)| to > from),
     );
     hidden_ranges.extend(
+        markdown_link_hidden_token_ranges(tokens, active_cursor_col)
+            .into_iter()
+            .map(|(from, to)| (from.min(len), to.min(len)))
+            .filter(|(from, to)| to > from),
+    );
+    hidden_ranges.extend(
         wiki_link_hidden_token_ranges(tokens, active_cursor_col)
             .into_iter()
             .map(|(from, to)| (from.min(len), to.min(len)))
             .filter(|(from, to)| to > from),
     );
     hidden_ranges
+}
+
+pub fn markdown_link_hidden_token_ranges(
+    tokens: &[InlineToken],
+    active_cursor_col: Option<usize>,
+) -> Vec<(usize, usize)> {
+    let mut hidden = Vec::new();
+    let mut link_start = None;
+    let mut marker_count = 0usize;
+
+    for token in tokens {
+        match token.kind {
+            InlineTokenType::LinkMarker => {
+                if link_start.is_none() {
+                    link_start = Some(token.from);
+                    marker_count = 1;
+                } else {
+                    marker_count += 1;
+                    if marker_count == 3 {
+                        let start = link_start.take().expect("link start was set");
+                        let end = token.to;
+                        let cursor_inside =
+                            active_cursor_col.is_some_and(|col| col >= start && col <= end);
+                        if !cursor_inside {
+                            hidden.extend(
+                                tokens
+                                    .iter()
+                                    .filter(|link_token| {
+                                        link_token.from >= start
+                                            && link_token.to <= end
+                                            && link_token.kind == InlineTokenType::LinkUrl
+                                    })
+                                    .map(|link_token| (link_token.from, link_token.to)),
+                            );
+                        }
+                        marker_count = 0;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    hidden
 }
 
 pub fn wiki_link_hidden_token_ranges(
@@ -520,6 +570,22 @@ mod tests {
     fn markdown_link_reveals_source_at_left_boundary() {
         let line = "[guide](./docs/guide.md)";
         let hidden = hidden_ranges_for_markdown_line(line, Some(0));
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn markdown_link_hides_url_when_cursor_is_outside_link() {
+        let line = "[guide](./docs/guide.md) tail";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(line.chars().count()));
+        assert_eq!(hidden, vec![(0, 1), (6, 24)]);
+        let (collapsed, _) = collapse_markdown_line_for_cursor(line, line.chars().count());
+        assert_eq!(collapsed, "guide tail");
+    }
+
+    #[test]
+    fn markdown_link_reveals_url_when_cursor_is_inside_link() {
+        let line = "[guide](./docs/guide.md) tail";
+        let hidden = hidden_ranges_for_markdown_line(line, Some(12));
         assert!(hidden.is_empty());
     }
 
