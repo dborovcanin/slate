@@ -571,12 +571,8 @@ fn large_note_fixture_evaluates_in_the_app() {
     let fixture = build_fixture(2_500);
     let db = fixture.db.clone();
     let mut app = open_app(&fixture);
-    // Link titles load on the idle ticks after open.
+    // Link titles and the deferred calc pass load on the idle ticks after open.
     measure_idle(&mut app, &db, &mut Samples::default());
-    // Linked-note values only load during a full recompute; opening a note
-    // does not trigger one yet, so force it to check the references resolve.
-    app.calc.stale = true;
-    app.run_calc_recompute();
     let line = |prefix: &str| {
         app.editor
             .lines

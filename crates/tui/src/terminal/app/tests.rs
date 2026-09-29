@@ -32,8 +32,17 @@ fn cleanup_db_files(path: &PathBuf) {
 }
 
 fn app_with_note(body: &str) -> (Db, TerminalApp, PathBuf) {
+    app_with_linked_notes(body, &[])
+}
+
+/// Opens `body` as note `n1` after saving `linked` `(id, body)` notes it can
+/// reference.
+fn app_with_linked_notes(body: &str, linked: &[(&str, &str)]) -> (Db, TerminalApp, PathBuf) {
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
+    for (id, linked_body) in linked {
+        db.save_note(id, linked_body).expect("linked note saved");
+    }
     let note_id = "n1";
     db.save_note(note_id, body).expect("note saved");
     let opts = TerminalOptions {

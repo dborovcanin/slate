@@ -985,6 +985,17 @@ impl TerminalApp {
                 variable_names: Default::default(),
             }
         } else {
+            let extern_vars = if active_note.modules.cross_note {
+                startup_cross_note_extern_vars(
+                    db,
+                    &calc_engine,
+                    &cross_note_var_index,
+                    &active_note.id,
+                    &lines,
+                )
+            } else {
+                Vec::new()
+            };
             compute_calc_data(
                 &calc_engine,
                 &lines,
@@ -992,7 +1003,7 @@ impl TerminalApp {
                 active_note.modules.cross_note,
                 note_table_enabled,
                 None,
-                Vec::new(),
+                extern_vars,
             )
         };
         let loading_calc_engine = calc_begin.elapsed();

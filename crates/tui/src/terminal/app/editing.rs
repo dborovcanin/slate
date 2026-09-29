@@ -3680,6 +3680,10 @@ impl TerminalApp {
     /// after the first call per dep per session.
     fn preload_cross_note_deps(&self) {
         let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
+        self.preload_cross_note_deps_for_refs(&refs);
+    }
+
+    fn preload_cross_note_deps_for_refs(&self, refs: &[app_core::calc::CrossNoteRef]) {
         if refs.is_empty() {
             return;
         }
@@ -3759,6 +3763,7 @@ impl TerminalApp {
         let extern_vars: Vec<ExternVar> = if cross_note_enabled {
             let note_id = self.active_note.id.clone();
             let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
+            self.preload_cross_note_deps_for_refs(&refs);
             if let Ok(mut index) = self.cross_note_var_index.lock() {
                 index.update_deps(&note_id, &refs);
                 index.extern_vars_for(&note_id)

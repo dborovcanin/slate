@@ -1868,3 +1868,37 @@ fn typing_a_compact_markdown_table_by_hand_builds_a_clean_table() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+const RATES_NOTE_ID: &str = "01ABCDEFGHJKMNPQRSTVWXYZ00";
+const RATES_NOTE_BODY: &str = "vat := 0.2";
+
+#[test]
+fn cross_note_values_show_right_after_opening_a_note() {
+    let body = "cost := 10\ncost * [[01ABCDEF]].vat";
+    let (db, app, path) = app_with_linked_notes(body, &[(RATES_NOTE_ID, RATES_NOTE_BODY)]);
+
+    assert_eq!(app.calc.results[1].as_deref(), Some("2"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn cross_note_values_show_in_viewport_evaluated_large_notes() {
+    let mut lines = vec![
+        "cost := 10".to_string(),
+        "cost * [[01ABCDEF]].vat".to_string(),
+    ];
+    lines.extend((0..super::super::CALC_VIEWPORT_ONLY_MIN_LINES).map(|i| format!("x{i} := {i}")));
+    let (db, mut app, path) =
+        app_with_linked_notes(&lines.join("\n"), &[(RATES_NOTE_ID, RATES_NOTE_BODY)]);
+    assert!(app.calc_runtime.viewport_only);
+
+    render_screen(&mut app);
+    assert_eq!(app.calc.results[1].as_deref(), Some("2"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

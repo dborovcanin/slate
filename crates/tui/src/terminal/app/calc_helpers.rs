@@ -363,6 +363,34 @@ pub(super) fn preload_cross_note_dep_value(
     }
 }
 
+/// Values for the `[[SHORTID]].var` references in `lines`, loading each
+/// linked note on first use, so the first calc pass after opening a note
+/// already shows cross-note results.
+pub(super) fn startup_cross_note_extern_vars(
+    db: &Db,
+    engine: &CalcEngine,
+    cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
+    note_id: &str,
+    lines: &[String],
+) -> Vec<ExternVar> {
+    let refs = app_core::calc::scan_cross_note_refs(lines);
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let short_ids: rustc_hash::FxHashSet<&str> =
+        refs.iter().map(|r| r.note_short_id.as_str()).collect();
+    for short_id in short_ids {
+        preload_cross_note_dep_value(short_id, cross_note_var_index, engine, db);
+    }
+    match cross_note_var_index.lock() {
+        Ok(mut index) => {
+            index.update_deps(note_id, &refs);
+            index.extern_vars_for(note_id)
+        }
+        Err(_) => Vec::new(),
+    }
+}
+
 /// If the text before `cursor_col` ends with `[[SHORTID]].partial`, return
 /// `(short_id, from_col_of_partial, partial_query)`.
 /// `from_col_of_partial` is the char index right after the dot.
