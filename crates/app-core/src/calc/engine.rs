@@ -284,14 +284,20 @@ struct ResolvedVariables {
 /// variable definitions and the variables resolved so far. Evaluating another
 /// range of the same note state reuses it instead of rescanning every line.
 struct PreparedNoteContext {
-    key: u64,
+    /// Identifies the options and extern values; a change rebuilds everything.
+    options_key: u64,
+    /// Hash of each line it was prepared from, to find what an edit changed.
+    line_hashes: Vec<u64>,
     /// The note with cross-note references replaced by their values; `None`
     /// when nothing was substituted and the original lines apply.
     eval_lines: Option<Vec<String>>,
     lines_with_unresolved: FxHashSet<usize>,
     cross_note_refs: Vec<CrossNoteRef>,
+    /// The definition each line makes, if any (empty when variables are off).
+    line_defs: Vec<Option<VariableDefinition>>,
     defs: FxHashMap<String, VariableDefinition>,
     variables: Vec<VariableIndexEntry>,
+    names_sorted: Vec<String>,
     variable_regex: Option<Regex>,
     resolved: ResolvedVariables,
 }
@@ -718,10 +724,16 @@ impl CalcEngine {
     ) -> NoteEvaluationResult {
         let generation = current_eval_generation();
         with_eval_generation(generation, || {
-            let key = note_context_key(lines, &options);
+            let options_key = note_options_key(&options);
+            let line_hashes: Vec<u64> = lines.iter().map(|line| hash_line(line)).collect();
             let mut prepared = match cache.0.take() {
-                Some(prepared) if prepared.key == key => prepared,
-                _ => prepare_note_context(lines, &options, key),
+                Some(mut prepared) if prepared.options_key == options_key => {
+                    if prepared.line_hashes != line_hashes {
+                        update_prepared_note_context(&mut prepared, lines, &options, line_hashes);
+                    }
+                    prepared
+                }
+                _ => prepare_note_context(lines, &options, options_key, line_hashes),
             };
             let result = evaluate_prepared(lines, &mut prepared, options);
             // An interrupted evaluation may have recorded failures that are
@@ -738,15 +750,14 @@ impl CalcEngine {
         lines: &[String],
         options: NoteEvaluationOptions,
     ) -> NoteEvaluationResult {
-        let mut prepared = prepare_note_context(lines, &options, 0);
+        let mut prepared = prepare_note_context(lines, &options, 0, Vec::new());
         evaluate_prepared(lines, &mut prepared, options)
     }
 }
 
-/// Identifies the note state a `PreparedNoteContext` was built from.
-fn note_context_key(lines: &[String], options: &NoteEvaluationOptions) -> u64 {
+/// Identifies the options a `PreparedNoteContext` was built with.
+fn note_options_key(options: &NoteEvaluationOptions) -> u64 {
     let mut hasher = FxHasher::default();
-    lines.hash(&mut hasher);
     (
         options.variables_enabled,
         options.table_enabled,
@@ -764,10 +775,49 @@ fn note_context_key(lines: &[String], options: &NoteEvaluationOptions) -> u64 {
     hasher.finish()
 }
 
+fn hash_line(line: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    line.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn extern_value_map(options: &NoteEvaluationOptions) -> FxHashMap<(String, String), f64> {
+    options
+        .extern_vars
+        .iter()
+        .map(|ev| {
+            (
+                (ev.note_short_id.clone(), ev.var_normalized.clone()),
+                ev.value,
+            )
+        })
+        .collect()
+}
+
+/// Longest-first names, so leftmost-first regex alternation picks the
+/// longest match.
+fn names_longest_first(defs: &FxHashMap<String, VariableDefinition>) -> Vec<String> {
+    let mut names: Vec<String> = defs.keys().cloned().collect();
+    names.sort_by_key(|name| (Reverse(name.len()), name.clone()));
+    names
+}
+
+/// The definitions in effect: the last assignment of each name wins.
+fn definitions_from_lines(
+    line_defs: &[Option<VariableDefinition>],
+) -> FxHashMap<String, VariableDefinition> {
+    let mut defs = FxHashMap::default();
+    for def in line_defs.iter().flatten() {
+        defs.insert(def.normalized.clone(), def.clone());
+    }
+    defs
+}
+
 fn prepare_note_context(
     lines: &[String],
     options: &NoteEvaluationOptions,
-    key: u64,
+    options_key: u64,
+    line_hashes: Vec<u64>,
 ) -> PreparedNoteContext {
     let cross_note_refs = if options.cross_note_enabled {
         options
@@ -783,16 +833,7 @@ fn prepare_note_context(
     let mut eval_lines: Option<Vec<String>> = None;
     let mut lines_with_unresolved = FxHashSet::default();
     if options.cross_note_enabled && !options.extern_vars.is_empty() {
-        let extern_map: FxHashMap<(String, String), f64> = options
-            .extern_vars
-            .iter()
-            .map(|ev| {
-                (
-                    (ev.note_short_id.clone(), ev.var_normalized.clone()),
-                    ev.value,
-                )
-            })
-            .collect();
+        let extern_map = extern_value_map(options);
         let mut previous_line = None;
         for reference in &cross_note_refs {
             let idx = reference.line - 1;
@@ -810,30 +851,157 @@ fn prepare_note_context(
         }
     }
 
-    let defs = if options.variables_enabled {
-        collect_variable_definitions(
-            eval_lines.as_deref().unwrap_or(lines),
-            options.table_enabled,
-        )
+    let line_defs: Vec<Option<VariableDefinition>> = if options.variables_enabled {
+        eval_lines
+            .as_deref()
+            .unwrap_or(lines)
+            .iter()
+            .enumerate()
+            .map(|(idx, line)| line_variable_definition(line, idx, options.table_enabled))
+            .collect()
     } else {
-        FxHashMap::default()
+        Vec::new()
     };
+    let defs = definitions_from_lines(&line_defs);
     let variables = variable_index_from_definitions(&defs);
-    let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
-    // Longest-first so leftmost-first regex alternation picks the longest match.
-    names_sorted.sort_by_key(|name| (Reverse(name.len()), name.clone()));
+    let names_sorted = names_longest_first(&defs);
     let variable_regex = cached_variable_regex(&names_sorted);
 
     PreparedNoteContext {
-        key,
+        options_key,
+        line_hashes,
         eval_lines,
         lines_with_unresolved,
         cross_note_refs,
+        line_defs,
         defs,
         variables,
+        names_sorted,
         variable_regex,
         resolved: ResolvedVariables::default(),
     }
+}
+
+/// Brings `prepared` up to date with `lines` after an edit, redoing the
+/// per-line work only for the lines that changed.
+fn update_prepared_note_context(
+    prepared: &mut PreparedNoteContext,
+    lines: &[String],
+    options: &NoteEvaluationOptions,
+    line_hashes: Vec<u64>,
+) {
+    let Some((from, old_to, new_to)) = changed_line_span(&prepared.line_hashes, &line_hashes)
+    else {
+        prepared.line_hashes = line_hashes;
+        return;
+    };
+    let delta = new_to as isize - old_to as isize;
+    let shift = |idx: usize| idx.saturating_add_signed(delta);
+
+    if options.cross_note_enabled {
+        let mut refs = Vec::with_capacity(prepared.cross_note_refs.len());
+        refs.extend(
+            prepared
+                .cross_note_refs
+                .iter()
+                .filter(|r| r.line - 1 < from)
+                .cloned(),
+        );
+        refs.extend(
+            scan_cross_note_refs(&lines[from..new_to])
+                .into_iter()
+                .map(|r| CrossNoteRef {
+                    line: r.line + from,
+                    ..r
+                }),
+        );
+        refs.extend(
+            prepared
+                .cross_note_refs
+                .iter()
+                .filter(|r| r.line > old_to)
+                .map(|r| CrossNoteRef {
+                    line: shift(r.line - 1) + 1,
+                    ..r.clone()
+                }),
+        );
+        prepared.cross_note_refs = refs;
+    }
+
+    if options.cross_note_enabled && !options.extern_vars.is_empty() {
+        let extern_map = extern_value_map(options);
+        prepared.lines_with_unresolved = prepared
+            .lines_with_unresolved
+            .iter()
+            .filter(|&&idx| idx < from || idx >= old_to)
+            .map(|&idx| if idx < from { idx } else { shift(idx) })
+            .collect();
+        let mut span = Vec::with_capacity(new_to - from);
+        let mut any_rewritten = false;
+        for (offset, line) in lines[from..new_to].iter().enumerate() {
+            let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
+            if has_unresolved {
+                prepared.lines_with_unresolved.insert(from + offset);
+            }
+            any_rewritten |= matches!(new_line, Cow::Owned(_));
+            span.push(new_line.into_owned());
+        }
+        match prepared.eval_lines.as_mut() {
+            Some(eval_lines) => {
+                eval_lines.splice(from..old_to, span);
+            }
+            None if any_rewritten => {
+                let mut eval_lines = lines.to_vec();
+                eval_lines.splice(from..new_to, span);
+                prepared.eval_lines = Some(eval_lines);
+            }
+            None => {}
+        }
+    }
+
+    if options.variables_enabled {
+        let eval_lines = prepared.eval_lines.as_deref().unwrap_or(lines);
+        let span_defs: Vec<Option<VariableDefinition>> = (from..new_to)
+            .map(|idx| line_variable_definition(&eval_lines[idx], idx, options.table_enabled))
+            .collect();
+        prepared.line_defs.splice(from..old_to, span_defs);
+        if delta != 0 {
+            for (idx, def) in prepared.line_defs.iter_mut().enumerate().skip(new_to) {
+                if let Some(def) = def {
+                    def.line = idx;
+                }
+            }
+        }
+        prepared.defs = definitions_from_lines(&prepared.line_defs);
+        prepared.variables = variable_index_from_definitions(&prepared.defs);
+        let names_sorted = names_longest_first(&prepared.defs);
+        if names_sorted != prepared.names_sorted {
+            prepared.variable_regex = cached_variable_regex(&names_sorted);
+            prepared.names_sorted = names_sorted;
+        }
+    }
+
+    // Any value may depend on the changed lines; resolve again on demand.
+    prepared.resolved = ResolvedVariables::default();
+    prepared.line_hashes = line_hashes;
+}
+
+/// The span that differs between two versions of a note, from their line
+/// hashes: old lines `[from, old_to)` became new lines `[from, new_to)`.
+fn changed_line_span(old: &[u64], new: &[u64]) -> Option<(usize, usize, usize)> {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    if prefix == old.len() && prefix == new.len() {
+        return None;
+    }
+    let max_suffix = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    Some((prefix, old.len() - suffix, new.len() - suffix))
 }
 
 fn evaluate_prepared(
@@ -2113,34 +2281,20 @@ fn extract_line_expression(line: &str, table_enabled: bool) -> Option<LineExpres
     }
 }
 
-fn collect_variable_definitions(
-    lines: &[String],
+/// The variable a line assigns, if it is an assignment.
+fn line_variable_definition(
+    line: &str,
+    line_idx: usize,
     table_enabled: bool,
-) -> FxHashMap<String, VariableDefinition> {
-    let mut defs = FxHashMap::default();
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        let Some(line_expr) = extract_line_expression(line, table_enabled) else {
-            continue;
-        };
-        let expression = line_expr.expression;
-
-        let Some((name, normalized, rhs)) = parse_variable_assignment(&expression) else {
-            continue;
-        };
-
-        defs.insert(
-            normalized.clone(),
-            VariableDefinition {
-                name,
-                normalized,
-                expression: rhs,
-                line: line_idx,
-            },
-        );
-    }
-
-    defs
+) -> Option<VariableDefinition> {
+    let line_expr = extract_line_expression(line, table_enabled)?;
+    let (name, normalized, rhs) = parse_variable_assignment(&line_expr.expression)?;
+    Some(VariableDefinition {
+        name,
+        normalized,
+        expression: rhs,
+        line: line_idx,
+    })
 }
 
 fn variable_index_from_definitions(
@@ -3402,6 +3556,85 @@ mod tests {
                 .as_deref(),
             Some("44")
         );
+    }
+
+    #[test]
+    fn cached_evaluation_matches_fresh_evaluation_across_random_edits() {
+        let pool = [
+            "base := 10",
+            "rate := [[abcd1234]].rate",
+            "base := 3",
+            "total := base * rate",
+            "total + 1",
+            "[[abcd1234]].missing * 2",
+            "[[abcd1234]].rate * base",
+            "4 + 5",
+            "prose line",
+            "",
+            "| a | b |",
+            "| --- | --- |",
+            "| 2 | :=(1,1) * base |",
+            "| sum | :=sum_col() |",
+        ];
+        let engine = CalcEngine::new();
+        let options = |range: (usize, usize)| NoteEvaluationOptions {
+            variables_enabled: true,
+            table_enabled: true,
+            cross_note_enabled: true,
+            eval_range: Some(range),
+            extern_vars: vec![ExternVar {
+                note_short_id: "abcd1234".to_string(),
+                var_normalized: "rate".to_string(),
+                value: 0.5,
+            }],
+            precomputed_refs: None,
+        };
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = |bound: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % bound.max(1) as u64) as usize
+        };
+        let mut lines: Vec<String> = (0..40).map(|i| pool[i % pool.len()].to_string()).collect();
+        let mut cache = NoteContextCache::default();
+        for step in 0..300 {
+            let at = next(lines.len() + 1);
+            match next(3) {
+                0 => {
+                    for _ in 0..1 + next(3) {
+                        lines.insert(at.min(lines.len()), pool[next(pool.len())].to_string());
+                    }
+                }
+                1 if lines.len() > 1 => {
+                    let start = at.min(lines.len() - 1);
+                    let end = (start + 1 + next(3)).min(lines.len());
+                    lines.drain(start..end);
+                }
+                _ if !lines.is_empty() => {
+                    let idx = at.min(lines.len() - 1);
+                    lines[idx] = pool[next(pool.len())].to_string();
+                }
+                _ => {}
+            }
+            for _ in 0..2 {
+                let from = next(lines.len());
+                let range = (from, (from + 1 + next(15)).min(lines.len()));
+                let cached =
+                    engine.evaluate_note_context_cached(&lines, options(range), &mut cache);
+                let fresh = engine.evaluate_note_context(&lines, options(range));
+                assert_eq!(
+                    cached.line_results, fresh.line_results,
+                    "step {step} {range:?}"
+                );
+                assert_eq!(
+                    cached.table_cell_results, fresh.table_cell_results,
+                    "step {step}"
+                );
+                assert_eq!(cached.variables, fresh.variables, "step {step}");
+                assert_eq!(cached.cross_note_refs, fresh.cross_note_refs, "step {step}");
+            }
+        }
     }
 
     #[test]
