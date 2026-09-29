@@ -2599,3 +2599,25 @@ fn write_command_waits_for_an_in_flight_autosave() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn search_matches_map_to_original_chars_when_lowercasing_changes_length() {
+    use crate::terminal::app::command_search_switcher::case_insensitive_matches;
+    assert_eq!(case_insensitive_matches("İİx", "x"), vec![(2, 3)]);
+    assert_eq!(
+        case_insensitive_matches("ÄBc äbC", "äb"),
+        vec![(0, 2), (4, 6)]
+    );
+    assert_eq!(
+        case_insensitive_matches("Total total", "total"),
+        vec![(0, 5), (6, 11)]
+    );
+    assert_eq!(case_insensitive_matches("aaaa", "aa"), vec![(0, 2), (2, 4)]);
+    assert_eq!(case_insensitive_matches("ab", "abc"), Vec::new());
+
+    let (_db, mut app, path) = app_with_note("İİx\nplain x");
+    app.search.query = "X".to_string();
+    app.recompute_search();
+    assert_eq!(app.search.matches, vec![(0, 2, 3), (1, 6, 7)]);
+    cleanup_db_files(&path);
+}

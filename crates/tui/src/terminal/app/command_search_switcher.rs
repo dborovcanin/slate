@@ -11,6 +11,45 @@ use crate::terminal::{notifications, switcher, text_input};
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::time::{Duration, Instant};
 
+/// Char ranges in `line` of non-overlapping matches of `query_lower` (an
+/// already lowercased query), compared case-insensitively.
+pub(super) fn case_insensitive_matches(line: &str, query_lower: &str) -> Vec<(usize, usize)> {
+    let mut matches = Vec::new();
+    if query_lower.is_empty() {
+        return matches;
+    }
+    if line.is_ascii() && query_lower.is_ascii() {
+        // ASCII lowercasing keeps byte offsets, which are char offsets here.
+        let lower = line.to_ascii_lowercase();
+        let mut start = 0;
+        while let Some(pos) = lower[start..].find(query_lower) {
+            let from = start + pos;
+            matches.push((from, from + query_lower.len()));
+            start = from + query_lower.len();
+        }
+        return matches;
+    }
+    // Lowercasing can change a char's length (`İ` becomes two chars), so
+    // keep, for every lowered char, the index of the char it came from.
+    let query: Vec<char> = query_lower.chars().collect();
+    let lowered: Vec<(char, usize)> = line
+        .chars()
+        .enumerate()
+        .flat_map(|(idx, ch)| ch.to_lowercase().map(move |lower| (lower, idx)))
+        .collect();
+    let mut start = 0;
+    while start + query.len() <= lowered.len() {
+        let window = &lowered[start..start + query.len()];
+        if window.iter().map(|(ch, _)| *ch).eq(query.iter().copied()) {
+            matches.push((window[0].1, window[query.len() - 1].1 + 1));
+            start += query.len();
+        } else {
+            start += 1;
+        }
+    }
+    matches
+}
+
 fn note_sources(db: &Db) -> app_core::note_sources::NoteSourceService {
     app_core::note_sources::NoteSourceService::new(db.clone())
 }
@@ -2916,17 +2955,9 @@ impl TerminalApp {
             return;
         }
 
-        let query_chars = query.chars().count();
         for (line_idx, line) in self.editor.lines.iter().enumerate() {
-            let lower = line.to_lowercase();
-            let mut byte_start = 0;
-            while let Some(pos) = lower[byte_start..].find(&query) {
-                let abs_byte = byte_start + pos;
-                let char_start = line[..abs_byte].chars().count();
-                self.search
-                    .matches
-                    .push((line_idx, char_start, char_start + query_chars));
-                byte_start = abs_byte + query.len();
+            for (char_start, char_end) in case_insensitive_matches(line, &query) {
+                self.search.matches.push((line_idx, char_start, char_end));
             }
         }
 
