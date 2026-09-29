@@ -3115,7 +3115,9 @@ mod tests {
             Some("hello".to_string())
         );
 
-        let updated = db.save_note_revision("n1", "updated").expect("note updated");
+        let updated = db
+            .save_note_revision("n1", "updated")
+            .expect("note updated");
         assert!(updated.updated_at >= created.updated_at);
         assert_eq!(
             db.get_note("n1").expect("lookup").map(|n| n.body),
@@ -4212,7 +4214,11 @@ mod tests {
         .expect("update modules");
 
         let after = db.search_notes_content("canary", 10).expect("search");
-        assert_eq!(after.len(), 1, "note must stay searchable after a modules write");
+        assert_eq!(
+            after.len(),
+            1,
+            "note must stay searchable after a modules write"
+        );
         assert_eq!(after[0].id, "n1");
 
         drop(db);
@@ -4225,7 +4231,8 @@ mod tests {
         let db = Db::open(path.clone()).expect("db opens");
 
         db.save_note("n1", "original canary").expect("save note");
-        db.save_note("n1", "replaced sentinel").expect("resave note");
+        db.save_note("n1", "replaced sentinel")
+            .expect("resave note");
 
         assert!(
             db.search_notes_content("canary", 10)

@@ -38,7 +38,10 @@ fn long_line_wraps_onto_continuation_rows_with_blank_gutter() {
         .expect("second line rendered");
     assert!(next_idx >= 2, "second line should follow the wrapped rows");
     assert!(editor[next_idx].trim_start().starts_with("2  next line"));
-    assert!(!rows.iter().any(|row| row.contains('>')), "no overflow markers when wrapping");
+    assert!(
+        !rows.iter().any(|row| row.contains('>')),
+        "no overflow markers when wrapping"
+    );
 
     drop(app);
     drop(db);
@@ -54,7 +57,10 @@ fn cursor_on_continuation_row_is_placed_on_that_row() {
     app.adjust_scroll();
 
     let (rows, cursor) = render_screen(&mut app);
-    assert_eq!(app.editor.scroll_col, 0, "wrapped lines never scroll horizontally");
+    assert_eq!(
+        app.editor.scroll_col, 0,
+        "wrapped lines never scroll horizontally"
+    );
     let cursor_row = usize::from(cursor.row);
     // Buffer row 1 is the first editor row; the line end is on a later row.
     assert!(cursor_row >= 2, "cursor should be below the first line row");
@@ -89,7 +95,11 @@ fn scrolls_until_wrapped_rows_above_leave_room_for_the_cursor_line() {
     );
     let cursor_row = usize::from(cursor.row);
     assert!(cursor_row >= 1 && cursor_row < rows.len() - 1);
-    assert!(rows[cursor_row].contains("l20w00"), "cursor row: {:?}", rows[cursor_row]);
+    assert!(
+        rows[cursor_row].contains("l20w00"),
+        "cursor row: {:?}",
+        rows[cursor_row]
+    );
 
     drop(app);
     drop(db);
@@ -108,8 +118,15 @@ fn tables_stay_unwrapped_with_overflow_marker() {
 
     let rows = screen_rows(&mut app);
     let editor = editor_rows(&rows);
-    assert!(editor[0].trim_end().ends_with('>'), "table row: {:?}", editor[0]);
-    assert!(editor[1].trim_start().starts_with("2  |"), "table stays one row per line");
+    assert!(
+        editor[0].trim_end().ends_with('>'),
+        "table row: {:?}",
+        editor[0]
+    );
+    assert!(
+        editor[1].trim_start().starts_with("2  |"),
+        "table stays one row per line"
+    );
 
     drop(app);
     drop(db);
@@ -151,10 +168,16 @@ fn gj_and_gk_move_between_screen_rows_keeping_the_column() {
     assert_eq!(app.editor.cursor_col, 7);
 
     app.move_cursor_screen(false, 2);
-    assert_eq!(app.editor.cursor_line, 1, "gj past the last row enters the next line");
+    assert_eq!(
+        app.editor.cursor_line, 1,
+        "gj past the last row enters the next line"
+    );
 
     app.move_cursor_screen(true, 1);
-    assert_eq!(app.editor.cursor_line, 0, "gk from the next line lands on the last row");
+    assert_eq!(
+        app.editor.cursor_line, 0,
+        "gk from the next line lands on the last row"
+    );
     assert!(app.editor.cursor_col >= ROW1_START);
 
     drop(app);
@@ -184,8 +207,12 @@ fn arrow_keys_move_by_screen_row_on_wrapped_lines_in_editor_mode() {
     app.mode = UiMode::Editor;
     app.editor.cursor_col = 3;
 
-    app.handle_editor_key(&db, Key::ArrowDown).expect("arrow down");
-    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, ROW1_START + 3));
+    app.handle_editor_key(&db, Key::ArrowDown)
+        .expect("arrow down");
+    assert_eq!(
+        (app.editor.cursor_line, app.editor.cursor_col),
+        (0, ROW1_START + 3)
+    );
     app.handle_editor_key(&db, Key::ArrowUp).expect("arrow up");
     assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (0, 3));
 
@@ -205,11 +232,21 @@ fn line_taller_than_the_screen_scrolls_by_rows_to_the_cursor() {
     app.adjust_scroll();
 
     let (rows, cursor) = render_screen(&mut app);
-    assert_eq!(app.editor.scroll_line, 1, "the tall cursor line becomes the top line");
-    assert!(app.editor.scroll_row_offset > 0, "rows above the cursor are skipped");
+    assert_eq!(
+        app.editor.scroll_line, 1,
+        "the tall cursor line becomes the top line"
+    );
+    assert!(
+        app.editor.scroll_row_offset > 0,
+        "rows above the cursor are skipped"
+    );
     let cursor_row = usize::from(cursor.row);
     assert!(cursor_row >= 1 && cursor_row < rows.len() - 1);
-    assert!(rows[cursor_row].contains("word249"), "cursor row: {:?}", rows[cursor_row]);
+    assert!(
+        rows[cursor_row].contains("word249"),
+        "cursor row: {:?}",
+        rows[cursor_row]
+    );
 
     // Moving back to the start scrolls the offset back to zero.
     app.editor.cursor_col = 0;

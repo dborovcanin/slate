@@ -112,7 +112,10 @@ impl TerminalSession {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let _ = execute!(self.terminal.backend_mut(), SetCursorStyle::DefaultUserShape);
+        let _ = execute!(
+            self.terminal.backend_mut(),
+            SetCursorStyle::DefaultUserShape
+        );
         let _ = self.terminal.show_cursor();
         restore_terminal(self.keyboard_enhanced);
     }

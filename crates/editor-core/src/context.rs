@@ -93,7 +93,6 @@ impl ResolvedContext<'static> {
 }
 
 impl<'a> ResolvedContext<'a> {
-
     pub fn text(&self) -> &str {
         self.text.as_ref()
     }

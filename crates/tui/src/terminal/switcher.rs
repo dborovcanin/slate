@@ -1,12 +1,12 @@
 use std::cmp::min;
 
 use super::canvas::{
-    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, draw_separator, pad_right, put_str,
-    TextStyle,
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, draw_separator, pad_right,
+    put_str, TextStyle,
 };
-use ratatui::buffer::Buffer;
 use super::render::RenderPalette;
 use app_core::storage::{Collection, NoteAccessMode, NoteSearchResult};
+use ratatui::buffer::Buffer;
 
 const CONTENT_SEARCH_MIN_H: usize = 9;
 const CONTENT_SEARCH_MAX_H: usize = 14;
@@ -356,7 +356,11 @@ pub fn draw_collection_switcher(
         box_w,
         surface_bg,
         palette.primary(),
-        Some(&count_label(view.matches.len(), "collection", "collections")),
+        Some(&count_label(
+            view.matches.len(),
+            "collection",
+            "collections",
+        )),
     );
 
     let max_rows = box_h.saturating_sub(4);
@@ -1317,10 +1321,7 @@ mod tests {
         draw_switcher(&view, &mut buf, 24, 80, palette);
 
         assert!(has_fg(&buf, 201), "prompt should use accent primary");
-        assert!(
-            !has_fg(&buf, 33),
-            "prompt should not use keyword color"
-        );
+        assert!(!has_fg(&buf, 33), "prompt should not use keyword color");
     }
 
     #[test]
@@ -1368,10 +1369,7 @@ mod tests {
         draw_content_search(&view, &mut buf, 24, 80, palette);
 
         assert!(has_fg(&buf, 201), "prompt should use accent primary");
-        assert!(
-            !has_fg(&buf, 33),
-            "prompt should not use keyword color"
-        );
+        assert!(!has_fg(&buf, 33), "prompt should not use keyword color");
     }
 
     #[test]

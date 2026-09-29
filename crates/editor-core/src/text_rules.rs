@@ -809,8 +809,8 @@ fn table_autoformat_rule(
             && cursor_line_no <= end_line
         {
             let source_idx = cursor_line_no.saturating_sub(start_line);
-            let had_delimiter =
-                (0..original_lines.len()).any(|idx| table::is_delimiter_line_in(&original_lines, idx));
+            let had_delimiter = (0..original_lines.len())
+                .any(|idx| table::is_delimiter_line_in(&original_lines, idx));
             let inserted_delimiter = !had_delimiter
                 && original_lines.len() >= 2
                 && formatted_lines.len() == original_lines.len() + 1;
@@ -2517,7 +2517,10 @@ mod tests {
         let head = text.find("bb").unwrap() + 1;
         let doc = snapshot(text, head, head);
         let op = run_enter_rules(&doc, TextRuleOptions::default()).expect("operation");
-        assert_eq!(apply_operation(doc.text(), &op), "| a   | bbbb | c |\n|  |  |  |");
+        assert_eq!(
+            apply_operation(doc.text(), &op),
+            "| a   | bbbb | c |\n|  |  |  |"
+        );
         assert_eq!(op.selection.expect("selection").anchor, text.len() + 3);
     }
 
@@ -2608,7 +2611,10 @@ mod tests {
             "second cell"
         );
         let text = "|   |   |";
-        assert!(run_table_manual_row_start_rule(&snapshot(text, 2, 2)).is_none(), "header");
+        assert!(
+            run_table_manual_row_start_rule(&snapshot(text, 2, 2)).is_none(),
+            "header"
+        );
     }
 
     #[test]
@@ -2624,10 +2630,13 @@ mod tests {
     #[test]
     fn duplicate_delimiter_rule_ignores_data_rows_and_mid_line_cursor() {
         let text = "| a | b |\n| --- | --- |\n| 1 | 2 |";
-        assert!(run_table_duplicate_delimiter_rule(&snapshot(text, text.len(), text.len())).is_none());
+        assert!(
+            run_table_duplicate_delimiter_rule(&snapshot(text, text.len(), text.len())).is_none()
+        );
         let text = "| a | b |\n| --- | --- |\n| --- | --- |";
         let head = text.len() - 2;
-        assert!(run_table_duplicate_delimiter_rule(&snapshot(text, head, head)).is_none());        let text = "| a | b |\n| --- | --- |\n| --- |";
+        assert!(run_table_duplicate_delimiter_rule(&snapshot(text, head, head)).is_none());
+        let text = "| a | b |\n| --- | --- |\n| --- |";
         assert!(
             run_table_duplicate_delimiter_rule(&snapshot(text, text.len(), text.len())).is_none(),
             "partial delimiter row"

@@ -432,7 +432,12 @@ fn execute_yank_word_forward(
     let mut cursor = origin;
     let mut yanked = Vec::new();
     for _ in 0..count {
-        let next = clamp_to_table_cell(text, &spans, origin, move_word_forward(text, &spans, cursor));
+        let next = clamp_to_table_cell(
+            text,
+            &spans,
+            origin,
+            move_word_forward(text, &spans, cursor),
+        );
         if next == cursor {
             break;
         }
@@ -464,7 +469,12 @@ fn execute_yank_word_backward(
     let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
-        let next = clamp_to_table_cell(text, &spans, origin, move_word_backward(text, &spans, cursor));
+        let next = clamp_to_table_cell(
+            text,
+            &spans,
+            origin,
+            move_word_backward(text, &spans, cursor),
+        );
         if next == cursor {
             break;
         }
@@ -495,7 +505,12 @@ fn execute_delete_word_forward(
     let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
-        let next = clamp_to_table_cell(text, &spans, origin, move_word_forward(text, &spans, cursor));
+        let next = clamp_to_table_cell(
+            text,
+            &spans,
+            origin,
+            move_word_forward(text, &spans, cursor),
+        );
         if next == cursor {
             break;
         }
@@ -535,7 +550,12 @@ fn execute_delete_word_backward(
     let origin = clamp_offset(text, selection.head);
     let mut cursor = origin;
     for _ in 0..count {
-        let next = clamp_to_table_cell(text, &spans, origin, move_word_backward(text, &spans, cursor));
+        let next = clamp_to_table_cell(
+            text,
+            &spans,
+            origin,
+            move_word_backward(text, &spans, cursor),
+        );
         if next == cursor {
             break;
         }
@@ -936,7 +956,12 @@ fn clamp_offset(text: &str, offset: usize) -> usize {
 /// On a table row, word operators stay inside the cursor's cell: `target` is
 /// clamped between the start of that cell's content and its right pipe, so a
 /// cell border is never deleted, changed or yanked.
-fn clamp_to_table_cell(text: &str, spans: &[(usize, usize)], origin: usize, target: usize) -> usize {
+fn clamp_to_table_cell(
+    text: &str,
+    spans: &[(usize, usize)],
+    origin: usize,
+    target: usize,
+) -> usize {
     if spans.is_empty() {
         return target;
     }

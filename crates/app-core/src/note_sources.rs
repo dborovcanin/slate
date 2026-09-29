@@ -23,8 +23,7 @@ pub enum NoteIdentity {
     FileNote(PathBuf),
 }
 
-impl NoteIdentity {
-}
+impl NoteIdentity {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoteSourceCapabilities {
@@ -1177,7 +1176,10 @@ mod tests {
 
     #[test]
     fn derived_title_skips_empty_headings_and_strips_markers() {
-        assert_eq!(derive_note_title_from_body("#\n\n# Weekly review\nbody"), "Weekly review");
+        assert_eq!(
+            derive_note_title_from_body("#\n\n# Weekly review\nbody"),
+            "Weekly review"
+        );
         assert_eq!(derive_note_title_from_body("First line"), "First line");
         assert_eq!(derive_note_title_from_body("\n  \n"), "Untitled");
     }

@@ -1,7 +1,7 @@
 mod adapter;
-mod canvas;
 mod app;
 mod calc_cache;
+mod canvas;
 mod clipboard;
 mod date_picker;
 mod external_open;
@@ -59,4 +59,3 @@ pub(crate) fn daily_date_label(stamp: app_core::daily::LocalStamp, pattern: &str
         pattern,
     )
 }
-

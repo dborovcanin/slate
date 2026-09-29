@@ -765,7 +765,10 @@ fn status_bar_shows_mode_pill_position_and_fresh_messages() {
     let status = rows.last().expect("status row");
     assert!(status.starts_with(" NORMAL "), "status: {status:?}");
     assert!(status.contains("saved n1"));
-    assert!(status.trim_end().ends_with("Ln 2, Col 3"), "status: {status:?}");
+    assert!(
+        status.trim_end().ends_with("Ln 2, Col 3"),
+        "status: {status:?}"
+    );
 
     // Messages expire; the idle loop is told to redraw once.
     let shown = app.render_state.status_shown.clone().expect("tracked");
@@ -791,7 +794,11 @@ fn title_bar_shows_title_first_and_dirty_marker() {
     let (db, mut app, path) = app_with_note("# Weekly review\nbody");
     app.dirty = true;
     let rows = screen_rows(&mut app);
-    assert!(rows[0].starts_with(" Weekly review •  n1"), "title: {:?}", rows[0]);
+    assert!(
+        rows[0].starts_with(" Weekly review •  n1"),
+        "title: {:?}",
+        rows[0]
+    );
 
     drop(app);
     drop(db);

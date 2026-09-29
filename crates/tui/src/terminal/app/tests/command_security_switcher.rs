@@ -2476,11 +2476,15 @@ fn command_bar_arrows_edit_mid_command() {
     let (db, mut app, path) = app_with_note("alpha");
     app.mode = UiMode::CommandBar;
     for ch in "note lck".chars() {
-        app.handle_command_bar_key(&db, Key::Char(ch)).expect("type");
+        app.handle_command_bar_key(&db, Key::Char(ch))
+            .expect("type");
     }
-    app.handle_command_bar_key(&db, Key::ArrowLeft).expect("left");
-    app.handle_command_bar_key(&db, Key::ArrowLeft).expect("left");
-    app.handle_command_bar_key(&db, Key::Char('o')).expect("insert");
+    app.handle_command_bar_key(&db, Key::ArrowLeft)
+        .expect("left");
+    app.handle_command_bar_key(&db, Key::ArrowLeft)
+        .expect("left");
+    app.handle_command_bar_key(&db, Key::Char('o'))
+        .expect("insert");
     assert_eq!(app.command_input, "note lock");
 
     // Cursor sits after the inserted char: ":" + "note lo" -> column 9.
@@ -2488,10 +2492,12 @@ fn command_bar_arrows_edit_mid_command() {
     assert_eq!(col, 9);
 
     app.handle_command_bar_key(&db, Key::Home).expect("home");
-    app.handle_command_bar_key(&db, Key::Delete).expect("delete");
+    app.handle_command_bar_key(&db, Key::Delete)
+        .expect("delete");
     assert_eq!(app.command_input, "ote lock");
     app.handle_command_bar_key(&db, Key::End).expect("end");
-    app.handle_command_bar_key(&db, Key::Char('s')).expect("append");
+    app.handle_command_bar_key(&db, Key::Char('s'))
+        .expect("append");
     assert_eq!(app.command_input, "ote locks");
 
     drop(app);
@@ -2508,7 +2514,11 @@ fn today_command_opens_the_daily_note_with_cursor_at_the_end() {
         "active note: {}",
         app.active_note.id
     );
-    assert!(app.editor.lines[0].starts_with("# "), "template heading: {:?}", app.editor.lines);
+    assert!(
+        app.editor.lines[0].starts_with("# "),
+        "template heading: {:?}",
+        app.editor.lines
+    );
     assert_eq!(app.editor.cursor_line, app.editor.lines.len() - 1);
 
     // Running it again returns to the same note instead of creating another.

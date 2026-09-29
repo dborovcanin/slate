@@ -1251,13 +1251,8 @@ pub fn sync_variable_dependency_graph(
         }
         return;
     };
-    let can_patch_in_place = try_patch_variable_dependency_graph_in_place(
-        cached,
-        lines,
-        changed_from,
-        changed_to,
-        mask,
-    );
+    let can_patch_in_place =
+        try_patch_variable_dependency_graph_in_place(cached, lines, changed_from, changed_to, mask);
 
     if !can_patch_in_place {
         *graph = build_variable_dependency_graph(lines, mask);
@@ -1858,7 +1853,12 @@ fn narrow_to_changed_lines(
 }
 
 /// Whether any of `lines[from..to]` satisfies `pred`.
-fn changed_lines_match(lines: &[String], from: usize, to: usize, pred: impl Fn(&str) -> bool) -> bool {
+fn changed_lines_match(
+    lines: &[String],
+    from: usize,
+    to: usize,
+    pred: impl Fn(&str) -> bool,
+) -> bool {
     lines
         .get(from.min(lines.len())..to.min(lines.len()))
         .is_some_and(|changed| changed.iter().any(|line| pred(line)))
@@ -2366,8 +2366,8 @@ impl<'a> DecideEvalWindowParams<'a> {
         self.variable_graph = dep_index.and_then(|d| d.variable_graph.as_ref());
         // A built index without formulas says "no formula dependencies";
         // passing None instead would make the window scan every table line.
-        self.table_formula_index = dep_index
-            .map(|d| d.table_formula_index.as_ref().unwrap_or(&NO_TABLE_FORMULAS));
+        self.table_formula_index =
+            dep_index.map(|d| d.table_formula_index.as_ref().unwrap_or(&NO_TABLE_FORMULAS));
         self
     }
 }
@@ -3259,7 +3259,10 @@ mod tests {
         let mut index = build_calc_dependency_index(&lines, mask);
         let parts = |index: &Option<CalcDependencyIndex>| {
             let index = index.as_ref().expect("built index is kept");
-            (index.variable_graph.is_some(), index.table_formula_index.is_some())
+            (
+                index.variable_graph.is_some(),
+                index.table_formula_index.is_some(),
+            )
         };
         assert_eq!(parts(&index), (false, false));
 

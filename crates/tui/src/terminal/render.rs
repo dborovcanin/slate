@@ -1,15 +1,15 @@
 use crate::editor_core::markdown_tokens;
 use crate::terminal::canvas::contrast_fg_for_bg;
-use ratatui::buffer::Buffer;
-use ratatui::style::Style;
 pub use crate::terminal::markdown_view::collapse_markdown_line_for_cursor_with_formatting_boundary_exit;
 use crate::terminal::markdown_view::{hidden_line_prefix_marker_ranges, normalize_hidden_ranges};
+pub use crate::terminal::render_styles::VariableNames;
 use crate::terminal::render_styles::{
     apply_code_token_styles, apply_inline_token_styles, apply_line_styles_from_info,
     apply_variable_styles, CharStyle,
 };
-pub use crate::terminal::render_styles::VariableNames;
 pub use crate::terminal::theme::RenderPalette;
+use ratatui::buffer::Buffer;
+use ratatui::style::Style;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -214,7 +214,8 @@ impl RenderContext {
         );
         let width = width.max(1);
         let layout = layout_wrap_rows(&cells, width);
-        let tracked = track_char.map(|ordinal| locate_ordinal(&cells, &layout, ordinal.min(visible_count), width));
+        let tracked = track_char
+            .map(|ordinal| locate_ordinal(&cells, &layout, ordinal.min(visible_count), width));
         let mut rows = layout.rows.len();
         if let Some((row, _)) = tracked {
             rows = rows.max(row + 1);
@@ -706,7 +707,13 @@ fn build_wrap_cells(
         if ch == '\t' {
             let tab_spaces = TAB_WIDTH - (stream_col % TAB_WIDTH);
             for n in 0..tab_spaces {
-                push(&mut cells, &mut stream_col, ' ', style, (n == 0).then_some(ordinal));
+                push(
+                    &mut cells,
+                    &mut stream_col,
+                    ' ',
+                    style,
+                    (n == 0).then_some(ordinal),
+                );
             }
         } else {
             push(&mut cells, &mut stream_col, ch, style, Some(ordinal));
@@ -816,7 +823,10 @@ fn locate_ordinal(
             col += cell.width;
         }
         // A consumed break space right after this row.
-        if let Some(cell) = cells.get(end).filter(|_| layout.rows.get(row + 1).is_some_and(|next| next.0 > end)) {
+        if let Some(cell) = cells
+            .get(end)
+            .filter(|_| layout.rows.get(row + 1).is_some_and(|next| next.0 > end))
+        {
             match cell.ordinal {
                 Some(ord) if ord == ordinal => return (row, col.min(width - 1)),
                 Some(_) => after_prev = (row, col.min(width - 1)),
@@ -846,7 +856,13 @@ fn paint_wrap_rows(
 ) {
     let area = buf.area;
     let last_row = layout.rows.len().saturating_sub(1);
-    for (row, &(start, end)) in layout.rows.iter().enumerate().skip(skip_rows).take(max_rows) {
+    for (row, &(start, end)) in layout
+        .rows
+        .iter()
+        .enumerate()
+        .skip(skip_rows)
+        .take(max_rows)
+    {
         let row_y = y.saturating_add((row - skip_rows) as u16);
         if row_y >= area.bottom() {
             break;
@@ -1182,7 +1198,9 @@ mod tests {
             calc_ghost: Some("4"),
             ..LineDecorations::default()
         };
-        assert!(render(&mut ctx, "value := 2 + 2", 30, 0, deco).text.contains("= 4"));
+        assert!(render(&mut ctx, "value := 2 + 2", 30, 0, deco)
+            .text
+            .contains("= 4"));
     }
 
     #[test]
@@ -1288,8 +1306,9 @@ mod tests {
         let mut ctx = RenderContext::new();
         let palette = RenderPalette::default();
         let out = render_plain(&mut ctx, "| a | 88* | 1455.86** |", 80);
-        assert!(out.any_cell(|cell| cell.modifier.contains(Modifier::DIM)
-            && cell.fg == fg(palette.code_comment)));
+        assert!(out.any_cell(
+            |cell| cell.modifier.contains(Modifier::DIM) && cell.fg == fg(palette.code_comment)
+        ));
         assert!(out.text.contains("88*"));
         assert!(out.text.contains("1455.86**"));
     }
@@ -1346,7 +1365,10 @@ mod tests {
         assert!(is_bold_with_fg(&exact.buf[(0, 0)], palette.variable));
 
         let different_case = render(&mut ctx, "Daily note", 40, 0, deco);
-        assert!(is_bold_with_fg(&different_case.buf[(0, 0)], palette.variable));
+        assert!(is_bold_with_fg(
+            &different_case.buf[(0, 0)],
+            palette.variable
+        ));
     }
 
     #[test]
@@ -1427,7 +1449,14 @@ mod tests {
         assert!(strong.starts_with("**bold** and code"));
         assert!(!strong.contains("`code`"));
 
-        let code = render(&mut ctx, "**bold** and `code`", 32, 0, with_cursor(Some(14))).text;
+        let code = render(
+            &mut ctx,
+            "**bold** and `code`",
+            32,
+            0,
+            with_cursor(Some(14)),
+        )
+        .text;
         assert!(code.starts_with("bold and `code`"));
         assert!(!code.contains("**bold**"));
     }
@@ -1440,7 +1469,8 @@ mod tests {
         deco: LineDecorations<'_>,
     ) -> (Vec<String>, WrapOutcome) {
         let mut buf = Buffer::empty(Rect::new(0, 0, width as u16, 8));
-        let outcome = ctx.render_line_wrapped(text, width, 0, 8, track, &deco, Some((&mut buf, 0, 0)));
+        let outcome =
+            ctx.render_line_wrapped(text, width, 0, 8, track, &deco, Some((&mut buf, 0, 0)));
         let rows = (0..outcome.rows.min(8) as u16)
             .map(|y| row_text(&buf, y).trim_end().to_string())
             .collect();
@@ -1450,8 +1480,13 @@ mod tests {
     #[test]
     fn wrap_breaks_after_spaces_and_consumes_the_overflowing_space() {
         let mut ctx = RenderContext::new();
-        let (rows, outcome) =
-            render_wrapped(&mut ctx, "hello world foo", 11, None, LineDecorations::default());
+        let (rows, outcome) = render_wrapped(
+            &mut ctx,
+            "hello world foo",
+            11,
+            None,
+            LineDecorations::default(),
+        );
         assert_eq!(rows, vec!["hello world", "foo"]);
         assert_eq!(outcome.rows, 2);
     }
@@ -1459,8 +1494,13 @@ mod tests {
     #[test]
     fn wrap_keeps_words_whole_when_a_break_exists() {
         let mut ctx = RenderContext::new();
-        let (rows, _) =
-            render_wrapped(&mut ctx, "alpha beta gamma", 12, None, LineDecorations::default());
+        let (rows, _) = render_wrapped(
+            &mut ctx,
+            "alpha beta gamma",
+            12,
+            None,
+            LineDecorations::default(),
+        );
         assert_eq!(rows, vec!["alpha beta", "gamma"]);
     }
 
@@ -1481,8 +1521,13 @@ mod tests {
     #[test]
     fn wrap_measures_hidden_markers_out_of_the_width() {
         let mut ctx = RenderContext::new();
-        let (rows, outcome) =
-            render_wrapped(&mut ctx, "**bold** text", 9, None, LineDecorations::default());
+        let (rows, outcome) = render_wrapped(
+            &mut ctx,
+            "**bold** text",
+            9,
+            None,
+            LineDecorations::default(),
+        );
         assert_eq!(rows, vec!["bold text"]);
         assert_eq!(outcome.rows, 1);
     }
@@ -1502,12 +1547,22 @@ mod tests {
     fn wrap_tracks_cursor_on_continuation_rows() {
         let mut ctx = RenderContext::new();
         // 'f' of "foo" is visible char 12.
-        let (_, outcome) =
-            render_wrapped(&mut ctx, "hello world foo", 11, Some(12), LineDecorations::default());
+        let (_, outcome) = render_wrapped(
+            &mut ctx,
+            "hello world foo",
+            11,
+            Some(12),
+            LineDecorations::default(),
+        );
         assert_eq!(outcome.tracked, Some((1, 0)));
         // The consumed break space stays on the first row, clamped to its edge.
-        let (_, outcome) =
-            render_wrapped(&mut ctx, "hello world foo", 11, Some(11), LineDecorations::default());
+        let (_, outcome) = render_wrapped(
+            &mut ctx,
+            "hello world foo",
+            11,
+            Some(11),
+            LineDecorations::default(),
+        );
         assert_eq!(outcome.tracked, Some((0, 10)));
     }
 
@@ -1526,8 +1581,13 @@ mod tests {
     fn wrap_tracks_visible_chars_not_hidden_markers() {
         let mut ctx = RenderContext::new();
         // Off-cursor markers are hidden: visible text is "bold text", 't' is 5.
-        let (_, outcome) =
-            render_wrapped(&mut ctx, "**bold** text", 6, Some(5), LineDecorations::default());
+        let (_, outcome) = render_wrapped(
+            &mut ctx,
+            "**bold** text",
+            6,
+            Some(5),
+            LineDecorations::default(),
+        );
         assert_eq!(outcome.tracked, Some((1, 0)));
     }
 
@@ -1568,8 +1628,7 @@ mod tests {
     #[test]
     fn wrap_char_positions_mark_hidden_markers() {
         let mut ctx = RenderContext::new();
-        let (positions, _) =
-            ctx.wrap_char_positions("**bold** x", 20, &LineDecorations::default());
+        let (positions, _) = ctx.wrap_char_positions("**bold** x", 20, &LineDecorations::default());
         assert_eq!(positions[0], None);
         assert_eq!(positions[2], Some((0, 0)));
         assert_eq!(positions[9], Some((0, 5)));

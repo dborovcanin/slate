@@ -1373,7 +1373,10 @@ mod tests {
 
     #[test]
     fn parses_daily_notes_section_and_defaults() {
-        assert_eq!(parse_daily_notes_config("").expect("defaults"), DailyNotesConfig::default());
+        assert_eq!(
+            parse_daily_notes_config("").expect("defaults"),
+            DailyNotesConfig::default()
+        );
         assert_eq!(
             parse_daily_notes_config(DEFAULT_CONFIG).expect("generated config"),
             DailyNotesConfig::default()

@@ -1,16 +1,14 @@
 use super::adapter::TerminalVimAdapter;
-use super::canvas::{
-    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle,
-};
 use super::calc_cache::CalcCache;
+use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle};
 use super::clipboard::{self, ClipboardWriteBackend};
 use super::date_picker::DatePickerAction;
 use super::folding::FoldKind;
 use super::folding_state::FoldingState;
 use super::history::LineHistory;
 use super::input::{self, Key};
-use super::session::TerminalSession;
 use super::render;
+use super::session::TerminalSession;
 use super::switcher::{self, CollectionMeta, NoteMeta};
 use super::text_utils::*;
 
@@ -543,7 +541,10 @@ struct RenderState {
     editor_cursor_cell: Option<(usize, usize)>,
     /// Number statistics for the current visual selection, keyed by the
     /// selection and the last edit so large selections are scanned once.
-    selection_stats: Option<(SelectionStatsKey, Option<crate::editor_core::sum::NumberStats>)>,
+    selection_stats: Option<(
+        SelectionStatsKey,
+        Option<crate::editor_core::sum::NumberStats>,
+    )>,
     /// Status message currently displayed and when it first appeared; the
     /// editor status bar hides it after `STATUS_MESSAGE_TTL`.
     status_shown: Option<(String, Instant)>,
@@ -1007,7 +1008,9 @@ impl TerminalApp {
             && active_has_variable_assignment
             && !active_has_builtin_formula;
         let skip_initial_calc = calc_viewport_only
-            || (!active_has_builtin_formula && !active_has_variable_assignment && !active_has_expression);
+            || (!active_has_builtin_formula
+                && !active_has_variable_assignment
+                && !active_has_expression);
         // Keep startup responsive for larger notes by deferring full calc
         // evaluation to the first idle ticks after initial paint.
         let defer_initial_full_calc = note_math_enabled

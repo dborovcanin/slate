@@ -8,8 +8,8 @@ use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::sync::OnceLock;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use time::{Date, Duration, Month, OffsetDateTime};
 
 const MAX_IMAP_LINE_BYTES: usize = 8 * 1024 * 1024;
@@ -723,8 +723,7 @@ fn strip_html_tags(html: &str) -> String {
     static CLOSING_P_RE: OnceLock<Regex> = OnceLock::new();
     static TAG_RE: OnceLock<Regex> = OnceLock::new();
     let br_re = BR_RE.get_or_init(|| Regex::new(r"(?i)<\s*br\s*/?\s*>").expect("br regex"));
-    let closing_p_re =
-        CLOSING_P_RE.get_or_init(|| Regex::new(r"(?i)</\s*p\s*>").expect("p regex"));
+    let closing_p_re = CLOSING_P_RE.get_or_init(|| Regex::new(r"(?i)</\s*p\s*>").expect("p regex"));
     let tag_re = TAG_RE.get_or_init(|| Regex::new(r"(?is)<[^>]+>").expect("tag regex"));
 
     let normalized = html.replace("\r\n", "\n");

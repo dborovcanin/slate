@@ -375,7 +375,7 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
                         handled,
                     };
                 }
-            (VimPending::Go, VimKey::Char('g')) => {
+                (VimPending::Go, VimKey::Char('g')) => {
                     let count = consume_count(&mut next);
                     if count > 1 {
                         actions.push(make_action(

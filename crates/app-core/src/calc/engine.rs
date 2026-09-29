@@ -1,14 +1,14 @@
 use aho_corasick::AhoCorasick;
 use regex::Regex;
-use table_syntax::{is_table_line, split_table_cells, table_pipe_positions};
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::cell::Cell;
 use std::cmp::Reverse;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
+use table_syntax::{is_table_line, split_table_cells, table_pipe_positions};
 
 pub struct CalcEngine;
 
@@ -2684,9 +2684,18 @@ mod tests {
     #[test]
     fn evaluates_leading_expression_before_a_text_label() {
         let engine = CalcEngine::new();
-        assert_eq!(engine.evaluate("100 - 20 groceries"), Some("80".to_string()));
-        assert_eq!(engine.evaluate("12 * 3 apples for the party"), Some("36".to_string()));
-        assert_eq!(engine.evaluate("1,200 + 300 rent and power"), Some("1500".to_string()));
+        assert_eq!(
+            engine.evaluate("100 - 20 groceries"),
+            Some("80".to_string())
+        );
+        assert_eq!(
+            engine.evaluate("12 * 3 apples for the party"),
+            Some("36".to_string())
+        );
+        assert_eq!(
+            engine.evaluate("1,200 + 300 rent and power"),
+            Some("1500".to_string())
+        );
     }
 
     #[test]
@@ -2695,7 +2704,11 @@ mod tests {
         assert_eq!(engine.evaluate("3 items bought"), None);
         assert_eq!(engine.evaluate("2 kids and 3 dogs"), None);
         assert_eq!(engine.evaluate("3 days ago"), None);
-        assert_eq!(engine.evaluate("groceries 100 - 20"), None, "must start with a number");
+        assert_eq!(
+            engine.evaluate("groceries 100 - 20"),
+            None,
+            "must start with a number"
+        );
     }
 
     #[test]

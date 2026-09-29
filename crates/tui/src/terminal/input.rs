@@ -176,38 +176,83 @@ mod tests {
 
     #[test]
     fn maps_plain_and_shifted_chars() {
-        assert_eq!(press(KeyCode::Char('j'), KeyModifiers::NONE), vec![Key::Char('j')]);
-        assert_eq!(press(KeyCode::Char('J'), KeyModifiers::SHIFT), vec![Key::Char('J')]);
+        assert_eq!(
+            press(KeyCode::Char('j'), KeyModifiers::NONE),
+            vec![Key::Char('j')]
+        );
+        assert_eq!(
+            press(KeyCode::Char('J'), KeyModifiers::SHIFT),
+            vec![Key::Char('J')]
+        );
     }
 
     #[test]
     fn maps_ctrl_chords_including_legacy_punctuation() {
-        assert_eq!(press(KeyCode::Char('p'), KeyModifiers::CONTROL), vec![Key::Ctrl('p')]);
-        assert_eq!(press(KeyCode::Char('5'), KeyModifiers::CONTROL), vec![Key::Ctrl(']')]);
-        assert_eq!(press(KeyCode::Char(']'), KeyModifiers::CONTROL), vec![Key::Ctrl(']')]);
-        assert_eq!(press(KeyCode::Char('4'), KeyModifiers::CONTROL), vec![Key::Ctrl('\\')]);
+        assert_eq!(
+            press(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            vec![Key::Ctrl('p')]
+        );
+        assert_eq!(
+            press(KeyCode::Char('5'), KeyModifiers::CONTROL),
+            vec![Key::Ctrl(']')]
+        );
+        assert_eq!(
+            press(KeyCode::Char(']'), KeyModifiers::CONTROL),
+            vec![Key::Ctrl(']')]
+        );
+        assert_eq!(
+            press(KeyCode::Char('4'), KeyModifiers::CONTROL),
+            vec![Key::Ctrl('\\')]
+        );
     }
 
     #[test]
     fn maps_ctrl_backspace_variants() {
-        assert_eq!(press(KeyCode::Char('h'), KeyModifiers::CONTROL), vec![Key::CtrlBackspace]);
-        assert_eq!(press(KeyCode::Backspace, KeyModifiers::CONTROL), vec![Key::CtrlBackspace]);
-        assert_eq!(press(KeyCode::Backspace, KeyModifiers::ALT), vec![Key::CtrlBackspace]);
-        assert_eq!(press(KeyCode::Backspace, KeyModifiers::NONE), vec![Key::Backspace]);
+        assert_eq!(
+            press(KeyCode::Char('h'), KeyModifiers::CONTROL),
+            vec![Key::CtrlBackspace]
+        );
+        assert_eq!(
+            press(KeyCode::Backspace, KeyModifiers::CONTROL),
+            vec![Key::CtrlBackspace]
+        );
+        assert_eq!(
+            press(KeyCode::Backspace, KeyModifiers::ALT),
+            vec![Key::CtrlBackspace]
+        );
+        assert_eq!(
+            press(KeyCode::Backspace, KeyModifiers::NONE),
+            vec![Key::Backspace]
+        );
     }
 
     #[test]
     fn maps_shift_enter_and_back_tab() {
-        assert_eq!(press(KeyCode::Enter, KeyModifiers::SHIFT), vec![Key::ShiftEnter]);
-        assert_eq!(press(KeyCode::BackTab, KeyModifiers::SHIFT), vec![Key::BackTab]);
+        assert_eq!(
+            press(KeyCode::Enter, KeyModifiers::SHIFT),
+            vec![Key::ShiftEnter]
+        );
+        assert_eq!(
+            press(KeyCode::BackTab, KeyModifiers::SHIFT),
+            vec![Key::BackTab]
+        );
         assert_eq!(press(KeyCode::Tab, KeyModifiers::SHIFT), vec![Key::BackTab]);
     }
 
     #[test]
     fn maps_ctrl_arrows_and_delete() {
-        assert_eq!(press(KeyCode::Left, KeyModifiers::CONTROL), vec![Key::CtrlArrowLeft]);
-        assert_eq!(press(KeyCode::Right, KeyModifiers::CONTROL), vec![Key::CtrlArrowRight]);
-        assert_eq!(press(KeyCode::Delete, KeyModifiers::CONTROL), vec![Key::CtrlDelete]);
+        assert_eq!(
+            press(KeyCode::Left, KeyModifiers::CONTROL),
+            vec![Key::CtrlArrowLeft]
+        );
+        assert_eq!(
+            press(KeyCode::Right, KeyModifiers::CONTROL),
+            vec![Key::CtrlArrowRight]
+        );
+        assert_eq!(
+            press(KeyCode::Delete, KeyModifiers::CONTROL),
+            vec![Key::CtrlDelete]
+        );
     }
 
     #[test]

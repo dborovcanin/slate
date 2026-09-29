@@ -1,15 +1,18 @@
 use super::{
-    contrast_fg_for_bg, cursor_render_char_col, display_cell_pipe_positions,
-    display_cols_prefix_and_total, draw_framed_surface, draw_row_at_styled,
-    find_table_formula_segments, format_formula_display_value, formula_marker_token,
-    is_markdown_table_line, line_display_cols, min, reformat_table_cursor_row_raw,
-    reformat_table_row_for_display,
-    cell_visible_width, cursor_cell_typing_width, table_cell_info_at_char, table_cursor_cell_index,
-    viewport_col_for_display_col, TextStyle, DatePickerAction,
-    SelectionStatsKey, TableFormulaSegment, TerminalApp, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
+    cell_visible_width, contrast_fg_for_bg, cursor_cell_typing_width, cursor_render_char_col,
+    display_cell_pipe_positions, display_cols_prefix_and_total, draw_framed_surface,
+    draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
+    formula_marker_token, is_markdown_table_line, line_display_cols, min,
+    reformat_table_cursor_row_raw, reformat_table_row_for_display, table_cell_info_at_char,
+    table_cursor_cell_index, viewport_col_for_display_col, DatePickerAction, SelectionStatsKey,
+    TableFormulaSegment, TerminalApp, TextStyle, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
+use crate::editor_core::{markdown_tokens, sum};
+use crate::terminal::canvas::{put_char, put_str, put_str_width};
 use crate::terminal::render;
+use crate::terminal::render::LineDecorations;
+use crate::terminal::session::CursorPlacement;
 use crate::terminal::text_utils::{
     compute_line_viewport, derive_title_from_lines, display_cols_for_prefix, line_char_len,
 };
@@ -21,12 +24,8 @@ use crate::terminal::{
         SwitcherView,
     },
 };
-use crate::terminal::canvas::{put_char, put_str, put_str_width};
-use crate::terminal::render::LineDecorations;
-use crate::terminal::session::CursorPlacement;
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
-use crate::editor_core::{markdown_tokens, sum};
 use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
@@ -555,9 +554,23 @@ impl TerminalApp {
 
         if let Some(message) = self.visible_status_message() {
             let width = right_col.saturating_sub(col + 1);
-            put_str_width(buf, row, col, &format!(" {message}"), width, text.to_style());
+            put_str_width(
+                buf,
+                row,
+                col,
+                &format!(" {message}"),
+                width,
+                text.to_style(),
+            );
         }
-        put_str_width(buf, row, right_col, &right_text, cols + 1 - right_col, dim.to_style());
+        put_str_width(
+            buf,
+            row,
+            right_col,
+            &right_text,
+            cols + 1 - right_col,
+            dim.to_style(),
+        );
     }
 
     /// The status message to show in the editor status bar: `None` for mode
@@ -862,7 +875,11 @@ impl TerminalApp {
             } else {
                 usize::MAX
             };
-            let segment: String = line.chars().skip(from).take(to.saturating_sub(from)).collect();
+            let segment: String = line
+                .chars()
+                .skip(from)
+                .take(to.saturating_sub(from))
+                .collect();
             stats.add_text(&segment);
         }
         let stats = (stats.count > 0).then_some(stats);
@@ -1143,7 +1160,12 @@ impl TerminalApp {
     /// char `from_col` of the cursor line. With soft wrap the stored anchor
     /// (computed during key handling assuming one row per line) can be off,
     /// so it is re-derived from the cursor cell painted this frame.
-    fn popup_anchor(&self, stored_row: usize, stored_col: usize, from_col: usize) -> (usize, usize) {
+    fn popup_anchor(
+        &self,
+        stored_row: usize,
+        stored_col: usize,
+        from_col: usize,
+    ) -> (usize, usize) {
         let Some((row, col)) = self
             .render_state
             .editor_cursor_cell
@@ -1214,7 +1236,9 @@ impl TerminalApp {
 
         let bg = self.render_palette.surface_bg();
         let border_fg = self.render_palette.primary();
-        draw_framed_surface(buf, y, x, box_width, box_height, bg, border_fg, false, None, None);
+        draw_framed_surface(
+            buf, y, x, box_width, box_height, bg, border_fg, false, None, None,
+        );
 
         let title_style = TextStyle {
             fg: Some(self.render_palette.text_fg()),
@@ -2016,9 +2040,8 @@ impl TerminalApp {
                     .get(line_idx)
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
-                let mut cell_result_by_index: Vec<
-                    Option<&app_core::calc::TableCellEvaluation>,
-                > = Vec::new();
+                let mut cell_result_by_index: Vec<Option<&app_core::calc::TableCellEvaluation>> =
+                    Vec::new();
                 for entry in cell_results {
                     if entry.cell_index >= cell_result_by_index.len() {
                         cell_result_by_index.resize(entry.cell_index + 1, None);
@@ -2048,10 +2071,8 @@ impl TerminalApp {
                     let value = eval
                         .map(|entry| format_formula_display_value(&entry.value))
                         .unwrap_or_else(|| String::from("…"));
-                    let has_error =
-                        eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
-                    let source_text =
-                        line_text[seg.from_byte..seg.to_byte].trim().to_string();
+                    let has_error = eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
+                    let source_text = line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
                     let is_focused = is_cursor_line
                         && self.editor.cursor_col >= seg.cell_from_char
@@ -2078,8 +2099,7 @@ impl TerminalApp {
 
                     if is_focused {
                         out.push_str(&line_text[seg.from_byte..seg.to_byte]);
-                        let mapped =
-                            (self.editor.cursor_col as isize + char_delta).max(0) as usize;
+                        let mapped = (self.editor.cursor_col as isize + char_delta).max(0) as usize;
                         focused_cursor_col = Some(mapped);
                         formula_segment_char_delta_prefix.push(char_delta);
                     } else {
@@ -2120,8 +2140,7 @@ impl TerminalApp {
                         ((self.editor.cursor_col as isize) + delta).max(0) as usize
                     });
                     line_cursor_col = Some(mapped_col);
-                    cursor_line_override =
-                        Some((rendered_line.as_ref().to_string(), mapped_col));
+                    cursor_line_override = Some((rendered_line.as_ref().to_string(), mapped_col));
                 }
             }
         }
@@ -2159,12 +2178,10 @@ impl TerminalApp {
                         Some(cursor),
                     );
                     // Focused-cell pipe highlight in RAW display coords.
-                    let cell_idx = table_cursor_cell_index(
-                        rendered_line.as_ref(),
-                        self.editor.cursor_col,
-                    );
-                    table_reflow_cell_pipes = cell_idx
-                        .and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
+                    let cell_idx =
+                        table_cursor_cell_index(rendered_line.as_ref(), self.editor.cursor_col);
+                    table_reflow_cell_pipes =
+                        cell_idx.and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
                     let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
                     line_cursor_col = Some(mc);
                     cursor_line_override = Some((collapsed_display, mc));
@@ -2200,8 +2217,7 @@ impl TerminalApp {
         let mut visual_highlight_ranges = Vec::new();
         if is_fold_placeholder {
             if self.line_is_in_visual_selection(line_idx) {
-                visual_highlight_ranges
-                    .push((0, rendered_line.as_ref().chars().count().max(1)));
+                visual_highlight_ranges.push((0, rendered_line.as_ref().chars().count().max(1)));
             }
         } else {
             self.append_visual_highlights(line_idx, &mut visual_highlight_ranges);
@@ -2227,8 +2243,7 @@ impl TerminalApp {
         if is_cursor_line
             && cursor_line_override.is_none()
             && (rendered_line.as_ref() != line_text.as_str()
-                || line_cursor_col.unwrap_or(self.editor.cursor_col)
-                    != self.editor.cursor_col)
+                || line_cursor_col.unwrap_or(self.editor.cursor_col) != self.editor.cursor_col)
         {
             cursor_line_override = Some((
                 rendered_line.as_ref().to_string(),
@@ -2254,11 +2269,9 @@ impl TerminalApp {
             if let Some((lp, rp)) = table_reflow_cell_pipes {
                 focused_pipe_ranges.push((lp, lp + 1));
                 focused_pipe_ranges.push((rp, rp + 1));
-            } else if let Some(info) = table_cell_info_at_char(
-                &self.editor.lines,
-                line_idx,
-                self.editor.cursor_col,
-            ) {
+            } else if let Some(info) =
+                table_cell_info_at_char(&self.editor.lines, line_idx, self.editor.cursor_col)
+            {
                 let left_pipe_char = line_text[..info.left_pipe].chars().count();
                 let right_pipe_char = line_text[..info.right_pipe].chars().count();
                 let translate = |src_col: usize| -> usize {
@@ -2302,12 +2315,14 @@ impl TerminalApp {
         match self.mode {
             UiMode::CommandBar => {
                 let at = text_input::cursor(&self.command_input, self.command_cursor);
-                let col = (1 + 1 + display_cols_for_prefix(&self.command_input, at)).min(cols.max(1));
+                let col =
+                    (1 + 1 + display_cols_for_prefix(&self.command_input, at)).min(cols.max(1));
                 (rows, col.max(1))
             }
             UiMode::Search => {
                 let at = text_input::cursor(&self.search.query, self.search.cursor);
-                let col = (1 + 1 + display_cols_for_prefix(&self.search.query, at)).min(cols.max(1));
+                let col =
+                    (1 + 1 + display_cols_for_prefix(&self.search.query, at)).min(cols.max(1));
                 (rows, col.max(1))
             }
             UiMode::DatePicker => {
@@ -2446,12 +2461,16 @@ fn preview_truncate(s: &str, max_chars: usize) -> String {
 
 /// Buffer x coordinate of 1-based screen column `col`.
 fn buf_x(buf: &Buffer, col: usize) -> u16 {
-    buf.area.x.saturating_add(u16::try_from(col.saturating_sub(1)).unwrap_or(u16::MAX))
+    buf.area
+        .x
+        .saturating_add(u16::try_from(col.saturating_sub(1)).unwrap_or(u16::MAX))
 }
 
 /// Buffer y coordinate of 1-based screen row `row`.
 fn buf_y(buf: &Buffer, row: usize) -> u16 {
-    buf.area.y.saturating_add(u16::try_from(row.saturating_sub(1)).unwrap_or(u16::MAX))
+    buf.area
+        .y
+        .saturating_add(u16::try_from(row.saturating_sub(1)).unwrap_or(u16::MAX))
 }
 
 /// One document line resolved for display; see `prepare_display_line`.

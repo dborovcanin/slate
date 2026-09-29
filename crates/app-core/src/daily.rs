@@ -97,7 +97,10 @@ mod tests {
 
     #[test]
     fn template_substitutes_the_date_label() {
-        assert_eq!(daily_note_body("# {date}\n\n", "07.09.2026"), "# 07.09.2026\n\n");
+        assert_eq!(
+            daily_note_body("# {date}\n\n", "07.09.2026"),
+            "# 07.09.2026\n\n"
+        );
     }
 
     #[test]
@@ -119,13 +122,23 @@ mod tests {
         assert_eq!(created.body, "# 2026-09-07\n\n");
 
         capture_to_daily_note(&db, &config, STAMP, "2026-09-07", "buy milk").expect("capture");
-        let later = LocalStamp { hour: 9, minute: 30, ..STAMP };
+        let later = LocalStamp {
+            hour: 9,
+            minute: 30,
+            ..STAMP
+        };
         let note =
             capture_to_daily_note(&db, &config, later, "2026-09-07", "ship it").expect("capture");
-        assert_eq!(note.body, "# 2026-09-07\n\n- 08:05 buy milk\n- 09:30 ship it\n");
+        assert_eq!(
+            note.body,
+            "# 2026-09-07\n\n- 08:05 buy milk\n- 09:30 ship it\n"
+        );
 
         let again = ensure_daily_note(&db, &config, STAMP, "ignored").expect("existing");
-        assert_eq!(again.body, note.body, "an existing daily note is not rewritten");
+        assert_eq!(
+            again.body, note.body,
+            "an existing daily note is not rewritten"
+        );
 
         assert!(capture_to_daily_note(&db, &config, STAMP, "x", "  ").is_err());
 

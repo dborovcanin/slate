@@ -3,11 +3,10 @@ use super::{
     compute_calc_data_for_note, compute_calc_trailer_refresh, contains_assignment_operator,
     cross_note_exports_for_autocomplete, display_cols_for_prefix,
     extract_cross_note_completion_prefix, extract_variable_completion_prefix,
-    variable_completion_candidates,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
-    table_cell_edit_start, table_cell_info_at_char,
-    table_cell_is_empty, table_cell_navigation_anchor, tui_note_short_id, Db, FoldKind,
+    table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
+    table_cell_navigation_anchor, tui_note_short_id, variable_completion_candidates, Db, FoldKind,
     LineReminderGhost, ReminderUndoEntry, TerminalApp, UiMode, UndoAction,
     VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
     WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
@@ -2990,7 +2989,9 @@ impl TerminalApp {
     /// its edit. Returns whether the rule fired.
     fn try_scoped_table_rule(
         &mut self,
-        rule: fn(&crate::editor_core::context::ResolvedContext<'_>) -> Option<crate::editor_core::types::EditOperation>,
+        rule: fn(
+            &crate::editor_core::context::ResolvedContext<'_>,
+        ) -> Option<crate::editor_core::types::EditOperation>,
     ) -> bool {
         if !self.note_table_module_enabled() {
             return false;
@@ -3011,8 +3012,9 @@ impl TerminalApp {
     }
 
     pub(super) fn try_table_duplicate_delimiter_rule(&mut self) -> bool {
-        let fired = self
-            .try_scoped_table_rule(crate::editor_core::text_rules::run_table_duplicate_delimiter_rule);
+        let fired = self.try_scoped_table_rule(
+            crate::editor_core::text_rules::run_table_duplicate_delimiter_rule,
+        );
         if fired {
             // End of the kept delimiter row, so Enter starts the first data row
             // (the padding guard in apply would pull it into the last cell).
@@ -3325,7 +3327,8 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let Some(plan) = plan_table_char_delete(self.current_line(), self.editor.cursor_col, backward)
+        let Some(plan) =
+            plan_table_char_delete(self.current_line(), self.editor.cursor_col, backward)
         else {
             return false;
         };
@@ -3408,9 +3411,10 @@ impl TerminalApp {
         if !self.note_table_module_enabled() {
             return false;
         }
-        let Some((block_start, block_end)) =
-            crate::editor_core::table::table_block_bounds(&self.editor.lines, self.editor.cursor_line)
-        else {
+        let Some((block_start, block_end)) = crate::editor_core::table::table_block_bounds(
+            &self.editor.lines,
+            self.editor.cursor_line,
+        ) else {
             return false;
         };
         let block_lines = &self.editor.lines[block_start..=block_end];
@@ -3610,7 +3614,12 @@ impl TerminalApp {
                 .next()
                 .copied()
                 .unwrap_or((0, 0));
-            let rows = positions.iter().flatten().map(|(r, _)| r + 1).max().unwrap_or(1);
+            let rows = positions
+                .iter()
+                .flatten()
+                .map(|(r, _)| r + 1)
+                .max()
+                .unwrap_or(1);
             let target_row = if up {
                 row.checked_sub(1)
             } else {

@@ -1013,10 +1013,7 @@ pub fn wiki_link_at_cursor(text: &str, cursor_col: usize) -> Option<WikiLinkMatc
         .find(|entry| cursor_col >= entry.from && cursor_col <= entry.to)
 }
 
-pub fn find_markdown_image_at_cursor(
-    text: &str,
-    cursor_col: usize,
-) -> Option<MarkdownImageMatch> {
+pub fn find_markdown_image_at_cursor(text: &str, cursor_col: usize) -> Option<MarkdownImageMatch> {
     let images = find_markdown_image_matches(text);
     images
         .into_iter()

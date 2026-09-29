@@ -1673,7 +1673,10 @@ fn visual_line_selection_shows_number_stats_in_status_bar() {
 
     let rows = screen_rows(&mut app);
     let status = rows.last().expect("status row");
-    assert!(status.contains("Σ 1500 · avg 750 · n 2"), "status: {status:?}");
+    assert!(
+        status.contains("Σ 1500 · avg 750 · n 2"),
+        "status: {status:?}"
+    );
 
     app.mode = UiMode::Normal;
     app.editor.selection_anchor = None;
@@ -1792,7 +1795,11 @@ fn typed_trailing_spaces_in_table_cell_render_before_next_word() {
     for typed in 1..=2 {
         app.handle_editor_key(&db, Key::Char(' ')).expect("space");
         let (_, cursor) = render_screen(&mut app);
-        assert_eq!(usize::from(cursor.col), base + typed, "caret advances per space");
+        assert_eq!(
+            usize::from(cursor.col),
+            base + typed,
+            "caret advances per space"
+        );
     }
 
     drop(app);
@@ -1828,9 +1835,8 @@ fn typed_trailing_spaces_widen_the_column_for_every_row() {
 
 #[test]
 fn enter_in_a_middle_table_cell_opens_a_row_below_without_splitting() {
-    let (db, mut app, path) = app_with_note(
-        "| sasa | sasa | sasas |\n| ---- | ---- | ----- |\n| sas  |      |       |",
-    );
+    let (db, mut app, path) =
+        app_with_note("| sasa | sasa | sasas |\n| ---- | ---- | ----- |\n| sas  |      |       |");
     app.editor.cursor_line = 2;
     app.editor.cursor_col = 5;
     app.handle_editor_key(&db, Key::Enter).expect("enter");

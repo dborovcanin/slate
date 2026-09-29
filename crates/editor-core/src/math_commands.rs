@@ -226,7 +226,10 @@ fn collect_table_terms(
         let mut terms = Vec::new();
         for line_no in range.start_line..cursor_line {
             let cells = table::split_table_cells(ctx.line_text(line_no));
-            if table::is_delimiter_row_at(&cells, crate::text_rules::follows_table_header(ctx, line_no)) {
+            if table::is_delimiter_row_at(
+                &cells,
+                crate::text_rules::follows_table_header(ctx, line_no),
+            ) {
                 continue;
             }
             if let Some(cell) = cells.get(cursor_col) {
@@ -445,7 +448,10 @@ mod tests {
         );
         assert_eq!(result.operations.len(), 1);
         let change = &result.operations[0].changes[0];
-        assert_eq!((change.from, change.to, change.insert.as_str()), (0, 0, "30.00"));
+        assert_eq!(
+            (change.from, change.to, change.insert.as_str()),
+            (0, 0, "30.00")
+        );
         assert_eq!(
             result.operations[0].selection.map(|s| s.anchor),
             Some("30.00".len())
@@ -499,7 +505,10 @@ mod tests {
             normalize_evaluated_value("approx. 1.239").as_deref(),
             Some("1.24")
         );
-        assert_eq!(normalize_evaluated_value("≈ 5 m").as_deref(), Some("5.00 m"));
+        assert_eq!(
+            normalize_evaluated_value("≈ 5 m").as_deref(),
+            Some("5.00 m")
+        );
         assert_eq!(normalize_evaluated_value("not a number"), None);
     }
 

@@ -1,8 +1,4 @@
 use super::input::Key;
-use crate::terminal::session::CursorPlacement;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
 use super::{
     build_variable_suggestions, builtin_formula_label, compute_calc_results,
     compute_calc_trailer_refresh, extract_variable_completion_prefix, find_calc_segment_range,
@@ -14,12 +10,16 @@ use super::{display_cols_for_prefix, line_char_len};
 use super::{TerminalApp, TerminalOptions, UiMode, VimRegisterMode};
 use crate::storage::Db;
 use crate::terminal::folding::describe_fold_ranges;
+use crate::terminal::session::CursorPlacement;
 use app_core::storage::NoteAccessMode;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
 use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use ulid::Ulid;
+use unicode_width::UnicodeWidthStr;
 
 fn temp_db_path() -> PathBuf {
     std::env::temp_dir().join(format!("note-terminal-test-{}.db", Ulid::new()))

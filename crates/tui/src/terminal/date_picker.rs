@@ -1,8 +1,10 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, put_str, TextStyle};
-use ratatui::buffer::Buffer;
+use super::canvas::{
+    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, put_str, TextStyle,
+};
 use super::render::RenderPalette;
+use ratatui::buffer::Buffer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DatePickerAction {
@@ -253,7 +255,11 @@ pub fn draw_date_picker(
         surface_bg,
         palette.primary(),
         false,
-        Some(if view.is_remind { "Set reminder" } else { "Insert date" }),
+        Some(if view.is_remind {
+            "Set reminder"
+        } else {
+            "Insert date"
+        }),
         None,
     );
 
@@ -309,7 +315,13 @@ pub fn draw_date_picker(
             } else {
                 day_style
             };
-            put_str(buf, grid_row, grid_col, &format!("{:>2}", day), style.to_style());
+            put_str(
+                buf,
+                grid_row,
+                grid_col,
+                &format!("{:>2}", day),
+                style.to_style(),
+            );
         }
 
         col_idx += 1;
@@ -366,7 +378,13 @@ pub fn draw_date_picker(
         hint_style,
     );
     let footer_x = x + 1 + inner_w.saturating_sub(selected.chars().count()) / 2;
-    put_str(buf, footer_row, footer_x, &selected, footer_style.to_style());
+    put_str(
+        buf,
+        footer_row,
+        footer_x,
+        &selected,
+        footer_style.to_style(),
+    );
 }
 
 #[cfg(test)]

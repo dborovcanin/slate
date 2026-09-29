@@ -204,7 +204,13 @@ pub(super) fn reformat_table_row_for_display(
     delimiter: bool,
     cursor_col: Option<usize>,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
-    reformat_table_row_impl(line, col_widths, delimiter, cursor_col, cursor_col.is_some())
+    reformat_table_row_impl(
+        line,
+        col_widths,
+        delimiter,
+        cursor_col,
+        cursor_col.is_some(),
+    )
 }
 
 /// Raw-marker reflow of the cursor row (markers kept for `render_line`
@@ -227,8 +233,8 @@ fn reformat_table_row_impl(
     collapse: bool,
 ) -> (String, Option<usize>, Option<(usize, usize)>) {
     use crate::editor_core::table::{
-        is_table_continuation_line, normalize_delimiter_cell_for_width,
-        split_table_cells, table_pipe_positions,
+        is_table_continuation_line, normalize_delimiter_cell_for_width, split_table_cells,
+        table_pipe_positions,
     };
 
     // Work on the trimmed portion so pipe positions are predictable.

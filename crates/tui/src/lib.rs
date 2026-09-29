@@ -246,7 +246,10 @@ fn run_append(note_id: Option<&str>) -> Result<(), String> {
 }
 
 /// Resolves today's daily note (creating it when missing) and returns its id.
-fn ensure_today_note(db: &app_core::storage::Db, theme: &config::ThemeConfig) -> Result<String, String> {
+fn ensure_today_note(
+    db: &app_core::storage::Db,
+    theme: &config::ThemeConfig,
+) -> Result<String, String> {
     let stamp = terminal::local_stamp();
     let label = terminal::daily_date_label(stamp, &theme.date_format);
     let daily = config::load_daily_notes_config();

@@ -78,8 +78,7 @@ pub enum CommandMode {
     Editor,
 }
 
-impl CommandMode {
-}
+impl CommandMode {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommandSuggestion {

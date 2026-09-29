@@ -2,14 +2,14 @@ use std::hash::{Hash, Hasher};
 
 use rustc_hash::{FxHashMap, FxHasher};
 
+use table_syntax::{
+    after_header_row, delimiter_cell_dashes, split_row_cells_raw, split_row_cells_raw_with_kind,
+    strip_continuation_marker,
+};
 pub use table_syntax::{
     follows_table_header, is_delimiter_cell, is_delimiter_line_in, is_delimiter_row,
     is_delimiter_row_at, is_delimiter_shaped_row, is_table_continuation_line, is_table_line,
     split_table_cells, table_block_bounds, table_block_delimiter_row, table_pipe_positions,
-};
-use table_syntax::{
-    after_header_row, delimiter_cell_dashes, split_row_cells_raw, split_row_cells_raw_with_kind,
-    strip_continuation_marker,
 };
 
 const TABLE_PARSE_CACHE_MAX_ENTRIES: usize = 512;
@@ -519,8 +519,10 @@ impl TableBlockLayout {
     ) -> Self {
         let block = &lines[start..=end];
         let rows: Vec<Vec<String>> = block.iter().map(|line| split_table_cells(line)).collect();
-        let continuation: Vec<bool> =
-            block.iter().map(|line| is_table_continuation_line(line)).collect();
+        let continuation: Vec<bool> = block
+            .iter()
+            .map(|line| is_table_continuation_line(line))
+            .collect();
         let delimiter_row = table_block_delimiter_row(&rows, &continuation);
         let mut col_widths: Vec<usize> = Vec::new();
         for (idx, cells) in rows.iter().enumerate() {
@@ -580,7 +582,10 @@ impl TableLayoutCache {
                 if Some(idx) == delimiter {
                     Vec::new()
                 } else {
-                    split_table_cells(line).iter().map(|cell| cell_width(cell)).collect()
+                    split_table_cells(line)
+                        .iter()
+                        .map(|cell| cell_width(cell))
+                        .collect()
                 }
             })
             .collect();
@@ -600,7 +605,12 @@ impl TableLayoutCache {
     /// Re-measures only changed rows. False when the block's shape may have
     /// changed (row count, a row's cell count, the header or delimiter rows)
     /// and a rebuild is needed.
-    fn update(&mut self, block: &[String], start: usize, cell_width: &impl Fn(&str) -> usize) -> bool {
+    fn update(
+        &mut self,
+        block: &[String],
+        start: usize,
+        cell_width: &impl Fn(&str) -> usize,
+    ) -> bool {
         let Some(layout) = self.layout.as_mut() else {
             return false;
         };
@@ -608,7 +618,9 @@ impl TableLayoutCache {
             return false;
         }
         // Rows up to the delimiter decide where the delimiter is.
-        let structural_rows = layout.delimiter_row.map_or(block.len(), |row| row - layout.start + 1);
+        let structural_rows = layout
+            .delimiter_row
+            .map_or(block.len(), |row| row - layout.start + 1);
         let mut changed = Vec::new();
         for (idx, line) in block.iter().enumerate() {
             if *line == self.lines[idx] {
@@ -620,7 +632,10 @@ impl TableLayoutCache {
             {
                 return false;
             }
-            let widths: Vec<usize> = split_table_cells(line).iter().map(|cell| cell_width(cell)).collect();
+            let widths: Vec<usize> = split_table_cells(line)
+                .iter()
+                .map(|cell| cell_width(cell))
+                .collect();
             if widths.len() != self.row_widths[idx].len() {
                 return false;
             }
@@ -638,7 +653,9 @@ impl TableLayoutCache {
         if shift != 0 {
             layout.start = start;
             layout.end = start + block.len() - 1;
-            layout.delimiter_row = layout.delimiter_row.map(|row| (row as isize + shift) as usize);
+            layout.delimiter_row = layout
+                .delimiter_row
+                .map(|row| (row as isize + shift) as usize);
         }
         true
     }
@@ -912,7 +929,9 @@ pub fn format_table_lines_with_cache<S: AsRef<str>>(
     cache: &mut TableFormatCache,
 ) -> Vec<String> {
     match format_table_block(lines, cache) {
-        TableFormatOutcome::Unchanged => lines.iter().map(|line| line.as_ref().to_string()).collect(),
+        TableFormatOutcome::Unchanged => {
+            lines.iter().map(|line| line.as_ref().to_string()).collect()
+        }
         TableFormatOutcome::Rows(rows) => {
             let mut out: Vec<String> = lines.iter().map(|line| line.as_ref().to_string()).collect();
             for (idx, text) in rows {
@@ -1046,13 +1065,19 @@ fn serialize_formatted_row(
             let content_width = content.chars().count();
             (std::borrow::Cow::Owned(content), content_width)
         } else {
-            (std::borrow::Cow::Borrowed(cell.as_str()), table_cell_display_width(cell))
+            (
+                std::borrow::Cow::Borrowed(cell.as_str()),
+                table_cell_display_width(cell),
+            )
         };
         if !(continuation && col == 0) {
             out.push(' ');
         }
         out.push_str(&content);
-        out.extend(std::iter::repeat_n(' ', width.saturating_sub(content_width) + 1));
+        out.extend(std::iter::repeat_n(
+            ' ',
+            width.saturating_sub(content_width) + 1,
+        ));
         out.push('|');
     }
     out
@@ -1157,7 +1182,8 @@ impl FormattedTable {
         }
 
         for (idx, cells) in updates {
-            self.column_widths.remove(&formatted_row_widths(&self.cells[idx], false));
+            self.column_widths
+                .remove(&formatted_row_widths(&self.cells[idx], false));
             self.column_widths.add(&formatted_row_widths(&cells, false));
             self.cells[idx] = cells;
         }
@@ -1229,15 +1255,18 @@ pub fn is_empty_table_continuation_row(line: &str) -> bool {
     if !is_table_continuation_line(line) {
         return false;
     }
-    split_table_cells(line).iter().enumerate().all(|(idx, cell)| {
-        let cell = cell.trim();
-        if idx == 0 {
-            cell.trim_start_matches(|c: char| c == '>' || c.is_whitespace())
-                .is_empty()
-        } else {
-            cell.is_empty()
-        }
-    })
+    split_table_cells(line)
+        .iter()
+        .enumerate()
+        .all(|(idx, cell)| {
+            let cell = cell.trim();
+            if idx == 0 {
+                cell.trim_start_matches(|c: char| c == '>' || c.is_whitespace())
+                    .is_empty()
+            } else {
+                cell.is_empty()
+            }
+        })
 }
 
 /// Char column where deleting the word before `cursor` stops inside a table
@@ -1331,7 +1360,10 @@ pub fn plan_table_char_delete(line: &str, col: usize, backward: bool) -> Option<
     if !is_table_line(line) {
         return None;
     }
-    let byte = line.char_indices().nth(col).map_or(line.len(), |(byte, _)| byte);
+    let byte = line
+        .char_indices()
+        .nth(col)
+        .map_or(line.len(), |(byte, _)| byte);
     let cell = table_cell_info_in_line(line, byte)?;
     let chars = |byte: usize| line[..byte.min(line.len())].chars().count();
     let edit_start_byte = table_cursor_motion_edit_start(&cell);
@@ -1347,14 +1379,20 @@ pub fn plan_table_char_delete(line: &str, col: usize, backward: bool) -> Option<
         } else if col > edit_end {
             TableCharDelete::Stay { cursor: edit_end }
         } else {
-            TableCharDelete::Remove { at: col - 1, cursor: col - 1 }
+            TableCharDelete::Remove {
+                at: col - 1,
+                cursor: col - 1,
+            }
         }
     } else if col < edit_start {
         TableCharDelete::Stay { cursor: edit_start }
     } else if col >= edit_end {
         TableCharDelete::Stay { cursor: col }
     } else {
-        TableCharDelete::Remove { at: col, cursor: col }
+        TableCharDelete::Remove {
+            at: col,
+            cursor: col,
+        }
     })
 }
 
@@ -1405,7 +1443,12 @@ impl Default for TableTypingPlan {
 ///   unformatted while it has fewer cells than the row above;
 /// - spaces at the end of a cell's content are kept (no reformat) until the
 ///   next non-space edit.
-pub fn plan_table_typed_char(lines: &[String], line_idx: usize, col: usize, ch: char) -> TableTypingPlan {
+pub fn plan_table_typed_char(
+    lines: &[String],
+    line_idx: usize,
+    col: usize,
+    ch: char,
+) -> TableTypingPlan {
     let mut plan = TableTypingPlan::default();
     let Some(line) = lines.get(line_idx) else {
         return plan;
@@ -1879,7 +1922,10 @@ mod tests {
             // Keep the cache on the applied lines, like the editor.
             let _ = format_table_block(&lines, &mut cache);
         }
-        assert!(incremental_rows > 50, "per-row path used ({incremental_rows})");
+        assert!(
+            incremental_rows > 50,
+            "per-row path used ({incremental_rows})"
+        );
     }
 
     #[test]
@@ -1943,8 +1989,15 @@ mod tests {
         let close = plan(&["| sasa | b "], 11, '|');
         assert!(close.closes_row && close.autoformat);
         assert_eq!(close.cursor, TableTypingCursor::PastRowEnd);
-        let short = plan(&["| a | b | c |", "| --- | --- | --- |", "| 1 | 2 "], 8, '|');
-        assert!(short.closes_row && !short.autoformat, "row shorter than the one above");
+        let short = plan(
+            &["| a | b | c |", "| --- | --- | --- |", "| 1 | 2 "],
+            8,
+            '|',
+        );
+        assert!(
+            short.closes_row && !short.autoformat,
+            "row shorter than the one above"
+        );
 
         // Space after a cell's content is kept literally.
         let space = plan(&["| aaa  | b |"], 5, ' ');
@@ -1964,16 +2017,37 @@ mod tests {
         let a = line.chars().position(|c| c == 'a').unwrap();
         let backspace = |col| plan_table_char_delete(line, col, true);
         let delete = |col| plan_table_char_delete(line, col, false);
-        assert_eq!(backspace(a + 1), Some(TableCharDelete::Remove { at: a, cursor: a }));
-        assert_eq!(backspace(2), Some(TableCharDelete::Stay { cursor: 2 }), "at the left pad");
-        assert_eq!(backspace(a + 3), Some(TableCharDelete::Stay { cursor: a + 1 }), "from padding");
+        assert_eq!(
+            backspace(a + 1),
+            Some(TableCharDelete::Remove { at: a, cursor: a })
+        );
+        assert_eq!(
+            backspace(2),
+            Some(TableCharDelete::Stay { cursor: 2 }),
+            "at the left pad"
+        );
+        assert_eq!(
+            backspace(a + 3),
+            Some(TableCharDelete::Stay { cursor: a + 1 }),
+            "from padding"
+        );
         assert_eq!(delete(1), Some(TableCharDelete::Stay { cursor: 2 }));
-        assert_eq!(delete(a), Some(TableCharDelete::Remove { at: a, cursor: a }));
-        assert_eq!(delete(a + 1), Some(TableCharDelete::Stay { cursor: a + 1 }), "at content end");
+        assert_eq!(
+            delete(a),
+            Some(TableCharDelete::Remove { at: a, cursor: a })
+        );
+        assert_eq!(
+            delete(a + 1),
+            Some(TableCharDelete::Stay { cursor: a + 1 }),
+            "at content end"
+        );
         // Multi-byte text before a cell: columns are chars, not bytes.
         let b = line.chars().position(|c| c == 'b').unwrap();
         assert_eq!(backspace(b), Some(TableCharDelete::Stay { cursor: b }));
-        assert_eq!(backspace(b + 1), Some(TableCharDelete::Remove { at: b, cursor: b }));
+        assert_eq!(
+            backspace(b + 1),
+            Some(TableCharDelete::Remove { at: b, cursor: b })
+        );
         assert_eq!(plan_table_char_delete("plain", 2, true), None);
     }
 
@@ -1982,14 +2056,23 @@ mod tests {
         let lines = owned(&["before", "| a | b |", "|-|:--:|", "| - | - |", "| 1 | 2 |"]);
         assert!(!is_delimiter_line_in(&lines, 1));
         assert!(is_delimiter_line_in(&lines, 2));
-        assert!(!is_delimiter_line_in(&lines, 3), "`-` placeholders are data");
+        assert!(
+            !is_delimiter_line_in(&lines, 3),
+            "`-` placeholders are data"
+        );
 
         let with_cont = owned(&["| a | b |", "|> a2 | |", "|--|--|"]);
-        assert!(is_delimiter_line_in(&with_cont, 2), "header continuation rows are skipped");
+        assert!(
+            is_delimiter_line_in(&with_cont, 2),
+            "header continuation rows are skipped"
+        );
 
         let dashes = |cells: &[&str]| cells.iter().map(|c| c.to_string()).collect::<Vec<_>>();
         assert!(is_delimiter_row_at(&dashes(&["---", ""]), false));
-        assert!(!is_delimiter_row_at(&dashes(&["--", ""]), true), "short needs every cell");
+        assert!(
+            !is_delimiter_row_at(&dashes(&["--", ""]), true),
+            "short needs every cell"
+        );
         assert!(!is_delimiter_row_at(&dashes(&["", ""]), true));
     }
 
@@ -1998,7 +2081,11 @@ mod tests {
         let out = format_table_lines(&owned(&["|a|b|c|", "|-|:-:|--:|", "|1|2|3|"]));
         assert_eq!(
             out,
-            owned(&["| a   | b     | c    |", "| --- | :---: | ---: |", "| 1   | 2     | 3    |"])
+            owned(&[
+                "| a   | b     | c    |",
+                "| --- | :---: | ---: |",
+                "| 1   | 2     | 3    |"
+            ])
         );
         let out = format_table_lines(&owned(&["| a | b |", "| - | - |", "| 1 | 2 |"]));
         assert_eq!(out[1], "| --- | --- |");
@@ -2013,9 +2100,15 @@ mod tests {
 
     #[test]
     fn vertical_motion_does_not_skip_empty_data_rows() {
-        let lines = owned(&["| a   | b   |", "| --- | --- |", "| 1   | 2   |", "|     |     |", "| 3   | 4   |"]);
-        let target =
-            plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Down).expect("target");
+        let lines = owned(&[
+            "| a   | b   |",
+            "| --- | --- |",
+            "| 1   | 2   |",
+            "|     |     |",
+            "| 3   | 4   |",
+        ]);
+        let target = plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Down)
+            .expect("target");
         assert_eq!(target.line_index, 3);
         let target =
             plan_table_cursor_motion(&lines, 2, 2, TableCursorMotionDirection::Up).expect("target");
@@ -2031,7 +2124,10 @@ mod tests {
             .collect();
         assert_eq!(table_row_next_word_start(line, 0), Some(starts[0]));
         assert_eq!(table_row_next_word_start(line, starts[0]), Some(starts[1]));
-        assert_eq!(table_row_next_word_start(line, starts[0] + 2), Some(starts[1]));
+        assert_eq!(
+            table_row_next_word_start(line, starts[0] + 2),
+            Some(starts[1])
+        );
         assert_eq!(table_row_next_word_start(line, starts[1]), Some(starts[2]));
         assert_eq!(table_row_next_word_start(line, starts[2]), Some(starts[3]));
         assert_eq!(table_row_next_word_start(line, starts[3]), None);
@@ -2039,7 +2135,10 @@ mod tests {
         assert_eq!(table_row_prev_word_start(line, starts[3]), Some(starts[2]));
         assert_eq!(table_row_prev_word_start(line, starts[2]), Some(starts[1]));
         assert_eq!(table_row_prev_word_start(line, starts[1]), Some(starts[0]));
-        assert_eq!(table_row_prev_word_start(line, starts[0] + 3), Some(starts[0]));
+        assert_eq!(
+            table_row_prev_word_start(line, starts[0] + 3),
+            Some(starts[0])
+        );
         assert_eq!(table_row_prev_word_start(line, starts[0]), None);
 
         let escaped = r"| a\|b | c |";
@@ -2055,7 +2154,10 @@ mod tests {
         assert!(is_empty_table_continuation_row("|>   |    |"));
         assert!(is_empty_table_continuation_row("|> > |  |"));
         assert!(!is_empty_table_continuation_row("|> a |  |"));
-        assert!(!is_empty_table_continuation_row("|    |  |"), "not a continuation row");
+        assert!(
+            !is_empty_table_continuation_row("|    |  |"),
+            "not a continuation row"
+        );
     }
 
     #[test]
@@ -2076,10 +2178,19 @@ mod tests {
         assert_eq!((edit.start, edit.end), (0, 2));
         assert_eq!(
             edit.lines,
-            owned(&["| a   | b   |", "| --- | --- |", "| x1  | z   |", "|>2y  |     |"])
+            owned(&[
+                "| a   | b   |",
+                "| --- | --- |",
+                "| x1  | z   |",
+                "|>2y  |     |"
+            ])
         );
         assert_eq!(edit.cursor_line, 3);
-        assert_eq!(edit.cursor_byte, edit.lines[3].find('y').unwrap(), "after the pasted text");
+        assert_eq!(
+            edit.cursor_byte,
+            edit.lines[3].find('y').unwrap(),
+            "after the pasted text"
+        );
         assert!(plan_table_cell_multiline_paste(&lines, 1, 3, "1\n2", &mut cache).is_none());
         assert!(plan_table_cell_multiline_paste(&lines, 2, cursor, "1", &mut cache).is_none());
     }

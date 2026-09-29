@@ -578,7 +578,11 @@ pub fn search_brave(query: &str, config: &WebSearchConfig) -> Result<WebSearchRe
         .unwrap_or_default()
         .into_iter()
         .find_map(|entry| {
-            brave_passage(entry.answer.as_deref(), entry.title.as_deref(), entry.url.as_deref())
+            brave_passage(
+                entry.answer.as_deref(),
+                entry.title.as_deref(),
+                entry.url.as_deref(),
+            )
         });
 
     let infobox_answer = data
@@ -599,12 +603,8 @@ pub fn search_brave(query: &str, config: &WebSearchConfig) -> Result<WebSearchRe
         None => (first_meaningful_snippet(&items), None),
     };
 
-    let answer_card = build_search_answer_card(
-        None,
-        summary.as_deref(),
-        structured_source.as_ref(),
-        &items,
-    );
+    let answer_card =
+        build_search_answer_card(None, summary.as_deref(), structured_source.as_ref(), &items);
 
     Ok(WebSearchResult {
         query: query.to_string(),
@@ -622,7 +622,10 @@ fn brave_passage(
     title: Option<&str>,
     url: Option<&str>,
 ) -> Option<(String, Option<WebSearchSource>)> {
-    let text = sanitize_result_text(&strip_html_tags(text.unwrap_or_default()), MAX_SNIPPET_CHARS);
+    let text = sanitize_result_text(
+        &strip_html_tags(text.unwrap_or_default()),
+        MAX_SNIPPET_CHARS,
+    );
     if text.is_empty() {
         return None;
     }
@@ -798,9 +801,7 @@ fn best_disambiguation_subject(topics: &[DuckDuckGoTopic]) -> Option<String> {
 /// DuckDuckGo answers a blocked scrape with its "bots use DuckDuckGo too"
 /// challenge page under a 2xx status, so the body is what identifies it.
 fn is_duckduckgo_challenge(html: &str) -> bool {
-    html.contains("anomaly-modal")
-        || html.contains("anomaly.js")
-        || html.contains("challenge-form")
+    html.contains("anomaly-modal") || html.contains("anomaly.js") || html.contains("challenge-form")
 }
 
 fn sanitized_optional_text(value: Option<String>) -> Option<String> {
@@ -877,10 +878,10 @@ fn is_duckduckgo_category(url: &str) -> bool {
     let Ok(parsed) = Url::parse(url) else {
         return false;
     };
-    parsed
-        .host_str()
-        .is_some_and(|host| host.trim_start_matches("www.").eq_ignore_ascii_case("duckduckgo.com"))
-        && parsed.path().starts_with("/c/")
+    parsed.host_str().is_some_and(|host| {
+        host.trim_start_matches("www.")
+            .eq_ignore_ascii_case("duckduckgo.com")
+    }) && parsed.path().starts_with("/c/")
 }
 
 fn duckduckgo_topic_title(url: &str) -> Option<String> {
@@ -965,7 +966,10 @@ fn extract_height_context(subject: &str, text: &str) -> Option<String> {
 
         // A fragment that names the measurement as a height is unambiguous, so
         // return its wording as-is.
-        if HEIGHT_MARKERS.iter().any(|marker| lowercase.contains(marker)) {
+        if HEIGHT_MARKERS
+            .iter()
+            .any(|marker| lowercase.contains(marker))
+        {
             if lowercase.starts_with("height") || lowercase.starts_with("stature") {
                 return Some(format!("{subject} — {fragment}"));
             }
@@ -1532,7 +1536,10 @@ mod tests {
         collect_duckduckgo_api_response(data, &mut items, 10);
 
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0].url, "https://en.wikipedia.org/wiki/Shaquille_O'Neal");
+        assert_eq!(
+            items[0].url,
+            "https://en.wikipedia.org/wiki/Shaquille_O'Neal"
+        );
     }
 
     #[test]
@@ -1555,7 +1562,9 @@ former professional basketball player. Nicknamed, among others, \"Diesel\", he i
                 "The Burj Khalifa has a total height of 829.8 m and remains the tallest structure."
             )
             .as_deref(),
-            Some("The Burj Khalifa has a total height of 829.8 m and remains the tallest structure.")
+            Some(
+                "The Burj Khalifa has a total height of 829.8 m and remains the tallest structure."
+            )
         );
 
         // A weight is not a height, so nothing should be reported.

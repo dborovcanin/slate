@@ -33,7 +33,9 @@ impl NoteAccessService {
     /// elsewhere from permanently refusing every unlock for the rest of the
     /// process, which is what unwrapping here would do.
     fn sessions(&self) -> std::sync::MutexGuard<'_, FxHashMap<String, NoteAccessSession>> {
-        self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.sessions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     pub(crate) fn new() -> Self {

@@ -143,7 +143,9 @@ pub fn fill(buf: &mut Buffer, row: usize, col: usize, width: usize, style: Style
     if y >= area.bottom() {
         return;
     }
-    let end = x.saturating_add(u16::try_from(width).unwrap_or(u16::MAX)).min(area.right());
+    let end = x
+        .saturating_add(u16::try_from(width).unwrap_or(u16::MAX))
+        .min(area.right());
     for cx in x..end {
         buf[(cx, y)].set_char(' ').set_style(style);
     }
@@ -193,11 +195,16 @@ pub fn draw_framed_surface(
         .border_style(border)
         .style(surface);
     if let Some(title) = title.filter(|title| !title.is_empty()) {
-        block = block.title(Line::from(format!(" {title} ")).style(border.add_modifier(Modifier::BOLD)));
+        block = block
+            .title(Line::from(format!(" {title} ")).style(border.add_modifier(Modifier::BOLD)));
     }
     if let Some(footer) = footer.filter(|footer| !footer.is_empty()) {
         let hint = cell_style(Some(border_fg), Some(bg), Modifier::DIM);
-        block = block.title_bottom(Line::from(format!(" {footer} ")).style(hint).right_aligned());
+        block = block.title_bottom(
+            Line::from(format!(" {footer} "))
+                .style(hint)
+                .right_aligned(),
+        );
     }
     block.render(area, buf);
 }
@@ -293,7 +300,9 @@ pub mod test_support {
     /// True when some cell shows `symbol` with the given 256-color fg and bg.
     pub fn has_styled_symbol(buf: &Buffer, symbol: &str, fg: u8, bg: u8) -> bool {
         has_cell(buf, |cell| {
-            cell.symbol() == symbol && cell.fg == Color::Indexed(fg) && cell.bg == Color::Indexed(bg)
+            cell.symbol() == symbol
+                && cell.fg == Color::Indexed(fg)
+                && cell.bg == Color::Indexed(bg)
         })
     }
 

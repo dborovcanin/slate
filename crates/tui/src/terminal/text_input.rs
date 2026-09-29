@@ -20,7 +20,10 @@ pub fn apply_key(text: &mut String, cursor_pos: &mut usize, key: &Key) -> bool {
             *cursor_pos = at + 1;
         }
         Key::Paste(pasted) => {
-            let clean: String = pasted.chars().filter(|c| *c != '\n' && *c != '\r').collect();
+            let clean: String = pasted
+                .chars()
+                .filter(|c| *c != '\n' && *c != '\r')
+                .collect();
             text.insert_str(byte_index(text, at), &clean);
             *cursor_pos = at + clean.chars().count();
         }
@@ -119,13 +122,19 @@ mod tests {
 
     #[test]
     fn end_sentinel_inserts_at_the_end() {
-        assert_eq!(edit("note", usize::MAX, &[Key::Char('s')]), ("notes".into(), 5));
+        assert_eq!(
+            edit("note", usize::MAX, &[Key::Char('s')]),
+            ("notes".into(), 5)
+        );
     }
 
     #[test]
     fn arrows_move_and_typing_inserts_mid_text() {
         let keys = [Key::ArrowLeft, Key::ArrowLeft, Key::Char('X')];
-        assert_eq!(edit("note lock", usize::MAX, &keys), ("note loXck".into(), 8));
+        assert_eq!(
+            edit("note lock", usize::MAX, &keys),
+            ("note loXck".into(), 8)
+        );
     }
 
     #[test]
@@ -146,8 +155,14 @@ mod tests {
 
     #[test]
     fn word_deletes_respect_the_cursor() {
-        assert_eq!(edit("note lock now", 9, &[Key::Ctrl('w')]), ("note  now".into(), 5));
-        assert_eq!(edit("note lock now", 4, &[Key::CtrlDelete]), ("note now".into(), 4));
+        assert_eq!(
+            edit("note lock now", 9, &[Key::Ctrl('w')]),
+            ("note  now".into(), 5)
+        );
+        assert_eq!(
+            edit("note lock now", 4, &[Key::CtrlDelete]),
+            ("note now".into(), 4)
+        );
         assert_eq!(edit("note lock", 5, &[Key::Ctrl('u')]), ("lock".into(), 0));
         assert_eq!(edit("note lock", 4, &[Key::Ctrl('k')]), ("note".into(), 4));
     }
@@ -160,7 +175,10 @@ mod tests {
 
     #[test]
     fn paste_inserts_without_newlines() {
-        assert_eq!(edit("ab", 1, &[Key::Paste("x\ny".into())]), ("axyb".into(), 3));
+        assert_eq!(
+            edit("ab", 1, &[Key::Paste("x\ny".into())]),
+            ("axyb".into(), 3)
+        );
     }
 
     #[test]

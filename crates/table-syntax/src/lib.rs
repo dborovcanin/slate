@@ -111,7 +111,9 @@ pub fn is_delimiter_row_at(cells: &[String], after_header: bool) -> bool {
     is_delimiter_row(cells)
         || (after_header
             && !cells.is_empty()
-            && cells.iter().all(|cell| delimiter_cell_dashes(cell).is_some()))
+            && cells
+                .iter()
+                .all(|cell| delimiter_cell_dashes(cell).is_some()))
 }
 
 /// Whether a row of delimiter-shaped cells (short or `---`-style).
@@ -157,8 +159,9 @@ pub fn after_header_row(row_count: usize, continuation: impl Fn(usize) -> bool) 
 /// Index of the delimiter row among a whole table block's rows (cells plus
 /// continuation flags, one entry per line).
 pub fn table_block_delimiter_row(rows: &[Vec<String>], continuation: &[bool]) -> Option<usize> {
-    let after_header =
-        after_header_row(rows.len(), |i| continuation.get(i).copied().unwrap_or(false));
+    let after_header = after_header_row(rows.len(), |i| {
+        continuation.get(i).copied().unwrap_or(false)
+    });
     rows.iter()
         .enumerate()
         .position(|(i, row)| is_delimiter_row_at(row, Some(i) == after_header))
@@ -209,7 +212,10 @@ mod tests {
     fn delimiter_rows_depend_on_position() {
         let lines = owned(&["| a | b |", "|-|:-:|", "| - | - |", "| --- | --- |"]);
         assert!(is_delimiter_line_in(&lines, 1));
-        assert!(!is_delimiter_line_in(&lines, 2), "short dashes later are data");
+        assert!(
+            !is_delimiter_line_in(&lines, 2),
+            "short dashes later are data"
+        );
         assert!(is_delimiter_line_in(&lines, 3), "`---` rows count anywhere");
         let rows: Vec<Vec<String>> = lines.iter().map(|line| split_table_cells(line)).collect();
         assert_eq!(table_block_delimiter_row(&rows, &[false; 4]), Some(1));
