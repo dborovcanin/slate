@@ -133,6 +133,21 @@ struct MatchSpan {
     end: usize,
 }
 
+/// A variable definition being resolved: its references are substituted
+/// left to right, pausing while an unresolved one is resolved first.
+struct ResolveFrame {
+    normalized: String,
+    name: String,
+    line: usize,
+    expression: String,
+    matches: Vec<MatchSpan>,
+    /// Index into `matches` of the reference being substituted.
+    next: usize,
+    /// Byte offset in `expression` copied into `substituted` so far.
+    cursor: usize,
+    substituted: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResolveState {
     Resolving,
@@ -373,76 +388,142 @@ impl<'a> VariableResolver<'a> {
         }
     }
 
+    /// Resolves a variable and, first, everything its definition depends on.
+    /// Dependencies are walked with an explicit stack, not recursion, so long
+    /// chains (`total 2 := total 1 + x`, ...) cannot overflow the stack.
     fn resolve(&mut self, normalized: &str, ctx: &mut fend_core::Context) -> Option<String> {
-        if let Some(state) = self.states.get(normalized).copied() {
-            return match state {
-                ResolveState::Resolved => self.values.get(normalized).cloned(),
-                ResolveState::Failed => None,
-                ResolveState::Resolving => {
-                    if let Some(def) = self.defs.get(normalized) {
-                        self.push_diagnostic(
-                            "cycle",
-                            def.line + 1,
-                            format!("cycle detected for variable '{}'", def.name),
-                        );
-                    }
-                    self.states
-                        .insert(normalized.to_string(), ResolveState::Failed);
-                    None
-                }
-            };
+        if let Some(known) = self.known_resolution(normalized) {
+            return known;
         }
+        let mut stack = vec![self.start_resolving(normalized)?];
+        // Result of the dependency that was just resolved, for the frame on top.
+        let mut dependency: Option<Option<String>> = None;
+        loop {
+            let frame = stack.last_mut().expect("frame to resolve");
+            if let Some(result) = dependency.take() {
+                let span = &frame.matches[frame.next];
+                let Some(value) = result else {
+                    let (name, line) = (frame.normalized.clone(), frame.line);
+                    let message = format!("unresolved variable '{}'", span.normalized);
+                    stack.pop();
+                    self.push_diagnostic("unresolved-variable", line + 1, message);
+                    self.states.insert(name, ResolveState::Failed);
+                    if stack.is_empty() {
+                        return None;
+                    }
+                    dependency = Some(None);
+                    continue;
+                };
+                frame.substituted.push_str(&value);
+                frame.cursor = span.end;
+                frame.next += 1;
+            }
 
-        let def = self.defs.get(normalized)?.clone();
+            if let Some(span) = frame.matches.get(frame.next) {
+                frame
+                    .substituted
+                    .push_str(&frame.expression[frame.cursor..span.start]);
+                let name = span.normalized.clone();
+                match self.known_resolution(&name) {
+                    Some(known) => dependency = Some(known),
+                    None => match self.start_resolving(&name) {
+                        Some(next) => stack.push(next),
+                        None => dependency = Some(None),
+                    },
+                }
+                continue;
+            }
+
+            let mut frame = stack.pop().expect("frame to finish");
+            frame
+                .substituted
+                .push_str(&frame.expression[frame.cursor..]);
+            let result = self.finish_resolving(&frame, ctx);
+            if stack.is_empty() {
+                return result;
+            }
+            dependency = Some(result);
+        }
+    }
+
+    /// The outcome for a variable that was already visited, or `None` when it
+    /// still needs resolving. Reaching one that is mid-resolution is a cycle.
+    fn known_resolution(&mut self, normalized: &str) -> Option<Option<String>> {
+        let state = self.states.get(normalized).copied()?;
+        Some(match state {
+            ResolveState::Resolved => self.values.get(normalized).cloned(),
+            ResolveState::Failed => None,
+            ResolveState::Resolving => {
+                if let Some(def) = self.defs.get(normalized) {
+                    let (line, name) = (def.line, def.name.clone());
+                    self.push_diagnostic(
+                        "cycle",
+                        line + 1,
+                        format!("cycle detected for variable '{name}'"),
+                    );
+                }
+                self.states
+                    .insert(normalized.to_string(), ResolveState::Failed);
+                None
+            }
+        })
+    }
+
+    /// Marks a defined variable as resolving and lists the variables its
+    /// expression references; `None` when the name has no definition.
+    fn start_resolving(&mut self, normalized: &str) -> Option<ResolveFrame> {
+        let def = self.defs.get(normalized)?;
+        let frame = ResolveFrame {
+            normalized: normalized.to_string(),
+            name: def.name.clone(),
+            line: def.line,
+            expression: def.expression.clone(),
+            matches: self.find_matches(&def.expression),
+            next: 0,
+            cursor: 0,
+            substituted: String::with_capacity(def.expression.len()),
+        };
         self.states
             .insert(normalized.to_string(), ResolveState::Resolving);
+        Some(frame)
+    }
 
-        let substituted = match self.substitute_runtime(&def.expression, Some(def.line), ctx) {
-            Some(value) => value,
-            None => {
-                self.states
-                    .insert(normalized.to_string(), ResolveState::Failed);
-                return None;
-            }
-        };
-
-        let raw_value = match self.eval_raw(&substituted, ctx) {
-            Some(value) => value,
-            None => {
-                self.push_diagnostic(
-                    "invalid-expression",
-                    def.line + 1,
-                    format!("failed to evaluate expression for variable '{}'", def.name),
-                );
-                self.states
-                    .insert(normalized.to_string(), ResolveState::Failed);
-                return None;
-            }
-        };
-
-        let numeric = match extract_first_number(&raw_value) {
-            Some(value) => value,
-            None => {
-                self.push_diagnostic(
+    /// Evaluates a definition whose references are all substituted.
+    fn finish_resolving(
+        &mut self,
+        frame: &ResolveFrame,
+        ctx: &mut fend_core::Context,
+    ) -> Option<String> {
+        let (kind, message) = match self.eval_raw(&frame.substituted, ctx) {
+            None => (
+                "invalid-expression",
+                format!(
+                    "failed to evaluate expression for variable '{}'",
+                    frame.name
+                ),
+            ),
+            Some(raw_value) => match extract_first_number(&raw_value) {
+                Some(numeric) => {
+                    let formatted = format_number(numeric);
+                    self.states
+                        .insert(frame.normalized.clone(), ResolveState::Resolved);
+                    self.values
+                        .insert(frame.normalized.clone(), formatted.clone());
+                    return Some(formatted);
+                }
+                None => (
                     "non-numeric",
-                    def.line + 1,
                     format!(
                         "variable '{}' did not evaluate to a numeric value",
-                        def.name
+                        frame.name
                     ),
-                );
-                self.states
-                    .insert(normalized.to_string(), ResolveState::Failed);
-                return None;
-            }
+                ),
+            },
         };
-
-        let formatted = format_number(numeric);
+        self.push_diagnostic(kind, frame.line + 1, message);
         self.states
-            .insert(normalized.to_string(), ResolveState::Resolved);
-        self.values
-            .insert(normalized.to_string(), formatted.clone());
-        Some(formatted)
+            .insert(frame.normalized.clone(), ResolveState::Failed);
+        None
     }
 
     fn substitute_runtime(
@@ -3163,6 +3244,63 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert!(result.variables.is_empty());
         assert_eq!(result.line_results[1], None);
+    }
+
+    #[test]
+    fn long_variable_chain_resolves_without_deep_recursion() {
+        // A range evaluation resolves the chain on demand from its last link.
+        // Run on a small stack so a recursive resolver would overflow here.
+        let handle = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let links = 20_000;
+                let mut lines = vec!["total 0 := 1".to_string()];
+                for i in 1..links {
+                    lines.push(format!("total {i} := total {} + 1", i - 1));
+                }
+                lines.push(format!("total {}", links - 1));
+                let last = lines.len() - 1;
+                CalcEngine::new().evaluate_note_context(
+                    &lines,
+                    NoteEvaluationOptions {
+                        variables_enabled: true,
+                        eval_range: Some((last, last + 1)),
+                        ..Default::default()
+                    },
+                )
+            })
+            .expect("spawn evaluator");
+        let result = handle.join().expect("evaluation did not overflow");
+        assert_eq!(
+            result.line_results.last().unwrap().as_deref(),
+            Some("20000")
+        );
+    }
+
+    #[test]
+    fn variable_cycle_reports_diagnostics_and_no_value() {
+        let lines = vec![
+            "a := b + 1".to_string(),
+            "b := a + 1".to_string(),
+            "a".to_string(),
+        ];
+        let result = CalcEngine::new().evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                variables_enabled: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(result.line_results[2], None);
+        let kinds: Vec<(&str, usize)> = result
+            .diagnostics
+            .iter()
+            .flatten()
+            .map(|d| (d.kind.as_str(), d.line))
+            .collect();
+        assert!(kinds.contains(&("cycle", 1)), "{kinds:?}");
+        assert!(kinds.contains(&("unresolved-variable", 1)), "{kinds:?}");
+        assert!(kinds.contains(&("unresolved-variable", 2)), "{kinds:?}");
     }
 
     // --- Cross-note variable tests ---
