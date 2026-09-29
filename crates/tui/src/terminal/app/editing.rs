@@ -444,6 +444,12 @@ impl TerminalApp {
         if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
             return;
         }
+        if self.calc.line_metadata.is_empty() && self.calc_runtime.viewport_only {
+            // Viewport notes build metadata off the input thread; the build
+            // re-derives any line edited before it lands.
+            self.calc_runtime.index_sync_pending = true;
+            return;
+        }
         self.ensure_calc_line_metadata();
         if line_idx >= self.editor.lines.len() || line_idx >= self.calc.line_metadata.len() {
             return;
@@ -461,6 +467,11 @@ impl TerminalApp {
         new_line_span: usize,
     ) {
         if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
+            return;
+        }
+        if self.calc.line_metadata.is_empty() && self.calc_runtime.viewport_only {
+            // Nothing to splice yet; the background build covers this edit.
+            self.calc_runtime.index_sync_pending = true;
             return;
         }
         let old_len = self.calc.line_metadata.len();
@@ -3978,16 +3989,39 @@ impl TerminalApp {
     /// Catches the dependency index up with the note after viewport
     /// evaluations skipped it, and refreshes the variable names it supplies.
     pub(super) fn maybe_sync_calc_index_after_idle(&mut self) {
-        if !self.calc_runtime.index_sync_pending
-            || self.last_edit.elapsed() < self.calc_recompute_debounce_duration()
-        {
+        if !self.calc_runtime.index_sync_pending {
             return;
         }
-        self.calc_runtime.index_sync_pending = false;
+        if self.calc.index_build.is_some() {
+            if !self.install_background_calc_index() {
+                return;
+            }
+        } else if self.last_edit.elapsed() < self.calc_recompute_debounce_duration() {
+            return;
+        }
         if !self.note_math_module_enabled() {
+            self.calc_runtime.index_sync_pending = false;
             return;
         }
         let mask = self.calc_feature_mask();
+        if self.calc_runtime.viewport_only
+            && (self.calc.calc_dependency_index.is_none() || self.calc.line_metadata.is_empty())
+        {
+            // The first build reads every line; do it off the input thread
+            // and catch up with any edits made meanwhile when it lands.
+            let lines = self.editor.lines.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let index =
+                    crate::editor_core::calc_plan::build_calc_dependency_index(&lines, mask);
+                let metadata =
+                    crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(&lines, mask);
+                let _ = tx.send((index, metadata));
+            });
+            self.calc.index_build = Some(rx);
+            return;
+        }
+        self.calc_runtime.index_sync_pending = false;
         if self.calc_runtime.viewport_only && self.calc.results.len() == self.editor.lines.len() {
             // Lets later structural edits shift results instead of clearing them.
             crate::editor_core::calc_plan::sync_line_metadata(
@@ -4024,6 +4058,44 @@ impl TerminalApp {
                 .set_from_revision(variable_names, revision);
             self.render_state.dirty = true;
         }
+    }
+
+    /// Installs a finished background index build; false while it runs.
+    /// Anything built meanwhile on the input thread is kept instead, and
+    /// metadata for lines edited since the build started is re-derived.
+    fn install_background_calc_index(&mut self) -> bool {
+        let Some(rx) = self.calc.index_build.as_ref() else {
+            return true;
+        };
+        let (index, metadata) = match rx.try_recv() {
+            Ok(built) => built,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.calc.index_build = None;
+                return true;
+            }
+        };
+        self.calc.index_build = None;
+        if self.calc.calc_dependency_index.is_none() {
+            self.calc.calc_dependency_index = index;
+        }
+        if self.calc.line_metadata.is_empty() {
+            self.calc.line_metadata = metadata;
+            let mask = self.calc_feature_mask();
+            crate::editor_core::calc_plan::sync_line_metadata(
+                &mut self.calc.line_metadata,
+                &self.editor.lines,
+                mask,
+            );
+            for (idx, line) in self.editor.lines.iter().enumerate() {
+                let hash = crate::editor_core::calc_plan::hash_line(line);
+                if self.calc.line_metadata[idx].hash != hash {
+                    self.calc.line_metadata[idx] =
+                        crate::editor_core::calc_plan::line_metadata_with_mask(line, mask);
+                }
+            }
+        }
+        true
     }
 
     // --- Wiki-link autocomplete ---

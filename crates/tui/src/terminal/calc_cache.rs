@@ -26,6 +26,14 @@ pub struct CalcCache {
     /// Cross-note refs from the last scan and the hashes of the lines they
     /// were scanned from, so later scans only read changed lines.
     pub cross_note_refs_scan: Option<(Vec<u64>, Vec<app_core::calc::CrossNoteRef>)>,
+    /// First dependency index and line metadata build, running off the
+    /// input thread for viewport notes.
+    pub index_build: Option<
+        std::sync::mpsc::Receiver<(
+            Option<crate::editor_core::calc_plan::CalcDependencyIndex>,
+            Vec<crate::editor_core::calc_plan::LineMetadata>,
+        )>,
+    >,
     pub calc_dependency_index: Option<crate::editor_core::calc_plan::CalcDependencyIndex>,
     /// Metadata for current `lines`, incrementally patched on edits.
     pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,

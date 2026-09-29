@@ -283,6 +283,20 @@ fn app_with_note_and_modules(
     (db, app, path)
 }
 
+/// Runs the idle calc work a pause would, waiting for background builds.
+fn settle_idle_calc(app: &mut TerminalApp) {
+    app.last_edit = Instant::now() - Duration::from_secs(1);
+    app.maybe_recompute_calc_after_idle();
+    for _ in 0..5_000 {
+        app.maybe_sync_calc_index_after_idle();
+        if app.calc.index_build.is_none() && !app.calc_runtime.index_sync_pending {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("idle calc work did not settle");
+}
+
 fn run_keys(app: &mut TerminalApp, db: &Db, keys: &[Key]) {
     for key in keys {
         app.handle_key(db, key.clone())

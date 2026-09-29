@@ -4,7 +4,7 @@
   "limits_p95_ms": {
     "30000": {
       "open": 100,
-      "idle_tick": 100,
+      "idle_tick": 45,
       "scroll_line": 10,
       "scroll_jump": 10,
       "jump_top_bottom": 10,
@@ -22,7 +22,7 @@
     },
     "100000": {
       "open": 300,
-      "idle_tick": 400,
+      "idle_tick": 60,
       "scroll_line": 15,
       "scroll_jump": 15,
       "jump_top_bottom": 15,

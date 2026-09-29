@@ -1134,6 +1134,7 @@ impl TerminalApp {
                 range_context: Default::default(),
                 pending_result_splices: Vec::new(),
                 cross_note_refs_scan: None,
+                index_build: None,
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
@@ -1366,11 +1367,16 @@ impl TerminalApp {
         // Process any deferred fold recompute while the user is not typing.
         if self.folds.rescan_pending {
             self.folds.rescan_pending = false;
-            self.recompute_folding();
+            self.recompute_folding_for_note_size();
             self.render_state.dirty = true;
         }
+        let calc_was_pending = self.calc_runtime.recompute_pending;
         self.maybe_recompute_calc_after_idle();
-        self.maybe_sync_calc_index_after_idle();
+        // One heavy calc task per tick, so input gets a turn in between.
+        let calc_ran = calc_was_pending && !self.calc_runtime.recompute_pending;
+        if !calc_ran {
+            self.maybe_sync_calc_index_after_idle();
+        }
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
         self.poll_background_save(db, false)?;
@@ -1383,10 +1389,20 @@ impl TerminalApp {
         Ok(())
     }
 
+    /// Full fold rescan, or the cheap reset when the note is large enough
+    /// that folding is off.
+    fn recompute_folding_for_note_size(&mut self) {
+        if self.large_note_reduced_features() {
+            self.recompute_folding_if_needed();
+        } else {
+            self.recompute_folding();
+        }
+    }
+
     fn maybe_hydrate_startup_state(&mut self, db: &Db) {
         if self.startup_fold_hydration_pending {
             let started = Instant::now();
-            self.recompute_folding();
+            self.recompute_folding_for_note_size();
             self.record_perf_duration(
                 "tui.idle.dispatch",
                 "startup_fold_hydration",

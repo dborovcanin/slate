@@ -1990,9 +1990,7 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
         render_screen(&mut app);
         // Typing defers calc (and viewport notes defer their index and line
         // metadata) to the idle tick; run it as a pause would.
-        app.last_edit = Instant::now() - Duration::from_secs(1);
-        app.maybe_recompute_calc_after_idle();
-        app.maybe_sync_calc_index_after_idle();
+        settle_idle_calc(&mut app);
         assert!(!app.calc_runtime.recompute_pending);
         if step > 0 {
             assert_eq!(app.calc.line_metadata.len(), app.editor.lines.len());
@@ -2086,11 +2084,43 @@ fn large_note_new_assignment_names_arrive_on_the_idle_tick() {
     run_keys(&mut app, &db, &keys);
     render_screen(&mut app);
 
-    app.last_edit = Instant::now() - Duration::from_secs(1);
-    app.maybe_recompute_calc_after_idle();
-    app.maybe_sync_calc_index_after_idle();
+    settle_idle_calc(&mut app);
     assert!(app.calc.variable_names.iter().any(|name| name == "zeta"));
     assert!(app.calc.variable_names.iter().any(|name| name == "base"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn background_index_build_catches_up_with_edits_made_while_it_runs() {
+    let mut lines = vec!["base := 1".to_string()];
+    lines.extend((0..2_500).map(|i| format!("v{i} := base + {i}")));
+    let (db, mut app, path) = app_with_note(&lines.join("\n"));
+    app.mode = UiMode::Normal;
+    render_screen(&mut app);
+    assert!(app.calc_runtime.viewport_only);
+
+    // Start the build, then edit before it lands.
+    app.last_edit = Instant::now() - Duration::from_secs(1);
+    app.maybe_sync_calc_index_after_idle();
+    assert!(app.calc.index_build.is_some());
+    app.editor.cursor_line = 3;
+    run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+    let mut keys = vec![Key::Char('O')];
+    keys.extend("late := 7".chars().map(Key::Char));
+    keys.push(Key::Esc);
+    run_keys(&mut app, &db, &keys);
+
+    settle_idle_calc(&mut app);
+    let mask = app.calc_feature_mask();
+    assert_eq!(
+        app.calc.line_metadata,
+        crate::editor_core::calc_plan::line_metadata_for_lines_with_mask(&app.editor.lines, mask)
+    );
+    assert!(app.calc.variable_names.iter().any(|name| name == "late"));
+    assert!(!app.calc.variable_names.iter().any(|name| name == "v2"));
 
     drop(app);
     drop(db);
