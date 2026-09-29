@@ -26,6 +26,16 @@ node scripts/startup-check.mjs
 
 The check fails when a measured startup mark regresses more than the configured threshold (`threshold_pct`, default 15%).
 
+## Large-note latency
+
+```sh
+cargo test --release -p slate --lib large_note_perf -- --ignored --nocapture
+```
+
+Generates a note (prose, images, tables with formulas, variables with duplicate assignments and chapter-long running totals, wiki links and cross-note references to two linked notes), then times navigation, typing, structural edits, undo/redo, search, open and idle ticks. Each sample is one action's key handling plus the repaint after it. The test fails when a p95 exceeds its limit in `perf/baselines/large_note.json`; `node scripts/perf-check.mjs` runs it in CI.
+
+`SLATE_LARGE_NOTE_SIZES=30000,100000` measures other line counts; sizes without limits are reported only. At 100k lines structural edits currently take seconds, so that size stays out of CI until they are fixed.
+
 ## Runtime Tracing
 
 Use the in-editor profiler for interaction latency and payload metrics.

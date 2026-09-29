@@ -9,6 +9,7 @@ function defaultConfig() {
     checks: {
       startup: { enabled: true, runs: 3, threshold_pct: 15 },
       table: { enabled: true, profile: "ci" },
+      large_note: { enabled: true },
     },
   };
 }
@@ -23,6 +24,7 @@ function loadConfig() {
       checks: {
         startup: { ...defaults.checks.startup, ...(parsed.checks?.startup ?? {}) },
         table: { ...defaults.checks.table, ...(parsed.checks?.table ?? {}) },
+        large_note: { ...defaults.checks.large_note, ...(parsed.checks?.large_note ?? {}) },
       },
     };
   } catch (error) {
@@ -46,6 +48,16 @@ function runNodeScript(scriptPath, extraEnv = {}) {
     ok: command.status === 0,
     elapsedMs,
     output: `${command.stdout ?? ""}${command.stderr ?? ""}`.trim(),
+  };
+}
+
+function runCommand(command, args) {
+  const started = Date.now();
+  const run = spawnSync(command, args, { encoding: "utf8", env: { ...process.env } });
+  return {
+    ok: run.status === 0,
+    elapsedMs: Date.now() - started,
+    output: `${run.stdout ?? ""}${run.stderr ?? ""}`.trim(),
   };
 }
 
@@ -113,6 +125,23 @@ if (bool(cfg.checks?.table?.enabled, true)) {
   };
   const run = runNodeScript(resolve("scripts/table-perf-check.mjs"), env);
   results.push({ name: "table", ...run });
+}
+
+if (bool(cfg.checks?.large_note?.enabled, true)) {
+  // Limits live in perf/baselines/large_note.json; the test enforces them.
+  const run = runCommand("cargo", [
+    "test",
+    "--quiet",
+    "--release",
+    "-p",
+    "slate",
+    "--lib",
+    "large_note_perf",
+    "--",
+    "--ignored",
+    "--nocapture",
+  ]);
+  results.push({ name: "large_note", ...run });
 }
 
 printSection("Checks");

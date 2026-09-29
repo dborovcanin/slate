@@ -174,7 +174,7 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 ## Performance Backlog
 
 - [ ] Adaptive large-note mode (follow-up to the 30,000-line full-feature cutoff): viewport-first calc, lazy fold/indexing, bounded caches, memory-bounded undo spans.
-- [ ] Large-note regression gates: `30k/100k/200k/400k` fixtures for edit latency and memory, p95 targets for keypress/render/save, fail perf checks on sustained regressions.
+- [ ] Large-note regression gates: the 30k latency gate exists (`large_note_perf`, limits in `perf/baselines/large_note.json`). Remaining: gate 100k+ once structural edits stop taking seconds there, memory budgets, save latency, and tightening limits as fixes land.
 
 Measurement references: `roadmap/performance.md`, `roadmap/perf-multirow-table.md`.
 

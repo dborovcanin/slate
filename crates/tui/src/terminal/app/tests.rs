@@ -493,3 +493,6 @@ mod vim;
 #[cfg(test)]
 #[path = "tests/wrap.rs"]
 mod wrap;
+
+#[path = "tests/large_note_perf.rs"]
+mod large_note_perf;

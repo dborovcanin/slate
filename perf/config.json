@@ -1,5 +1,5 @@
 {
-  "description": "Unified performance checks (startup + table). Global enable/disable comes from config.toml [perf].enabled.",
+  "description": "Unified performance checks (startup + table + large_note). Global enable/disable comes from config.toml [perf].enabled.",
   "checks": {
     "startup": {
       "enabled": true,
@@ -9,6 +9,9 @@
     "table": {
       "enabled": true,
       "profile": "ci"
+    },
+    "large_note": {
+      "enabled": true
     }
   }
 }
