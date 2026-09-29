@@ -283,6 +283,18 @@ fn app_with_note_and_modules(
     (db, app, path)
 }
 
+/// Waits for a large viewport note's background calc preparation to land.
+fn wait_for_viewport_calc(app: &mut TerminalApp) {
+    for _ in 0..30_000 {
+        app.poll_viewport_calc_preparation();
+        if app.calc.range_context_build.is_none() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("viewport calc preparation did not land");
+}
+
 /// Runs the idle calc work a pause would, waiting for background builds.
 fn settle_idle_calc(app: &mut TerminalApp) {
     app.last_edit = Instant::now() - Duration::from_secs(1);

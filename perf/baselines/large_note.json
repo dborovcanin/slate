@@ -3,7 +3,7 @@
   "sizes": [30000, 100000],
   "limits_p95_ms": {
     "30000": {
-      "open": 100,
+      "open": 30,
       "idle_tick": 45,
       "scroll_line": 10,
       "scroll_jump": 10,
@@ -21,7 +21,7 @@
       "redo": 20
     },
     "100000": {
-      "open": 300,
+      "open": 90,
       "idle_tick": 60,
       "scroll_line": 15,
       "scroll_jump": 15,

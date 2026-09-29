@@ -12,6 +12,15 @@ pub struct ResultSplice {
     pub removed_affects_calc: bool,
 }
 
+/// Whole-note calc preparation built off the input thread when a large
+/// viewport note opens.
+pub struct RangeContextBuild {
+    pub note_id: String,
+    pub context: app_core::calc::NoteContextCache,
+    /// Line hashes and cross-note refs the build scanned, if it did.
+    pub refs_scan: Option<(Vec<u64>, Vec<app_core::calc::CrossNoteRef>)>,
+}
+
 /// Calc evaluation state kept between keystrokes to enable incremental updates.
 pub struct CalcCache {
     pub engine: CalcEngine,
@@ -26,6 +35,9 @@ pub struct CalcCache {
     /// Cross-note refs from the last scan and the hashes of the lines they
     /// were scanned from, so later scans only read changed lines.
     pub cross_note_refs_scan: Option<(Vec<u64>, Vec<app_core::calc::CrossNoteRef>)>,
+    /// Viewport calc preparation running off the input thread; viewport
+    /// evaluation waits for it instead of preparing on the keystroke.
+    pub range_context_build: Option<std::sync::mpsc::Receiver<RangeContextBuild>>,
     /// First dependency index and line metadata build, running off the
     /// input thread for viewport notes.
     pub index_build: Option<

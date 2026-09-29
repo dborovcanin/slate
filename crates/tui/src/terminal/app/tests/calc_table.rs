@@ -315,6 +315,7 @@ fn huge_variable_calc_note_100k_uses_viewport_or_minimal_eval_windows() {
     lines.extend((0..99_999).map(|_| "base + 2".to_string()));
     let body = lines.join("\n");
     let (db, mut app, path) = app_with_note(&body);
+    wait_for_viewport_calc(&mut app);
 
     assert!(app.calc_runtime.viewport_only);
     let initial_range = app
@@ -2121,6 +2122,59 @@ fn background_index_build_catches_up_with_edits_made_while_it_runs() {
     );
     assert!(app.calc.variable_names.iter().any(|name| name == "late"));
     assert!(!app.calc.variable_names.iter().any(|name| name == "v2"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn large_viewport_note_prepares_calc_off_the_input_thread() {
+    let mut lines = vec!["base := 1".to_string(), "rate := base * 2".to_string()];
+    lines.extend(
+        (0..super::super::CALC_BACKGROUND_PREPARE_MIN_LINES).map(|i| format!("v{i} := rate + {i}")),
+    );
+    lines.push("rate + 1".to_string());
+    let (db, mut app, path) = app_with_note(&lines.join("\n"));
+    app.mode = UiMode::Normal;
+    assert!(app.calc_runtime.viewport_only);
+    assert!(
+        app.calc.range_context_build.is_some(),
+        "open does not prepare inline"
+    );
+    render_screen(&mut app);
+
+    // Edit before the preparation lands: drop a line and change `rate`.
+    app.editor.cursor_line = 2;
+    run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+    app.editor.cursor_line = 1;
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('$'),
+            Key::Char('x'),
+            Key::Char('a'),
+            Key::Char('5'),
+            Key::Esc,
+        ],
+    );
+    assert_eq!(app.editor.lines[1], "rate := base * 5");
+
+    wait_for_viewport_calc(&mut app);
+    render_screen(&mut app);
+
+    // After the edits line 2 holds `v1 := rate + 1`, and `rate` is 5.
+    let last = app.editor_height().min(app.editor.lines.len());
+    for line in 2..last {
+        let offset = line - 1;
+        let expected = (5 + offset).to_string();
+        assert_eq!(
+            app.calc.results[line].as_deref(),
+            Some(expected.as_str()),
+            "line {line}"
+        );
+    }
 
     drop(app);
     drop(db);

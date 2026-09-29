@@ -3986,6 +3986,100 @@ impl TerminalApp {
         }
     }
 
+    /// Starts preparing a large viewport note's calc off the input thread:
+    /// cross-note refs and values, then the whole-note calc context. The
+    /// note paints without calc ghosts until `poll_viewport_calc_preparation`
+    /// installs it. False when the note is small enough to prepare inline.
+    pub(super) fn start_viewport_calc_preparation(&mut self) -> bool {
+        if !self.calc_runtime.viewport_only
+            || !self.note_math_module_enabled()
+            || self.editor.lines.len() < super::CALC_BACKGROUND_PREPARE_MIN_LINES
+        {
+            return false;
+        }
+        let lines = self.editor.lines.clone();
+        let note_id = self.active_note.id.clone();
+        let variables_enabled = self.calc_variables_enabled();
+        let cross_note_enabled = self.calc_cross_note_enabled();
+        let table_enabled = self.note_table_module_enabled();
+        let index = std::sync::Arc::clone(&self.cross_note_var_index);
+        let db = self.cross_note_db.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let engine = app_core::calc::CalcEngine::new();
+            let (extern_vars, refs_scan) = if cross_note_enabled {
+                let refs = app_core::calc::scan_cross_note_refs(&lines);
+                let short_ids: rustc_hash::FxHashSet<&str> =
+                    refs.iter().map(|r| r.note_short_id.as_str()).collect();
+                for short_id in short_ids {
+                    preload_cross_note_dep_value(short_id, &index, &engine, &db);
+                }
+                let extern_vars = match index.lock() {
+                    Ok(mut index) => {
+                        index.update_deps(&note_id, &refs);
+                        index.extern_vars_for(&note_id)
+                    }
+                    Err(_) => Vec::new(),
+                };
+                let hashes = crate::editor_core::calc_plan::hash_lines(&lines);
+                (extern_vars, Some((hashes, refs)))
+            } else {
+                (Vec::new(), None)
+            };
+            let options = app_core::calc::NoteEvaluationOptions {
+                variables_enabled,
+                cross_note_enabled,
+                table_enabled,
+                extern_vars,
+                ..Default::default()
+            };
+            let context = engine.prepare_note_context(&lines, &options);
+            let _ = tx.send(crate::terminal::calc_cache::RangeContextBuild {
+                note_id,
+                context,
+                refs_scan,
+            });
+        });
+        self.calc.range_context_build = Some(rx);
+        true
+    }
+
+    /// Takes over a finished background calc preparation; false while it
+    /// still runs. A build for a note that is no longer open is dropped.
+    fn install_viewport_calc_preparation(&mut self) -> bool {
+        let Some(rx) = self.calc.range_context_build.as_ref() else {
+            return true;
+        };
+        let build = match rx.try_recv() {
+            Ok(build) => build,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.calc.range_context_build = None;
+                return true;
+            }
+        };
+        self.calc.range_context_build = None;
+        if build.note_id == self.active_note.id {
+            self.calc.range_context = build.context;
+            if build.refs_scan.is_some() {
+                self.calc.cross_note_refs_scan = build.refs_scan;
+            }
+        }
+        self.calc_runtime.last_view_eval_range = None;
+        true
+    }
+
+    /// Event-loop hook: once the background preparation lands, evaluates
+    /// the viewport (now cheap) and repaints.
+    pub(super) fn poll_viewport_calc_preparation(&mut self) {
+        if self.calc.range_context_build.is_none() || !self.install_viewport_calc_preparation() {
+            return;
+        }
+        let editor_height = self.editor_height();
+        self.ensure_calc_for_viewport(editor_height, true);
+        self.render_state.dirty = true;
+    }
+
     /// Catches the dependency index up with the note after viewport
     /// evaluations skipped it, and refreshes the variable names it supplies.
     pub(super) fn maybe_sync_calc_index_after_idle(&mut self) {
@@ -4611,6 +4705,11 @@ impl TerminalApp {
     pub(super) fn ensure_calc_for_viewport(&mut self, editor_height: usize, force: bool) {
         let started = Instant::now();
         if !self.calc_runtime.viewport_only {
+            return;
+        }
+        // Preparing inline would redo, on this keystroke, the whole-note work
+        // the background build is already doing; its install evaluates.
+        if self.calc.range_context_build.is_some() && !self.install_viewport_calc_preparation() {
             return;
         }
         let Some(eval_range) = self.calc_eval_range_for_viewport(editor_height) else {

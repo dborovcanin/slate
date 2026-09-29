@@ -749,6 +749,23 @@ impl CalcEngine {
         })
     }
 
+    /// Builds the whole-note preparation that `evaluate_note_context_cached`
+    /// reuses, without evaluating any line. Large notes build it off the
+    /// input thread and hand the cache over when it is ready.
+    pub fn prepare_note_context(
+        &self,
+        lines: &[String],
+        options: &NoteEvaluationOptions,
+    ) -> NoteContextCache {
+        let line_hashes = lines.iter().map(|line| hash_line(line)).collect();
+        NoteContextCache(Some(prepare_note_context(
+            lines,
+            options,
+            note_options_key(options),
+            line_hashes,
+        )))
+    }
+
     fn evaluate_note_context_inner(
         &self,
         lines: &[String],
@@ -3754,6 +3771,30 @@ mod tests {
                 "{text:?}"
             );
         }
+    }
+
+    #[test]
+    fn prepared_context_built_elsewhere_serves_cached_evaluation() {
+        fn assert_send<T: Send>(_: &T) {}
+        let engine = CalcEngine::new();
+        let lines: Vec<String> = ["a := 2", "b := a * 3", "b + 1"]
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let options = |range| NoteEvaluationOptions {
+            variables_enabled: true,
+            eval_range: range,
+            ..Default::default()
+        };
+        let mut cache = std::thread::scope(|scope| {
+            scope
+                .spawn(|| engine.prepare_note_context(&lines, &options(None)))
+                .join()
+                .unwrap()
+        });
+        assert_send(&cache);
+        let cached = engine.evaluate_note_context_cached(&lines, options(Some((2, 3))), &mut cache);
+        assert_eq!(cached.line_results[2].as_deref(), Some("7"));
     }
 
     #[test]

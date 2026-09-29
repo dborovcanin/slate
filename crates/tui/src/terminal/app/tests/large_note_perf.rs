@@ -319,10 +319,16 @@ fn run_size(lines: usize) -> Samples {
         let mut app = open_app(&fixture);
         render_screen(&mut app);
         samples.add("open", ms(started.elapsed()));
+        // Large notes paint first and fill in calc values when the
+        // background preparation lands.
+        wait_for_viewport_calc(&mut app);
+        render_screen(&mut app);
+        samples.add("open_calc", ms(started.elapsed()));
     }
 
     let mut app = open_app(&fixture);
     render_screen(&mut app);
+    wait_for_viewport_calc(&mut app);
     measure_idle(&mut app, &db, &mut samples);
 
     // Navigation. Each scenario must actually move, or it measures nothing.

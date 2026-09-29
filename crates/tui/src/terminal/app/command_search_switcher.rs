@@ -2873,7 +2873,7 @@ impl TerminalApp {
         self.recompute_folding();
         self.adjust_cursor();
         self.adjust_scroll();
-        if self.calc_runtime.viewport_only {
+        if self.calc_runtime.viewport_only && !self.start_viewport_calc_preparation() {
             let editor_height = self.editor_height();
             self.ensure_calc_for_viewport(editor_height, true);
         }

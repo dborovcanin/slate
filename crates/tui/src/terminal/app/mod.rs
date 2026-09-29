@@ -59,6 +59,14 @@ const OVERFLOW_LEFT_MARKER: char = '<';
 const OVERFLOW_RIGHT_MARKER: char = '>';
 const LARGE_DOC_CALC_DEFER_LINES: usize = 20_000;
 const CALC_VIEWPORT_ONLY_MIN_LINES: usize = 2_000;
+/// Viewport notes this long prepare calc off the input thread when opened;
+/// below it the preparation takes a few milliseconds and runs inline.
+#[cfg(not(test))]
+const CALC_BACKGROUND_PREPARE_MIN_LINES: usize = 20_000;
+/// Lower in tests so the background path runs on notes debug builds handle
+/// quickly; it stays above the 2,500-line viewport notes other tests use.
+#[cfg(test)]
+const CALC_BACKGROUND_PREPARE_MIN_LINES: usize = 3_000;
 const CALC_VIEWPORT_PREFETCH_MULTIPLIER: usize = 2;
 const VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS: usize = 3;
 const WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE: usize = 16;
@@ -1135,6 +1143,7 @@ impl TerminalApp {
                 pending_result_splices: Vec::new(),
                 cross_note_refs_scan: None,
                 index_build: None,
+                range_context_build: None,
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
@@ -1210,7 +1219,7 @@ impl TerminalApp {
         app.adjust_cursor();
         app.adjust_scroll();
         app.require_startup_password_if_needed();
-        if app.calc_runtime.viewport_only {
+        if app.calc_runtime.viewport_only && !app.start_viewport_calc_preparation() {
             let editor_height = app.editor_height();
             app.ensure_calc_for_viewport(editor_height, true);
         }
@@ -1290,6 +1299,7 @@ impl TerminalApp {
             // is applied promptly whether or not the user is pressing keys.
             self.maybe_finish_backup_op(db);
             self.poll_background_save(db, false)?;
+            self.poll_viewport_calc_preparation();
 
             if self.image_renderer.poll() {
                 self.render_state.dirty = true;
@@ -1370,6 +1380,7 @@ impl TerminalApp {
             self.recompute_folding_for_note_size();
             self.render_state.dirty = true;
         }
+        self.poll_viewport_calc_preparation();
         let calc_was_pending = self.calc_runtime.recompute_pending;
         self.maybe_recompute_calc_after_idle();
         // One heavy calc task per tick, so input gets a turn in between.
