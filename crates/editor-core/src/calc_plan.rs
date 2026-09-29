@@ -1439,6 +1439,9 @@ pub struct CalcDependencyIndex {
     mask: CalcFeatureMask,
     variable_graph: Option<VariableDependencyGraph>,
     table_formula_index: Option<TableFormulaDependencyIndex>,
+    /// Hash of each line as the index last saw it, so a sync can skip lines
+    /// in its range that did not actually change.
+    line_hashes: Vec<u64>,
 }
 
 fn build_table_formula_dependency_block(
@@ -1597,7 +1600,29 @@ pub fn build_calc_dependency_index(
         mask,
         variable_graph: build_variable_dependency_graph(lines, mask),
         table_formula_index: build_table_formula_dependency_index(lines, mask),
+        line_hashes: hash_lines(lines),
     })
+}
+
+/// Narrows `[from, to)` to the lines whose hash differs from `line_hashes`
+/// and records the new hashes. `None` when no line in the range changed.
+/// Only valid while the line count is unchanged.
+fn narrow_to_changed_lines(
+    line_hashes: &mut [u64],
+    lines: &[String],
+    from: usize,
+    to: usize,
+) -> Option<(usize, usize)> {
+    let to = to.min(lines.len());
+    let mut changed: Option<(usize, usize)> = None;
+    for idx in from.min(to)..to {
+        let hash = hash_line(&lines[idx]);
+        if line_hashes[idx] != hash {
+            line_hashes[idx] = hash;
+            changed = Some((changed.map_or(idx, |(start, _)| start), idx + 1));
+        }
+    }
+    changed
 }
 
 /// Whether any of `lines[from..to]` satisfies `pred`.
@@ -1629,6 +1654,16 @@ pub fn sync_calc_dependency_index(
     }
 
     if let Some(cached) = index.as_mut() {
+        let (changed_from, changed_to) = if cached.line_hashes.len() == lines.len() {
+            match narrow_to_changed_lines(&mut cached.line_hashes, lines, changed_from, changed_to)
+            {
+                Some(changed) => changed,
+                None => return,
+            }
+        } else {
+            cached.line_hashes = hash_lines(lines);
+            (changed_from, changed_to)
+        };
         sync_variable_dependency_graph(
             &mut cached.variable_graph,
             lines,
