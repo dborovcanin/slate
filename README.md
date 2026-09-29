@@ -8,8 +8,8 @@ Open fast, type, close. Notes are autosaved locally. No accounts, no cloud, no b
 
 Detailed project documentation is organized in [`docs/`](docs/README.md):
 
+- [Feature Guide](docs/features.md) (all features with their keys and commands)
 - [How Slate Works](docs/how-slate-works.md)
-- [Feature Guide](docs/features.md)
 - [Keymaps](docs/keymaps.md)
 - [Command Reference](docs/command-reference.md)
 - [Configuration](docs/configuration.md)
@@ -21,98 +21,93 @@ Roadmap and planning docs are in [`roadmap/`](roadmap/).
 
 ## Features
 
-**Editor**
-- Full-screen terminal editor with note switcher and status bar
-- Autosave (idle flush + save on exit/switch) and restore of the last-open note
-- Multi-theme color schemes with live config reload (default: `gruvbox-light`)
-- Command bar (`:`) for calc/date/reminder/list/module/fold/export/note-security flows (full list + aliases: `docs/command-reference.md`)
-- Per-note modules (`math`, `table`, `variables`, `style`), persisted with each note
-- Markdown-style rich editing: live styling for headings, quotes, lists, inline code, links, bold/italic/strike while keeping raw markdown editable
-- Checklist markdown (`- [ ]`, `- [x]`), optional checklist auto-reorder, ` /x` toggle suffix
-- List continuation on Enter, markdown table autoformat/alignment, table-aware cursor movement
-- Wiki links with autocomplete, collapsed rendering, `Ctrl+]` / `gd` navigation, and `K` preview
-- Open markdown files directly: `slate path/to/file.md` (`.md`, `.markdown`, `.mdown`, `.mkd`), saved back to the file
-- Pipe append: `cmd | slate append` (or `cmd | slate append --id <note-id>`)
-- Daily notes and quick capture: `slate today` / `:today`, `slate capture buy milk`, `cmd | slate capture`
+Grouped by area, with the keys and commands for each. Commands run in the command bar (`:` in Normal mode, `Ctrl+E` while editing). Details for every item: [Feature Guide](docs/features.md).
 
-**Vim mode (optional)**
-- Enable with `[editor] vim_mode = true`
-- Normal/insert/visual/visual-line/visual-block modes, counts, text objects
-- Macros (`q<register>`, `@<register>`, counted replay), `Q` register summary
-- Folding (`za`, `:fold`, `:unfold`, `:fold-toggle`)
-- Ex commands: `:w`, `:wq`, `:q`, `:sum`, `:avg`, `:date`, `:format`, `:clist`, `:ulist`, `:olist`, `:module ...`, and more
+### Notes and saving
 
-**Inline calculations**
-- Type a math expression and see the result as a ghost annotation to the right of the line
-- Press Tab to apply the result inline
-- Uses note-context evaluation with line-aware extraction (normal lines, list bodies, single calc table cell)
-- In markdown tables, lists, and checklists, calc applies to the expression part and `Tab` replaces that expression in place
-- Table formula cells use a leading `:=` marker: `:=sum_col()`, `:=avg_row() * 2`, or `:=tax_rate * subtotal`
-- `name := expression` remains the variable assignment syntax; inside a table cell, `:=expression` without a name is a formula marker, not a variable definition
-- Supports arithmetic, unit conversions (`50 kg to lbs`), percentages, and everything [fend](https://github.com/printfn/fend) can evaluate
-- Non-math lines are ignored — no noise
-- Date-like lines (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`) are ignored to avoid false numeric ghost suggestions
+| Feature | Keys / commands |
+| --- | --- |
+| New note, fuzzy switcher, full-text content search | `Ctrl+N`, `Ctrl+P`, `Tab` inside the switcher |
+| Delete a note | `Delete` in the switcher |
+| Autosave (background, idle + on switch/quit), manual save | automatic, `Ctrl+S`, `:w`, `:w!` |
+| Quit | `Ctrl+Q`, `:q`, `:wq` |
+| Open a markdown file as a note (saved back to the file) | `slate path/to/file.md` |
+| Collections and a session working collection | `Ctrl+G`, `:collection create/choose/join/leave/update/delete/purge` |
 
-**Variables (Antinote-style, note-local)**
-- Define variables with `:=` assignment syntax: `name := expression`
-- Variable names are case-insensitive and may include spaces (letters/digits/underscore/space)
-- Variables are note-local and reactive: dependent lines recompute as definitions change
-- Conversion assignments are normalized to numeric values for reuse (`len := 3 m to km`, then `len + 2`)
-- Assignment lines do not render calc ghosts
-- Unresolved/cyclic variable expressions fail silently (no ghost noise)
-- Variable autocomplete popup appears while typing (default after 3 chars); `Tab` accepts completion when popup is open, otherwise `Tab` applies calc ghost
-- Full behavior contract: `docs/variables.md`
+### Capture and daily notes
+
+| Feature | Keys / commands |
+| --- | --- |
+| Today's daily note from a template | `slate today`, `:today` |
+| Quick capture of a timestamped `- HH:MM` entry | `slate capture buy milk` |
+| Capture command output through a pipe | `cmd \| slate capture` |
+| Append piped output to a note | `cmd \| slate append [--id <note-id>]` |
+| Paste every new clipboard text at the cursor | `:clip-watch on`, `:clip-watch off` |
+
+### Editing
+
+| Feature | Keys / commands |
+| --- | --- |
+| Styled-in-place markdown (headings, lists, quotes, code, links, emphasis) | always on (`style` module) |
+| List continuation, checklists, checklist auto-reorder | `Enter`, `- [ ]`, trailing ` /x` |
+| Inline formatting on a selection | `:bold`, `:italic`, `:strike`, `:icode`, `:format clear` |
+| Convert lines to heading / checklist / bullets / numbers | `:title`, `:clist`, `:ulist`, `:olist` |
+| Format the whole note | `:format` (or `format_on_save`) |
+| In-note search | `/`, `Ctrl+F`, `n` / `N` |
+| Folding | `za`, `:fold`, `:unfold`, `:fold-toggle` |
+| Insert a date, set a line reminder (desktop notification) | `:date`, `:remind`, `:remind toggle` |
+| Soft wrap for prose; tables and code scroll | `[editor] wrap` |
+
+### Vim mode and macros
+
+| Feature | Keys |
+| --- | --- |
+| Normal / insert / visual / visual-line modes | `Esc`, `i a I A o O`, `v`, `V` (`vim_mode = true` starts in Normal) |
+| Motions with counts | `h j k l w b 0 $ gg G gj gk` |
+| Operators and text objects | `d y c` + `w b e 0 $ t{c}`, `iw aw i\| a\| i( i[ i{ i" i*` ... |
+| Edit, paste, undo | `x`, `dd`, `yy`, `cc`, `C`, `p`, `u`, `Ctrl+R` |
+| Macros: record, stop, replay, counted replay | `q{r}`, `q`, `@{r}`, `3@{r}` |
+
+### Links and images
+
+| Feature | Keys / commands |
+| --- | --- |
+| Wiki links `[[SHORTID]]`, `[[SHORTID#Heading\|Title]]` with note and heading autocomplete | type `[[`, then `#` for headings |
+| Follow a link | `Ctrl+]`, `gd` |
+| Preview the linked note | `K` |
+| Images `![alt](./assets/x.png)`, imported by pasting an image path | paste |
+| Image preview (sixel / kitty / iTerm2 / half-blocks) | `gx` (Normal), `Ctrl+O` (vim mode off); `o` opens the system viewer |
+| Web search with results you can open or insert as links | `?`, `:web <query>`; `Enter` open, `Shift+Enter` insert |
+
+### Calculations, variables and tables
+
+| Feature | Keys / commands |
+| --- | --- |
+| Ghost results for math lines (units, percentages, [fend](https://github.com/printfn/fend)) | automatic; `Tab` applies the result |
+| Note-local variables with autocomplete | `name := expression` |
+| Variables from other notes | `[[SHORTID]].name` |
+| Sum / average a paragraph, list, table row/column, or the note | `:sum`, `:avg`, `:sum list`, `:avg row`, `:sum column`, `:sum doc` |
+| Tables that align as you type, with cell navigation | `\|`, `Tab` / `Shift+Tab`, `Ctrl+Arrow`, `Shift+Enter` for multiline cells |
+| Table formulas and cell references | `:=sum_col()`, `:=avg_row() * 2`, `:=(1,2) + (2,2)` |
+| Per-note modules | `:module status`, `:module math\|table\|variables\|style\|cross_note on\|off\|toggle` |
 
 ```
 200 * 1.19              → 238
 50 kg to lbs            → 110.231 lb
 sqrt(144) + 3^2         → 21
+rate := 1.19
+200 * rate              → 238
 ```
 
-**Wiki links**
-- Syntax: `[[01HX4VHR]]`, `[[01HX4VHR#Heading]]`, `[[01HX4VHR|Display Title]]`, `[[01HX4VHR#Heading|Display Title]]`
-- Short ids are 8-character alphanumeric prefixes of note ids
-- Navigation with `Ctrl+]` or vim `gd`
-- Broken links are rendered distinctly and resolve automatically when notes become available
+### Security, export and sync
 
-**Multiple notes**
-- Create, switch, and delete notes with keyboard shortcuts
-- Fuzzy search switcher (`Ctrl+P`) and collection picker (`Ctrl+G`)
-- Titles derived from the first non-empty line
-
-**Note protection**
-- `note lock` requires a password to open a note in the app, but the note body remains plaintext in SQLite
-- `note encrypt` requires a password and stores the note body encrypted at rest
-- Password arguments for note-security commands are redacted from command history entries
-
-**Export and backup**
-- `export pdf <path>`, `export md [path]`, `export txt [path]` (`md`/`txt` without a path export to clipboard)
-- Markdown-aware PDF output (headings, lists, code blocks, tables, images, checklists)
-- Full database backup/restore: `backup export <path.zip>`, `backup load <path.zip>`
-
-**IMAP email sync (special notes)**
-- Run sync once: `slate imap-sync`
-- Enable background polling in app sessions: set `[imap] auto_sync_on_startup = true`
-- Pulls from configured IMAP folder and appends messages to daily notes (`inbox-email-YYYY-MM-DD` by default)
-- Works with any provider exposing IMAP over TLS
-- Uses incremental UID checkpointing to avoid reprocessing old messages
-- Fetches newest messages first by default
-- First sync defaults to recent mail only (`[imap] initial_sync_past_days = 1`) to avoid flooding
-- Shows a system notification when background sync appends new emails
-
-**Keyboard shortcuts**
-
-| Shortcut | Action |
+| Feature | Keys / commands |
 | --- | --- |
-| `Ctrl+N` | New note |
-| `Ctrl+P` | Fuzzy note switcher |
-| `Ctrl+G` | Collection picker |
-| `Ctrl+S` | Manual save |
-| `Ctrl+Q` / `Ctrl+W` | Quit |
-| `Ctrl+]` | Navigate wiki link at cursor |
-| `Tab` | Accept variable completion or apply calc result |
-
-Full list: [docs/keymaps.md](docs/keymaps.md).
+| App-level lock (plaintext at rest) / encryption at rest | `:note lock <pw>`, `:note encrypt <pw>`, `:note unprotect <pw>` |
+| Export to PDF, markdown or text (file or clipboard) | `:export pdf <path>`, `:export md [path]`, `:export txt [path]` |
+| Full database backup and restore | `:backup export <path.zip>`, `:backup load <path.zip>` |
+| IMAP mail into daily inbox notes (one-off or background) | `slate imap-sync`, `[imap] auto_sync_on_startup = true` |
+| Themes (14 color schemes, live config reload) | `[theme] color_scheme`, `accent` |
 
 **Storage**
 - SQLite with WAL mode in `~/.local/share/slate/notes.db`
