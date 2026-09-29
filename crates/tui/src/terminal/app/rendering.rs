@@ -1236,21 +1236,142 @@ impl TerminalApp {
         }
     }
 
+    fn draw_image_preview_popup(
+        &mut self,
+        buf: &mut Buffer,
+        rows: usize,
+        cols: usize,
+        db: Option<&app_core::storage::Db>,
+    ) {
+        let (Some(preview), Some(graphics)) = (self.image_preview.clone(), self.graphics.as_ref())
+        else {
+            return;
+        };
+        if rows < 8 || cols < 20 {
+            return;
+        }
+
+        // Keep a blank cell gutter around terminal graphics. Some graphics
+        // protocols round pixel placement to cell boundaries, so using every
+        // interior cell can make the image touch or cross the frame.
+        let image_width = cols.saturating_sub(12).min(80);
+        let max_image_rows = graphics.max_rows().min(rows.saturating_sub(9)).max(1);
+        let width = u16::try_from(image_width).unwrap_or(u16::MAX);
+        let max_rows = u16::try_from(max_image_rows).unwrap_or(u16::MAX);
+
+        if let (Some(db), Some(picker)) = (db, graphics.picker()) {
+            self.image_renderer.request(
+                db,
+                &self.active_note.id,
+                &preview.src,
+                width,
+                max_rows,
+                picker,
+            );
+        }
+
+        let image_rows =
+            self.image_renderer
+                .rows(&self.active_note.id, &preview.src, width, max_rows);
+        let failed =
+            self.image_renderer
+                .failed(&self.active_note.id, &preview.src, width, max_rows);
+        let body_rows = image_rows.unwrap_or(1).clamp(1, max_image_rows);
+        let box_width = image_width + 4;
+        let box_height = body_rows + 4;
+        let x = cols.saturating_sub(box_width) / 2 + 1;
+        let y = rows.saturating_sub(box_height) / 2 + 1;
+        let bg = self.render_palette.surface_bg();
+        let title = format!(
+            "Image: {}",
+            preview_truncate(&preview.alt, image_width.saturating_sub(6))
+        );
+        draw_framed_surface(
+            buf,
+            y,
+            x,
+            box_width,
+            box_height,
+            bg,
+            self.render_palette.primary(),
+            false,
+            Some(&title),
+            Some("o external  Esc close"),
+        );
+
+        if let Some(image_rows) = image_rows {
+            self.image_renderer.render(
+                buf,
+                &self.active_note.id,
+                &preview.src,
+                width,
+                max_rows,
+                u16::try_from(x + 1).unwrap_or(u16::MAX),
+                u16::try_from(y + 1).unwrap_or(u16::MAX),
+            );
+            debug_assert!(image_rows <= max_image_rows);
+        } else {
+            let message = if failed {
+                " Preview unavailable"
+            } else {
+                " Loading image…"
+            };
+            draw_row_at_styled(
+                buf,
+                y + 2,
+                x + 2,
+                image_width,
+                message,
+                TextStyle {
+                    fg: Some(self.render_palette.text_fg()),
+                    bg: Some(bg),
+                    dim: true,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+
     /// Paints the current state into a ratatui frame and returns where the
     /// terminal cursor belongs.
-    pub(super) fn render(&mut self, frame: &mut Frame) -> Result<CursorPlacement, String> {
-        Ok(self.render_to_buffer(frame.buffer_mut()))
+    pub(super) fn render(
+        &mut self,
+        frame: &mut Frame,
+        db: &app_core::storage::Db,
+    ) -> Result<CursorPlacement, String> {
+        Ok(self.render_to_buffer_with_db(frame.buffer_mut(), db))
     }
 
     /// Paints the whole screen into `buf`, which must cover the terminal area.
+    #[cfg(test)]
     pub(super) fn render_to_buffer(&mut self, buf: &mut Buffer) -> CursorPlacement {
+        self.render_to_buffer_pass(buf, None)
+    }
+
+    fn render_to_buffer_with_db(
+        &mut self,
+        buf: &mut Buffer,
+        db: &app_core::storage::Db,
+    ) -> CursorPlacement {
+        self.render_to_buffer_pass(buf, Some(db))
+    }
+
+    fn render_to_buffer_pass(
+        &mut self,
+        buf: &mut Buffer,
+        db: Option<&app_core::storage::Db>,
+    ) -> CursorPlacement {
         self.render_caches.table_layout_pass = Some(Vec::new());
-        let placement = self.render_to_buffer_pass(buf);
+        let placement = self.render_to_buffer_inner(buf, db);
         self.render_caches.table_layout_pass = None;
         placement
     }
 
-    fn render_to_buffer_pass(&mut self, buf: &mut Buffer) -> CursorPlacement {
+    fn render_to_buffer_inner(
+        &mut self,
+        buf: &mut Buffer,
+        db: Option<&app_core::storage::Db>,
+    ) -> CursorPlacement {
         let (rows, cols) = input::terminal_size();
         let editor_height = rows.saturating_sub(2).max(1);
         let editor_bg = self.render_palette.surface_bg();
@@ -1707,6 +1828,7 @@ impl TerminalApp {
         self.draw_variable_autocomplete_popup(buf, rows, cols);
         self.draw_wiki_link_autocomplete_popup(buf, rows, cols);
         self.draw_wiki_link_preview_popup(buf, rows, cols);
+        self.draw_image_preview_popup(buf, rows, cols, db);
 
         let cursor_block = matches!(
             self.mode,
@@ -2157,6 +2279,8 @@ impl TerminalApp {
             }
         }
 
+        // Image height is known only after the background worker decodes it.
+        // Before then the markdown placeholder remains a single text row.
         DisplayLine {
             text: rendered_line.into_owned(),
             is_cursor_line,

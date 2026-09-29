@@ -37,6 +37,19 @@ impl TerminalApp {
     }
 
     pub(super) fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        if self.image_preview.is_some() {
+            match key {
+                Key::Esc => self.image_preview = None,
+                Key::Char('o') | Key::Char('O') => {
+                    if let Some(preview) = self.image_preview.take() {
+                        self.open_image_externally(db, &preview.src, &preview.alt);
+                    }
+                }
+                Key::Ctrl('q') => self.quit = true,
+                _ => {}
+            }
+            return Ok(());
+        }
         if self.mode != UiMode::Normal {
             self.folds.pending_prefix_until = None;
         }
@@ -76,6 +89,10 @@ impl TerminalApp {
         match key {
             Key::Ctrl('q') => {
                 self.quit = true;
+                return Ok(());
+            }
+            Key::Ctrl('o') if !self.vim_enabled => {
+                self.preview_image_at_cursor(db);
                 return Ok(());
             }
             Key::Ctrl('w') => {
@@ -451,6 +468,17 @@ impl TerminalApp {
             return Ok(());
         }
 
+        if key == Key::Char('x')
+            && matches!(
+                self.vim_state.pending,
+                Some(crate::editor_core::vim::VimPending::Go)
+            )
+        {
+            self.vim_state.pending = None;
+            self.preview_image_at_cursor(db);
+            return Ok(());
+        }
+
         if key == Key::Char('K') {
             if self.wiki_link_preview.visible {
                 self.close_wiki_link_preview();
@@ -812,5 +840,96 @@ impl TerminalApp {
             _ => {}
         }
         Ok(())
+    }
+}
+
+impl TerminalApp {
+    fn preview_image_at_cursor(&mut self, db: &Db) {
+        let Some(image) = crate::editor_core::markdown_tokens::find_markdown_image_at_cursor(
+            self.current_line(),
+            self.editor.cursor_col,
+        ) else {
+            self.status = "no image at cursor".to_string();
+            return;
+        };
+        let graphics = self
+            .graphics
+            .get_or_insert_with(crate::terminal::graphics::GraphicsContext::detect);
+        if !graphics.is_enabled() {
+            self.open_image_externally(db, &image.src, &image.alt);
+            return;
+        }
+        self.image_preview = Some(super::ImagePreviewState {
+            src: image.src,
+            alt: image.alt,
+        });
+        self.close_wiki_link_preview();
+    }
+
+    fn open_image_externally(&mut self, db: &Db, src: &str, alt: &str) {
+        use crate::terminal::external_open;
+        use app_core::note_sources::{NoteImageSource, NoteSourceService};
+        if src.contains("://") {
+            self.status = "remote images are not opened".to_string();
+            return;
+        }
+        let sources = NoteSourceService::new(db.clone());
+        let source = match sources.locate_image_by_id(&self.active_note.id, src) {
+            Ok(Some(source)) => source,
+            Ok(None) => {
+                self.status = "image source is missing".to_string();
+                return;
+            }
+            Err(error) => {
+                self.status = format!("cannot resolve image: {error}");
+                return;
+            }
+        };
+        let (path, temporary) = match source {
+            NoteImageSource::File(path) => (path, false),
+            stored @ NoteImageSource::Stored { .. } => {
+                let image = match sources.read_image(&stored) {
+                    Ok(Some(image)) => image,
+                    Ok(None) => {
+                        self.status = "image source is missing".to_string();
+                        return;
+                    }
+                    Err(error) => {
+                        self.status = format!("cannot read image: {error}");
+                        return;
+                    }
+                };
+                match external_open::write_private_temp_file(&image.bytes, image.extension) {
+                    Ok(path) => (path, true),
+                    Err(error) => {
+                        self.status = format!("cannot prepare image: {error}");
+                        return;
+                    }
+                }
+            }
+        };
+
+        match external_open::open_with_default_app(path.as_os_str()) {
+            Ok(()) => {
+                if temporary {
+                    self.open_image_temp_paths.push(path);
+                }
+                self.status = format!("opened image {alt}");
+            }
+            Err(error) => {
+                if temporary {
+                    external_open::remove_private_temp_file(&path);
+                }
+                self.status = format!("cannot open image: {error}");
+            }
+        }
+    }
+}
+
+impl Drop for TerminalApp {
+    fn drop(&mut self) {
+        for path in self.open_image_temp_paths.drain(..) {
+            crate::terminal::external_open::remove_private_temp_file(&path);
+        }
     }
 }

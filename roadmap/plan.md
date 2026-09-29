@@ -274,27 +274,24 @@ Open: heading scroll after navigation; unambiguous resolution when short-id pref
 
 ## Image Support
 
-Syntax: `![alt](./assets/image.png)`. Import copies files into note-scoped assets and inserts a relative markdown link; `app-core` owns path normalization, size/format limits, and traversal protection. Today the terminal collapses image links to a `[image: alt]` placeholder when the cursor is outside them.
+Syntax: `![alt](./assets/image.png)`. Import copies files into note-scoped assets and inserts a relative markdown link; `app-core` owns path normalization, size/format limits, and traversal protection. In the editor, images remain compact `[image: alt]` placeholders; the raw Markdown is shown while editing the image token.
 
-### Inline rendering (sixel, kitty, iTerm2)
+Open an image under the cursor with `gx` in Vim normal mode or `Ctrl+O` in non-Vim editor mode.
 
-Goal: show images inline in terminals that support a graphics protocol, and keep the text placeholder everywhere else.
+### Preview dialog
 
-- **Protocol detection:** query the terminal once at startup (after entering raw mode) for sixel support (device attributes), the kitty graphics protocol, and iTerm2; honour a `[terminal] images = "auto" | "sixel" | "kitty" | "iterm2" | "off"` config override. Inside tmux, use passthrough when enabled, otherwise fall back to the placeholder.
-- **Library:** use `ratatui-image` (sixel/kitty/iTerm2/half-block backends) if its release for ratatui 0.30 is usable; otherwise encode sixel ourselves with a small encoder crate and write it through the crossterm backend.
-- **Layout:** an image line reserves N rows below it (N from image aspect ratio and a `max_rows` cap), counted by the wrap layout and the scroll fit-up like continuation rows, so cursor placement and scrolling stay exact. The markdown line stays editable; the cursor never enters the image rows.
-- **Rendering:** images are drawn after the ratatui diff flush (graphics are not cells), only for images fully inside the viewport. When the frame changes under an image, clear and redraw it; skip redraws when the image rect and scroll position are unchanged.
-- **Caching:** decode and resize off the input path into a per-path cache keyed by (path, mtime, cell size); show the placeholder until the image is ready.
-- **Fallbacks:** unsupported terminal, missing file, or `images = "off"` keeps the current `[image: alt]` placeholder. Remote URLs are not fetched.
+Render images in a bounded dialog instead of reserving rows in the document viewport.
+
+- **Protocol detection:** query the terminal once, on the first preview (startup never pays for it), for sixel support, the kitty graphics protocol, iTerm2, and the cell size in pixels; honour a `[terminal] images = "auto" | "sixel" | "kitty" | "iterm2" | "halfblocks" | "off"` config override, which replaces only the protocol and keeps the queried cell size. Inside tmux, use passthrough when `allow-passthrough` is on (including inherited global values), otherwise use the external viewer.
+- **Rendering:** use `ratatui-image` (sixel/kitty/iTerm2/half-block backends) in a bounded dialog. Escape closes it; image rows do not affect document wrapping, cursor placement, or scrolling.
+- **Caching:** decode and resize off the input path into a bounded cache keyed by note, source, and dialog dimensions. Rechecks compare a cheap stamp (file metadata or the stored image row) and never re-read unchanged image bytes.
+- **Fallbacks:** failed previews offer the external viewer with `o`; `images = "off"` opens the external viewer directly. Remote images are not fetched.
 
 ### Checklist
 
-- [ ] Image token/match helpers in `editor-core` with tokenizer tests
-- [ ] Path sanitization and traversal protection tests
+- [x] Image token/match helpers in `editor-core` with tokenizer tests
+- [x] Path sanitization and traversal protection tests
 - [x] Terminal placeholder rendering outside the caret, raw markdown inside the caret
-- [ ] Protocol detection + `[terminal] images` config
-- [ ] Reserved image rows in the wrap layout and scroll fit-up
-- [ ] Sixel rendering (then kitty and iTerm2) after the frame flush, viewport-only
-- [ ] Background decode/resize cache
-- [ ] Open-image-at-cursor action (external viewer)
-- [ ] Perf checks for notes with many image references
+- [x] Protocol detection + `[terminal] images` config
+- [x] Bounded preview dialog with background decode/resize cache
+- [x] Open-image-at-cursor action with external-viewer fallback

@@ -1013,6 +1013,16 @@ pub fn wiki_link_at_cursor(text: &str, cursor_col: usize) -> Option<WikiLinkMatc
         .find(|entry| cursor_col >= entry.from && cursor_col <= entry.to)
 }
 
+pub fn find_markdown_image_at_cursor(
+    text: &str,
+    cursor_col: usize,
+) -> Option<MarkdownImageMatch> {
+    let images = find_markdown_image_matches(text);
+    images
+        .into_iter()
+        .find(|entry| cursor_col >= entry.from && cursor_col <= entry.to)
+}
+
 pub fn find_markdown_image_matches(text: &str) -> Vec<MarkdownImageMatch> {
     let tokens = tokenize_inline_markdown(text);
     let chars: Vec<char> = text.chars().collect();
@@ -1559,6 +1569,33 @@ mod tests {
         assert_eq!(matches[1].src, "./empty-alt.jpg");
         assert_eq!(matches[1].width, None);
         assert_eq!(matches[1].height, None);
+    }
+
+    #[test]
+    fn find_markdown_image_at_cursor_finds_image_at_boundaries() {
+        let text = "prev ![my image](./img.png) next";
+        let start = text.find("![").unwrap();
+        let end = text.find(')').unwrap();
+
+        assert!(find_markdown_image_at_cursor(text, start.saturating_sub(1)).is_none());
+        assert_eq!(
+            find_markdown_image_at_cursor(text, start).unwrap().src,
+            "./img.png"
+        );
+        assert_eq!(
+            find_markdown_image_at_cursor(text, start + 5).unwrap().alt,
+            "my image"
+        );
+        assert_eq!(
+            find_markdown_image_at_cursor(text, end).unwrap().src,
+            "./img.png"
+        );
+        // at right boundary (token.to)
+        assert_eq!(
+            find_markdown_image_at_cursor(text, end + 1).unwrap().src,
+            "./img.png"
+        );
+        assert!(find_markdown_image_at_cursor(text, end + 2).is_none());
     }
 
     #[test]

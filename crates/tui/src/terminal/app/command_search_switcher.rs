@@ -3106,34 +3106,5 @@ fn open_browser_url(url: &str) -> Result<(), String> {
     if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
         return Err("only HTTP(S) URLs can be opened".to_string());
     }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(parsed.as_str())
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| format!("xdg-open failed: {err}"))
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(parsed.as_str())
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| format!("open failed: {err}"))
-    }
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("rundll32.exe")
-            .arg("url.dll,FileProtocolHandler")
-            .arg(parsed.as_str())
-            .spawn()
-            .map(|_| ())
-            .map_err(|err| format!("browser launcher failed: {err}"))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    {
-        Err("opening browser links is unsupported on this platform".to_string())
-    }
+    crate::terminal::external_open::open_with_default_app(parsed.as_str().as_ref())
 }
