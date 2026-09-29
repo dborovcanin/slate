@@ -1902,3 +1902,120 @@ fn cross_note_values_show_in_viewport_evaluated_large_notes() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn large_note_deleting_an_assignment_updates_visible_results_immediately() {
+    let mut lines = vec![
+        "title".to_string(),
+        "base := 1".to_string(),
+        "note".to_string(),
+    ];
+    lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+    let (db, mut app, path) = app_with_note(&lines.join("\n"));
+    app.mode = UiMode::Normal;
+    render_screen(&mut app);
+    assert!(app.calc_runtime.viewport_only);
+    assert_eq!(app.calc.results[3].as_deref(), Some("3"));
+
+    app.editor.cursor_line = 1;
+    for key in "dd".chars() {
+        app.handle_key(&db, Key::Char(key)).expect("dd");
+    }
+    assert!(!app.calc_runtime.recompute_pending);
+    assert_eq!(app.calc.results.len(), app.editor.lines.len());
+    assert_ne!(
+        app.calc.results[2].as_deref(),
+        Some("3"),
+        "base is gone, so base + 2 must not keep its old value"
+    );
+
+    app.handle_key(&db, Key::Char('u')).expect("undo");
+    assert_eq!(app.editor.lines[1], "base := 1");
+    assert_eq!(app.calc.results[3].as_deref(), Some("3"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
+    let pool = [
+        "base := 2",
+        "rate := base * 3",
+        "base + rate",
+        "rate * 4",
+        "prose with 7 words",
+        "plain words",
+        "",
+        "12 + 30",
+        "base := 5",
+    ];
+    let mut lines: Vec<String> = (0..2_300)
+        .map(|i| pool[i % pool.len()].to_string())
+        .collect();
+    lines.insert(0, "title".to_string());
+    let (db, mut app, path) = app_with_note(&lines.join("\n"));
+    app.mode = UiMode::Normal;
+    render_screen(&mut app);
+    assert!(app.calc_runtime.viewport_only);
+
+    let mut seed = 0x51_7cc1_b727_220au64;
+    let mut next = |bound: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % bound.max(1) as u64) as usize
+    };
+    for step in 0..120 {
+        let visible = app.editor_height().min(app.editor.lines.len());
+        app.editor.cursor_line = app.editor.scroll_line + next(visible.saturating_sub(1));
+        app.editor.cursor_col = 0;
+        let keys: Vec<Key> = match next(6) {
+            0 => "dd".chars().map(Key::Char).collect(),
+            1 => "yyp".chars().map(Key::Char).collect(),
+            2 => {
+                let mut keys = vec![Key::Char('o')];
+                keys.extend(pool[next(pool.len())].chars().map(Key::Char));
+                keys.push(Key::Esc);
+                keys
+            }
+            3 => vec![Key::Char('x')],
+            4 => vec![Key::Char('A'), Key::Enter, Key::Esc],
+            _ => vec![Key::Char('u')],
+        };
+        for key in keys {
+            app.handle_key(&db, key).expect("key");
+        }
+        render_screen(&mut app);
+        // Typing defers calc to the idle tick; run it as a pause would.
+        if app.calc_runtime.recompute_pending {
+            app.last_edit = Instant::now() - Duration::from_secs(1);
+            app.maybe_recompute_calc_after_idle();
+            assert!(!app.calc_runtime.recompute_pending);
+        }
+
+        let fresh = crate::terminal::app::compute_calc_data(
+            &app.calc.engine,
+            &app.editor.lines,
+            true,
+            false,
+            true,
+            None,
+            Vec::new(),
+        );
+        let first = app.editor.scroll_line;
+        let last = (first + app.editor_height()).min(app.editor.lines.len());
+        for line in first..last {
+            assert_eq!(
+                app.calc.results[line], fresh.line_results[line],
+                "step {step}, line {line}: {:?}",
+                app.editor.lines[line]
+            );
+        }
+    }
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

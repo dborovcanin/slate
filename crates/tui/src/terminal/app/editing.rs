@@ -432,9 +432,12 @@ impl TerminalApp {
     }
 
     fn ensure_calc_line_metadata(&mut self) {
-        if self.calc.line_metadata.len() != self.editor.lines.len() {
-            self.rebuild_calc_line_metadata();
-        }
+        let mask = self.calc_feature_mask();
+        crate::editor_core::calc_plan::sync_line_metadata(
+            &mut self.calc.line_metadata,
+            &self.editor.lines,
+            mask,
+        );
     }
 
     fn refresh_calc_line_metadata_at(&mut self, line_idx: usize) {
@@ -459,6 +462,22 @@ impl TerminalApp {
     ) {
         if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
             return;
+        }
+        let old_len = self.calc.line_metadata.len();
+        if start_line + old_line_span <= old_len {
+            let removed_affects_calc = self.calc.line_metadata
+                [start_line..start_line + old_line_span]
+                .iter()
+                .any(|meta| meta.has_assignment || meta.has_builtin_formula);
+            self.calc
+                .pending_result_splices
+                .push(crate::terminal::calc_cache::ResultSplice {
+                    start: start_line,
+                    old_span: old_line_span,
+                    new_span: new_line_span,
+                    old_len,
+                    removed_affects_calc,
+                });
         }
         // Core recomputes metadata only for the replaced lines, or returns false
         // when dimensions are inconsistent so we fall back to a full rebuild
@@ -558,6 +577,108 @@ impl TerminalApp {
         Duration::from_millis(CALC_RECOMPUTE_DEBOUNCE_MS)
     }
 
+    /// Whether any of `lines` takes part in calc: tables, assignments,
+    /// builtin formulas or calc expressions.
+    fn lines_affect_calc(&self, lines: &[String]) -> bool {
+        let mask = self.calc_feature_mask();
+        (mask.table_enabled && lines.iter().any(|line| is_markdown_table_line(line)))
+            || crate::editor_core::calc_plan::contains_variable_assignment_with_mask(lines, mask)
+            || crate::editor_core::calc_plan::contains_builtin_formula_with_mask(lines, mask)
+            || lines.iter().any(|line| {
+                let eval_target =
+                    crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask);
+                let trimmed = eval_target.trim();
+                !trimmed.is_empty() && crate::editor_core::calc_plan::has_calc_signal(trimmed)
+            })
+    }
+
+    /// Viewport-only notes after an edit that may insert, delete or replace
+    /// lines: shifts cached results so unchanged lines keep their values and
+    /// re-evaluates only the viewport, and only when the changed lines take
+    /// part in calc. The whole note is never evaluated on the keystroke.
+    fn refresh_viewport_calc_after_edit(&mut self) {
+        let next_len = self.editor.lines.len();
+        let splices = std::mem::take(&mut self.calc.pending_result_splices);
+        let new_hashes = crate::editor_core::calc_plan::hash_lines(&self.editor.lines);
+        let mut needs_eval = true;
+        if !splices.is_empty() && self.calc.cell_results.len() == self.calc.results.len() {
+            // The edit already spliced the metadata; replay it on the results.
+            needs_eval = splices.len() > 1;
+            for splice in &splices {
+                if self.calc.results.len() != splice.old_len {
+                    needs_eval = true;
+                    break;
+                }
+                let old_range = splice.start..splice.start + splice.old_span;
+                self.calc
+                    .results
+                    .splice(old_range.clone(), vec![None; splice.new_span]);
+                self.calc
+                    .cell_results
+                    .splice(old_range, vec![Vec::new(); splice.new_span]);
+                let new_lines = self
+                    .editor
+                    .lines
+                    .get(splice.start..splice.start + splice.new_span)
+                    .unwrap_or(&[]);
+                needs_eval |= splice.removed_affects_calc || self.lines_affect_calc(new_lines);
+            }
+        } else if !self.calc.line_metadata.is_empty()
+            && self.calc.line_metadata.len() == self.calc.results.len()
+            && self.calc.cell_results.len() == self.calc.results.len()
+        {
+            let old_hashes: Vec<u64> = self.calc.line_metadata.iter().map(|m| m.hash).collect();
+            match crate::editor_core::calc_plan::changed_line_span(&old_hashes, &new_hashes) {
+                None => needs_eval = false,
+                Some((from, old_to, new_to)) => {
+                    let removed_mattered = self.calc.line_metadata[from..old_to]
+                        .iter()
+                        .any(|meta| meta.has_assignment || meta.has_builtin_formula);
+                    needs_eval = removed_mattered
+                        || self.lines_affect_calc(&self.editor.lines[from..new_to]);
+                    let span = new_to - from;
+                    self.calc.results.splice(from..old_to, vec![None; span]);
+                    self.calc
+                        .cell_results
+                        .splice(from..old_to, vec![Vec::new(); span]);
+                }
+            }
+        }
+        if self.calc.results.len() != next_len || self.calc.cell_results.len() != next_len {
+            self.calc.results = vec![None; next_len];
+            self.calc.cell_results = vec![Vec::new(); next_len];
+            needs_eval = true;
+        }
+
+        let mask = self.calc_feature_mask();
+        if self.calc.line_metadata.len() == next_len {
+            for (idx, hash) in new_hashes.iter().enumerate() {
+                if self.calc.line_metadata[idx].hash != *hash {
+                    self.calc.line_metadata[idx] =
+                        crate::editor_core::calc_plan::line_metadata_with_mask(
+                            &self.editor.lines[idx],
+                            mask,
+                        );
+                }
+            }
+        } else {
+            crate::editor_core::calc_plan::sync_line_metadata(
+                &mut self.calc.line_metadata,
+                &self.editor.lines,
+                mask,
+            );
+        }
+
+        if needs_eval {
+            let editor_height = self.editor_height();
+            self.ensure_calc_for_viewport(editor_height, true);
+        }
+        self.calc_runtime.recompute_pending = false;
+        self.calc_runtime.recompute_due_at = None;
+        self.calc_runtime.pending_viewport_pass = false;
+        self.calc_runtime.pending_full_pass = false;
+    }
+
     fn schedule_calc_recompute(&mut self, viewport_pass: bool, full_pass: bool) {
         self.calc_runtime.recompute_pending = true;
         self.calc_runtime.pending_viewport_pass |= viewport_pass;
@@ -637,38 +758,17 @@ impl TerminalApp {
         let prev_changed_had_builtin_formula = prev_changed_slice
             .iter()
             .any(|entry| entry.has_builtin_formula);
-        let mask = self.calc_feature_mask();
         let changed_lines = self
             .editor
             .lines
             .get(changed_from..changed_to_next)
             .unwrap_or(&[]);
-        let changed_touches_table = mask.table_enabled
-            && changed_lines
-                .iter()
-                .any(|line| is_markdown_table_line(line));
-        let changed_has_assignment =
-            crate::editor_core::calc_plan::contains_variable_assignment_with_mask(
-                changed_lines,
-                mask,
-            );
-        let changed_has_builtin_formula =
-            crate::editor_core::calc_plan::contains_builtin_formula_with_mask(changed_lines, mask);
-        let changed_has_calc_expression = changed_lines.iter().any(|line| {
-            let eval_target =
-                crate::editor_core::calc_plan::line_for_calc_evaluation_with_mask(line, mask);
-            let trimmed = eval_target.trim();
-            !trimmed.is_empty() && crate::editor_core::calc_plan::has_calc_signal(trimmed)
-        });
 
         // Safe remap-only path: only line index shifting happened, and changed
         // lines don't participate in calc semantics.
-        if changed_touches_table
-            || prev_changed_had_assignment
-            || changed_has_assignment
+        if prev_changed_had_assignment
             || prev_changed_had_builtin_formula
-            || changed_has_builtin_formula
-            || changed_has_calc_expression
+            || self.lines_affect_calc(changed_lines)
         {
             return false;
         }
@@ -769,6 +869,18 @@ impl TerminalApp {
         }
         // Process any pending deferred recompute first.
         if self.folds.rescan_pending {
+            if self.folds.collapsed_starts.is_empty() {
+                // Nothing is hidden, so stale ranges do not change what is
+                // shown: keep the view map sized to the note and leave the
+                // O(N) rescan to the idle tick (fold commands force it).
+                if self.folds.real_to_visible.len() != self.editor.lines.len() {
+                    self.folds.ranges.clear();
+                    self.folds.range_by_start = vec![None; self.editor.lines.len()];
+                    self.rebuild_fold_view_map();
+                }
+                self.folds.analysis_ready = false;
+                return;
+            }
             self.folds.rescan_pending = false;
             self.recompute_folding();
             return;
@@ -1298,6 +1410,7 @@ impl TerminalApp {
     ) {
         let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         let line_count_changed = self.editor.lines.len() != self.calc.results.len();
+        let viewport_structural = line_count_changed && self.calc_runtime.viewport_only;
         self.invalidate_joined_text_cache();
         self.render_caches.table_formula_segment_cache.clear();
         self.dirty = true;
@@ -1333,7 +1446,9 @@ impl TerminalApp {
             self.calc_runtime.pending_full_pass = false;
         } else {
             if self.editor.lines.len() >= CALC_ASYNC_MIN_LINES {
-                if line_count_changed {
+                if viewport_structural {
+                    self.refresh_viewport_calc_after_edit();
+                } else if line_count_changed {
                     // Structural edits (Enter/join/delete-at-boundary): try a
                     // cheap remap-only path first, and recompute only when
                     // changed lines may affect calc semantics.
@@ -1351,12 +1466,28 @@ impl TerminalApp {
                     if let Some(slot) = self.calc.cell_results.get_mut(self.editor.cursor_line) {
                         slot.clear();
                     }
+                    // Keep the edited lines' metadata current so a later
+                    // structural edit diffs against what is actually there.
+                    let (start, span) = match history_span {
+                        Some((start, old_span, new_span)) if old_span == new_span => {
+                            (start, new_span)
+                        }
+                        _ => (self.editor.cursor_line, 1),
+                    };
+                    for line_idx in start..start + span {
+                        self.refresh_calc_line_metadata_at(line_idx);
+                    }
+                    if !(start..start + span).contains(&self.editor.cursor_line) {
+                        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
+                    }
                     self.schedule_calc_recompute(true, true);
                 }
             } else {
                 self.run_calc_recompute();
             }
         }
+        // Splices are only meaningful for the edit that recorded them.
+        self.calc.pending_result_splices.clear();
         self.record_history_after_edit(coalesce_undo, history_span);
         self.last_edit = Instant::now();
     }
@@ -1433,7 +1564,13 @@ impl TerminalApp {
             // Full lines replacement: invalidate all caches.
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
-            self.run_calc_recompute();
+            if self.calc_runtime.viewport_only {
+                // History swaps lines without splicing metadata.
+                self.calc.pending_result_splices.clear();
+                self.refresh_viewport_calc_after_edit();
+            } else {
+                self.run_calc_recompute();
+            }
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();
@@ -1460,7 +1597,13 @@ impl TerminalApp {
             }
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
-            self.run_calc_recompute();
+            if self.calc_runtime.viewport_only {
+                // History swaps lines without splicing metadata.
+                self.calc.pending_result_splices.clear();
+                self.refresh_viewport_calc_after_edit();
+            } else {
+                self.run_calc_recompute();
+            }
             self.recompute_folding();
             self.adjust_cursor();
             self.adjust_scroll();

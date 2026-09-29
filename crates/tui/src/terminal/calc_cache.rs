@@ -1,5 +1,17 @@
 use app_core::calc::CalcEngine;
 
+/// One replacement of old lines `[start, start + old_span)` by `new_span`
+/// lines, applied to a line list of length `old_len`.
+#[derive(Debug, Clone, Copy)]
+pub struct ResultSplice {
+    pub start: usize,
+    pub old_span: usize,
+    pub new_span: usize,
+    pub old_len: usize,
+    /// The removed lines assigned a variable or held a builtin formula.
+    pub removed_affects_calc: bool,
+}
+
 /// Calc evaluation state kept between keystrokes to enable incremental updates.
 pub struct CalcCache {
     pub engine: CalcEngine,
@@ -8,6 +20,9 @@ pub struct CalcCache {
     pub variable_names: crate::terminal::render::VariableNames,
     /// Whole-note calc preparation reused across viewport range evaluations.
     pub range_context: app_core::calc::NoteContextCache,
+    /// Line splices applied to `line_metadata` since `results` last matched
+    /// it, so viewport notes can shift results instead of re-evaluating.
+    pub pending_result_splices: Vec<ResultSplice>,
     pub calc_dependency_index: Option<crate::editor_core::calc_plan::CalcDependencyIndex>,
     /// Metadata for current `lines`, incrementally patched on edits.
     pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,

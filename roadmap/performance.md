@@ -34,7 +34,7 @@ cargo test --release -p slate --lib large_note_perf -- --ignored --nocapture
 
 Generates a note (prose, images, tables with formulas, variables with duplicate assignments and chapter-long running totals, wiki links and cross-note references to two linked notes), then times navigation, typing, structural edits, undo/redo, search, open and idle ticks. Each sample is one action's key handling plus the repaint after it. The test fails when a p95 exceeds its limit in `perf/baselines/large_note.json`; `node scripts/perf-check.mjs` runs it in CI.
 
-`SLATE_LARGE_NOTE_SIZES=30000,100000` measures other line counts; sizes without limits are reported only. At 100k lines structural edits currently take seconds, so that size stays out of CI until they are fixed.
+`SLATE_LARGE_NOTE_SIZES=30000,100000` measures other line counts; sizes without limits are reported only. At 100k lines scrolling still costs ~100 ms per step and line deletes ~175 ms, so that size stays out of CI until those scale with the viewport rather than the note.
 
 ## Runtime Tracing
 

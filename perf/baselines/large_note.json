@@ -4,21 +4,21 @@
   "limits_p95_ms": {
     "30000": {
       "open": 250,
-      "idle_tick": 150,
+      "idle_tick": 100,
       "scroll_line": 25,
       "scroll_jump": 25,
       "jump_top_bottom": 25,
       "search": 60,
       "type_prose": 25,
       "type_calc": 5,
-      "type_table": 40,
+      "type_table": 10,
       "delete_char": 5,
-      "enter": 400,
-      "open_line": 20,
-      "delete_line": 750,
-      "paste_line": 400,
-      "undo": 250,
-      "redo": 250
+      "enter": 10,
+      "open_line": 10,
+      "delete_line": 80,
+      "paste_line": 60,
+      "undo": 80,
+      "redo": 80
     }
   }
 }

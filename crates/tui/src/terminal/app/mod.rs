@@ -1117,6 +1117,7 @@ impl TerminalApp {
                 cell_results: calc_data.cell_results,
                 variable_names: calc_data.variable_names.into(),
                 range_context: Default::default(),
+                pending_result_splices: Vec::new(),
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
