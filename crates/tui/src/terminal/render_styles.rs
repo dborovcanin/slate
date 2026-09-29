@@ -97,6 +97,40 @@ impl VariableNames {
             })
             .as_ref()
     }
+
+    /// Byte ranges of variable names in `text`, matched ASCII
+    /// case-insensitively on word boundaries. Left-most matches win, and the
+    /// longer name wins among matches that start together.
+    pub fn find_ranges(&self, text: &str) -> Vec<(usize, usize)> {
+        if text.is_empty() {
+            return Vec::new();
+        }
+        let Some(matcher) = self.matcher() else {
+            return Vec::new();
+        };
+
+        let bytes = text.as_bytes();
+        let mut matches: Vec<(usize, usize)> = matcher
+            .find_overlapping_iter(text)
+            .map(|found| (found.start(), found.end()))
+            .filter(|&(start, end)| has_variable_word_boundaries(bytes, start, end))
+            .collect();
+
+        if matches.len() <= 1 {
+            return matches;
+        }
+
+        matches.sort_by(|a, b| a.0.cmp(&b.0).then((b.1 - b.0).cmp(&(a.1 - a.0))));
+
+        let mut deduped: Vec<(usize, usize)> = Vec::new();
+        for candidate in matches {
+            if deduped.last().is_some_and(|last| candidate.0 < last.1) {
+                continue;
+            }
+            deduped.push(candidate);
+        }
+        deduped
+    }
 }
 
 impl std::ops::Deref for VariableNames {
@@ -113,44 +147,6 @@ impl From<Vec<String>> for VariableNames {
     }
 }
 
-fn find_variable_ranges(text: &str, variable_names: &VariableNames) -> Vec<(usize, usize)> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-    let Some(matcher) = variable_names.matcher() else {
-        return Vec::new();
-    };
-
-    // Byte ranges, matched ASCII case-insensitively against the trimmed names.
-    let bytes = text.as_bytes();
-    let mut matches: Vec<(usize, usize)> = matcher
-        .find_overlapping_iter(text)
-        .map(|found| (found.start(), found.end()))
-        .filter(|&(start, end)| has_variable_word_boundaries(bytes, start, end))
-        .collect();
-
-    if matches.len() <= 1 {
-        return matches;
-    }
-
-    // Prefer left-most ranges; for overlaps at same start, keep longer match.
-    matches.sort_by(|a, b| a.0.cmp(&b.0).then((b.1 - b.0).cmp(&(a.1 - a.0))));
-
-    let mut deduped = Vec::new();
-    for candidate in matches {
-        let Some(last) = deduped.last() else {
-            deduped.push(candidate);
-            continue;
-        };
-        if candidate.0 < last.1 {
-            continue;
-        }
-        deduped.push(candidate);
-    }
-
-    deduped
-}
-
 pub(super) fn apply_variable_styles(
     chars: &[char],
     styles: &mut [CharStyle],
@@ -165,7 +161,17 @@ pub(super) fn apply_variable_styles(
     }
 
     let text: String = chars.iter().collect();
-    for (start, end) in find_variable_ranges(&text, variable_names) {
+    let ascii = text.is_ascii();
+    // `styles` is indexed by char; matches are byte ranges into `text`.
+    let char_idx = |byte: usize| {
+        if ascii {
+            byte
+        } else {
+            text[..byte].chars().count()
+        }
+    };
+    for (start, end) in variable_names.find_ranges(&text) {
+        let (start, end) = (char_idx(start), char_idx(end));
         for style in styles.iter_mut().take(end).skip(start) {
             style.fg = Some(variable_color);
             style.bold = true;
@@ -336,12 +342,9 @@ mod tests {
             " Tax Rate ".to_string(),
             String::new(),
         ]);
-        assert_eq!(
-            find_variable_ranges("tax rates TAX", &names),
-            vec![(0, 3), (10, 13)]
-        );
-        assert_eq!(find_variable_ranges("x = tax rate", &names), vec![(4, 12)]);
-        assert_eq!(find_variable_ranges("syntax", &names), Vec::new());
+        assert_eq!(names.find_ranges("tax rates TAX"), vec![(0, 3), (10, 13)]);
+        assert_eq!(names.find_ranges("x = tax rate"), vec![(4, 12)]);
+        assert_eq!(names.find_ranges("syntax"), Vec::new());
     }
 
     #[test]

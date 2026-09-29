@@ -1349,6 +1349,23 @@ mod tests {
         assert!(is_bold_with_fg(&different_case.buf[(0, 0)], palette.variable));
     }
 
+    #[test]
+    fn render_variable_highlighting_aligns_after_non_ascii_text() {
+        let mut ctx = RenderContext::new();
+        let palette = RenderPalette::default();
+        let vars = VariableNames::new(vec!["total".to_string()]);
+        let deco = LineDecorations {
+            variable_names: Some(&vars),
+            ..LineDecorations::default()
+        };
+        // "é" is two bytes but one cell; "total" occupies columns 4..9.
+        let out = render(&mut ctx, "é = total + 1", 40, 0, deco);
+        assert!(!is_bold_with_fg(&out.buf[(3, 0)], palette.variable));
+        assert!(is_bold_with_fg(&out.buf[(4, 0)], palette.variable));
+        assert!(is_bold_with_fg(&out.buf[(8, 0)], palette.variable));
+        assert!(!is_bold_with_fg(&out.buf[(9, 0)], palette.variable));
+    }
+
     fn assert_search_colors(palette: RenderPalette) {
         let mut ctx = RenderContext::new_with_palette(palette);
         let deco = LineDecorations {
