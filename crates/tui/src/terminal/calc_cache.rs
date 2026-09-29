@@ -6,6 +6,8 @@ pub struct CalcCache {
     pub results: Vec<Option<String>>,
     pub cell_results: Vec<Vec<app_core::calc::TableCellEvaluation>>,
     pub variable_names: crate::terminal::render::VariableNames,
+    /// Whole-note calc preparation reused across viewport range evaluations.
+    pub range_context: app_core::calc::NoteContextCache,
     pub calc_dependency_index: Option<crate::editor_core::calc_plan::CalcDependencyIndex>,
     /// Metadata for current `lines`, incrementally patched on edits.
     pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,

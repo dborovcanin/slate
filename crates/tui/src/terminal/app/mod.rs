@@ -1116,6 +1116,7 @@ impl TerminalApp {
                 results: calc_data.line_results,
                 cell_results: calc_data.cell_results,
                 variable_names: calc_data.variable_names.into(),
+                range_context: Default::default(),
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,

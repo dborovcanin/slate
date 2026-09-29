@@ -1,6 +1,6 @@
 use super::{
-    build_variable_suggestions, compute_calc_data, compute_calc_data_for_note,
-    compute_calc_trailer_refresh, contains_assignment_operator,
+    build_variable_suggestions, compute_calc_data, compute_calc_data_cached,
+    compute_calc_data_for_note, compute_calc_trailer_refresh, contains_assignment_operator,
     cross_note_exports_for_autocomplete, display_cols_for_prefix,
     extract_cross_note_completion_prefix, extract_variable_completion_prefix,
     variable_completion_candidates,
@@ -3773,7 +3773,7 @@ impl TerminalApp {
         } else {
             Vec::new()
         };
-        let calc_data = compute_calc_data(
+        let calc_data = compute_calc_data_cached(
             &self.calc.engine,
             &self.editor.lines,
             vars_enabled,
@@ -3781,6 +3781,7 @@ impl TerminalApp {
             self.note_table_module_enabled(),
             Some((eval_from, eval_to)),
             extern_vars,
+            &mut self.calc.range_context,
         );
         if self.calc.results.len() != self.editor.lines.len() {
             self.calc.results = vec![None; self.editor.lines.len()];

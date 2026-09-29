@@ -1,6 +1,6 @@
 use regex::{Regex, RegexBuilder};
 use table_syntax::{is_table_line, split_table_cells, table_pipe_positions};
-use rustc_hash::{FxHashMap, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
@@ -273,6 +273,33 @@ struct VariableResolver<'a> {
     raw_eval_cache: FxHashMap<String, Option<String>>,
 }
 
+/// Variables already resolved against one set of definitions.
+#[derive(Default)]
+struct ResolvedVariables {
+    states: FxHashMap<String, ResolveState>,
+    values: FxHashMap<String, String>,
+}
+
+/// The whole-document part of a note evaluation: cross-note substitution,
+/// variable definitions and the variables resolved so far. Evaluating another
+/// range of the same note state reuses it instead of rescanning every line.
+struct PreparedNoteContext {
+    key: u64,
+    /// The note with cross-note references replaced by their values; `None`
+    /// when nothing was substituted and the original lines apply.
+    eval_lines: Option<Vec<String>>,
+    lines_with_unresolved: FxHashSet<usize>,
+    cross_note_refs: Vec<CrossNoteRef>,
+    defs: FxHashMap<String, VariableDefinition>,
+    variables: Vec<VariableIndexEntry>,
+    variable_regex: Option<Regex>,
+    resolved: ResolvedVariables,
+}
+
+/// Reusable state for `CalcEngine::evaluate_note_context_cached`.
+#[derive(Default)]
+pub struct NoteContextCache(Option<PreparedNoteContext>);
+
 static VARIABLE_REGEX_CACHE: OnceLock<Mutex<FxHashMap<u64, Regex>>> = OnceLock::new();
 static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
 static CROSS_NOTE_REF_RE: OnceLock<Regex> = OnceLock::new();
@@ -334,19 +361,27 @@ fn table_ref_error_code(value: &str) -> Option<String> {
 }
 
 impl<'a> VariableResolver<'a> {
-    fn new(defs: &'a FxHashMap<String, VariableDefinition>) -> Self {
-        let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
-        // Longest-first so leftmost-first regex alternation picks the longest match.
-        names_sorted.sort_by_key(|name| (Reverse(name.len()), name.clone()));
-        let variable_regex = cached_variable_regex(&names_sorted);
-
+    /// A resolver that starts from `resolved`, the states and values an
+    /// earlier evaluation of the same definitions left behind.
+    fn with_resolved(
+        defs: &'a FxHashMap<String, VariableDefinition>,
+        variable_regex: Option<Regex>,
+        resolved: ResolvedVariables,
+    ) -> Self {
         Self {
             defs,
             variable_regex,
-            states: FxHashMap::default(),
-            values: FxHashMap::default(),
+            states: resolved.states,
+            values: resolved.values,
             diagnostics: Vec::new(),
             raw_eval_cache: FxHashMap::default(),
+        }
+    }
+
+    fn into_resolved(self) -> ResolvedVariables {
+        ResolvedVariables {
+            states: self.states,
+            values: self.values,
         }
     }
 
@@ -670,295 +705,368 @@ impl CalcEngine {
         })
     }
 
+    /// Like `evaluate_note_context`, but keeps the whole-document preparation
+    /// (cross-note substitution, variable definitions, resolved variables) in
+    /// `cache` and reuses it while `lines` and the options stay the same, so
+    /// evaluating successive ranges of an unchanged note only costs the range.
+    /// Diagnostics then cover only variables resolved by this call.
+    pub fn evaluate_note_context_cached(
+        &self,
+        lines: &[String],
+        options: NoteEvaluationOptions,
+        cache: &mut NoteContextCache,
+    ) -> NoteEvaluationResult {
+        let generation = current_eval_generation();
+        with_eval_generation(generation, || {
+            let key = note_context_key(lines, &options);
+            let mut prepared = match cache.0.take() {
+                Some(prepared) if prepared.key == key => prepared,
+                _ => prepare_note_context(lines, &options, key),
+            };
+            let result = evaluate_prepared(lines, &mut prepared, options);
+            // An interrupted evaluation may have recorded failures that are
+            // not real; only keep state from a completed one.
+            if current_eval_generation() == generation {
+                cache.0 = Some(prepared);
+            }
+            result
+        })
+    }
+
     fn evaluate_note_context_inner(
         &self,
         lines: &[String],
         options: NoteEvaluationOptions,
     ) -> NoteEvaluationResult {
-        let mut ctx = new_context();
+        let mut prepared = prepare_note_context(lines, &options, 0);
+        evaluate_prepared(lines, &mut prepared, options)
+    }
+}
 
-        // Build extern_vars lookup and preprocess lines for cross-note refs.
-        // Use precomputed_refs when available to avoid rescanning the same lines.
-        let (eval_lines, cross_note_refs, lines_with_unresolved) = if options.cross_note_enabled
-            && !options.extern_vars.is_empty()
-        {
-            let extern_map: FxHashMap<(String, String), f64> = options
-                .extern_vars
-                .iter()
-                .map(|ev| {
-                    (
-                        (ev.note_short_id.clone(), ev.var_normalized.clone()),
-                        ev.value,
-                    )
-                })
-                .collect();
-            let refs = options
-                .precomputed_refs
-                .unwrap_or_else(|| scan_cross_note_refs(lines));
-            let mut unresolved_set: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
-            let mut rewritten: Vec<Cow<'_, str>> = Vec::with_capacity(lines.len());
-            let mut any_rewritten = false;
-            for (idx, line) in lines.iter().enumerate() {
-                let (new_line, has_unresolved) = preprocess_line_cross_note(line, &extern_map);
-                if has_unresolved {
-                    unresolved_set.insert(idx);
-                }
-                any_rewritten |= matches!(new_line, Cow::Owned(_));
-                rewritten.push(new_line);
+/// Identifies the note state a `PreparedNoteContext` was built from.
+fn note_context_key(lines: &[String], options: &NoteEvaluationOptions) -> u64 {
+    let mut hasher = FxHasher::default();
+    lines.hash(&mut hasher);
+    (
+        options.variables_enabled,
+        options.table_enabled,
+        options.cross_note_enabled,
+    )
+        .hash(&mut hasher);
+    // Order-independent: the caller may list extern values in any order.
+    let mut externs = 0u64;
+    for var in &options.extern_vars {
+        let mut entry = FxHasher::default();
+        (&var.note_short_id, &var.var_normalized, var.value.to_bits()).hash(&mut entry);
+        externs = externs.wrapping_add(entry.finish());
+    }
+    externs.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn prepare_note_context(
+    lines: &[String],
+    options: &NoteEvaluationOptions,
+    key: u64,
+) -> PreparedNoteContext {
+    let cross_note_refs = if options.cross_note_enabled {
+        options
+            .precomputed_refs
+            .clone()
+            .unwrap_or_else(|| scan_cross_note_refs(lines))
+    } else {
+        Vec::new()
+    };
+
+    // Substitute known cross-note values. Only lines holding a reference can
+    // change, and the rest of the note is copied only if one does.
+    let mut eval_lines: Option<Vec<String>> = None;
+    let mut lines_with_unresolved = FxHashSet::default();
+    if options.cross_note_enabled && !options.extern_vars.is_empty() {
+        let extern_map: FxHashMap<(String, String), f64> = options
+            .extern_vars
+            .iter()
+            .map(|ev| {
+                (
+                    (ev.note_short_id.clone(), ev.var_normalized.clone()),
+                    ev.value,
+                )
+            })
+            .collect();
+        let mut previous_line = None;
+        for reference in &cross_note_refs {
+            let idx = reference.line - 1;
+            if previous_line == Some(idx) || idx >= lines.len() {
+                continue;
             }
-            // Only materialize a second copy of the document when a ref was
-            // actually substituted. With no resolvable refs — the common case —
-            // nothing above allocated a line and the originals are used as-is.
-            if any_rewritten {
-                let preprocessed: Vec<String> =
-                    rewritten.into_iter().map(Cow::into_owned).collect();
-                (Cow::Owned(preprocessed), refs, unresolved_set)
-            } else {
-                (Cow::Borrowed(lines), refs, unresolved_set)
+            previous_line = Some(idx);
+            let (new_line, has_unresolved) = preprocess_line_cross_note(&lines[idx], &extern_map);
+            if has_unresolved {
+                lines_with_unresolved.insert(idx);
             }
-        } else if options.cross_note_enabled {
-            let refs = options
-                .precomputed_refs
-                .unwrap_or_else(|| scan_cross_note_refs(lines));
-            (
-                Cow::Borrowed(lines),
-                refs,
-                rustc_hash::FxHashSet::default(),
-            )
+            if let Cow::Owned(rewritten) = new_line {
+                eval_lines.get_or_insert_with(|| lines.to_vec())[idx] = rewritten;
+            }
+        }
+    }
+
+    let defs = if options.variables_enabled {
+        collect_variable_definitions(
+            eval_lines.as_deref().unwrap_or(lines),
+            options.table_enabled,
+        )
+    } else {
+        FxHashMap::default()
+    };
+    let variables = variable_index_from_definitions(&defs);
+    let mut names_sorted: Vec<String> = defs.keys().cloned().collect();
+    // Longest-first so leftmost-first regex alternation picks the longest match.
+    names_sorted.sort_by_key(|name| (Reverse(name.len()), name.clone()));
+    let variable_regex = cached_variable_regex(&names_sorted);
+
+    PreparedNoteContext {
+        key,
+        eval_lines,
+        lines_with_unresolved,
+        cross_note_refs,
+        defs,
+        variables,
+        variable_regex,
+        resolved: ResolvedVariables::default(),
+    }
+}
+
+fn evaluate_prepared(
+    lines: &[String],
+    prepared: &mut PreparedNoteContext,
+    options: NoteEvaluationOptions,
+) -> NoteEvaluationResult {
+    let mut ctx = new_context();
+    let PreparedNoteContext {
+        eval_lines: prepared_lines,
+        lines_with_unresolved,
+        cross_note_refs,
+        defs,
+        variables,
+        variable_regex,
+        resolved,
+        ..
+    } = prepared;
+    let eval_lines: &[String] = prepared_lines.as_deref().unwrap_or(lines);
+    let defs: &FxHashMap<String, VariableDefinition> = defs;
+
+    let line_count = eval_lines.len();
+    let (eval_from, eval_to) = match options.eval_range {
+        Some((from, to)) => (from.min(line_count), to.min(line_count)),
+        None => (0, line_count),
+    };
+    let mut resolver =
+        VariableResolver::with_resolved(defs, variable_regex.clone(), std::mem::take(resolved));
+    let is_full_eval = eval_from == 0 && eval_to == line_count;
+    if options.variables_enabled && is_full_eval {
+        let mut names: Vec<String> = defs.keys().cloned().collect();
+        names.sort();
+        for normalized in names {
+            let _ = resolver.resolve(&normalized, &mut ctx);
+        }
+    }
+
+    let mut line_results: Vec<Option<String>> = vec![None; line_count];
+    let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); line_count];
+
+    // Working copy of the document for formula substitution. Allocated lazily
+    // — only when a table formula cell actually writes a value back.
+    let mut working_lines: Option<Vec<String>> = None;
+    // Cache and recursion guard for table-cell formula evaluation by (line, cell).
+    let mut table_formula_cache: FxHashMap<(usize, usize), String> = FxHashMap::default();
+    let mut table_formula_stack: Vec<(usize, usize)> = Vec::new();
+    let mut table_eval_cache = TableEvalCache::default();
+    let mut table_diagnostics: Vec<NoteEvaluationDiagnostic> = Vec::new();
+
+    // Helper: get a mutable reference to working_lines, cloning from `eval_lines`
+    // on first access. Call this only when a write is needed.
+    macro_rules! ensure_working {
+        () => {{
+            working_lines.get_or_insert_with(|| eval_lines.to_vec())
+        }};
+    }
+
+    // Read a line from working_lines if allocated, otherwise from eval_lines.
+    macro_rules! read_line {
+        ($i:expr) => {
+            working_lines
+                .as_ref()
+                .map(|w| w[$i].as_str())
+                .unwrap_or(&eval_lines[$i])
+        };
+    }
+
+    for idx in eval_from..eval_to {
+        if lines_with_unresolved.contains(&idx) {
+            continue;
+        }
+        // Borrow the current line text per probe; each `read_line!` borrow
+        // ends with the expression so it doesn't conflict with later
+        // `ensure_working!()` mutation of `working_lines`.
+        let table_segments = if options.table_enabled && is_table_line(read_line!(idx)) {
+            table_expression_segments(read_line!(idx), true)
         } else {
-            (
-                Cow::Borrowed(lines),
-                Vec::new(),
-                rustc_hash::FxHashSet::default(),
-            )
+            Vec::new()
         };
 
-        let eval_lines: &[String] = &eval_lines;
-
-        let defs = if options.variables_enabled {
-            collect_variable_definitions(eval_lines, options.table_enabled)
-        } else {
-            FxHashMap::default()
-        };
-        let variables = variable_index_from_definitions(&defs);
-
-        let line_count = eval_lines.len();
-        let (eval_from, eval_to) = match options.eval_range {
-            Some((from, to)) => (from.min(line_count), to.min(line_count)),
-            None => (0, line_count),
-        };
-        let mut resolver = VariableResolver::new(&defs);
-        let is_full_eval = eval_from == 0 && eval_to == line_count;
-        if options.variables_enabled && is_full_eval {
-            let mut names: Vec<String> = defs.keys().cloned().collect();
-            names.sort();
-            for normalized in names {
-                let _ = resolver.resolve(&normalized, &mut ctx);
-            }
-        }
-
-        let mut line_results: Vec<Option<String>> = vec![None; line_count];
-        let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); line_count];
-
-        // Working copy of the document for formula substitution. Allocated lazily
-        // — only when a table formula cell actually writes a value back.
-        let mut working_lines: Option<Vec<String>> = None;
-        // Cache and recursion guard for table-cell formula evaluation by (line, cell).
-        let mut table_formula_cache: FxHashMap<(usize, usize), String> = FxHashMap::default();
-        let mut table_formula_stack: Vec<(usize, usize)> = Vec::new();
-        let mut table_eval_cache = TableEvalCache::default();
-        let mut table_diagnostics: Vec<NoteEvaluationDiagnostic> = Vec::new();
-
-        // Helper: get a mutable reference to working_lines, cloning from `eval_lines`
-        // on first access. Call this only when a write is needed.
-        macro_rules! ensure_working {
-            () => {{
-                working_lines.get_or_insert_with(|| eval_lines.to_vec())
-            }};
-        }
-
-        // Read a line from working_lines if allocated, otherwise from eval_lines.
-        macro_rules! read_line {
-            ($i:expr) => {
-                working_lines
-                    .as_ref()
-                    .map(|w| w[$i].as_str())
-                    .unwrap_or(&eval_lines[$i])
-            };
-        }
-
-        for idx in eval_from..eval_to {
-            if lines_with_unresolved.contains(&idx) {
-                continue;
-            }
-            // Borrow the current line text per probe; each `read_line!` borrow
-            // ends with the expression so it doesn't conflict with later
-            // `ensure_working!()` mutation of `working_lines`.
-            let table_segments = if options.table_enabled && is_table_line(read_line!(idx)) {
-                table_expression_segments(read_line!(idx), true)
-            } else {
-                Vec::new()
-            };
-
-            // Multi-cell table evaluation: walk every formula cell L→R.
-            // Triggered by any builtin call OR an explicit := prefix.
-            if table_segments.iter().any(|(expr, _)| {
-                find_builtin_formula_calls(expr).first().is_some()
-                    || expr
-                        .trim()
-                        .strip_prefix(":=")
-                        .map(|rest| !rest.trim_start().is_empty())
-                        .unwrap_or(false)
-            }) {
-                let working = ensure_working!();
-                let mut first_value: Option<String> = None;
-                for (expression, cell_idx) in table_segments {
-                    let value = evaluate_table_formula(
-                        working,
-                        idx,
-                        &expression,
-                        Some(cell_idx),
-                        options.variables_enabled,
-                        if options.variables_enabled {
-                            Some(&mut resolver)
-                        } else {
-                            None
-                        },
-                        &mut table_eval_cache,
-                        &mut table_formula_cache,
-                        &mut table_formula_stack,
-                        &mut ctx,
-                    );
-                    let Some(value) = value else { continue };
-                    if let Some(code) = table_ref_error_code(&value) {
-                        table_diagnostics.push(NoteEvaluationDiagnostic {
-                            kind: format!("table-ref-{code}"),
-                            line: idx + 1,
-                            message: format!(
-                                "table formula cell {} returned {}",
-                                cell_idx + 1,
-                                value
-                            ),
-                        });
-                    }
-
-                    if first_value.is_none() {
-                        first_value = Some(value.clone());
-                    }
-                    table_cell_results[idx].push(TableCellEvaluation {
-                        cell_index: cell_idx,
-                        value: value.clone(),
-                        error_kind: table_cell_error_kind(&value),
-                    });
-
-                    if let Some(updated) =
-                        substitute_table_cell_value(&working[idx], cell_idx, &value)
-                    {
-                        working[idx] = updated;
-                        table_eval_cache.split_cells.remove(&idx);
-                    }
-                }
-                line_results[idx] = first_value;
-                continue;
-            }
-
-            // Single-expression path (preserves original behavior).
-            let Some(line_expr) = extract_line_expression(read_line!(idx), options.table_enabled)
-            else {
-                continue;
-            };
-            let expression = line_expr.expression.as_str();
-
-            let result = if options.variables_enabled {
-                if let Some(value) = evaluate_table_formula(
-                    working_lines.as_deref().unwrap_or(eval_lines),
+        // Multi-cell table evaluation: walk every formula cell L→R.
+        // Triggered by any builtin call OR an explicit := prefix.
+        if table_segments.iter().any(|(expr, _)| {
+            find_builtin_formula_calls(expr).first().is_some()
+                || expr
+                    .trim()
+                    .strip_prefix(":=")
+                    .map(|rest| !rest.trim_start().is_empty())
+                    .unwrap_or(false)
+        }) {
+            let working = ensure_working!();
+            let mut first_value: Option<String> = None;
+            for (expression, cell_idx) in table_segments {
+                let value = evaluate_table_formula(
+                    working,
                     idx,
-                    expression,
-                    line_expr.table_cell_index,
-                    true,
-                    Some(&mut resolver),
-                    &mut table_eval_cache,
-                    &mut table_formula_cache,
-                    &mut table_formula_stack,
-                    &mut ctx,
-                ) {
-                    if let Some(code) = table_ref_error_code(&value) {
-                        table_diagnostics.push(NoteEvaluationDiagnostic {
-                            kind: format!("table-ref-{code}"),
-                            line: idx + 1,
-                            message: format!("table formula returned {}", value),
-                        });
-                    }
-                    Some(value)
-                } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(expression)
-                {
-                    let resolved = resolver.resolve(&normalized, &mut ctx);
-                    if assignment_rhs_is_plain_numeric_literal(&rhs) {
-                        None
+                    &expression,
+                    Some(cell_idx),
+                    options.variables_enabled,
+                    if options.variables_enabled {
+                        Some(&mut resolver)
                     } else {
-                        resolved
-                    }
-                } else {
-                    evaluate_expression_with_variables(expression, &mut resolver, &mut ctx)
-                }
-            } else {
-                if let Some(value) = evaluate_table_formula(
-                    working_lines.as_deref().unwrap_or(eval_lines),
-                    idx,
-                    expression,
-                    line_expr.table_cell_index,
-                    false,
-                    None,
+                        None
+                    },
                     &mut table_eval_cache,
                     &mut table_formula_cache,
                     &mut table_formula_stack,
                     &mut ctx,
-                ) {
-                    if let Some(code) = table_ref_error_code(&value) {
-                        table_diagnostics.push(NoteEvaluationDiagnostic {
-                            kind: format!("table-ref-{code}"),
-                            line: idx + 1,
-                            message: format!("table formula returned {}", value),
-                        });
-                    }
-                    Some(value)
-                } else {
-                    evaluate_single(expression, &mut ctx)
+                );
+                let Some(value) = value else { continue };
+                if let Some(code) = table_ref_error_code(&value) {
+                    table_diagnostics.push(NoteEvaluationDiagnostic {
+                        kind: format!("table-ref-{code}"),
+                        line: idx + 1,
+                        message: format!("table formula cell {} returned {}", cell_idx + 1, value),
+                    });
                 }
-            };
 
-            line_results[idx] = result;
-        }
+                if first_value.is_none() {
+                    first_value = Some(value.clone());
+                }
+                table_cell_results[idx].push(TableCellEvaluation {
+                    cell_index: cell_idx,
+                    value: value.clone(),
+                    error_kind: table_cell_error_kind(&value),
+                });
 
-        let mut diagnostics = resolver.diagnostics().unwrap_or_default();
-        for diag in table_diagnostics {
-            if !diagnostics.iter().any(|existing| {
-                existing.kind == diag.kind
-                    && existing.line == diag.line
-                    && existing.message == diag.message
-            }) {
-                diagnostics.push(diag);
+                if let Some(updated) = substitute_table_cell_value(&working[idx], cell_idx, &value)
+                {
+                    working[idx] = updated;
+                    table_eval_cache.split_cells.remove(&idx);
+                }
             }
+            line_results[idx] = first_value;
+            continue;
         }
 
-        let variable_values = if options.variables_enabled {
-            resolver.numeric_values()
+        // Single-expression path (preserves original behavior).
+        let Some(line_expr) = extract_line_expression(read_line!(idx), options.table_enabled)
+        else {
+            continue;
+        };
+        let expression = line_expr.expression.as_str();
+
+        let result = if options.variables_enabled {
+            if let Some(value) = evaluate_table_formula(
+                working_lines.as_deref().unwrap_or(eval_lines),
+                idx,
+                expression,
+                line_expr.table_cell_index,
+                true,
+                Some(&mut resolver),
+                &mut table_eval_cache,
+                &mut table_formula_cache,
+                &mut table_formula_stack,
+                &mut ctx,
+            ) {
+                if let Some(code) = table_ref_error_code(&value) {
+                    table_diagnostics.push(NoteEvaluationDiagnostic {
+                        kind: format!("table-ref-{code}"),
+                        line: idx + 1,
+                        message: format!("table formula returned {}", value),
+                    });
+                }
+                Some(value)
+            } else if let Some((_name, normalized, rhs)) = parse_variable_assignment(expression) {
+                let resolved = resolver.resolve(&normalized, &mut ctx);
+                if assignment_rhs_is_plain_numeric_literal(&rhs) {
+                    None
+                } else {
+                    resolved
+                }
+            } else {
+                evaluate_expression_with_variables(expression, &mut resolver, &mut ctx)
+            }
         } else {
-            FxHashMap::default()
+            if let Some(value) = evaluate_table_formula(
+                working_lines.as_deref().unwrap_or(eval_lines),
+                idx,
+                expression,
+                line_expr.table_cell_index,
+                false,
+                None,
+                &mut table_eval_cache,
+                &mut table_formula_cache,
+                &mut table_formula_stack,
+                &mut ctx,
+            ) {
+                if let Some(code) = table_ref_error_code(&value) {
+                    table_diagnostics.push(NoteEvaluationDiagnostic {
+                        kind: format!("table-ref-{code}"),
+                        line: idx + 1,
+                        message: format!("table formula returned {}", value),
+                    });
+                }
+                Some(value)
+            } else {
+                evaluate_single(expression, &mut ctx)
+            }
         };
 
-        NoteEvaluationResult {
-            line_results,
-            variables,
-            diagnostics: if diagnostics.is_empty() {
-                None
-            } else {
-                Some(diagnostics)
-            },
-            table_cell_results,
-            variable_values,
-            cross_note_refs,
+        line_results[idx] = result;
+    }
+
+    let mut diagnostics = resolver.diagnostics().unwrap_or_default();
+    for diag in table_diagnostics {
+        if !diagnostics.iter().any(|existing| {
+            existing.kind == diag.kind
+                && existing.line == diag.line
+                && existing.message == diag.message
+        }) {
+            diagnostics.push(diag);
         }
+    }
+
+    let variable_values = if options.variables_enabled {
+        resolver.numeric_values()
+    } else {
+        FxHashMap::default()
+    };
+    *resolved = resolver.into_resolved();
+
+    NoteEvaluationResult {
+        line_results,
+        variables: variables.clone(),
+        diagnostics: if diagnostics.is_empty() {
+            None
+        } else {
+            Some(diagnostics)
+        },
+        table_cell_results,
+        variable_values,
+        cross_note_refs: cross_note_refs.clone(),
     }
 }
 
@@ -3244,6 +3352,56 @@ mod tests {
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert!(result.variables.is_empty());
         assert_eq!(result.line_results[1], None);
+    }
+
+    #[test]
+    fn cached_range_evaluation_matches_uncached_and_follows_edits() {
+        let engine = CalcEngine::new();
+        let mut lines: Vec<String> = vec![
+            "rate := [[abcd1234]].rate".to_string(),
+            "base := 10".to_string(),
+        ];
+        for i in 0..40 {
+            lines.push(format!("v{i} := base * {i} + rate"));
+            lines.push(format!("v{i} * 2"));
+            lines.push("| a | b |".to_string());
+            lines.push("| --- | --- |".to_string());
+            lines.push(format!("| {i} | :=(1,1) * base |"));
+        }
+        let options = |range: Option<(usize, usize)>, rate: f64| NoteEvaluationOptions {
+            variables_enabled: true,
+            table_enabled: true,
+            cross_note_enabled: true,
+            eval_range: range,
+            extern_vars: vec![ExternVar {
+                note_short_id: "abcd1234".to_string(),
+                var_normalized: "rate".to_string(),
+                value: rate,
+            }],
+            precomputed_refs: None,
+        };
+        let mut cache = NoteContextCache::default();
+        let check = |lines: &[String], cache: &mut NoteContextCache, rate: f64| {
+            for from in (0..lines.len()).step_by(37) {
+                let range = Some((from, (from + 50).min(lines.len())));
+                let cached =
+                    engine.evaluate_note_context_cached(lines, options(range, rate), cache);
+                let fresh = engine.evaluate_note_context(lines, options(range, rate));
+                assert_eq!(cached.line_results, fresh.line_results, "range {range:?}");
+                assert_eq!(cached.table_cell_results, fresh.table_cell_results);
+            }
+        };
+        check(&lines, &mut cache, 0.5);
+        lines[1] = "base := 20".to_string();
+        check(&lines, &mut cache, 0.5);
+        check(&lines, &mut cache, 2.0);
+        assert_eq!(
+            engine
+                .evaluate_note_context_cached(&lines, options(Some((8, 9)), 2.0), &mut cache)
+                .line_results[8]
+                .as_deref(),
+            Some("44")
+        );
     }
 
     #[test]

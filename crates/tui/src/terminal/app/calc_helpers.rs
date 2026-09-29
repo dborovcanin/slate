@@ -3,7 +3,8 @@ use crate::storage::Db;
 #[cfg(test)]
 use crate::terminal::text_utils::line_display_cols;
 use app_core::calc::{
-    CalcEngine, ExternVar, NoteEvaluationOptions, TableCellEvaluation, VariableIndexEntry,
+    CalcEngine, ExternVar, NoteContextCache, NoteEvaluationOptions, NoteEvaluationResult,
+    TableCellEvaluation, VariableIndexEntry,
 };
 use app_core::cross_note::CrossNoteVarIndex;
 use std::sync::{Arc, Mutex};
@@ -58,6 +59,38 @@ pub(super) fn compute_calc_data(
             ..Default::default()
         },
     );
+    calc_data_from_result(result)
+}
+
+/// `compute_calc_data` that reuses whole-note preparation from `cache` while
+/// the note is unchanged, for repeated range evaluations such as scrolling.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn compute_calc_data_cached(
+    engine: &CalcEngine,
+    lines: &[String],
+    variables_enabled: bool,
+    cross_note_enabled: bool,
+    table_enabled: bool,
+    eval_range: Option<(usize, usize)>,
+    extern_vars: Vec<ExternVar>,
+    cache: &mut NoteContextCache,
+) -> CalcData {
+    let result = engine.evaluate_note_context_cached(
+        lines,
+        NoteEvaluationOptions {
+            variables_enabled,
+            cross_note_enabled,
+            table_enabled,
+            eval_range,
+            extern_vars,
+            ..Default::default()
+        },
+        cache,
+    );
+    calc_data_from_result(result)
+}
+
+fn calc_data_from_result(result: NoteEvaluationResult) -> CalcData {
     let mut variable_names = result
         .variables
         .into_iter()
