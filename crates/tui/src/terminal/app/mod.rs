@@ -732,10 +732,9 @@ struct TerminalApp {
     undo_actions: Vec<UndoAction>,
     undo_action_pos: usize,
     perf_trace: PerfTraceState,
-    /// Graphics protocol context — protocol detection result and picker, used
-    /// by the image preview. Set from the session after terminal raw mode is
-    /// entered; initially disabled.
-    graphics: Arc<super::graphics::GraphicsContext>,
+    /// Terminal graphics support for the image preview. `None` until the
+    /// first preview, which queries the terminal, so startup never pays for it.
+    graphics: Option<super::graphics::GraphicsContext>,
     image_renderer: super::graphics::ImageRenderer,
     open_image_temp_paths: Vec<std::path::PathBuf>,
 }
@@ -1171,7 +1170,7 @@ impl TerminalApp {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()
             },
-            graphics: Arc::new(super::graphics::GraphicsContext::disabled()),
+            graphics: None,
             image_renderer: super::graphics::ImageRenderer::new(),
             open_image_temp_paths: Vec::new(),
         };
@@ -1197,9 +1196,6 @@ impl TerminalApp {
 
     fn run(&mut self, db: &Db) -> Result<(), String> {
         let mut session = TerminalSession::enter()?;
-        // Bind the detected graphics context (protocol + picker) into the app
-        // for the image preview.
-        self.graphics = Arc::clone(session.graphics());
         let mut last_draw = Instant::now();
 
         loop {

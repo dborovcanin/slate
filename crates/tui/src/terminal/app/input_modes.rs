@@ -41,8 +41,9 @@ impl TerminalApp {
             match key {
                 Key::Esc => self.image_preview = None,
                 Key::Char('o') | Key::Char('O') => {
-                    self.image_preview = None;
-                    self.open_image_externally_at_cursor(db);
+                    if let Some(preview) = self.image_preview.take() {
+                        self.open_image_externally(db, &preview.src, &preview.alt);
+                    }
                 }
                 Key::Ctrl('q') => self.quit = true,
                 _ => {}
@@ -844,10 +845,6 @@ impl TerminalApp {
 
 impl TerminalApp {
     fn preview_image_at_cursor(&mut self, db: &Db) {
-        if !self.graphics.is_enabled() {
-            self.open_image_externally_at_cursor(db);
-            return;
-        }
         let Some(image) = crate::editor_core::markdown_tokens::find_markdown_image_at_cursor(
             self.current_line(),
             self.editor.cursor_col,
@@ -855,6 +852,13 @@ impl TerminalApp {
             self.status = "no image at cursor".to_string();
             return;
         };
+        let graphics = self
+            .graphics
+            .get_or_insert_with(crate::terminal::graphics::GraphicsContext::detect);
+        if !graphics.is_enabled() {
+            self.open_image_externally(db, &image.src, &image.alt);
+            return;
+        }
         self.image_preview = Some(super::ImagePreviewState {
             src: image.src,
             alt: image.alt,
@@ -862,20 +866,16 @@ impl TerminalApp {
         self.close_wiki_link_preview();
     }
 
-    fn open_image_externally_at_cursor(&mut self, db: &Db) {
-        use base64::Engine as _;
-        let Some(image) = crate::editor_core::markdown_tokens::find_markdown_image_at_cursor(
-            self.current_line(),
-            self.editor.cursor_col,
-        ) else {
-            self.status = "no image at cursor".to_string();
+    fn open_image_externally(&mut self, db: &Db, src: &str, alt: &str) {
+        use crate::terminal::external_open;
+        use app_core::note_sources::{NoteImageSource, NoteSourceService};
+        if src.contains("://") {
+            self.status = "remote images are not opened".to_string();
             return;
-        };
-        let sources = app_core::note_sources::NoteSourceService::new(db.clone());
-        let resolved = match sources
-            .resolve_image_markdown_source_by_id(&self.active_note.id, &image.src)
-        {
-            Ok(Some(value)) => value,
+        }
+        let sources = NoteSourceService::new(db.clone());
+        let source = match sources.locate_image_by_id(&self.active_note.id, src) {
+            Ok(Some(source)) => source,
             Ok(None) => {
                 self.status = "image source is missing".to_string();
                 return;
@@ -885,53 +885,40 @@ impl TerminalApp {
                 return;
             }
         };
-        let mut temporary_path = false;
-        let path = if let Some(data) = resolved.strip_prefix("data:") {
-            let Some((header, encoded)) = data.split_once(',') else {
-                self.status = "invalid image data".to_string();
-                return;
-            };
-            if !header.ends_with(";base64") || encoded.len() > 24 * 1024 * 1024 {
-                self.status = "unsupported image data".to_string();
-                return;
-            }
-            let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) else {
-                self.status = "invalid image data".to_string();
-                return;
-            };
-            let extension = match header.split(';').next().unwrap_or_default() {
-                "image/jpeg" => "jpg",
-                "image/gif" => "gif",
-                "image/webp" => "webp",
-                "image/bmp" => "bmp",
-                _ => "png",
-            };
-            let path = match create_private_image_file(&bytes, extension) {
-                Ok(path) => path,
-                Err(error) => {
-                    self.status = format!("cannot prepare image: {error}");
-                    return;
+        let (path, temporary) = match source {
+            NoteImageSource::File(path) => (path, false),
+            stored @ NoteImageSource::Stored { .. } => {
+                let image = match sources.read_image(&stored) {
+                    Ok(Some(image)) => image,
+                    Ok(None) => {
+                        self.status = "image source is missing".to_string();
+                        return;
+                    }
+                    Err(error) => {
+                        self.status = format!("cannot read image: {error}");
+                        return;
+                    }
+                };
+                match external_open::write_private_temp_file(&image.bytes, image.extension) {
+                    Ok(path) => (path, true),
+                    Err(error) => {
+                        self.status = format!("cannot prepare image: {error}");
+                        return;
+                    }
                 }
-            };
-            temporary_path = true;
-            path
-        } else if resolved.contains("://") {
-            self.status = "remote images are not opened".to_string();
-            return;
-        } else {
-            std::path::PathBuf::from(resolved)
+            }
         };
 
-        match open_local_file(&path) {
+        match external_open::open_with_default_app(path.as_os_str()) {
             Ok(()) => {
-                if temporary_path {
+                if temporary {
                     self.open_image_temp_paths.push(path);
                 }
-                self.status = format!("opened image {}", image.alt);
+                self.status = format!("opened image {alt}");
             }
             Err(error) => {
-                if temporary_path {
-                    let _ = std::fs::remove_file(path);
+                if temporary {
+                    external_open::remove_private_temp_file(&path);
                 }
                 self.status = format!("cannot open image: {error}");
             }
@@ -939,104 +926,10 @@ impl TerminalApp {
     }
 }
 
-fn open_local_file(path: &std::path::Path) -> Result<(), String> {
-    #[cfg(target_os = "linux")]
-    let (program, args) = ("xdg-open", vec![path.as_os_str()]);
-    #[cfg(target_os = "macos")]
-    let (program, args) = ("open", vec![path.as_os_str()]);
-    #[cfg(target_os = "windows")]
-    let (program, args) = (
-        "rundll32.exe",
-        vec![
-            std::ffi::OsStr::new("url.dll,FileProtocolHandler"),
-            path.as_os_str(),
-        ],
-    );
-    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-    return Err("external image viewers are unsupported on this platform".to_string());
-
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    std::process::Command::new(program)
-        .args(args)
-        .spawn()
-        .map(|_| ())
-        .map_err(|error| error.to_string())
-}
-
-fn create_private_image_file(bytes: &[u8], extension: &str) -> Result<std::path::PathBuf, String> {
-    let directory = std::env::temp_dir().join(format!("slate-open-image-{}", ulid::Ulid::new()));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt as _;
-        let mut builder = std::fs::DirBuilder::new();
-        builder.mode(0o700);
-        builder
-            .create(&directory)
-            .map_err(|error| error.to_string())?;
-    }
-    #[cfg(not(unix))]
-    std::fs::create_dir(&directory).map_err(|error| error.to_string())?;
-
-    let path = directory.join(format!("image.{extension}"));
-    let result = (|| {
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .map_err(|error| error.to_string())?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            file.set_permissions(std::fs::Permissions::from_mode(0o600))
-                .map_err(|error| error.to_string())?;
-        }
-        std::io::Write::write_all(&mut file, bytes).map_err(|error| error.to_string())?;
-        Ok(path.clone())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_dir_all(&directory);
-    }
-    result
-}
-
 impl Drop for TerminalApp {
     fn drop(&mut self) {
         for path in self.open_image_temp_paths.drain(..) {
-            if let Some(directory) = path.parent() {
-                let _ = std::fs::remove_dir_all(directory);
-            }
+            crate::terminal::external_open::remove_private_temp_file(&path);
         }
-    }
-}
-
-#[cfg(test)]
-mod image_open_tests {
-    use super::*;
-
-    #[test]
-    fn database_image_temp_file_is_private_and_removable() {
-        let path = create_private_image_file(b"pixels", "png").expect("create private image");
-        assert_eq!(std::fs::read(&path).expect("read image"), b"pixels");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(
-                std::fs::metadata(&path)
-                    .expect("image metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o600
-            );
-            assert_eq!(
-                std::fs::metadata(path.parent().expect("private dir"))
-                    .expect("dir metadata")
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
-        }
-        std::fs::remove_dir_all(path.parent().expect("private dir")).expect("cleanup image");
     }
 }

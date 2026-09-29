@@ -56,7 +56,6 @@ const DEFAULT_WEB_SEARCH_ENGINE_ID: &str = "";
 const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 10;
 const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
 const MAX_WEB_SEARCH_MAX_RESULTS: usize = 10;
-const DEFAULT_TERMINAL_IMAGES_MODE: &str = "auto";
 const DEFAULT_TERMINAL_IMAGE_MAX_ROWS: usize = 15;
 const MIN_TERMINAL_IMAGE_MAX_ROWS: usize = 1;
 const MAX_TERMINAL_IMAGE_MAX_ROWS: usize = 100;
@@ -187,9 +186,9 @@ max_results = 10
 [terminal]
 # Inline image rendering mode:
 #   "auto"       detect best graphics protocol (sixel, kitty, iterm2), fall back if unsupported (default)
-#   "sixel"      force Sixel graphics (e.g. foot, wezterm)
-#   "kitty"      force Kitty graphics protocol (e.g. kitty, ghostty, wezterm)
-#   "iterm2"     force iTerm2 graphics protocol
+#   "sixel"      force Sixel graphics (e.g. foot)
+#   "kitty"      force Kitty graphics protocol (e.g. kitty, ghostty)
+#   "iterm2"     force iTerm2 graphics protocol (e.g. iTerm2, wezterm)
 #   "halfblocks" unicode halfblock characters fallback
 #   "off"        text placeholder [image: alt] only
 images = "auto"
@@ -340,16 +339,28 @@ impl Default for WebSearchConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalImagesMode {
+    #[default]
+    Auto,
+    Sixel,
+    Kitty,
+    Iterm2,
+    Halfblocks,
+    Off,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TerminalImagesConfig {
-    pub mode: String,
+    pub mode: TerminalImagesMode,
     pub max_rows: usize,
 }
 
 impl Default for TerminalImagesConfig {
     fn default() -> Self {
         Self {
-            mode: DEFAULT_TERMINAL_IMAGES_MODE.to_string(),
+            mode: TerminalImagesMode::default(),
             max_rows: DEFAULT_TERMINAL_IMAGE_MAX_ROWS,
         }
     }
@@ -916,15 +927,14 @@ pub fn parse_terminal_images_config(text: &str) -> Result<TerminalImagesConfig, 
     Ok(TerminalImagesConfig { mode, max_rows })
 }
 
-fn normalize_terminal_images_mode(mode: Option<&str>) -> String {
-    let normalized = mode
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_ascii_lowercase)
-        .unwrap_or_else(|| DEFAULT_TERMINAL_IMAGES_MODE.to_string());
-    match normalized.as_str() {
-        "auto" | "sixel" | "kitty" | "iterm2" | "halfblocks" | "off" => normalized,
-        _ => DEFAULT_TERMINAL_IMAGES_MODE.to_string(),
+fn normalize_terminal_images_mode(mode: Option<&str>) -> TerminalImagesMode {
+    match mode.map(|mode| mode.trim().to_ascii_lowercase()).as_deref() {
+        Some("sixel") => TerminalImagesMode::Sixel,
+        Some("kitty") => TerminalImagesMode::Kitty,
+        Some("iterm2") => TerminalImagesMode::Iterm2,
+        Some("halfblocks") => TerminalImagesMode::Halfblocks,
+        Some("off") => TerminalImagesMode::Off,
+        _ => TerminalImagesMode::Auto,
     }
 }
 
@@ -1442,7 +1452,7 @@ mod tests {
     fn parses_terminal_images_section_and_defaults() {
         let defaults = parse_terminal_images_config("").expect("terminal images config parsed");
         assert_eq!(defaults, TerminalImagesConfig::default());
-        assert_eq!(defaults.mode, "auto");
+        assert_eq!(defaults.mode, TerminalImagesMode::Auto);
         assert_eq!(defaults.max_rows, 15);
 
         let parsed = parse_terminal_images_config(
@@ -1453,7 +1463,7 @@ mod tests {
             "#,
         )
         .expect("terminal images parsed");
-        assert_eq!(parsed.mode, "sixel");
+        assert_eq!(parsed.mode, TerminalImagesMode::Sixel);
         assert_eq!(parsed.max_rows, 20);
 
         let invalid_mode = parse_terminal_images_config(
@@ -1464,7 +1474,7 @@ mod tests {
             "#,
         )
         .expect("invalid mode parsed with fallback");
-        assert_eq!(invalid_mode.mode, "auto");
+        assert_eq!(invalid_mode.mode, TerminalImagesMode::Auto);
         assert_eq!(invalid_mode.max_rows, 100);
     }
 }

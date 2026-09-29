@@ -1,14 +1,14 @@
-use crate::config::{load_terminal_images_config, TerminalImagesConfig};
+use crate::config::{load_terminal_images_config, TerminalImagesConfig, TerminalImagesMode};
 use ratatui::layout::Size;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::Protocol;
-use ratatui_image::Resize;
+use ratatui_image::{FontSize, Resize};
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::env;
-use std::io::{IsTerminal as _, Read as _};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError};
-use std::time::{Duration, UNIX_EPOCH};
+use std::io::IsTerminal as _;
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::time::Duration;
 
 const IMAGE_RECHECK_INTERVAL: Duration = Duration::from_secs(2);
 const IMAGE_CACHE_LIMIT: usize = 64;
@@ -38,7 +38,7 @@ struct ImageResponse {
 struct CachedImage {
     protocol: Protocol,
     rows: u16,
-    stamp: Option<u64>,
+    stamp: u64,
     checked_at: std::time::Instant,
 }
 
@@ -96,7 +96,7 @@ impl ImageRenderer {
             Some(cached) if now.duration_since(cached.checked_at) < IMAGE_RECHECK_INTERVAL => {
                 return;
             }
-            Some(cached) => cached.stamp,
+            Some(cached) => Some(cached.stamp),
             None => None,
         };
         let request = ImageRequest {
@@ -136,11 +136,7 @@ impl ImageRenderer {
 
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        loop {
-            let response = match self.rx.try_recv() {
-                Ok(response) => response,
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
-            };
+        while let Ok(response) = self.rx.try_recv() {
             self.pending.remove(&response.key);
             match response.result {
                 Ok(Some((protocol, rows, stamp))) => {
@@ -160,7 +156,7 @@ impl ImageRenderer {
                         CachedImage {
                             protocol,
                             rows,
-                            stamp: Some(stamp),
+                            stamp,
                             checked_at: std::time::Instant::now(),
                         },
                     );
@@ -275,203 +271,133 @@ impl Default for ImageRenderer {
 }
 
 fn decode_image_request(request: ImageRequest) -> ImageResponse {
-    let sources = app_core::note_sources::NoteSourceService::new(request.db);
-    let resolved =
-        sources.resolve_image_markdown_source_by_id(&request.key.note_id, &request.key.src);
-    let result = resolved.and_then(|resolved| {
-        let Some(resolved) = resolved else {
-            return Err("image source is missing".to_string());
-        };
-        let (bytes, stamp) = if let Some(payload) = resolved.strip_prefix("data:") {
-            use base64::Engine as _;
-            let Some((header, encoded)) = payload.split_once(',') else {
-                return Err("invalid image data URL".to_string());
-            };
-            if !header.ends_with(";base64") || encoded.len() > 24 * 1024 * 1024 {
-                return Err("unsupported or oversized image data URL".to_string());
-            }
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(encoded)
-                .map_err(|error| format!("invalid image data: {error}"))?;
-            let stamp = hash_image_source(&bytes);
-            (bytes, Some(stamp))
-        } else if resolved.contains("://") {
-            return Err("remote images are not loaded".to_string());
-        } else {
-            let path = std::path::Path::new(&resolved);
-            let metadata = std::fs::metadata(path).map_err(|error| error.to_string())?;
-            if !metadata.is_file()
-                || metadata.len() > app_core::note_sources::MAX_NOTE_IMAGE_BYTES as u64
-            {
-                return Err(
-                    "image is not a supported local file or exceeds the size limit".to_string(),
-                );
-            }
-            let modified = metadata
-                .modified()
-                .unwrap_or(UNIX_EPOCH)
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos() as u64;
-            let stamp = modified ^ metadata.len().rotate_left(17);
-            let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
-            let mut bytes = Vec::with_capacity(metadata.len() as usize);
-            file.take((app_core::note_sources::MAX_NOTE_IMAGE_BYTES + 1) as u64)
-                .read_to_end(&mut bytes)
-                .map_err(|error| error.to_string())?;
-            if bytes.len() > app_core::note_sources::MAX_NOTE_IMAGE_BYTES {
-                return Err("image exceeds the size limit".to_string());
-            }
-            (bytes, Some(stamp))
-        };
-        if request.previous_stamp == stamp {
-            return Ok(None);
-        }
-        let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format()
-            .map_err(|error| error.to_string())?;
-        let mut limits = image::Limits::default();
-        limits.max_image_width = Some(app_core::note_sources::MAX_NOTE_IMAGE_DIMENSION);
-        limits.max_image_height = Some(app_core::note_sources::MAX_NOTE_IMAGE_DIMENSION);
-        limits.max_alloc = Some(420_000_000);
-        reader.limits(limits);
-        let image = reader.decode().map_err(|error| error.to_string())?;
-        if image.width() > app_core::note_sources::MAX_NOTE_IMAGE_DIMENSION
-            || image.height() > app_core::note_sources::MAX_NOTE_IMAGE_DIMENSION
-            || u64::from(image.width()).saturating_mul(u64::from(image.height()) as u64)
-                > app_core::note_sources::MAX_NOTE_IMAGE_PIXELS
-        {
-            return Err("image dimensions exceed the supported limit".to_string());
-        }
-        let rows = image_rows_for(
-            image.width(),
-            image.height(),
-            request.key.width,
-            request.max_rows,
-        );
-        let protocol = request
-            .picker
-            .new_protocol(image, Size::new(request.key.width, rows), Resize::Fit(None))
-            .map_err(|error| error.to_string())?;
-        Ok(Some((protocol, rows, stamp.unwrap_or_default())))
-    });
+    let result = load_image(&request);
     ImageResponse {
         key: request.key,
         result,
     }
 }
 
-fn hash_image_source(bytes: &[u8]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    bytes.hash(&mut hasher);
-    hasher.finish()
+fn load_image(request: &ImageRequest) -> Result<Option<(Protocol, u16, u64)>, String> {
+    let missing = || "image source is missing".to_string();
+    let sources = app_core::note_sources::NoteSourceService::new(request.db.clone());
+    let source = sources
+        .locate_image_by_id(&request.key.note_id, &request.key.src)?
+        .ok_or_else(missing)?;
+    // The stamp comes from file metadata or the image row, so an unchanged
+    // image is rechecked without reading or decoding its bytes.
+    let stamp = sources.image_stamp(&source)?.ok_or_else(missing)?;
+    if request.previous_stamp == Some(stamp) {
+        return Ok(None);
+    }
+    let bytes = sources.read_image(&source)?.ok_or_else(missing)?.bytes;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|error| error.to_string())?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(app_core::note_sources::MAX_NOTE_IMAGE_DIMENSION);
+    limits.max_image_height = Some(app_core::note_sources::MAX_NOTE_IMAGE_DIMENSION);
+    limits.max_alloc = Some(420_000_000);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|error| error.to_string())?;
+    if u64::from(image.width()).saturating_mul(u64::from(image.height()))
+        > app_core::note_sources::MAX_NOTE_IMAGE_PIXELS
+    {
+        return Err("image dimensions exceed the supported limit".to_string());
+    }
+    let rows = image_rows_for(
+        image.width(),
+        image.height(),
+        request.key.width,
+        request.max_rows,
+        request.picker.font_size(),
+    );
+    let protocol = request
+        .picker
+        .new_protocol(image, Size::new(request.key.width, rows), Resize::Fit(None))
+        .map_err(|error| error.to_string())?;
+    Ok(Some((protocol, rows, stamp)))
 }
 
-fn image_rows_for(pixel_width: u32, pixel_height: u32, cell_width: u16, max_rows: u16) -> u16 {
-    if pixel_width == 0 || cell_width == 0 || max_rows == 0 {
+/// Rows needed to show the image at `cell_width` columns, from the pixel
+/// aspect ratio and the terminal cell size.
+fn image_rows_for(
+    pixel_width: u32,
+    pixel_height: u32,
+    cell_width: u16,
+    max_rows: u16,
+    font: FontSize,
+) -> u16 {
+    if pixel_width == 0 || cell_width == 0 || max_rows == 0 || font.height == 0 {
         return 0;
     }
-    ((f64::from(pixel_height) / f64::from(pixel_width) * f64::from(cell_width) * 0.5).ceil() as u16)
+    let cell_aspect = f64::from(font.width) / f64::from(font.height);
+    ((f64::from(pixel_height) / f64::from(pixel_width) * f64::from(cell_width) * cell_aspect).ceil()
+        as u16)
         .clamp(1, max_rows)
 }
 
+/// Terminal graphics capabilities. Detection queries the terminal, so it
+/// runs on the first image preview rather than at startup.
 #[derive(Clone, Debug)]
 pub struct GraphicsContext {
     pub config: TerminalImagesConfig,
-    pub protocol: Option<ProtocolType>,
-    pub picker: Option<Picker>,
+    picker: Option<Picker>,
 }
 
 impl GraphicsContext {
-    pub fn new() -> Self {
+    /// Loads the `[terminal]` config and queries the terminal. Call only
+    /// while the terminal session is active (raw mode).
+    pub fn detect() -> Self {
         let config = load_terminal_images_config();
-        let inside_tmux = config.mode != "off" && tmux_detected();
-        if inside_tmux && !tmux_passthrough_enabled() {
-            return Self {
-                config,
-                protocol: None,
-                picker: None,
-            };
+        if config.mode == TerminalImagesMode::Off || (inside_tmux() && !tmux_passthrough_enabled())
+        {
+            return Self::disabled(config);
         }
-        Self::from_config(config)
-    }
-
-    pub fn from_config(config: TerminalImagesConfig) -> Self {
-        if config.mode == "off" {
-            return Self {
-                config,
-                protocol: None,
-                picker: None,
-            };
-        }
-
-        let mut picker = if config.mode == "auto" {
-            let queried = if std::io::stdin().is_terminal() {
-                Picker::from_query_stdio().ok()
-            } else {
-                None
-            };
-            queried.unwrap_or_else(Picker::halfblocks)
+        // The query also reports the cell size in pixels, which forced
+        // protocols need to size images correctly.
+        let picker = if std::io::stdin().is_terminal() {
+            Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
         } else {
             Picker::halfblocks()
         };
+        Self::with_picker(config, picker)
+    }
 
-        let detected_protocol = match config.mode.as_str() {
-            "sixel" => Some(ProtocolType::Sixel),
-            "kitty" => Some(ProtocolType::Kitty),
-            "iterm2" => Some(ProtocolType::Iterm2),
-            "halfblocks" => Some(ProtocolType::Halfblocks),
-            "auto" => {
-                let queried_proto = picker.protocol_type();
-                if queried_proto != ProtocolType::Halfblocks {
-                    Some(queried_proto)
-                } else if let Some(env_proto) = detect_protocol_from_env() {
-                    Some(env_proto)
-                } else {
-                    Some(ProtocolType::Halfblocks)
-                }
-            }
-            _ => Some(ProtocolType::Halfblocks),
+    /// Applies the configured mode to an already-detected picker. In `auto`
+    /// mode the picker's own choice stands.
+    pub fn with_picker(config: TerminalImagesConfig, mut picker: Picker) -> Self {
+        let forced = match config.mode {
+            TerminalImagesMode::Off => return Self::disabled(config),
+            TerminalImagesMode::Auto => None,
+            TerminalImagesMode::Sixel => Some(ProtocolType::Sixel),
+            TerminalImagesMode::Kitty => Some(ProtocolType::Kitty),
+            TerminalImagesMode::Iterm2 => Some(ProtocolType::Iterm2),
+            TerminalImagesMode::Halfblocks => Some(ProtocolType::Halfblocks),
         };
-
-        if let Some(proto) = detected_protocol {
-            picker.set_protocol_type(proto);
+        if let Some(protocol) = forced {
+            picker.set_protocol_type(protocol);
         }
-
         Self {
             config,
-            protocol: detected_protocol,
             picker: Some(picker),
         }
     }
 
-    pub fn is_enabled(&self) -> bool {
-        self.protocol.is_some() && self.picker.is_some()
+    fn disabled(config: TerminalImagesConfig) -> Self {
+        Self {
+            config,
+            picker: None,
+        }
     }
 
-    #[cfg(test)]
-    pub fn is_native_graphics(&self) -> bool {
-        matches!(
-            self.protocol,
-            Some(ProtocolType::Sixel) | Some(ProtocolType::Kitty) | Some(ProtocolType::Iterm2)
-        )
+    pub fn is_enabled(&self) -> bool {
+        self.picker.is_some()
     }
 
     #[cfg(test)]
     pub fn protocol(&self) -> Option<ProtocolType> {
-        self.protocol
-    }
-
-    #[cfg(test)]
-    pub fn protocol_name(&self) -> &'static str {
-        match self.protocol {
-            Some(ProtocolType::Sixel) => "sixel",
-            Some(ProtocolType::Kitty) => "kitty",
-            Some(ProtocolType::Iterm2) => "iterm2",
-            Some(ProtocolType::Halfblocks) => "halfblocks",
-            None => "off",
-        }
+        self.picker.as_ref().map(Picker::protocol_type)
     }
 
     pub fn picker(&self) -> Option<&Picker> {
@@ -483,76 +409,21 @@ impl GraphicsContext {
     }
 }
 
-impl Default for GraphicsContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl GraphicsContext {
-    /// Returns a disabled context that does not query the terminal.
-    /// Used as a placeholder in `TerminalApp` before the session is established.
-    pub fn disabled() -> Self {
-        Self {
-            config: crate::config::TerminalImagesConfig {
-                mode: "off".to_string(),
-                max_rows: 0,
-            },
-            protocol: None,
-            picker: None,
-        }
-    }
-}
-
-fn tmux_detected() -> bool {
-    env::var("TERM").is_ok_and(|term| term.starts_with("tmux"))
-        || env::var("TERM_PROGRAM").is_ok_and(|program| program == "tmux")
+fn inside_tmux() -> bool {
+    env::var_os("TMUX").is_some_and(|value| !value.is_empty())
 }
 
 fn tmux_passthrough_enabled() -> bool {
+    // `-A` includes values inherited from the global/session options, which
+    // is where `set -g allow-passthrough on` puts it.
     std::process::Command::new("tmux")
-        .args(["show-option", "-p", "-v", "allow-passthrough"])
+        .args(["show-options", "-A", "-p", "-v", "allow-passthrough"])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"on"))
-}
-
-pub fn detect_protocol_from_env() -> Option<ProtocolType> {
-    if env::var("GHOSTTY_RESOURCES_DIR").is_ok() {
-        return Some(ProtocolType::Kitty);
-    }
-    if let Ok(term) = env::var("TERM") {
-        let lower = term.to_ascii_lowercase();
-        if lower.contains("ghostty") || lower.contains("kitty") {
-            return Some(ProtocolType::Kitty);
-        }
-        if lower.contains("foot") {
-            return Some(ProtocolType::Sixel);
-        }
-    }
-    if env::var("KITTY_WINDOW_ID").is_ok() {
-        return Some(ProtocolType::Kitty);
-    }
-    if env::var("FOOT_TERMINAL").is_ok() {
-        return Some(ProtocolType::Sixel);
-    }
-    if let Ok(prog) = env::var("TERM_PROGRAM") {
-        let lower = prog.to_ascii_lowercase();
-        if lower.contains("iterm") {
-            return Some(ProtocolType::Iterm2);
-        }
-        if lower.contains("wezterm") {
-            return Some(ProtocolType::Kitty);
-        }
-        if lower.contains("ghostty") {
-            return Some(ProtocolType::Kitty);
-        }
-        if lower.contains("foot") {
-            return Some(ProtocolType::Sixel);
-        }
-    }
-    None
+        .is_ok_and(|output| {
+            output.status.success() && matches!(output.stdout.trim_ascii(), b"on" | b"all")
+        })
 }
 
 #[cfg(test)]
@@ -563,10 +434,14 @@ mod tests {
 
     #[test]
     fn image_row_height_uses_aspect_ratio_and_respects_cap() {
-        assert_eq!(image_rows_for(1600, 900, 80, 40), 23);
-        assert_eq!(image_rows_for(400, 900, 80, 40), 40);
-        assert_eq!(image_rows_for(400, 900, 80, 15), 15);
-        assert_eq!(image_rows_for(0, 900, 80, 15), 0);
+        let font = FontSize::new(10, 20);
+        assert_eq!(image_rows_for(1600, 900, 80, 40, font), 23);
+        assert_eq!(image_rows_for(400, 900, 80, 40, font), 40);
+        assert_eq!(image_rows_for(400, 900, 80, 15, font), 15);
+        assert_eq!(image_rows_for(0, 900, 80, 15, font), 0);
+        // Narrower cells fit fewer pixels per column, so the same image
+        // needs fewer rows at the same column width.
+        assert_eq!(image_rows_for(1600, 900, 80, 40, FontSize::new(8, 20)), 18);
     }
 
     #[test]
@@ -679,50 +554,42 @@ mod tests {
         let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
+    fn config(mode: TerminalImagesMode) -> TerminalImagesConfig {
+        TerminalImagesConfig { mode, max_rows: 15 }
+    }
+
     #[test]
     fn mode_off_disables_graphics() {
-        let ctx = GraphicsContext::from_config(TerminalImagesConfig {
-            mode: "off".to_string(),
-            max_rows: 15,
-        });
+        let ctx =
+            GraphicsContext::with_picker(config(TerminalImagesMode::Off), Picker::halfblocks());
         assert!(!ctx.is_enabled());
         assert_eq!(ctx.protocol(), None);
-        assert_eq!(ctx.protocol_name(), "off");
     }
 
     #[test]
-    fn mode_sixel_forces_sixel() {
-        let ctx = GraphicsContext::from_config(TerminalImagesConfig {
-            mode: "sixel".to_string(),
-            max_rows: 15,
-        });
-        assert!(ctx.is_enabled());
-        assert_eq!(ctx.protocol(), Some(ProtocolType::Sixel));
-        assert_eq!(ctx.protocol_name(), "sixel");
-        assert!(ctx.is_native_graphics());
+    fn forced_modes_override_protocol_but_keep_detected_cell_size() {
+        for (mode, protocol) in [
+            (TerminalImagesMode::Sixel, ProtocolType::Sixel),
+            (TerminalImagesMode::Kitty, ProtocolType::Kitty),
+            (TerminalImagesMode::Iterm2, ProtocolType::Iterm2),
+            (TerminalImagesMode::Halfblocks, ProtocolType::Halfblocks),
+        ] {
+            // Stands in for a picker from a terminal query that reported 8x16 cells.
+            #[allow(deprecated)]
+            let detected = Picker::from_fontsize(FontSize::new(8, 16));
+            let ctx = GraphicsContext::with_picker(config(mode), detected);
+            assert!(ctx.is_enabled());
+            assert_eq!(ctx.protocol(), Some(protocol));
+            let font = ctx.picker().map(Picker::font_size).expect("picker");
+            assert_eq!((font.width, font.height), (8, 16));
+        }
     }
 
     #[test]
-    fn mode_kitty_forces_kitty() {
-        let ctx = GraphicsContext::from_config(TerminalImagesConfig {
-            mode: "kitty".to_string(),
-            max_rows: 15,
-        });
-        assert!(ctx.is_enabled());
-        assert_eq!(ctx.protocol(), Some(ProtocolType::Kitty));
-        assert_eq!(ctx.protocol_name(), "kitty");
-        assert!(ctx.is_native_graphics());
-    }
-
-    #[test]
-    fn mode_halfblocks_forces_halfblocks() {
-        let ctx = GraphicsContext::from_config(TerminalImagesConfig {
-            mode: "halfblocks".to_string(),
-            max_rows: 15,
-        });
-        assert!(ctx.is_enabled());
-        assert_eq!(ctx.protocol(), Some(ProtocolType::Halfblocks));
-        assert_eq!(ctx.protocol_name(), "halfblocks");
-        assert!(!ctx.is_native_graphics());
+    fn auto_mode_keeps_the_detected_protocol() {
+        let mut detected = Picker::halfblocks();
+        detected.set_protocol_type(ProtocolType::Iterm2);
+        let ctx = GraphicsContext::with_picker(config(TerminalImagesMode::Auto), detected);
+        assert_eq!(ctx.protocol(), Some(ProtocolType::Iterm2));
     }
 }

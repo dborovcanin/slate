@@ -95,11 +95,12 @@ fn image_preview_dialog_opens_and_blocks_editor_input_until_escape() {
     let body = "![diagram](./assets/diagram.png)";
     let (db, mut app, path) = app_with_note(body);
     app.vim_enabled = false;
-    app.graphics = std::sync::Arc::new(crate::terminal::graphics::GraphicsContext::from_config(
+    app.graphics = Some(crate::terminal::graphics::GraphicsContext::with_picker(
         app_core::config::TerminalImagesConfig {
-            mode: "halfblocks".to_string(),
+            mode: app_core::config::TerminalImagesMode::Halfblocks,
             max_rows: 15,
         },
+        ratatui_image::picker::Picker::halfblocks(),
     ));
 
     app.handle_key(&db, Key::Ctrl('o')).expect("open preview");

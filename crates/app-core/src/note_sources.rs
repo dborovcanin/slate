@@ -348,6 +348,105 @@ impl NoteSourceService {
         Ok(resolve_image_markdown_path(identity, src)?
             .map(|path| path.to_string_lossy().to_string()))
     }
+
+    /// Locates the image a markdown `src` refers to without reading it.
+    /// Missing images and paths outside the note's allowed roots are `None`.
+    pub fn locate_image_by_id(
+        &self,
+        note_id: &str,
+        src: &str,
+    ) -> Result<Option<NoteImageSource>, String> {
+        let identity = self.parse_identity(note_id);
+        if let NoteIdentity::DbNote(id) = &identity {
+            if let Some(image_id) = parse_db_image_markdown_source(src) {
+                return Ok(Some(NoteImageSource::Stored {
+                    note_id: id.clone(),
+                    image_id: image_id.to_string(),
+                }));
+            }
+        }
+        Ok(resolve_image_markdown_path(identity, src)?.map(NoteImageSource::File))
+    }
+
+    /// A value that changes when the image content is replaced. Reads only
+    /// file metadata or the stored row's timestamp, never the image bytes.
+    pub fn image_stamp(&self, source: &NoteImageSource) -> Result<Option<u64>, String> {
+        match source {
+            NoteImageSource::File(path) => {
+                let Ok(metadata) = fs::metadata(path) else {
+                    return Ok(None);
+                };
+                if !metadata.is_file() {
+                    return Ok(None);
+                }
+                let modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(SystemTime::UNIX_EPOCH).ok())
+                    .unwrap_or_default();
+                Ok(Some(hash_stamp((modified.as_nanos(), metadata.len()))))
+            }
+            NoteImageSource::Stored { note_id, image_id } => {
+                Ok(self.db.note_image_stamp(note_id, image_id)?.map(hash_stamp))
+            }
+        }
+    }
+
+    /// Reads the image bytes, bounded by `MAX_NOTE_IMAGE_BYTES`.
+    pub fn read_image(&self, source: &NoteImageSource) -> Result<Option<NoteImageBytes>, String> {
+        match source {
+            NoteImageSource::File(path) => {
+                let bytes = read_image_file_bounded(path)?;
+                let extension = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(str::to_ascii_lowercase)
+                    .and_then(|ext| {
+                        image_metadata_for_extension(if ext == "jpeg" { "jpg" } else { &ext })
+                    })
+                    .map_or("png", |metadata| metadata.extension);
+                Ok(Some(NoteImageBytes { bytes, extension }))
+            }
+            NoteImageSource::Stored { note_id, image_id } => Ok(self
+                .db
+                .read_note_image_bytes(note_id, image_id)?
+                .map(|(mime, bytes)| NoteImageBytes {
+                    bytes,
+                    extension: image_extension_for_mime(&mime),
+                })),
+        }
+    }
+}
+
+/// Where a note image referenced from markdown lives.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NoteImageSource {
+    /// A local file inside the note's allowed image root.
+    File(PathBuf),
+    /// An image stored in the database for a DB note.
+    Stored { note_id: String, image_id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteImageBytes {
+    pub bytes: Vec<u8>,
+    /// File extension matching the image type, e.g. `png`.
+    pub extension: &'static str,
+}
+
+fn hash_stamp(value: impl std::hash::Hash) -> u64 {
+    use std::hash::Hasher as _;
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn image_extension_for_mime(mime: &str) -> &'static str {
+    ["png", "jpg", "gif", "webp", "bmp"]
+        .into_iter()
+        .filter_map(image_metadata_for_extension)
+        .find(|metadata| metadata.mime_type == mime)
+        .map_or("png", |metadata| metadata.extension)
 }
 
 pub fn validate_note_image_payload_len(byte_len: usize) -> Result<(), String> {
@@ -1562,6 +1661,51 @@ mod tests {
         assert!(abs_resolved.is_none());
 
         let _ = fs::remove_dir_all(note_dir);
+        drop(db);
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn stored_image_is_located_stamped_and_read_without_data_urls() {
+        let db_path = temp_db_path();
+        let db = Db::open(db_path.clone()).expect("db opens");
+        db.save_note("n1", "note").expect("seed note");
+        let service = NoteSourceService::new(db.clone());
+        let imported = service
+            .import_image_bytes_by_id("n1", Some("pic.png"), Some("image/png"), &tiny_png_bytes())
+            .expect("import image");
+
+        let source = service
+            .locate_image_by_id("n1", &imported.markdown_path)
+            .expect("locate")
+            .expect("stored image");
+        assert!(matches!(source, NoteImageSource::Stored { .. }));
+        let first_stamp = service.image_stamp(&source).expect("stamp").expect("ready");
+        assert_eq!(
+            service.image_stamp(&source).expect("stamp"),
+            Some(first_stamp)
+        );
+        let read = service.read_image(&source).expect("read").expect("bytes");
+        assert_eq!(read.bytes, tiny_png_bytes());
+        assert_eq!(read.extension, "png");
+
+        let mut replacement = Vec::new();
+        PngEncoder::new(&mut replacement)
+            .write_image(&[0, 0, 255, 0, 0, 255], 2, 1, ColorType::Rgb8.into())
+            .expect("png encode");
+        db.write_note_image_bytes(
+            "n1",
+            &imported.image_id,
+            Some("pic.png"),
+            Some("image/png"),
+            &replacement,
+        )
+        .expect("replace image");
+        assert_ne!(
+            service.image_stamp(&source).expect("stamp"),
+            Some(first_stamp)
+        );
+
         drop(db);
         cleanup_db_files(&db_path);
     }

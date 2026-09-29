@@ -4,6 +4,7 @@ mod app;
 mod calc_cache;
 mod clipboard;
 mod date_picker;
+mod external_open;
 mod folding;
 mod folding_state;
 pub(crate) mod graphics;

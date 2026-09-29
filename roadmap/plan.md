@@ -282,9 +282,9 @@ Open an image under the cursor with `gx` in Vim normal mode or `Ctrl+O` in non-V
 
 Render images in a bounded dialog instead of reserving rows in the document viewport.
 
-- **Protocol detection:** query the terminal once at startup (after entering raw mode) for sixel support, the kitty graphics protocol, and iTerm2; honour a `[terminal] images = "auto" | "sixel" | "kitty" | "iterm2" | "off"` config override. Inside tmux, use passthrough when enabled, otherwise use the external viewer.
+- **Protocol detection:** query the terminal once, on the first preview (startup never pays for it), for sixel support, the kitty graphics protocol, iTerm2, and the cell size in pixels; honour a `[terminal] images = "auto" | "sixel" | "kitty" | "iterm2" | "halfblocks" | "off"` config override, which replaces only the protocol and keeps the queried cell size. Inside tmux, use passthrough when `allow-passthrough` is on (including inherited global values), otherwise use the external viewer.
 - **Rendering:** use `ratatui-image` (sixel/kitty/iTerm2/half-block backends) in a bounded dialog. Escape closes it; image rows do not affect document wrapping, cursor placement, or scrolling.
-- **Caching:** decode and resize off the input path into a bounded cache keyed by note, source, and dialog dimensions.
+- **Caching:** decode and resize off the input path into a bounded cache keyed by note, source, and dialog dimensions. Rechecks compare a cheap stamp (file metadata or the stored image row) and never re-read unchanged image bytes.
 - **Fallbacks:** failed previews offer the external viewer with `o`; `images = "off"` opens the external viewer directly. Remote images are not fetched.
 
 ### Checklist

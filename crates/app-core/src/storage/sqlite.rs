@@ -2081,38 +2081,65 @@ impl Db {
         note_id: &str,
         image_id: &str,
     ) -> Result<Option<String>, String> {
+        Ok(self
+            .read_note_image_bytes(note_id, image_id)?
+            .map(|(mime, bytes)| format!("data:{mime};base64,{}", BASE64_STANDARD.encode(bytes))))
+    }
+
+    /// MIME type and bytes of a ready stored image.
+    pub fn read_note_image_bytes(
+        &self,
+        note_id: &str,
+        image_id: &str,
+    ) -> Result<Option<(String, Vec<u8>)>, String> {
         let conn = self.conn.lock()?;
         let row = conn
             .query_row(
-                "SELECT mime_type, image_bytes, status
+                "SELECT mime_type, image_bytes
                  FROM note_images
-                 WHERE id = ?1 AND note_id = ?2",
+                 WHERE id = ?1 AND note_id = ?2 AND status = 'ready'",
                 rusqlite::params![image_id, note_id],
                 |row| {
                     Ok((
                         row.get::<_, Option<String>>(0)?,
                         row.get::<_, Option<Vec<u8>>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
                     ))
                 },
             )
             .optional()
             .map_err(|e| e.to_string())?;
-        let Some((mime_type, image_bytes, status)) = row else {
-            return Ok(None);
-        };
-        if status.as_deref().unwrap_or("pending") != "ready" {
-            return Ok(None);
-        }
-        let Some(bytes) = image_bytes else {
+        let Some((mime_type, Some(bytes))) = row else {
             return Ok(None);
         };
         if bytes.is_empty() {
             return Ok(None);
         }
         let mime = normalize_mime_value(mime_type.unwrap_or_else(|| "image/png".to_string()));
-        let encoded = BASE64_STANDARD.encode(bytes);
-        Ok(Some(format!("data:{mime};base64,{encoded}")))
+        Ok(Some((mime, bytes)))
+    }
+
+    /// `(updated_at, byte_len)` of a ready stored image, read without loading
+    /// the image bytes so callers can cheaply detect replacements.
+    pub fn note_image_stamp(
+        &self,
+        note_id: &str,
+        image_id: &str,
+    ) -> Result<Option<(String, i64)>, String> {
+        let conn = self.conn.lock()?;
+        conn.query_row(
+            "SELECT updated_at, byte_len
+             FROM note_images
+             WHERE id = ?1 AND note_id = ?2 AND status = 'ready'",
+            rusqlite::params![image_id, note_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                    row.get::<_, Option<i64>>(1)?.unwrap_or_default(),
+                ))
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())
     }
 
     fn ensure_note_allows_image_mutation(

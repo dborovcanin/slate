@@ -1243,7 +1243,8 @@ impl TerminalApp {
         cols: usize,
         db: Option<&app_core::storage::Db>,
     ) {
-        let Some(preview) = self.image_preview.clone() else {
+        let (Some(preview), Some(graphics)) = (self.image_preview.clone(), self.graphics.as_ref())
+        else {
             return;
         };
         if rows < 8 || cols < 20 {
@@ -1254,11 +1255,11 @@ impl TerminalApp {
         // protocols round pixel placement to cell boundaries, so using every
         // interior cell can make the image touch or cross the frame.
         let image_width = cols.saturating_sub(12).min(80);
-        let max_image_rows = self.graphics.max_rows().min(rows.saturating_sub(9)).max(1);
+        let max_image_rows = graphics.max_rows().min(rows.saturating_sub(9)).max(1);
         let width = u16::try_from(image_width).unwrap_or(u16::MAX);
         let max_rows = u16::try_from(max_image_rows).unwrap_or(u16::MAX);
 
-        if let (Some(db), Some(picker)) = (db, self.graphics.picker()) {
+        if let (Some(db), Some(picker)) = (db, graphics.picker()) {
             self.image_renderer.request(
                 db,
                 &self.active_note.id,

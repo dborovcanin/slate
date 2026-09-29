@@ -1023,10 +1023,6 @@ pub fn find_markdown_image_at_cursor(
         .find(|entry| cursor_col >= entry.from && cursor_col <= entry.to)
 }
 
-pub fn markdown_image_at_cursor(text: &str, cursor_col: usize) -> Option<MarkdownImageMatch> {
-    find_markdown_image_at_cursor(text, cursor_col)
-}
-
 pub fn find_markdown_image_matches(text: &str) -> Vec<MarkdownImageMatch> {
     let tokens = tokenize_inline_markdown(text);
     let chars: Vec<char> = text.chars().collect();
