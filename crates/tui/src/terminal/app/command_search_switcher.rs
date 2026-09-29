@@ -2265,6 +2265,8 @@ impl TerminalApp {
     }
 
     pub(super) fn save_with_options(&mut self, db: &Db, force: bool) -> Result<(), String> {
+        // Never race an in-flight autosave on the note's revision.
+        self.poll_background_save(db, true)?;
         let started = Instant::now();
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
@@ -2311,6 +2313,101 @@ impl TerminalApp {
             if force { "forced" } else { "normal" },
             started.elapsed(),
         );
+        Ok(())
+    }
+
+    /// Autosave without blocking input: the write runs on a thread and
+    /// `poll_background_save` applies the result.
+    pub(super) fn start_background_autosave(&mut self, db: &Db) -> Result<(), String> {
+        if self.background_save.is_some() {
+            return Ok(());
+        }
+        if self.format_on_save {
+            self.execute_terminal_command(db, "format");
+        }
+        if !self.dirty {
+            return Ok(());
+        }
+        if !self.active_note_is_editable() {
+            self.set_locked_note_status();
+            return Ok(());
+        }
+        self.sync_reminder_ghosts_if_dirty(db)?;
+        let body = self
+            .editor
+            .joined_text_cache
+            .clone()
+            .unwrap_or_else(|| join_lines(&self.editor.lines));
+        let note_id = self.active_note.id.clone();
+        let options = app_core::note_sources::SaveOptions {
+            expected_revision: Some(self.active_note.updated_at.clone()),
+            force: false,
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let db = db.clone();
+        let thread_note_id = note_id.clone();
+        std::thread::spawn(move || {
+            let result =
+                note_sources(&db).save_note_revision_by_id(&thread_note_id, &body, options);
+            let _ = tx.send(result);
+        });
+        self.background_save = Some(super::BackgroundSave {
+            rx,
+            note_id,
+            edit_mark: self.last_edit,
+        });
+        Ok(())
+    }
+
+    /// Applies a finished background autosave; with `wait`, blocks until the
+    /// in-flight one finishes. Errors other than a locked note propagate,
+    /// as they did when autosave ran inline.
+    pub(super) fn poll_background_save(&mut self, db: &Db, wait: bool) -> Result<(), String> {
+        let Some(job) = self.background_save.as_ref() else {
+            return Ok(());
+        };
+        let result = if wait {
+            job.rx
+                .recv()
+                .unwrap_or_else(|_| Err("autosave stopped unexpectedly".to_string()))
+        } else {
+            match job.rx.try_recv() {
+                Ok(result) => result,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Err("autosave stopped unexpectedly".to_string())
+                }
+            }
+        };
+        let job = self.background_save.take().expect("save in flight");
+        let saved = match result {
+            Ok(saved) => saved,
+            Err(error) if Self::is_locked_note_error(&error) => {
+                self.set_locked_note_status();
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        };
+        if job.note_id != self.active_note.id {
+            return Ok(());
+        }
+        self.active_note.id = saved.id;
+        self.active_note.updated_at = saved.updated_at;
+        if self.last_edit == job.edit_mark {
+            self.dirty = false;
+            self.history.checkpoint(
+                &self.editor.lines,
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+            );
+        }
+        self.status = format!("autosaved {}", self.active_note.id);
+        self.render_state.dirty = true;
+        if self.switcher.needs_title_refresh {
+            self.refresh_switcher_items(db)?;
+        } else {
+            self.update_switcher_item_after_body_save();
+        }
         Ok(())
     }
 

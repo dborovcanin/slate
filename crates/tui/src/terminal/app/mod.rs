@@ -486,6 +486,15 @@ impl Default for DatePickerState {
     }
 }
 
+/// An autosave running on a background thread.
+struct BackgroundSave {
+    rx: mpsc::Receiver<Result<app_core::storage::NoteRevision, String>>,
+    note_id: String,
+    /// `last_edit` when the saved text was taken: later edits keep the note
+    /// dirty once the save lands.
+    edit_mark: Instant,
+}
+
 /// Calc recompute scheduling/runtime flags (distinct from `calc: CalcCache`,
 /// which holds the ghost results). These coordinate the debounced viewport/full
 /// eval passes; all written on the edit hot path but read/written independently
@@ -678,6 +687,8 @@ struct TerminalApp {
     quit: bool,
     force_quit: bool,
     backup: BackupState,
+    /// Autosave writing on a background thread, if one is in flight.
+    background_save: Option<BackgroundSave>,
     // Date picker overlay
     date_picker: DatePickerState,
     // Vim state
@@ -1098,6 +1109,7 @@ impl TerminalApp {
             quit: false,
             force_quit: false,
             backup: BackupState::default(),
+            background_save: None,
             date_picker: DatePickerState {
                 format: date_format,
                 time_format: date_time_format,
@@ -1276,6 +1288,7 @@ impl TerminalApp {
             // Poll for backup thread completion on every iteration so the result
             // is applied promptly whether or not the user is pressing keys.
             self.maybe_finish_backup_op(db);
+            self.poll_background_save(db, false)?;
 
             if self.image_renderer.poll() {
                 self.render_state.dirty = true;
@@ -1360,22 +1373,12 @@ impl TerminalApp {
         self.maybe_sync_calc_index_after_idle();
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
+        self.poll_background_save(db, false)?;
         if !self.autosave_enabled {
             return Ok(());
         }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {
-            match self.save(db) {
-                Ok(()) => {
-                    self.status = format!("autosaved {}", self.active_note.id);
-                }
-                Err(error) => {
-                    if Self::is_locked_note_error(&error) {
-                        self.set_locked_note_status();
-                    } else {
-                        return Err(error);
-                    }
-                }
-            }
+            self.start_background_autosave(db)?;
         }
         Ok(())
     }

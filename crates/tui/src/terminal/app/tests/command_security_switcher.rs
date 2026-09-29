@@ -2520,3 +2520,82 @@ fn today_command_opens_the_daily_note_with_cursor_at_the_end() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+fn past_autosave_debounce() -> Instant {
+    Instant::now() - Duration::from_millis(crate::terminal::app::AUTOSAVE_DEBOUNCE_MS + 5)
+}
+
+#[test]
+fn autosave_writes_on_a_background_thread() {
+    let (db, mut app, path) = app_with_note("one");
+    app.editor.lines = vec!["one updated".to_string()];
+    app.dirty = true;
+    app.last_edit = past_autosave_debounce();
+
+    app.maybe_autosave(&db).expect("idle tick");
+    assert!(app.background_save.is_some(), "save runs in the background");
+    app.poll_background_save(&db, true).expect("save lands");
+
+    assert!(!app.dirty);
+    assert!(app.status.starts_with("autosaved"));
+    let persisted = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(persisted.body, "one updated");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn edits_during_a_background_autosave_are_saved_next() {
+    let (db, mut app, path) = app_with_note("one");
+    app.editor.lines = vec!["two".to_string()];
+    app.dirty = true;
+    app.last_edit = past_autosave_debounce();
+    app.maybe_autosave(&db).expect("first autosave starts");
+
+    // Typed while the first write is in flight.
+    app.editor.lines = vec!["three".to_string()];
+    app.editor.joined_text_cache = None;
+    app.last_edit = Instant::now();
+    app.poll_background_save(&db, true)
+        .expect("first save lands");
+    assert!(app.dirty, "the newer text is still unsaved");
+
+    app.last_edit = past_autosave_debounce();
+    app.maybe_autosave(&db).expect("second autosave starts");
+    app.poll_background_save(&db, true)
+        .expect("second save lands without a conflict");
+    assert!(!app.dirty);
+    let persisted = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(persisted.body, "three");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn write_command_waits_for_an_in_flight_autosave() {
+    let (db, mut app, path) = app_with_note("one");
+    app.editor.lines = vec!["two".to_string()];
+    app.dirty = true;
+    app.last_edit = past_autosave_debounce();
+    app.maybe_autosave(&db).expect("autosave starts");
+
+    app.editor.lines = vec!["three".to_string()];
+    app.editor.joined_text_cache = None;
+    app.dirty = true;
+    app.last_edit = Instant::now();
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.execute_terminal_command(&db, "w");
+    assert_eq!(app.status, "written");
+    assert!(app.background_save.is_none());
+    let persisted = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(persisted.body, "three");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
