@@ -71,6 +71,8 @@ monthly_income := 5000
 **`crates/tui/src/lib.rs`**
 - `run_terminal_session` receives `core.cross_note_var_index_arc()`
 
+**Loading values on open (2026-09-29):** the first calc pass after opening a note, and viewport evaluation of large notes, now load linked notes' values first, so `[[SHORTID]].var` lines show values without being edited. Large notes do this on the background calc preparation.
+
 ### Deferred
 
 **Module gating**: cross-note refs are gated implicitly by `variables_enabled`. A dedicated `cross_note` module flag is deferred until the feature is stable.

@@ -41,7 +41,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 12. **Mouse support** - click to place the cursor, wheel scroll, click rows in lists (crossterm already reports mouse events).
 
 Also on the list:
-- **Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
+- ~~**Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready).~~ Done 2026-09-29 without moving it: viewport evaluation reuses a cached whole-note preparation and costs ~2 ms at 30k lines and ~5 ms at 100k (see "Performance Backlog"). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
 - **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; replace the Node perf scripts with a Rust or shell runner; sticky goal column for screen-row motions.
 - **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, per-note history and diff view.
 
@@ -128,8 +128,8 @@ Action points:
 
 Action points:
 
-1. Move TUI cross-note preload fully off the input/render loop, with visible pending/stale state.
-2. Tighten invalidation/remap behavior for large-note edits to avoid stale calc state.
+1. Move TUI cross-note preload fully off the input/render loop, with visible pending/stale state. Partial: large notes load linked-note values on the background calc preparation at open; the Tab/autocomplete path still waits (`wait_timeout_while`).
+2. ~~Tighten invalidation/remap behavior for large-note edits to avoid stale calc state.~~ Done 2026-09-29: structural edits replay their line splices on cached results, the dependency index and cached preparation update by line-hash span, and randomized tests compare them with fresh builds.
 
 ### Table Formula Expressions
 
@@ -173,8 +173,24 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 
 ## Performance Backlog
 
-- [ ] Adaptive large-note mode (follow-up to the 30,000-line full-feature cutoff): viewport-first calc, lazy fold/indexing, bounded caches, memory-bounded undo spans.
-- [ ] Large-note regression gates: 30k and 100k latency gates exist (`large_note_perf`, limits in `perf/baselines/large_note.json`). Remaining: 200k/400k sizes, memory budgets, and faster open and first search at 100k+.
+- [ ] Adaptive large-note mode (follow-up to the 30,000-line full-feature cutoff): ~~viewport-first calc~~, ~~lazy fold/indexing~~, bounded caches, memory-bounded undo spans. Viewport calc, deferred fold rescans and background index builds are done; bounded caches and undo memory remain.
+- [ ] Large-note regression gates: ~~30k and 100k latency gates~~ (`large_note_perf`, limits in `perf/baselines/large_note.json`, run by `scripts/perf-check.mjs`). Remaining: 200k/400k sizes and memory budgets.
+
+Done 2026-09-29 (30k / 100k lines, p50 before -> after, from `large_note_perf`):
+
+- [x] ~~Variable highlighting scanned every variable name per rendered line~~ -> one Aho-Corasick matcher per name set (render 4.2 ms -> 0.33 ms on a 1.8k-line calc note).
+- [x] ~~Every key repainted, so key bursts piled up and dropped input~~ -> queued keys are handled before painting, at most 16 ms between frames.
+- [x] ~~Calc variable regex degraded with thousands of names~~ -> Aho-Corasick matcher with the same word-bounded, longest-match rules (`j` at 100k: 98 ms -> 5 ms).
+- [x] ~~Viewport evaluation redid whole-note work on every scroll step~~ -> dependency sync skips unchanged lines; the whole-note preparation, cross-note ref scan and variable names are cached and updated by span (`j`: 55 -> 1.9 ms at 30k).
+- [x] ~~Structural edits rebuilt the dependency index, table formula index and line metadata~~ -> span splices; results shift instead of re-evaluating when the changed lines take no part in calc (`dd`: 118 -> 6 ms at 30k, 25-60 s -> 17 ms at 100k).
+- [x] ~~Undo/redo ran a full calc recompute and fold rescan~~ -> viewport refresh and deferred fold rescan (64 -> 5 ms at 30k, 212 -> 13 ms at 100k).
+- [x] ~~Vim edits forced a synchronous fold rescan~~ -> deferred to idle while nothing is folded; folds are no longer scanned above the 30k-line cutoff.
+- [x] ~~Autosave blocked input~~ -> saves on a background thread with the same revision check (60-90 ms at 100k).
+- [x] ~~Idle ticks blocked for up to ~200 ms at 100k~~ -> first index/metadata build on a thread, one heavy calc task per tick (p95 161 -> 21 ms).
+- [x] ~~Opening a large note prepared calc inline~~ -> prepared off the input thread above 20k lines; the note paints first (open 26 -> 9 ms at 30k, 89 -> 29 ms at 100k) and values fill in when ready.
+- [x] ~~Deep variable chains overflowed the stack~~ -> iterative resolver.
+- [x] ~~Cross-note values stayed blank after opening a note~~ -> linked notes load before the first calc pass.
+- [x] ~~Search panicked when lowercasing changed a line's length~~ -> per-char matching mapped back to original columns.
 
 Measurement references: `roadmap/performance.md`, `roadmap/perf-multirow-table.md`.
 
@@ -190,9 +206,9 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 | Versioned SQLite migrations | Postponed | Only `migrations/0001_init.sql` exists. Introduce `PRAGMA user_version` (or a `schema_migrations` table), ordered migrations, migration tests, and backup guidance for schema changes. | 10 | 6 |
 | Backup restore validation | Backlog | Run `PRAGMA integrity_check` and verify the expected schema on a staged backup before restore; guard restore around open notes and background work. | 8 | 5 |
 | Zeroize sensitive memory | Backlog | Zeroize passwords and derived encryption keys after use; avoid cloning key material. | 8 | 6 |
-| Move cross-note preload off the event loop | Backlog | The terminal still waits (`wait_timeout_while` in `editing.rs`) for cross-note dependency evaluation; evaluate asynchronously and show pending/stale state instead. | 7 | 6 |
+| Move cross-note preload off the event loop | Partial | Opening a large note loads linked-note values on the background calc preparation. The Tab/autocomplete path still waits (`wait_timeout_while` in `editing.rs`); evaluate asynchronously and show pending/stale state instead. | 7 | 6 |
 | Reduce undo memory spikes | Partial | Span-based history paths exist; extend them so remaining large-note edits avoid full line-vector snapshots. | 8 | 7 |
-| Performance budgets in CI | Partial | CI runs the startup and table perf checks. Add budgets for frame render, calc delta evaluation, save, and large-note opening. | 8 | 6 |
+| Performance budgets in CI | Partial | CI runs the startup, table and large-note checks; the large-note check budgets open, scrolling, typing, structural edits, undo/redo, search and idle ticks at 30k and 100k lines. Remaining: memory budgets and 200k/400k sizes. | 8 | 6 |
 | Large-note degradation | Backlog | See "Performance Backlog": replace the all-or-nothing 30,000-line cutoff with per-feature budgets and visible degraded-state indicators. | 8 | 7 |
 | Unambiguous wiki-link resolution | Backlog | Resolve exact ids, aliases, or ask to disambiguate instead of taking the most recent note matching an 8-char prefix. | 6 | 5 |
 | File-note trust boundary | Partial | Asset access is constrained in `app-core`; the terminal should make clear that a file-backed note is an external file saved directly to its path (e.g. a title-bar badge). | 7 | 4 |
