@@ -8,6 +8,7 @@ use crate::terminal::render_styles::{
     apply_code_token_styles, apply_inline_token_styles, apply_line_styles_from_info,
     apply_variable_styles, CharStyle,
 };
+pub use crate::terminal::render_styles::VariableNames;
 pub use crate::terminal::theme::RenderPalette;
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
@@ -506,7 +507,7 @@ pub struct LineDecorations<'a> {
     pub reminder_strikethrough: bool,
     pub search_ranges: &'a [(usize, usize)],
     pub current_search_ranges: &'a [(usize, usize)],
-    pub variable_names: &'a [String],
+    pub variable_names: Option<&'a VariableNames>,
     pub dim_ranges: &'a [(usize, usize)],
     pub selection_ranges: &'a [(usize, usize)],
     pub accent_ranges: &'a [(usize, usize)],
@@ -1320,9 +1321,9 @@ mod tests {
     fn render_highlights_variables_in_bold_with_distinct_color() {
         let mut ctx = RenderContext::new();
         let palette = RenderPalette::default();
-        let vars = vec!["subtotal".to_string(), "tax rate".to_string()];
+        let vars = VariableNames::new(vec!["subtotal".to_string(), "tax rate".to_string()]);
         let deco = LineDecorations {
-            variable_names: &vars,
+            variable_names: Some(&vars),
             ..LineDecorations::default()
         };
         let out = render(&mut ctx, "total = subtotal + tax rate", 80, 0, deco);
@@ -1335,9 +1336,9 @@ mod tests {
     fn render_variable_highlighting_is_case_insensitive() {
         let mut ctx = RenderContext::new();
         let palette = RenderPalette::default();
-        let vars = vec!["daily".to_string()];
+        let vars = VariableNames::new(vec!["daily".to_string()]);
         let deco = LineDecorations {
-            variable_names: &vars,
+            variable_names: Some(&vars),
             ..LineDecorations::default()
         };
 

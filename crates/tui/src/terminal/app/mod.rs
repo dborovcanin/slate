@@ -979,7 +979,7 @@ impl TerminalApp {
             CalcData {
                 line_results: vec![None; lines.len()],
                 cell_results: vec![Vec::new(); lines.len()],
-                variable_names: Vec::new(),
+                variable_names: Default::default(),
             }
         } else {
             compute_calc_data(
@@ -1089,7 +1089,7 @@ impl TerminalApp {
                 engine: calc_engine,
                 results: calc_data.line_results,
                 cell_results: calc_data.cell_results,
-                variable_names: calc_data.variable_names,
+                variable_names: calc_data.variable_names.into(),
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,

@@ -1403,7 +1403,7 @@ fn defer_calc_state_after_edit_clears_full_cached_results_vector() {
         Some("4".to_string()),
         Some("6".to_string()),
     ];
-    app.calc.variable_names = vec!["total".to_string()];
+    app.calc.variable_names.set(vec!["total".to_string()]);
     app.editor.cursor_line = 1;
 
     app.defer_calc_state_after_edit();

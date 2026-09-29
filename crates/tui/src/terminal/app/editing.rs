@@ -1569,11 +1569,11 @@ impl TerminalApp {
                 crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
                     self.calc.calc_dependency_index.as_ref(),
                 );
-            self.calc.variable_names = if variable_names.is_empty() {
+            self.calc.variable_names.set(if variable_names.is_empty() {
                 calc_data.variable_names
             } else {
                 variable_names
-            };
+            });
             self.calc.pathological_window_streak = 0;
             self.calc.forced_full_recompute_remaining = 0;
             self.calc.stale = false;
@@ -1885,7 +1885,7 @@ impl TerminalApp {
         }
         self.calc.results = new_results;
         self.calc.cell_results = new_cell_results;
-        self.calc.variable_names = variable_names;
+        self.calc.variable_names.set(variable_names);
         self.calc.stale = false;
         self.calc_runtime.recompute_pending = false;
         self.calc_runtime.recompute_due_at = None;
@@ -3803,11 +3803,11 @@ impl TerminalApp {
             crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
                 self.calc.calc_dependency_index.as_ref(),
             );
-        self.calc.variable_names = if variable_names.is_empty() {
+        self.calc.variable_names.set(if variable_names.is_empty() {
             calc_data.variable_names
         } else {
             variable_names
-        };
+        });
     }
 
     // --- Wiki-link autocomplete ---

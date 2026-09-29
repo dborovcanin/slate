@@ -2350,14 +2350,17 @@ pub(super) struct DisplayLine {
 }
 
 impl DisplayLine {
-    pub(super) fn decorations<'a>(&'a self, variable_names: &'a [String]) -> LineDecorations<'a> {
+    pub(super) fn decorations<'a>(
+        &'a self,
+        variable_names: &'a render::VariableNames,
+    ) -> LineDecorations<'a> {
         LineDecorations {
             calc_ghost: self.calc_ghost.as_deref(),
             reminder_ghost: self.reminder_ghost.as_deref(),
             reminder_strikethrough: self.reminder_strikethrough,
             search_ranges: &self.search_ranges,
             current_search_ranges: &self.current_search_ranges,
-            variable_names,
+            variable_names: Some(variable_names),
             dim_ranges: &self.dim_ranges,
             selection_ranges: &self.selection_ranges,
             accent_ranges: &self.accent_ranges,

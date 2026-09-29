@@ -7,6 +7,8 @@ use crate::terminal::markdown_view::{
     wiki_link_hidden_token_ranges,
 };
 use crate::terminal::theme::RenderPalette;
+use aho_corasick::AhoCorasick;
+use std::cell::OnceCell;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct CharStyle {
@@ -43,44 +45,89 @@ fn has_variable_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool 
     left_ok && right_ok
 }
 
-fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, usize)> {
-    if text.is_empty() || variable_names.is_empty() {
+/// Calc variable names plus a matcher for highlighting them, built on first
+/// use. A note can define thousands of variables, so rendered lines must not
+/// be scanned once per name.
+#[derive(Default)]
+pub struct VariableNames {
+    names: Vec<String>,
+    matcher: OnceCell<Option<AhoCorasick>>,
+}
+
+impl VariableNames {
+    pub fn new(names: Vec<String>) -> Self {
+        Self {
+            names,
+            matcher: OnceCell::new(),
+        }
+    }
+
+    /// Replaces the names, keeping the built matcher when they are unchanged
+    /// (the common case for recomputes triggered by edits).
+    pub fn set(&mut self, names: Vec<String>) {
+        if names != self.names {
+            *self = Self::new(names);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.set(Vec::new());
+    }
+
+    pub fn shrink_to_fit(&mut self) {
+        self.names.shrink_to_fit();
+    }
+
+    fn matcher(&self) -> Option<&AhoCorasick> {
+        self.matcher
+            .get_or_init(|| {
+                let needles: Vec<&str> = self
+                    .names
+                    .iter()
+                    .map(|name| name.trim())
+                    .filter(|name| !name.is_empty())
+                    .collect();
+                if needles.is_empty() {
+                    return None;
+                }
+                AhoCorasick::builder()
+                    .ascii_case_insensitive(true)
+                    .build(needles)
+                    .ok()
+            })
+            .as_ref()
+    }
+}
+
+impl std::ops::Deref for VariableNames {
+    type Target = [String];
+
+    fn deref(&self) -> &[String] {
+        &self.names
+    }
+}
+
+impl From<Vec<String>> for VariableNames {
+    fn from(names: Vec<String>) -> Self {
+        Self::new(names)
+    }
+}
+
+fn find_variable_ranges(text: &str, variable_names: &VariableNames) -> Vec<(usize, usize)> {
+    if text.is_empty() {
         return Vec::new();
     }
+    let Some(matcher) = variable_names.matcher() else {
+        return Vec::new();
+    };
 
+    // Byte ranges, matched ASCII case-insensitively against the trimmed names.
     let bytes = text.as_bytes();
-    // Keep byte indices stable (for style slicing) while matching variables
-    // case-insensitively, matching normalized variable names.
-    let lower_bytes = bytes
-        .iter()
-        .map(|byte| byte.to_ascii_lowercase())
-        .collect::<Vec<_>>();
-    let mut matches: Vec<(usize, usize)> = Vec::new();
-
-    for raw in variable_names {
-        let needle_text = raw.trim();
-        if needle_text.is_empty() {
-            continue;
-        }
-        let needle = needle_text
-            .as_bytes()
-            .iter()
-            .map(|byte| byte.to_ascii_lowercase())
-            .collect::<Vec<_>>();
-        if needle.len() > bytes.len() {
-            continue;
-        }
-
-        let mut idx = 0usize;
-        while idx + needle.len() <= bytes.len() {
-            let end = idx + needle.len();
-            if lower_bytes[idx..end] == needle[..] && has_variable_word_boundaries(bytes, idx, end)
-            {
-                matches.push((idx, end));
-            }
-            idx += 1;
-        }
-    }
+    let mut matches: Vec<(usize, usize)> = matcher
+        .find_overlapping_iter(text)
+        .map(|found| (found.start(), found.end()))
+        .filter(|&(start, end)| has_variable_word_boundaries(bytes, start, end))
+        .collect();
 
     if matches.len() <= 1 {
         return matches;
@@ -107,9 +154,12 @@ fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, us
 pub(super) fn apply_variable_styles(
     chars: &[char],
     styles: &mut [CharStyle],
-    variable_names: &[String],
+    variable_names: Option<&VariableNames>,
     variable_color: u8,
 ) {
+    let Some(variable_names) = variable_names else {
+        return;
+    };
     if chars.is_empty() || variable_names.is_empty() {
         return;
     }
@@ -272,5 +322,37 @@ pub(super) fn apply_code_token_styles(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variable_ranges_fall_back_to_shorter_name_at_word_boundary() {
+        let names = VariableNames::new(vec![
+            "tax".to_string(),
+            " Tax Rate ".to_string(),
+            String::new(),
+        ]);
+        assert_eq!(
+            find_variable_ranges("tax rates TAX", &names),
+            vec![(0, 3), (10, 13)]
+        );
+        assert_eq!(find_variable_ranges("x = tax rate", &names), vec![(4, 12)]);
+        assert_eq!(find_variable_ranges("syntax", &names), Vec::new());
+    }
+
+    #[test]
+    fn variable_names_set_keeps_matcher_for_unchanged_names() {
+        let mut names = VariableNames::new(vec!["a".to_string()]);
+        assert!(names.matcher().is_some());
+        names.set(vec!["a".to_string()]);
+        assert!(names.matcher.get().is_some());
+        names.set(vec!["b".to_string()]);
+        assert!(names.matcher.get().is_none());
+        names.clear();
+        assert!(names.matcher().is_none());
     }
 }
