@@ -1536,6 +1536,21 @@ pub struct CalcDependencyIndex {
     /// Hash of each line as the index last saw it, so a sync can skip lines
     /// in its range that did not actually change.
     line_hashes: Vec<u64>,
+    /// Changes whenever the index is rebuilt or a sync changes it.
+    revision: u64,
+}
+
+static NEXT_INDEX_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+fn next_index_revision() -> u64 {
+    NEXT_INDEX_REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+impl CalcDependencyIndex {
+    /// Identifies the index state; equal revisions mean equal contents.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
 }
 
 fn build_table_formula_dependency_block(
@@ -1798,6 +1813,7 @@ pub fn build_calc_dependency_index(
         variable_graph: build_variable_dependency_graph(lines, mask),
         table_formula_index: build_table_formula_dependency_index(lines, mask),
         line_hashes: hash_lines(lines),
+        revision: next_index_revision(),
     })
 }
 
@@ -1884,6 +1900,7 @@ pub fn sync_calc_dependency_index(
         let Some((from, old_to, new_to)) = changed else {
             return;
         };
+        cached.revision = next_index_revision();
         splice_variable_dependency_graph(
             &mut cached.variable_graph,
             lines,
