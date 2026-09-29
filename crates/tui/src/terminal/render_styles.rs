@@ -52,6 +52,8 @@ fn has_variable_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool 
 pub struct VariableNames {
     names: Vec<String>,
     matcher: OnceCell<Option<AhoCorasick>>,
+    /// Revision of the source the names were derived from, when known.
+    source_revision: Option<u64>,
 }
 
 impl VariableNames {
@@ -59,7 +61,20 @@ impl VariableNames {
         Self {
             names,
             matcher: OnceCell::new(),
+            source_revision: None,
         }
+    }
+
+    /// `set`, recording that the names were derived from source `revision`.
+    pub fn set_from_revision(&mut self, names: Vec<String>, revision: u64) {
+        self.set(names);
+        self.source_revision = Some(revision);
+    }
+
+    /// The revision passed to the last `set_from_revision`, while the names
+    /// have not changed since.
+    pub fn source_revision(&self) -> Option<u64> {
+        self.source_revision
     }
 
     /// Replaces the names, keeping the built matcher when they are unchanged

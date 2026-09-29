@@ -651,7 +651,10 @@ impl TerminalApp {
         }
 
         let mask = self.calc_feature_mask();
-        if self.calc.line_metadata.len() == next_len {
+        if self.calc.line_metadata.is_empty() {
+            // Building metadata reads every line; the idle tick does it.
+            self.calc_runtime.index_sync_pending = true;
+        } else if self.calc.line_metadata.len() == next_len {
             for (idx, hash) in new_hashes.iter().enumerate() {
                 if self.calc.line_metadata[idx].hash != *hash {
                     self.calc.line_metadata[idx] =
@@ -1474,11 +1477,15 @@ impl TerminalApp {
                         }
                         _ => (self.editor.cursor_line, 1),
                     };
-                    for line_idx in start..start + span {
-                        self.refresh_calc_line_metadata_at(line_idx);
-                    }
-                    if !(start..start + span).contains(&self.editor.cursor_line) {
-                        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
+                    // Without metadata yet (viewport notes build it at idle),
+                    // there is nothing to keep current.
+                    if !self.calc.line_metadata.is_empty() {
+                        for line_idx in start..start + span {
+                            self.refresh_calc_line_metadata_at(line_idx);
+                        }
+                        if !(start..start + span).contains(&self.editor.cursor_line) {
+                            self.refresh_calc_line_metadata_at(self.editor.cursor_line);
+                        }
                     }
                     self.schedule_calc_recompute(true, true);
                 }
@@ -1571,7 +1578,10 @@ impl TerminalApp {
             } else {
                 self.run_calc_recompute();
             }
-            self.recompute_folding();
+            // History may replace any lines; rescan, deferred to idle time
+            // unless a collapsed fold depends on it.
+            self.folds.rescan_pending = true;
+            self.recompute_folding_if_needed();
             self.adjust_cursor();
             self.adjust_scroll();
             self.history.checkpoint(
@@ -1604,7 +1614,10 @@ impl TerminalApp {
             } else {
                 self.run_calc_recompute();
             }
-            self.recompute_folding();
+            // History may replace any lines; rescan, deferred to idle time
+            // unless a collapsed fold depends on it.
+            self.folds.rescan_pending = true;
+            self.recompute_folding_if_needed();
             self.adjust_cursor();
             self.adjust_scroll();
             self.history.checkpoint(
@@ -3893,26 +3906,34 @@ impl TerminalApp {
         if eval_from >= eval_to || eval_to > self.editor.lines.len() {
             return;
         }
-        let calc_mask = self.calc_feature_mask();
-        crate::editor_core::calc_plan::sync_calc_dependency_index(
-            &mut self.calc.calc_dependency_index,
-            &self.editor.lines,
-            eval_from,
-            eval_to,
-            calc_mask,
-        );
+        // The dependency index only supplies variable names here; syncing it
+        // walks the whole note, so leave that to the idle tick.
+        self.calc_runtime.index_sync_pending = true;
         let vars_enabled = self.calc_variables_enabled();
         let cross_note_enabled = self.calc_cross_note_enabled();
         let extern_vars: Vec<ExternVar> = if cross_note_enabled {
             let note_id = self.active_note.id.clone();
-            let refs = app_core::calc::scan_cross_note_refs(&self.editor.lines);
+            // Viewport evaluations repeat on every scroll step and edit;
+            // rescan only the lines that changed since the last scan.
+            let line_hashes = crate::editor_core::calc_plan::hash_lines(&self.editor.lines);
+            let refs = match self.calc.cross_note_refs_scan.take() {
+                Some((scanned, refs)) => {
+                    match crate::editor_core::calc_plan::changed_line_span(&scanned, &line_hashes) {
+                        None => refs,
+                        Some(span) => splice_cross_note_refs(refs, &self.editor.lines, span),
+                    }
+                }
+                None => app_core::calc::scan_cross_note_refs(&self.editor.lines),
+            };
             self.preload_cross_note_deps_for_refs(&refs);
-            if let Ok(mut index) = self.cross_note_var_index.lock() {
+            let extern_vars = if let Ok(mut index) = self.cross_note_var_index.lock() {
                 index.update_deps(&note_id, &refs);
                 index.extern_vars_for(&note_id)
             } else {
                 Vec::new()
-            }
+            };
+            self.calc.cross_note_refs_scan = Some((line_hashes, refs));
+            extern_vars
         } else {
             Vec::new()
         };
@@ -3948,15 +3969,61 @@ impl TerminalApp {
                     .unwrap_or_default();
             }
         }
+        if self.calc.calc_dependency_index.is_none() {
+            // Until the idle tick builds the index, take names from the eval.
+            self.calc.variable_names.set(calc_data.variable_names);
+        }
+    }
+
+    /// Catches the dependency index up with the note after viewport
+    /// evaluations skipped it, and refreshes the variable names it supplies.
+    pub(super) fn maybe_sync_calc_index_after_idle(&mut self) {
+        if !self.calc_runtime.index_sync_pending
+            || self.last_edit.elapsed() < self.calc_recompute_debounce_duration()
+        {
+            return;
+        }
+        self.calc_runtime.index_sync_pending = false;
+        if !self.note_math_module_enabled() {
+            return;
+        }
+        let mask = self.calc_feature_mask();
+        if self.calc_runtime.viewport_only && self.calc.results.len() == self.editor.lines.len() {
+            // Lets later structural edits shift results instead of clearing them.
+            crate::editor_core::calc_plan::sync_line_metadata(
+                &mut self.calc.line_metadata,
+                &self.editor.lines,
+                mask,
+            );
+        }
+        crate::editor_core::calc_plan::sync_calc_dependency_index(
+            &mut self.calc.calc_dependency_index,
+            &self.editor.lines,
+            0,
+            self.editor.lines.len(),
+            mask,
+        );
+        let Some(revision) = self
+            .calc
+            .calc_dependency_index
+            .as_ref()
+            .map(|index| index.revision())
+        else {
+            return;
+        };
+        if self.calc.variable_names.source_revision() == Some(revision) {
+            return;
+        }
         let variable_names =
             crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
                 self.calc.calc_dependency_index.as_ref(),
             );
-        self.calc.variable_names.set(if variable_names.is_empty() {
-            calc_data.variable_names
-        } else {
-            variable_names
-        });
+        if !variable_names.is_empty() {
+            self.calc
+                .variable_names
+                .set_from_revision(variable_names, revision);
+            self.render_state.dirty = true;
+        }
     }
 
     // --- Wiki-link autocomplete ---
@@ -4509,6 +4576,39 @@ fn extract_preview_content(body: &str, max_lines: usize) -> String {
 /// Char index on screen `row` whose column is the closest at or before
 /// `screen_col` (the first char of the row when none is). The end-of-line
 /// slot is only a candidate when `allow_end` (insert mode).
+/// Cross-note refs of `lines` given the refs of their previous version, where
+/// old lines `[from, old_to)` became `[from, new_to)`: only the changed lines
+/// are scanned and later refs are shifted.
+pub(super) fn splice_cross_note_refs(
+    refs: Vec<app_core::calc::CrossNoteRef>,
+    lines: &[String],
+    (from, old_to, new_to): (usize, usize, usize),
+) -> Vec<app_core::calc::CrossNoteRef> {
+    let mut spliced = Vec::with_capacity(refs.len());
+    let mut after = Vec::new();
+    for reference in refs {
+        let line_idx = reference.line - 1;
+        if line_idx < from {
+            spliced.push(reference);
+        } else if line_idx >= old_to {
+            after.push(app_core::calc::CrossNoteRef {
+                line: line_idx - old_to + new_to + 1,
+                ..reference
+            });
+        }
+    }
+    spliced.extend(
+        app_core::calc::scan_cross_note_refs(&lines[from..new_to])
+            .into_iter()
+            .map(|reference| app_core::calc::CrossNoteRef {
+                line: reference.line + from,
+                ..reference
+            }),
+    );
+    spliced.append(&mut after);
+    spliced
+}
+
 fn column_on_screen_row(
     positions: &[Option<(usize, usize)>],
     row: usize,

@@ -1988,11 +1988,14 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
             app.handle_key(&db, key).expect("key");
         }
         render_screen(&mut app);
-        // Typing defers calc to the idle tick; run it as a pause would.
-        if app.calc_runtime.recompute_pending {
-            app.last_edit = Instant::now() - Duration::from_secs(1);
-            app.maybe_recompute_calc_after_idle();
-            assert!(!app.calc_runtime.recompute_pending);
+        // Typing defers calc (and viewport notes defer their index and line
+        // metadata) to the idle tick; run it as a pause would.
+        app.last_edit = Instant::now() - Duration::from_secs(1);
+        app.maybe_recompute_calc_after_idle();
+        app.maybe_sync_calc_index_after_idle();
+        assert!(!app.calc_runtime.recompute_pending);
+        if step > 0 {
+            assert_eq!(app.calc.line_metadata.len(), app.editor.lines.len());
         }
 
         let fresh = crate::terminal::app::compute_calc_data(
@@ -2014,6 +2017,80 @@ fn viewport_results_match_a_fresh_evaluation_after_random_edits() {
             );
         }
     }
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn spliced_cross_note_refs_match_a_full_scan_across_random_edits() {
+    use crate::editor_core::calc_plan::{changed_line_span, hash_lines};
+    let pool = [
+        "[[abcd1234]].rate * 2",
+        "[[abcd1234]].rate + [[zzzz9999]].fee",
+        "plain",
+        "",
+        "x := [[zzzz9999]].fee",
+    ];
+    let mut seed = 0xfeed_beef_u64;
+    let mut next = |bound: usize| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % bound.max(1) as u64) as usize
+    };
+    let mut lines: Vec<String> = (0..20).map(|i| pool[i % pool.len()].to_string()).collect();
+    let mut hashes = hash_lines(&lines);
+    let mut refs = app_core::calc::scan_cross_note_refs(&lines);
+    for step in 0..500 {
+        let at = next(lines.len() + 1);
+        match next(3) {
+            0 => lines.insert(at.min(lines.len()), pool[next(pool.len())].to_string()),
+            1 if lines.len() > 1 => {
+                let start = at.min(lines.len() - 1);
+                let end = (start + 1 + next(3)).min(lines.len());
+                lines.drain(start..end);
+            }
+            _ if !lines.is_empty() => {
+                let idx = at.min(lines.len() - 1);
+                lines[idx] = pool[next(pool.len())].to_string();
+            }
+            _ => {}
+        }
+        let new_hashes = hash_lines(&lines);
+        if let Some(span) = changed_line_span(&hashes, &new_hashes) {
+            refs = crate::terminal::app::editing::splice_cross_note_refs(refs, &lines, span);
+        }
+        hashes = new_hashes;
+        assert_eq!(
+            refs,
+            app_core::calc::scan_cross_note_refs(&lines),
+            "step {step}"
+        );
+    }
+}
+
+#[test]
+fn large_note_new_assignment_names_arrive_on_the_idle_tick() {
+    let mut lines = vec!["base := 1".to_string()];
+    lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+    let (db, mut app, path) = app_with_note(&lines.join("\n"));
+    app.mode = UiMode::Normal;
+    render_screen(&mut app);
+    assert!(app.calc_runtime.viewport_only);
+
+    let mut keys = vec![Key::Char('o')];
+    keys.extend("zeta := 5".chars().map(Key::Char));
+    keys.push(Key::Esc);
+    run_keys(&mut app, &db, &keys);
+    render_screen(&mut app);
+
+    app.last_edit = Instant::now() - Duration::from_secs(1);
+    app.maybe_recompute_calc_after_idle();
+    app.maybe_sync_calc_index_after_idle();
+    assert!(app.calc.variable_names.iter().any(|name| name == "zeta"));
+    assert!(app.calc.variable_names.iter().any(|name| name == "base"));
 
     drop(app);
     drop(db);

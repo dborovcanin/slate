@@ -23,6 +23,9 @@ pub struct CalcCache {
     /// Line splices applied to `line_metadata` since `results` last matched
     /// it, so viewport notes can shift results instead of re-evaluating.
     pub pending_result_splices: Vec<ResultSplice>,
+    /// Cross-note refs from the last scan and the hashes of the lines they
+    /// were scanned from, so later scans only read changed lines.
+    pub cross_note_refs_scan: Option<(Vec<u64>, Vec<app_core::calc::CrossNoteRef>)>,
     pub calc_dependency_index: Option<crate::editor_core::calc_plan::CalcDependencyIndex>,
     /// Metadata for current `lines`, incrementally patched on edits.
     pub line_metadata: Vec<crate::editor_core::calc_plan::LineMetadata>,

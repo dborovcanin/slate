@@ -498,6 +498,9 @@ struct CalcRuntime {
     pending_full_pass: bool,
     viewport_only: bool,
     last_view_eval_range: Option<(usize, usize)>,
+    /// Viewport evaluation skipped syncing the dependency index (it only
+    /// feeds variable names there); the idle tick catches it up.
+    index_sync_pending: bool,
 }
 
 /// Draw-output and render-bookkeeping state: the reused draw buffer, the
@@ -1118,6 +1121,7 @@ impl TerminalApp {
                 variable_names: calc_data.variable_names.into(),
                 range_context: Default::default(),
                 pending_result_splices: Vec::new(),
+                cross_note_refs_scan: None,
                 calc_dependency_index,
                 line_metadata: line_metadata.clone(),
                 prev_line_metadata: line_metadata,
@@ -1135,6 +1139,7 @@ impl TerminalApp {
                 pending_full_pass: defer_initial_full_calc,
                 viewport_only: calc_viewport_only,
                 last_view_eval_range: None,
+                index_sync_pending: false,
             },
             reminder_ghosts,
             reminders_dirty: false,
@@ -1352,6 +1357,7 @@ impl TerminalApp {
             self.render_state.dirty = true;
         }
         self.maybe_recompute_calc_after_idle();
+        self.maybe_sync_calc_index_after_idle();
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
         if !self.autosave_enabled {

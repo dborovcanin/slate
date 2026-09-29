@@ -459,6 +459,39 @@ fn line_deletes_defer_the_fold_rescan_until_a_fold_command_needs_it() {
 }
 
 #[test]
+fn undo_keeps_collapsed_folds_exact_and_defers_the_rescan_otherwise() {
+    let (db, mut app, path) = app_with_note("# h1\none\ntwo\n# h2\nthree\nfour");
+    app.mode = UiMode::Normal;
+
+    app.editor.cursor_line = 5;
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('d'), Key::Char('d'), Key::Char('u')],
+    );
+    assert!(app.folds.rescan_pending, "nothing collapsed: rescan waits");
+
+    app.editor.cursor_line = 0;
+    run_keys(&mut app, &db, &[Key::Char('z'), Key::Char('a')]);
+    app.editor.cursor_line = 4;
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('d'), Key::Char('d'), Key::Char('u')],
+    );
+    assert!(
+        !app.folds.rescan_pending,
+        "a collapsed fold forces the rescan"
+    );
+    assert!(app.folds.collapsed_starts.contains(&0));
+    assert_eq!(app.folds.visible_to_real, vec![0, 3, 4, 5]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn heading_fold_keeps_title_and_preserves_separator_blank_line() {
     let (db, mut app, path) = app_with_note("## 13.05.2026.\nentry\n\n## 14.05.2026.\nnext line");
     app.mode = UiMode::Normal;

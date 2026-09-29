@@ -1,24 +1,42 @@
 {
-  "description": "Large-note latency guardrails: p95 per action (key handling plus the repaint after it), measured by the large_note_perf test. Limits sit ~1.5x above current measurements to catch regressions; tighten them as large-note work lands. Sizes without limits are reported only.",
-  "sizes": [30000],
+  "description": "Large-note latency guardrails: p95 per action (key handling plus the repaint after it), measured by the large_note_perf test. Limits sit ~2-3x above current measurements (5 ms floor) to catch regressions on slower machines; tighten them as large-note work lands. Sizes without limits are reported only.",
+  "sizes": [30000, 100000],
   "limits_p95_ms": {
     "30000": {
-      "open": 250,
+      "open": 100,
       "idle_tick": 100,
-      "scroll_line": 25,
-      "scroll_jump": 25,
-      "jump_top_bottom": 25,
-      "search": 60,
-      "type_prose": 25,
+      "scroll_line": 10,
+      "scroll_jump": 10,
+      "jump_top_bottom": 10,
+      "search": 45,
+      "type_prose": 5,
       "type_calc": 5,
-      "type_table": 10,
+      "type_table": 5,
       "delete_char": 5,
       "enter": 10,
       "open_line": 10,
+      "delete_line": 25,
+      "paste_line": 20,
+      "undo": 20,
+      "redo": 20
+    },
+    "100000": {
+      "open": 300,
+      "idle_tick": 400,
+      "scroll_line": 15,
+      "scroll_jump": 15,
+      "jump_top_bottom": 15,
+      "search": 120,
+      "type_prose": 10,
+      "type_calc": 5,
+      "type_table": 5,
+      "delete_char": 5,
+      "enter": 15,
+      "open_line": 10,
       "delete_line": 80,
-      "paste_line": 60,
-      "undo": 80,
-      "redo": 80
+      "paste_line": 40,
+      "undo": 40,
+      "redo": 40
     }
   }
 }
