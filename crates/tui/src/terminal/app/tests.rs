@@ -90,6 +90,35 @@ fn buffer_rows(buf: &Buffer) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn image_preview_dialog_opens_and_blocks_editor_input_until_escape() {
+    let body = "![diagram](./assets/diagram.png)";
+    let (db, mut app, path) = app_with_note(body);
+    app.vim_enabled = false;
+    app.graphics = std::sync::Arc::new(crate::terminal::graphics::GraphicsContext::from_config(
+        app_core::config::TerminalImagesConfig {
+            mode: "halfblocks".to_string(),
+            max_rows: 15,
+        },
+    ));
+
+    app.handle_key(&db, Key::Ctrl('o')).expect("open preview");
+    assert!(app.image_preview.is_some());
+    let (rows, _) = render_screen(&mut app);
+    assert!(rows.iter().any(|row| row.contains("Image: diagram")));
+    assert!(rows.iter().any(|row| row.contains("Loading image")));
+
+    app.handle_key(&db, Key::Char('x'))
+        .expect("modal consumes key");
+    assert_eq!(app.editor.lines[0], body);
+    assert!(app.image_preview.is_some());
+
+    app.handle_key(&db, Key::Esc).expect("close preview");
+    assert!(app.image_preview.is_none());
+
+    cleanup_db_files(&path);
+}
+
 fn screen_rows(app: &mut TerminalApp) -> Vec<String> {
     render_screen(app).0
 }

@@ -9,6 +9,13 @@ function defaultConfig() {
     checks: {
       startup: { enabled: true, runs: 3, threshold_pct: 15 },
       table: { enabled: true, profile: "ci" },
+      images: {
+        enabled: true,
+        lines: 100000,
+        viewport_lines: 24,
+        iterations: 1000,
+        threshold_p95_ms: 5,
+      },
     },
   };
 }
@@ -23,6 +30,7 @@ function loadConfig() {
       checks: {
         startup: { ...defaults.checks.startup, ...(parsed.checks?.startup ?? {}) },
         table: { ...defaults.checks.table, ...(parsed.checks?.table ?? {}) },
+        images: { ...defaults.checks.images, ...(parsed.checks?.images ?? {}) },
       },
     };
   } catch (error) {
@@ -113,6 +121,17 @@ if (bool(cfg.checks?.table?.enabled, true)) {
   };
   const run = runNodeScript(resolve("scripts/table-perf-check.mjs"), env);
   results.push({ name: "table", ...run });
+}
+
+if (bool(cfg.checks?.images?.enabled, true)) {
+  const env = {
+    SLATE_IMAGE_PERF_LINES: String(cfg.checks.images.lines ?? 100000),
+    SLATE_IMAGE_PERF_VIEWPORT_LINES: String(cfg.checks.images.viewport_lines ?? 24),
+    SLATE_IMAGE_PERF_ITERATIONS: String(cfg.checks.images.iterations ?? 1000),
+    SLATE_IMAGE_PERF_P95_THRESHOLD_MS: String(cfg.checks.images.threshold_p95_ms ?? 5),
+  };
+  const run = runNodeScript(resolve("scripts/image-perf-check.mjs"), env);
+  results.push({ name: "images", ...run });
 }
 
 printSection("Checks");

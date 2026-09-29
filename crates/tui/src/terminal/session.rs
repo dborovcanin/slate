@@ -12,6 +12,8 @@ use ratatui::crossterm::terminal::{
 use ratatui::{Frame, Terminal};
 use std::io::{self, Stdout};
 
+use std::sync::Arc;
+use super::graphics::GraphicsContext;
 use super::input;
 
 /// Where the terminal cursor goes after a frame, in 0-based cells.
@@ -29,6 +31,7 @@ pub struct TerminalSession {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     keyboard_enhanced: bool,
     cursor_block: Option<bool>,
+    graphics: Arc<GraphicsContext>,
 }
 
 impl TerminalSession {
@@ -48,6 +51,8 @@ impl TerminalSession {
             )
             .is_ok();
 
+        let graphics = Arc::new(GraphicsContext::new());
+
         let mut session = Self {
             terminal: match Terminal::new(CrosstermBackend::new(stdout)) {
                 Ok(terminal) => terminal,
@@ -58,6 +63,7 @@ impl TerminalSession {
             },
             keyboard_enhanced,
             cursor_block: None,
+            graphics,
         };
         let size = session
             .terminal
@@ -107,6 +113,10 @@ impl TerminalSession {
             self.cursor_block = Some(cursor.block);
         }
         Ok(())
+    }
+
+    pub fn graphics(&self) -> &Arc<GraphicsContext> {
+        &self.graphics
     }
 }
 

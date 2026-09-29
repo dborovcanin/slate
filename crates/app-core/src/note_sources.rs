@@ -1543,6 +1543,24 @@ mod tests {
             .expect("resolve should not error");
         assert!(resolved.is_none());
 
+        // Directory traversal using parent segments '../'
+        let traversal_resolved = service
+            .resolve_image_markdown_source_by_id(&note_id, "./assets/../outside.png")
+            .expect("resolve traversal should not error");
+        assert!(traversal_resolved.is_none());
+
+        // Deep traversal
+        let deep_traversal = service
+            .resolve_image_markdown_source_by_id(&note_id, "../../../../etc/passwd")
+            .expect("resolve deep traversal should not error");
+        assert!(deep_traversal.is_none());
+
+        // Absolute path outside assets
+        let abs_resolved = service
+            .resolve_image_markdown_source_by_id(&note_id, outside_image.to_str().unwrap())
+            .expect("resolve absolute outside path should not error");
+        assert!(abs_resolved.is_none());
+
         let _ = fs::remove_dir_all(note_dir);
         drop(db);
         cleanup_db_files(&db_path);

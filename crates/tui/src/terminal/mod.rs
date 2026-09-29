@@ -6,6 +6,7 @@ mod clipboard;
 mod date_picker;
 mod folding;
 mod folding_state;
+pub(crate) mod graphics;
 mod history;
 mod input;
 mod markdown_view;

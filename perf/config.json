@@ -1,5 +1,5 @@
 {
-  "description": "Unified performance checks (startup + table). Global enable/disable comes from config.toml [perf].enabled.",
+  "description": "Unified performance checks (startup + table + inline images). Global enable/disable comes from config.toml [perf].enabled.",
   "checks": {
     "startup": {
       "enabled": true,
@@ -9,6 +9,13 @@
     "table": {
       "enabled": true,
       "profile": "ci"
+    },
+    "images": {
+      "enabled": true,
+      "lines": 100000,
+      "viewport_lines": 24,
+      "iterations": 1000,
+      "threshold_p95_ms": 5
     }
   }
 }

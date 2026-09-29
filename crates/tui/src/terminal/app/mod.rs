@@ -327,6 +327,12 @@ struct WikiLinkPreviewState {
     body: String,
 }
 
+#[derive(Debug, Clone)]
+struct ImagePreviewState {
+    src: String,
+    alt: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct WikiLinkAutocompletePopupState {
     visible: bool,
@@ -706,6 +712,7 @@ struct TerminalApp {
     variable_autocomplete_min_chars: usize,
     variable_autocomplete_popup: VariableAutocompletePopupState,
     wiki_link_preview: WikiLinkPreviewState,
+    image_preview: Option<ImagePreviewState>,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
     wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
@@ -725,6 +732,12 @@ struct TerminalApp {
     undo_actions: Vec<UndoAction>,
     undo_action_pos: usize,
     perf_trace: PerfTraceState,
+    /// Graphics protocol context — protocol detection result and picker, used
+    /// by the image preview. Set from the session after terminal raw mode is
+    /// entered; initially disabled.
+    graphics: Arc<super::graphics::GraphicsContext>,
+    image_renderer: super::graphics::ImageRenderer,
+    open_image_temp_paths: Vec<std::path::PathBuf>,
 }
 
 mod calc_helpers;
@@ -1125,6 +1138,7 @@ impl TerminalApp {
             ),
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             wiki_link_preview: WikiLinkPreviewState::default(),
+            image_preview: None,
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
             wiki_link_prefix_index: FxHashMap::default(),
@@ -1157,6 +1171,9 @@ impl TerminalApp {
                 enabled: perf_enabled,
                 ..PerfTraceState::default()
             },
+            graphics: Arc::new(super::graphics::GraphicsContext::disabled()),
+            image_renderer: super::graphics::ImageRenderer::new(),
+            open_image_temp_paths: Vec::new(),
         };
 
         app.bootstrap_folding_for_startup();
@@ -1180,6 +1197,9 @@ impl TerminalApp {
 
     fn run(&mut self, db: &Db) -> Result<(), String> {
         let mut session = TerminalSession::enter()?;
+        // Bind the detected graphics context (protocol + picker) into the app
+        // for the image preview.
+        self.graphics = Arc::clone(session.graphics());
         let mut last_draw = Instant::now();
 
         loop {
@@ -1188,7 +1208,7 @@ impl TerminalApp {
             {
                 let draw_start = Instant::now();
                 self.render_state.dirty = false;
-                session.draw(|frame| self.render(frame))?;
+                session.draw(|frame| self.render(frame, db))?;
                 last_draw = Instant::now();
                 self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
             }
@@ -1242,6 +1262,10 @@ impl TerminalApp {
             // Poll for backup thread completion on every iteration so the result
             // is applied promptly whether or not the user is pressing keys.
             self.maybe_finish_backup_op(db);
+
+            if self.image_renderer.poll() {
+                self.render_state.dirty = true;
+            }
 
             self.poll_web_search();
             self.maybe_clipboard_watch();

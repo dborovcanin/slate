@@ -56,6 +56,10 @@ const DEFAULT_WEB_SEARCH_ENGINE_ID: &str = "";
 const DEFAULT_WEB_SEARCH_MAX_RESULTS: usize = 10;
 const MIN_WEB_SEARCH_MAX_RESULTS: usize = 1;
 const MAX_WEB_SEARCH_MAX_RESULTS: usize = 10;
+const DEFAULT_TERMINAL_IMAGES_MODE: &str = "auto";
+const DEFAULT_TERMINAL_IMAGE_MAX_ROWS: usize = 15;
+const MIN_TERMINAL_IMAGE_MAX_ROWS: usize = 1;
+const MAX_TERMINAL_IMAGE_MAX_ROWS: usize = 100;
 const DEFAULT_CONFIG: &str = r##"# Slate configuration
 #
 # All settings are optional. Unknown keys are ignored.
@@ -179,6 +183,18 @@ api_key = ""
 search_engine_id = ""
 # Maximum search results to return (1..10, default 10)
 max_results = 10
+
+[terminal]
+# Inline image rendering mode:
+#   "auto"       detect best graphics protocol (sixel, kitty, iterm2), fall back if unsupported (default)
+#   "sixel"      force Sixel graphics (e.g. foot, wezterm)
+#   "kitty"      force Kitty graphics protocol (e.g. kitty, ghostty, wezterm)
+#   "iterm2"     force iTerm2 graphics protocol
+#   "halfblocks" unicode halfblock characters fallback
+#   "off"        text placeholder [image: alt] only
+images = "auto"
+# Maximum terminal row height for an inline image. Range: 1..100
+image_max_rows = 15
 
 [startup]
 # Enable non-critical startup work asynchronously after first paint/edit
@@ -324,6 +340,21 @@ impl Default for WebSearchConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TerminalImagesConfig {
+    pub mode: String,
+    pub max_rows: usize,
+}
+
+impl Default for TerminalImagesConfig {
+    fn default() -> Self {
+        Self {
+            mode: DEFAULT_TERMINAL_IMAGES_MODE.to_string(),
+            max_rows: DEFAULT_TERMINAL_IMAGE_MAX_ROWS,
+        }
+    }
+}
+
 impl Default for ImapConfig {
     fn default() -> Self {
         Self {
@@ -430,7 +461,15 @@ struct FileConfig {
     #[serde(default)]
     web_search: WebSearchSection,
     #[serde(default)]
+    terminal: TerminalSection,
+    #[serde(default)]
     startup: StartupSection,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct TerminalSection {
+    images: Option<String>,
+    image_max_rows: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -703,6 +742,32 @@ pub fn load_web_search_config() -> WebSearchConfig {
     }
 }
 
+pub fn load_terminal_images_config() -> TerminalImagesConfig {
+    let path = match ensure_config_file() {
+        Ok(path) => path,
+        Err(err) => {
+            eprintln!("Config: {err}");
+            return TerminalImagesConfig::default();
+        }
+    };
+
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("Config: failed to read {}: {err}", path.display());
+            return TerminalImagesConfig::default();
+        }
+    };
+
+    match parse_terminal_images_config(&text) {
+        Ok(config) => config,
+        Err(err) => {
+            eprintln!("Config: failed to parse {}: {err}", path.display());
+            TerminalImagesConfig::default()
+        }
+    }
+}
+
 fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
     let date_format = normalize_date_format(raw.editor.date_format);
@@ -838,6 +903,29 @@ fn parse_web_search_config(text: &str) -> Result<WebSearchConfig, String> {
         search_engine_id: normalize_optional_path(raw.web_search.search_engine_id),
         max_results: normalize_web_search_max_results(raw.web_search.max_results),
     })
+}
+
+pub fn parse_terminal_images_config(text: &str) -> Result<TerminalImagesConfig, String> {
+    let raw: FileConfig = toml::from_str(text).map_err(|e| e.to_string())?;
+    let mode = normalize_terminal_images_mode(raw.terminal.images.as_deref());
+    let max_rows = raw
+        .terminal
+        .image_max_rows
+        .map(|r| r.clamp(MIN_TERMINAL_IMAGE_MAX_ROWS, MAX_TERMINAL_IMAGE_MAX_ROWS))
+        .unwrap_or(DEFAULT_TERMINAL_IMAGE_MAX_ROWS);
+    Ok(TerminalImagesConfig { mode, max_rows })
+}
+
+fn normalize_terminal_images_mode(mode: Option<&str>) -> String {
+    let normalized = mode
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| DEFAULT_TERMINAL_IMAGES_MODE.to_string());
+    match normalized.as_str() {
+        "auto" | "sixel" | "kitty" | "iterm2" | "halfblocks" | "off" => normalized,
+        _ => DEFAULT_TERMINAL_IMAGES_MODE.to_string(),
+    }
 }
 
 fn normalize_web_search_max_results(value: Option<usize>) -> usize {
@@ -1348,5 +1436,35 @@ mod tests {
         assert_eq!(parsed.api_key, "test_key");
         assert_eq!(parsed.search_engine_id, "test_cx");
         assert_eq!(parsed.max_results, 8);
+    }
+
+    #[test]
+    fn parses_terminal_images_section_and_defaults() {
+        let defaults = parse_terminal_images_config("").expect("terminal images config parsed");
+        assert_eq!(defaults, TerminalImagesConfig::default());
+        assert_eq!(defaults.mode, "auto");
+        assert_eq!(defaults.max_rows, 15);
+
+        let parsed = parse_terminal_images_config(
+            r#"
+            [terminal]
+            images = "sixel"
+            image_max_rows = 20
+            "#,
+        )
+        .expect("terminal images parsed");
+        assert_eq!(parsed.mode, "sixel");
+        assert_eq!(parsed.max_rows, 20);
+
+        let invalid_mode = parse_terminal_images_config(
+            r#"
+            [terminal]
+            images = "unknown_mode"
+            image_max_rows = 500
+            "#,
+        )
+        .expect("invalid mode parsed with fallback");
+        assert_eq!(invalid_mode.mode, "auto");
+        assert_eq!(invalid_mode.max_rows, 100);
     }
 }
