@@ -1,4 +1,5 @@
-use regex::{Regex, RegexBuilder};
+use aho_corasick::AhoCorasick;
+use regex::Regex;
 use table_syntax::{is_table_line, split_table_cells, table_pipe_positions};
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::borrow::Cow;
@@ -266,7 +267,7 @@ impl TableEvalCache {
 
 struct VariableResolver<'a> {
     defs: &'a FxHashMap<String, VariableDefinition>,
-    variable_regex: Option<Regex>,
+    variable_matcher: Option<VariableMatcher>,
     states: FxHashMap<String, ResolveState>,
     values: FxHashMap<String, String>,
     diagnostics: Vec<NoteEvaluationDiagnostic>,
@@ -298,15 +299,18 @@ struct PreparedNoteContext {
     defs: FxHashMap<String, VariableDefinition>,
     variables: Vec<VariableIndexEntry>,
     names_sorted: Vec<String>,
-    variable_regex: Option<Regex>,
+    variable_matcher: Option<VariableMatcher>,
     resolved: ResolvedVariables,
+    /// Scratch copy of the evaluated lines that table formulas write their
+    /// values into; rows written by an evaluation are restored after it.
+    working_lines: Option<Vec<String>>,
 }
 
 /// Reusable state for `CalcEngine::evaluate_note_context_cached`.
 #[derive(Default)]
 pub struct NoteContextCache(Option<PreparedNoteContext>);
 
-static VARIABLE_REGEX_CACHE: OnceLock<Mutex<FxHashMap<u64, Regex>>> = OnceLock::new();
+static VARIABLE_MATCHER_CACHE: OnceLock<Mutex<FxHashMap<u64, VariableMatcher>>> = OnceLock::new();
 static TABLE_COORD_REF_RE: OnceLock<Regex> = OnceLock::new();
 static CROSS_NOTE_REF_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -371,12 +375,12 @@ impl<'a> VariableResolver<'a> {
     /// earlier evaluation of the same definitions left behind.
     fn with_resolved(
         defs: &'a FxHashMap<String, VariableDefinition>,
-        variable_regex: Option<Regex>,
+        variable_matcher: Option<VariableMatcher>,
         resolved: ResolvedVariables,
     ) -> Self {
         Self {
             defs,
-            variable_regex,
+            variable_matcher,
             states: resolved.states,
             values: resolved.values,
             diagnostics: Vec::new(),
@@ -392,24 +396,24 @@ impl<'a> VariableResolver<'a> {
     }
 
     fn find_matches(&self, expression: &str) -> Vec<MatchSpan> {
-        let Some(regex) = &self.variable_regex else {
+        let Some(matcher) = &self.variable_matcher else {
             return Vec::new();
         };
-        regex
-            .find_iter(expression)
-            .map(|m| MatchSpan {
-                normalized: expression[m.start()..m.end()].to_ascii_lowercase(),
-                start: m.start(),
-                end: m.end(),
+        matcher
+            .find(expression)
+            .into_iter()
+            .map(|(start, end)| MatchSpan {
+                normalized: expression[start..end].to_ascii_lowercase(),
+                start,
+                end,
             })
             .collect()
     }
 
     fn expression_references_variable(&self, expression: &str) -> bool {
-        self.variable_regex
+        self.variable_matcher
             .as_ref()
-            .map(|r| r.is_match(expression))
-            .unwrap_or(false)
+            .is_some_and(|matcher| matcher.is_match(expression))
     }
 
     fn eval_raw(&mut self, expr: &str, ctx: &mut fend_core::Context) -> Option<String> {
@@ -625,7 +629,7 @@ impl<'a> VariableResolver<'a> {
     }
 }
 
-fn variable_regex_cache_key(names_sorted: &[String]) -> u64 {
+fn variable_matcher_cache_key(names_sorted: &[String]) -> u64 {
     let mut hasher = FxHasher::default();
     names_sorted.len().hash(&mut hasher);
     for name in names_sorted {
@@ -635,20 +639,20 @@ fn variable_regex_cache_key(names_sorted: &[String]) -> u64 {
     hasher.finish()
 }
 
-fn cached_variable_regex(names_sorted: &[String]) -> Option<Regex> {
+fn cached_variable_matcher(names_sorted: &[String]) -> Option<VariableMatcher> {
     if names_sorted.is_empty() {
         return None;
     }
 
-    let key = variable_regex_cache_key(names_sorted);
-    let cache = VARIABLE_REGEX_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()));
+    let key = variable_matcher_cache_key(names_sorted);
+    let cache = VARIABLE_MATCHER_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()));
     if let Ok(guard) = cache.lock() {
         if let Some(hit) = guard.get(&key) {
             return Some(hit.clone());
         }
     }
 
-    let compiled = build_variable_regex(names_sorted)?;
+    let compiled = VariableMatcher::new(names_sorted)?;
     if let Ok(mut guard) = cache.lock() {
         if guard.len() >= 256 {
             guard.clear();
@@ -865,7 +869,7 @@ fn prepare_note_context(
     let defs = definitions_from_lines(&line_defs);
     let variables = variable_index_from_definitions(&defs);
     let names_sorted = names_longest_first(&defs);
-    let variable_regex = cached_variable_regex(&names_sorted);
+    let variable_matcher = cached_variable_matcher(&names_sorted);
 
     PreparedNoteContext {
         options_key,
@@ -877,8 +881,9 @@ fn prepare_note_context(
         defs,
         variables,
         names_sorted,
-        variable_regex,
+        variable_matcher,
         resolved: ResolvedVariables::default(),
+        working_lines: None,
     }
 }
 
@@ -964,6 +969,10 @@ fn update_prepared_note_context(
         let span_defs: Vec<Option<VariableDefinition>> = (from..new_to)
             .map(|idx| line_variable_definition(&eval_lines[idx], idx, options.table_enabled))
             .collect();
+        let definitions_changed = prepared.line_defs[from..old_to]
+            .iter()
+            .chain(&span_defs)
+            .any(Option::is_some);
         prepared.line_defs.splice(from..old_to, span_defs);
         if delta != 0 {
             for (idx, def) in prepared.line_defs.iter_mut().enumerate().skip(new_to) {
@@ -972,17 +981,36 @@ fn update_prepared_note_context(
                 }
             }
         }
-        prepared.defs = definitions_from_lines(&prepared.line_defs);
-        prepared.variables = variable_index_from_definitions(&prepared.defs);
-        let names_sorted = names_longest_first(&prepared.defs);
-        if names_sorted != prepared.names_sorted {
-            prepared.variable_regex = cached_variable_regex(&names_sorted);
-            prepared.names_sorted = names_sorted;
+        if definitions_changed {
+            prepared.defs = definitions_from_lines(&prepared.line_defs);
+            prepared.variables = variable_index_from_definitions(&prepared.defs);
+            let names_sorted = names_longest_first(&prepared.defs);
+            if names_sorted != prepared.names_sorted {
+                prepared.variable_matcher = cached_variable_matcher(&names_sorted);
+                prepared.names_sorted = names_sorted;
+            }
+        } else if delta != 0 {
+            // Same definitions, only moved: shift the lines of those after
+            // the edit. The index stays sorted by name, then line.
+            for def in prepared.defs.values_mut() {
+                if def.line >= old_to {
+                    def.line = shift(def.line);
+                }
+            }
+            for entry in &mut prepared.variables {
+                if entry.line > old_to {
+                    entry.line = shift(entry.line - 1) + 1;
+                }
+            }
         }
     }
 
     // Any value may depend on the changed lines; resolve again on demand.
     prepared.resolved = ResolvedVariables::default();
+    if let Some(working) = prepared.working_lines.as_mut() {
+        let eval_lines = prepared.eval_lines.as_deref().unwrap_or(lines);
+        working.splice(from..old_to, eval_lines[from..new_to].iter().cloned());
+    }
     prepared.line_hashes = line_hashes;
 }
 
@@ -1016,8 +1044,9 @@ fn evaluate_prepared(
         cross_note_refs,
         defs,
         variables,
-        variable_regex,
+        variable_matcher,
         resolved,
+        working_lines,
         ..
     } = prepared;
     let eval_lines: &[String] = prepared_lines.as_deref().unwrap_or(lines);
@@ -1029,7 +1058,7 @@ fn evaluate_prepared(
         None => (0, line_count),
     };
     let mut resolver =
-        VariableResolver::with_resolved(defs, variable_regex.clone(), std::mem::take(resolved));
+        VariableResolver::with_resolved(defs, variable_matcher.clone(), std::mem::take(resolved));
     let is_full_eval = eval_from == 0 && eval_to == line_count;
     if options.variables_enabled && is_full_eval {
         let mut names: Vec<String> = defs.keys().cloned().collect();
@@ -1042,9 +1071,10 @@ fn evaluate_prepared(
     let mut line_results: Vec<Option<String>> = vec![None; line_count];
     let mut table_cell_results: Vec<Vec<TableCellEvaluation>> = vec![Vec::new(); line_count];
 
-    // Working copy of the document for formula substitution. Allocated lazily
-    // — only when a table formula cell actually writes a value back.
-    let mut working_lines: Option<Vec<String>> = None;
+    // Working copy of the document for formula substitution, allocated only
+    // when a table formula writes a value back and kept between evaluations
+    // of the same note state; `written` rows are restored at the end.
+    let mut written: Vec<usize> = Vec::new();
     // Cache and recursion guard for table-cell formula evaluation by (line, cell).
     let mut table_formula_cache: FxHashMap<(usize, usize), String> = FxHashMap::default();
     let mut table_formula_stack: Vec<(usize, usize)> = Vec::new();
@@ -1132,6 +1162,7 @@ fn evaluate_prepared(
                 if let Some(updated) = substitute_table_cell_value(&working[idx], cell_idx, &value)
                 {
                     working[idx] = updated;
+                    written.push(idx);
                     table_eval_cache.split_cells.remove(&idx);
                 }
             }
@@ -1204,6 +1235,12 @@ fn evaluate_prepared(
         };
 
         line_results[idx] = result;
+    }
+
+    if let Some(working) = working_lines.as_mut() {
+        for idx in written {
+            working[idx].clone_from(&eval_lines[idx]);
+        }
     }
 
     let mut diagnostics = resolver.diagnostics().unwrap_or_default();
@@ -2422,23 +2459,62 @@ fn preprocess_line_cross_note<'a>(
     }
 }
 
-fn build_variable_regex(names_sorted: &[String]) -> Option<Regex> {
-    let escaped: Vec<String> = names_sorted
-        .iter()
-        .filter(|n| !n.is_empty())
-        .map(|n| regex::escape(n))
-        .collect();
-    if escaped.is_empty() {
-        return None;
+/// Finds variable names in expressions: ASCII case-insensitive, on word
+/// boundaries, left-most first and the longest name among those starting at
+/// the same place. A single automaton over all names; a regex alternation of
+/// thousands of names degrades badly as the note grows.
+#[derive(Clone)]
+struct VariableMatcher(Arc<AhoCorasick>);
+
+impl VariableMatcher {
+    fn new(names: &[String]) -> Option<Self> {
+        let names: Vec<&str> = names
+            .iter()
+            .map(String::as_str)
+            .filter(|n| !n.is_empty())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(names)
+            .ok()
+            .map(|automaton| Self(Arc::new(automaton)))
     }
-    // unicode(false) makes \b use ASCII word-char semantics ([A-Za-z0-9_]),
-    // matching the previous hand-rolled boundary check exactly.
-    let pattern = format!(r"\b(?:{})\b", escaped.join("|"));
-    RegexBuilder::new(&pattern)
-        .unicode(false)
-        .case_insensitive(true)
-        .build()
-        .ok()
+
+    /// Byte ranges of the variable names in `text`, left to right.
+    fn find(&self, text: &str) -> Vec<(usize, usize)> {
+        let bytes = text.as_bytes();
+        let mut matches: Vec<(usize, usize)> = self
+            .0
+            .find_overlapping_iter(text)
+            .map(|found| (found.start(), found.end()))
+            .filter(|&(start, end)| on_word_boundaries(bytes, start, end))
+            .collect();
+        matches.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        let mut picked: Vec<(usize, usize)> = Vec::with_capacity(matches.len());
+        for candidate in matches {
+            if picked.last().is_some_and(|last| candidate.0 < last.1) {
+                continue;
+            }
+            picked.push(candidate);
+        }
+        picked
+    }
+
+    fn is_match(&self, text: &str) -> bool {
+        let bytes = text.as_bytes();
+        self.0
+            .find_overlapping_iter(text)
+            .any(|found| on_word_boundaries(bytes, found.start(), found.end()))
+    }
+}
+
+/// `start..end` is not glued to an ASCII word character on either side.
+fn on_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool {
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    (start == 0 || !is_word(bytes[start - 1])) && (end == bytes.len() || !is_word(bytes[end]))
 }
 
 fn format_number(value: f64) -> String {
@@ -3634,6 +3710,49 @@ mod tests {
                 assert_eq!(cached.variables, fresh.variables, "step {step}");
                 assert_eq!(cached.cross_note_refs, fresh.cross_note_refs, "step {step}");
             }
+        }
+    }
+
+    #[test]
+    fn variable_matcher_matches_the_word_bounded_regex_it_replaced() {
+        let mut names: Vec<String> = [
+            "tax", "tax rate", "rate", "a", "ab", "x_1", "total 2", "total", "b2b",
+        ]
+        .iter()
+        .map(|n| n.to_string())
+        .collect();
+        names.sort_by_key(|name| (Reverse(name.len()), name.clone()));
+        let escaped: Vec<String> = names.iter().map(|n| regex::escape(n)).collect();
+        let reference = regex::RegexBuilder::new(&format!(r"\b(?:{})\b", escaped.join("|")))
+            .unicode(false)
+            .case_insensitive(true)
+            .build()
+            .unwrap();
+        let matcher = VariableMatcher::new(&names).unwrap();
+        let pieces = [
+            "tax", "TAX", "rate", " ", "+", "_", "1", "2", "total", "a", "b", "é", "(", "Rate",
+            "x_1", "ab", "b2b", "*",
+        ];
+        let mut seed = 0x1234_5678_u64;
+        for _ in 0..5_000 {
+            let mut text = String::new();
+            for _ in 0..(seed % 9) {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                text.push_str(pieces[(seed % pieces.len() as u64) as usize]);
+            }
+            seed = seed.wrapping_add(1);
+            let expected: Vec<(usize, usize)> = reference
+                .find_iter(&text)
+                .map(|m| (m.start(), m.end()))
+                .collect();
+            assert_eq!(matcher.find(&text), expected, "{text:?}");
+            assert_eq!(
+                matcher.is_match(&text),
+                reference.is_match(&text),
+                "{text:?}"
+            );
         }
     }
 
