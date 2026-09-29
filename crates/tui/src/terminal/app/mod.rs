@@ -29,6 +29,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use ulid::Ulid;
 
 const AUTOSAVE_DEBOUNCE_MS: u64 = 500;
+/// Longest a pending repaint waits while queued keys are handled first, so a
+/// key burst (held key, wheel scroll) paints once per frame, not once per key.
+const MAX_FRAME_DEFER: Duration = Duration::from_millis(16);
 
 #[derive(Debug, Clone, Copy, Default)]
 enum BackupAnimOp {
@@ -1177,12 +1180,16 @@ impl TerminalApp {
 
     fn run(&mut self, db: &Db) -> Result<(), String> {
         let mut session = TerminalSession::enter()?;
+        let mut last_draw = Instant::now();
 
         loop {
-            if self.render_state.dirty {
+            if self.render_state.dirty
+                && (last_draw.elapsed() >= MAX_FRAME_DEFER || !input::input_ready()?)
+            {
                 let draw_start = Instant::now();
                 self.render_state.dirty = false;
                 session.draw(|frame| self.render(frame))?;
+                last_draw = Instant::now();
                 self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
             }
             if self.quit {

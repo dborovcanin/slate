@@ -65,6 +65,14 @@ pub fn take_resize() -> bool {
     RESIZED.swap(false, Ordering::Relaxed)
 }
 
+/// True when input is waiting, so `read_key` would return without blocking.
+pub fn input_ready() -> Result<bool, String> {
+    if PENDING.with(|pending| !pending.borrow().is_empty()) {
+        return Ok(true);
+    }
+    event::poll(Duration::ZERO).map_err(|e| format!("Failed to poll input: {e}"))
+}
+
 /// Waits up to `IDLE_POLL` for the next key. Returns `None` on timeout or for
 /// events that do not map to a key (resizes set the resize flag instead).
 pub fn read_key() -> Result<Option<Key>, String> {
