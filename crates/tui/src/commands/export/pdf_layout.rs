@@ -4,6 +4,7 @@ use super::pdf_style::{
     PdfExportPalette, PdfRgbColor, StyledChar, TextStyle, HELVETICA_BOLD_CHAR_WIDTHS,
     HELVETICA_CHAR_WIDTHS,
 };
+use crate::terminal::render::VariableNames;
 use app_core::calc::{CalcEngine, NoteEvaluationOptions};
 use editor_core::calc_plan;
 use editor_core::markdown_tokens::{self, CodeTokenType, InlineTokenType};
@@ -104,7 +105,7 @@ pub(super) fn render_markdown_to_pages(
         .map(|line| line.to_string())
         .collect::<Vec<_>>();
     let lines: Vec<&str> = owned_lines.iter().map(String::as_str).collect();
-    let variable_names = calc_plan::collect_assignment_names(&owned_lines);
+    let variable_names = VariableNames::new(calc_plan::collect_assignment_names(&owned_lines));
     let table_formula_values = collect_table_formula_display_values(&owned_lines);
     let mut i = 0usize;
 
@@ -359,80 +360,13 @@ fn normalize_styled_whitespace(input: &[StyledChar]) -> Vec<StyledChar> {
     out
 }
 
-fn is_variable_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
-}
-
-fn has_variable_word_boundaries(bytes: &[u8], start: usize, end: usize) -> bool {
-    let left_ok = start == 0 || !is_variable_word_byte(bytes[start - 1]);
-    let right_ok = end == bytes.len() || !is_variable_word_byte(bytes[end]);
-    left_ok && right_ok
-}
-
-fn eq_ascii_case_insensitive_bytes(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.iter()
-        .zip(b.iter())
-        .all(|(left, right)| left.eq_ignore_ascii_case(right))
-}
-
-fn find_variable_ranges(text: &str, variable_names: &[String]) -> Vec<(usize, usize)> {
-    if text.is_empty() || variable_names.is_empty() {
-        return Vec::new();
-    }
-
-    let bytes = text.as_bytes();
-    let mut matches: Vec<(usize, usize)> = Vec::new();
-
-    for raw in variable_names {
-        let needle_text = raw.trim();
-        if needle_text.is_empty() {
-            continue;
-        }
-        let needle = needle_text.as_bytes();
-        if needle.len() > bytes.len() {
-            continue;
-        }
-        let mut idx = 0usize;
-        while idx + needle.len() <= bytes.len() {
-            let end = idx + needle.len();
-            if eq_ascii_case_insensitive_bytes(&bytes[idx..end], needle)
-                && has_variable_word_boundaries(bytes, idx, end)
-            {
-                matches.push((idx, end));
-            }
-            idx += 1;
-        }
-    }
-
-    if matches.len() <= 1 {
-        return matches;
-    }
-
-    matches.sort_by(|a, b| a.0.cmp(&b.0).then((b.1 - b.0).cmp(&(a.1 - a.0))));
-    let mut deduped: Vec<(usize, usize)> = Vec::new();
-    for candidate in matches {
-        let Some(last) = deduped.last() else {
-            deduped.push(candidate);
-            continue;
-        };
-        if candidate.0 < last.1 {
-            continue;
-        }
-        deduped.push(candidate);
-    }
-    deduped
-}
-
 fn byte_to_char_idx(text: &str, byte_idx: usize) -> usize {
     text[..byte_idx.min(text.len())].chars().count()
 }
 
 pub(super) fn styled_chars_from_inline(
     text: &str,
-    variable_names: &[String],
+    variable_names: &VariableNames,
     palette: &PdfExportPalette,
     base: TextStyle,
 ) -> Vec<StyledChar> {
@@ -504,7 +438,7 @@ pub(super) fn styled_chars_from_inline(
         }
     }
 
-    for (start, end) in find_variable_ranges(text, variable_names) {
+    for (start, end) in variable_names.find_ranges(text) {
         let from = byte_to_char_idx(text, start).min(chars.len());
         let to = byte_to_char_idx(text, end).min(chars.len());
         if to <= from {
@@ -775,7 +709,7 @@ fn render_paragraph_block(
     max_top: f32,
     text: &str,
     palette: &PdfExportPalette,
-    variable_names: &[String],
+    variable_names: &VariableNames,
 ) {
     let chars = styled_chars_from_inline(
         text,
@@ -802,7 +736,7 @@ fn render_hard_line_paragraph_block(
     max_top: f32,
     lines: &[String],
     palette: &PdfExportPalette,
-    variable_names: &[String],
+    variable_names: &VariableNames,
 ) {
     for line in lines {
         let chars = styled_chars_from_inline(
@@ -943,7 +877,7 @@ fn render_list_block(
     items: &[String],
     ordered: bool,
     palette: &PdfExportPalette,
-    variable_names: &[String],
+    variable_names: &VariableNames,
 ) {
     for (idx, item) in items.iter().enumerate() {
         let (is_checklist, checked, content) =
@@ -1011,7 +945,7 @@ fn render_blockquote_block(
     max_top: f32,
     lines: &[String],
     palette: &PdfExportPalette,
-    variable_names: &[String],
+    variable_names: &VariableNames,
 ) {
     let quote_x = PDF_MARGIN_LEFT_PT + 10.0;
     let text_x = PDF_MARGIN_LEFT_PT + 16.0;
@@ -1062,7 +996,7 @@ fn render_table_block(
     table_lines: &[String],
     table_start_line_idx: usize,
     palette: &PdfExportPalette,
-    variable_names: &[String],
+    variable_names: &VariableNames,
     table_formula_values: &FxHashMap<(usize, usize), String>,
 ) {
     if table_lines.len() < 2 {

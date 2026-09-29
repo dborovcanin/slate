@@ -986,7 +986,7 @@ mod tests {
     #[test]
     fn styled_chars_from_inline_preserves_spacing_around_code_and_links() {
         let palette = PdfExportPalette::default();
-        let variable_names: Vec<String> = Vec::new();
+        let variable_names = crate::terminal::render::VariableNames::default();
         let source = "Add assignment-trailer evaluation support (`val := a - b = 44` style reconciliation on tab). Link handling polish for [text](url) display behavior.";
         let styled = styled_chars_from_inline(
             source,
@@ -1057,7 +1057,7 @@ mod tests {
         };
         let styled = styled_chars_from_inline(
             "MoN := 41",
-            &["mon".to_string()],
+            &crate::terminal::render::VariableNames::new(vec!["mon".to_string()]),
             &palette,
             TextStyle::body(pdf_black()),
         );
