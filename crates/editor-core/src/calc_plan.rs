@@ -75,6 +75,28 @@ pub fn line_metadata_with_mask(line: &String, mask: CalcFeatureMask) -> LineMeta
     }
 }
 
+/// Brings `metadata` in line with `lines` after lines were inserted or
+/// deleted, re-deriving only the span whose hashes differ.
+pub fn sync_line_metadata(
+    metadata: &mut Vec<LineMetadata>,
+    lines: &[String],
+    mask: CalcFeatureMask,
+) {
+    if metadata.len() == lines.len() {
+        return;
+    }
+    if !metadata.is_empty() {
+        let old_hashes: Vec<u64> = metadata.iter().map(|meta| meta.hash).collect();
+        let span = changed_line_span(&old_hashes, &hash_lines(lines));
+        if let Some((from, old_to, new_to)) = span {
+            if splice_line_metadata(metadata, lines, from, old_to - from, new_to - from, mask) {
+                return;
+            }
+        }
+    }
+    *metadata = line_metadata_for_lines_with_mask(lines, mask);
+}
+
 pub fn line_metadata_for_lines_with_mask(
     lines: &[String],
     mask: CalcFeatureMask,
@@ -920,6 +942,7 @@ pub fn collect_assignment_names_with_mask(lines: &[String], mask: CalcFeatureMas
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct VariableDependencyGraph {
     assignment_name_by_line: Vec<Option<String>>,
     assignment_rhs_refs_by_line: Vec<FxHashSet<String>>,
@@ -1241,6 +1264,73 @@ pub fn sync_variable_dependency_graph(
     }
 }
 
+/// Replaces the graph's entries for old lines `[from, old_to)` with parses of
+/// `lines[from..new_to]`. Only those lines are parsed, so inserting or
+/// deleting lines, or editing a note that assigns a name more than once, no
+/// longer re-parses the whole document.
+fn splice_variable_dependency_graph(
+    graph: &mut Option<VariableDependencyGraph>,
+    lines: &[String],
+    from: usize,
+    old_to: usize,
+    new_to: usize,
+    mask: CalcFeatureMask,
+) {
+    if !mask.variables_active() {
+        *graph = None;
+        return;
+    }
+    let Some(cached) = graph.as_mut() else {
+        // No assignment anywhere before this edit: a graph only appears if
+        // the changed lines add one.
+        if changed_lines_match(lines, from, new_to, |line| {
+            line_assignment_def(line, mask).0.is_some()
+        }) {
+            *graph = build_variable_dependency_graph(lines, mask);
+        }
+        return;
+    };
+    let old_len = cached.assignment_name_by_line.len();
+    let consistent = cached.assignment_rhs_refs_by_line.len() == old_len
+        && cached.line_variable_refs.len() == old_len
+        && from <= old_to
+        && old_to <= old_len
+        && new_to <= lines.len()
+        && lines.len() + old_to == old_len + new_to;
+    if !consistent {
+        *graph = build_variable_dependency_graph(lines, mask);
+        return;
+    }
+    if old_to == new_to
+        && try_patch_variable_dependency_graph_in_place(cached, lines, from, new_to, mask)
+    {
+        if cached.assignment_line_by_name.is_empty() {
+            *graph = None;
+        }
+        return;
+    }
+
+    let mut names = Vec::with_capacity(new_to - from);
+    let mut rhs_refs = Vec::with_capacity(new_to - from);
+    let mut line_refs = Vec::with_capacity(new_to - from);
+    for line in &lines[from..new_to] {
+        let (name, refs) = line_assignment_def(line, mask);
+        names.push(name);
+        rhs_refs.push(refs);
+        line_refs.push(line_variable_refs(line, mask));
+    }
+    cached.assignment_name_by_line.splice(from..old_to, names);
+    cached
+        .assignment_rhs_refs_by_line
+        .splice(from..old_to, rhs_refs);
+    cached.line_variable_refs.splice(from..old_to, line_refs);
+    if cached.assignment_name_by_line.iter().all(Option::is_none) {
+        *graph = None;
+        return;
+    }
+    rebuild_dependency_maps(cached);
+}
+
 pub fn variable_names_from_dependency_graph(graph: &VariableDependencyGraph) -> Vec<String> {
     let mut names = graph
         .assignment_line_by_name
@@ -1358,6 +1448,7 @@ fn split_table_cells(line: &str) -> Vec<String> {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 struct TableDataRows {
     rows: Vec<Vec<usize>>,
     row_for_line: FxHashMap<usize, usize>,
@@ -1405,6 +1496,7 @@ fn table_data_rows(lines: &[String], table_start: usize, table_end: usize) -> Ta
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 struct TableFormulaLineInfo {
     line_idx: usize,
     has_row_formula: bool,
@@ -1412,6 +1504,7 @@ struct TableFormulaLineInfo {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 struct TableFormulaDependencyBlock {
     table_start: usize,
     table_end: usize,
@@ -1423,6 +1516,7 @@ struct TableFormulaDependencyBlock {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(test, derive(PartialEq))]
 pub struct TableFormulaDependencyIndex {
     line_count: usize,
     blocks: Vec<TableFormulaDependencyBlock>,
@@ -1559,6 +1653,109 @@ pub fn build_table_formula_dependency_index(
     }
 }
 
+/// Moves a table block's line numbers by `delta` after lines were inserted
+/// or deleted above it. Cell coordinates are table-relative and stay put;
+/// the lines they map to move.
+fn shift_table_block(block: &mut TableFormulaDependencyBlock, delta: isize) {
+    let shift = |line: usize| line.saturating_add_signed(delta);
+    block.table_start = shift(block.table_start);
+    block.table_end = shift(block.table_end);
+    for info in &mut block.formula_lines {
+        info.line_idx = shift(info.line_idx);
+    }
+    for line in block.formula_nodes.values_mut() {
+        *line = shift(*line);
+    }
+    for row in &mut block.data_rows.rows {
+        for line in row.iter_mut() {
+            *line = shift(*line);
+        }
+    }
+    let rows = &mut block.data_rows;
+    rows.row_for_line = std::mem::take(&mut rows.row_for_line)
+        .into_iter()
+        .map(|(line, row)| (shift(line), row))
+        .collect();
+    rows.col_count_for_line = std::mem::take(&mut rows.col_count_for_line)
+        .into_iter()
+        .map(|(line, cols)| (shift(line), cols))
+        .collect();
+}
+
+/// Updates the table formula index after old lines `[from, old_to)` became
+/// new lines `[from, new_to)`: tables after the span are shifted, and only
+/// tables touching or adjacent to it are rebuilt.
+fn splice_table_formula_dependency_index(
+    index: &mut Option<TableFormulaDependencyIndex>,
+    lines: &[String],
+    from: usize,
+    old_to: usize,
+    new_to: usize,
+    mask: CalcFeatureMask,
+) {
+    if !mask.table_active() {
+        *index = None;
+        return;
+    }
+    let Some(cached) = index.as_mut() else {
+        // No formula anywhere before this edit: an index only appears if the
+        // changed lines add one.
+        if changed_lines_match(lines, from, new_to, |line| {
+            is_table_line(line) && !find_table_formula_segments(line).is_empty()
+        }) {
+            *index = build_table_formula_dependency_index(lines, mask);
+        }
+        return;
+    };
+    if cached.line_count + new_to != lines.len() + old_to {
+        *index = build_table_formula_dependency_index(lines, mask);
+        return;
+    }
+
+    let delta = new_to as isize - old_to as isize;
+    let mut before = Vec::new();
+    let mut after = Vec::new();
+    // New-line range to rescan: the span plus every table touching it.
+    let (mut scan_start, mut scan_end) = (from, new_to);
+    for mut block in std::mem::take(&mut cached.blocks) {
+        if block.table_end + 1 < from {
+            before.push(block);
+        } else if block.table_start > old_to {
+            shift_table_block(&mut block, delta);
+            after.push(block);
+        } else {
+            scan_start = scan_start.min(block.table_start);
+            if block.table_end >= old_to {
+                scan_end = scan_end.max(block.table_end.saturating_add_signed(delta) + 1);
+            }
+        }
+    }
+
+    let mut line_idx = scan_start;
+    while line_idx < scan_end.min(lines.len()) {
+        if !is_table_line(&lines[line_idx]) {
+            line_idx += 1;
+            continue;
+        }
+        let Some((table_start, table_end)) = table_block_range(lines, line_idx) else {
+            line_idx += 1;
+            continue;
+        };
+        if let Some(block) = build_table_formula_dependency_block(lines, table_start, table_end) {
+            before.push(block);
+        }
+        line_idx = table_end + 1;
+    }
+    before.append(&mut after);
+
+    if before.is_empty() {
+        *index = None;
+    } else {
+        cached.blocks = before;
+        cached.line_count = lines.len();
+    }
+}
+
 pub fn sync_table_formula_dependency_index(
     index: &mut Option<TableFormulaDependencyIndex>,
     lines: &[String],
@@ -1602,6 +1799,25 @@ pub fn build_calc_dependency_index(
         table_formula_index: build_table_formula_dependency_index(lines, mask),
         line_hashes: hash_lines(lines),
     })
+}
+
+/// The span that differs between two versions of a note, from their line
+/// hashes: `(from, old_to, new_to)` where old lines `[from, old_to)` became new
+/// lines `[from, new_to)`. `None` when they are identical.
+pub fn changed_line_span(old: &[u64], new: &[u64]) -> Option<(usize, usize, usize)> {
+    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+    if prefix == old.len() && prefix == new.len() {
+        return None;
+    }
+    let max_suffix = old.len().min(new.len()) - prefix;
+    let suffix = old
+        .iter()
+        .rev()
+        .zip(new.iter().rev())
+        .take(max_suffix)
+        .take_while(|(a, b)| a == b)
+        .count();
+    Some((prefix, old.len() - suffix, new.len() - suffix))
 }
 
 /// Narrows `[from, to)` to the lines whose hash differs from `line_hashes`
@@ -1654,28 +1870,34 @@ pub fn sync_calc_dependency_index(
     }
 
     if let Some(cached) = index.as_mut() {
-        let (changed_from, changed_to) = if cached.line_hashes.len() == lines.len() {
-            match narrow_to_changed_lines(&mut cached.line_hashes, lines, changed_from, changed_to)
-            {
-                Some(changed) => changed,
-                None => return,
-            }
+        let changed = if cached.line_hashes.len() == lines.len() {
+            narrow_to_changed_lines(&mut cached.line_hashes, lines, changed_from, changed_to)
+                .map(|(from, to)| (from, to, to))
         } else {
-            cached.line_hashes = hash_lines(lines);
-            (changed_from, changed_to)
+            // Lines were inserted or deleted: find the exact span from the
+            // hashes, independent of the range the caller passed.
+            let new_hashes = hash_lines(lines);
+            let span = changed_line_span(&cached.line_hashes, &new_hashes);
+            cached.line_hashes = new_hashes;
+            span
         };
-        sync_variable_dependency_graph(
+        let Some((from, old_to, new_to)) = changed else {
+            return;
+        };
+        splice_variable_dependency_graph(
             &mut cached.variable_graph,
             lines,
-            changed_from,
-            changed_to,
+            from,
+            old_to,
+            new_to,
             mask,
         );
-        sync_table_formula_dependency_index(
+        splice_table_formula_dependency_index(
             &mut cached.table_formula_index,
             lines,
-            changed_from,
-            changed_to,
+            from,
+            old_to,
+            new_to,
             mask,
         );
     } else {
@@ -2353,6 +2575,97 @@ pub fn plan_incremental_calc_from_line_metadata(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn dependency_index_sync_matches_a_fresh_build_across_edits() {
+        let pool = [
+            "a := 1",
+            "b := a + 2",
+            "c := b * a",
+            "a := 5",
+            "b + c",
+            "total := a + b + c",
+            "plain words",
+            "",
+            "| n | v |",
+            "| --- | --- |",
+            "| 1 | :=(1,1) * a |",
+            "| 2 | :=sum_col() |",
+            "| 3 | 4 |",
+        ];
+        let mask = CalcFeatureMask::default();
+        for start_seed in [
+            0x2545_f491_4f6c_dd1du64,
+            7,
+            0xdead_beef,
+            0x1234_5678_9abc,
+            42,
+        ] {
+            let mut seed = start_seed;
+            let mut next = |bound: usize| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed % bound.max(1) as u64) as usize
+            };
+            let mut lines: Vec<String> =
+                (0..30).map(|i| pool[i % pool.len()].to_string()).collect();
+            let mut index = build_calc_dependency_index(&lines, mask);
+            let mut metadata = line_metadata_for_lines_with_mask(&lines, mask);
+            for step in 0..600 {
+                let at = next(lines.len() + 1);
+                let (from, to) = match next(3) {
+                    0 => {
+                        let count = 1 + next(3);
+                        for k in 0..count {
+                            lines.insert(at, pool[next(pool.len())].to_string());
+                            let _ = k;
+                        }
+                        (at, at + count)
+                    }
+                    1 if !lines.is_empty() => {
+                        let start = at.min(lines.len() - 1);
+                        let end = (start + 1 + next(3)).min(lines.len());
+                        lines.drain(start..end);
+                        (start, start)
+                    }
+                    _ if !lines.is_empty() => {
+                        let idx = at.min(lines.len() - 1);
+                        lines[idx] = pool[next(pool.len())].to_string();
+                        (idx, idx + 1)
+                    }
+                    _ => continue,
+                };
+                if metadata.len() != lines.len() {
+                    sync_line_metadata(&mut metadata, &lines, mask);
+                    assert_eq!(
+                        metadata,
+                        line_metadata_for_lines_with_mask(&lines, mask),
+                        "step {step}"
+                    );
+                } else {
+                    metadata = line_metadata_for_lines_with_mask(&lines, mask);
+                }
+                // Callers pass either the edited span or a loose superset of it.
+                let (from, to) = if step % 2 == 0 {
+                    (from, to)
+                } else {
+                    (0, lines.len())
+                };
+                sync_calc_dependency_index(&mut index, &lines, from, to, mask);
+                let synced = index
+                    .as_ref()
+                    .and_then(|index| index.variable_graph.as_ref());
+                let fresh = build_variable_dependency_graph(&lines, mask);
+                assert_eq!(synced, fresh.as_ref(), "step {step}: {lines:?}");
+                let synced = index
+                    .as_ref()
+                    .and_then(|index| index.table_formula_index.as_ref());
+                let fresh = build_table_formula_dependency_index(&lines, mask);
+                assert_eq!(synced, fresh.as_ref(), "tables, step {step}: {lines:?}");
+            }
+        }
+    }
     use super::*;
 
     /// Derives `decide_eval_window` params from raw previously-changed lines.
