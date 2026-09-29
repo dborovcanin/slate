@@ -4640,6 +4640,29 @@ impl TerminalApp {
         true
     }
 
+    pub(super) fn go_to_variable_definition_at_cursor(&mut self) {
+        let target = if self.note_math_module_enabled() {
+            crate::editor_core::calc_plan::variable_definition_at(
+                &self.editor.lines,
+                self.calc.calc_dependency_index.as_ref(),
+                self.editor.cursor_line,
+                self.editor.cursor_col,
+                self.calc_feature_mask(),
+            )
+        } else {
+            None
+        };
+        let Some(target) = target else {
+            self.status = "no link or variable at cursor".to_string();
+            return;
+        };
+        self.editor.cursor_line = target.line;
+        self.editor.cursor_col = target.col;
+        self.adjust_cursor();
+        self.adjust_scroll();
+        self.status = format!("definition: {}", target.name);
+    }
+
     pub(super) fn open_wiki_link_preview(&mut self, db: &crate::storage::Db) {
         let line = self.current_line().to_string();
         let Some(link) =

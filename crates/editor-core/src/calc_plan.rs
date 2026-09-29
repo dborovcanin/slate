@@ -1931,6 +1931,108 @@ pub fn variable_names_from_calc_dependency_index(
         .unwrap_or_default()
 }
 
+/// Where a variable referenced in the note is assigned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VariableDefinitionTarget {
+    /// Normalized (lowercase) variable name.
+    pub name: String,
+    pub line: usize,
+    /// Char column of the name on `line`.
+    pub col: usize,
+}
+
+/// The assignment of the variable named at char column `col` of `line_idx`.
+/// When a name is assigned more than once the last assignment wins, as in
+/// evaluation. `index` supplies the names and assignment lines; a line it
+/// reports that no longer assigns the name (the index can trail recent edits)
+/// falls back to scanning the note.
+pub fn variable_definition_at(
+    lines: &[String],
+    index: Option<&CalcDependencyIndex>,
+    line_idx: usize,
+    col: usize,
+    mask: CalcFeatureMask,
+) -> Option<VariableDefinitionTarget> {
+    if !mask.variables_active() {
+        return None;
+    }
+    let line = lines.get(line_idx)?;
+    let graph = index.and_then(|cached| cached.variable_graph.as_ref());
+    let scanned_names;
+    let names: Vec<&str> = match graph {
+        Some(graph) => graph
+            .assignment_line_by_name
+            .keys()
+            .map(String::as_str)
+            .collect(),
+        None => {
+            scanned_names = collect_assignment_names_with_mask(lines, mask);
+            scanned_names.iter().map(String::as_str).collect()
+        }
+    };
+    let cursor_byte = line
+        .char_indices()
+        .nth(col)
+        .map_or(line.len(), |(byte, _)| byte);
+    let name = variable_name_covering(line, cursor_byte, &names)?.to_string();
+
+    let assigns_name = |idx: usize| {
+        lines
+            .get(idx)
+            .and_then(|text| line_assignment_def(text, mask).0)
+            .is_some_and(|assigned| assigned == name)
+    };
+    let def_line = graph
+        .and_then(|graph| graph.assignment_line_by_name.get(&name).copied())
+        .filter(|&idx| assigns_name(idx))
+        .or_else(|| (0..lines.len()).rev().find(|&idx| assigns_name(idx)))?;
+    let def_text = &lines[def_line];
+    let col = variable_name_occurrences(def_text, &name)
+        .next()
+        .map_or(0, |(start, _)| def_text[..start].chars().count());
+    Some(VariableDefinitionTarget {
+        name,
+        line: def_line,
+        col,
+    })
+}
+
+/// The longest of `names` occurring in `line` over byte `cursor_byte`.
+fn variable_name_covering<'a>(
+    line: &str,
+    cursor_byte: usize,
+    names: &[&'a str],
+) -> Option<&'a str> {
+    names
+        .iter()
+        .copied()
+        .filter(|name| {
+            variable_name_occurrences(line, name)
+                .any(|(start, end)| start <= cursor_byte && cursor_byte < end)
+        })
+        .max_by_key(|name| name.len())
+}
+
+/// Byte ranges of `name` in `text`: ASCII case-insensitive, on word
+/// boundaries, as the evaluator matches references.
+fn variable_name_occurrences<'a>(
+    text: &'a str,
+    name: &'a str,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    let bytes = text.as_bytes();
+    let needle = name.as_bytes();
+    let is_word = |byte: u8| byte.is_ascii_alphanumeric() || byte == b'_';
+    (0..(bytes.len() + 1).saturating_sub(needle.len().max(1)))
+        .filter(move |&start| {
+            let end = start + needle.len();
+            !needle.is_empty()
+                && bytes[start..end].eq_ignore_ascii_case(needle)
+                && (start == 0 || !is_word(bytes[start - 1]))
+                && (end == bytes.len() || !is_word(bytes[end]))
+        })
+        .map(move |start| (start, start + needle.len()))
+}
+
 fn coordinate_formula_dependency_window_in_block(
     block: &TableFormulaDependencyBlock,
     changed_from: usize,
@@ -3355,5 +3457,51 @@ mod tests {
         assert!(!ok);
         // Caller is expected to full-rebuild; metadata left untouched.
         assert_eq!(metadata.len(), 1);
+    }
+
+    fn definition_lines(text: &str) -> Vec<String> {
+        text.lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    fn variable_definition_at_finds_the_last_assignment() {
+        let lines =
+            definition_lines("price := 3\ntax := price * 0.2\nprice := 4\ntotal := Price + tax");
+        let mask = CalcFeatureMask::default();
+        let index = super::build_calc_dependency_index(&lines, mask);
+        let at = |line, col| super::variable_definition_at(&lines, index.as_ref(), line, col, mask);
+
+        let price = at(3, 10).expect("price reference");
+        assert_eq!(
+            (price.name.as_str(), price.line, price.col),
+            ("price", 2, 0)
+        );
+        let tax = at(3, 18).expect("tax reference");
+        assert_eq!((tax.line, tax.col), (1, 0));
+        // Not on a name: the operator, or text that only contains one.
+        assert_eq!(at(3, 15), None);
+        assert_eq!(at(1, 15), None);
+    }
+
+    #[test]
+    fn variable_definition_at_prefers_the_longest_multi_word_name() {
+        let lines = definition_lines("unit := 2\nunit price := 5\n- cost := unit price * 3");
+        let mask = CalcFeatureMask::default();
+        let index = super::build_calc_dependency_index(&lines, mask);
+        let target =
+            super::variable_definition_at(&lines, index.as_ref(), 2, 10, mask).expect("reference");
+        assert_eq!((target.name.as_str(), target.line), ("unit price", 1));
+    }
+
+    #[test]
+    fn variable_definition_at_survives_a_stale_or_missing_index() {
+        let mask = CalcFeatureMask::default();
+        let old = definition_lines("a := 1\nb := a");
+        let index = super::build_calc_dependency_index(&old, mask);
+        let lines = definition_lines("note\na := 1\nb := a");
+        let stale = super::variable_definition_at(&lines, index.as_ref(), 2, 5, mask);
+        assert_eq!(stale.map(|t| t.line), Some(1));
+        let missing = super::variable_definition_at(&lines, None, 2, 5, mask);
+        assert_eq!(missing.map(|t| t.line), Some(1));
     }
 }

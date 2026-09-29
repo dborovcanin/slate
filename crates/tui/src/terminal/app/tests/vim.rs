@@ -1088,3 +1088,26 @@ fn word_operators_stay_inside_the_table_cell() {
     // `ciw` keeps the space before the replaced word.
     assert_eq!(cells(&run("ciwZ", "dasd")), vec!["dusan", "as Z", "y"]);
 }
+
+#[test]
+fn gd_goes_to_the_variable_definition() {
+    let (db, mut app, path) = app_with_note("rate := 2\nhours := 8\npay := rate * hours");
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 16;
+
+    run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (1, 0));
+    assert_eq!(app.status, "definition: hours");
+    assert_eq!(app.vim_state.pending, None);
+
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = 13;
+    run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
+    assert_eq!(app.editor.cursor_line, 2);
+    assert_eq!(app.status, "no link or variable at cursor");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

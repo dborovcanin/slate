@@ -56,7 +56,7 @@ Key tables by mode. The [Feature Guide](./features.md) lists the same keys group
 | `:` | Command bar |
 | `q{r}` ... `q`, `@{r}`, `{n}@{r}` | Record, stop, replay macro |
 | `za` | Toggle fold |
-| `gd` | Follow wiki link |
+| `gd` | Follow wiki link, or go to the definition of the variable at the cursor |
 | `K` | Toggle linked-note preview |
 | `gx` | Preview image at cursor |
 | `?` | Web search |
