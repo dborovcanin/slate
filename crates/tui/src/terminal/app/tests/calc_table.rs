@@ -2095,6 +2095,29 @@ fn large_note_new_assignment_names_arrive_on_the_idle_tick() {
 }
 
 #[test]
+fn large_note_deleting_the_last_assignment_drops_its_name_on_the_idle_tick() {
+    let mut lines = vec!["base := 1".to_string()];
+    lines.extend((0..2_500).map(|_| "base + 2".to_string()));
+    let (db, mut app, path) = app_with_note(&lines.join("\n"));
+    app.mode = UiMode::Normal;
+    render_screen(&mut app);
+    assert!(app.calc_runtime.viewport_only);
+    settle_idle_calc(&mut app);
+    assert!(app.calc.variable_names.iter().any(|name| name == "base"));
+
+    app.editor.cursor_line = 0;
+    run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+    render_screen(&mut app);
+
+    settle_idle_calc(&mut app);
+    assert!(app.calc.variable_names.is_empty());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn background_index_build_catches_up_with_edits_made_while_it_runs() {
     let mut lines = vec!["base := 1".to_string()];
     lines.extend((0..2_500).map(|i| format!("v{i} := base + {i}")));

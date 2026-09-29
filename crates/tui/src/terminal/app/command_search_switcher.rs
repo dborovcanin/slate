@@ -1276,6 +1276,12 @@ impl TerminalApp {
             return true;
         }
 
+        // The module write moves the note's revision; land any in-flight
+        // autosave first so the two don't race on it.
+        if let Err(error) = self.poll_background_save(db, true) {
+            self.status = format!("save failed: {error}");
+            return true;
+        }
         let previous_modules = self.active_note.modules;
         match db.set_note_modules(&self.active_note.id, next_modules) {
             Ok(saved_note) => {
@@ -2378,8 +2384,9 @@ impl TerminalApp {
             .clone()
             .unwrap_or_else(|| join_lines(&self.editor.lines));
         let note_id = self.active_note.id.clone();
+        let expected_revision = self.active_note.updated_at.clone();
         let options = app_core::note_sources::SaveOptions {
-            expected_revision: Some(self.active_note.updated_at.clone()),
+            expected_revision: Some(expected_revision.clone()),
             force: false,
         };
         let (tx, rx) = std::sync::mpsc::channel();
@@ -2394,6 +2401,7 @@ impl TerminalApp {
             rx,
             note_id,
             edit_mark: self.last_edit,
+            expected_revision,
         });
         Ok(())
     }
@@ -2430,8 +2438,10 @@ impl TerminalApp {
         if job.note_id != self.active_note.id {
             return Ok(());
         }
-        self.active_note.id = saved.id;
-        self.active_note.updated_at = saved.updated_at;
+        if self.active_note.updated_at == job.expected_revision {
+            self.active_note.id = saved.id;
+            self.active_note.updated_at = saved.updated_at;
+        }
         if self.last_edit == job.edit_mark {
             self.dirty = false;
             self.history.checkpoint(

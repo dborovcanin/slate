@@ -2575,6 +2575,72 @@ fn edits_during_a_background_autosave_are_saved_next() {
     cleanup_db_files(&path);
 }
 
+/// Blocks until the in-flight autosave has written, without polling it.
+fn wait_for_background_write(db: &Db, note_id: &str, body: &str) {
+    for _ in 0..400 {
+        if db.get_note(note_id).expect("lookup").expect("note").body == body {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    panic!("background autosave never wrote {body:?}");
+}
+
+#[test]
+fn module_command_after_an_unpolled_autosave_keeps_the_newer_revision() {
+    let (db, mut app, path) = app_with_note("one");
+    app.editor.lines = vec!["two".to_string()];
+    app.dirty = true;
+    app.last_edit = past_autosave_debounce();
+    app.maybe_autosave(&db).expect("autosave starts");
+    wait_for_background_write(&db, "n1", "two");
+    // Revisions are timestamps; make sure the module write gets a later one.
+    std::thread::sleep(Duration::from_millis(2));
+
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.execute_terminal_command(&db, "modules variables off");
+    app.poll_background_save(&db, false).expect("poll");
+    let persisted = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(app.active_note.updated_at, persisted.updated_at);
+
+    app.editor.lines = vec!["three".to_string()];
+    app.editor.joined_text_cache = None;
+    app.dirty = true;
+    app.save(&db).expect("save without a false conflict");
+    let persisted = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(persisted.body, "three");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn finished_autosave_does_not_roll_back_a_newer_revision() {
+    let (db, mut app, path) = app_with_note("one");
+    app.editor.lines = vec!["two".to_string()];
+    app.dirty = true;
+    app.last_edit = past_autosave_debounce();
+    app.maybe_autosave(&db).expect("autosave starts");
+    wait_for_background_write(&db, "n1", "two");
+    std::thread::sleep(Duration::from_millis(2));
+
+    // A revision-moving write lands before the autosave is polled.
+    let modules = app_core::storage::NoteModules {
+        variables: false,
+        ..app.active_note.modules
+    };
+    let saved = db.set_note_modules("n1", modules).expect("module write");
+    app.active_note.updated_at = saved.updated_at.clone();
+    app.poll_background_save(&db, false).expect("poll");
+    assert_eq!(app.active_note.updated_at, saved.updated_at);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
 #[test]
 fn write_command_waits_for_an_in_flight_autosave() {
     let (db, mut app, path) = app_with_note("one");

@@ -4146,12 +4146,12 @@ impl TerminalApp {
             crate::editor_core::calc_plan::variable_names_from_calc_dependency_index(
                 self.calc.calc_dependency_index.as_ref(),
             );
-        if !variable_names.is_empty() {
-            self.calc
-                .variable_names
-                .set_from_revision(variable_names, revision);
-            self.render_state.dirty = true;
-        }
+        // An empty list is applied too: deleting the last assignment must
+        // drop its name.
+        self.calc
+            .variable_names
+            .set_from_revision(variable_names, revision);
+        self.render_state.dirty = true;
     }
 
     /// Installs a finished background index build; false while it runs.

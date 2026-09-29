@@ -501,6 +501,9 @@ struct BackgroundSave {
     /// `last_edit` when the saved text was taken: later edits keep the note
     /// dirty once the save lands.
     edit_mark: Instant,
+    /// Revision the save was checked against. When the note's revision has
+    /// moved on meanwhile (e.g. a module change), the saved one is stale.
+    expected_revision: String,
 }
 
 /// Calc recompute scheduling/runtime flags (distinct from `calc: CalcCache`,
