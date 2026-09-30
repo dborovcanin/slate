@@ -787,7 +787,7 @@ impl TerminalApp {
         true
     }
 
-    fn draw_status_row_with_right_sticky(
+    pub(super) fn draw_status_row_with_right_sticky(
         &self,
         buf: &mut Buffer,
         row: usize,
@@ -1397,6 +1397,11 @@ impl TerminalApp {
         db: Option<&app_core::storage::Db>,
     ) -> CursorPlacement {
         let (rows, cols) = input::terminal_size();
+        if self.mode == UiMode::Browser {
+            // Full screen: the editor underneath is neither drawn nor evaluated.
+            self.render_state.editor_cursor_cell = None;
+            return self.render_browser_screen(buf, rows, cols);
+        }
         let editor_height = rows.saturating_sub(2).max(1);
         let editor_bg = self.render_palette.surface_bg();
         self.ensure_calc_for_viewport(editor_height, false);
@@ -1649,6 +1654,7 @@ impl TerminalApp {
                 }
             }
             UiMode::ContentSearch => switcher_status_owned.as_deref().unwrap_or(&self.status),
+            UiMode::Browser => &self.status,
             UiMode::DatePicker => {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
             }
@@ -1862,6 +1868,7 @@ impl TerminalApp {
             row: u16::try_from(cursor_row.saturating_sub(1)).unwrap_or(u16::MAX),
             col: u16::try_from(cursor_col.saturating_sub(1)).unwrap_or(u16::MAX),
             block: cursor_block,
+            visible: true,
         }
     }
 
@@ -2325,7 +2332,7 @@ impl TerminalApp {
                     (1 + 1 + display_cols_for_prefix(&self.search.query, at)).min(cols.max(1));
                 (rows, col.max(1))
             }
-            UiMode::DatePicker => {
+            UiMode::DatePicker | UiMode::Browser => {
                 // Hide cursor inside the date picker
                 (1, 1)
             }

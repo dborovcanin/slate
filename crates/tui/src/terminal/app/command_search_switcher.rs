@@ -1645,6 +1645,12 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::Browse => {
+                    if let Err(error) = self.open_browser(db) {
+                        self.status = format!("browse: {error}");
+                    }
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Date => {
                     self.open_date_picker(DatePickerAction::InsertDate, false);
                     return;

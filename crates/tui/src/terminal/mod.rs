@@ -1,5 +1,6 @@
 mod adapter;
 mod app;
+mod browser;
 mod calc_cache;
 mod canvas;
 mod clipboard;
@@ -9,6 +10,7 @@ mod folding;
 mod folding_state;
 pub(crate) mod graphics;
 mod history;
+mod icons;
 mod input;
 mod markdown_view;
 mod media_sources;

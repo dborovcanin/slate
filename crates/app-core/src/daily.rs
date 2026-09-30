@@ -23,6 +23,22 @@ pub fn daily_note_id(prefix: &str, stamp: LocalStamp) -> String {
     )
 }
 
+/// Whether `id` has the daily note shape `<prefix>-YYYY-MM-DD`.
+pub fn is_daily_note_id(prefix: &str, id: &str) -> bool {
+    let Some(date) = id
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('-'))
+    else {
+        return false;
+    };
+    let bytes = date.as_bytes();
+    bytes.len() == 10
+        && bytes.iter().enumerate().all(|(i, b)| match i {
+            4 | 7 => *b == b'-',
+            _ => b.is_ascii_digit(),
+        })
+}
+
 /// Body of a new daily note: the template with `{date}` replaced.
 pub fn daily_note_body(template: &str, date_label: &str) -> String {
     template.replace("{date}", date_label)
@@ -76,6 +92,14 @@ pub fn capture_to_daily_note(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_daily_note_ids() {
+        assert!(is_daily_note_id("daily", "daily-2026-09-30"));
+        assert!(!is_daily_note_id("daily", "daily-2026-9-30"));
+        assert!(!is_daily_note_id("daily", "journal-2026-09-30"));
+        assert!(!is_daily_note_id("daily", "daily-2026-09-30x"));
+    }
 
     const STAMP: LocalStamp = LocalStamp {
         year: 2026,

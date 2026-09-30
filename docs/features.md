@@ -357,6 +357,32 @@ Collections group notes; the working collection is session-scoped and applies to
 | `:collection delete <name>` | Delete the collection only |
 | `:collection purge <name>` | Delete the collection and its notes |
 
+### Collection browser
+
+`Ctrl+B`, `-` in Normal mode, or `:browse` (`:explore`, `:files`) opens a full-screen browser in three columns, like the yazi file manager: collections on the left, the notes of the open collection in the middle and a preview of the hovered note (title, age, collections, tags and the start of the body) on the right. `All notes` and `Unsorted` (notes in no collection) sit above the collections. It opens on the working collection with the current note hovered.
+
+A note can belong to several collections, so notes are copied into collections rather than moved like files: `y` then `p` adds a note to another collection, `x` then `p` moves it out of the collection it was cut from, and `d` removes it from the open collection without deleting it. `u` undoes the last of these.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move |
+| `l`, `Enter`, `o` | Open the collection or note (asks for the password of a locked note) |
+| `h`, `-`, `Backspace` | Back to the collections list |
+| `/` | Filter the list (fuzzy); `Esc` clears it |
+| `Space` / `Ctrl+A` | Mark the note and move down / mark all |
+| `y` / `x` | Copy / cut the marked (or hovered) notes |
+| `p` | Paste into the open or hovered collection: copy adds the notes to it, cut moves them |
+| `d` | Remove the notes from the open collection (the notes stay) |
+| `u` | Undo the last paste or remove |
+| `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
+| `a` / `r` | New note (in the open collection) or collection / rename the hovered one |
+| `s` | Sort notes by modification time or title |
+| `w` | Make the collection the working collection (`All notes` clears it) |
+| `R` | Reload |
+| `q`, `Esc`, `Ctrl+B` | Close |
+
+Icons use Nerd Font glyphs by default; set `[theme] icons = "unicode"` or `"ascii"` for other fonts.
+
 ## Per-note modules
 
 Each note stores its own module switches; `[editor.modules]` sets defaults for new notes.

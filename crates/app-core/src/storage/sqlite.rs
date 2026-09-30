@@ -14,8 +14,8 @@ use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
 use super::models::{
-    Collection, Note, NoteAccessMode, NoteModules, NoteRevision, NoteSearchResult, NoteSummary,
-    Reminder,
+    Collection, CollectionCounts, Note, NoteAccessMode, NoteModules, NoteRevision,
+    NoteSearchResult, NoteSummary, Reminder,
 };
 use super::note_access::{NoteAccessGrant, NoteAccessService};
 use crate::note_sources::derive_note_title_from_body;
@@ -1138,6 +1138,35 @@ impl Db {
         Ok(Some(row.body))
     }
 
+    /// First `max_chars` characters of a note body for previews, or
+    /// `"[locked]"` while the note is protected.
+    pub fn get_note_body_head(&self, id: &str, max_chars: usize) -> Result<Option<String>, String> {
+        let row = {
+            let conn = self.conn.lock()?;
+            conn.query_row(
+                "SELECT access_mode, substr(body, 1, ?2) FROM notes WHERE id = ?1",
+                rusqlite::params![id, max_chars as i64],
+                |r| {
+                    Ok((
+                        parse_note_access_mode(r.get::<_, Option<String>>(0)?),
+                        r.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        };
+        Ok(row.map(|(access_mode, body)| {
+            if matches!(access_mode, NoteAccessMode::Encrypted)
+                || (is_note_protected(access_mode) && !self.is_note_unlocked(id))
+            {
+                "[locked]".to_string()
+            } else {
+                body
+            }
+        }))
+    }
+
     pub fn list_notes_meta_filtered(
         &self,
         collection_id: Option<&str>,
@@ -1521,6 +1550,119 @@ impl Db {
         }
         tx.commit().map_err(|e| e.to_string())?;
         self.get_note_collection_ids(note_id)
+    }
+
+    /// Note counts for the collection browser, in one pass over the tables.
+    pub fn collection_note_counts(&self) -> Result<CollectionCounts, String> {
+        let conn = self.conn.lock()?;
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM notes", [], |row| row.get(0))
+            .map_err(|e| e.to_string())?;
+        let unsorted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM notes n
+                 WHERE NOT EXISTS (SELECT 1 FROM note_collections nc WHERE nc.note_id = n.id)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT collection_id, COUNT(*) FROM note_collections GROUP BY collection_id")
+            .map_err(|e| e.to_string())?;
+        let per_collection = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<_, _>>()
+            .map_err(|e| e.to_string())?;
+        Ok(CollectionCounts {
+            total: total as usize,
+            unsorted: unsorted as usize,
+            per_collection,
+        })
+    }
+
+    /// Notes that belong to no collection, most recently updated first.
+    pub fn list_notes_meta_unsorted(&self) -> Result<Vec<NoteSummary>, String> {
+        let rows = {
+            let conn = self.conn.lock()?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT n.id, n.note_title, substr(n.body, 1, 200), n.access_mode, n.updated_at,
+                            n.encryption_salt, n.encryption_nonce, n.encrypted_body
+                     FROM notes n
+                     WHERE NOT EXISTS (SELECT 1 FROM note_collections nc WHERE nc.note_id = n.id)
+                     ORDER BY n.updated_at DESC",
+                )
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], map_note_summary_row)
+                .map_err(|e| e.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        };
+        rows.iter()
+            .map(|row| self.note_summary_from_row(row))
+            .collect()
+    }
+
+    /// Adds each note to the collection, keeping its other memberships.
+    /// Returns how many notes were not already members.
+    pub fn add_notes_to_collection(
+        &self,
+        collection_id: &str,
+        note_ids: &[String],
+    ) -> Result<usize, String> {
+        let mut conn = self.conn.lock()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let exists: Option<String> = tx
+            .query_row(
+                "SELECT id FROM collections WHERE id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if exists.is_none() {
+            return Err("collection not found".to_string());
+        }
+        let now = now_iso();
+        let mut added = 0usize;
+        for note_id in note_ids {
+            added += tx
+                .execute(
+                    "INSERT OR IGNORE INTO note_collections (note_id, collection_id, created_at)
+                     SELECT id, ?2, ?3 FROM notes WHERE id = ?1",
+                    rusqlite::params![note_id, collection_id, now],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(added)
+    }
+
+    /// Removes each note from the collection; the notes themselves stay.
+    /// Returns how many memberships were removed.
+    pub fn remove_notes_from_collection(
+        &self,
+        collection_id: &str,
+        note_ids: &[String],
+    ) -> Result<usize, String> {
+        let mut conn = self.conn.lock()?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let mut removed = 0usize;
+        for note_id in note_ids {
+            removed += tx
+                .execute(
+                    "DELETE FROM note_collections WHERE note_id = ?1 AND collection_id = ?2",
+                    rusqlite::params![note_id, collection_id],
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(removed)
     }
 
     pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
@@ -3814,6 +3956,57 @@ mod tests {
             .list_note_tags("n-plain")
             .expect("tags lookup")
             .is_empty());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn collection_membership_batch_ops_and_counts() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let work = db.create_collection("Work", "").expect("collection");
+        let home = db.create_collection("Home", "").expect("collection");
+        let baseline = db.collection_note_counts().expect("counts");
+        for id in ["a", "b", "c"] {
+            db.create_note_with_context(id, NoteModules::default(), None, None)
+                .expect("note created");
+        }
+        let ids = |list: &[&str]| list.iter().map(|id| id.to_string()).collect::<Vec<_>>();
+
+        assert_eq!(
+            db.add_notes_to_collection(&work.id, &ids(&["a", "b", "missing"]))
+                .expect("added"),
+            2
+        );
+        assert_eq!(
+            db.add_notes_to_collection(&work.id, &ids(&["a"]))
+                .expect("added"),
+            0
+        );
+        db.add_notes_to_collection(&home.id, &ids(&["a"]))
+            .expect("added");
+
+        let counts = db.collection_note_counts().expect("counts");
+        assert_eq!(counts.total, baseline.total + 3);
+        assert_eq!(counts.unsorted, baseline.unsorted + 1);
+        assert_eq!(counts.per_collection.get(&work.id), Some(&2));
+        assert_eq!(counts.per_collection.get(&home.id), Some(&1));
+        let unsorted = db.list_notes_meta_unsorted().expect("unsorted");
+        assert_eq!(unsorted.len(), counts.unsorted);
+        assert!(unsorted.iter().any(|n| n.id == "c"));
+        assert!(!unsorted.iter().any(|n| n.id == "a" || n.id == "b"));
+
+        assert_eq!(
+            db.remove_notes_from_collection(&work.id, &ids(&["a", "c"]))
+                .expect("removed"),
+            1
+        );
+        assert_eq!(
+            db.get_note_collection_ids("a").expect("ids"),
+            vec![home.id.clone()]
+        );
+        assert!(db.add_notes_to_collection("nope", &ids(&["a"])).is_err());
 
         drop(db);
         let _ = fs::remove_file(path);

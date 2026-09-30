@@ -160,6 +160,7 @@ enum UiMode {
     VisualLine,
     Switcher,
     CollectionSwitcher,
+    Browser,
     ContentSearch,
     CommandBar,
     Search,
@@ -672,6 +673,9 @@ struct TerminalApp {
     switcher: SwitcherState,
     // Collection switcher overlay
     collection_switcher: CollectionSwitcherState,
+    // Collection browser (full screen) and the mode it returns to
+    browser: super::browser::BrowserState,
+    browser_return_mode: UiMode,
     // Content-search overlay (cross-note full-text search)
     content_search: ContentSearchState,
     working_collection_id: Option<String>,
@@ -765,6 +769,7 @@ struct TerminalApp {
     open_image_temp_paths: Vec<std::path::PathBuf>,
 }
 
+mod browser;
 mod calc_helpers;
 mod command_search_switcher;
 mod editing;
@@ -1099,6 +1104,8 @@ impl TerminalApp {
                 ..Default::default()
             },
             collection_switcher: CollectionSwitcherState::default(),
+            browser: super::browser::BrowserState::default(),
+            browser_return_mode: UiMode::Normal,
             content_search: ContentSearchState::default(),
             working_collection_id: None,
             working_collection_name: None,

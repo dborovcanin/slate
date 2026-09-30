@@ -100,6 +100,15 @@ pub struct Collection {
     pub updated_at: String,
 }
 
+/// Note counts for collection browsing: every note, notes in no collection,
+/// and notes per collection id (collections without notes are absent).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollectionCounts {
+    pub total: usize,
+    pub unsorted: usize,
+    pub per_collection: std::collections::HashMap<String, usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Tag {
     pub id: String,

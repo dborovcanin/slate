@@ -60,6 +60,7 @@ impl TerminalApp {
             UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
             UiMode::CollectionSwitcher => self.handle_collection_switcher_key(db, key)?,
+            UiMode::Browser => self.handle_browser_key(db, key)?,
             UiMode::ContentSearch => self.handle_content_search_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(db, key)?,
             UiMode::Search => self.handle_search_key(key)?,
@@ -140,6 +141,10 @@ impl TerminalApp {
             Key::Ctrl('g') => {
                 self.dismiss_variable_autocomplete_popup();
                 self.open_collection_switcher(db)?;
+                return Ok(());
+            }
+            Key::Ctrl('b') => {
+                self.open_browser(db)?;
                 return Ok(());
             }
             Key::ArrowUp => {
@@ -458,6 +463,11 @@ impl TerminalApp {
             return Ok(());
         }
 
+        if key == Key::Ctrl('b') {
+            self.open_browser(db)?;
+            return Ok(());
+        }
+
         if key == Key::Char('?') {
             self.open_web_search(None);
             return Ok(());
@@ -511,6 +521,16 @@ impl TerminalApp {
         if key == Key::Char('z') {
             self.folds.pending_prefix_until =
                 Some(now + Duration::from_millis(FOLD_PREFIX_TIMEOUT_MS));
+            return Ok(());
+        }
+
+        // `-` opens the browser on the current note, as in oil.nvim, unless it
+        // completes a pending vim command (`f-`, `r-`, a count).
+        if key == Key::Char('-')
+            && self.vim_state.pending.is_none()
+            && self.vim_state.count_buffer.is_empty()
+        {
+            self.open_browser(db)?;
             return Ok(());
         }
 
@@ -589,6 +609,11 @@ impl TerminalApp {
 
         if key == Key::Ctrl('g') {
             self.open_collection_switcher(db)?;
+            return Ok(());
+        }
+
+        if key == Key::Ctrl('b') {
+            self.open_browser(db)?;
             return Ok(());
         }
 

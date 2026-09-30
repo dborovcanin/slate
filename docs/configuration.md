@@ -13,6 +13,7 @@ The file is auto-generated on first run.
 [theme]
 color_scheme = "gruvbox-light"
 accent = "auto"
+icons = "nerd"
 
 [editor]
 markdown_autoformat = true
@@ -59,6 +60,7 @@ max_body_bytes = 524288
 
 - `color_scheme`
 - `accent`
+- `icons`
 
 ### color_scheme values
 
@@ -87,6 +89,12 @@ max_body_bytes = 524288
 - `cobalt`
 - `slate`
 - custom hex like `#4f7bd9`
+
+### icons values
+
+- `nerd` (default): Nerd Font glyphs, as in yazi or lsd. Needs a [Nerd Font](https://www.nerdfonts.com/) in the terminal.
+- `unicode`: symbols from standard Unicode blocks, for any font.
+- `ascii`: plain ASCII markers.
 
 ## Editor settings
 

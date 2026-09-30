@@ -30,6 +30,7 @@ Every command-bar command with its aliases. For what each feature does and its k
 | Command | Aliases | Purpose |
 | --- | --- | --- |
 | `today` | `daily` | Open today's daily note, creating it from the `[daily]` template |
+| `browse` | `explore`, `files` | Open the collection browser |
 | `date` | | Insert a picked date |
 | `remind` | `alarm` | Set a reminder for the current line |
 | `remind toggle` | | Remove the line's reminder, or set one if there is none |

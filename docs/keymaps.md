@@ -11,6 +11,7 @@ Key tables by mode. The [Feature Guide](./features.md) lists the same keys group
 | `Ctrl+Q` | Quit |
 | `Ctrl+P` | Note switcher |
 | `Ctrl+G` | Collection picker |
+| `Ctrl+B` | Collection browser (also `-` in Normal mode) |
 | `Ctrl+E` | Command bar (Insert, Normal, Visual) |
 | `Ctrl+]` | Follow wiki link at cursor (Insert, Normal) |
 | `Ctrl+S` | Save (in Insert only while autosave is on) |
@@ -122,6 +123,26 @@ Key tables by mode. The [Feature Guide](./features.md) lists the same keys group
 | `Enter` | Set working collection |
 | `Ctrl+E` | Edit collection (`Tab` / `Shift+Tab` between fields, `Enter` save, `Esc` cancel) |
 | `Esc` / `Ctrl+G` / `Ctrl+P` | Close |
+
+## Collection browser (`Ctrl+B`, `-`, `:browse`)
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move |
+| `l`, `Enter`, `o` | Open the collection or note (asks for the password of a locked note) |
+| `h`, `-`, `Backspace` | Back to the collections list |
+| `/` | Filter the list (fuzzy); `Esc` clears it |
+| `Space` / `Ctrl+A` | Mark the note and move down / mark all |
+| `y` / `x` | Copy / cut the marked (or hovered) notes |
+| `p` | Paste into the open or hovered collection: copy adds the notes to it, cut moves them |
+| `d` | Remove the notes from the open collection (the notes stay) |
+| `u` | Undo the last paste or remove |
+| `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
+| `a` / `r` | New note (in the open collection) or collection / rename the hovered one |
+| `s` | Sort notes by modification time or title |
+| `w` | Make the collection the working collection (`All notes` clears it) |
+| `R` | Reload |
+| `q`, `Esc`, `Ctrl+B` | Close |
 
 ## Image preview
 
