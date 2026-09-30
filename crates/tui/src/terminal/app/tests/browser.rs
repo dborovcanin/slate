@@ -306,6 +306,11 @@ fn content_search_lists_hits_previews_the_line_and_opens_there() {
     app.handle_key(&db, Key::Backspace).expect("erase");
     finish_search(&mut app, &db);
 
+    // New hits arrive unselected; Enter opens only a picked hit.
+    assert_eq!(app.browser.search.as_ref().unwrap().selected, None);
+    app.handle_key(&db, Key::Enter).expect("nothing picked");
+    assert_eq!(app.mode, UiMode::Browser);
+    app.handle_key(&db, Key::ArrowDown).expect("pick");
     app.handle_key(&db, Key::Enter).expect("open hit");
     assert_eq!(app.active_note.id, "n2");
     assert_eq!(app.editor.cursor_line, 1);
@@ -479,6 +484,7 @@ fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() 
     // Ctrl+R in the note switcher opens the selected note's history.
     app.handle_key(&db, Key::Ctrl('p')).expect("switcher");
     type_text(&mut app, &db, "meeting");
+    app.handle_key(&db, Key::ArrowDown).expect("pick");
     app.handle_key(&db, Key::Ctrl('r')).expect("history");
     assert_eq!(app.mode, UiMode::Browser);
     assert_eq!(

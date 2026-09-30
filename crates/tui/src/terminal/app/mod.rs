@@ -592,7 +592,8 @@ struct SwitcherState {
     items: Vec<NoteMeta>,
     matches: Vec<usize>,
     score_scratch: Vec<(usize, i32)>,
-    selected: usize,
+    /// Match picked with the arrows; editing the query clears it.
+    selected: Option<usize>,
     open_confirm: Option<SwitcherOpenConfirm>,
     delete_confirm: Option<SwitcherDeleteConfirm>,
     collection_filter_id: Option<String>,
@@ -622,7 +623,8 @@ struct ContentSearchState {
     query: String,
     cursor_col: usize,
     results: Vec<NoteSearchResult>,
-    selected: usize,
+    /// Result picked with the arrows; editing the query clears it.
+    selected: Option<usize>,
     pending: bool,
     debounce_until: Option<Instant>,
     rx: Option<std::sync::mpsc::Receiver<ContentSearchResponse>>,
@@ -935,10 +937,8 @@ impl TerminalApp {
             .enumerate()
             .find(|(_, idx)| self.switcher.items[**idx].id == self.active_note.id)
         {
-            self.switcher.selected = match_idx;
+            self.switcher.selected = Some(match_idx);
             note_title = self.switcher.items[*switcher_idx].title.clone();
-        } else {
-            self.switcher.selected = 0;
         }
 
         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
@@ -1654,7 +1654,7 @@ impl TerminalApp {
             self.content_search.pending = false;
             self.content_search.debounce_until = None;
             self.content_search.results.clear();
-            self.content_search.selected = 0;
+            self.content_search.selected = None;
             return;
         }
 
@@ -1696,7 +1696,7 @@ impl TerminalApp {
                 Ok((query, Ok(results))) => {
                     if self.content_search.query.trim() == query {
                         self.content_search.results = results;
-                        self.content_search.selected = 0;
+                        self.content_search.selected = None;
                     }
                     self.content_search.rx = None;
                     self.render_state.dirty = true;

@@ -1242,6 +1242,7 @@ impl TerminalApp {
                 let before = search.query.clone();
                 text_input::apply_key(&mut search.query, &mut search.cursor, &other);
                 if search.query.trim() != before.trim() {
+                    search.selected = None;
                     search.pending = true;
                     self.browser_search_due = Some(std::time::Instant::now() + SEARCH_DEBOUNCE);
                 }
@@ -1305,7 +1306,7 @@ impl TerminalApp {
                                 search.error = Some(format!("search failed: {error}"));
                             }
                         }
-                        search.selected = 0;
+                        search.selected = None;
                         search.searched = query;
                     }
                 }

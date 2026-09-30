@@ -199,7 +199,8 @@ pub struct ContentSearch {
     /// Char index; `usize::MAX` means at the end.
     pub cursor: usize,
     pub hits: Vec<SearchHit>,
-    pub selected: usize,
+    /// Hit picked with the arrows; a new query or new hits clear it.
+    pub selected: Option<usize>,
     /// Query the current hits belong to.
     pub searched: String,
     /// The query changed and waits for the debounce before it runs.
@@ -216,7 +217,7 @@ impl ContentSearch {
             query: String::new(),
             cursor: usize::MAX,
             hits: Vec::new(),
-            selected: 0,
+            selected: None,
             searched: String::new(),
             pending: false,
             running: false,
@@ -225,7 +226,7 @@ impl ContentSearch {
     }
 
     pub fn hovered(&self) -> Option<&SearchHit> {
-        self.hits.get(self.selected)
+        self.hits.get(self.selected?)
     }
 }
 
@@ -448,7 +449,6 @@ impl BrowserState {
 
     fn cursor_mut(&mut self) -> &mut usize {
         match (self.level(), self.search.as_mut(), self.history.as_mut()) {
-            (Level::Search, Some(search), _) => &mut search.selected,
             (Level::History, _, Some(history)) => &mut history.selected,
             (Level::Notes, ..) => &mut self.note_cursor,
             _ => &mut self.collection_cursor,
@@ -457,6 +457,10 @@ impl BrowserState {
 
     /// Moves the cursor by `delta` rows, clamped to the list.
     pub fn move_cursor(&mut self, delta: isize) {
+        if let (Level::Search, Some(search)) = (self.level(), self.search.as_mut()) {
+            search.selected = step_selection(search.selected, delta, search.hits.len());
+            return;
+        }
         let len = self.list_len();
         let cursor = self.cursor_mut();
         *cursor = if len == 0 {
@@ -467,6 +471,11 @@ impl BrowserState {
     }
 
     pub fn move_to_end(&mut self, end: bool) {
+        if let (Level::Search, Some(search)) = (self.level(), self.search.as_mut()) {
+            let len = search.hits.len();
+            search.selected = (len > 0).then(|| if end { len - 1 } else { 0 });
+            return;
+        }
         let len = self.list_len();
         *self.cursor_mut() = if end { len.saturating_sub(1) } else { 0 };
     }
@@ -965,9 +974,12 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     let icons = view.look.icons;
     let (position, total) = match (state.level(), state.search.as_ref(), state.history.as_ref()) {
         (Level::Search, Some(search), _) => (search.selected, search.hits.len()),
-        (Level::History, _, Some(history)) => (history.selected, history.versions.len() + 1),
-        (Level::Notes, ..) => (state.note_cursor, state.note_matches.len()),
-        _ => (state.collection_cursor, state.collection_matches.len()),
+        (Level::History, _, Some(history)) => (Some(history.selected), history.versions.len() + 1),
+        (Level::Notes, ..) => (Some(state.note_cursor), state.note_matches.len()),
+        _ => (
+            Some(state.collection_cursor),
+            state.collection_matches.len(),
+        ),
     };
     let mut right = String::new();
     if let Some(search) = state.search.as_ref() {
@@ -1015,8 +1027,25 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
 }
 
 /// `3/12`, or `0/0` for an empty list.
-pub(crate) fn position_label(position: usize, total: usize) -> String {
-    format!("{}/{}", (position + 1).min(total), total)
+/// `3/29`, or just `29` when nothing is selected.
+pub(crate) fn position_label(position: Option<usize>, total: usize) -> String {
+    match position {
+        Some(position) => format!("{}/{}", (position + 1).min(total), total),
+        None => total.to_string(),
+    }
+}
+
+/// Moves an optional list selection by `delta` rows, clamped to the list.
+/// With nothing selected, moving down picks the first row and up the last.
+pub(crate) fn step_selection(selected: Option<usize>, delta: isize, len: usize) -> Option<usize> {
+    if len == 0 {
+        return None;
+    }
+    Some(match selected {
+        Some(pos) => pos.saturating_add_signed(delta).min(len - 1),
+        None if delta < 0 => len - 1,
+        None => 0,
+    })
 }
 
 /// Title, metadata and the start of the body of `note`, from `preview`.
@@ -1622,7 +1651,7 @@ pub fn draw_browser(
                     row.right = format!(":{}", hit.line_number);
                     row
                 },
-                Some((search.selected, Hover::Focused)),
+                search.selected.map(|pos| (pos, Hover::Focused)),
             );
             if search.hits.is_empty() {
                 let hint = if let Some(error) = search.error.as_deref() {
@@ -1799,6 +1828,17 @@ fn draw_confirm(view: &BrowserView, buf: &mut Buffer, rows: usize, cols: usize, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_selection_starts_from_the_ends_and_clamps() {
+        assert_eq!(step_selection(None, 1, 3), Some(0));
+        assert_eq!(step_selection(None, -1, 3), Some(2));
+        assert_eq!(step_selection(Some(1), 5, 3), Some(2));
+        assert_eq!(step_selection(Some(1), -5, 3), Some(0));
+        assert_eq!(step_selection(None, 1, 0), None);
+        assert_eq!(position_label(None, 3), "3");
+        assert_eq!(position_label(Some(0), 3), "1/3");
+    }
 
     fn note(id: &str, title: &str, updated_at: &str) -> NoteEntry {
         NoteEntry {

@@ -169,12 +169,12 @@ impl TerminalApp {
                     &PickerView {
                         look,
                         title: "Collections",
-                        footer: position_label(state.selected, state.matches.len()),
+                        footer: position_label(Some(state.selected), state.matches.len()),
                         query: &state.query,
                         cursor: usize::MAX,
                         placeholder: "find a collection",
                         len: state.matches.len(),
-                        selected: state.selected,
+                        selected: Some(state.selected),
                         row_at: |pos: usize| {
                             collection_entry_row(&look, &state.entries[state.matches[pos]], false)
                         },

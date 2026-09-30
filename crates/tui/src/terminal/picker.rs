@@ -24,7 +24,8 @@ pub struct PickerView<'a, F: Fn(usize) -> Row> {
     pub cursor: usize,
     pub placeholder: &'a str,
     pub len: usize,
-    pub selected: usize,
+    /// Highlighted row, if any.
+    pub selected: Option<usize>,
     pub row_at: F,
     /// Shown in place of an empty list.
     pub empty_hint: &'a str,
@@ -100,7 +101,7 @@ pub fn draw_picker<F: Fn(usize) -> Row>(
         list_height,
         view.len,
         &view.row_at,
-        Some((view.selected, Hover::Focused)),
+        view.selected.map(|pos| (pos, Hover::Focused)),
     );
     if view.len == 0 {
         draw_centered_hint(buf, palette, pane, list_top + 1, view.empty_hint);

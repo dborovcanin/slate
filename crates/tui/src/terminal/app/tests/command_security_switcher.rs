@@ -773,7 +773,7 @@ fn switcher_delete_cancel_keeps_note() {
     run_keys(
         &mut app,
         &db,
-        &[Key::Ctrl('p'), Key::Char('s'), Key::Delete],
+        &[Key::Ctrl('p'), Key::Char('s'), Key::ArrowDown, Key::Delete],
     );
     assert_eq!(app.mode, UiMode::Switcher);
     assert!(app.switcher.delete_confirm.is_some());
@@ -798,7 +798,12 @@ fn switcher_delete_removes_active_after_confirmation() {
     run_keys(
         &mut app,
         &db,
-        &[Key::Ctrl('p'), Key::Paste("first".to_string()), Key::Delete],
+        &[
+            Key::Ctrl('p'),
+            Key::Paste("first".to_string()),
+            Key::ArrowDown,
+            Key::Delete,
+        ],
     );
     assert_eq!(app.mode, UiMode::Switcher);
     let pending = app
@@ -856,12 +861,16 @@ fn switcher_enter_opens_note_in_normal_mode() {
         .expect("switcher items refreshed");
     app.mode = UiMode::Editor;
 
+    // A query edit leaves nothing selected, so Enter waits for a pick.
     run_keys(
         &mut app,
         &db,
         &[Key::Ctrl('p'), Key::Paste("second".to_string()), Key::Enter],
     );
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert_eq!(app.active_note.id, "n1");
 
+    run_keys(&mut app, &db, &[Key::ArrowDown, Key::Enter]);
     assert_eq!(app.active_note.id, "n2");
     assert_eq!(app.mode, UiMode::Normal);
     assert_eq!(app.vim_state.mode, crate::editor_core::vim::VimMode::Normal);
@@ -884,7 +893,12 @@ fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
     run_keys(
         &mut app,
         &db,
-        &[Key::Ctrl('p'), Key::Paste("second".to_string()), Key::Enter],
+        &[
+            Key::Ctrl('p'),
+            Key::Paste("second".to_string()),
+            Key::ArrowDown,
+            Key::Enter,
+        ],
     );
     assert_eq!(app.mode, UiMode::Switcher);
     assert!(app.switcher.open_confirm.is_some());
@@ -1020,7 +1034,7 @@ fn content_search_enter_opens_note_at_result_line() {
         rank: 0.0,
         updated_at: String::new(),
     }];
-    app.content_search.selected = 0;
+    app.content_search.selected = Some(0);
 
     run_keys(&mut app, &db, &[Key::Enter]);
     assert_eq!(app.active_note.id, "n2");
@@ -1061,8 +1075,12 @@ fn content_search_can_reopen_and_find_results_after_opening_match() {
             .next(),
         Some("n2")
     );
+    assert_eq!(
+        app.content_search.selected, None,
+        "results arrive unselected"
+    );
 
-    run_keys(&mut app, &db, &[Key::Enter]);
+    run_keys(&mut app, &db, &[Key::ArrowDown, Key::Enter]);
     assert_eq!(app.active_note.id, "n2");
     assert_eq!(app.mode, UiMode::Normal);
 
@@ -1107,7 +1125,7 @@ fn opening_note_from_content_search_clears_search_session_state() {
         rank: 0.0,
         updated_at: String::new(),
     }];
-    app.content_search.selected = 0;
+    app.content_search.selected = Some(0);
     app.content_search.pending = true;
     let (_tx, rx) = std::sync::mpsc::channel();
     app.content_search.rx = Some(rx);
@@ -1117,7 +1135,7 @@ fn opening_note_from_content_search_clears_search_session_state() {
     assert_eq!(app.mode, UiMode::Normal);
     assert!(app.content_search.query.is_empty());
     assert!(app.content_search.results.is_empty());
-    assert_eq!(app.content_search.selected, 0);
+    assert_eq!(app.content_search.selected, None);
     assert!(!app.content_search.pending);
     assert!(
         app.content_search.rx.is_none(),
@@ -1152,7 +1170,7 @@ fn tab_from_content_search_clears_search_session_state() {
         rank: 0.0,
         updated_at: String::new(),
     }];
-    app.content_search.selected = 0;
+    app.content_search.selected = Some(0);
     app.content_search.pending = true;
     let (_tx, rx) = std::sync::mpsc::channel();
     app.content_search.rx = Some(rx);
@@ -1161,7 +1179,7 @@ fn tab_from_content_search_clears_search_session_state() {
     assert_eq!(app.mode, UiMode::Switcher);
     assert!(app.content_search.query.is_empty());
     assert!(app.content_search.results.is_empty());
-    assert_eq!(app.content_search.selected, 0);
+    assert_eq!(app.content_search.selected, None);
     assert!(!app.content_search.pending);
     assert!(
         app.content_search.rx.is_none(),

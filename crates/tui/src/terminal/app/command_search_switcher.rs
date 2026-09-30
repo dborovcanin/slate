@@ -6,6 +6,7 @@ use super::{
     WebSearchState, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
     CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
+use crate::terminal::browser::step_selection;
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
 use crate::terminal::{notifications, switcher, text_input};
 use app_core::storage::{NoteAccessMode, NoteModules};
@@ -223,7 +224,7 @@ impl TerminalApp {
         self.content_search.query.clear();
         self.content_search.cursor_col = 0;
         self.content_search.results.clear();
-        self.content_search.selected = 0;
+        self.content_search.selected = None;
         self.content_search.pending = false;
         self.content_search.debounce_until = None;
     }
@@ -250,7 +251,7 @@ impl TerminalApp {
             self.push_detached_content_search_rx(rx);
         }
         self.content_search.results = self.content_search_title_fallback_results(&query);
-        self.content_search.selected = 0;
+        self.content_search.selected = None;
         self.content_search.pending = !query.is_empty();
         self.content_search.debounce_until = if query.is_empty() {
             None
@@ -365,14 +366,12 @@ impl TerminalApp {
                 self.handle_editor_key(db, Key::Ctrl('n'))?;
             }
             Key::ArrowUp => {
-                if self.switcher.selected > 0 {
-                    self.switcher.selected -= 1;
-                }
+                self.switcher.selected =
+                    step_selection(self.switcher.selected, -1, self.switcher.matches.len());
             }
             Key::ArrowDown => {
-                if self.switcher.selected + 1 < self.switcher.matches.len() {
-                    self.switcher.selected += 1;
-                }
+                self.switcher.selected =
+                    step_selection(self.switcher.selected, 1, self.switcher.matches.len());
             }
             Key::Backspace => {
                 self.switcher.query.pop();
@@ -382,7 +381,12 @@ impl TerminalApp {
                 self.request_switcher_delete_confirmation(db);
             }
             Key::Enter => {
-                if let Some(idx) = self.switcher.matches.get(self.switcher.selected).copied() {
+                if let Some(idx) = self
+                    .switcher
+                    .selected
+                    .and_then(|pos| self.switcher.matches.get(pos))
+                    .copied()
+                {
                     let item = self.switcher.items[idx].clone();
                     if item.access_mode != NoteAccessMode::None && !item.is_unlocked {
                         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
@@ -414,7 +418,12 @@ impl TerminalApp {
                 self.open_collection_switcher(db)?;
             }
             Key::Ctrl('r') => {
-                if let Some(idx) = self.switcher.matches.get(self.switcher.selected).copied() {
+                if let Some(idx) = self
+                    .switcher
+                    .selected
+                    .and_then(|pos| self.switcher.matches.get(pos))
+                    .copied()
+                {
                     let note_id = self.switcher.items[idx].id.clone();
                     self.close_switcher();
                     self.open_browser_history(db, &note_id)?;
@@ -843,7 +852,12 @@ impl TerminalApp {
     }
 
     pub(super) fn request_switcher_delete_confirmation(&mut self, db: &Db) {
-        if let Some(idx) = self.switcher.matches.get(self.switcher.selected).copied() {
+        if let Some(idx) = self
+            .switcher
+            .selected
+            .and_then(|pos| self.switcher.matches.get(pos))
+            .copied()
+        {
             let item = &self.switcher.items[idx];
             let capabilities = note_sources(db).capabilities_for_note_id(&item.id);
             if !capabilities.can_delete {
@@ -2257,7 +2271,7 @@ impl TerminalApp {
         self.mode = UiMode::Editor;
         self.switcher.query.clear();
         self.switcher.matches.clear();
-        self.switcher.selected = 0;
+        self.switcher.selected = None;
         self.switcher.open_confirm = None;
         self.switcher.delete_confirm = None;
         self.status = format!("editing {}", self.active_note.id);
@@ -2267,7 +2281,7 @@ impl TerminalApp {
         let query = self.switcher.query.trim();
         if query.is_empty() {
             self.switcher.matches = (0..self.switcher.items.len()).collect();
-            self.switcher.selected = 0;
+            self.switcher.selected = None;
             return;
         }
 
@@ -2286,7 +2300,7 @@ impl TerminalApp {
             .iter()
             .map(|(idx, _)| *idx)
             .collect();
-        self.switcher.selected = 0;
+        self.switcher.selected = None;
     }
 
     pub(super) fn save(&mut self, db: &Db) -> Result<(), String> {
@@ -2598,14 +2612,18 @@ impl TerminalApp {
                 self.refresh_content_search_preview();
             }
             Key::ArrowUp => {
-                if self.content_search.selected > 0 {
-                    self.content_search.selected -= 1;
-                }
+                self.content_search.selected = step_selection(
+                    self.content_search.selected,
+                    -1,
+                    self.content_search.results.len(),
+                );
             }
             Key::ArrowDown => {
-                if self.content_search.selected + 1 < self.content_search.results.len() {
-                    self.content_search.selected += 1;
-                }
+                self.content_search.selected = step_selection(
+                    self.content_search.selected,
+                    1,
+                    self.content_search.results.len(),
+                );
             }
             Key::ArrowLeft => {
                 self.content_search.cursor_col = self.content_search.cursor_col.saturating_sub(1);
@@ -2641,8 +2659,8 @@ impl TerminalApp {
             Key::Enter => {
                 if let Some(result) = self
                     .content_search
-                    .results
-                    .get(self.content_search.selected)
+                    .selected
+                    .and_then(|pos| self.content_search.results.get(pos))
                     .cloned()
                 {
                     // Check if the note is protected
