@@ -1,6 +1,7 @@
 use super::switcher::NoteMeta;
 use super::{TerminalApp, UiMode};
 use crate::terminal::browser::{collection_entry_row, plain_note_row, position_label, NoteEntry};
+use crate::terminal::canvas::{draw_centered_input_box, InputBox};
 use crate::terminal::picker::{draw_picker, PickerView};
 use crate::terminal::switcher;
 use app_core::storage::{NoteAccessMode, NoteSearchResult};
@@ -65,6 +66,45 @@ impl TerminalApp {
             return Some("Tab/Shift+Tab field, Enter save, Esc cancel".to_string());
         }
         None
+    }
+
+    /// The password field of the switcher's unlock or delete dialog.
+    pub(super) fn switcher_password_box(&self) -> InputBox<'_> {
+        let locked = self.look().icons.locked;
+        let (title, text, hint) = match (&self.switcher.open_confirm, &self.switcher.delete_confirm)
+        {
+            (Some(confirm), _) => (
+                match confirm.collection.as_deref() {
+                    Some(collection) => format!(
+                        "{locked} {} · {}",
+                        switcher::truncate_title_for_confirm(collection),
+                        switcher::truncate_title_for_confirm(&confirm.note_title)
+                    ),
+                    None => format!(
+                        "{locked} {}",
+                        switcher::truncate_title_for_confirm(&confirm.note_title)
+                    ),
+                },
+                confirm.password.as_str(),
+                "Enter unlock · Esc cancel",
+            ),
+            (None, Some(confirm)) => (
+                format!(
+                    "{locked} Delete \"{}\"",
+                    switcher::truncate_title_for_confirm(&confirm.note_title)
+                ),
+                confirm.password.as_str(),
+                "Enter delete · Esc cancel",
+            ),
+            (None, None) => (String::new(), "", ""),
+        };
+        InputBox {
+            title,
+            text,
+            cursor: usize::MAX,
+            password: true,
+            hint,
+        }
     }
 
     /// Draws the open picker popup and its dialogs over the editor.
@@ -191,26 +231,14 @@ impl TerminalApp {
 
         let palette = self.render_palette;
         if let Some(confirm) = self.switcher.delete_confirm.as_ref() {
-            switcher::draw_delete_confirm(
-                &confirm.note_title,
-                confirm.requires_password,
-                confirm.password.chars().count(),
-                buf,
-                rows,
-                cols,
-                palette,
-            );
+            if confirm.requires_password {
+                draw_centered_input_box(buf, rows, cols, &palette, &self.switcher_password_box());
+            } else {
+                switcher::draw_delete_confirm(&confirm.note_title, buf, rows, cols, palette);
+            }
         }
-        if let Some(confirm) = self.switcher.open_confirm.as_ref() {
-            switcher::draw_open_confirm(
-                &confirm.note_title,
-                confirm.collection.as_deref(),
-                confirm.password.chars().count(),
-                buf,
-                rows,
-                cols,
-                palette,
-            );
+        if self.switcher.open_confirm.is_some() {
+            draw_centered_input_box(buf, rows, cols, &palette, &self.switcher_password_box());
         }
         if let Some(dialog) = self.collection_switcher.edit_dialog.as_ref() {
             switcher::draw_collection_edit_dialog(

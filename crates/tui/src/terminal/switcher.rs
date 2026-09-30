@@ -558,50 +558,28 @@ pub fn draw_web_search(
     );
 }
 
+/// Asks to confirm deleting an unprotected note. A protected note asks for
+/// its password in an input box instead (see `canvas::InputBox`).
 pub fn draw_delete_confirm(
     note_title: &str,
-    requires_password: bool,
-    password_len: usize,
     buf: &mut Buffer,
     rows: usize,
     cols: usize,
     palette: RenderPalette,
 ) {
-    let title = truncate_title_for_confirm(note_title);
-    let message = format!(" Delete \"{title}\"? ");
-    let password_prompt = if requires_password {
-        let masked = if password_len == 0 {
-            "<required>".to_string()
-        } else {
-            "*".repeat(password_len.min(32))
-        };
-        format!(" Password: {masked} ")
-    } else {
-        String::new()
-    };
-    let hint = if requires_password {
-        " Enter confirm, Esc cancel "
-    } else {
-        " Enter/Y confirm, Esc/N cancel "
-    };
-    let mut inner_w = message.chars().count().max(hint.chars().count()).max(30);
-    if requires_password {
-        inner_w = inner_w.max(password_prompt.chars().count());
-    }
-    let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
-    let target_h = if requires_password { 4 } else { 3 };
-    let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
+    let message = format!(" Delete \"{}\"? ", truncate_title_for_confirm(note_title));
+    let hint = "Enter/Y confirm · Esc/N cancel";
+    let box_w = (message
+        .chars()
+        .count()
+        .max(hint.chars().count() + 4)
+        .max(30)
+        + 2)
+    .min(cols.saturating_sub(4).max(24));
+    let box_h = 3;
     let x = (cols.saturating_sub(box_w)) / 2 + 1;
     let y = (rows.saturating_sub(box_h)) / 2 + 1;
     let surface_bg = palette.surface_bg();
-
-    let message_style = TextStyle {
-        fg: Some(palette.primary()),
-        bg: Some(surface_bg),
-        bold: true,
-        ..Default::default()
-    };
-
     draw_framed_surface(
         buf,
         y,
@@ -612,148 +590,24 @@ pub fn draw_delete_confirm(
         palette.primary(),
         true,
         Some("Delete note"),
-        Some(hint.trim()),
+        Some(hint),
     );
-
     draw_row_at_styled(
         buf,
         y + 1,
         x + 1,
         box_w.saturating_sub(2),
         &message,
-        message_style,
-    );
-    if requires_password {
-        draw_row_at_styled(
-            buf,
-            y + 2,
-            x + 1,
-            box_w.saturating_sub(2),
-            &password_prompt,
-            message_style,
-        );
-    }
-}
-
-/// Password prompt for a locked note; `collection` names the encrypted
-/// collection whose password it needs.
-pub fn draw_open_confirm(
-    note_title: &str,
-    collection: Option<&str>,
-    password_len: usize,
-    buf: &mut Buffer,
-    rows: usize,
-    cols: usize,
-    palette: RenderPalette,
-) {
-    let title = match collection {
-        Some(collection) => format!("Unlock {}", truncate_title_for_confirm(collection)),
-        None => "Unlock note".to_string(),
-    };
-    draw_confirm(
-        &title,
-        &format!(" Open \"{}\" ", truncate_title_for_confirm(note_title)),
-        Some(password_len),
-        " Enter confirm, Esc cancel ",
-        buf,
-        rows,
-        cols,
-        palette,
+        TextStyle {
+            fg: Some(palette.primary()),
+            bg: Some(surface_bg),
+            bold: true,
+            ..Default::default()
+        },
     );
 }
 
-/// Masked password dialog: `title` on the frame, `message` above the field.
-pub fn draw_password_dialog(
-    title: &str,
-    message: &str,
-    password_len: usize,
-    buf: &mut Buffer,
-    rows: usize,
-    cols: usize,
-    palette: RenderPalette,
-) {
-    draw_confirm(
-        title,
-        &format!(" {message} "),
-        Some(password_len),
-        " Enter confirm, Esc cancel ",
-        buf,
-        rows,
-        cols,
-        palette,
-    );
-}
-
-fn draw_confirm(
-    title: &str,
-    message: &str,
-    password_len: Option<usize>,
-    hint: &str,
-    buf: &mut Buffer,
-    rows: usize,
-    cols: usize,
-    palette: RenderPalette,
-) {
-    let password_prompt = password_len.map(|len| {
-        let masked = if len == 0 {
-            "<required>".to_string()
-        } else {
-            "*".repeat(len.min(32))
-        };
-        format!(" Password: {masked} ")
-    });
-    let mut inner_w = message.chars().count().max(hint.chars().count()).max(30);
-    if let Some(prompt) = password_prompt.as_ref() {
-        inner_w = inner_w.max(prompt.chars().count());
-    }
-    let box_w = (inner_w + 2).min(cols.saturating_sub(4).max(24));
-    let target_h = if password_prompt.is_some() { 4 } else { 3 };
-    let box_h = target_h.min(rows.saturating_sub(2).max(target_h));
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-    let surface_bg = palette.surface_bg();
-
-    let message_style = TextStyle {
-        fg: Some(palette.primary()),
-        bg: Some(surface_bg),
-        bold: true,
-        ..Default::default()
-    };
-
-    draw_framed_surface(
-        buf,
-        y,
-        x,
-        box_w,
-        box_h,
-        surface_bg,
-        palette.primary(),
-        true,
-        Some(title),
-        Some(hint.trim()),
-    );
-
-    draw_row_at_styled(
-        buf,
-        y + 1,
-        x + 1,
-        box_w.saturating_sub(2),
-        message,
-        message_style,
-    );
-    if let Some(prompt) = password_prompt.as_ref() {
-        draw_row_at_styled(
-            buf,
-            y + 2,
-            x + 1,
-            box_w.saturating_sub(2),
-            prompt,
-            message_style,
-        );
-    }
-}
-
-fn truncate_title_for_confirm(value: &str) -> String {
+pub(crate) fn truncate_title_for_confirm(value: &str) -> String {
     const MAX_CHARS: usize = 48;
     let mut out = String::new();
     for (idx, ch) in value.chars().enumerate() {

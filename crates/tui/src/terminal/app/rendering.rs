@@ -9,7 +9,9 @@ use super::{
     OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::editor_core::{markdown_tokens, sum};
-use crate::terminal::canvas::{put_char, put_str, put_str_width};
+use crate::terminal::canvas::{
+    centered_input_box_cursor, draw_centered_input_box, put_char, put_str, put_str_width, InputBox,
+};
 use crate::terminal::date_picker::DatePickerView;
 use crate::terminal::picker::picker_query_cursor;
 use crate::terminal::render;
@@ -1659,22 +1661,8 @@ impl TerminalApp {
         }
 
         self.draw_picker_popup(buf, rows, cols);
-        if let Some(dialog) = self.note_password_dialog.as_ref() {
-            use crate::editor_core::command_catalog::NoteSecurityAction;
-            let (title, message) = match (dialog.action, dialog.first.is_some()) {
-                (NoteSecurityAction::Encrypt, false) => ("Encrypt note", "New password"),
-                (NoteSecurityAction::Encrypt, true) => ("Encrypt note", "Repeat password"),
-                (NoteSecurityAction::Decrypt, _) => ("Decrypt note", "Password"),
-            };
-            super::switcher::draw_password_dialog(
-                title,
-                message,
-                dialog.password.chars().count(),
-                buf,
-                rows,
-                cols,
-                self.render_palette,
-            );
+        if let Some(input) = self.note_password_box() {
+            draw_centered_input_box(buf, rows, cols, &self.render_palette, &input);
         }
 
         if self.mode == UiMode::DatePicker {
@@ -1717,6 +1705,9 @@ impl TerminalApp {
             );
         }
         let (mut cursor_row, mut cursor_col) = self.cursor_position(rows, cols);
+        // The note password dialog takes the cursor from the editor.
+        let dialog_open = self.note_password_dialog.is_some();
+        let cursor_line_override = cursor_line_override.filter(|_| !dialog_open);
         if let Some((line_text, mapped_col)) = cursor_line_override {
             if matches!(
                 self.mode,
@@ -1742,7 +1733,7 @@ impl TerminalApp {
                 cursor_col = (gutter_width + visible_col + 1).min(cols.max(1)).max(1);
             }
         }
-        if editor_cursor_mode {
+        if editor_cursor_mode && !dialog_open {
             if let Some((cell_row, cell_col)) = wrapped_cursor_cell {
                 cursor_row = cell_row;
                 cursor_col = cell_col.min(cols.max(1));
@@ -1758,10 +1749,11 @@ impl TerminalApp {
         self.draw_wiki_link_preview_popup(buf, rows, cols);
         self.draw_image_preview_popup(buf, rows, cols, db);
 
-        let cursor_block = matches!(
-            self.mode,
-            UiMode::Normal | UiMode::Visual | UiMode::VisualLine
-        );
+        let cursor_block = !dialog_open
+            && matches!(
+                self.mode,
+                UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+            );
         CursorPlacement {
             row: u16::try_from(cursor_row.saturating_sub(1)).unwrap_or(u16::MAX),
             col: u16::try_from(cursor_col.saturating_sub(1)).unwrap_or(u16::MAX),
@@ -2216,7 +2208,37 @@ impl TerminalApp {
         }
     }
 
+    /// The password field of `:note encrypt` / `:note decrypt`, while open.
+    fn note_password_box(&self) -> Option<InputBox<'_>> {
+        use crate::editor_core::command_catalog::NoteSecurityAction;
+        let dialog = self.note_password_dialog.as_ref()?;
+        let step = match (dialog.action, dialog.first.is_some()) {
+            (NoteSecurityAction::Encrypt, false) => "Encrypt note · new password",
+            (NoteSecurityAction::Encrypt, true) => "Encrypt note · repeat password",
+            (NoteSecurityAction::Decrypt, _) => "Decrypt note · password",
+        };
+        Some(InputBox {
+            title: format!("{} {step}", self.look().icons.locked),
+            text: &dialog.password,
+            cursor: usize::MAX,
+            password: true,
+            hint: "Enter ok · Esc cancel",
+        })
+    }
+
     pub(super) fn cursor_position(&self, rows: usize, cols: usize) -> (usize, usize) {
+        if let Some(input) = self.note_password_box() {
+            return centered_input_box_cursor(rows, cols, &input);
+        }
+        let switcher_password = self.switcher.open_confirm.is_some()
+            || self
+                .switcher
+                .delete_confirm
+                .as_ref()
+                .is_some_and(|confirm| confirm.requires_password);
+        if self.mode == UiMode::Switcher && switcher_password {
+            return centered_input_box_cursor(rows, cols, &self.switcher_password_box());
+        }
         match self.mode {
             UiMode::CommandBar => {
                 let at = text_input::cursor(&self.command_input, self.command_cursor);

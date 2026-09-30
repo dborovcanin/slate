@@ -13,7 +13,8 @@ use ratatui::buffer::Buffer;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::canvas::{
-    cell_style, contrast_fg_for_bg, draw_framed_surface, fill, put_str_width, TextStyle,
+    cell_style, contrast_fg_for_bg, draw_framed_surface, draw_input_box, fill, put_str_width,
+    scrolled_input, InputBox,
 };
 use super::icons::Icons;
 use super::render::{LineDecorations, RenderContext, RenderPalette};
@@ -1363,25 +1364,6 @@ pub(crate) fn query_bar_cursor(
     (top, pane.col + 3 + offset)
 }
 
-/// The part of `text` shown in a `width`-cell input with the cursor at char
-/// `cursor`, and the cursor's cell offset in it.
-fn scrolled_input(text: &str, cursor: usize, width: usize) -> (String, usize) {
-    let at = super::text_input::cursor(text, cursor);
-    let before_width: usize = text.chars().take(at).map(|c| c.width().unwrap_or(0)).sum();
-    // Keep the cursor visible in long input by scrolling the text left.
-    let skip_width = before_width.saturating_sub(width.saturating_sub(1));
-    let mut skipped = 0;
-    let visible: String = text
-        .chars()
-        .skip_while(|c| {
-            let skip = skipped < skip_width;
-            skipped += c.width().unwrap_or(0);
-            skip
-        })
-        .collect();
-    (visible, before_width - skip_width.min(before_width))
-}
-
 /// Row `pos` of a history list: the current text, then the stored versions.
 fn version_row(look: &Look, history: &HistoryView, pos: usize) -> Row {
     let palette = look.palette;
@@ -1761,7 +1743,6 @@ fn draw_prompt(
     let width = pane.width.clamp(20, 60);
     let col = pane.col;
     let row = top;
-    let bg = palette.surface_bg();
     let locked = view.look.icons.locked;
     let title = match &prompt.kind {
         PromptKind::Unlock {
@@ -1776,33 +1757,20 @@ fn draw_prompt(
         }
         kind => kind.title().to_string(),
     };
-    draw_framed_surface(
+    Some(draw_input_box(
         buf,
         row,
         col,
         width,
-        3,
-        bg,
-        palette.primary(),
-        true,
-        Some(&title),
-        Some("Enter ok · Esc cancel"),
-    );
-    let inner = width.saturating_sub(4);
-    let shown = if prompt.kind.is_password() {
-        "•".repeat(prompt.text.chars().count())
-    } else {
-        prompt.text.clone()
-    };
-    let (visible, cursor_offset) = scrolled_input(&shown, prompt.cursor, inner);
-    let style = TextStyle {
-        fg: Some(palette.text_fg()),
-        bg: Some(bg),
-        ..Default::default()
-    }
-    .to_style();
-    put_str_width(buf, row + 1, col + 2, &visible, inner, style);
-    Some((row + 1, col + 2 + cursor_offset))
+        &palette,
+        &InputBox {
+            title,
+            text: &prompt.text,
+            cursor: prompt.cursor,
+            password: prompt.kind.is_password(),
+            hint: "Enter ok · Esc cancel",
+        },
+    ))
 }
 
 fn draw_confirm(view: &BrowserView, buf: &mut Buffer, rows: usize, cols: usize, confirm: &Confirm) {

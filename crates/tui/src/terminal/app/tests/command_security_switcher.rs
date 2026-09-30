@@ -694,12 +694,20 @@ fn note_encrypt_and_decrypt_ask_for_the_password_in_a_masked_dialog() {
     app.execute_terminal_command(&db, "note encrypt visible");
     assert!(app.note_password_dialog.is_some());
     let (rows, _) = render_screen(&mut app);
-    assert!(rows.join("\n").contains("New password"));
+    assert!(rows.join("\n").contains("Encrypt note · new password"));
     enter_password(&mut app, &db, "enc123");
     let (rows, _) = render_screen(&mut app);
     let screen = rows.join("\n");
-    assert!(screen.contains("Repeat password"), "{screen}");
+    assert!(screen.contains("repeat password"), "{screen}");
     assert!(!screen.contains("enc123"), "masked");
+    run_keys(&mut app, &db, &[Key::Char('a'), Key::Char('b')]);
+    let (rows, cursor) = render_screen(&mut app);
+    let field = rows
+        .iter()
+        .position(|row| row.contains("••"))
+        .expect("masked field shown");
+    assert_eq!(usize::from(cursor.row), field, "cursor sits in the field");
+    run_keys(&mut app, &db, &[Key::Backspace, Key::Backspace]);
     enter_password(&mut app, &db, "different");
     assert!(app.status.contains("passwords differ"));
     assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
@@ -951,6 +959,13 @@ fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
     assert_eq!(app.mode, UiMode::Switcher);
     assert!(app.switcher.open_confirm.is_some());
     assert_eq!(app.active_note.id, "n1");
+    run_keys(&mut app, &db, &[Key::Paste("pw".to_string())]);
+    let (rows, _) = render_screen(&mut app);
+    let screen = rows.join("\n");
+    assert!(screen.contains("second note"), "{screen}");
+    assert!(screen.contains("Enter unlock · Esc cancel"), "{screen}");
+    assert!(screen.contains("••") && !screen.contains("**"), "{screen}");
+    run_keys(&mut app, &db, &[Key::Backspace, Key::Backspace]);
 
     run_keys(
         &mut app,

@@ -2,12 +2,13 @@
 //! to match the screen layout constants used by the renderer; writes outside
 //! the buffer are clipped.
 
+use super::render::RenderPalette;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 /// A fully specified cell style: unset colors mean the terminal default, and
 /// unset attributes are cleared rather than inherited from the cell.
@@ -247,6 +248,108 @@ fn cell_x(origin: u16, col: usize) -> Option<u16> {
 
 fn cell_y(origin: u16, row: usize) -> Option<u16> {
     origin.checked_add(u16::try_from(row.checked_sub(1)?).ok()?)
+}
+
+/// The part of `text` shown in a `width`-cell input with the cursor at char
+/// `cursor`, and the cursor's cell offset in it.
+pub fn scrolled_input(text: &str, cursor: usize, width: usize) -> (String, usize) {
+    let at = super::text_input::cursor(text, cursor);
+    let before_width: usize = text.chars().take(at).map(|c| c.width().unwrap_or(0)).sum();
+    // Keep the cursor visible in long input by scrolling the text left.
+    let skip_width = before_width.saturating_sub(width.saturating_sub(1));
+    let mut skipped = 0;
+    let visible: String = text
+        .chars()
+        .skip_while(|c| {
+            let skip = skipped < skip_width;
+            skipped += c.width().unwrap_or(0);
+            skip
+        })
+        .collect();
+    (visible, before_width - skip_width.min(before_width))
+}
+
+/// A one-line input in a frame, like the browser's prompts: `title` on the
+/// top border, `hint` on the bottom one.
+pub struct InputBox<'a> {
+    pub title: String,
+    pub text: &'a str,
+    /// Char index; `usize::MAX` means at the end.
+    pub cursor: usize,
+    /// Shown as one `•` per character.
+    pub password: bool,
+    pub hint: &'a str,
+}
+
+impl InputBox<'_> {
+    fn shown(&self) -> String {
+        if self.password {
+            "•".repeat(self.text.chars().count())
+        } else {
+            self.text.to_string()
+        }
+    }
+}
+
+/// Draws `input` with its top-left cell at `row`, `col`; returns the screen
+/// cell of its cursor.
+pub fn draw_input_box(
+    buf: &mut Buffer,
+    row: usize,
+    col: usize,
+    width: usize,
+    palette: &RenderPalette,
+    input: &InputBox,
+) -> (usize, usize) {
+    let bg = palette.surface_bg();
+    draw_framed_surface(
+        buf,
+        row,
+        col,
+        width,
+        3,
+        bg,
+        palette.primary(),
+        true,
+        Some(&input.title),
+        Some(input.hint),
+    );
+    let inner = width.saturating_sub(4);
+    let (visible, offset) = scrolled_input(&input.shown(), input.cursor, inner);
+    let style = cell_style(Some(palette.text_fg()), Some(bg), Modifier::empty());
+    put_str_width(buf, row + 1, col + 2, &visible, inner, style);
+    (row + 1, col + 2 + offset)
+}
+
+/// Top-left cell and width of an input box centred on a `rows` x `cols`
+/// screen.
+fn centered_input_box_rect(rows: usize, cols: usize) -> (usize, usize, usize) {
+    let width = cols.saturating_sub(4).min(60).max(cols.min(24));
+    (
+        rows.saturating_sub(3) / 2 + 1,
+        cols.saturating_sub(width) / 2 + 1,
+        width,
+    )
+}
+
+/// Draws `input` centred on a `rows` x `cols` screen.
+pub fn draw_centered_input_box(
+    buf: &mut Buffer,
+    rows: usize,
+    cols: usize,
+    palette: &RenderPalette,
+    input: &InputBox,
+) {
+    let (row, col, width) = centered_input_box_rect(rows, cols);
+    draw_input_box(buf, row, col, width, palette, input);
+}
+
+/// Screen cell of the cursor of `input` drawn centred on a `rows` x `cols`
+/// screen.
+pub fn centered_input_box_cursor(rows: usize, cols: usize, input: &InputBox) -> (usize, usize) {
+    let (row, col, width) = centered_input_box_rect(rows, cols);
+    let (_, offset) = scrolled_input(&input.shown(), input.cursor, width.saturating_sub(4));
+    (row + 1, col + 2 + offset)
 }
 
 #[cfg(test)]
