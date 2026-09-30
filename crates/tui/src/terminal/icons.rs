@@ -27,6 +27,8 @@ pub struct Icons {
     pub separator: &'static str,
     pub filter: &'static str,
     pub clock: &'static str,
+    /// Creation date.
+    pub added: &'static str,
     pub tag: &'static str,
 }
 
@@ -48,6 +50,7 @@ const NERD: Icons = Icons {
     separator: "\u{f105}",       // nf-fa-angle_right
     filter: "\u{f002}",          // nf-fa-search
     clock: "\u{f017}",           // nf-fa-clock_o
+    added: "\u{f055}",           // nf-fa-plus_circle
     tag: "\u{f02b}",             // nf-fa-tag
 };
 
@@ -69,6 +72,7 @@ const UNICODE: Icons = Icons {
     separator: "›",
     filter: "⌕",
     clock: "◔",
+    added: "+",
     tag: "#",
 };
 
@@ -90,6 +94,7 @@ const ASCII: Icons = Icons {
     separator: ">",
     filter: "/",
     clock: "@",
+    added: "+",
     tag: "#",
 };
 
@@ -130,6 +135,7 @@ mod tests {
                 icons.separator,
                 icons.filter,
                 icons.clock,
+                icons.added,
                 icons.tag,
             ] {
                 assert_eq!(glyph.width(), 1, "{style:?} glyph {glyph:?}");

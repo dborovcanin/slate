@@ -324,10 +324,16 @@ impl TerminalApp {
             .filter_map(|id| collection_name(id))
             .collect();
         let tags = db.list_note_tags(&note.id).unwrap_or_default();
+        let created_at = if note.id == self.active_note.id {
+            Some(self.active_note.created_at.clone())
+        } else {
+            db.get_note_created_at(&note.id).ok().flatten()
+        };
         Preview::Note {
             note_id: note.id.clone(),
             lines,
             focus_line: focus,
+            created_at,
             collections,
             tags,
             locked,
@@ -1210,6 +1216,8 @@ impl TerminalApp {
             icons: self.browser_icons(),
             working_collection_id: self.working_collection_id.as_deref(),
             active_note_id: &self.active_note.id,
+            date_format: &self.date_picker.format,
+            date_time_format: &self.date_picker.time_format,
             now_epoch: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)

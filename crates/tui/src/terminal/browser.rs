@@ -59,16 +59,21 @@ pub struct NoteEntry {
     pub is_daily: bool,
 }
 
+/// A stored title for display. Titles stored before headings were stripped
+/// still carry `# `.
+pub fn display_title(stored: &str) -> String {
+    match app_core::note_sources::title_text_for_line(stored) {
+        "" => stored.to_string(),
+        clean => clean.to_string(),
+    }
+}
+
 impl NoteEntry {
     pub fn from_summary(summary: NoteSummary, daily_prefix: &str) -> Self {
         Self {
             is_daily: app_core::daily::is_daily_note_id(daily_prefix, &summary.id),
+            title: display_title(&summary.title),
             id: summary.id,
-            // Titles stored before headings were stripped still carry `# `.
-            title: match app_core::note_sources::title_text_for_line(&summary.title) {
-                "" => summary.title.clone(),
-                clean => clean.to_string(),
-            },
             access_mode: summary.access_mode,
             is_unlocked: summary.is_unlocked,
             updated_at: summary.updated_at,
@@ -260,6 +265,8 @@ pub enum Preview {
         lines: Vec<String>,
         /// 0-based line to scroll to and highlight (search hits).
         focus_line: Option<usize>,
+        /// RFC 3339 creation time, when known.
+        created_at: Option<String>,
         collections: Vec<String>,
         tags: Vec<String>,
         locked: bool,
@@ -516,8 +523,9 @@ pub fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
     Some(days * 86_400 + hour * 3600 + minute * 60 + second - offset)
 }
 
-/// Short age of `updated_at`: `now`, `5m`, `3h`, `2d`, or the date after a week.
-pub fn age_label(updated_at: &str, now_epoch: i64) -> String {
+/// Short age of `updated_at`: `now`, `5m`, `3h`, `2d`, or after a week the
+/// local date in `date_format` (the `[editor]` pattern).
+pub fn age_label(updated_at: &str, now_epoch: i64, date_format: &str) -> String {
     let Some(epoch) = parse_rfc3339_epoch(updated_at) else {
         return String::new();
     };
@@ -527,8 +535,13 @@ pub fn age_label(updated_at: &str, now_epoch: i64) -> String {
         60..3_600 => format!("{}m", age / 60),
         3_600..86_400 => format!("{}h", age / 3_600),
         86_400..604_800 => format!("{}d", age / 86_400),
-        _ => updated_at.get(..10).unwrap_or_default().to_string(),
+        _ => local_date(epoch, date_format),
     }
+}
+
+/// Local time of a Unix timestamp in an `[editor]` date pattern.
+fn local_date(epoch: i64, pattern: &str) -> String {
+    super::date_picker::format_epoch_local(epoch, pattern).unwrap_or_default()
 }
 
 /// `text` cut to `width` display cells, ending in `…` when shortened.
@@ -562,6 +575,9 @@ pub struct Look<'a> {
     pub working_collection_id: Option<&'a str>,
     pub active_note_id: &'a str,
     pub now_epoch: i64,
+    /// `[editor] date_format` and `date_time_format`.
+    pub date_format: &'a str,
+    pub date_time_format: &'a str,
 }
 
 pub struct BrowserView<'a> {
@@ -773,7 +789,7 @@ pub(crate) fn plain_note_row(look: &Look, note: &NoteEntry) -> Row {
         text: note.title.clone(),
         text_fg: look.palette.text_fg(),
         bold: false,
-        right: age_label(&note.updated_at, look.now_epoch),
+        right: age_label(&note.updated_at, look.now_epoch, look.date_format),
     }
 }
 
@@ -969,6 +985,7 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
         right.push_str(&format!("{}  ", state.sort.label()));
     }
     right.push_str(&position_label(position, total));
+    right.push(' ');
     let crumb = match (state.level(), state.scope.as_ref(), state.search.as_ref()) {
         (Level::Search, _, Some(search)) => format!(
             "{} {} {} search",
@@ -982,9 +999,9 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     draw_header_bar(&view.look, buf, cols, &crumb, &right);
 }
 
-/// `3/12 ` for the header, `0/0 ` for an empty list.
+/// `3/12`, or `0/0` for an empty list.
 pub(crate) fn position_label(position: usize, total: usize) -> String {
-    format!("{}/{} ", (position + 1).min(total), total)
+    format!("{}/{}", (position + 1).min(total), total)
 }
 
 /// Title, metadata and the start of the body of `note`, from `preview`.
@@ -1008,6 +1025,7 @@ pub(crate) fn draw_note_preview(
         note_id,
         lines,
         focus_line,
+        created_at,
         collections,
         tags,
         locked,
@@ -1043,19 +1061,30 @@ pub(crate) fn draw_note_preview(
     );
     row += 1;
 
-    let age = age_label(&note.updated_at, look.now_epoch);
-    let updated = if age.is_empty() {
-        String::new()
-    } else if age.len() == 10 {
-        format!("{} updated {age}", icons.clock)
-    } else if age == "now" {
-        format!("{} updated just now", icons.clock)
-    } else {
-        format!("{} updated {age} ago", icons.clock)
-    };
-    if !updated.is_empty() {
-        put_str_width(buf, row, col, &fit_width(&updated, inner), inner, dim);
+    if let Some(epoch) = parse_rfc3339_epoch(&note.updated_at) {
+        let age = look.now_epoch.saturating_sub(epoch);
+        let when = local_date(epoch, look.date_time_format);
+        let text = if age < 60 {
+            format!("{} modified just now · {when}", icons.clock)
+        } else if age < 604_800 {
+            let label = age_label(&note.updated_at, look.now_epoch, look.date_format);
+            format!("{} modified {label} ago · {when}", icons.clock)
+        } else {
+            format!("{} modified {when}", icons.clock)
+        };
+        put_str_width(buf, row, col, &fit_width(&text, inner), inner, dim);
         row += 1;
+    }
+    if let Some(epoch) = created_at.as_deref().and_then(parse_rfc3339_epoch) {
+        if row < bottom {
+            let text = format!(
+                "{} added {}",
+                icons.added,
+                local_date(epoch, look.date_time_format)
+            );
+            put_str_width(buf, row, col, &fit_width(&text, inner), inner, dim);
+            row += 1;
+        }
     }
     if !collections.is_empty() && row < bottom {
         let text = format!("{} {}", icons.collection, collections.join(", "));
@@ -1583,11 +1612,14 @@ mod tests {
     #[test]
     fn age_labels_step_from_minutes_to_dates() {
         let now = parse_rfc3339_epoch("2026-09-30T12:00:00Z").unwrap();
-        assert_eq!(age_label("2026-09-30T11:59:30Z", now), "now");
-        assert_eq!(age_label("2026-09-30T11:55:00Z", now), "5m");
-        assert_eq!(age_label("2026-09-30T09:00:00Z", now), "3h");
-        assert_eq!(age_label("2026-09-28T12:00:00Z", now), "2d");
-        assert_eq!(age_label("2026-08-01T12:00:00Z", now), "2026-08-01");
+        let format = "%d.%m.%Y";
+        assert_eq!(age_label("2026-09-30T11:59:30Z", now, format), "now");
+        assert_eq!(age_label("2026-09-30T11:55:00Z", now, format), "5m");
+        assert_eq!(age_label("2026-09-30T09:00:00Z", now, format), "3h");
+        assert_eq!(age_label("2026-09-28T12:00:00Z", now, format), "2d");
+        // Older notes show the local date in the configured format; noon UTC
+        // is the same calendar day in every common time zone.
+        assert_eq!(age_label("2026-08-01T12:00:00Z", now, format), "01.08.2026");
     }
 
     #[test]

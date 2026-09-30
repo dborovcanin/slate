@@ -1140,6 +1140,16 @@ impl Db {
 
     /// First `max_chars` characters of a note body for previews, or
     /// `"[locked]"` while the note is protected.
+    /// When the note was created (RFC 3339), for note info displays.
+    pub fn get_note_created_at(&self, id: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock()?;
+        conn.query_row("SELECT created_at FROM notes WHERE id = ?1", [id], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())
+    }
+
     pub fn get_note_body_head(&self, id: &str, max_chars: usize) -> Result<Option<String>, String> {
         let row = {
             let conn = self.conn.lock()?;
