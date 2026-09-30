@@ -94,7 +94,7 @@ Keep expensive indexing asynchronous and panels driven by cached state. Text-cha
 ## Editor
 
 - [ ] **Table range operations** — rectangular selection, TSV paste from spreadsheets, fill-down and applying formulas across columns. Start with rectangular paste and fill-down, preserving coherent undo.
-- [ ] **Local note history** — browse saved revisions and restore a paragraph or table without replacing the entire note.
+- [x] **Local note history** — versions per editing session stored as reverse line deltas; `:history`, `H` in the browser, `Ctrl+R` in the switcher; preview and restore a whole version. Still open: restore a single paragraph or table instead of the entire note.
 - [ ] Multicursor support.
 - [ ] Support variable assignment from formula helpers like `a := sum_column()`.
 - [ ] Code folding UX improvements.

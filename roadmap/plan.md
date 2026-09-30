@@ -17,7 +17,7 @@ Slate is a **computational notebook for the terminal**: a fast scratchpad where 
 
 Full knowledge-base apps (for example ZenNotes TUI: vault of Markdown files, panes and tabs, kanban tasks, CSV databases, preview pane, MCP) cover organisation breadth. Slate should not chase that feature list. New work should either strengthen the computational notebook or remove friction from everyday editing.
 
-Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`, the yazi-style collection browser (`Ctrl+B`, `-`, `:browse`) with configurable icons (`[theme] icons`).
+Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`, the yazi-style collection browser (`Ctrl+B`, `-`, `:browse`) with configurable icons (`[theme] icons`), note history (`:history`).
 
 ### Next steps (ordered)
 
@@ -43,7 +43,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 Also on the list:
 - ~~**Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready).~~ Done 2026-09-29 without moving it: viewport evaluation reuses a cached whole-note preparation and costs ~2 ms at 30k lines and ~5 ms at 100k (see "Performance Backlog"). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
 - **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; sticky goal column for screen-row motions.
-- **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, per-note history and diff view.
+- **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, restoring part of a note from its history.
 
 ## Product Intent
 
