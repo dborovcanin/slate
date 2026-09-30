@@ -1,7 +1,6 @@
 use crate::markdown_tokens;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FoldKind {
     Heading,
     Fence,
@@ -22,14 +21,14 @@ impl FoldKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FoldRange {
     pub start_line: usize, // 0-based
     pub end_line: usize,   // 0-based, inclusive
     pub kind: FoldKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoldLineEdit {
     pub old_start_line: usize, // 0-based
     pub old_line_span: usize,  // at least 1

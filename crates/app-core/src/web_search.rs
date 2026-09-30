@@ -1,6 +1,6 @@
 use crate::{calc::CalcEngine, config::WebSearchConfig};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 use url::Url;
@@ -21,7 +21,7 @@ const DUCKDUCKGO_USER_AGENT: &str =
 /// turn one search into an unbounded series of requests.
 const MAX_INSTANT_ANSWER_ATTEMPTS: usize = 4;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchItem {
     pub title: String,
     pub url: String,
@@ -29,20 +29,20 @@ pub struct WebSearchItem {
     pub markdown_link: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchSource {
     pub title: String,
     pub url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchAnswerCard {
     pub title: String,
     pub text: String,
     pub sources: Vec<WebSearchSource>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchResult {
     pub query: String,
     /// A provider-supplied direct answer, such as a unit conversion.

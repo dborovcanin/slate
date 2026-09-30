@@ -1,5 +1,4 @@
 use crate::types::{CommandMode, CommandSuggestion};
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandId {
@@ -111,8 +110,7 @@ pub struct ParsedNoteSecurityCommand {
     pub used_note_prefix: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     Pdf,
     Md,

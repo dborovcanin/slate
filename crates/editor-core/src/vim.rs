@@ -1,6 +1,6 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VimMode {
     Insert,
@@ -9,7 +9,7 @@ pub enum VimMode {
     VisualLine,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VimPending {
     Delete,
@@ -28,7 +28,7 @@ pub enum VimPending {
     MacroPlay,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct VimState {
     #[serde(default = "default_mode")]
     pub mode: VimMode,
@@ -55,8 +55,7 @@ impl Default for VimState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VimKey {
     Esc,
     Enter,
@@ -71,7 +70,7 @@ pub enum VimKey {
     Ctrl(char),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VimIntent {
     MoveLeft,
@@ -149,7 +148,7 @@ pub enum VimIntent {
     Swallow,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 pub struct VimContext {
     #[serde(default)]
     pub has_search_matches: bool,
@@ -159,7 +158,7 @@ pub struct VimContext {
     pub macro_recording: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct VimAction {
     pub intent: VimIntent,
     #[serde(default)]
@@ -168,7 +167,7 @@ pub struct VimAction {
     pub target_char: Option<char>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VimStep {
     pub state: VimState,
     pub actions: Vec<VimAction>,

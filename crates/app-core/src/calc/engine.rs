@@ -1,7 +1,7 @@
 use aho_corasick::AhoCorasick;
 use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::cmp::Reverse;
@@ -23,7 +23,7 @@ pub struct ExternVar {
 }
 
 /// A cross-note variable reference found while scanning a note's lines.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrossNoteRef {
     /// 8-char lowercase alphanumeric short ID of the referenced note.
     pub note_short_id: String,
@@ -67,21 +67,21 @@ impl Default for NoteEvaluationOptions {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariableIndexEntry {
     pub name: String,
     pub normalized: String,
     pub line: usize, // 1-based
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteEvaluationDiagnostic {
     pub kind: String,
     pub line: usize, // 1-based
     pub message: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NoteEvaluationResult {
     pub line_results: Vec<Option<String>>,
     pub variables: Vec<VariableIndexEntry>,
@@ -90,26 +90,23 @@ pub struct NoteEvaluationResult {
     /// a result. Lines without table formulas have an empty inner Vec.
     /// Within a row, cells are evaluated left-to-right; rows are evaluated
     /// top-to-bottom and earlier results are visible to subsequent formulas.
-    #[serde(default)]
     pub table_cell_results: Vec<Vec<TableCellEvaluation>>,
     /// Resolved numeric values for each note-local variable (normalized name → f64).
     /// Populated only when `variables_enabled` is true. Used for cross-note export.
-    #[serde(default, skip_serializing_if = "rustc_hash::FxHashMap::is_empty")]
     pub variable_values: rustc_hash::FxHashMap<String, f64>,
     /// Cross-note variable references found in this note's lines.
     /// Used by the caller to maintain the dependency graph.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cross_note_refs: Vec<CrossNoteRef>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct TableCellEvaluation {
     pub cell_index: usize,
     pub value: String,
     pub error_kind: Option<TableCellErrorKind>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TableCellErrorKind {
     OutOfBounds,

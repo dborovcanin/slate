@@ -1,8 +1,6 @@
-use serde::{Deserialize, Serialize};
-
 use crate::command_catalog;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandHistoryStep {
     pub index: usize,
     pub command: String,

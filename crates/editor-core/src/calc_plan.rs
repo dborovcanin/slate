@@ -1,7 +1,6 @@
 use crate::table;
 use regex::Regex;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 
@@ -17,7 +16,7 @@ pub fn hash_lines(lines: &[String]) -> Vec<u64> {
     lines.iter().map(|line| hash_line(line)).collect()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineMetadata {
     pub hash: u64,
     pub assignment_name: Option<String>,
@@ -25,17 +24,16 @@ pub struct LineMetadata {
     pub has_builtin_formula: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CalcSignalFlags {
     pub has_variable_assignment: bool,
     pub has_builtin_formula: bool,
     /// Some line looks like a calculation (`2 + 2`, `5 kg to lbs`), so the
     /// note has results to show even without assignments or formulas.
-    #[serde(default)]
     pub has_expression: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalcFeatureMask {
     pub math_enabled: bool,
     pub table_enabled: bool,
@@ -199,7 +197,7 @@ pub fn splice_line_metadata(
     true
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalcSegment {
     pub expr: String,
     pub from_col: usize,
@@ -208,7 +206,7 @@ pub struct CalcSegment {
     pub to_byte: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TableFormulaSegment {
     /// Byte range of the formula expression inside the cell (excludes pipes/padding).
     pub from_byte: usize,
@@ -227,19 +225,19 @@ pub struct TableFormulaSegment {
     pub labels: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalcTrailerRefresh {
     pub eq_byte_idx: usize,
     pub new_tail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineCalcResult {
     pub line_idx: usize,
     pub result: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IncrementalCalcPlan {
     pub base_results: Vec<LineCalcResult>,
     pub eval_from: usize,
@@ -247,14 +245,14 @@ pub struct IncrementalCalcPlan {
     pub eval_lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CalcEvalScopeDecision {
     pub touches_any_assignment: bool,
     pub touches_builtin_formula: bool,
     pub can_use_partial: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalcEvalWindowDecision {
     pub eval_from: usize,
     pub eval_to: usize,

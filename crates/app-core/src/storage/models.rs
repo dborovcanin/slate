@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteAccessMode {
     None,
     Locked,
@@ -14,7 +13,8 @@ impl Default for NoteAccessMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// Stored per note as JSON in `notes.modules_json`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoteModules {
     pub math: bool,
     pub table: bool,
@@ -37,13 +37,13 @@ impl Default for NoteModules {
 
 /// The outcome of a write, without the body the caller just sent.
 /// `updated_at` is the revision token used for optimistic concurrency.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NoteRevision {
     pub id: String,
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Note {
     pub id: String,
     pub body: String,
@@ -54,7 +54,7 @@ pub struct Note {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NoteSummary {
     pub id: String,
     pub title: String,
@@ -64,7 +64,7 @@ pub struct NoteSummary {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NoteSearchResult {
     pub id: String,
     pub title: String,
@@ -74,7 +74,7 @@ pub struct NoteSearchResult {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct Reminder {
     pub note_id: String,
     pub line_number: i64,
@@ -86,7 +86,7 @@ pub struct Reminder {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Collection {
     pub id: String,
     pub name: String,
@@ -104,7 +104,7 @@ pub struct CollectionCounts {
     pub per_collection: std::collections::HashMap<String, usize>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tag {
     pub id: String,
     pub name: String,

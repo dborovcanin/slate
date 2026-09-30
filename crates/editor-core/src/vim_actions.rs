@@ -1,26 +1,22 @@
 use crate::operations::replace_range;
 use crate::types::{EditOperation, OperationSelection, SelectionSnapshot};
 use crate::vim::VimIntent;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VimRegisterMode {
     Charwise,
     Linewise,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VimRegisterValue {
     pub text: String,
     pub mode: VimRegisterMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct VimActionExecutionResult {
-    #[serde(default)]
     pub operations: Vec<EditOperation>,
-    #[serde(default)]
     pub register: Option<VimRegisterValue>,
 }
 

@@ -1,5 +1,5 @@
 use directories::ProjectDirs;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::fs;
 use std::path::PathBuf;
 use time::{Month, OffsetDateTime, UtcOffset};
@@ -205,7 +205,7 @@ image_max_rows = 15
 background_tasks_enabled = true
 "##;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorModulesConfig {
     pub math: bool,
     pub table: bool,
@@ -227,8 +227,7 @@ impl Default for EditorModulesConfig {
 }
 
 /// Which glyph set the terminal UI draws icons with.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum IconStyle {
     /// Nerd Font private-use glyphs.
     #[default]
@@ -250,7 +249,7 @@ impl IconStyle {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThemeConfig {
     pub color_scheme: String,
     pub accent: String,
@@ -270,7 +269,7 @@ pub struct ThemeConfig {
     pub security: NoteSecurityConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoteSecurityConfig {
     pub encrypt_notes: bool,
     pub password_env: String,
@@ -285,7 +284,7 @@ impl Default for NoteSecurityConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DailyNotesConfig {
     pub note_prefix: String,
     pub template: String,
@@ -300,7 +299,7 @@ impl Default for DailyNotesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecialNotesConfig {
     pub email_note_prefix: String,
     pub email_rotation: String,
@@ -315,7 +314,7 @@ impl Default for SpecialNotesConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImapConfig {
     pub host: String,
     pub port: u16,
@@ -330,7 +329,7 @@ pub struct ImapConfig {
     pub max_body_bytes: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PerfConfig {
     pub enabled: bool,
     pub log_path: String,
@@ -345,7 +344,7 @@ impl Default for PerfConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSearchConfig {
     pub provider: String,
     pub api_key: String,
@@ -364,8 +363,7 @@ impl Default for WebSearchConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TerminalImagesMode {
     #[default]
     Auto,
@@ -376,7 +374,7 @@ pub enum TerminalImagesMode {
     Off,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalImagesConfig {
     pub mode: TerminalImagesMode,
     pub max_rows: usize,

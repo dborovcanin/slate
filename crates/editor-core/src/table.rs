@@ -106,7 +106,7 @@ impl TableCellSpan {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableCursorCellInfo {
     pub column_index: usize,
     pub column_count: usize,
@@ -127,7 +127,7 @@ pub enum TableCursorMotionDirection {
     Down,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableCursorMotionTarget {
     pub line_index: isize,
     pub col: usize,

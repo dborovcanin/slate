@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/tui", "crates/editor-core", "crates/app-core", "crates/table-syntax"]
 
 # Thin LTO + single codegen unit pays a small build-time cost for noticeably
-# smaller binaries (native + wasm) and faster hot loops in editor-core and
+# smaller binaries and faster hot loops in editor-core and
 # the calc engine. Keep `debug = false` so release artifacts stay slim.
 [profile.release]
 lto = "thin"

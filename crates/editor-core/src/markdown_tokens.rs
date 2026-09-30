@@ -1,7 +1,6 @@
 use rustc_hash::FxHashSet;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownLineInfo {
     pub heading_level: Option<usize>,
     pub heading_marker_end: Option<usize>,
@@ -15,8 +14,7 @@ pub struct MarkdownLineInfo {
     pub is_code_fence: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InlineTokenType {
     Strong,
     Emphasis,
@@ -59,21 +57,20 @@ impl InlineTokenType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InlineToken {
     pub from: usize,
     pub to: usize,
-    #[serde(rename = "type")]
     pub kind: InlineTokenType,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InlineMarkerComponentRange {
     pub from: usize,
     pub to: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WikiLinkMatch {
     pub from: usize,
     pub to: usize,
@@ -82,7 +79,7 @@ pub struct WikiLinkMatch {
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownImageMatch {
     pub from: usize,
     pub to: usize,
@@ -92,8 +89,7 @@ pub struct MarkdownImageMatch {
     pub height: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CodeTokenType {
     Keyword,
     String,
@@ -116,15 +112,14 @@ impl CodeTokenType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodeToken {
     pub from: usize,
     pub to: usize,
-    #[serde(rename = "type")]
     pub kind: CodeTokenType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FenceState {
     pub in_code_block: bool,
     pub code_fence_lang: Option<String>,
@@ -139,7 +134,7 @@ impl Default for FenceState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownAnalyzedLine {
     pub info: MarkdownLineInfo,
     pub in_code_block: bool,
@@ -148,7 +143,7 @@ pub struct MarkdownAnalyzedLine {
     pub code_tokens: Vec<CodeToken>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkdownAnalyzeResult {
     pub lines: Vec<MarkdownAnalyzedLine>,
     pub final_in_code_block: bool,
