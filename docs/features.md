@@ -75,6 +75,8 @@ Locked or encrypted notes ask for their password before opening. Content search 
 
 Slate keeps older versions of every stored note. Saves less than five minutes apart form one editing session, and each session keeps the text from before it as a version (a session longer than half an hour is split). Versions are stored as the line changes between them, with an occasional full copy, so a small edit to a large note costs a few bytes; the history of an encrypted note is encrypted with it. File-backed notes (`slate file.md`) keep no history.
 
+Old versions are thinned out when a new one is added: every version of the last day stays, then the newest of each day for a month, then the newest of each week, up to 500 versions per note.
+
 `:history` (or `:versions`), `H` on a note in the browser, or `Ctrl+R` in the note switcher opens the history in the browser: the current text first, then each version with its time and the lines its session added and removed. The preview shows what restoring would change (`-` current lines, `+` lines of the version), or the version's text.
 
 | Key | Action |

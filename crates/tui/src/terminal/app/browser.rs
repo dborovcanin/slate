@@ -1112,7 +1112,7 @@ impl TerminalApp {
             self.browser_message("this is the current text · pick an older version");
             return;
         };
-        let label = crate::terminal::browser::parse_rfc3339_epoch(&version.saved_at)
+        let label = app_core::storage::timestamp_epoch(&version.saved_at)
             .and_then(|epoch| {
                 crate::terminal::date_picker::format_epoch_local(
                     epoch,

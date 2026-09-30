@@ -524,49 +524,12 @@ fn filtered_indices<T>(items: &[T], filter: &str, key: impl Fn(&T) -> &str) -> V
     scored.into_iter().map(|(idx, _)| idx).collect()
 }
 
-/// Seconds since the Unix epoch for an RFC 3339 timestamp
-/// (`2026-09-30T12:34:56.123Z`, `...+02:00`).
-pub fn parse_rfc3339_epoch(value: &str) -> Option<i64> {
-    let b = value.as_bytes();
-    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[13] != b':' || b[16] != b':' {
-        return None;
-    }
-    let num = |from: usize, to: usize| -> Option<i64> { value.get(from..to)?.parse().ok() };
-    let (year, month, day) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
-    let (hour, minute, second) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
-    let mut rest = &value[19..];
-    if let Some(frac) = rest.strip_prefix('.') {
-        rest = frac.trim_start_matches(|c: char| c.is_ascii_digit());
-    }
-    let offset = match rest.as_bytes().first() {
-        None | Some(b'Z' | b'z') => 0,
-        Some(sign @ (b'+' | b'-')) => {
-            let hours: i64 = rest.get(1..3)?.parse().ok()?;
-            let minutes: i64 = rest.get(4..6)?.parse().ok()?;
-            let total = hours * 3600 + minutes * 60;
-            if *sign == b'+' {
-                total
-            } else {
-                -total
-            }
-        }
-        Some(_) => return None,
-    };
-    // Days from civil (Howard Hinnant's algorithm).
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (month + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    Some(days * 86_400 + hour * 3600 + minute * 60 + second - offset)
-}
+use app_core::storage::timestamp_epoch;
 
 /// Short age of `updated_at`: `now`, `5m`, `3h`, `2d`, or after a week the
 /// local date in `date_format` (the `[editor]` pattern).
 pub fn age_label(updated_at: &str, now_epoch: i64, date_format: &str) -> String {
-    let Some(epoch) = parse_rfc3339_epoch(updated_at) else {
+    let Some(epoch) = timestamp_epoch(updated_at) else {
         return String::new();
     };
     let age = now_epoch.saturating_sub(epoch).max(0);
@@ -1113,7 +1076,7 @@ pub(crate) fn draw_note_preview(
     );
     row += 1;
 
-    if let Some(epoch) = parse_rfc3339_epoch(&note.updated_at) {
+    if let Some(epoch) = timestamp_epoch(&note.updated_at) {
         let age = look.now_epoch.saturating_sub(epoch);
         let when = local_date(epoch, look.date_time_format);
         let text = if age < 60 {
@@ -1127,7 +1090,7 @@ pub(crate) fn draw_note_preview(
         put_str_width(buf, row, col, &fit_width(&text, inner), inner, dim);
         row += 1;
     }
-    if let Some(epoch) = created_at.as_deref().and_then(parse_rfc3339_epoch) {
+    if let Some(epoch) = created_at.as_deref().and_then(timestamp_epoch) {
         if row < bottom {
             let text = format!(
                 "{} added {}",
@@ -1376,7 +1339,7 @@ fn version_row(look: &Look, history: &HistoryView, pos: usize) -> Row {
             right: age_label(&history.note.updated_at, look.now_epoch, look.date_format),
         };
     };
-    let saved = parse_rfc3339_epoch(&version.saved_at);
+    let saved = timestamp_epoch(&version.saved_at);
     let when = saved
         .map(|epoch| local_date(epoch, look.date_time_format))
         .unwrap_or_else(|| version.saved_at.clone());
@@ -1849,22 +1812,8 @@ mod tests {
     }
 
     #[test]
-    fn parses_rfc3339_with_fraction_and_offset() {
-        assert_eq!(parse_rfc3339_epoch("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(
-            parse_rfc3339_epoch("2026-09-30T12:00:00.123456Z"),
-            Some(1_790_769_600)
-        );
-        assert_eq!(
-            parse_rfc3339_epoch("2026-09-30T14:00:00+02:00"),
-            Some(1_790_769_600)
-        );
-        assert_eq!(parse_rfc3339_epoch("garbage"), None);
-    }
-
-    #[test]
     fn age_labels_step_from_minutes_to_dates() {
-        let now = parse_rfc3339_epoch("2026-09-30T12:00:00Z").unwrap();
+        let now = timestamp_epoch("2026-09-30T12:00:00Z").unwrap();
         let format = "%d.%m.%Y";
         assert_eq!(age_label("2026-09-30T11:59:30Z", now, format), "now");
         assert_eq!(age_label("2026-09-30T11:55:00Z", now, format), "5m");

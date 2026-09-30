@@ -3081,6 +3081,13 @@ fn load_reminder(
     Ok(reminder)
 }
 
+/// Seconds since the Unix epoch of a stored RFC 3339 timestamp.
+pub fn timestamp_epoch(value: &str) -> Option<i64> {
+    OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+        .ok()
+        .map(OffsetDateTime::unix_timestamp)
+}
+
 fn now_iso() -> String {
     let now = OffsetDateTime::now_utc();
     now.format(&time::format_description::well_known::Rfc3339)
@@ -4065,6 +4072,68 @@ mod tests {
     }
 
     #[test]
+    fn pruning_thins_old_versions_and_keeps_the_rest_rebuildable() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.create_note_with_context("p", NoteModules::default(), None, None)
+            .expect("note created");
+        let mut body = String::from("start");
+        db.save_note_revision("p", &body).expect("save");
+        for i in 0..40 {
+            end_history_session(&db, "p");
+            body.push_str(&format!("\nline {i}"));
+            db.save_note_revision("p", &body).expect("save");
+        }
+        // Spread the versions over two months, newest first, 36 hours apart.
+        let now = OffsetDateTime::now_utc().unix_timestamp();
+        let ids: Vec<i64> = db
+            .list_note_history("p")
+            .unwrap()
+            .iter()
+            .map(|v| v.id)
+            .collect();
+        {
+            let conn = db.conn.lock().unwrap();
+            for (index, id) in ids.iter().enumerate() {
+                let saved =
+                    OffsetDateTime::from_unix_timestamp(now - 3600 - index as i64 * 36 * 3600)
+                        .unwrap()
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap();
+                conn.execute(
+                    "UPDATE note_history SET saved_at = ?2 WHERE id = ?1",
+                    rusqlite::params![id, saved],
+                )
+                .unwrap();
+            }
+        }
+        let before: std::collections::HashMap<i64, String> = ids
+            .iter()
+            .map(|id| (*id, db.note_version_text("p", *id).unwrap()))
+            .collect();
+
+        end_history_session(&db, "p");
+        body.push_str("\nlast");
+        db.save_note_revision("p", &body)
+            .expect("save triggers pruning");
+
+        let after = db.list_note_history("p").unwrap();
+        assert!(after.len() < ids.len() + 1, "old versions were thinned");
+        assert!(after.len() > 20, "recent and daily versions stay");
+        for version in &after[1..] {
+            assert_eq!(
+                db.note_version_text("p", version.id).unwrap(),
+                before[&version.id],
+                "version {} still rebuilds",
+                version.id
+            );
+        }
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn history_of_encrypted_notes_is_encrypted_and_follows_protection_changes() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
@@ -4102,6 +4171,21 @@ mod tests {
 
         drop(db);
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn parses_stored_timestamps_with_fraction_and_offset() {
+        assert_eq!(timestamp_epoch("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(
+            timestamp_epoch("2026-09-30T12:00:00.123456Z"),
+            Some(1_790_769_600)
+        );
+        assert_eq!(
+            timestamp_epoch("2026-09-30T14:00:00+02:00"),
+            Some(1_790_769_600)
+        );
+        assert_eq!(timestamp_epoch("garbage"), None);
+        assert!(timestamp_epoch(&now_iso()).is_some());
     }
 
     #[test]

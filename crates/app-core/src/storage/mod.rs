@@ -6,4 +6,4 @@ pub use models::{
     Collection, CollectionCounts, Note, NoteAccessMode, NoteModules, NoteRevision,
     NoteSearchResult, NoteSummary, NoteVersion, Reminder, Tag,
 };
-pub use sqlite::{Db, DbOpenMetrics};
+pub use sqlite::{timestamp_epoch, Db, DbOpenMetrics};

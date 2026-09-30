@@ -7,7 +7,7 @@
 //! extend the newest row instead of adding one. Payloads of encrypted notes
 //! are encrypted with the note's key.
 
-use super::{decrypt_bytes_with_key, encrypt_bytes_with_key};
+use super::{decrypt_bytes_with_key, encrypt_bytes_with_key, timestamp_epoch};
 use crate::history::{self, Payload};
 use crate::storage::NoteVersion;
 use rusqlite::{Connection, OptionalExtension};
@@ -16,6 +16,8 @@ use rusqlite::{Connection, OptionalExtension};
 const SESSION_GAP_SECS: i64 = 5 * 60;
 /// A session longer than this starts a new version even without a pause.
 const SESSION_MAX_SECS: i64 = 30 * 60;
+/// Most versions kept per note after thinning (see `history::versions_to_keep`).
+const MAX_VERSIONS_PER_NOTE: usize = 500;
 
 fn epoch_now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
@@ -153,6 +155,104 @@ pub(super) fn record(
         ],
     )
     .map_err(|e| e.to_string())?;
+    prune(conn, note_id, new_body, now, key)
+}
+
+/// Thins out old versions (see `history::versions_to_keep`). Kept versions
+/// whose newer neighbor goes are re-expressed against the next kept one, so
+/// every remaining version still rebuilds. `current_body` is the text the
+/// newest row is relative to.
+fn prune(
+    conn: &Connection,
+    note_id: &str,
+    current_body: &str,
+    now: i64,
+    key: Option<&[u8; 32]>,
+) -> Result<(), String> {
+    let times = {
+        let mut stmt = conn
+            .prepare("SELECT saved_at FROM note_history WHERE note_id = ?1 ORDER BY id DESC")
+            .map_err(|e| e.to_string())?;
+        let times = stmt
+            .query_map([note_id], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        times
+    };
+    let saved: Vec<i64> = times
+        .iter()
+        .map(|time| timestamp_epoch(time).unwrap_or(now))
+        .collect();
+    let keep = history::versions_to_keep(&saved, now, MAX_VERSIONS_PER_NOTE);
+    if keep.iter().all(|keep| *keep) {
+        return Ok(());
+    }
+
+    let rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, payload, payload_nonce FROM note_history
+                 WHERE note_id = ?1 ORDER BY id DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([note_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, Option<Vec<u8>>>(2)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        rows
+    };
+    // Every version's text, newest first, rebuilt along the chain.
+    let mut payloads = Vec::with_capacity(rows.len());
+    let mut texts = Vec::with_capacity(rows.len());
+    let mut newer = current_body.to_string();
+    for (_, bytes, nonce) in rows.iter().cloned() {
+        let payload = load_payload(bytes, nonce, key)?;
+        let text = payload.resolve(&newer)?;
+        newer = text.clone();
+        payloads.push(payload);
+        texts.push(text);
+    }
+
+    let mut newer_kept = current_body;
+    let mut neighbor_kept = true;
+    for (index, (id, _, _)) in rows.iter().enumerate() {
+        if !keep[index] {
+            conn.execute("DELETE FROM note_history WHERE id = ?1", [id])
+                .map_err(|e| e.to_string())?;
+            neighbor_kept = false;
+            continue;
+        }
+        if !neighbor_kept {
+            let back = history::diff(newer_kept, &texts[index]);
+            let (lines_added, lines_removed) = session_line_counts(&back);
+            if payloads[index].is_full() {
+                conn.execute(
+                    "UPDATE note_history SET lines_added = ?2, lines_removed = ?3 WHERE id = ?1",
+                    rusqlite::params![id, lines_added as i64, lines_removed as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            } else {
+                let (bytes, nonce) = store_payload(&Payload::Delta(back), key)?;
+                conn.execute(
+                    "UPDATE note_history
+                     SET payload = ?2, payload_nonce = ?3, lines_added = ?4, lines_removed = ?5
+                     WHERE id = ?1",
+                    rusqlite::params![id, bytes, nonce, lines_added as i64, lines_removed as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+        }
+        newer_kept = &texts[index];
+        neighbor_kept = true;
+    }
     Ok(())
 }
 

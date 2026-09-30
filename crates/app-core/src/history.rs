@@ -324,6 +324,41 @@ pub fn should_checkpoint(
         || delta_bytes_since_full.saturating_mul(2) > text_len
 }
 
+const DAY_SECS: i64 = 86_400;
+/// Every version of the last day is kept.
+const KEEP_ALL_SECS: i64 = DAY_SECS;
+/// After that, the newest version of each day, up to this age.
+const KEEP_DAILY_SECS: i64 = 30 * DAY_SECS;
+
+/// Which versions to keep, given when each was saved (newest first): all of
+/// the last day, the newest of each day for a month, then the newest of each
+/// week, and never more than `max_versions`.
+pub fn versions_to_keep(saved_at: &[i64], now: i64, max_versions: usize) -> Vec<bool> {
+    let mut last_bucket: Option<(bool, i64)> = None;
+    let mut kept = 0usize;
+    saved_at
+        .iter()
+        .map(|&saved| {
+            let age = now.saturating_sub(saved).max(0);
+            let keep = if age < KEEP_ALL_SECS {
+                true
+            } else {
+                let bucket = if age < KEEP_DAILY_SECS {
+                    (true, saved.div_euclid(DAY_SECS))
+                } else {
+                    (false, saved.div_euclid(7 * DAY_SECS))
+                };
+                let first_in_bucket = last_bucket != Some(bucket);
+                last_bucket = Some(bucket);
+                first_in_bucket
+            };
+            let keep = keep && kept < max_versions;
+            kept += usize::from(keep);
+            keep
+        })
+        .collect()
+}
+
 /// Rebuilds the version stored at `index` in `rows` (newest first), starting
 /// from `current`, the note's present text. Starts from the nearest full
 /// checkpoint at or newer than `index`.
@@ -488,6 +523,31 @@ mod tests {
             ]
         );
         assert!(line_changes("same", "same", 3).is_empty());
+    }
+
+    #[test]
+    fn retention_keeps_recent_versions_then_one_per_day_and_week() {
+        let now = 1_000 * DAY_SECS;
+        let hours = |h: i64| now - h * 3600;
+        let saved = [
+            hours(1),
+            hours(5),
+            hours(23),      // last day: all kept
+            hours(30),      // day -2, newest of that day
+            hours(31),      // same day: dropped
+            hours(24 * 5),  // a later day
+            hours(24 * 40), // week bucket
+            hours(24 * 41), // same week: dropped
+            hours(24 * 60), // another week
+        ];
+        assert_eq!(
+            versions_to_keep(&saved, now, 100),
+            vec![true, true, true, true, false, true, true, false, true]
+        );
+        assert_eq!(
+            versions_to_keep(&saved, now, 2),
+            vec![true, true, false, false, false, false, false, false, false]
+        );
     }
 
     #[test]
