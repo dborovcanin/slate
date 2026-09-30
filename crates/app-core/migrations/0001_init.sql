@@ -231,3 +231,23 @@ CREATE TABLE IF NOT EXISTS collection_default_tags (
 
 CREATE INDEX IF NOT EXISTS idx_collection_default_tags_tag_collection
     ON collection_default_tags(tag_id, collection_id);
+
+-- Older versions of each note as reverse deltas (see `app_core::history`).
+-- Rows are newest-last by id; the newest row is relative to the note's
+-- current body. A row covers one editing session: `session_started` and
+-- `session_last_write` decide whether the next save extends it.
+CREATE TABLE IF NOT EXISTS note_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    note_id TEXT NOT NULL,
+    saved_at TEXT NOT NULL,
+    session_started INTEGER NOT NULL,
+    session_last_write INTEGER NOT NULL,
+    is_full INTEGER NOT NULL,
+    payload BLOB NOT NULL,
+    payload_nonce BLOB,
+    lines_added INTEGER NOT NULL,
+    lines_removed INTEGER NOT NULL,
+    FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_history_note ON note_history(note_id, id);

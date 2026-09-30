@@ -111,3 +111,14 @@ pub struct Tag {
     pub created_at: String,
     pub updated_at: String,
 }
+
+/// A stored older version of a note.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NoteVersion {
+    pub id: i64,
+    /// When this version was saved (RFC 3339).
+    pub saved_at: String,
+    /// Lines the editing session after this version added and removed.
+    pub lines_added: usize,
+    pub lines_removed: usize,
+}

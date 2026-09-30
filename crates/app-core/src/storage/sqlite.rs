@@ -15,9 +15,12 @@ use time::OffsetDateTime;
 
 use super::models::{
     Collection, CollectionCounts, Note, NoteAccessMode, NoteModules, NoteRevision,
-    NoteSearchResult, NoteSummary, Reminder,
+    NoteSearchResult, NoteSummary, NoteVersion, Reminder,
 };
 use super::note_access::{NoteAccessGrant, NoteAccessService};
+
+#[path = "history_store.rs"]
+mod history_store;
 use crate::note_sources::derive_note_title_from_body;
 
 const DEFAULT_NOTE_MODULES_JSON: &str =
@@ -350,10 +353,11 @@ impl Db {
     /// assemble a full `Note`.
     pub fn save_note_revision(&self, id: &str, body: &str) -> Result<NoteRevision, String> {
         let conn = self.conn.lock()?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
-        if let Some(security) = self.load_note_security(&conn, id)? {
+        if let Some(security) = self.load_note_security(&tx, id)? {
             match security.access_mode {
                 NoteAccessMode::None => {}
                 NoteAccessMode::Locked => {
@@ -365,8 +369,9 @@ impl Db {
                     let encryption = self
                         .unlocked_encryption_for(id)
                         .ok_or_else(|| "note is locked; unlock first".to_string())?;
+                    self.record_history(&tx, id, &security, body)?;
                     let encrypted = encrypt_note_body_with_key(body, &encryption.key)?;
-                    let changed = conn
+                    let changed = tx
                         .execute(
                             "UPDATE notes
                          SET body = '',
@@ -389,15 +394,17 @@ impl Db {
                     if changed == 0 {
                         return Err("Note not found".to_string());
                     }
+                    tx.commit().map_err(|e| e.to_string())?;
                     return Ok(NoteRevision {
                         id: id.to_string(),
                         updated_at: now,
                     });
                 }
             }
+            self.record_history(&tx, id, &security, body)?;
         }
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
@@ -406,6 +413,7 @@ impl Db {
             rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
 
         Ok(NoteRevision {
             id: id.to_string(),
@@ -415,10 +423,11 @@ impl Db {
 
     pub fn save_note(&self, id: &str, body: &str) -> Result<Note, String> {
         let conn = self.conn.lock()?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
-        if let Some(security) = self.load_note_security(&conn, id)? {
+        if let Some(security) = self.load_note_security(&tx, id)? {
             match security.access_mode {
                 NoteAccessMode::None => {}
                 NoteAccessMode::Locked => {
@@ -428,13 +437,14 @@ impl Db {
                 }
                 NoteAccessMode::Encrypted => {
                     let persisted = self
-                        .load_note_persistence_row(&conn, id)?
+                        .load_note_persistence_row(&tx, id)?
                         .ok_or_else(|| "Note not found".to_string())?;
                     let encryption = self
                         .unlocked_encryption_for(id)
                         .ok_or_else(|| "note is locked; unlock first".to_string())?;
+                    self.record_history(&tx, id, &security, body)?;
                     let encrypted = encrypt_note_body_with_key(body, &encryption.key)?;
-                    conn.execute(
+                    tx.execute(
                         "UPDATE notes
                          SET body = '',
                              note_title = ?2,
@@ -453,6 +463,7 @@ impl Db {
                         ],
                     )
                     .map_err(|e| e.to_string())?;
+                    tx.commit().map_err(|e| e.to_string())?;
                     return Ok(Note {
                         id: id.to_string(),
                         body: body.to_string(),
@@ -464,9 +475,10 @@ impl Db {
                     });
                 }
             }
+            self.record_history(&tx, id, &security, body)?;
         }
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
@@ -475,6 +487,7 @@ impl Db {
             rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
 
         self.load_note_with_access(&conn, id)?
             .ok_or_else(|| "Note not found after save".to_string())
@@ -630,8 +643,10 @@ impl Db {
         let note_title = derive_note_title_from_body(&body);
         let now = now_iso();
         let (password_salt, password_hash) = password_hash_pair(&password)?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        history_store::rekey(&tx, id, self.history_key(id, &security).as_ref(), None)?;
 
-        conn.execute(
+        tx.execute(
             "UPDATE notes
              SET body = ?2,
                  note_title = ?3,
@@ -646,6 +661,7 @@ impl Db {
             rusqlite::params![id, body, note_title, password_salt, password_hash, now],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
 
         self.note_access.clear(id);
         self.load_note_with_access(&conn, id)?
@@ -708,8 +724,15 @@ impl Db {
         let encrypted = encrypt_note_body_with_key(&body, &encryption_key)?;
         let (password_salt, password_hash) = password_hash_pair(&password)?;
         let now = now_iso();
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        history_store::rekey(
+            &tx,
+            id,
+            self.history_key(id, &security).as_ref(),
+            Some(&encryption_key),
+        )?;
 
-        conn.execute(
+        tx.execute(
             "UPDATE notes
              SET body = '',
                  note_title = ?2,
@@ -733,6 +756,7 @@ impl Db {
             ],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
 
         // Keep the just-encrypted note open in this session so autosave continues
         // to write encrypted-at-rest payloads with the same unlocked key.
@@ -768,7 +792,13 @@ impl Db {
             .ok_or_else(|| "Note not found".to_string())?;
         let note_title = derive_note_title_from_body(&body);
         let now = now_iso();
-        conn.execute(
+        let history_key = match (security.access_mode, security.encryption_salt.as_ref()) {
+            (NoteAccessMode::Encrypted, Some(salt)) => Some(derive_encryption_key(&password, salt)),
+            _ => None,
+        };
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        history_store::rekey(&tx, id, history_key.as_ref(), None)?;
+        tx.execute(
             "UPDATE notes
              SET body = ?2,
                  note_title = ?3,
@@ -783,6 +813,7 @@ impl Db {
             rusqlite::params![id, body, note_title, now],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         self.note_access.clear(id);
         self.load_note_with_access(&conn, id)?
             .ok_or_else(|| "Note not found after decrypt".to_string())
@@ -790,10 +821,11 @@ impl Db {
 
     pub fn append_note_body(&self, id: &str, body_suffix: &str) -> Result<Note, String> {
         let conn = self.conn.lock()?;
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let now = now_iso();
 
-        let security = self.load_note_security(&conn, id)?;
-        if let Some(security) = security {
+        let security = self.load_note_security(&tx, id)?;
+        if let Some(security) = &security {
             match security.access_mode {
                 NoteAccessMode::None => {}
                 NoteAccessMode::Locked => {
@@ -803,13 +835,13 @@ impl Db {
                 }
                 NoteAccessMode::Encrypted => {
                     let persisted = self
-                        .load_note_persistence_row(&conn, id)?
+                        .load_note_persistence_row(&tx, id)?
                         .ok_or_else(|| "Note not found".to_string())?;
                     let encryption = self
                         .unlocked_encryption_for(id)
                         .ok_or_else(|| "note is locked; unlock first".to_string())?;
                     let current = self
-                        .load_note_plain_body_for_access(&conn, id, &security)?
+                        .load_note_plain_body_for_access(&tx, id, security)?
                         .unwrap_or_default();
                     let next_body = if current.is_empty() {
                         body_suffix.to_string()
@@ -821,8 +853,9 @@ impl Db {
                         format!("{current}\n{body_suffix}")
                     };
                     let note_title = derive_note_title_from_body(&next_body);
+                    self.record_history(&tx, id, security, &next_body)?;
                     let encrypted = encrypt_note_body_with_key(&next_body, &encryption.key)?;
-                    conn.execute(
+                    tx.execute(
                         "UPDATE notes
                          SET body = '',
                              note_title = ?2,
@@ -841,6 +874,7 @@ impl Db {
                         ],
                     )
                     .map_err(|e| e.to_string())?;
+                    tx.commit().map_err(|e| e.to_string())?;
                     return Ok(Note {
                         id: id.to_string(),
                         body: next_body,
@@ -855,7 +889,7 @@ impl Db {
         }
 
         let current = self
-            .load_note_row(&conn, id)?
+            .load_note_row(&tx, id)?
             .map(|row| row.body)
             .unwrap_or_default();
         let next_body = if current.is_empty() {
@@ -868,8 +902,11 @@ impl Db {
             format!("{current}\n{body_suffix}")
         };
         let note_title = derive_note_title_from_body(&next_body);
+        if let Some(security) = &security {
+            self.record_history(&tx, id, security, &next_body)?;
+        }
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
@@ -885,6 +922,7 @@ impl Db {
             ],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
 
         self.load_note_with_access(&conn, id)?
             .ok_or_else(|| "Note not found after append".to_string())
@@ -974,6 +1012,9 @@ impl Db {
             format!("{body}\n{existing_body}")
         };
         let note_title = derive_note_title_from_body(&next_body);
+        if let Some(security) = self.load_note_security(&tx, note_id)? {
+            self.record_history(&tx, note_id, &security, &next_body)?;
+        }
 
         tx.execute(
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -1136,6 +1177,56 @@ impl Db {
 
     /// First `max_chars` characters of a note body for previews, or
     /// `"[locked]"` while the note is protected.
+    /// Older versions of a note, newest first.
+    pub fn list_note_history(&self, id: &str) -> Result<Vec<NoteVersion>, String> {
+        let conn = self.conn.lock()?;
+        history_store::list(&conn, id)
+    }
+
+    /// The text of a stored version of a note. Protected notes must be
+    /// unlocked.
+    pub fn note_version_text(&self, id: &str, version_id: i64) -> Result<String, String> {
+        let conn = self.conn.lock()?;
+        let security = self
+            .load_note_security(&conn, id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        let current = self
+            .load_note_plain_body_for_access(&conn, id, &security)?
+            .ok_or_else(|| "note is locked; unlock first".to_string())?;
+        let key = self.history_key(id, &security);
+        history_store::version_text(&conn, id, version_id, &current, key.as_ref())
+    }
+
+    /// Records the stored body of `id` as a history version before `new_body`
+    /// replaces it. Call inside the transaction that writes `new_body`.
+    fn record_history(
+        &self,
+        conn: &Connection,
+        id: &str,
+        security: &NoteSecurityRow,
+        new_body: &str,
+    ) -> Result<(), String> {
+        let Some(old_body) = self.load_note_plain_body_for_access(conn, id, security)? else {
+            return Ok(());
+        };
+        let saved_at: String = conn
+            .query_row("SELECT updated_at FROM notes WHERE id = ?1", [id], |row| {
+                row.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let key = self.history_key(id, security);
+        history_store::record(conn, id, &old_body, &saved_at, new_body, key.as_ref())
+    }
+
+    /// Key the history of an encrypted note is sealed with, while unlocked.
+    fn history_key(&self, id: &str, security: &NoteSecurityRow) -> Option<[u8; 32]> {
+        if security.access_mode != NoteAccessMode::Encrypted {
+            return None;
+        }
+        self.unlocked_encryption_for(id)
+            .map(|unlocked| unlocked.key)
+    }
+
     /// When the note was created (RFC 3339), for note info displays.
     pub fn get_note_created_at(&self, id: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock()?;
@@ -2897,6 +2988,10 @@ fn derive_encryption_key(password: &str, salt: &[u8]) -> [u8; 32] {
 }
 
 fn encrypt_note_body_with_key(body: &str, key: &[u8; 32]) -> Result<EncryptedBody, String> {
+    encrypt_bytes_with_key(body.as_bytes(), key)
+}
+
+fn encrypt_bytes_with_key(bytes: &[u8], key: &[u8; 32]) -> Result<EncryptedBody, String> {
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
 
@@ -2904,7 +2999,7 @@ fn encrypt_note_body_with_key(body: &str, key: &[u8; 32]) -> Result<EncryptedBod
     fill_random_bytes(&mut nonce_bytes)?;
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
-        .encrypt(nonce, body.as_bytes())
+        .encrypt(nonce, bytes)
         .map_err(|_| "Failed to encrypt note body".to_string())?;
 
     Ok(EncryptedBody {
@@ -2918,15 +3013,23 @@ fn decrypt_note_body_with_key(
     nonce: &[u8],
     key: &[u8; 32],
 ) -> Result<String, String> {
+    let plain = decrypt_bytes_with_key(ciphertext, nonce, key)?;
+    String::from_utf8(plain).map_err(|_| "encrypted note content invalid UTF-8".to_string())
+}
+
+fn decrypt_bytes_with_key(
+    ciphertext: &[u8],
+    nonce: &[u8],
+    key: &[u8; 32],
+) -> Result<Vec<u8>, String> {
     if nonce.len() != ENCRYPTION_NONCE_LEN {
         return Err("encrypted note nonce invalid".to_string());
     }
     let cipher =
         Aes256Gcm::new_from_slice(key).map_err(|e| format!("Failed to init cipher: {e}"))?;
-    let plain = cipher
+    cipher
         .decrypt(Nonce::from_slice(nonce), ciphertext)
-        .map_err(|_| "invalid password".to_string())?;
-    String::from_utf8(plain).map_err(|_| "encrypted note content invalid UTF-8".to_string())
+        .map_err(|_| "invalid password".to_string())
 }
 
 fn decrypt_note_body(
@@ -3834,6 +3937,161 @@ mod tests {
             vec![home.id.clone()]
         );
         assert!(db.add_notes_to_collection("nope", &ids(&["a"])).is_err());
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    /// Ends the current history session of a note, as if an hour passed.
+    fn end_history_session(db: &Db, note_id: &str) {
+        let conn = db.conn.lock().expect("conn");
+        conn.execute(
+            "UPDATE note_history SET session_started = session_started - 3600,
+                 session_last_write = session_last_write - 3600
+             WHERE note_id = ?1",
+            [note_id],
+        )
+        .expect("age history");
+    }
+
+    fn history_texts(db: &Db, note_id: &str) -> Vec<String> {
+        db.list_note_history(note_id)
+            .expect("list history")
+            .iter()
+            .map(|version| {
+                db.note_version_text(note_id, version.id)
+                    .expect("version text")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn history_keeps_one_version_per_editing_session() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.create_note_with_context("h", NoteModules::default(), None, None)
+            .expect("note created");
+        db.save_note_revision("h", "one").expect("save");
+        assert!(db.list_note_history("h").unwrap().is_empty(), "empty start");
+        db.save_note_revision("h", "one\ntwo").expect("save");
+        db.save_note_revision("h", "one\ntwo\nthree").expect("save");
+        // Both saves belong to one session: the version from before it.
+        assert_eq!(history_texts(&db, "h"), vec!["one"]);
+        let version = &db.list_note_history("h").unwrap()[0];
+        assert_eq!((version.lines_added, version.lines_removed), (2, 0));
+
+        end_history_session(&db, "h");
+        db.save_note("h", "zero\none\ntwo\nthree").expect("save");
+        assert_eq!(history_texts(&db, "h"), vec!["one\ntwo\nthree", "one"]);
+
+        // Returning to the session's starting text drops its version.
+        db.save_note("h", "one\ntwo\nthree").expect("save");
+        assert_eq!(history_texts(&db, "h"), vec!["one"]);
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn history_rebuilds_random_sessions_across_checkpoints() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.create_note_with_context("r", NoteModules::default(), None, None)
+            .expect("note created");
+        let mut seed = 0x9e37_79b9_u64;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut lines: Vec<String> = (0..40).map(|i| format!("line {i}")).collect();
+        db.save_note_revision("r", &lines.join("\n")).expect("save");
+        // Expected versions, oldest first.
+        let mut expected: Vec<String> = Vec::new();
+        for _ in 0..70 {
+            end_history_session(&db, "r");
+            let before = lines.join("\n");
+            for _ in 0..1 + next() % 3 {
+                let at = (next() as usize) % (lines.len() + 1);
+                match next() % 3 {
+                    0 => lines.insert(at, format!("new {}", next() % 1000)),
+                    1 if lines.len() > 1 => {
+                        lines.remove(at.min(lines.len() - 1));
+                    }
+                    _ => {
+                        let i = at.min(lines.len() - 1);
+                        lines[i].push_str(" edited");
+                    }
+                }
+                db.save_note_revision("r", &lines.join("\n")).expect("save");
+            }
+            if before != lines.join("\n") {
+                expected.push(before);
+            }
+        }
+        expected.reverse();
+        assert_eq!(history_texts(&db, "r"), expected);
+        let fulls: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM note_history WHERE note_id = 'r' AND is_full = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(fulls >= 1, "long histories get checkpoints");
+
+        db.delete_note("r", None).expect("delete");
+        let left: i64 = db
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM note_history", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "history goes with its note");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn history_of_encrypted_notes_is_encrypted_and_follows_protection_changes() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.create_note_with_context("e", NoteModules::default(), None, None)
+            .expect("note created");
+        db.save_note_revision("e", "plain secret v1").expect("save");
+        end_history_session(&db, "e");
+        db.save_note_revision("e", "plain secret v2").expect("save");
+
+        db.encrypt_note("e", "pw").expect("encrypt");
+        end_history_session(&db, "e");
+        db.save_note_revision("e", "plain secret v3").expect("save");
+        let raw: Vec<(Vec<u8>, Option<Vec<u8>>)> = {
+            let conn = db.conn.lock().unwrap();
+            let mut stmt = conn
+                .prepare("SELECT payload, payload_nonce FROM note_history WHERE note_id = 'e'")
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(raw.len(), 2);
+        assert!(raw.iter().all(|(_, nonce)| nonce.is_some()));
+        assert_eq!(
+            history_texts(&db, "e"),
+            vec!["plain secret v2", "plain secret v1"]
+        );
+
+        db.decrypt_note("e", "pw").expect("decrypt");
+        assert_eq!(
+            history_texts(&db, "e"),
+            vec!["plain secret v2", "plain secret v1"]
+        );
 
         drop(db);
         let _ = fs::remove_file(path);
