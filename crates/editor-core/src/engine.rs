@@ -1,6 +1,6 @@
 use crate::command_catalog::{
     self, BackupAction, CollectionCommandAction, CommandDefinition, CommandId, ExportFormat,
-    NoteSecurityAction, ParsedNoteSecurityCommand,
+    NoteSecurityAction,
 };
 use crate::types::{CommandMode, CommandSuggestion};
 use crate::vim::{self, VimContext, VimKey, VimState, VimStep};
@@ -144,7 +144,6 @@ pub enum HostCommandPlan {
     },
     NoteSecurity {
         action: NoteSecurityAction,
-        password: String,
     },
     Write {
         quit: bool,
@@ -171,7 +170,7 @@ impl EditorEngine {
         command_catalog::list_command_suggestions(mode, raw_input)
     }
 
-    pub fn parse_note_security_command(raw_input: &str) -> Option<ParsedNoteSecurityCommand> {
+    pub fn parse_note_security_command(raw_input: &str) -> Option<NoteSecurityAction> {
         command_catalog::parse_note_security_command(raw_input)
     }
 
@@ -181,11 +180,8 @@ impl EditorEngine {
                 query: parsed.query,
             });
         }
-        if let Some(parsed) = command_catalog::parse_note_security_command(raw_input) {
-            return Some(HostCommandPlan::NoteSecurity {
-                action: parsed.action,
-                password: parsed.password,
-            });
+        if let Some(action) = command_catalog::parse_note_security_command(raw_input) {
+            return Some(HostCommandPlan::NoteSecurity { action });
         }
         if let Some(parsed) = command_catalog::parse_export_command(raw_input) {
             return Some(HostCommandPlan::Export {
@@ -473,13 +469,12 @@ mod tests {
 
     #[test]
     fn host_command_plan_parses_note_security_and_q_force() {
-        let note = EditorEngine::plan_host_command(CommandMode::Editor, "note encrypt pass123")
+        let note = EditorEngine::plan_host_command(CommandMode::Editor, "note encrypt")
             .expect("note plan");
         assert_eq!(
             note,
             HostCommandPlan::NoteSecurity {
                 action: NoteSecurityAction::Encrypt,
-                password: "pass123".to_string(),
             }
         );
 

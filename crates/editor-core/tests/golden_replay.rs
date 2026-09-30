@@ -56,8 +56,6 @@ struct CommandReplayCase {
 #[derive(Debug, Deserialize)]
 struct ExpectedNoteSecurity {
     action: String,
-    password: String,
-    used_note_prefix: bool,
 }
 
 #[test]
@@ -154,19 +152,9 @@ fn command_replay_golden_cases() {
             (None, Some(_)) => panic!("expected note security parse in {}", case.name),
             (Some(actual), Some(expected)) => {
                 assert_eq!(
-                    actual.action.as_str(),
+                    actual.as_str(),
                     expected.action,
                     "note action mismatch in {}",
-                    case.name
-                );
-                assert_eq!(
-                    actual.password, expected.password,
-                    "note password mismatch in {}",
-                    case.name
-                );
-                assert_eq!(
-                    actual.used_note_prefix, expected.used_note_prefix,
-                    "note prefix mismatch in {}",
                     case.name
                 );
             }

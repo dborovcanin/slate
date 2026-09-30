@@ -1587,7 +1587,7 @@ impl TerminalApp {
                     self.quit = true;
                     return;
                 }
-                crate::editor_core::engine::HostCommandPlan::NoteSecurity { action, .. } => {
+                crate::editor_core::engine::HostCommandPlan::NoteSecurity { action } => {
                     // The password goes into a masked dialog; one typed on
                     // the command line is ignored.
                     let capabilities =

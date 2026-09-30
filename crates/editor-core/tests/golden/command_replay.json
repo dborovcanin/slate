@@ -15,9 +15,7 @@
       "mode": "editor",
       "expected_resolved": "note encrypt",
       "expected_note_security": {
-        "action": "encrypt",
-        "password": "pass123",
-        "used_note_prefix": true
+        "action": "encrypt"
       }
     },
     {
@@ -27,9 +25,7 @@
       "mode": "editor",
       "expected_resolved": "note decrypt",
       "expected_note_security": {
-        "action": "decrypt",
-        "password": "p",
-        "used_note_prefix": false
+        "action": "decrypt"
       }
     },
     {

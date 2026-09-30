@@ -92,13 +92,6 @@ impl NoteSecurityAction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParsedNoteSecurityCommand {
-    pub action: NoteSecurityAction,
-    pub password: String,
-    pub used_note_prefix: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportFormat {
     Pdf,
@@ -183,42 +176,16 @@ pub fn note_security_action_from_token(token: &str) -> Option<NoteSecurityAction
     }
 }
 
-pub fn parse_note_security_command(input: &str) -> Option<ParsedNoteSecurityCommand> {
+/// The action of a `note encrypt` / `note decrypt` command (or an alias).
+/// Anything after it is ignored: passwords are typed into a dialog.
+pub fn parse_note_security_command(input: &str) -> Option<NoteSecurityAction> {
     let normalized = input.trim_start().trim_start_matches(':').trim_start();
-    if normalized.is_empty() {
-        return None;
-    }
-
-    let split_at = normalized
-        .find(char::is_whitespace)
-        .unwrap_or(normalized.len());
-    let head = &normalized[..split_at];
-    let mut rest = normalized[split_at..].trim_start();
-
+    let mut tokens = normalized.split_whitespace();
+    let head = tokens.next()?;
     if head.eq_ignore_ascii_case("note") {
-        if rest.is_empty() {
-            return None;
-        }
-        let action_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-        let action = note_security_action_from_token(&rest[..action_end])?;
-        rest = if action_end >= rest.len() {
-            ""
-        } else {
-            rest[action_end..].trim_start()
-        };
-        return Some(ParsedNoteSecurityCommand {
-            action,
-            password: rest.to_string(),
-            used_note_prefix: true,
-        });
+        return note_security_action_from_token(tokens.next()?);
     }
-
-    let action = note_security_action_from_token(head)?;
-    Some(ParsedNoteSecurityCommand {
-        action,
-        password: rest.to_string(),
-        used_note_prefix: false,
-    })
+    note_security_action_from_token(head)
 }
 
 pub fn parse_export_command(input: &str) -> Option<ParsedExportCommand> {
@@ -926,8 +893,8 @@ fn command_matches(def: &CommandDefinition, normalized_input: &str) -> bool {
         return true;
     }
 
-    if let Some(parsed) = parse_note_security_command(normalized_input) {
-        return parsed.action.command_id() == def.id;
+    if let Some(action) = parse_note_security_command(normalized_input) {
+        return action.command_id() == def.id;
     }
     if let Some(parsed) = parse_export_command(normalized_input) {
         return parsed.format.command_id() == def.id;
@@ -1206,21 +1173,16 @@ mod tests {
 
     #[test]
     fn parse_note_security_command_supports_prefixed_and_alias_forms() {
-        let note_prefixed =
-            parse_note_security_command("note encrypt top secret").expect("parse note-prefixed");
-        assert_eq!(note_prefixed.action, NoteSecurityAction::Encrypt);
-        assert_eq!(note_prefixed.password, "top secret");
-        assert!(note_prefixed.used_note_prefix);
-
-        let alias = parse_note_security_command(":decrypt-note pass123").expect("parse alias");
-        assert_eq!(alias.action, NoteSecurityAction::Decrypt);
-        assert_eq!(alias.password, "pass123");
-        assert!(!alias.used_note_prefix);
-
-        let no_password = parse_note_security_command("note decrypt").expect("parse usage form");
-        assert_eq!(no_password.action, NoteSecurityAction::Decrypt);
-        assert_eq!(no_password.password, "");
-        assert!(no_password.used_note_prefix);
+        assert_eq!(
+            parse_note_security_command("note encrypt"),
+            Some(NoteSecurityAction::Encrypt)
+        );
+        assert_eq!(
+            parse_note_security_command(":decrypt-note typed anyway"),
+            Some(NoteSecurityAction::Decrypt)
+        );
+        assert_eq!(parse_note_security_command("note"), None);
+        assert_eq!(parse_note_security_command("note lock"), None);
     }
 
     #[test]

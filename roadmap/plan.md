@@ -203,7 +203,7 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 | Move remaining table delete semantics into `editor-core` | Done | Boundary edits, structural merges, header deletion, cursor movement, word motions and operators, in-cell Backspace/Delete, empty continuation-row detection, multiline paste, and hand-typed rows are planned in `editor_core::table`. | 10 | 8 |
 | Consolidate pure command execution | Backlog | Move inline format, list conversion, format clear, and date insertion execution from `crates/tui/src/editor_core/commands.rs` into `editor-core`; keep only side effects in the terminal layer. | 9 | 7 |
 | Command catalog conformance check | Backlog | Test that every `CommandId` in `command_catalog.rs` has a core executor, a terminal host handler, or an explicit unsupported state. | 9 | 5 |
-| Versioned SQLite migrations | Postponed | Only `migrations/0001_init.sql` exists. Introduce `PRAGMA user_version` (or a `schema_migrations` table), ordered migrations, migration tests, and backup guidance for schema changes. | 10 | 6 |
+| Versioned SQLite migrations | Partial | `migrate()` in `storage/sqlite.rs` runs ordered steps recorded in `PRAGMA user_version`, with tests, also on a restored backup. Remaining: backup guidance before a schema change. | 10 | 6 |
 | Backup restore validation | Backlog | Run `PRAGMA integrity_check` and verify the expected schema on a staged backup before restore; guard restore around open notes and background work. | 8 | 5 |
 | Zeroize sensitive memory | Backlog | Zeroize passwords and derived encryption keys after use; avoid cloning key material. | 8 | 6 |
 | Move cross-note preload off the event loop | Partial | Opening a large note loads linked-note values on the background calc preparation. The Tab/autocomplete path still waits (`wait_timeout_while` in `editing.rs`); evaluate asynchronously and show pending/stale state instead. | 7 | 6 |
@@ -241,7 +241,10 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 - [ ] Improve exports
 - [ ] Fix modules to apply actual changes at runtime
 - [ ] Do not follow cursor for a checkbox that is moved to the bottom because it was checked
-- [ ] Improve encrypted notes (per-note passphrase, locked from search until unlock)
+- [x] ~~Improve encrypted notes (per-note passphrase, locked from search until unlock)~~ -> random per-note keys wrapped by a note or collection password; encrypted collections
+- [ ] Encrypt reminder text and images of encrypted notes (still stored in the clear)
+- [ ] New notes in an encrypted collection: their title is hidden until renamed (it cannot be pinned before it is typed)
+- [ ] Listing notes decrypts every unlocked encrypted note in full for its preview; cache title and preview per unlock if large encrypted collections get slow
 - [ ] Vault mode for hidden tagged notes
 
 ## Note Search Pass 2
