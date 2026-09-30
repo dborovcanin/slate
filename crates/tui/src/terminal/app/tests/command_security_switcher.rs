@@ -1949,7 +1949,7 @@ fn collection_commands_choose_add_and_remove_match_expected_outcomes() {
     assert_eq!(app.working_collection_name.as_deref(), Some("Projects"));
 
     app.execute_terminal_command(&db, "collection join Projects");
-    assert_eq!(app.status, "added to collection Projects");
+    assert_eq!(app.status, "joined collection Projects");
     assert_eq!(
         db.get_note_collection_ids("n1")
             .expect("membership lookup after add"),
@@ -1957,7 +1957,7 @@ fn collection_commands_choose_add_and_remove_match_expected_outcomes() {
     );
 
     app.execute_terminal_command(&db, "collection leave Projects");
-    assert_eq!(app.status, "removed from collection Projects");
+    assert_eq!(app.status, "left collection Projects");
     assert!(db
         .get_note_collection_ids("n1")
         .expect("membership lookup after remove")

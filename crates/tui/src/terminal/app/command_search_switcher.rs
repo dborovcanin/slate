@@ -1346,7 +1346,7 @@ impl TerminalApp {
             current.push(collection.id.clone());
             db.set_note_collections(&self.active_note.id, &current)?;
             self.refresh_switcher_items(db)?;
-            return Ok(format!("added to collection {}", collection.name));
+            return Ok(format!("joined collection {}", collection.name));
         }
 
         if !has_membership {
@@ -1355,7 +1355,7 @@ impl TerminalApp {
         current.retain(|id| id != &collection.id);
         db.set_note_collections(&self.active_note.id, &current)?;
         self.refresh_switcher_items(db)?;
-        Ok(format!("removed from collection {}", collection.name))
+        Ok(format!("left collection {}", collection.name))
     }
 
     fn handle_create_collection(

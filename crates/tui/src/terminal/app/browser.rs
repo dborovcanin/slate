@@ -51,10 +51,26 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
 const NOTES_HINTS: &[(&str, &str)] = &[
     ("o", "open"),
     ("space", "mark"),
-    ("y", "copy"),
+    ("y", "yank"),
     ("x", "cut"),
     ("p", "paste"),
-    ("d", "remove"),
+    ("d", "leave"),
+    ("D", "delete"),
+    ("n", "new"),
+    ("r", "rename"),
+    ("s", "sort"),
+    ("H", "history"),
+    ("u", "undo"),
+    ("/", "filter"),
+    ("h", "back"),
+];
+/// `NOTES_HINTS` outside a collection, where there is nothing to leave.
+const UNSCOPED_NOTES_HINTS: &[(&str, &str)] = &[
+    ("o", "open"),
+    ("space", "mark"),
+    ("y", "yank"),
+    ("x", "cut"),
+    ("p", "paste"),
     ("D", "delete"),
     ("n", "new"),
     ("r", "rename"),
@@ -689,7 +705,7 @@ impl TerminalApp {
 
     fn browser_yank(&mut self, op: ClipOp) {
         if self.browser.level() != Level::Notes {
-            self.browser_message("open a collection to copy or cut notes");
+            self.browser_message("open a collection to yank or cut notes");
             return;
         }
         let note_ids = self.browser.selected_note_ids();
@@ -700,7 +716,7 @@ impl TerminalApp {
             return;
         }
         let verb = match op {
-            ClipOp::Copy => "copied",
+            ClipOp::Copy => "yanked",
             ClipOp::Cut => "cut",
         };
         self.browser_message(format!(
@@ -717,7 +733,7 @@ impl TerminalApp {
 
     fn browser_paste(&mut self, db: &Db) -> Result<(), String> {
         let Some(clip) = self.browser.clipboard.clone() else {
-            self.browser_message("nothing to paste · y copies, x cuts");
+            self.browser_message("nothing to paste · y yanks, x cuts");
             return Ok(());
         };
         let target = match self.browser.level() {
@@ -749,18 +765,15 @@ impl TerminalApp {
         let target_name = self
             .browser
             .scope_name(&Scope::Collection(target_id.clone()));
-        let verb = match (&clip.op, &clip.source) {
+        let notes = plural(clip.note_ids.len(), "note");
+        let label = match (&clip.op, &clip.source) {
             (ClipOp::Cut, Scope::Collection(source_id)) if *source_id != target_id => {
                 db.remove_notes_from_collection(source_id, &clip.note_ids)?;
                 undo.removed = vec![(source_id.clone(), clip.note_ids.clone())];
-                "moved"
+                format!("moved {notes} to {target_name}")
             }
-            _ => "added",
+            _ => format!("{notes} joined {target_name}"),
         };
-        let label = format!(
-            "{verb} {} to {target_name}",
-            plural(clip.note_ids.len(), "note")
-        );
         undo.label = label.clone();
         self.browser.undo = Some(undo);
         if clip.op == ClipOp::Cut {
@@ -790,7 +803,7 @@ impl TerminalApp {
             .collection_name(&collection_id)
             .unwrap_or("collection")
             .to_string();
-        let label = format!("removed {} from {name}", plural(removed, "note"));
+        let label = format!("{} left {name}", plural(removed, "note"));
         self.browser.undo = Some(MembershipUndo {
             removed: vec![(collection_id, note_ids)],
             label: label.clone(),
@@ -1361,7 +1374,8 @@ impl TerminalApp {
     fn draw_browser_status_bar(&self, buf: &mut Buffer, row: usize, cols: usize) {
         let hints = match self.browser.level() {
             Level::Collections => COLLECTIONS_HINTS,
-            Level::Notes => NOTES_HINTS,
+            Level::Notes if matches!(self.browser.scope, Some(Scope::Collection(_))) => NOTES_HINTS,
+            Level::Notes => UNSCOPED_NOTES_HINTS,
             Level::Search => SEARCH_HINTS,
             Level::History => HISTORY_HINTS,
         };

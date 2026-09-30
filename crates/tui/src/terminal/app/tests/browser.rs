@@ -50,7 +50,9 @@ fn browser_opens_on_all_notes_with_the_active_note_hovered() {
     ] {
         assert!(screen.contains(text), "missing {text}:\n{screen}");
     }
-    assert!(rows.last().unwrap().contains("space mark"));
+    let hints = rows.last().unwrap();
+    assert!(hints.contains("space mark") && hints.contains("y yank"));
+    assert!(!hints.contains("d leave"), "nothing to leave in All notes");
     assert!(!cursor.visible);
 
     app.handle_key(&db, Key::Char('q')).expect("close");
@@ -61,7 +63,7 @@ fn browser_opens_on_all_notes_with_the_active_note_hovered() {
 }
 
 #[test]
-fn copy_into_new_collection_then_move_and_undo() {
+fn yank_into_new_collection_then_move_and_undo() {
     let (db, mut app, path) = browser_app();
 
     // New collection from the collections level.
@@ -79,7 +81,7 @@ fn copy_into_new_collection_then_move_and_undo() {
         Some(Scope::Collection(work.id.clone()))
     );
 
-    // Copy n2 from All notes, paste onto the hovered collection.
+    // Yank n2 from All notes, paste onto the hovered collection.
     app.handle_key(&db, Key::Char('g')).expect("g");
     app.handle_key(&db, Key::Char('g')).expect("gg");
     app.handle_key(&db, Key::Enter).expect("enter all notes");
@@ -98,12 +100,22 @@ fn copy_into_new_collection_then_move_and_undo() {
         db.get_note_collection_ids("n2").expect("ids"),
         vec![work.id.clone()]
     );
-    assert!(app.browser.clipboard.is_some(), "copy keeps the clipboard");
+    assert!(app.browser.clipboard.is_some(), "yank keeps the clipboard");
+    assert_eq!(
+        app.browser.message.as_deref(),
+        Some("1 note joined Work · u undo")
+    );
 
-    // Remove it again from inside the collection, then undo.
+    // Leave it again from inside the collection, then undo.
     app.handle_key(&db, Key::Enter).expect("enter work");
     assert_eq!(app.browser.notes.len(), 1);
-    app.handle_key(&db, Key::Char('d')).expect("remove");
+    let (rows, _) = render_screen(&mut app);
+    assert!(rows.last().unwrap().contains("d leave"));
+    app.handle_key(&db, Key::Char('d')).expect("leave");
+    assert_eq!(
+        app.browser.message.as_deref(),
+        Some("1 note left Work · u undo")
+    );
     assert!(db.get_note_collection_ids("n2").expect("ids").is_empty());
     assert!(app.browser.notes.is_empty());
     app.handle_key(&db, Key::Char('u')).expect("undo");

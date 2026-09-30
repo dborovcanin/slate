@@ -710,14 +710,14 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 69] = [
         id: CommandId::AddToCollection,
         value: "collection join",
         aliases: &[],
-        description: "add active note to collection",
+        description: "active note joins a collection",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::RemoveFromCollection,
         value: "collection leave",
         aliases: &[],
-        description: "remove active note from collection",
+        description: "active note leaves a collection",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
