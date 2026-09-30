@@ -1480,7 +1480,7 @@ impl TerminalApp {
                     // cheap remap-only path first, and recompute only when
                     // changed lines may affect calc semantics.
                     if !self.try_remap_calc_results_after_structural_edit() {
-                        self.run_calc_recompute();
+                        self.recompute_calc_after_edit(history_span);
                     }
                 } else {
                     // Keep large-note typing non-blocking: schedule calc for
@@ -1514,13 +1514,33 @@ impl TerminalApp {
                     self.schedule_calc_recompute(true, true);
                 }
             } else {
-                self.run_calc_recompute();
+                self.recompute_calc_after_edit(history_span);
             }
         }
         // Splices are only meaningful for the edit that recorded them.
         self.calc.pending_result_splices.clear();
         self.record_history_after_edit(coalesce_undo, history_span);
         self.last_edit = Instant::now();
+    }
+
+    /// Recomputes calc now, or once the key being handled is done when it may
+    /// edit again (autoformat after the typed text). The edited lines'
+    /// metadata is kept current so that recompute sees every edit.
+    fn recompute_calc_after_edit(&mut self, history_span: Option<(usize, usize, usize)>) {
+        if self.key_depth == 0 {
+            self.run_calc_recompute();
+            return;
+        }
+        self.ensure_calc_line_metadata();
+        if let Some((start, old_span, new_span)) = history_span {
+            if old_span == new_span {
+                for line_idx in start..start + new_span {
+                    self.refresh_calc_line_metadata_at(line_idx);
+                }
+            }
+        }
+        self.refresh_calc_line_metadata_at(self.editor.cursor_line);
+        self.calc_recompute_after_key = true;
     }
 
     pub(super) fn mark_edited_from_line(&mut self, changed_from_line: usize) {

@@ -37,6 +37,16 @@ impl TerminalApp {
     }
 
     pub(super) fn handle_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        self.key_depth += 1;
+        let result = self.handle_key_inner(db, key);
+        self.key_depth -= 1;
+        if self.key_depth == 0 && std::mem::take(&mut self.calc_recompute_after_key) {
+            self.run_calc_recompute();
+        }
+        result
+    }
+
+    fn handle_key_inner(&mut self, db: &Db, key: Key) -> Result<(), String> {
         if self.image_preview.is_some() {
             match key {
                 Key::Esc => self.image_preview = None,

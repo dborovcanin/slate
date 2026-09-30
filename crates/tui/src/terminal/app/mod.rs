@@ -688,6 +688,11 @@ struct TerminalApp {
     editor: EditorModel,
     mode: UiMode,
     vim_enabled: bool,
+    /// Keys being handled (nested for macro replay). While above zero, edits
+    /// set `calc_recompute_after_key` instead of recomputing, so a key that
+    /// edits several times (text, then autoformat) recomputes once.
+    key_depth: usize,
+    calc_recompute_after_key: bool,
     // Note switcher overlay
     switcher: SwitcherState,
     // Collection switcher overlay
@@ -1131,6 +1136,8 @@ impl TerminalApp {
             },
             mode: initial_mode,
             vim_enabled: vim_mode,
+            key_depth: 0,
+            calc_recompute_after_key: false,
             switcher: SwitcherState {
                 items: switcher_items,
                 prewarm_pending: background_tasks_enabled,
