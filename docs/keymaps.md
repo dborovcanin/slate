@@ -102,6 +102,8 @@ Key tables by mode. The [Feature Guide](./features.md) lists the same keys group
 
 ## Note switcher (`Ctrl+P`)
 
+Popup with a search bar, the notes (icon, title, age) and key hints; the title shows the scope.
+
 | Key | Action |
 | --- | --- |
 | type | Filter by title |
@@ -116,6 +118,8 @@ Key tables by mode. The [Feature Guide](./features.md) lists the same keys group
 | `Esc` / `Ctrl+P` | Close |
 
 ## Collection picker (`Ctrl+G`)
+
+Popup listing collections with note counts; `All notes` clears the working collection.
 
 | Key | Action |
 | --- | --- |

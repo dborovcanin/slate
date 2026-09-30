@@ -15,6 +15,7 @@ mod input;
 mod markdown_view;
 mod media_sources;
 mod notifications;
+mod picker;
 pub mod render;
 mod render_styles;
 mod session;

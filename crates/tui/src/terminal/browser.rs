@@ -532,7 +532,7 @@ pub fn age_label(updated_at: &str, now_epoch: i64) -> String {
 }
 
 /// `text` cut to `width` display cells, ending in `…` when shortened.
-fn fit_width(text: &str, width: usize) -> String {
+pub(crate) fn fit_width(text: &str, width: usize) -> String {
     if text.width() <= width {
         return text.to_string();
     }
@@ -553,8 +553,10 @@ fn fit_width(text: &str, width: usize) -> String {
     out
 }
 
-pub struct BrowserView<'a> {
-    pub state: &'a BrowserState,
+/// Colors, icons and the facts row styling depends on; shared by the
+/// browser and the note and collection pickers.
+#[derive(Clone, Copy)]
+pub struct Look<'a> {
     pub palette: RenderPalette,
     pub icons: &'static Icons,
     pub working_collection_id: Option<&'a str>,
@@ -562,10 +564,15 @@ pub struct BrowserView<'a> {
     pub now_epoch: i64,
 }
 
+pub struct BrowserView<'a> {
+    pub state: &'a BrowserState,
+    pub look: Look<'a>,
+}
+
 #[derive(Clone, Copy)]
-struct Pane {
-    col: usize,
-    width: usize,
+pub(crate) struct Pane {
+    pub col: usize,
+    pub width: usize,
 }
 
 /// Parent, current and preview panes for a screen `cols` wide; narrow
@@ -616,18 +623,18 @@ fn pane_layout(cols: usize) -> (Option<Pane>, Pane, Option<Pane>) {
 }
 
 /// One list row: optional marker, icon, text and a dim right-aligned label.
-struct Row<'a> {
-    marker: Option<u8>,
-    icon: &'a str,
-    icon_fg: u8,
-    text: String,
-    text_fg: u8,
-    bold: bool,
-    right: String,
+pub(crate) struct Row {
+    pub marker: Option<u8>,
+    pub icon: &'static str,
+    pub icon_fg: u8,
+    pub text: String,
+    pub text_fg: u8,
+    pub bold: bool,
+    pub right: String,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Hover {
+pub(crate) enum Hover {
     Focused,
     Dim,
 }
@@ -641,14 +648,14 @@ fn scroll_start(cursor: usize, len: usize, height: usize) -> usize {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_rows<'a>(
+pub(crate) fn draw_rows(
     buf: &mut Buffer,
     palette: RenderPalette,
     pane: Pane,
     top: usize,
     height: usize,
     len: usize,
-    row_at: impl Fn(usize) -> Row<'a>,
+    row_at: impl Fn(usize) -> Row,
     cursor: Option<(usize, Hover)>,
 ) {
     let bg = palette.surface_bg();
@@ -658,7 +665,7 @@ fn draw_rows<'a>(
     for (offset, idx) in (start..len).take(height).enumerate() {
         let row = row_at(idx);
         let screen_row = top + offset;
-        let hover = cursor.and_then(|(cursor, hover)| (cursor == start + offset).then_some(hover));
+        let hover = cursor.and_then(|(cursor, hover)| (cursor == idx).then_some(hover));
         let row_bg = match hover {
             Some(Hover::Focused) => palette.primary(),
             Some(Hover::Dim) => palette.code_block_bg,
@@ -734,20 +741,54 @@ fn draw_rows<'a>(
     }
 }
 
-/// Row for the `pos`-th visible collection.
-fn collection_row<'a>(view: &BrowserView<'a>, pos: usize, open_scope: Option<&Scope>) -> Row<'a> {
-    let icons = view.icons;
-    let palette = view.palette;
-    let entry = &view.state.collections[view.state.collection_matches[pos]];
+/// Icon and its color for a note: open, protected, daily or plain.
+pub(crate) fn note_icon(look: &Look, note: &NoteEntry) -> (&'static str, u8) {
+    let icons = look.icons;
+    let palette = look.palette;
+    if note.id == look.active_note_id {
+        (icons.active, palette.primary())
+    } else if note.access_mode == NoteAccessMode::Encrypted {
+        (icons.encrypted, palette.code_keyword)
+    } else if note.access_mode == NoteAccessMode::Locked {
+        let icon = if note.is_unlocked {
+            icons.unlocked
+        } else {
+            icons.locked
+        };
+        (icon, palette.code_keyword)
+    } else if note.is_daily {
+        (icons.daily_note, palette.code_number)
+    } else {
+        (icons.note, palette.text_fg())
+    }
+}
+
+/// A note row with its icon, title and age.
+pub(crate) fn plain_note_row(look: &Look, note: &NoteEntry) -> Row {
+    let (icon, icon_fg) = note_icon(look, note);
+    Row {
+        marker: None,
+        icon,
+        icon_fg,
+        text: note.title.clone(),
+        text_fg: look.palette.text_fg(),
+        bold: false,
+        right: age_label(&note.updated_at, look.now_epoch),
+    }
+}
+
+/// A collection row with its icon and note count; the working collection
+/// gets a marker and a pin.
+pub(crate) fn collection_entry_row(look: &Look, entry: &CollectionEntry, open: bool) -> Row {
+    let icons = look.icons;
+    let palette = look.palette;
     let (icon, icon_fg) = match &entry.scope {
         Scope::All => (icons.library, palette.code_type),
         Scope::Unsorted => (icons.inbox, palette.code_number),
-        Scope::Collection(_) if open_scope == Some(&entry.scope) => {
-            (icons.collection_open, palette.code_function)
-        }
+        Scope::Collection(_) if open => (icons.collection_open, palette.code_function),
         Scope::Collection(_) => (icons.collection, palette.code_function),
     };
-    let working = match (&entry.scope, view.working_collection_id) {
+    let working = match (&entry.scope, look.working_collection_id) {
         (Scope::Collection(id), Some(working)) => id == working,
         _ => false,
     };
@@ -766,33 +807,22 @@ fn collection_row<'a>(view: &BrowserView<'a>, pos: usize, open_scope: Option<&Sc
     }
 }
 
-fn note_row<'a>(view: &BrowserView<'a>, note: &NoteEntry, show_marks: bool) -> Row<'a> {
-    let icons = view.icons;
-    let palette = view.palette;
+/// Row for the `pos`-th visible collection.
+fn collection_row(view: &BrowserView, pos: usize, open_scope: Option<&Scope>) -> Row {
+    let entry = &view.state.collections[view.state.collection_matches[pos]];
+    collection_entry_row(&view.look, entry, open_scope == Some(&entry.scope))
+}
+
+/// A note row with the browser's marks and clipboard markers.
+fn note_row(view: &BrowserView, note: &NoteEntry) -> Row {
+    let palette = view.look.palette;
     let state = view.state;
-    let (icon, icon_fg) = if note.id == view.active_note_id {
-        (icons.active, palette.primary())
-    } else if note.access_mode == NoteAccessMode::Encrypted {
-        (icons.encrypted, palette.code_keyword)
-    } else if note.access_mode == NoteAccessMode::Locked {
-        (
-            if note.is_unlocked {
-                icons.unlocked
-            } else {
-                icons.locked
-            },
-            palette.code_keyword,
-        )
-    } else if note.is_daily {
-        (icons.daily_note, palette.code_number)
-    } else {
-        (icons.note, palette.text_fg())
-    };
+    let mut row = plain_note_row(&view.look, note);
     let clip = state
         .clipboard
         .as_ref()
-        .filter(|clip| show_marks && clip.note_ids.contains(&note.id));
-    let marker = if show_marks && state.marked.contains(&note.id) {
+        .filter(|clip| clip.note_ids.contains(&note.id));
+    row.marker = if state.marked.contains(&note.id) {
         Some(palette.code_string)
     } else {
         clip.map(|clip| match clip.op {
@@ -800,26 +830,17 @@ fn note_row<'a>(view: &BrowserView<'a>, note: &NoteEntry, show_marks: bool) -> R
             ClipOp::Cut => palette.code_keyword,
         })
     };
-    let mut right = age_label(&note.updated_at, view.now_epoch);
     if let Some(clip) = clip {
         let glyph = match clip.op {
-            ClipOp::Copy => icons.copied,
-            ClipOp::Cut => icons.cut,
+            ClipOp::Copy => view.look.icons.copied,
+            ClipOp::Cut => view.look.icons.cut,
         };
-        right = format!("{glyph} {right}");
+        row.right = format!("{glyph} {}", row.right);
     }
-    Row {
-        marker,
-        icon,
-        icon_fg,
-        text: note.title.clone(),
-        text_fg: palette.text_fg(),
-        bold: false,
-        right,
-    }
+    row
 }
 
-fn draw_separator_column(
+pub(crate) fn draw_separator_column(
     buf: &mut Buffer,
     palette: RenderPalette,
     col: usize,
@@ -836,7 +857,7 @@ fn draw_separator_column(
     }
 }
 
-fn draw_centered_hint(
+pub(crate) fn draw_centered_hint(
     buf: &mut Buffer,
     palette: RenderPalette,
     pane: Pane,
@@ -853,10 +874,29 @@ fn draw_centered_hint(
     put_str_width(buf, row, col, &text, pane.width, style);
 }
 
-fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
-    let palette = view.palette;
-    let state = view.state;
-    let icons = view.icons;
+/// Clears rows `1..rows` to the surface color.
+pub(crate) fn draw_screen_base(look: &Look, buf: &mut Buffer, rows: usize, cols: usize) {
+    let palette = look.palette;
+    let base = cell_style(
+        Some(palette.text_fg()),
+        Some(palette.surface_bg()),
+        Modifier::empty(),
+    );
+    for row in 1..rows {
+        fill(buf, row, 1, cols, base);
+    }
+}
+
+/// Header row: ` Slate › crumb` on the left and a dim `right` label.
+pub(crate) fn draw_header_bar(
+    look: &Look,
+    buf: &mut Buffer,
+    cols: usize,
+    crumb: &str,
+    right: &str,
+) {
+    let palette = look.palette;
+    let icons = look.icons;
     let bg = palette.surface_bg();
     fill(
         buf,
@@ -868,7 +908,42 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     let accent = cell_style(Some(palette.primary()), Some(bg), Modifier::BOLD);
     let dim = cell_style(Some(palette.code_comment), Some(bg), Modifier::empty());
     let text = cell_style(Some(palette.text_fg()), Some(bg), Modifier::BOLD);
+    let right_width = right.width();
+    let left_room = cols.saturating_sub(right_width + 1);
 
+    let mut col = put_str_width(
+        buf,
+        1,
+        1,
+        &format!(" {} ", icons.library),
+        left_room,
+        accent,
+    );
+    col = put_str_width(
+        buf,
+        1,
+        col,
+        "Slate",
+        left_room.saturating_sub(col - 1),
+        accent,
+    );
+    col = put_str_width(
+        buf,
+        1,
+        col,
+        &format!(" {} ", icons.separator),
+        left_room.saturating_sub(col - 1),
+        dim,
+    );
+    put_str_width(buf, 1, col, crumb, left_room.saturating_sub(col - 1), text);
+    if right_width < cols {
+        put_str_width(buf, 1, cols + 1 - right_width, right, right_width, dim);
+    }
+}
+
+fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
+    let state = view.state;
+    let icons = view.look.icons;
     let (position, total) = match (state.level(), state.search.as_ref()) {
         (Level::Search, Some(search)) => (search.selected, search.hits.len()),
         (Level::Notes, _) => (state.note_cursor, state.note_matches.len()),
@@ -893,26 +968,7 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     if state.level() == Level::Notes {
         right.push_str(&format!("{}  ", state.sort.label()));
     }
-    right.push_str(&format!("{}/{} ", (position + 1).min(total), total));
-    let right_width = right.width();
-    let left_room = cols.saturating_sub(right_width + 1);
-
-    let mut col = put_str_width(
-        buf,
-        1,
-        1,
-        &format!(" {} ", icons.library),
-        left_room,
-        accent,
-    );
-    col = put_str_width(
-        buf,
-        1,
-        col,
-        "Slate",
-        left_room.saturating_sub(col - 1),
-        accent,
-    );
+    right.push_str(&position_label(position, total));
     let crumb = match (state.level(), state.scope.as_ref(), state.search.as_ref()) {
         (Level::Search, _, Some(search)) => format!(
             "{} {} {} search",
@@ -923,23 +979,30 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
         (Level::Notes, Some(scope), _) => state.scope_name(scope),
         _ => "Collections".to_string(),
     };
-    col = put_str_width(
-        buf,
-        1,
-        col,
-        &format!(" {} ", icons.separator),
-        left_room.saturating_sub(col - 1),
-        dim,
-    );
-    put_str_width(buf, 1, col, &crumb, left_room.saturating_sub(col - 1), text);
-    if right_width < cols {
-        put_str_width(buf, 1, cols + 1 - right_width, &right, right_width, dim);
-    }
+    draw_header_bar(&view.look, buf, cols, &crumb, &right);
 }
 
-fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usize, height: usize) {
-    let palette = view.palette;
-    let icons = view.icons;
+/// `3/12 ` for the header, `0/0 ` for an empty list.
+pub(crate) fn position_label(position: usize, total: usize) -> String {
+    format!("{}/{} ", (position + 1).min(total), total)
+}
+
+/// Title, metadata and the start of the body of `note`, from `preview`.
+/// A focused line (search hit) is scrolled into view and `terms` are
+/// highlighted.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_note_preview(
+    look: &Look,
+    buf: &mut Buffer,
+    pane: Pane,
+    top: usize,
+    height: usize,
+    note: &NoteEntry,
+    preview: &Preview,
+    terms: &[String],
+) {
+    let palette = look.palette;
+    let icons = look.icons;
     let bg = palette.surface_bg();
     let Preview::Note {
         note_id,
@@ -948,27 +1011,27 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
         collections,
         tags,
         locked,
-    } = &view.state.preview
+    } = preview
     else {
         return;
     };
-    let Some(note) = view.state.focused_note().filter(|note| &note.id == note_id) else {
+    if *note_id != note.id {
         return;
-    };
+    }
     let inner = pane.width.saturating_sub(2);
     let col = pane.col + 1;
     let dim = cell_style(Some(palette.code_comment), Some(bg), Modifier::empty());
     let mut row = top;
     let bottom = top + height;
 
-    let title_row = note_row(view, note, false);
+    let (icon, icon_fg) = note_icon(look, note);
     put_str_width(
         buf,
         row,
         col,
-        title_row.icon,
+        icon,
         1,
-        cell_style(Some(title_row.icon_fg), Some(bg), Modifier::empty()),
+        cell_style(Some(icon_fg), Some(bg), Modifier::empty()),
     );
     put_str_width(
         buf,
@@ -980,16 +1043,20 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
     );
     row += 1;
 
-    let age = age_label(&note.updated_at, view.now_epoch);
-    let updated = if age.len() == 10 {
+    let age = age_label(&note.updated_at, look.now_epoch);
+    let updated = if age.is_empty() {
+        String::new()
+    } else if age.len() == 10 {
         format!("{} updated {age}", icons.clock)
     } else if age == "now" {
         format!("{} updated just now", icons.clock)
     } else {
         format!("{} updated {age} ago", icons.clock)
     };
-    put_str_width(buf, row, col, &fit_width(&updated, inner), inner, dim);
-    row += 1;
+    if !updated.is_empty() {
+        put_str_width(buf, row, col, &fit_width(&updated, inner), inner, dim);
+        row += 1;
+    }
     if !collections.is_empty() && row < bottom {
         let text = format!("{} {}", icons.collection, collections.join(", "));
         put_str_width(
@@ -1037,17 +1104,13 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
             .min(lines.len().saturating_sub(1))
     });
     ctx.advance_lines(&lines[..skip]);
-    let terms = match (&view.state.search, view.state.level()) {
-        (Some(search), Level::Search) => search_terms(&search.searched),
-        _ => Vec::new(),
-    };
     let area = buf.area;
     for (line_idx, line) in lines.iter().enumerate().skip(skip) {
         if row >= bottom {
             break;
         }
         let mut ranges: Vec<(usize, usize)> = Vec::new();
-        for term in &terms {
+        for term in terms {
             for range in case_insensitive_matches(line, term) {
                 if !ranges.iter().any(|r| r.0 < range.1 && range.0 < r.1) {
                     ranges.push(range);
@@ -1080,21 +1143,155 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
     }
 }
 
+/// A collection's description and the notes in it.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_collection_preview(
+    look: &Look,
+    buf: &mut Buffer,
+    pane: Pane,
+    top: usize,
+    height: usize,
+    description: &str,
+    notes: &[NoteEntry],
+) {
+    let palette = look.palette;
+    let mut row = top;
+    if !description.trim().is_empty() {
+        let dim = cell_style(
+            Some(palette.code_comment),
+            Some(palette.surface_bg()),
+            Modifier::ITALIC,
+        );
+        let inner = pane.width.saturating_sub(2);
+        put_str_width(
+            buf,
+            row,
+            pane.col + 1,
+            &fit_width(description, inner),
+            inner,
+            dim,
+        );
+        row += 2;
+    }
+    if notes.is_empty() {
+        draw_centered_hint(buf, palette, pane, row + 1, "empty");
+    } else {
+        draw_rows(
+            buf,
+            palette,
+            pane,
+            row,
+            (top + height).saturating_sub(row),
+            notes.len(),
+            |idx| plain_note_row(look, &notes[idx]),
+            None,
+        );
+    }
+}
+
+/// Query line at the top of `pane` with a rule under it. Returns the cursor
+/// cell.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_query_bar(
+    look: &Look,
+    buf: &mut Buffer,
+    pane: Pane,
+    top: usize,
+    query: &str,
+    cursor: usize,
+    placeholder: &str,
+) -> (usize, usize) {
+    let palette = look.palette;
+    let bg = palette.surface_bg();
+    let inner = query_bar_width(pane);
+    let col = pane.col + 1;
+    put_str_width(
+        buf,
+        top,
+        col,
+        look.icons.filter,
+        1,
+        cell_style(Some(palette.primary()), Some(bg), Modifier::BOLD),
+    );
+    let text_col = col + 2;
+    let (visible, cursor_offset) = scrolled_input(query, cursor, inner);
+    if query.is_empty() {
+        put_str_width(
+            buf,
+            top,
+            text_col,
+            placeholder,
+            inner,
+            cell_style(Some(palette.code_comment), Some(bg), Modifier::empty()),
+        );
+    } else {
+        put_str_width(
+            buf,
+            top,
+            text_col,
+            &visible,
+            inner,
+            cell_style(Some(palette.text_fg()), Some(bg), Modifier::BOLD),
+        );
+    }
+    let rule = cell_style(Some(palette.primary()), Some(bg), Modifier::empty());
+    put_str_width(
+        buf,
+        top + 1,
+        pane.col,
+        &"─".repeat(pane.width),
+        pane.width,
+        rule,
+    );
+    (top, text_col + cursor_offset)
+}
+
+fn query_bar_width(pane: Pane) -> usize {
+    pane.width.saturating_sub(4)
+}
+
+/// Screen cell of the cursor in a query bar drawn by [`draw_query_bar`].
+pub(crate) fn query_bar_cursor(
+    pane: Pane,
+    top: usize,
+    query: &str,
+    cursor: usize,
+) -> (usize, usize) {
+    let (_, offset) = scrolled_input(query, cursor, query_bar_width(pane));
+    (top, pane.col + 3 + offset)
+}
+
+/// The part of `text` shown in a `width`-cell input with the cursor at char
+/// `cursor`, and the cursor's cell offset in it.
+fn scrolled_input(text: &str, cursor: usize, width: usize) -> (String, usize) {
+    let at = super::text_input::cursor(text, cursor);
+    let before_width: usize = text.chars().take(at).map(|c| c.width().unwrap_or(0)).sum();
+    // Keep the cursor visible in long input by scrolling the text left.
+    let skip_width = before_width.saturating_sub(width.saturating_sub(1));
+    let mut skipped = 0;
+    let visible: String = text
+        .chars()
+        .skip_while(|c| {
+            let skip = skipped < skip_width;
+            skipped += c.width().unwrap_or(0);
+            skip
+        })
+        .collect();
+    (visible, before_width - skip_width.min(before_width))
+}
+
 /// Draws the browser over rows `1..rows` (the status bar row is left to the
-/// caller). Returns the cursor cell while a prompt is open.
+/// caller). Returns the cursor cell while a prompt or search is open.
 pub fn draw_browser(
     view: &BrowserView,
     buf: &mut Buffer,
     rows: usize,
     cols: usize,
 ) -> Option<(usize, usize)> {
-    let palette = view.palette;
+    let look = &view.look;
+    let palette = look.palette;
     let state = view.state;
-    let bg = palette.surface_bg();
-    let base = cell_style(Some(palette.text_fg()), Some(bg), Modifier::empty());
-    for row in 1..rows {
-        fill(buf, row, 1, cols, base);
-    }
+    draw_screen_base(look, buf, rows, cols);
     draw_header(view, buf, cols);
 
     let top = 2;
@@ -1109,6 +1306,27 @@ pub fn draw_browser(
     if let Some(preview) = preview {
         draw_separator_column(buf, palette, preview.col - 1, top, height);
     }
+    let draw_parent = |buf: &mut Buffer, open: Option<&Scope>| {
+        let Some(parent) = parent else {
+            return;
+        };
+        let hovered = open.and_then(|scope| {
+            state
+                .collection_matches
+                .iter()
+                .position(|idx| &state.collections[*idx].scope == scope)
+        });
+        draw_rows(
+            buf,
+            palette,
+            parent,
+            top,
+            height,
+            state.collection_matches.len(),
+            |pos| collection_row(view, pos, open),
+            hovered.map(|pos| (pos, Hover::Dim)),
+        );
+    };
 
     let mut search_cursor = None;
     match state.level() {
@@ -1116,7 +1334,7 @@ pub fn draw_browser(
             if let Some(parent) = parent {
                 let root = |_| Row {
                     marker: None,
-                    icon: view.icons.library,
+                    icon: look.icons.library,
                     icon_fg: palette.code_type,
                     text: "Slate".to_string(),
                     text_fg: palette.text_fg(),
@@ -1149,55 +1367,11 @@ pub fn draw_browser(
                 draw_centered_hint(buf, palette, current, top + 1, "no match");
             }
             if let (Some(pane), Preview::Notes { description, notes }) = (preview, &state.preview) {
-                let mut row = top;
-                if !description.trim().is_empty() {
-                    let dim = cell_style(Some(palette.code_comment), Some(bg), Modifier::ITALIC);
-                    let inner = pane.width.saturating_sub(2);
-                    put_str_width(
-                        buf,
-                        row,
-                        pane.col + 1,
-                        &fit_width(description, inner),
-                        inner,
-                        dim,
-                    );
-                    row += 2;
-                }
-                if notes.is_empty() {
-                    draw_centered_hint(buf, palette, pane, row + 1, "empty");
-                } else {
-                    draw_rows(
-                        buf,
-                        palette,
-                        pane,
-                        row,
-                        (top + height).saturating_sub(row),
-                        notes.len(),
-                        |idx| note_row(view, &notes[idx], false),
-                        None,
-                    );
-                }
+                draw_collection_preview(look, buf, pane, top, height, description, notes);
             }
         }
         Level::Notes => {
-            if let Some(parent) = parent {
-                let open = state.scope.as_ref().and_then(|scope| {
-                    state
-                        .collection_matches
-                        .iter()
-                        .position(|idx| &state.collections[*idx].scope == scope)
-                });
-                draw_rows(
-                    buf,
-                    palette,
-                    parent,
-                    top,
-                    height,
-                    state.collection_matches.len(),
-                    |pos| collection_row(view, pos, state.scope.as_ref()),
-                    open.map(|open| (open, Hover::Dim)),
-                );
-            }
+            draw_parent(buf, state.scope.as_ref());
             let len = state.note_matches.len();
             draw_rows(
                 buf,
@@ -1206,7 +1380,7 @@ pub fn draw_browser(
                 top,
                 height,
                 len,
-                |pos| note_row(view, &state.notes[state.note_matches[pos]], true),
+                |pos| note_row(view, &state.notes[state.note_matches[pos]]),
                 Some((state.note_cursor, Hover::Focused)),
             );
             if len == 0 {
@@ -1217,41 +1391,33 @@ pub fn draw_browser(
                 };
                 draw_centered_hint(buf, palette, current, top + 1, hint);
             }
-            if let Some(pane) = preview {
-                draw_note_preview(view, buf, pane, top, height);
+            if let (Some(pane), Some(note)) = (preview, state.focused_note()) {
+                draw_note_preview(look, buf, pane, top, height, note, &state.preview, &[]);
             }
         }
         Level::Search => {
             let search = state.search.as_ref()?;
-            if let Some(parent) = parent {
-                let open = state
-                    .collection_matches
-                    .iter()
-                    .position(|idx| state.collections[*idx].scope == search.scope);
-                draw_rows(
-                    buf,
-                    palette,
-                    parent,
-                    top,
-                    height,
-                    state.collection_matches.len(),
-                    |pos| collection_row(view, pos, Some(&search.scope)),
-                    open.map(|open| (open, Hover::Dim)),
-                );
-            }
-            search_cursor = draw_search_bar(view, buf, current, top, search);
+            draw_parent(buf, Some(&search.scope));
+            search_cursor = Some(draw_query_bar(
+                look,
+                buf,
+                current,
+                top,
+                &search.query,
+                search.cursor,
+                "search note text",
+            ));
             let list_top = top + 2;
-            let list_height = height.saturating_sub(2);
             draw_rows(
                 buf,
                 palette,
                 current,
                 list_top,
-                list_height,
+                height.saturating_sub(2),
                 search.hits.len(),
                 |pos| {
                     let hit = &search.hits[pos];
-                    let mut row = note_row(view, &hit.note, false);
+                    let mut row = plain_note_row(look, &hit.note);
                     row.right = format!(":{}", hit.line_number);
                     row
                 },
@@ -1259,18 +1425,19 @@ pub fn draw_browser(
             );
             if search.hits.is_empty() {
                 let hint = if let Some(error) = search.error.as_deref() {
-                    error.to_string()
+                    error
                 } else if search.query.trim().is_empty() {
-                    "type to search note text".to_string()
+                    "type to search note text"
                 } else if search.pending || search.running {
-                    "searching…".to_string()
+                    "searching…"
                 } else {
-                    "no matches".to_string()
+                    "no matches"
                 };
-                draw_centered_hint(buf, palette, current, list_top + 1, &hint);
+                draw_centered_hint(buf, palette, current, list_top + 1, hint);
             }
-            if let Some(pane) = preview {
-                draw_note_preview(view, buf, pane, top, height);
+            if let (Some(pane), Some(note)) = (preview, state.focused_note()) {
+                let terms = search_terms(&search.searched);
+                draw_note_preview(look, buf, pane, top, height, note, &state.preview, &terms);
             }
         }
     }
@@ -1285,79 +1452,6 @@ pub fn draw_browser(
     }
 }
 
-/// Query line at the top of the middle pane with a rule under it. Returns
-/// the cursor cell.
-fn draw_search_bar(
-    view: &BrowserView,
-    buf: &mut Buffer,
-    pane: Pane,
-    top: usize,
-    search: &ContentSearch,
-) -> Option<(usize, usize)> {
-    let palette = view.palette;
-    let bg = palette.surface_bg();
-    let inner = pane.width.saturating_sub(4);
-    let col = pane.col + 1;
-    put_str_width(
-        buf,
-        top,
-        col,
-        view.icons.filter,
-        1,
-        cell_style(Some(palette.primary()), Some(bg), Modifier::BOLD),
-    );
-    let text_col = col + 2;
-    let (visible, cursor_offset) = scrolled_input(&search.query, search.cursor, inner);
-    if search.query.is_empty() {
-        put_str_width(
-            buf,
-            top,
-            text_col,
-            "search note text",
-            inner,
-            cell_style(Some(palette.code_comment), Some(bg), Modifier::empty()),
-        );
-    } else {
-        put_str_width(
-            buf,
-            top,
-            text_col,
-            &visible,
-            inner,
-            cell_style(Some(palette.text_fg()), Some(bg), Modifier::BOLD),
-        );
-    }
-    let rule = cell_style(Some(palette.primary()), Some(bg), Modifier::empty());
-    put_str_width(
-        buf,
-        top + 1,
-        pane.col,
-        &"─".repeat(pane.width),
-        pane.width,
-        rule,
-    );
-    Some((top, text_col + cursor_offset))
-}
-
-/// The part of `text` shown in a `width`-cell input with the cursor at char
-/// `cursor`, and the cursor's cell offset in it.
-fn scrolled_input(text: &str, cursor: usize, width: usize) -> (String, usize) {
-    let at = super::text_input::cursor(text, cursor);
-    let before_width: usize = text.chars().take(at).map(|c| c.width().unwrap_or(0)).sum();
-    // Keep the cursor visible in long input by scrolling the text left.
-    let skip_width = before_width.saturating_sub(width.saturating_sub(1));
-    let mut skipped = 0;
-    let visible: String = text
-        .chars()
-        .skip_while(|c| {
-            let skip = skipped < skip_width;
-            skipped += c.width().unwrap_or(0);
-            skip
-        })
-        .collect();
-    (visible, before_width - skip_width.min(before_width))
-}
-
 fn draw_prompt(
     view: &BrowserView,
     buf: &mut Buffer,
@@ -1365,13 +1459,13 @@ fn draw_prompt(
     top: usize,
     prompt: &Prompt,
 ) -> Option<(usize, usize)> {
-    let palette = view.palette;
+    let palette = view.look.palette;
     let width = pane.width.clamp(20, 60);
     let col = pane.col;
     let row = top;
     let bg = palette.surface_bg();
     let title = match &prompt.kind {
-        PromptKind::Unlock { title, .. } => format!("{} {title}", view.icons.locked),
+        PromptKind::Unlock { title, .. } => format!("{} {title}", view.look.icons.locked),
         kind => kind.title().to_string(),
     };
     draw_framed_surface(
@@ -1403,7 +1497,7 @@ fn draw_prompt(
 }
 
 fn draw_confirm(view: &BrowserView, buf: &mut Buffer, rows: usize, cols: usize, confirm: &Confirm) {
-    let palette = view.palette;
+    let palette = view.look.palette;
     let (title, question, detail) = match confirm {
         Confirm::DeleteNotes { note_ids, label } => (
             "Delete",

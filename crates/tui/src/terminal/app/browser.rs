@@ -1,7 +1,7 @@
 use super::{new_note_with_context, Db, Key, TerminalApp, UiMode};
 use crate::terminal::browser::{
     BrowserState, BrowserView, ClipOp, Clipboard, CollectionEntry, Confirm, ContentSearch, Level,
-    MembershipUndo, NoteEntry, Preview, Prompt, PromptKind, Scope, SearchHit, SortKey,
+    Look, MembershipUndo, NoteEntry, Preview, Prompt, PromptKind, Scope, SearchHit, SortKey,
     PREVIEW_BODY_CHARS,
 };
 use crate::terminal::canvas::{
@@ -141,7 +141,11 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn browser_load_scope(&self, db: &Db, scope: &Scope) -> Result<Vec<NoteEntry>, String> {
+    pub(super) fn browser_load_scope(
+        &self,
+        db: &Db,
+        scope: &Scope,
+    ) -> Result<Vec<NoteEntry>, String> {
         let summaries = match scope {
             Scope::All => db.list_notes_meta_filtered(None)?,
             Scope::Unsorted => db.list_notes_meta_unsorted()?,
@@ -275,43 +279,58 @@ impl TerminalApp {
                 ) {
                     return;
                 }
-                // A search hit may sit deep in the note: load up to it.
-                let (max_lines, max_chars) = match focus {
-                    Some(line) => (line + PREVIEW_MAX_LINES, SEARCH_PREVIEW_BODY_CHARS),
-                    None => (PREVIEW_MAX_LINES, PREVIEW_BODY_CHARS),
-                };
-                let (lines, locked) = if note.id == self.active_note.id {
-                    let lines = self.editor.lines.iter().take(max_lines).cloned().collect();
-                    (lines, !self.active_note_is_editable())
-                } else {
-                    let body = db
-                        .get_note_body_head(&note.id, max_chars)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_default();
-                    if body == "[locked]" {
-                        (Vec::new(), true)
-                    } else {
-                        let lines = body.lines().take(max_lines).map(str::to_string).collect();
-                        (lines, false)
-                    }
-                };
-                let collections = db
-                    .get_note_collection_ids(&note.id)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter_map(|id| self.browser.collection_name(id).map(str::to_string))
-                    .collect();
-                let tags = db.list_note_tags(&note.id).unwrap_or_default();
-                self.browser.preview = Preview::Note {
-                    note_id: note.id,
-                    lines,
-                    focus_line: focus,
-                    collections,
-                    tags,
-                    locked,
-                };
+                let names = |id: &str| self.browser.collection_name(id).map(str::to_string);
+                let preview = self.load_note_preview(db, &note, focus, &names);
+                self.browser.preview = preview;
             }
+        }
+    }
+
+    /// Preview of `note`: the start of its body (up to past `focus`, a
+    /// 0-based line to scroll to), its collections and tags. The open note
+    /// is read from the editor buffer, so unsaved edits show.
+    pub(super) fn load_note_preview(
+        &self,
+        db: &Db,
+        note: &NoteEntry,
+        focus: Option<usize>,
+        collection_name: &dyn Fn(&str) -> Option<String>,
+    ) -> Preview {
+        // A search hit may sit deep in the note: load up to it.
+        let (max_lines, max_chars) = match focus {
+            Some(line) => (line + PREVIEW_MAX_LINES, SEARCH_PREVIEW_BODY_CHARS),
+            None => (PREVIEW_MAX_LINES, PREVIEW_BODY_CHARS),
+        };
+        let (lines, locked) = if note.id == self.active_note.id {
+            let lines = self.editor.lines.iter().take(max_lines).cloned().collect();
+            (lines, !self.active_note_is_editable())
+        } else {
+            let body = db
+                .get_note_body_head(&note.id, max_chars)
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+            if body == "[locked]" {
+                (Vec::new(), true)
+            } else {
+                let lines = body.lines().take(max_lines).map(str::to_string).collect();
+                (lines, false)
+            }
+        };
+        let collections = db
+            .get_note_collection_ids(&note.id)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|id| collection_name(id))
+            .collect();
+        let tags = db.list_note_tags(&note.id).unwrap_or_default();
+        Preview::Note {
+            note_id: note.id.clone(),
+            lines,
+            focus_line: focus,
+            collections,
+            tags,
+            locked,
         }
     }
 
@@ -1070,18 +1089,10 @@ impl TerminalApp {
         rows: usize,
         cols: usize,
     ) -> CursorPlacement {
-        let now_epoch = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
         let cursor = crate::terminal::browser::draw_browser(
             &BrowserView {
                 state: &self.browser,
-                palette: self.render_palette,
-                icons: self.browser_icons(),
-                working_collection_id: self.working_collection_id.as_deref(),
-                active_note_id: &self.active_note.id,
-                now_epoch,
+                look: self.look(),
             },
             buf,
             rows,
@@ -1099,10 +1110,35 @@ impl TerminalApp {
 }
 
 impl TerminalApp {
-    /// Status row styled like the editor's: a mode pill, then either the last
-    /// message or key hints (keys bold in the accent color, labels muted),
-    /// and the working collection on the right.
+    /// The browser's status row: its last message or the key hints.
     fn draw_browser_status_bar(&self, buf: &mut Buffer, row: usize, cols: usize) {
+        let hints = match self.browser.level() {
+            Level::Collections => COLLECTIONS_HINTS,
+            Level::Notes => NOTES_HINTS,
+            Level::Search => SEARCH_HINTS,
+        };
+        self.draw_hint_status_bar(
+            buf,
+            row,
+            cols,
+            " BROWSE ",
+            self.browser.message.as_deref(),
+            hints,
+        );
+    }
+
+    /// Status row styled like the editor's: a `pill`, then `message` or the
+    /// key `hints` (keys bold in the accent color, labels muted), and the
+    /// working collection on the right.
+    pub(super) fn draw_hint_status_bar(
+        &self,
+        buf: &mut Buffer,
+        row: usize,
+        cols: usize,
+        pill: &str,
+        message: Option<&str>,
+        hints: &[(&str, &str)],
+    ) {
         let palette = self.render_palette;
         let bar_bg = palette.code_block_bg;
         let text = TextStyle {
@@ -1120,7 +1156,7 @@ impl TerminalApp {
             buf,
             row,
             1,
-            " BROWSE ",
+            pill,
             TextStyle {
                 fg: Some(contrast_fg_for_bg(pill_bg)),
                 bg: Some(pill_bg),
@@ -1140,14 +1176,9 @@ impl TerminalApp {
         let right_col = (cols + 1).saturating_sub(right_width).max(col);
         let room = right_col.saturating_sub(col + 1);
 
-        if let Some(message) = self.browser.message.as_deref() {
+        if let Some(message) = message {
             col = put_str_width(buf, row, col, message, room, text.to_style());
         } else {
-            let hints = match self.browser.level() {
-                Level::Collections => COLLECTIONS_HINTS,
-                Level::Notes => NOTES_HINTS,
-                Level::Search => SEARCH_HINTS,
-            };
             col = draw_key_hints(
                 buf,
                 row,
@@ -1170,6 +1201,20 @@ impl TerminalApp {
 
     fn browser_icons(&self) -> &'static Icons {
         Icons::for_style(self.note_creation_theme.icons)
+    }
+
+    /// Colors, icons and context for browser-style views.
+    pub(super) fn look(&self) -> Look<'_> {
+        Look {
+            palette: self.render_palette,
+            icons: self.browser_icons(),
+            working_collection_id: self.working_collection_id.as_deref(),
+            active_note_id: &self.active_note.id,
+            now_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        }
     }
 }
 

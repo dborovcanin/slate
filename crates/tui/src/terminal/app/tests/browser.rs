@@ -344,3 +344,42 @@ fn content_search_stays_in_the_open_collection_and_esc_returns() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn note_and_collection_pickers_are_popups_with_browser_rows() {
+    let (db, mut app, path) = browser_app();
+    app.handle_key(&db, Key::Esc).expect("close browser");
+    let work = db.create_collection("Work", "day job").expect("collection");
+    db.add_notes_to_collection(&work.id, &["n2".to_string()])
+        .expect("added");
+
+    app.handle_key(&db, Key::Ctrl('p')).expect("switcher");
+    assert_eq!(app.mode, UiMode::Switcher);
+    type_text(&mut app, &db, "meet");
+    let (rows, cursor) = render_screen(&mut app);
+    let screen = rows.join("\n");
+    assert!(rows[2].contains("Notes · all notes"), "{screen}");
+    assert!(screen.contains("Meeting notes"));
+    assert!(!screen.contains("- agenda"), "no preview:\n{screen}");
+    assert!(!screen.contains(" n2 "), "note ids are not shown");
+    assert!(screen.contains("Tab search text"));
+    // Editor title bar still shows behind the popup.
+    assert!(rows[0].contains("Budget"));
+    assert_eq!((cursor.row, cursor.col), (3, 6 + 4));
+
+    app.handle_key(&db, Key::Esc).expect("close");
+    app.handle_key(&db, Key::Ctrl('g')).expect("collections");
+    assert_eq!(app.mode, UiMode::CollectionSwitcher);
+    type_text(&mut app, &db, "work");
+    let (rows, _) = render_screen(&mut app);
+    let screen = rows.join("\n");
+    assert!(rows[2].contains("Collections"));
+    assert!(screen.contains("Work"));
+    assert!(!screen.contains("Meeting notes"), "no preview:\n{screen}");
+    app.handle_key(&db, Key::Enter).expect("work in");
+    assert_eq!(app.working_collection_id.as_deref(), Some(work.id.as_str()));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

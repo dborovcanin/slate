@@ -42,6 +42,8 @@ Conventions:
 - A note's title is its first non-empty line (heading markers dropped).
 - Markdown files open directly: `slate path/to/file.md` (`.md`, `.markdown`, `.mdown`, `.mkd`); edits are saved back to the file.
 
+The note switcher, its content search and the collection picker are popups styled like the [collection browser](#collection-browser): a search bar over a list with icons, ages (or match lines) and note counts, and key hints at the bottom. The title shows whether the list covers the working collection or all notes.
+
 | Key / command | Action |
 | --- | --- |
 | `Ctrl+N` (Insert, switcher) | New note (in the working collection, if one is set) |

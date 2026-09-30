@@ -1,16 +1,9 @@
 use std::cmp::min;
 
-use super::canvas::{
-    contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, draw_separator, pad_right,
-    put_str, TextStyle,
-};
+use super::canvas::{contrast_fg_for_bg, draw_framed_surface, draw_row_at_styled, TextStyle};
 use super::render::RenderPalette;
-use app_core::storage::{Collection, NoteAccessMode, NoteSearchResult};
+use app_core::storage::{Collection, NoteAccessMode};
 use ratatui::buffer::Buffer;
-
-const CONTENT_SEARCH_MIN_H: usize = 9;
-const CONTENT_SEARCH_MAX_H: usize = 14;
-const CONTENT_SEARCH_PREVIEW_LINES: usize = 3;
 
 fn fill_box_interior(
     buf: &mut Buffer,
@@ -93,14 +86,6 @@ pub fn collection_to_meta(collection: Collection) -> CollectionMeta {
     }
 }
 
-fn access_badge(note: &NoteMeta) -> Option<&'static str> {
-    match note.access_mode {
-        NoteAccessMode::None => None,
-        NoteAccessMode::Locked => Some("[session lock]"),
-        NoteAccessMode::Encrypted => Some("[encrypted at rest]"),
-    }
-}
-
 pub fn print_note_list(db: &crate::storage::Db) -> Result<(), String> {
     let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
     let notes = note_sources.list_notes_meta(None)?;
@@ -159,121 +144,6 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     }
 }
 
-/// View data required to render the switcher overlay.
-pub struct SwitcherView<'a> {
-    pub query: &'a str,
-    pub items: &'a [NoteMeta],
-    pub matches: &'a [usize],
-    pub selected: usize,
-}
-
-pub fn draw_switcher(
-    view: &SwitcherView,
-    buf: &mut Buffer,
-    rows: usize,
-    cols: usize,
-    palette: RenderPalette,
-) {
-    let box_w = min(cols.saturating_sub(4).max(30), 72);
-    let box_h = min(rows.saturating_sub(4).max(8), 14);
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-    let surface_bg = palette.surface_bg();
-
-    let prompt_style = TextStyle {
-        fg: Some(palette.primary()),
-        bg: Some(surface_bg),
-        bold: true,
-        ..Default::default()
-    };
-    let row_style = TextStyle {
-        fg: Some(palette.variable),
-        bg: Some(surface_bg),
-        ..Default::default()
-    };
-    let selected_bg = palette.primary();
-    let selected_style = TextStyle {
-        fg: Some(contrast_fg_for_bg(selected_bg)),
-        bg: Some(selected_bg),
-        bold: true,
-        ..Default::default()
-    };
-
-    draw_framed_surface(
-        buf,
-        y,
-        x,
-        box_w,
-        box_h,
-        surface_bg,
-        palette.primary(),
-        false,
-        Some("Notes"),
-        None,
-    );
-    fill_box_interior(buf, y, x, box_w, box_h, row_style);
-
-    draw_prompt(
-        buf,
-        y + 1,
-        x + 1,
-        box_w.saturating_sub(2),
-        view.query,
-        "type to filter notes",
-        prompt_style,
-        palette,
-    );
-    draw_separator(
-        buf,
-        y + 2,
-        x,
-        box_w,
-        surface_bg,
-        palette.primary(),
-        Some(&count_label(view.matches.len(), "note", "notes")),
-    );
-
-    let max_rows = box_h.saturating_sub(4);
-    let mut start = 0usize;
-    if view.selected >= max_rows {
-        start = view.selected + 1 - max_rows;
-    }
-
-    for i in 0..max_rows {
-        let row = y + 3 + i;
-        if let Some(match_idx) = view.matches.get(start + i).copied() {
-            let item = &view.items[match_idx];
-            let note_label = note_identity_label(&item.id);
-            let marker = " ";
-            let text = if let Some(badge) = access_badge(item) {
-                format!("{marker} {}  {} {}", note_label, badge, item.title)
-            } else {
-                format!("{marker} {}  {}", note_label, item.title)
-            };
-            if start + i == view.selected {
-                draw_row_at_styled(
-                    buf,
-                    row,
-                    x + 1,
-                    box_w.saturating_sub(2),
-                    &text,
-                    selected_style,
-                );
-            } else {
-                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
-            }
-        } else {
-            draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
-        }
-    }
-}
-
-pub struct ContentSearchView<'a> {
-    pub query: &'a str,
-    pub results: &'a [NoteSearchResult],
-    pub selected: usize,
-}
-
 pub struct WebSearchView<'a> {
     pub query: &'a str,
     pub results: &'a [app_core::web_search::WebSearchItem],
@@ -283,131 +153,6 @@ pub struct WebSearchView<'a> {
     pub selected: usize,
     pub pending: bool,
     pub error: Option<&'a str>,
-}
-
-pub struct CollectionSwitcherView<'a> {
-    pub query: &'a str,
-    pub items: &'a [CollectionMeta],
-    pub matches: &'a [usize],
-    pub selected: usize,
-    pub working_collection_id: Option<&'a str>,
-}
-
-pub fn draw_collection_switcher(
-    view: &CollectionSwitcherView,
-    buf: &mut Buffer,
-    rows: usize,
-    cols: usize,
-    palette: RenderPalette,
-) {
-    let box_w = min(cols.saturating_sub(4).max(30), 72);
-    let box_h = min(rows.saturating_sub(4).max(8), 14);
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-    let surface_bg = palette.surface_bg();
-
-    let prompt_style = TextStyle {
-        fg: Some(palette.primary()),
-        bg: Some(surface_bg),
-        bold: true,
-        ..Default::default()
-    };
-    let row_style = TextStyle {
-        fg: Some(palette.variable),
-        bg: Some(surface_bg),
-        ..Default::default()
-    };
-    let selected_bg = palette.primary();
-    let selected_style = TextStyle {
-        fg: Some(contrast_fg_for_bg(selected_bg)),
-        bg: Some(selected_bg),
-        bold: true,
-        ..Default::default()
-    };
-
-    draw_framed_surface(
-        buf,
-        y,
-        x,
-        box_w,
-        box_h,
-        surface_bg,
-        palette.primary(),
-        false,
-        Some("Collections"),
-        None,
-    );
-    fill_box_interior(buf, y, x, box_w, box_h, row_style);
-
-    draw_prompt(
-        buf,
-        y + 1,
-        x + 1,
-        box_w.saturating_sub(2),
-        view.query,
-        "type to filter collections",
-        prompt_style,
-        palette,
-    );
-    draw_separator(
-        buf,
-        y + 2,
-        x,
-        box_w,
-        surface_bg,
-        palette.primary(),
-        Some(&count_label(
-            view.matches.len(),
-            "collection",
-            "collections",
-        )),
-    );
-
-    let max_rows = box_h.saturating_sub(4);
-    let mut start = 0usize;
-    if view.selected >= max_rows {
-        start = view.selected + 1 - max_rows;
-    }
-
-    for i in 0..max_rows {
-        let row = y + 3 + i;
-        if let Some(match_idx) = view.matches.get(start + i).copied() {
-            let item = &view.items[match_idx];
-            let marker = " ";
-            let badge = if item.is_clear {
-                "[clear]"
-            } else if item.id.as_deref() == view.working_collection_id {
-                "[active]"
-            } else {
-                ""
-            };
-            let text = if item.description.trim().is_empty() {
-                if badge.is_empty() {
-                    format!("{marker} {}", item.name)
-                } else {
-                    format!("{marker} {} {}", item.name, badge)
-                }
-            } else if badge.is_empty() {
-                format!("{marker} {}  {}", item.name, item.description)
-            } else {
-                format!("{marker} {} {}  {}", item.name, badge, item.description)
-            };
-            if start + i == view.selected {
-                draw_row_at_styled(
-                    buf,
-                    row,
-                    x + 1,
-                    box_w.saturating_sub(2),
-                    &text,
-                    selected_style,
-                );
-            } else {
-                draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), &text, row_style);
-            }
-        } else {
-            draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
-        }
-    }
 }
 
 pub struct CollectionEditView<'a> {
@@ -506,20 +251,6 @@ pub fn draw_collection_edit_dialog(
     }
 }
 
-pub(crate) fn content_search_box_geometry(
-    rows: usize,
-    cols: usize,
-) -> (usize, usize, usize, usize) {
-    let box_w = min(cols.saturating_sub(4).max(30), 72);
-    let box_h = min(
-        rows.saturating_sub(4).max(CONTENT_SEARCH_MIN_H),
-        CONTENT_SEARCH_MAX_H,
-    );
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-    (x, y, box_w, box_h)
-}
-
 fn sanitize_preview_text(snippet: &str) -> String {
     let mut out = String::with_capacity(snippet.len());
     let mut chars = snippet.chars().peekable();
@@ -568,248 +299,6 @@ fn wrap_preview_lines(text: &str, width: usize, max_lines: usize) -> Vec<String>
     }
 
     out
-}
-
-fn content_search_highlight_terms(query: &str) -> Vec<String> {
-    query
-        .to_lowercase()
-        .split(|ch: char| !ch.is_alphanumeric())
-        .map(str::trim)
-        .filter(|term| !term.is_empty())
-        .map(|term| term.to_string())
-        .collect()
-}
-
-fn highlight_ranges_for_terms(text: &str, terms: &[String]) -> Vec<(usize, usize)> {
-    if terms.is_empty() {
-        return Vec::new();
-    }
-    let chars = text.chars().collect::<Vec<_>>();
-    let lower_chars = text.to_lowercase().chars().collect::<Vec<_>>();
-    if chars.is_empty() || lower_chars.is_empty() {
-        return Vec::new();
-    }
-    let mut mask = vec![false; chars.len()];
-    for term in terms {
-        let needle = term.chars().collect::<Vec<_>>();
-        if needle.is_empty() || needle.len() > lower_chars.len() {
-            continue;
-        }
-        for start in 0..=lower_chars.len() - needle.len() {
-            if lower_chars[start..start + needle.len()] == needle[..] {
-                for idx in start..start + needle.len() {
-                    if idx < mask.len() {
-                        mask[idx] = true;
-                    }
-                }
-            }
-        }
-    }
-    let mut ranges = Vec::new();
-    let mut start: Option<usize> = None;
-    for (idx, marked) in mask.into_iter().enumerate() {
-        match (start, marked) {
-            (None, true) => start = Some(idx),
-            (Some(from), false) => {
-                ranges.push((from, idx));
-                start = None;
-            }
-            _ => {}
-        }
-    }
-    if let Some(from) = start {
-        ranges.push((from, chars.len()));
-    }
-    ranges
-}
-
-fn draw_row_with_highlights(
-    buf: &mut Buffer,
-    row: usize,
-    col: usize,
-    width: usize,
-    text: &str,
-    base_style: TextStyle,
-    highlight_style: TextStyle,
-    terms: &[String],
-) {
-    let display = pad_right(text, width);
-    let chars = display.chars().collect::<Vec<_>>();
-    let ranges = highlight_ranges_for_terms(&display, terms);
-    let mut highlighted = vec![false; chars.len()];
-    for (from, to) in ranges {
-        for idx in from..to.min(highlighted.len()) {
-            highlighted[idx] = true;
-        }
-    }
-
-    let base_style = base_style.to_style();
-    let highlight_style = highlight_style.to_style();
-    let mut draw_col = col;
-    let mut encoded = [0u8; 4];
-    for (idx, ch) in chars.into_iter().enumerate() {
-        let style = if highlighted.get(idx).copied().unwrap_or(false) {
-            highlight_style
-        } else {
-            base_style
-        };
-        draw_col = put_str(buf, row, draw_col, ch.encode_utf8(&mut encoded), style);
-    }
-}
-
-pub fn draw_content_search(
-    view: &ContentSearchView,
-    buf: &mut Buffer,
-    rows: usize,
-    cols: usize,
-    palette: RenderPalette,
-) {
-    let (x, y, box_w, box_h) = content_search_box_geometry(rows, cols);
-    let surface_bg = palette.surface_bg();
-
-    let prompt_style = TextStyle {
-        fg: Some(palette.primary()),
-        bg: Some(surface_bg),
-        bold: true,
-        ..Default::default()
-    };
-    let row_style = TextStyle {
-        fg: Some(palette.variable),
-        bg: Some(surface_bg),
-        ..Default::default()
-    };
-    let selected_bg = palette.primary();
-    let selected_style = TextStyle {
-        fg: Some(contrast_fg_for_bg(selected_bg)),
-        bg: Some(selected_bg),
-        bold: true,
-        ..Default::default()
-    };
-    let snippet_style = TextStyle {
-        fg: Some(palette.code_comment),
-        bg: Some(surface_bg),
-        dim: true,
-        ..Default::default()
-    };
-    let match_style = TextStyle {
-        fg: Some(palette.primary()),
-        bg: Some(surface_bg),
-        bold: true,
-        ..Default::default()
-    };
-    let highlight_terms = content_search_highlight_terms(view.query);
-
-    draw_framed_surface(
-        buf,
-        y,
-        x,
-        box_w,
-        box_h,
-        surface_bg,
-        palette.primary(),
-        false,
-        Some("Search notes"),
-        None,
-    );
-    fill_box_interior(buf, y, x, box_w, box_h, row_style);
-
-    draw_prompt(
-        buf,
-        y + 1,
-        x + 1,
-        box_w.saturating_sub(2),
-        view.query,
-        "search note contents",
-        prompt_style,
-        palette,
-    );
-    let results_label_row = y + 2;
-    draw_separator(
-        buf,
-        results_label_row,
-        x,
-        box_w,
-        surface_bg,
-        palette.primary(),
-        Some(&count_label(view.results.len(), "match", "matches")),
-    );
-
-    // Reserve preview rows at the bottom; result rows fill the rest.
-    let layout_rows = 4; // prompt + label + preview + borders
-    let max_rows = box_h.saturating_sub(layout_rows + CONTENT_SEARCH_PREVIEW_LINES);
-    let mut start = 0usize;
-    if view.selected >= max_rows {
-        start = view.selected + 1 - max_rows;
-    }
-
-    for i in 0..max_rows {
-        let row = results_label_row + 1 + i;
-        if let Some(result) = view.results.get(start + i) {
-            let marker = " ";
-            let text = format!("{marker} L{}  {}", result.line_number.max(1), result.title);
-            if start + i == view.selected {
-                draw_row_at_styled(
-                    buf,
-                    row,
-                    x + 1,
-                    box_w.saturating_sub(2),
-                    &text,
-                    selected_style,
-                );
-            } else {
-                draw_row_with_highlights(
-                    buf,
-                    row,
-                    x + 1,
-                    box_w.saturating_sub(2),
-                    &text,
-                    row_style,
-                    match_style,
-                    &highlight_terms,
-                );
-            }
-        } else {
-            draw_row_at_styled(buf, row, x + 1, box_w.saturating_sub(2), "", row_style);
-        }
-    }
-
-    // Preview area: fixed 3 lines at the bottom of the dialog.
-    let preview_start_row = y + box_h.saturating_sub(CONTENT_SEARCH_PREVIEW_LINES + 1);
-    let snippet_inner_w = box_w.saturating_sub(2);
-    for i in 0..CONTENT_SEARCH_PREVIEW_LINES {
-        draw_row_at_styled(
-            buf,
-            preview_start_row + i,
-            x + 1,
-            snippet_inner_w,
-            "",
-            snippet_style,
-        );
-    }
-
-    let selected_result = view.results.get(view.selected);
-    if let Some(result) = selected_result {
-        let snippet = sanitize_preview_text(result.snippet.trim());
-        let preview_text = if snippet.trim().is_empty() {
-            "no snippet preview".to_string()
-        } else {
-            snippet
-        };
-        let lines =
-            wrap_preview_lines(&preview_text, snippet_inner_w, CONTENT_SEARCH_PREVIEW_LINES);
-        for (idx, line) in lines.into_iter().enumerate() {
-            draw_row_with_highlights(
-                buf,
-                preview_start_row + idx,
-                x + 1,
-                snippet_inner_w,
-                &line,
-                snippet_style,
-                match_style,
-                &highlight_terms,
-            );
-        }
-    }
 }
 
 pub(crate) fn web_search_box_geometry(rows: usize, cols: usize) -> (usize, usize, usize, usize) {
@@ -1282,14 +771,10 @@ fn draw_prompt(
     }
 }
 
-fn count_label(count: usize, singular: &str, plural: &str) -> String {
-    format!("{count} {}", if count == 1 { singular } else { plural })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::canvas::test_support::{buffer_text, has_fg, has_styled_symbol, screen};
+    use crate::terminal::canvas::test_support::{buffer_text, screen};
     use crate::terminal::render::RenderPalette;
 
     #[test]
@@ -1305,71 +790,11 @@ mod tests {
     }
 
     #[test]
-    fn draw_switcher_prompt_uses_primary_color_instead_of_keyword_color() {
-        let palette = RenderPalette {
-            code_keyword: 33,
-            primary: 201,
-            ..RenderPalette::default()
-        };
-        let view = SwitcherView {
-            query: "abc",
-            items: &[],
-            matches: &[],
-            selected: 0,
-        };
-        let mut buf = screen(24, 80);
-        draw_switcher(&view, &mut buf, 24, 80, palette);
-
-        assert!(has_fg(&buf, 201), "prompt should use accent primary");
-        assert!(!has_fg(&buf, 33), "prompt should not use keyword color");
-    }
-
-    #[test]
-    fn draw_switcher_border_uses_accent_and_surface_background() {
-        let palette = RenderPalette {
-            primary: 201,
-            surface_bg: 250,
-            ..RenderPalette::default()
-        };
-        let view = SwitcherView {
-            query: "",
-            items: &[],
-            matches: &[],
-            selected: 0,
-        };
-        let mut buf = screen(24, 80);
-        draw_switcher(&view, &mut buf, 24, 80, palette);
-        assert!(
-            has_styled_symbol(&buf, "╭", 201, 250),
-            "switcher border should use accent fg with surface bg"
-        );
-    }
-
-    #[test]
     fn note_identity_label_decodes_markdown_file_note_id_to_path() {
         let path = std::env::temp_dir().join("switcher-mdfile-test.md");
         let note_id = crate::note_id_for_file(&path);
         assert_eq!(note_identity_label(&note_id), path.display().to_string());
         assert_eq!(note_identity_label("n1"), "n1".to_string());
-    }
-
-    #[test]
-    fn draw_content_search_prompt_uses_primary_color_instead_of_keyword_color() {
-        let palette = RenderPalette {
-            code_keyword: 33,
-            primary: 201,
-            ..RenderPalette::default()
-        };
-        let view = ContentSearchView {
-            query: "abc",
-            results: &[],
-            selected: 0,
-        };
-        let mut buf = screen(24, 80);
-        draw_content_search(&view, &mut buf, 24, 80, palette);
-
-        assert!(has_fg(&buf, 201), "prompt should use accent primary");
-        assert!(!has_fg(&buf, 33), "prompt should not use keyword color");
     }
 
     #[test]

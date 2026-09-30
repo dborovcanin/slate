@@ -1236,7 +1236,7 @@ fn content_search_dispatches_even_with_full_detached_pool() {
 }
 
 #[test]
-fn content_search_cursor_stays_on_prompt_row_with_fixed_overlay_height() {
+fn content_search_cursor_sits_in_the_query_bar() {
     let (db, mut app, path) = app_with_note("alpha body");
     app.open_content_search(&db).expect("content search opens");
     app.content_search.query = "franc".to_string();
@@ -1253,15 +1253,10 @@ fn content_search_cursor_stays_on_prompt_row_with_fixed_overlay_height() {
     let rows = 24usize;
     let cols = 80usize;
     let (cursor_row, cursor_col) = app.cursor_position(rows, cols);
-    let box_w = std::cmp::min(cols.saturating_sub(4).max(30), 72);
-    let box_h = std::cmp::min(rows.saturating_sub(4).max(9), 14);
-    let x = (cols.saturating_sub(box_w)) / 2 + 1;
-    let y = (rows.saturating_sub(box_h)) / 2 + 1;
-    let prompt = crate::terminal::switcher::PROMPT_PREFIX;
-    let expected_col = x + 1 + prompt.chars().count() + app.content_search.query.chars().count();
-
-    assert_eq!(cursor_row, y + 1);
-    assert_eq!(cursor_col, expected_col);
+    // The popup (76 wide at column 3 on 80x24) starts at row 3; its query
+    // bar is the first row inside the frame: "│ ⌕ " then the query.
+    assert_eq!(cursor_row, 4);
+    assert_eq!(cursor_col, 3 + 4 + app.content_search.query.chars().count());
 
     drop(app);
     drop(db);

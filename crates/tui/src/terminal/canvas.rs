@@ -85,16 +85,6 @@ pub fn contrast_fg_for_bg(bg: u8) -> u8 {
     }
 }
 
-/// Truncates or space-pads `text` to exactly `width` chars.
-pub fn pad_right(text: &str, width: usize) -> String {
-    let mut out: String = text.chars().take(width).collect();
-    let current = out.chars().count();
-    if current < width {
-        out.push_str(&" ".repeat(width - current));
-    }
-    out
-}
-
 /// Writes `text` starting at (`row`, `col`), clipped to `max_width` cells and
 /// to the buffer. Returns the column after the last written cell.
 pub fn put_str_width(
@@ -238,33 +228,6 @@ pub fn draw_framed_surface(
     block.render(area, buf);
 }
 
-/// Horizontal rule across a framed surface at `row`, joining its side
-/// borders (`├──┤`), with an optional dim label near the left.
-pub fn draw_separator(
-    buf: &mut Buffer,
-    row: usize,
-    col: usize,
-    width: usize,
-    bg: u8,
-    border_fg: u8,
-    label: Option<&str>,
-) {
-    if width < 2 {
-        return;
-    }
-    let line = cell_style(Some(border_fg), Some(bg), Modifier::empty());
-    put_char(buf, row, col, '├', line);
-    for dx in 1..width - 1 {
-        put_char(buf, row, col + dx, '─', line);
-    }
-    put_char(buf, row, col + width - 1, '┤', line);
-    if let Some(label) = label.filter(|label| !label.is_empty()) {
-        let text = format!(" {label} ");
-        let dim = cell_style(Some(border_fg), Some(bg), Modifier::DIM);
-        put_str_width(buf, row, col + 2, &text, width.saturating_sub(4), dim);
-    }
-}
-
 /// Buffer rectangle for a 1-based (`row`, `col`) box, clipped to the buffer.
 fn cell_rect(buf: &Buffer, row: usize, col: usize, width: usize, height: usize) -> Option<Rect> {
     if width == 0 || height == 0 {
@@ -358,9 +321,5 @@ pub mod test_support {
                 && cell.fg == Color::Indexed(fg)
                 && cell.bg == Color::Indexed(bg)
         })
-    }
-
-    pub fn has_fg(buf: &Buffer, fg: u8) -> bool {
-        has_cell(buf, |cell| cell.fg == Color::Indexed(fg))
     }
 }

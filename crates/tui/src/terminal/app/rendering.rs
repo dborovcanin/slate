@@ -10,6 +10,8 @@ use super::{
 };
 use crate::editor_core::{markdown_tokens, sum};
 use crate::terminal::canvas::{put_char, put_str, put_str_width};
+use crate::terminal::date_picker::DatePickerView;
+use crate::terminal::picker::picker_query_cursor;
 use crate::terminal::render;
 use crate::terminal::render::LineDecorations;
 use crate::terminal::session::CursorPlacement;
@@ -17,13 +19,6 @@ use crate::terminal::text_utils::{
     compute_line_viewport, derive_title_from_lines, display_cols_for_prefix, line_char_len,
 };
 use crate::terminal::{date_picker, input, media_sources, notifications, switcher, text_input};
-use crate::terminal::{
-    date_picker::DatePickerView,
-    switcher::{
-        content_search_box_geometry, CollectionEditView, CollectionSwitcherView, ContentSearchView,
-        SwitcherView,
-    },
-};
 use ratatui::buffer::Buffer;
 use ratatui::Frame;
 use std::borrow::Cow;
@@ -1397,8 +1392,8 @@ impl TerminalApp {
         db: Option<&app_core::storage::Db>,
     ) -> CursorPlacement {
         let (rows, cols) = input::terminal_size();
+        // Full screen: the editor underneath is neither drawn nor evaluated.
         if self.mode == UiMode::Browser {
-            // Full screen: the editor underneath is neither drawn nor evaluated.
             self.render_state.editor_cursor_cell = None;
             return self.render_browser_screen(buf, rows, cols);
         }
@@ -1613,30 +1608,7 @@ impl TerminalApp {
         } else {
             None
         };
-        let switcher_status_owned = match self.mode {
-            UiMode::Switcher | UiMode::ContentSearch => {
-                if let Some(confirm) = self.switcher.open_confirm.as_ref() {
-                    Some(format!(
-                        "Open {}: type password, Enter confirm, Esc cancel",
-                        Self::access_mode_prompt_label(confirm.access_mode)
-                    ))
-                } else if self.mode == UiMode::Switcher {
-                    self.switcher.delete_confirm.as_ref().map(|confirm| {
-                        if confirm.requires_password {
-                            format!(
-                                "Confirm delete {}: type password, Enter confirm, Esc cancel",
-                                Self::access_mode_prompt_label(confirm.access_mode)
-                            )
-                        } else {
-                            "Confirm delete: Enter/Y confirm, Esc/N cancel".to_string()
-                        }
-                    })
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
+        let picker_status_owned = self.picker_status_message();
         let status_base = match self.mode {
             UiMode::Editor => editor_status_owned.as_deref().unwrap_or(&self.status),
             UiMode::Normal
@@ -1645,15 +1617,9 @@ impl TerminalApp {
             | UiMode::WebSearch
             | UiMode::Visual
             | UiMode::VisualLine => &self.status,
-            UiMode::Switcher => switcher_status_owned.as_deref().unwrap_or(&self.status),
-            UiMode::CollectionSwitcher => {
-                if self.collection_switcher.edit_dialog.is_some() {
-                    "Collection edit: Tab/Shift+Tab field, Enter save, Esc cancel"
-                } else {
-                    &self.status
-                }
+            UiMode::Switcher | UiMode::CollectionSwitcher | UiMode::ContentSearch => {
+                picker_status_owned.as_deref().unwrap_or(&self.status)
             }
-            UiMode::ContentSearch => switcher_status_owned.as_deref().unwrap_or(&self.status),
             UiMode::Browser => &self.status,
             UiMode::DatePicker => {
                 "Date picker: arrows navigate, Ctrl+arrows months, Enter insert, Esc cancel"
@@ -1689,95 +1655,7 @@ impl TerminalApp {
             );
         }
 
-        if self.mode == UiMode::Switcher {
-            switcher::draw_switcher(
-                &SwitcherView {
-                    query: &self.switcher.query,
-                    items: &self.switcher.items,
-                    matches: &self.switcher.matches,
-                    selected: self.switcher.selected,
-                },
-                buf,
-                rows,
-                cols,
-                self.render_palette,
-            );
-            if let Some(confirm) = self.switcher.delete_confirm.as_ref() {
-                switcher::draw_delete_confirm(
-                    &confirm.note_title,
-                    confirm.requires_password,
-                    confirm.password.chars().count(),
-                    buf,
-                    rows,
-                    cols,
-                    self.render_palette,
-                );
-            }
-            if let Some(confirm) = self.switcher.open_confirm.as_ref() {
-                switcher::draw_open_confirm(
-                    &confirm.note_title,
-                    confirm.password.chars().count(),
-                    buf,
-                    rows,
-                    cols,
-                    self.render_palette,
-                );
-            }
-        }
-
-        if self.mode == UiMode::CollectionSwitcher {
-            switcher::draw_collection_switcher(
-                &CollectionSwitcherView {
-                    query: &self.collection_switcher.query,
-                    items: &self.collection_switcher.items,
-                    matches: &self.collection_switcher.matches,
-                    selected: self.collection_switcher.selected,
-                    working_collection_id: self.working_collection_id.as_deref(),
-                },
-                buf,
-                rows,
-                cols,
-                self.render_palette,
-            );
-            if let Some(dialog) = self.collection_switcher.edit_dialog.as_ref() {
-                switcher::draw_collection_edit_dialog(
-                    &CollectionEditView {
-                        name: &dialog.name,
-                        description: &dialog.description,
-                        default_tags: &dialog.default_tags,
-                        selected_field: dialog.selected_field,
-                    },
-                    buf,
-                    rows,
-                    cols,
-                    self.render_palette,
-                );
-            }
-        }
-
-        if self.mode == UiMode::ContentSearch {
-            switcher::draw_content_search(
-                &ContentSearchView {
-                    query: &self.content_search.query,
-                    results: &self.content_search.results,
-                    selected: self.content_search.selected,
-                },
-                buf,
-                rows,
-                cols,
-                self.render_palette,
-            );
-            if let Some(confirm) = self.switcher.open_confirm.as_ref() {
-                switcher::draw_open_confirm(
-                    &confirm.note_title,
-                    confirm.password.chars().count(),
-                    buf,
-                    rows,
-                    cols,
-                    self.render_palette,
-                );
-            }
-        }
+        self.draw_picker_popup(buf, rows, cols);
 
         if self.mode == UiMode::DatePicker {
             date_picker::draw_date_picker(
@@ -2365,20 +2243,10 @@ impl TerminalApp {
                 (row.max(1), col.max(1))
             }
             UiMode::Switcher => {
-                let box_w = min(cols.saturating_sub(4).max(30), 72);
-                let box_h = min(rows.saturating_sub(4).max(8), 14);
-                let x = (cols.saturating_sub(box_w)) / 2 + 1;
-                let y = (rows.saturating_sub(box_h)) / 2 + 1;
-                let prompt = switcher::PROMPT_PREFIX;
-                let col = (x + 1 + prompt.chars().count() + self.switcher.query.chars().count())
-                    .min(cols.max(1));
-                (y + 1, col.max(1))
+                let (row, col) = picker_query_cursor(rows, cols, &self.switcher.query, usize::MAX);
+                (row, col.min(cols.max(1)))
             }
             UiMode::CollectionSwitcher => {
-                let box_w = min(cols.saturating_sub(4).max(30), 72);
-                let box_h = min(rows.saturating_sub(4).max(8), 14);
-                let x = (cols.saturating_sub(box_w)) / 2 + 1;
-                let y = (rows.saturating_sub(box_h)) / 2 + 1;
                 if let Some(dialog) = self.collection_switcher.edit_dialog.as_ref() {
                     let edit_w = min(cols.saturating_sub(4).max(48), 88);
                     let edit_h = min(rows.saturating_sub(4).max(10), 12);
@@ -2398,21 +2266,23 @@ impl TerminalApp {
                     let row = edit_y + 4 + dialog.selected_field.min(2);
                     (row.max(1), col.max(1))
                 } else {
-                    let prompt = switcher::PROMPT_PREFIX;
-                    let col = (x
-                        + 1
-                        + prompt.chars().count()
-                        + self.collection_switcher.query.chars().count())
-                    .min(cols.max(1));
-                    (y + 1, col.max(1))
+                    let (row, col) = picker_query_cursor(
+                        rows,
+                        cols,
+                        &self.collection_switcher.query,
+                        usize::MAX,
+                    );
+                    (row, col.min(cols.max(1)))
                 }
             }
             UiMode::ContentSearch => {
-                let (x, y, _box_w, _box_h) = content_search_box_geometry(rows, cols);
-                let prompt = switcher::PROMPT_PREFIX;
-                let col = (x + 1 + prompt.chars().count() + self.content_search.cursor_col)
-                    .min(cols.max(1));
-                (y + 1, col.max(1))
+                let (row, col) = picker_query_cursor(
+                    rows,
+                    cols,
+                    &self.content_search.query,
+                    self.content_search.cursor_col,
+                );
+                (row, col.min(cols.max(1)))
             }
             UiMode::WebSearch => {
                 let (x, y, _box_w, _box_h) = switcher::web_search_box_geometry(rows, cols);

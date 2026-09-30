@@ -607,6 +607,8 @@ struct SwitcherState {
 struct CollectionSwitcherState {
     query: String,
     items: Vec<CollectionMeta>,
+    /// `items` with note counts, for drawing.
+    entries: Vec<super::browser::CollectionEntry>,
     matches: Vec<usize>,
     selected: usize,
     edit_dialog: Option<CollectionEditDialogState>,
@@ -778,6 +780,7 @@ mod calc_helpers;
 mod command_search_switcher;
 mod editing;
 mod input_modes;
+mod picker;
 mod reminder_helpers;
 mod rendering;
 mod table_helpers;
