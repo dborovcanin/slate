@@ -5,6 +5,7 @@ use pdf_layout::{
     collect_image_sources, render_markdown_to_pages, DrawOp, Page, PdfImageObject,
     PDF_PAGE_HEIGHT_PT, PDF_PAGE_WIDTH_PT,
 };
+pub use pdf_style::PdfExportPalette;
 use pdf_style::*;
 
 use app_core::note_sources::NoteSourceService;
@@ -20,9 +21,6 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use ttf_parser::Face;
 use url::Url;
-
-#[allow(unused_imports)]
-pub use pdf_style::{PdfExportPalette, PdfRgbColor};
 
 const MAX_PDF_IMAGE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PDF_TOTAL_IMAGE_BYTES: u64 = 64 * 1024 * 1024;

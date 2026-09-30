@@ -722,8 +722,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 68] = [
     CommandDefinition {
         id: CommandId::ClipWatch,
         value: "clip-watch on",
-        // Keep `start` as a semantic synonym for `on`; drop snake_case and the
-        // bare `clip-watch` legacy form.
+        // `start` is a synonym for `on`.
         aliases: &["clip-watch start"],
         description: "watch clipboard and paste text at cursor",
         modes: &MODES_BOTH,
@@ -731,8 +730,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 68] = [
     CommandDefinition {
         id: CommandId::ClipWatchStop,
         value: "clip-watch off",
-        // Keep `stop` as a semantic synonym for `off`; drop snake_case and the
-        // dash-joined legacy form.
+        // `stop` is a synonym for `off`.
         aliases: &["clip-watch stop"],
         description: "stop clipboard watch",
         modes: &MODES_BOTH,
@@ -1206,7 +1204,7 @@ mod tests {
             resolve_command(CommandMode::Editor, "backup load /tmp/slate.zip").map(|cmd| cmd.id),
             Some(CommandId::BackupLoad)
         );
-        // Bare `backup` and legacy `backup notes` / `backup <path>` no longer resolve.
+        // `backup` needs `export` or `load`; other forms do not resolve.
         assert!(resolve_command(CommandMode::Editor, "backup").is_none());
         assert!(resolve_command(CommandMode::Editor, "backup /tmp/slate.zip").is_none());
         assert!(resolve_command(CommandMode::Editor, "backup notes /tmp/slate.zip").is_none());
@@ -1302,8 +1300,7 @@ mod tests {
         assert_eq!(load_no_path.action, BackupAction::Load);
         assert_eq!(load_no_path.path, None);
 
-        // Legacy forms are gone: bare `backup`, `backup <path>`, `backup notes …`
-        // are no longer accepted.
+        // `backup` needs a subcommand.
         assert!(parse_backup_command("backup").is_none());
         assert!(parse_backup_command("backup /tmp/slate.zip").is_none());
         assert!(parse_backup_command("backup notes /tmp/slate.zip").is_none());

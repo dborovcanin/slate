@@ -160,9 +160,7 @@ pub(super) fn paper_code_border_color(palette: &PdfExportPalette) -> PdfRgbColor
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PdfExportPalette {
-    #[allow(dead_code)]
     pub fg: PdfRgbColor,
-    #[allow(dead_code)]
     pub fg_dim: PdfRgbColor,
     pub accent: PdfRgbColor,
     pub variable: PdfRgbColor,

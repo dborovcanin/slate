@@ -1202,6 +1202,7 @@ pub fn inline_marker_component_ranges_from_tokens(
     ranges
 }
 
+#[cfg(test)]
 pub fn inline_marker_component_ranges(text: &str) -> Vec<InlineMarkerComponentRange> {
     let tokens = tokenize_inline_markdown(text);
     inline_marker_component_ranges_from_tokens(&tokens)

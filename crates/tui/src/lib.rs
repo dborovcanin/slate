@@ -534,7 +534,7 @@ mod tests {
         let path = std::env::temp_dir().join(format!("slate-missing-mdfile-{}.md", Ulid::new()));
         let note_id = note_id_for_file(&path);
         let revision = note_sources
-            .get_note_revision_by_id(&note_id)
+            .get_note_revision(&note_sources.parse_identity(&note_id))
             .expect("revision lookup should succeed");
         assert_eq!(revision, None);
         drop(db);

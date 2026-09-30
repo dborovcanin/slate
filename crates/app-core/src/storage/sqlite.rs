@@ -60,7 +60,6 @@ pub struct DbOpenMetrics {
     pub primary_open_ms: f64,
     pub primary_configure_ms: f64,
     pub schema_init_ms: f64,
-    pub fts_seed_ms: f64,
     pub total_ms: f64,
 }
 
@@ -120,10 +119,8 @@ impl SqlitePool {
             .map_err(|e| format!("Failed to initialize schema: {e}"))?;
         let schema_init_ms = schema_started.elapsed().as_secs_f64() * 1000.0;
 
-        // Keep first-edit startup lean; FTS consistency/repair runs lazily on
-        // the first search request via `ensure_search_index_checked`.
-        let fts_seed_ms = 0.0;
-
+        // FTS consistency/repair runs lazily on the first search request via
+        // `ensure_search_index_checked`, keeping startup lean.
         let mut connections = Vec::with_capacity(pool_size.max(1));
         connections.push(first);
         let total_ms = total_started.elapsed().as_secs_f64() * 1000.0;
@@ -141,7 +138,6 @@ impl SqlitePool {
                 primary_open_ms,
                 primary_configure_ms,
                 schema_init_ms,
-                fts_seed_ms,
                 total_ms,
             },
         ))
@@ -341,7 +337,6 @@ impl Db {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn get_note(&self, id: &str) -> Result<Option<Note>, String> {
         let conn = self.conn.lock()?;
         self.load_note_with_access(&conn, id)
@@ -485,6 +480,7 @@ impl Db {
             .ok_or_else(|| "Note not found after save".to_string())
     }
 
+    #[cfg(test)]
     pub fn create_note_with_defaults(
         &self,
         id: &str,
@@ -1793,6 +1789,7 @@ impl Db {
         Ok(updated_at)
     }
 
+    #[cfg(test)]
     pub fn search_notes_content(
         &self,
         query: &str,
@@ -1898,6 +1895,7 @@ impl Db {
         Ok(results)
     }
 
+    #[cfg(test)]
     pub fn rebuild_note_search_index(&self) -> Result<(), String> {
         let conn = self.conn.lock()?;
         rebuild_note_search_index_inner(&conn)
@@ -2067,61 +2065,6 @@ impl Db {
         Ok(changed > 0)
     }
 
-    pub fn has_ingest_message_id(&self, source: &str, message_id: &str) -> Result<bool, String> {
-        let conn = self.conn.lock()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT 1
-                 FROM ingest_events
-                 WHERE source = ?1 AND message_id = ?2
-                 LIMIT 1",
-            )
-            .map_err(|e| e.to_string())?;
-        let found = stmt
-            .query_row(rusqlite::params![source, message_id], |_| Ok(()))
-            .optional()
-            .map_err(|e| e.to_string())?
-            .is_some();
-        Ok(found)
-    }
-
-    pub fn record_ingest_event(
-        &self,
-        source: &str,
-        message_id: Option<&str>,
-        note_id: &str,
-        raw_payload: &[u8],
-        body_truncated: bool,
-        message_truncated: bool,
-    ) -> Result<bool, String> {
-        let conn = self.conn.lock()?;
-        let now = now_iso();
-
-        let changed = conn
-            .execute(
-                "INSERT OR IGNORE INTO ingest_events (
-                    source,
-                    message_id,
-                    note_id,
-                    received_at,
-                    raw_payload,
-                    body_truncated,
-                    message_truncated
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                rusqlite::params![
-                    source,
-                    message_id,
-                    note_id,
-                    now,
-                    raw_payload,
-                    if body_truncated { 1 } else { 0 },
-                    if message_truncated { 1 } else { 0 },
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(changed > 0)
-    }
-
     pub fn get_ingest_offset(&self, source_key: &str) -> Result<Option<i64>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
@@ -2214,17 +2157,6 @@ impl Db {
             return Err("image placeholder not found".to_string());
         }
         Ok(())
-    }
-
-    pub fn delete_note_image(&self, note_id: &str, image_id: &str) -> Result<bool, String> {
-        let conn = self.conn.lock()?;
-        let deleted = conn
-            .execute(
-                "DELETE FROM note_images WHERE id = ?1 AND note_id = ?2",
-                rusqlite::params![image_id, note_id],
-            )
-            .map_err(|e| e.to_string())?;
-        Ok(deleted > 0)
     }
 
     pub fn resolve_note_image_data_url(
@@ -3388,13 +3320,6 @@ mod tests {
             .resolve_note_image_data_url("n1", &image_id)
             .expect("resolve")
             .is_some());
-        assert!(db
-            .delete_note_image("n1", &image_id)
-            .expect("delete image row"));
-        assert!(db
-            .resolve_note_image_data_url("n1", &image_id)
-            .expect("resolve after delete")
-            .is_none());
 
         drop(db);
         let _ = fs::remove_file(path);
@@ -4543,77 +4468,6 @@ mod tests {
             .append_note_body("n1", "second block")
             .expect("append updates note");
         assert_eq!(appended.body, "first block\nsecond block");
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn ingest_event_dedup_uses_source_and_message_id() {
-        let path = temp_db_path();
-        let db = Db::open(path.clone()).expect("db opens");
-
-        let inserted = db
-            .record_ingest_event(
-                "smtp",
-                Some("<a@b>"),
-                "inbox-email-2026-04-17",
-                b"raw",
-                false,
-                false,
-            )
-            .expect("inserted");
-        assert!(inserted);
-        assert!(db
-            .has_ingest_message_id("smtp", "<a@b>")
-            .expect("dedup lookup"));
-
-        let duplicate = db
-            .record_ingest_event(
-                "smtp",
-                Some("<a@b>"),
-                "inbox-email-2026-04-17",
-                b"raw-duplicate",
-                false,
-                false,
-            )
-            .expect("duplicate insert checked");
-        assert!(!duplicate);
-
-        let other_source = db
-            .record_ingest_event(
-                "imap",
-                Some("<a@b>"),
-                "inbox-email-2026-04-17",
-                b"raw-imap",
-                false,
-                false,
-            )
-            .expect("other source insert");
-        assert!(other_source);
-
-        let no_message_id_1 = db
-            .record_ingest_event(
-                "smtp",
-                None,
-                "inbox-email-2026-04-17",
-                b"raw-1",
-                false,
-                false,
-            )
-            .expect("no message id insert 1");
-        let no_message_id_2 = db
-            .record_ingest_event(
-                "smtp",
-                None,
-                "inbox-email-2026-04-17",
-                b"raw-2",
-                false,
-                false,
-            )
-            .expect("no message id insert 2");
-        assert!(no_message_id_1);
-        assert!(no_message_id_2);
 
         drop(db);
         let _ = fs::remove_file(path);

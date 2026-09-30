@@ -675,6 +675,7 @@ impl CalcEngine {
         })
     }
 
+    #[cfg(test)]
     pub fn evaluate_lines(&self, lines: &[String]) -> Vec<Option<String>> {
         self.evaluate_lines_with_generation(lines, current_eval_generation())
     }

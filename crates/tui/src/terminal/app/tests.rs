@@ -251,7 +251,7 @@ fn app_with_note_and_modules(
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
     let note_id = "n1";
-    db.create_note_with_defaults(note_id, modules, None)
+    db.create_note_with_context(note_id, modules, None, None)
         .expect("create note with modules");
     db.save_note(note_id, body).expect("note saved");
     let opts = TerminalOptions {

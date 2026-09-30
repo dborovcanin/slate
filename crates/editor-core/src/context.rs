@@ -1,5 +1,5 @@
 use crate::types::{
-    BlockLineRange, EditorContextSnapshot, LineContext, SelectionContext, TextRange, WordContext,
+    BlockLineRange, EditorContextSnapshot, LineContext, SelectionContext, TextRange,
 };
 use std::borrow::Cow;
 
@@ -66,10 +66,6 @@ fn is_list_line(line: &str) -> bool {
 
 fn is_table_line(line: &str) -> bool {
     crate::table::is_table_line(line)
-}
-
-fn is_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 #[derive(Debug, Clone)]
@@ -144,11 +140,6 @@ impl<'a> ResolvedContext<'a> {
 
     pub fn current_line(&self) -> LineContext {
         self.line_at(self.cursor_pos())
-    }
-
-    pub fn current_column(&self) -> usize {
-        let line = self.current_line();
-        self.cursor_pos() - line.from
     }
 
     pub fn line_text(&self, number: usize) -> &str {
@@ -249,38 +240,6 @@ impl<'a> ResolvedContext<'a> {
         })
     }
 
-    pub fn word_at(&self, pos: Option<usize>) -> Option<WordContext> {
-        let bytes = self.text().as_bytes();
-        if bytes.is_empty() {
-            return None;
-        }
-
-        let p = clamp(pos.unwrap_or(self.cursor_pos()), 0, bytes.len());
-        let left = if p > 0 { bytes[p - 1] } else { 0 };
-        let right = if p < bytes.len() { bytes[p] } else { 0 };
-        if !is_word_byte(left) && !is_word_byte(right) {
-            return None;
-        }
-
-        let mut from = p;
-        let mut to = p;
-        while from > 0 && is_word_byte(bytes[from - 1]) {
-            from -= 1;
-        }
-        while to < bytes.len() && is_word_byte(bytes[to]) {
-            to += 1;
-        }
-        if from >= to {
-            return None;
-        }
-
-        Some(WordContext {
-            from,
-            to,
-            text: String::from_utf8_lossy(&bytes[from..to]).into_owned(),
-        })
-    }
-
     fn line_from_index(&self, idx: usize) -> LineContext {
         let safe_idx = idx.min(self.parsed.starts.len().saturating_sub(1));
         let from = self.parsed.starts[safe_idx];
@@ -312,7 +271,6 @@ mod tests {
     fn line_lookup_follows_cursor_positions() {
         let resolved = ctx("a\nbc", 1, 1);
         assert_eq!(resolved.current_line().number, 1);
-        assert_eq!(resolved.current_column(), 1);
         assert_eq!(resolved.line_at(2).number, 2);
         assert_eq!(resolved.line(2).text, "bc");
     }
@@ -355,27 +313,6 @@ mod tests {
                 start_line: 1,
                 end_line: 2
             })
-        );
-    }
-
-    #[test]
-    fn resolves_words_around_cursor() {
-        let text = "hello world";
-        assert_eq!(
-            ctx(text, 1, 1).word_at(None).map(|w| w.text),
-            Some("hello".to_string())
-        );
-        assert_eq!(
-            ctx(text, 5, 5).word_at(None).map(|w| w.text),
-            Some("hello".to_string())
-        );
-        assert_eq!(
-            ctx(text, 6, 6).word_at(None).map(|w| w.text),
-            Some("world".to_string())
-        );
-        assert_eq!(
-            ctx(text, 11, 11).word_at(None).map(|w| w.text),
-            Some("world".to_string())
         );
     }
 

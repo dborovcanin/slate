@@ -923,6 +923,7 @@ fn list_autoformat_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     ))
 }
 
+#[cfg(test)]
 pub fn run_doc_change_rules(
     ctx: &ResolvedContext<'_>,
     options: TextRuleOptions,
@@ -1334,6 +1335,7 @@ pub fn run_table_cell_navigation_rules(
     table_tab_rule(ctx, &options)
 }
 
+#[cfg(test)]
 pub fn run_table_multiline_break_rule(
     ctx: &ResolvedContext<'_>,
     table_enabled: bool,
@@ -1474,6 +1476,7 @@ pub fn run_table_multiline_break_rule_with_table_cache(
 /// - the cursor is not on the header row of a pipe table,
 /// - the table has no recognizable structure,
 /// - or the cursor sits on a pipe character itself.
+#[cfg(test)]
 pub fn run_table_pipe_insert_column_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     let mut table_format_cache = table::TableFormatCache::default();
     run_table_pipe_insert_column_rule_with_table_cache(ctx, &mut table_format_cache)
@@ -1681,6 +1684,7 @@ pub fn run_table_pipe_insert_column_rule_with_table_cache(
 /// - the cursor is not on the header row of a pipe table,
 /// - the current header cell is non-empty,
 /// - or the table only has a single column (deletion would destroy the table).
+#[cfg(test)]
 pub fn run_table_header_delete_column_rule(ctx: &ResolvedContext<'_>) -> Option<EditOperation> {
     let mut table_format_cache = table::TableFormatCache::default();
     run_table_header_delete_column_rule_with_table_cache(ctx, &mut table_format_cache)

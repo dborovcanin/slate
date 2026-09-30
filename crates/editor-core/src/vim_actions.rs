@@ -26,6 +26,7 @@ impl VimRegisterValue {
     }
 }
 
+#[cfg(test)]
 pub fn execute_vim_action(
     text: &str,
     selection: SelectionSnapshot,

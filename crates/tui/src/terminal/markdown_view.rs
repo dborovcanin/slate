@@ -300,7 +300,6 @@ pub fn image_hidden_token_ranges(
     hidden
 }
 
-#[allow(dead_code)]
 pub fn hidden_ranges_for_markdown_line(
     text: &str,
     active_cursor_col: Option<usize>,
@@ -330,7 +329,7 @@ fn hidden_ranges_for_markdown_line_with_formatting_boundary_exit(
     normalize_hidden_ranges(hidden_ranges, len)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn collapse_markdown_line_for_cursor(text: &str, cursor_col: usize) -> (String, usize) {
     collapse_markdown_line_for_cursor_with_formatting_boundary_exit(text, cursor_col, false)
 }

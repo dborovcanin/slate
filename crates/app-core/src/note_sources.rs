@@ -23,8 +23,6 @@ pub enum NoteIdentity {
     FileNote(PathBuf),
 }
 
-impl NoteIdentity {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoteSourceCapabilities {
     pub can_save: bool,
@@ -100,6 +98,7 @@ impl NoteSourceService {
         }
     }
 
+    #[cfg(test)]
     pub fn save_note_by_id(
         &self,
         note_id: &str,
@@ -212,6 +211,7 @@ impl NoteSourceService {
         )
     }
 
+    #[cfg(test)]
     pub fn get_note_meta_by_id(&self, note_id: &str) -> Result<Option<NoteSummary>, String> {
         self.get_note_meta(&self.parse_identity(note_id))
     }
@@ -238,6 +238,7 @@ impl NoteSourceService {
         self.db.resolve_wiki_link_note(short_id)
     }
 
+    #[cfg(test)]
     pub fn get_note_revision_by_id(&self, note_id: &str) -> Result<Option<String>, String> {
         self.get_note_revision(&self.parse_identity(note_id))
     }
@@ -488,6 +489,7 @@ pub fn validate_note_image_payload_len(byte_len: usize) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn validate_declared_image_type(
     file_name: Option<&str>,
     mime_type: Option<&str>,
@@ -800,6 +802,7 @@ pub fn syntax_language_for_path(path: &Path) -> Option<String> {
     Some(lang.to_string())
 }
 
+#[cfg(test)]
 pub fn syntax_language_for_note_id(note_id: &str) -> Option<String> {
     let path = markdown_file_path_from_note_id(note_id)?;
     syntax_language_for_path(&path)

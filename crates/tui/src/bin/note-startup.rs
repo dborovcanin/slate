@@ -192,7 +192,6 @@ fn probe_tui() -> Result<StartupReport, String> {
         core_metrics.db.primary_configure_ms,
     );
     probe.mark_ms("db_schema_init_ms", core_metrics.db.schema_init_ms);
-    probe.mark_ms("db_fts_seed_ms", core_metrics.db.fts_seed_ms);
     probe.mark_ms("db_open_total_ms", core_metrics.db.total_ms);
 
     let note = core.db().get_most_recent_note()?;

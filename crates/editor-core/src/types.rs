@@ -36,13 +36,6 @@ pub struct SelectionContext {
     pub empty: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WordContext {
-    pub from: usize,
-    pub to: usize,
-    pub text: String,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockLineRange {
     pub start_line: usize,

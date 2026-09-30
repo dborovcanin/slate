@@ -88,16 +88,6 @@ impl RenderContext {
         }
     }
 
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub fn with_fence_state(
-        in_code_block: bool,
-        code_fence_lang: Option<String>,
-        palette: RenderPalette,
-    ) -> Self {
-        Self::with_syntax_mode(in_code_block, code_fence_lang, false, None, palette)
-    }
-
     pub fn with_syntax_mode(
         in_code_block: bool,
         code_fence_lang: Option<String>,

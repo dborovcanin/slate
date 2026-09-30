@@ -54,10 +54,6 @@ impl TableFormatCache {
         }
     }
 
-    pub fn invalidate_parsed_rows(&mut self) {
-        self.parsed_rows.clear();
-    }
-
     pub fn parsed_row_cache_stats(&self) -> (usize, usize) {
         (self.parsed_rows_hits, self.parsed_rows_misses)
     }
@@ -1779,21 +1775,6 @@ mod tests {
         assert_eq!(
             split_table_cells_with_cache(line, &mut cache),
             vec!["left \\| right".to_string(), "ok".to_string()]
-        );
-    }
-
-    #[test]
-    fn cached_table_row_parse_invalidate_drops_previous_entries() {
-        let mut cache = TableFormatCache::default();
-        let line = "| a | b |";
-        assert_eq!(
-            split_table_cells_with_cache(line, &mut cache),
-            vec!["a", "b"]
-        );
-        cache.invalidate_parsed_rows();
-        assert_eq!(
-            table_pipe_positions_with_cache(line, &mut cache),
-            table_pipe_positions(line)
         );
     }
 

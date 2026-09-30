@@ -98,7 +98,7 @@ fn decimal_digit_count(mut value: usize) -> usize {
 }
 
 fn gutter_width_for_visible_lines(visible_lines: usize) -> usize {
-    // Keep the legacy 4-digit gutter (+2 spaces), but expand once line numbers
+    // A 4-digit gutter (+2 spaces) that widens once line numbers
     // outgrow it so rendering/cursor math stay aligned at 10k+ lines.
     (decimal_digit_count(visible_lines.max(1)) + 2).max(GUTTER_WIDTH)
 }

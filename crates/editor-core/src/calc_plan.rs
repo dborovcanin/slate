@@ -758,6 +758,7 @@ fn line_has_builtin_formula_with_mask(line: &str, mask: CalcFeatureMask) -> bool
     !trimmed.is_empty() && !builtin_formula_labels_in_text(trimmed).is_empty()
 }
 
+#[cfg(test)]
 pub fn line_for_calc_evaluation(line: &str) -> String {
     line_for_calc_evaluation_with_mask(line, CalcFeatureMask::default())
 }
@@ -782,6 +783,7 @@ pub fn contains_variable_assignment_with_mask(lines: &[String], mask: CalcFeatur
     })
 }
 
+#[cfg(test)]
 pub fn contains_builtin_formula(lines: &[String]) -> bool {
     contains_builtin_formula_with_mask(lines, CalcFeatureMask::default())
 }
@@ -792,6 +794,7 @@ pub fn contains_builtin_formula_with_mask(lines: &[String], mask: CalcFeatureMas
         .any(|line| line_has_builtin_formula_with_mask(line, mask))
 }
 
+#[cfg(test)]
 pub fn detect_calc_signal_flags(lines: &[String]) -> CalcSignalFlags {
     detect_calc_signal_flags_with_mask(lines, CalcFeatureMask::default())
 }
@@ -1227,6 +1230,7 @@ pub fn build_variable_dependency_graph(
     Some(graph)
 }
 
+#[cfg(test)]
 pub fn sync_variable_dependency_graph(
     graph: &mut Option<VariableDependencyGraph>,
     lines: &[String],
@@ -1761,34 +1765,6 @@ fn splice_table_formula_dependency_index(
     } else {
         cached.blocks = before;
         cached.line_count = lines.len();
-    }
-}
-
-pub fn sync_table_formula_dependency_index(
-    index: &mut Option<TableFormulaDependencyIndex>,
-    lines: &[String],
-    changed_from: usize,
-    changed_to: usize,
-    mask: CalcFeatureMask,
-) {
-    if !mask.table_active() {
-        *index = None;
-        return;
-    }
-
-    let needs_rebuild = match index.as_ref() {
-        Some(cached) => {
-            cached.line_count != lines.len()
-                || table_range_maybe_impacts_formulas(lines, changed_from, changed_to, mask)
-        }
-        // No formula anywhere before this edit: an index only appears if the
-        // changed lines add one.
-        None => changed_lines_match(lines, changed_from, changed_to, |line| {
-            is_table_line(line) && !find_table_formula_segments(line).is_empty()
-        }),
-    };
-    if needs_rebuild {
-        *index = build_table_formula_dependency_index(lines, mask);
     }
 }
 
@@ -2669,6 +2645,7 @@ pub fn plan_incremental_calc_from_hashes(
     }
 }
 
+#[cfg(test)]
 pub fn plan_incremental_calc(
     prev_lines: &[String],
     prev_results: &[Option<String>],
