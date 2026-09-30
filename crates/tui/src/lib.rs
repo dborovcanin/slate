@@ -98,7 +98,7 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
                 print_help();
                 return Err(String::new());
             }
-            "imap-sync" | "--imap-sync" => force_imap = true,
+            "imap-sync" => force_imap = true,
             "today" => force_today = true,
             "capture" => {
                 // Everything after `capture` is the text to capture.
@@ -106,7 +106,7 @@ fn parse_args(args: &[String], stdin_tty: bool) -> Result<(Mode, TerminalOptions
                 capture = Some((!text.trim().is_empty()).then_some(text));
                 break;
             }
-            "append" | "--append" => force_append = true,
+            "append" => force_append = true,
             "--new" | "-n" => {
                 opts.create_new = true;
                 saw_note_flag = true;

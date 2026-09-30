@@ -21,7 +21,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 
 ### Next steps (ordered)
 
-1. **Editing papercuts** - done: hand-typed tables keep their cells, variable autocomplete falls back to the last word on prose lines, titles drop heading markers (existing notes pick up the clean title on their next save).
+1. **Editing papercuts** - done: hand-typed tables keep their cells, variable autocomplete falls back to the last word on prose lines, titles drop heading markers.
 2. **Selection statistics** - while a visual selection or table cells are selected, show `sum`, `avg`, `count` of the numbers in the status bar (spreadsheet-style). Reuse the `:sum` / `:avg` scope logic in `editor-core`.
 3. **Segmented status bar** - mode pill, note title, dirty mark, module chips, calc/selection result, working collection; transient messages ("autosaved ...") become short-lived toasts instead of overwriting the status line.
 4. **Discoverability**

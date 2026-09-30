@@ -14,17 +14,12 @@ impl Default for NoteAccessMode {
     }
 }
 
-fn default_true() -> bool {
-    true
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NoteModules {
     pub math: bool,
     pub table: bool,
     pub variables: bool,
     pub style: bool,
-    #[serde(default = "default_true")]
     pub cross_note: bool,
 }
 

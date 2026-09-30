@@ -203,8 +203,6 @@ image_max_rows = 15
 # Enable non-critical startup work asynchronously after first paint/edit
 # (prewarm/hydration/background sync loops).
 background_tasks_enabled = true
-# Alias for the same behavior:
-# async_enabled = true
 "##;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -268,10 +266,8 @@ pub struct ThemeConfig {
     pub date_time_format: String,
     pub variables_autocomplete_min_chars: u8,
     pub default_modules: EditorModulesConfig,
-    // Compatibility-only fields. Runtime note security should be accessed
-    // via NoteSecurityConfig helpers to avoid mixing with visual/editor prefs.
-    pub encrypt_notes: bool,
-    pub notes_password_env: String,
+    /// `[editor.security]`: encryption of new notes.
+    pub security: NoteSecurityConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -479,8 +475,7 @@ impl Default for ThemeConfig {
             date_time_format: DEFAULT_DATE_TIME_FORMAT.to_string(),
             variables_autocomplete_min_chars: DEFAULT_VARIABLE_AUTOCOMPLETE_MIN_CHARS,
             default_modules: EditorModulesConfig::default(),
-            encrypt_notes: DEFAULT_ENCRYPT_NOTES,
-            notes_password_env: DEFAULT_NOTES_PASSWORD_ENV.to_string(),
+            security: NoteSecurityConfig::default(),
         }
     }
 }
@@ -595,7 +590,6 @@ struct PerfSection {
 
 #[derive(Debug, Clone, Deserialize, Default)]
 struct StartupSection {
-    async_enabled: Option<bool>,
     background_tasks_enabled: Option<bool>,
 }
 
@@ -636,13 +630,6 @@ pub fn load_theme_config() -> ThemeConfig {
             eprintln!("Config: failed to parse {}: {err}", path.display());
             ThemeConfig::default()
         }
-    }
-}
-
-pub fn note_security_config_from_theme(theme: &ThemeConfig) -> NoteSecurityConfig {
-    NoteSecurityConfig {
-        encrypt_notes: theme.encrypt_notes,
-        password_env: theme.notes_password_env.clone(),
     }
 }
 
@@ -831,8 +818,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
         wrap: raw.editor.wrap.unwrap_or(DEFAULT_WRAP),
         background_tasks_enabled: raw
             .startup
-            .async_enabled
-            .or(raw.startup.background_tasks_enabled)
+            .background_tasks_enabled
             .unwrap_or(DEFAULT_BACKGROUND_TASKS_ENABLED),
         date_time_format: normalize_date_time_format(raw.editor.date_time_format, &date_format),
         date_format,
@@ -866,15 +852,17 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
                 .cross_note
                 .unwrap_or(DEFAULT_MODULE_CROSS_NOTE_ENABLED),
         },
-        encrypt_notes: raw
-            .editor
-            .security
-            .encrypt_notes
-            .unwrap_or(DEFAULT_ENCRYPT_NOTES),
-        notes_password_env: normalize_nonempty(
-            raw.editor.security.password_env,
-            DEFAULT_NOTES_PASSWORD_ENV,
-        ),
+        security: NoteSecurityConfig {
+            encrypt_notes: raw
+                .editor
+                .security
+                .encrypt_notes
+                .unwrap_or(DEFAULT_ENCRYPT_NOTES),
+            password_env: normalize_nonempty(
+                raw.editor.security.password_env,
+                DEFAULT_NOTES_PASSWORD_ENV,
+            ),
+        },
     })
 }
 
@@ -1176,8 +1164,8 @@ mod tests {
         assert!(!cfg.default_modules.variables);
         assert!(cfg.default_modules.style);
         assert!(cfg.default_modules.cross_note);
-        assert!(!cfg.encrypt_notes);
-        assert_eq!(cfg.notes_password_env, "SLATE_NOTES_PASSWORD");
+        assert!(!cfg.security.encrypt_notes);
+        assert_eq!(cfg.security.password_env, "SLATE_NOTES_PASSWORD");
     }
 
     #[test]
@@ -1233,8 +1221,8 @@ mod tests {
         assert!(cfg.default_modules.variables);
         assert!(cfg.default_modules.style);
         assert!(cfg.default_modules.cross_note);
-        assert!(!cfg.encrypt_notes);
-        assert_eq!(cfg.notes_password_env, "SLATE_NOTES_PASSWORD");
+        assert!(!cfg.security.encrypt_notes);
+        assert_eq!(cfg.security.password_env, "SLATE_NOTES_PASSWORD");
     }
 
     #[test]
@@ -1268,31 +1256,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_async_enabled_override() {
-        let cfg = parse_theme_config(
-            r#"
-            [startup]
-            async_enabled = false
-            "#,
-        )
-        .expect("config");
-        assert!(!cfg.background_tasks_enabled);
-    }
-
-    #[test]
-    fn startup_async_enabled_takes_precedence_when_both_set() {
-        let cfg = parse_theme_config(
-            r#"
-            [startup]
-            background_tasks_enabled = true
-            async_enabled = false
-            "#,
-        )
-        .expect("config");
-        assert!(!cfg.background_tasks_enabled);
-    }
-
-    #[test]
     fn parses_editor_security_section() {
         let cfg = parse_theme_config(
             r#"
@@ -1302,24 +1265,12 @@ mod tests {
             "#,
         )
         .expect("config");
-        assert!(cfg.encrypt_notes);
-        assert_eq!(cfg.notes_password_env, "APP_NOTES_PASSWORD");
+        assert!(cfg.security.encrypt_notes);
+        assert_eq!(cfg.security.password_env, "APP_NOTES_PASSWORD");
     }
 
     #[test]
-    fn note_security_config_helpers_extract_and_validate() {
-        let cfg = parse_theme_config(
-            r#"
-            [editor.security]
-            encrypt_notes = true
-            password_env = "APP_NOTES_PASSWORD"
-            "#,
-        )
-        .expect("config");
-        let security = note_security_config_from_theme(&cfg);
-        assert!(security.encrypt_notes);
-        assert_eq!(security.password_env, "APP_NOTES_PASSWORD");
-
+    fn default_note_encryption_password_needs_encryption_and_env() {
         let disabled = NoteSecurityConfig {
             encrypt_notes: false,
             password_env: "IGNORED".to_string(),

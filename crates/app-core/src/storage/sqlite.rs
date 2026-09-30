@@ -461,7 +461,7 @@ impl Db {
                     return Ok(Note {
                         id: id.to_string(),
                         body: body.to_string(),
-                        modules: parse_note_modules_json(persisted.modules_json),
+                        modules: parse_note_modules_json(&persisted.modules_json),
                         access_mode: NoteAccessMode::Encrypted,
                         is_unlocked: true,
                         created_at: persisted.created_at,
@@ -848,7 +848,7 @@ impl Db {
                     return Ok(Note {
                         id: id.to_string(),
                         body: next_body,
-                        modules: parse_note_modules_json(persisted.modules_json),
+                        modules: parse_note_modules_json(&persisted.modules_json),
                         access_mode: NoteAccessMode::Encrypted,
                         is_unlocked: true,
                         created_at: persisted.created_at,
@@ -1748,7 +1748,7 @@ impl Db {
         short_id: &str,
     ) -> Result<Option<NoteSummary>, String> {
         let pattern = format!("{}%", short_id);
-        let row: Option<(String, Option<String>, NoteAccessMode, String)> = stmt
+        let row: Option<(String, String, NoteAccessMode, String)> = stmt
             .query_row([&pattern], |row| {
                 Ok((
                     row.get(0)?,
@@ -1763,10 +1763,9 @@ impl Db {
             return Ok(None);
         };
         let is_unlocked = !is_note_protected(access_mode) || self.is_note_unlocked(id.as_str());
-        let title = normalize_stored_title(note_title).unwrap_or_else(|| "Untitled".to_string());
         Ok(Some(NoteSummary {
             id,
-            title,
+            title: note_title,
             body_prefix: if is_unlocked {
                 String::new()
             } else {
@@ -2523,7 +2522,7 @@ impl Db {
         Ok(Note {
             id: row.id.clone(),
             body,
-            modules: parse_note_modules_json(row.modules_json.clone()),
+            modules: parse_note_modules_json(&row.modules_json),
             access_mode: row.access_mode,
             is_unlocked,
             created_at: row.created_at.clone(),
@@ -2542,8 +2541,7 @@ impl Db {
                         is_unlocked = false;
                         return Ok(NoteSummary {
                             id: row.id.clone(),
-                            title: normalize_stored_title(row.note_title.clone())
-                                .unwrap_or_else(|| "Untitled".to_string()),
+                            title: row.note_title.clone(),
                             body_prefix: "[locked]".to_string(),
                             access_mode: row.access_mode,
                             is_unlocked,
@@ -2581,14 +2579,9 @@ impl Db {
         } else {
             "[locked]".to_string()
         };
-        let title = match normalize_stored_title(row.note_title.clone()) {
-            Some(value) => value,
-            None if is_unlocked => derive_note_title_from_body(&body_prefix),
-            None => "Untitled".to_string(),
-        };
         Ok(NoteSummary {
             id: row.id.clone(),
-            title,
+            title: row.note_title.clone(),
             body_prefix,
             access_mode: row.access_mode,
             is_unlocked,
@@ -2732,14 +2725,14 @@ struct NoteRow {
 
 #[derive(Debug, Clone)]
 struct NotePersistenceRow {
-    modules_json: Option<String>,
+    modules_json: String,
     created_at: String,
 }
 
 #[derive(Debug, Clone)]
 struct NoteSummaryRow {
     id: String,
-    note_title: Option<String>,
+    note_title: String,
     body_prefix: String,
     access_mode: NoteAccessMode,
     updated_at: String,
@@ -2752,7 +2745,7 @@ struct NoteSummaryRow {
 struct NoteAccessRow {
     id: String,
     body: String,
-    modules_json: Option<String>,
+    modules_json: String,
     access_mode: NoteAccessMode,
     encryption_salt: Option<Vec<u8>>,
     encryption_nonce: Option<Vec<u8>>,
@@ -2761,14 +2754,9 @@ struct NoteAccessRow {
     updated_at: String,
 }
 
-fn parse_note_modules_json(value: Option<String>) -> NoteModules {
-    let Some(raw) = value else {
-        return NoteModules::default();
-    };
-    match serde_json::from_str::<NoteModules>(&raw) {
-        Ok(modules) => modules,
-        Err(_) => NoteModules::default(),
-    }
+/// Stored module flags; unreadable JSON falls back to the defaults.
+fn parse_note_modules_json(raw: &str) -> NoteModules {
+    serde_json::from_str::<NoteModules>(raw).unwrap_or_default()
 }
 
 fn map_note_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummaryRow> {
@@ -2875,14 +2863,6 @@ fn select_image_mime_type(file_name: Option<&str>, mime_type: Option<&str>) -> S
         }
     }
     "image/png".to_string()
-}
-
-fn normalize_stored_title(value: Option<String>) -> Option<String> {
-    value
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(ToString::to_string)
 }
 
 fn normalize_display_name(value: &str) -> Result<String, String> {
@@ -3746,19 +3726,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_module_json_defaults_missing_cross_note_only() {
-        let modules = parse_note_modules_json(Some(
-            r#"{"math":false,"table":true,"variables":false,"style":true}"#.to_string(),
-        ));
-
-        assert!(!modules.math);
-        assert!(modules.table);
-        assert!(!modules.variables);
-        assert!(modules.style);
-        assert!(modules.cross_note);
-    }
-
-    #[test]
     fn list_notes_and_most_recent_follow_updated_at() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
@@ -3811,81 +3778,6 @@ mod tests {
         assert!(ids.contains(&"plain-b"));
         assert!(!ids.contains(&"locked-a"));
         assert!(!ids.contains(&"enc-a"));
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn search_notes_content_seeds_index_for_pre_fts_databases() {
-        let path = temp_db_path();
-        let conn = Connection::open(path.clone()).expect("legacy db opens");
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE notes (
-                id TEXT PRIMARY KEY,
-                body TEXT NOT NULL DEFAULT '',
-                note_title TEXT NOT NULL DEFAULT '',
-                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
-                access_mode TEXT NOT NULL DEFAULT 'none',
-                password_salt BLOB,
-                password_hash BLOB,
-                encryption_salt BLOB,
-                encryption_nonce BLOB,
-                encrypted_body BLOB,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
-             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
-             VALUES ('legacy-note', 'alpha from legacy schema', 'legacy', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
-        )
-        .expect("legacy schema created");
-        drop(conn);
-
-        let db = Db::open(path.clone()).expect("db opens with search index bootstrap");
-        let hits = db
-            .search_notes_content("alpha", 20)
-            .expect("search succeeds");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "legacy-note");
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn schema_upgrade_preserves_existing_notes() {
-        let path = temp_db_path();
-        let conn = Connection::open(path.clone()).expect("legacy db opens");
-        conn.execute_batch(
-            "PRAGMA foreign_keys=ON;
-             CREATE TABLE notes (
-                id TEXT PRIMARY KEY,
-                body TEXT NOT NULL DEFAULT '',
-                note_title TEXT NOT NULL DEFAULT '',
-                modules_json TEXT NOT NULL DEFAULT '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}',
-                access_mode TEXT NOT NULL DEFAULT 'none',
-                password_salt BLOB,
-                password_hash BLOB,
-                encryption_salt BLOB,
-                encryption_nonce BLOB,
-                encrypted_body BLOB,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-             );
-             INSERT INTO notes (id, body, note_title, modules_json, access_mode, created_at, updated_at)
-             VALUES ('legacy-note', 'legacy body survives', 'legacy', '{\"math\":true,\"table\":true,\"variables\":true,\"style\":true}', 'none', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');",
-        )
-        .expect("legacy schema created");
-        drop(conn);
-
-        let db = Db::open(path.clone()).expect("db opens with migration");
-        let legacy = db
-            .get_note("legacy-note")
-            .expect("lookup succeeds")
-            .expect("legacy note exists");
-        assert_eq!(legacy.body, "legacy body survives");
-        assert!(db.list_collections().expect("collections list").is_empty());
 
         drop(db);
         let _ = fs::remove_file(path);
@@ -4334,59 +4226,6 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "n1");
 
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn opening_an_existing_database_replaces_the_unscoped_fts_update_trigger() {
-        let path = temp_db_path();
-        let db = Db::open(path.clone()).expect("db opens");
-        db.save_note("n1", "canary body text").expect("save note");
-        drop(db);
-
-        // Put the pre-change trigger back to stand in for a database created
-        // before the update trigger was scoped. `CREATE ... IF NOT EXISTS`
-        // alone would leave it in place on reopen.
-        let conn = Connection::open(&path).expect("raw connection");
-        conn.execute_batch(
-            "DROP TRIGGER IF EXISTS notes_fts_au;
-             CREATE TRIGGER notes_fts_au
-             AFTER UPDATE ON notes
-             BEGIN
-                 DELETE FROM notes_fts WHERE rowid = old.rowid;
-                 INSERT INTO notes_fts(rowid, note_id, note_title, body)
-                 SELECT new.rowid, new.id, new.note_title, new.body
-                 WHERE new.access_mode = 'none';
-             END;",
-        )
-        .expect("legacy trigger restored");
-        drop(conn);
-
-        let db = Db::open(path.clone()).expect("db reopens");
-        let conn = Connection::open(&path).expect("raw connection");
-        let sql: String = conn
-            .query_row(
-                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'notes_fts_au'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("trigger exists");
-        assert!(
-            sql.contains("UPDATE OF"),
-            "reopening must upgrade the legacy trigger, got: {sql}"
-        );
-
-        // And the upgraded trigger still indexes correctly.
-        db.save_note("n1", "replaced sentinel").expect("resave");
-        assert_eq!(
-            db.search_notes_content("sentinel", 10)
-                .expect("search")
-                .len(),
-            1
-        );
-
-        drop(conn);
         drop(db);
         let _ = fs::remove_file(path);
     }

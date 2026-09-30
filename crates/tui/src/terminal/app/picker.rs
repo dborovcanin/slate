@@ -1,8 +1,6 @@
 use super::switcher::NoteMeta;
 use super::{TerminalApp, UiMode};
-use crate::terminal::browser::{
-    collection_entry_row, display_title, plain_note_row, position_label, NoteEntry,
-};
+use crate::terminal::browser::{collection_entry_row, plain_note_row, position_label, NoteEntry};
 use crate::terminal::picker::{draw_picker, PickerView};
 use crate::terminal::switcher;
 use app_core::storage::{NoteAccessMode, NoteSearchResult};
@@ -11,7 +9,7 @@ use ratatui::buffer::Buffer;
 fn note_entry_from_meta(meta: &NoteMeta, daily_prefix: &str) -> NoteEntry {
     NoteEntry {
         id: meta.id.clone(),
-        title: display_title(&meta.title),
+        title: meta.title.clone(),
         access_mode: meta.access_mode,
         is_unlocked: meta.is_unlocked,
         updated_at: meta.updated_at.clone(),
@@ -22,7 +20,7 @@ fn note_entry_from_meta(meta: &NoteMeta, daily_prefix: &str) -> NoteEntry {
 fn note_entry_from_result(result: &NoteSearchResult, daily_prefix: &str) -> NoteEntry {
     NoteEntry {
         id: result.id.clone(),
-        title: display_title(&result.title),
+        title: result.title.clone(),
         access_mode: NoteAccessMode::None,
         is_unlocked: true,
         updated_at: result.updated_at.clone(),

@@ -1868,8 +1868,8 @@ fn new_note_with_context(
     working_collection_id: Option<&str>,
 ) -> Result<Note, String> {
     let id = Ulid::new().to_string();
-    let security = crate::config::note_security_config_from_theme(config);
-    let default_password = crate::config::resolve_default_note_encryption_password(&security)?;
+    let default_password =
+        crate::config::resolve_default_note_encryption_password(&config.security)?;
     let modules = NoteModules {
         math: config.default_modules.math,
         table: config.default_modules.table,
