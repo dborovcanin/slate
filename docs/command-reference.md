@@ -89,13 +89,10 @@ Every command-bar command with its aliases. For what each feature does and its k
 
 | Command | Aliases | Purpose |
 | --- | --- | --- |
-| `note lock <password>` | `note-lock`, `lock-note` | App-level lock (plaintext at rest) |
-| `note unlock <password>` | `note-unlock`, `unlock-note` | Remove app-level lock |
-| `note encrypt <password>` | `note-encrypt`, `encrypt-note` | Encrypt note at rest |
-| `note decrypt <password>` | `note-decrypt`, `decrypt-note` | Store note unencrypted |
-| `note unprotect <password>` | `note-unprotect`, `unprotect-note`, `note unencrypt`, `note-unencrypt`, `unencrypt-note` | Remove lock/encryption and password |
+| `note encrypt` | `note-encrypt`, `encrypt-note` | Encrypt the note with its own password; on an unlocked encrypted note, change its password |
+| `note decrypt` | `note-decrypt`, `decrypt-note` | Store the note unencrypted (a note in an encrypted collection takes the collection's password) |
 
-Passwords are redacted from command history.
+Both ask for the password in a masked dialog (encrypting asks twice); a password typed on the command line is ignored. Collections are encrypted from the browser (`e`).
 
 ## Export and backup
 

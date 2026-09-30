@@ -105,7 +105,7 @@ rate := 1.19
 
 | Feature | Keys / commands |
 | --- | --- |
-| Note encryption at rest, title included (password asked when opened) | `:note encrypt <pw>`, `:note decrypt <pw>` |
+| Note and collection encryption at rest (password asked when opened) | `:note encrypt`, `:note decrypt`, `e` on a collection in the browser |
 | Export to PDF, markdown or text (file or clipboard) | `:export pdf <path>`, `:export md [path]`, `:export txt [path]` |
 | Full database backup and restore | `:backup export <path.zip>`, `:backup load <path.zip>` |
 | IMAP mail into daily inbox notes (one-off or background) | `slate imap-sync`, `[imap] auto_sync_on_startup = true` |

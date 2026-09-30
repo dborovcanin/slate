@@ -57,7 +57,7 @@ The note switcher, its content search and the collection picker are popups style
 | `Esc` / `Ctrl+P` in the switcher | Close it |
 | `Ctrl+Q` | Quit (from any mode) |
 
-Locked or encrypted notes ask for their password before opening. Content search only indexes unprotected notes.
+Encrypted notes ask for their password (or their collection's) before opening. Content search only indexes unprotected notes.
 
 ## Saving
 
@@ -387,17 +387,18 @@ A note can belong to several collections, so notes are copied into collections r
 | Key | Action |
 | --- | --- |
 | `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move |
-| `o`, `l`, `Enter` | Open the collection or note (asks for the password of a locked note) |
+| `o`, `l`, `Enter` | Open the collection or note (asks for the password of a locked note or encrypted collection) |
 | `h`, `-`, `Backspace` | Back to the collections list |
 | `/` | Filter the list (fuzzy); `Esc` clears it |
 | `Ctrl+F`, `Ctrl+/` | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
 | `Space` / `Ctrl+A` | Mark the note and move down / mark all |
-| `y` / `x` | Copy / cut the marked (or hovered) notes |
+| `y` / `x` | Yank / cut the marked (or hovered) notes |
 | `p` | Paste into the open or hovered collection: copy adds the notes to it, cut moves them |
-| `d` | Remove the notes from the open collection (the notes stay) |
+| `d` | Leave: take the notes out of the open collection (the notes stay) |
 | `u` | Undo the last paste or remove |
 | `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
-| `n` / `r` | New note (in the open collection) or collection / rename the hovered one |
+| `n` / `r` | New note (in the open collection) or collection / rename the hovered one (a note keeps the name; empty follows its first line) |
+| `e` | Encrypt the hovered collection, or decrypt an encrypted one |
 | `s` | Sort notes by modification time or title |
 | `w` | Make the collection the working collection (`All notes` clears it) |
 | `R` | Reload |
@@ -423,13 +424,18 @@ Commands: `:module status` (`:modules`), `:module <name> on|off|toggle` (also `:
 
 | Command | Action |
 | --- | --- |
-| `:note lock <password>` | Require a password to open the note in Slate (body stays plaintext on disk) |
-| `:note unlock <password>` | Remove the app lock |
-| `:note encrypt <password>` | Encrypt the note body at rest |
-| `:note decrypt <password>` | Store it unencrypted again |
-| `:note unprotect <password>` | Remove any lock or encryption and the password |
+| `:note encrypt` | Encrypt the note with its own password; on an unlocked encrypted note, change its password |
+| `:note decrypt` | Store it unencrypted again |
 
-Passwords are redacted from command history. `[editor.security] encrypt_notes = true` encrypts new notes by default using the password in `password_env`. Not available for file-backed notes.
+Both ask for the password in a masked dialog, and encrypting asks for it twice.
+
+An encrypted note's text and history are sealed with its own random key, and the password only unlocks that key, so changing a password does not rewrite the note. Its title stays visible (encrypting pins it; rename it to something vaguer, or clear it to show "Encrypted note"). Renaming an encrypted note asks for its password first. Opening one asks for the password and keeps it unlocked for 15 minutes of inactivity.
+
+**Encrypted collections.** `e` on a collection in the browser encrypts it with a password (asked twice): its notes are encrypted with the collection's key, with their titles pinned, and notes created in it, pasted into it or added with `:collection join` are encrypted too. Entering the collection or opening any of its notes asks for its password once and unlocks all of them. A note that leaves the collection stays encrypted with the collection's password until the collection is decrypted (`e` again), and a collection that still protects notes cannot be deleted. Notes that were locked, or belong to another encrypted collection, keep their own protection.
+
+Reminder text and images attached to encrypted notes are still stored unencrypted.
+
+`[editor.security] encrypt_notes = true` encrypts new notes by default using the password in `password_env`. Not available for file-backed notes.
 
 ## Export and backup
 
