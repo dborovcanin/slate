@@ -80,7 +80,11 @@ impl TerminalApp {
                     state.collection_filter_id.as_ref(),
                     state.collection_filter_name.as_deref(),
                 );
-                let mut hints = vec![("Enter", "open"), ("Tab", "search text")];
+                let mut hints = vec![
+                    ("Enter", "open"),
+                    ("Tab", "search text"),
+                    ("Ctrl+R", "history"),
+                ];
                 if working {
                     hints.push(("Ctrl+L", "all / working"));
                 }

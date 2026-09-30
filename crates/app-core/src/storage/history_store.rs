@@ -205,6 +205,18 @@ fn extend_session(
     Ok(())
 }
 
+/// Ends the note's current editing session, so the next save starts a new
+/// version even right away.
+pub(super) fn end_session(conn: &Connection, note_id: &str) -> Result<(), String> {
+    conn.execute(
+        "UPDATE note_history SET session_started = 0
+         WHERE id = (SELECT MAX(id) FROM note_history WHERE note_id = ?1)",
+        [note_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Stored versions of a note, newest first.
 pub(super) fn list(conn: &Connection, note_id: &str) -> Result<Vec<NoteVersion>, String> {
     let mut stmt = conn

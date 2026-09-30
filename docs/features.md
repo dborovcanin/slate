@@ -11,7 +11,7 @@ Conventions:
 ## Contents
 
 1. [Notes and switching](#notes-and-switching)
-2. [Saving](#saving)
+2. [Saving](#saving) and [note history](#note-history)
 3. [Command line entry points](#command-line-entry-points)
 4. [Daily notes, capture and pipe append](#daily-notes-capture-and-pipe-append)
 5. [Editing and markdown helpers](#editing-and-markdown-helpers)
@@ -51,6 +51,7 @@ The note switcher, its content search and the collection picker are popups style
 | `Tab` in the switcher | Switch to full-text content search; `Tab` again goes back to title search |
 | `Enter` in the switcher / content search | Open the note (content search jumps to the matching line) |
 | `Ctrl+L` in the switcher / content search | Toggle between the working collection and all notes |
+| `Ctrl+R` in the switcher | [History](#note-history) of the selected note |
 | `Delete` / `Ctrl+Backspace` in the switcher | Delete the selected note (confirm with `y`/`Enter`; protected notes ask for the password) |
 | `Ctrl+W` in the switcher | Delete the last word of the query |
 | `Esc` / `Ctrl+P` in the switcher | Close it |
@@ -69,6 +70,20 @@ Locked or encrypted notes ask for their password before opening. Content search 
 | `:q` / `:q!` | Quit / quit without saving |
 
 `[editor] format_on_save = true` runs `:format` before every save. If the note changed elsewhere since it was loaded, a save stops with `note changed since last load; use :w! to force save`.
+
+### Note history
+
+Slate keeps older versions of every stored note. Saves less than five minutes apart form one editing session, and each session keeps the text from before it as a version (a session longer than half an hour is split). Versions are stored as the line changes between them, with an occasional full copy, so a small edit to a large note costs a few bytes; the history of an encrypted note is encrypted with it. File-backed notes (`slate file.md`) keep no history.
+
+`:history` (or `:versions`), `H` on a note in the browser, or `Ctrl+R` in the note switcher opens the history in the browser: the current text first, then each version with its time and the lines its session added and removed. The preview shows what restoring would change (`-` current lines, `+` lines of the version), or the version's text.
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move between the current text and older versions |
+| `Tab`, `t` | Preview what restoring would change, or the version's full text |
+| `Enter`, `l` | Restore the version (`y` confirms); the text before it is kept as a version |
+| `h`, `-`, `Esc` | Back to the notes |
+| `q`, `Ctrl+B` | Close the browser |
 
 ## Command line entry points
 

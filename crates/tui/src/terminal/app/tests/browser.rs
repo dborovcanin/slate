@@ -383,3 +383,100 @@ fn note_and_collection_pickers_are_popups_with_browser_rows() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn history_lists_versions_previews_changes_and_restores_another_note() {
+    let (db, mut app, path) = browser_app();
+    db.save_note("n2", "# Meeting notes\n- agenda\n- budget")
+        .expect("edit n2");
+    app.handle_key(&db, Key::Char('R')).expect("reload");
+    hover_note(&mut app, &db, "n2");
+    app.handle_key(&db, Key::Char('H')).expect("history");
+    assert_eq!(app.browser.level(), Level::History);
+    let history = app.browser.history.as_ref().expect("history open");
+    assert_eq!(history.versions.len(), 1);
+    assert_eq!(
+        (
+            history.versions[0].lines_added,
+            history.versions[0].lines_removed
+        ),
+        (1, 0)
+    );
+
+    app.handle_key(&db, Key::Char('j')).expect("select version");
+    let (rows, _) = render_screen(&mut app);
+    let screen = rows.join("\n");
+    assert!(
+        rows[0].contains("Meeting notes") && rows[0].contains("history"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("- - budget"),
+        "restore removes the new line:\n{screen}"
+    );
+    assert!(rows.last().unwrap().contains("restore"));
+
+    app.handle_key(&db, Key::Tab).expect("text");
+    let (rows, _) = render_screen(&mut app);
+    assert!(!rows.join("\n").contains("budget"));
+
+    app.handle_key(&db, Key::Enter).expect("restore");
+    assert!(app.browser.confirm.is_some());
+    app.handle_key(&db, Key::Char('y')).expect("confirm");
+    assert_eq!(
+        db.get_note("n2").unwrap().unwrap().body,
+        "# Meeting notes\n- agenda"
+    );
+    // The text before the restore is a version now, so it can be undone.
+    let versions = &app.browser.history.as_ref().unwrap().versions;
+    assert_eq!(versions.len(), 2);
+    assert_eq!(
+        db.note_version_text("n2", versions[0].id).unwrap(),
+        "# Meeting notes\n- agenda\n- budget"
+    );
+
+    app.handle_key(&db, Key::Char('h')).expect("back");
+    assert_eq!(app.browser.level(), Level::Notes);
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() {
+    let (db, mut app, path) = browser_app();
+    app.handle_key(&db, Key::Esc).expect("close browser");
+    app.editor.lines = vec!["# Budget".into(), "rent := 1500".into()];
+    app.dirty = true;
+    app.save(&db).expect("save");
+
+    app.execute_terminal_command(&db, "history");
+    assert_eq!(app.mode, UiMode::Browser);
+    assert_eq!(app.browser.level(), Level::History);
+    assert_eq!(
+        app.browser.history.as_ref().map(|h| h.note.id.as_str()),
+        Some("n1")
+    );
+    app.handle_key(&db, Key::Char('G')).expect("oldest");
+    app.handle_key(&db, Key::Enter).expect("restore");
+    app.handle_key(&db, Key::Char('y')).expect("confirm");
+    assert_eq!(app.editor.lines, vec!["# Budget", "rent := 1200", ""]);
+    assert!(db.get_note("n1").unwrap().unwrap().body.contains("1200"));
+    app.handle_key(&db, Key::Char('q')).expect("close");
+
+    // Ctrl+R in the note switcher opens the selected note's history.
+    app.handle_key(&db, Key::Ctrl('p')).expect("switcher");
+    type_text(&mut app, &db, "meeting");
+    app.handle_key(&db, Key::Ctrl('r')).expect("history");
+    assert_eq!(app.mode, UiMode::Browser);
+    assert_eq!(
+        app.browser.history.as_ref().map(|h| h.note.id.as_str()),
+        Some("n2")
+    );
+    let (rows, _) = render_screen(&mut app);
+    assert!(rows.join("\n").contains("no older versions yet"));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

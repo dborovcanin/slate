@@ -7,7 +7,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use app_core::storage::{NoteAccessMode, NoteSummary};
+use app_core::history::LineChange;
+use app_core::storage::{NoteAccessMode, NoteSummary, NoteVersion};
 use ratatui::buffer::Buffer;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -82,6 +83,8 @@ pub enum Level {
     Notes,
     /// Full-text search over the notes of one scope.
     Search,
+    /// Stored versions of one note.
+    History,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -158,6 +161,10 @@ pub struct Prompt {
 pub enum Confirm {
     DeleteNotes {
         note_ids: Vec<String>,
+        label: String,
+    },
+    RestoreVersion {
+        version_id: i64,
         label: String,
     },
     DeleteCollection {
@@ -240,6 +247,37 @@ pub fn search_terms(query: &str) -> Vec<String> {
     terms
 }
 
+/// Versions of one note, listed under its current text.
+#[derive(Debug, Clone)]
+pub struct HistoryView {
+    pub note: NoteEntry,
+    /// Level to return to on `h`/`Esc`.
+    pub return_level: Level,
+    pub versions: Vec<NoteVersion>,
+    /// 0 is the current text; `i` is `versions[i - 1]`.
+    pub selected: usize,
+    /// Show the version's text instead of what restoring it would change.
+    pub show_text: bool,
+}
+
+impl HistoryView {
+    pub fn selected_version(&self) -> Option<&NoteVersion> {
+        self.selected
+            .checked_sub(1)
+            .and_then(|index| self.versions.get(index))
+    }
+}
+
+/// Preview of a stored version.
+#[derive(Debug, Clone)]
+pub enum VersionPreview {
+    /// What restoring the version would change in the current text.
+    Changes(Vec<LineChange>),
+    Text(Vec<String>),
+    /// The version cannot be read (locked note, broken history).
+    Unavailable(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum Preview {
     #[default]
@@ -261,6 +299,10 @@ pub enum Preview {
         collections: Vec<String>,
         tags: Vec<String>,
         locked: bool,
+    },
+    Version {
+        version_id: i64,
+        content: VersionPreview,
     },
 }
 
@@ -289,6 +331,7 @@ pub struct BrowserState {
     pub message: Option<String>,
     pub pending_g: bool,
     pub search: Option<ContentSearch>,
+    pub history: Option<HistoryView>,
 }
 
 impl BrowserState {
@@ -314,6 +357,7 @@ impl BrowserState {
             Level::Collections => None,
             Level::Notes => self.hovered_note(),
             Level::Search => self.search.as_ref()?.hovered().map(|hit| &hit.note),
+            Level::History => self.history.as_ref().map(|history| &history.note),
         }
     }
 
@@ -336,7 +380,7 @@ impl BrowserState {
         match self.level() {
             Level::Collections => &self.collection_filter,
             Level::Notes => &self.note_filter,
-            Level::Search => "",
+            Level::Search | Level::History => "",
         }
     }
 
@@ -350,7 +394,7 @@ impl BrowserState {
                 self.note_filter = filter;
                 self.recompute_note_matches();
             }
-            Level::Search => {}
+            Level::Search | Level::History => {}
         }
     }
 
@@ -395,13 +439,18 @@ impl BrowserState {
             Level::Collections => self.collection_matches.len(),
             Level::Notes => self.note_matches.len(),
             Level::Search => self.search.as_ref().map_or(0, |search| search.hits.len()),
+            Level::History => self
+                .history
+                .as_ref()
+                .map_or(0, |history| history.versions.len() + 1),
         }
     }
 
     fn cursor_mut(&mut self) -> &mut usize {
-        match (self.level(), self.search.as_mut()) {
-            (Level::Search, Some(search)) => &mut search.selected,
-            (Level::Notes, _) => &mut self.note_cursor,
+        match (self.level(), self.search.as_mut(), self.history.as_mut()) {
+            (Level::Search, Some(search), _) => &mut search.selected,
+            (Level::History, _, Some(history)) => &mut history.selected,
+            (Level::Notes, ..) => &mut self.note_cursor,
             _ => &mut self.collection_cursor,
         }
     }
@@ -951,9 +1000,10 @@ pub(crate) fn draw_header_bar(
 fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     let state = view.state;
     let icons = view.look.icons;
-    let (position, total) = match (state.level(), state.search.as_ref()) {
-        (Level::Search, Some(search)) => (search.selected, search.hits.len()),
-        (Level::Notes, _) => (state.note_cursor, state.note_matches.len()),
+    let (position, total) = match (state.level(), state.search.as_ref(), state.history.as_ref()) {
+        (Level::Search, Some(search), _) => (search.selected, search.hits.len()),
+        (Level::History, _, Some(history)) => (history.selected, history.versions.len() + 1),
+        (Level::Notes, ..) => (state.note_cursor, state.note_matches.len()),
         _ => (state.collection_cursor, state.collection_matches.len()),
     };
     let mut right = String::new();
@@ -978,6 +1028,17 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     right.push_str(&position_label(position, total));
     right.push(' ');
     let crumb = match (state.level(), state.scope.as_ref(), state.search.as_ref()) {
+        (Level::History, scope, _) => format!(
+            "{}{} {} history",
+            scope
+                .map(|scope| format!("{} {} ", state.scope_name(scope), icons.separator))
+                .unwrap_or_default(),
+            state
+                .history
+                .as_ref()
+                .map_or("", |history| history.note.title.as_str()),
+            icons.separator
+        ),
         (Level::Search, _, Some(search)) => format!(
             "{} {} {} search",
             state.scope_name(&search.scope),
@@ -1300,6 +1361,163 @@ fn scrolled_input(text: &str, cursor: usize, width: usize) -> (String, usize) {
     (visible, before_width - skip_width.min(before_width))
 }
 
+/// Row `pos` of a history list: the current text, then the stored versions.
+fn version_row(look: &Look, history: &HistoryView, pos: usize) -> Row {
+    let palette = look.palette;
+    let Some(version) = pos.checked_sub(1).and_then(|i| history.versions.get(i)) else {
+        let (icon, icon_fg) = note_icon(look, &history.note);
+        return Row {
+            marker: None,
+            icon,
+            icon_fg,
+            text: "Current".to_string(),
+            text_fg: palette.text_fg(),
+            bold: true,
+            right: age_label(&history.note.updated_at, look.now_epoch, look.date_format),
+        };
+    };
+    let saved = parse_rfc3339_epoch(&version.saved_at);
+    let when = saved
+        .map(|epoch| local_date(epoch, look.date_time_format))
+        .unwrap_or_else(|| version.saved_at.clone());
+    let age = age_label(&version.saved_at, look.now_epoch, look.date_format);
+    Row {
+        marker: None,
+        icon: look.icons.clock,
+        icon_fg: palette.code_function,
+        text: when,
+        text_fg: palette.text_fg(),
+        bold: false,
+        right: format!("+{} −{}  {age}", version.lines_added, version.lines_removed),
+    }
+}
+
+/// Preview of a stored version: what restoring it would change, or its text.
+#[allow(clippy::too_many_arguments)]
+fn draw_version_preview(
+    look: &Look,
+    buf: &mut Buffer,
+    pane: Pane,
+    top: usize,
+    height: usize,
+    history: &HistoryView,
+    content: &VersionPreview,
+) {
+    let palette = look.palette;
+    let icons = look.icons;
+    let bg = palette.surface_bg();
+    let inner = pane.width.saturating_sub(2);
+    let col = pane.col + 1;
+    let bottom = top + height;
+    let dim = cell_style(Some(palette.code_comment), Some(bg), Modifier::empty());
+    let mut row = top;
+
+    let (icon, icon_fg) = note_icon(look, &history.note);
+    put_str_width(
+        buf,
+        row,
+        col,
+        icon,
+        1,
+        cell_style(Some(icon_fg), Some(bg), Modifier::empty()),
+    );
+    put_str_width(
+        buf,
+        row,
+        col + 2,
+        &fit_width(&history.note.title, inner.saturating_sub(2)),
+        inner.saturating_sub(2),
+        cell_style(Some(palette.primary()), Some(bg), Modifier::BOLD),
+    );
+    row += 1;
+    let subtitle = match content {
+        VersionPreview::Changes(_) => format!(
+            "{} restoring changes  − current  + this version",
+            icons.clock
+        ),
+        VersionPreview::Text(_) => format!("{} text of this version", icons.clock),
+        VersionPreview::Unavailable(_) => format!("{} version", icons.clock),
+    };
+    put_str_width(buf, row, col, &fit_width(&subtitle, inner), inner, dim);
+    row += 1;
+    put_str_width(buf, row, col, &"─".repeat(inner), inner, dim);
+    row += 1;
+
+    match content {
+        VersionPreview::Unavailable(message) => {
+            put_str_width(buf, row, col, &fit_width(message, inner), inner, dim);
+        }
+        VersionPreview::Changes(changes) if changes.is_empty() => {
+            put_str_width(
+                buf,
+                row,
+                col,
+                &fit_width("same as the current text", inner),
+                inner,
+                dim,
+            );
+        }
+        VersionPreview::Changes(changes) => {
+            for change in changes {
+                if row >= bottom {
+                    break;
+                }
+                let (text, fg) = match change {
+                    LineChange::Same(line) => (format!("  {line}"), palette.text_fg()),
+                    LineChange::Added(line) => (format!("+ {line}"), palette.code_string),
+                    LineChange::Removed(line) => (format!("- {line}"), palette.code_keyword),
+                    LineChange::Skipped(count) => (
+                        format!(
+                            "⋯ {count} unchanged line{}",
+                            if *count == 1 { "" } else { "s" }
+                        ),
+                        palette.code_comment,
+                    ),
+                };
+                put_str_width(
+                    buf,
+                    row,
+                    col,
+                    &fit_width(&text, inner),
+                    inner,
+                    cell_style(Some(fg), Some(bg), Modifier::empty()),
+                );
+                row += 1;
+            }
+        }
+        VersionPreview::Text(lines) => {
+            let mut ctx = RenderContext::with_syntax_mode(false, None, false, None, palette);
+            let deco = LineDecorations {
+                calc_ghost: None,
+                reminder_ghost: None,
+                reminder_strikethrough: false,
+                search_ranges: &[],
+                current_search_ranges: &[],
+                variable_names: None,
+                dim_ranges: &[],
+                selection_ranges: &[],
+                accent_ranges: &[],
+                underline_ranges: &[],
+                active_cursor_col: None,
+            };
+            let area = buf.area;
+            for line in lines {
+                if row >= bottom {
+                    break;
+                }
+                let (Ok(x), Ok(y)) = (u16::try_from(col - 1), u16::try_from(row - 1)) else {
+                    break;
+                };
+                if y >= area.bottom() || x >= area.right() {
+                    break;
+                }
+                ctx.render_line(line, inner, 0, &deco, buf, area.x + x, area.y + y);
+                row += 1;
+            }
+        }
+    }
+}
+
 /// Draws the browser over rows `1..rows` (the status bar row is left to the
 /// caller). Returns the cursor cell while a prompt or search is open.
 pub fn draw_browser(
@@ -1460,6 +1678,45 @@ pub fn draw_browser(
                 draw_note_preview(look, buf, pane, top, height, note, &state.preview, &terms);
             }
         }
+        Level::History => {
+            let history = state.history.as_ref()?;
+            if let Some(parent) = parent {
+                let open = state.note_position(&history.note.id);
+                draw_rows(
+                    buf,
+                    palette,
+                    parent,
+                    top,
+                    height,
+                    state.note_matches.len(),
+                    |pos| plain_note_row(look, &state.notes[state.note_matches[pos]]),
+                    open.map(|pos| (pos, Hover::Dim)),
+                );
+            }
+            draw_rows(
+                buf,
+                palette,
+                current,
+                top,
+                height,
+                history.versions.len() + 1,
+                |pos| version_row(look, history, pos),
+                Some((history.selected, Hover::Focused)),
+            );
+            if history.versions.is_empty() {
+                draw_centered_hint(buf, palette, current, top + 2, "no older versions yet");
+            }
+            if let Some(pane) = preview {
+                match &state.preview {
+                    Preview::Version { content, .. } => {
+                        draw_version_preview(look, buf, pane, top, height, history, content)
+                    }
+                    other => {
+                        draw_note_preview(look, buf, pane, top, height, &history.note, other, &[])
+                    }
+                }
+            }
+        }
     }
 
     if let Some(confirm) = state.confirm.as_ref() {
@@ -1527,6 +1784,11 @@ fn draw_confirm(view: &BrowserView, buf: &mut Buffer, rows: usize, cols: usize, 
                 format!("Delete {} notes?", note_ids.len())
             },
             "This removes the notes permanently.".to_string(),
+        ),
+        Confirm::RestoreVersion { label, .. } => (
+            "Restore",
+            format!("Restore the version from {label}?"),
+            "The current text stays in the history.".to_string(),
         ),
         Confirm::DeleteCollection { name, .. } => (
             "Delete collection",

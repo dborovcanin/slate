@@ -1,8 +1,8 @@
 use super::{new_note_with_context, Db, Key, TerminalApp, UiMode};
 use crate::terminal::browser::{
-    BrowserState, BrowserView, ClipOp, Clipboard, CollectionEntry, Confirm, ContentSearch, Level,
-    Look, MembershipUndo, NoteEntry, Preview, Prompt, PromptKind, Scope, SearchHit, SortKey,
-    PREVIEW_BODY_CHARS,
+    BrowserState, BrowserView, ClipOp, Clipboard, CollectionEntry, Confirm, ContentSearch,
+    HistoryView, Level, Look, MembershipUndo, NoteEntry, Preview, Prompt, PromptKind, Scope,
+    SearchHit, SortKey, VersionPreview, PREVIEW_BODY_CHARS,
 };
 use crate::terminal::canvas::{
     contrast_fg_for_bg, draw_key_hints, draw_row_at_styled, put_str, put_str_width, TextStyle,
@@ -36,6 +36,12 @@ const COLLECTIONS_HINTS: &[(&str, &str)] = &[
     ("/", "filter"),
     ("q", "close"),
 ];
+const HISTORY_HINTS: &[(&str, &str)] = &[
+    ("Enter", "restore"),
+    ("Tab", "changes / text"),
+    ("j/k", "move"),
+    ("h", "back"),
+];
 const SEARCH_HINTS: &[(&str, &str)] = &[
     ("type", "search"),
     ("↑↓", "move"),
@@ -53,6 +59,7 @@ const NOTES_HINTS: &[(&str, &str)] = &[
     ("a", "new"),
     ("r", "rename"),
     ("s", "sort"),
+    ("H", "history"),
     ("u", "undo"),
     ("/", "filter"),
     ("h", "back"),
@@ -215,7 +222,9 @@ impl TerminalApp {
         self.browser_reload_collections(db)?;
         // Titles and note ids feed the switcher and wiki-link completion.
         self.refresh_switcher_items(db)?;
-        if let (Level::Notes, Some(scope)) = (self.browser.level(), self.browser.scope.clone()) {
+        if let (Level::Notes | Level::History, Some(scope)) =
+            (self.browser.level(), self.browser.scope.clone())
+        {
             let notes = self.browser_load_scope(db, &scope)?;
             let state = &mut self.browser;
             state.notes = notes;
@@ -236,6 +245,10 @@ impl TerminalApp {
     }
 
     fn browser_refresh_preview(&mut self, db: &Db) {
+        if self.browser.level() == Level::History {
+            self.browser_refresh_history_preview(db);
+            return;
+        }
         match self.browser.level() {
             Level::Collections => {
                 let Some(entry) = self.browser.hovered_collection().cloned() else {
@@ -260,7 +273,7 @@ impl TerminalApp {
                     notes,
                 };
             }
-            Level::Notes | Level::Search => {
+            Level::Notes | Level::Search | Level::History => {
                 let Some(note) = self.browser.focused_note().cloned() else {
                     self.browser.preview = Preview::Empty;
                     return;
@@ -352,8 +365,10 @@ impl TerminalApp {
         if self.browser.prompt.is_some() {
             return self.handle_browser_prompt_key(db, key);
         }
-        if self.browser.level() == Level::Search {
-            return self.handle_browser_search_key(db, key);
+        match self.browser.level() {
+            Level::Search => return self.handle_browser_search_key(db, key),
+            Level::History => return self.handle_browser_history_key(db, key),
+            Level::Collections | Level::Notes => {}
         }
         let pending_g = std::mem::take(&mut self.browser.pending_g);
         let page = (input::terminal_size().0.saturating_sub(2) / 2).max(1) as isize;
@@ -402,16 +417,19 @@ impl TerminalApp {
             Key::Char('/') => {
                 let text = match level {
                     Level::Notes => self.browser.note_filter.clone(),
-                    Level::Collections | Level::Search => self.browser.collection_filter.clone(),
+                    Level::Collections | Level::Search | Level::History => {
+                        self.browser.collection_filter.clone()
+                    }
                 };
                 self.browser_open_prompt(PromptKind::Filter, text);
             }
             Key::Char('a') => match level {
                 Level::Collections => self.browser_open_prompt(PromptKind::NewCollection, ""),
                 Level::Notes => self.browser_open_prompt(PromptKind::NewNote, ""),
-                Level::Search => {}
+                Level::Search | Level::History => {}
             },
             Key::Char('r') => self.browser_request_rename(),
+            Key::Char('H') if level == Level::Notes => return self.browser_open_history(db),
             Key::Char(' ') if level == Level::Notes => {
                 self.browser.toggle_mark_hovered();
                 self.browser.move_cursor(1);
@@ -446,6 +464,10 @@ impl TerminalApp {
     fn browser_open_hovered(&mut self, db: &Db) -> Result<(), String> {
         match self.browser.level() {
             Level::Search => return self.browser_open_search_hit(db),
+            Level::History => {
+                self.browser_request_restore();
+                return Ok(());
+            }
             Level::Collections => {
                 if let Some(scope) = self.browser.hovered_collection().map(|e| e.scope.clone()) {
                     self.browser_enter_scope(db, scope, None)?;
@@ -580,7 +602,7 @@ impl TerminalApp {
 
     fn browser_request_rename(&mut self) {
         match self.browser.level() {
-            Level::Search => {}
+            Level::Search | Level::History => {}
             Level::Collections => match self.browser.hovered_collection() {
                 Some(CollectionEntry {
                     scope: Scope::Collection(id),
@@ -701,7 +723,7 @@ impl TerminalApp {
         let target = match self.browser.level() {
             Level::Notes => self.browser.scope.clone(),
             Level::Collections => self.browser.hovered_collection().map(|e| e.scope.clone()),
-            Level::Search => None,
+            Level::Search | Level::History => None,
         };
         let Some(Scope::Collection(target_id)) = target else {
             self.browser_message("paste into a collection");
@@ -798,7 +820,7 @@ impl TerminalApp {
 
     fn browser_request_delete(&mut self) {
         match self.browser.level() {
-            Level::Search => {}
+            Level::Search | Level::History => {}
             Level::Collections => match self.browser.hovered_collection() {
                 Some(CollectionEntry {
                     scope: Scope::Collection(id),
@@ -851,6 +873,11 @@ impl TerminalApp {
             return Ok(());
         };
         match confirm {
+            Confirm::RestoreVersion { version_id, label } => {
+                if let Err(error) = self.browser_restore_version(db, version_id, &label) {
+                    self.browser_message(format!("restore failed: {error}"));
+                }
+            }
             Confirm::DeleteNotes { note_ids, label } => {
                 let mut deleted = 0usize;
                 for note_id in &note_ids {
@@ -917,7 +944,7 @@ impl TerminalApp {
         let scope = match self.browser.level() {
             Level::Collections => self.browser.hovered_collection().map(|e| e.scope.clone()),
             Level::Notes => self.browser.scope.clone(),
-            Level::Search => None,
+            Level::Search | Level::History => None,
         };
         match scope {
             Some(Scope::Collection(id)) => {
@@ -935,6 +962,220 @@ impl TerminalApp {
         }
     }
 
+    /// Opens the browser on the history of `note_id`, hovering it in the
+    /// working collection or, when it is not there, in all notes.
+    pub(super) fn open_browser_history(&mut self, db: &Db, note_id: &str) -> Result<(), String> {
+        self.open_browser(db)?;
+        match self.browser.note_position(note_id) {
+            Some(pos) => self.browser.note_cursor = pos,
+            None => self.browser_enter_scope(db, Scope::All, Some(note_id))?,
+        }
+        if self.browser.hovered_note().map(|note| note.id.as_str()) != Some(note_id) {
+            self.browser_message("that note is not stored in Slate");
+            return Ok(());
+        }
+        self.browser_open_history(db)
+    }
+
+    /// Opens the history of the hovered note.
+    fn browser_open_history(&mut self, db: &Db) -> Result<(), String> {
+        let Some(note) = self.browser.hovered_note().cloned() else {
+            return Ok(());
+        };
+        if crate::file_path_from_note_id(&note.id).is_some() {
+            self.browser_message("file-backed notes keep no history");
+            return Ok(());
+        }
+        let versions = db.list_note_history(&note.id)?;
+        self.browser.history = Some(HistoryView {
+            note,
+            return_level: self.browser.level(),
+            versions,
+            selected: 0,
+            show_text: false,
+        });
+        self.browser.level = Some(Level::History);
+        self.browser.preview = Preview::Empty;
+        self.browser_refresh_preview(db);
+        Ok(())
+    }
+
+    fn close_browser_history(&mut self, db: &Db) {
+        if let Some(history) = self.browser.history.take() {
+            self.browser.level = Some(history.return_level);
+        }
+        self.browser.preview = Preview::Empty;
+        self.browser_refresh_preview(db);
+    }
+
+    fn handle_browser_history_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        let pending_g = std::mem::take(&mut self.browser.pending_g);
+        let page = (input::terminal_size().0.saturating_sub(2) / 2).max(1) as isize;
+        match key {
+            Key::Char('j') | Key::ArrowDown => self.browser.move_cursor(1),
+            Key::Char('k') | Key::ArrowUp => self.browser.move_cursor(-1),
+            Key::Ctrl('d') | Key::PageDown => self.browser.move_cursor(page),
+            Key::Ctrl('u') | Key::PageUp => self.browser.move_cursor(-page),
+            Key::Char('g') if pending_g => self.browser.move_to_end(false),
+            Key::Char('g') => self.browser.pending_g = true,
+            Key::Home => self.browser.move_to_end(false),
+            Key::Char('G') | Key::End => self.browser.move_to_end(true),
+            Key::Tab | Key::Char('t') => {
+                if let Some(history) = self.browser.history.as_mut() {
+                    history.show_text = !history.show_text;
+                }
+            }
+            Key::Enter | Key::Char('l') | Key::ArrowRight => self.browser_request_restore(),
+            Key::Char('h') | Key::Char('-') | Key::Esc | Key::ArrowLeft | Key::Backspace => {
+                self.close_browser_history(db);
+                return Ok(());
+            }
+            Key::Char('q') | Key::Ctrl('b') => {
+                self.close_browser();
+                return Ok(());
+            }
+            _ => {}
+        }
+        self.browser_refresh_preview(db);
+        Ok(())
+    }
+
+    /// The selected version's preview: what restoring it would change, or
+    /// its text; the current text shows as a normal note preview.
+    fn browser_refresh_history_preview(&mut self, db: &Db) {
+        let Some(history) = self.browser.history.as_ref() else {
+            self.browser.preview = Preview::Empty;
+            return;
+        };
+        let note = history.note.clone();
+        let show_text = history.show_text;
+        let Some(version) = history.selected_version().cloned() else {
+            if !matches!(&self.browser.preview, Preview::Note { note_id, .. } if *note_id == note.id)
+            {
+                let names = |id: &str| self.browser.collection_name(id).map(str::to_string);
+                let preview = self.load_note_preview(db, &note, None, &names);
+                self.browser.preview = preview;
+            }
+            return;
+        };
+        if let Preview::Version {
+            version_id,
+            content,
+        } = &self.browser.preview
+        {
+            let same_mode = match content {
+                VersionPreview::Text(_) => show_text,
+                VersionPreview::Changes(_) => !show_text,
+                VersionPreview::Unavailable(_) => true,
+            };
+            if *version_id == version.id && same_mode {
+                return;
+            }
+        }
+        let content = match db.note_version_text(&note.id, version.id) {
+            Err(error) => VersionPreview::Unavailable(error),
+            Ok(text) if show_text => VersionPreview::Text(
+                text.split('\n')
+                    .take(PREVIEW_MAX_LINES)
+                    .map(str::to_string)
+                    .collect(),
+            ),
+            Ok(text) => {
+                let current = if note.id == self.active_note.id {
+                    Ok(self.editor.lines.join("\n"))
+                } else {
+                    db.get_note(&note.id)
+                        .and_then(|found| found.ok_or_else(|| "note missing".to_string()))
+                        .map(|found| found.body)
+                };
+                match current {
+                    Ok(current) => {
+                        VersionPreview::Changes(app_core::history::line_changes(&current, &text, 3))
+                    }
+                    Err(error) => VersionPreview::Unavailable(error),
+                }
+            }
+        };
+        self.browser.preview = Preview::Version {
+            version_id: version.id,
+            content,
+        };
+    }
+
+    fn browser_request_restore(&mut self) {
+        let Some(version) = self
+            .browser
+            .history
+            .as_ref()
+            .and_then(HistoryView::selected_version)
+        else {
+            self.browser_message("this is the current text · pick an older version");
+            return;
+        };
+        let label = crate::terminal::browser::parse_rfc3339_epoch(&version.saved_at)
+            .and_then(|epoch| {
+                crate::terminal::date_picker::format_epoch_local(
+                    epoch,
+                    &self.date_picker.time_format,
+                )
+            })
+            .unwrap_or_else(|| version.saved_at.clone());
+        self.browser.confirm = Some(Confirm::RestoreVersion {
+            version_id: version.id,
+            label,
+        });
+    }
+
+    /// Replaces the note's text with a stored version. The text before the
+    /// restore becomes a version of its own, so a restore can be undone.
+    fn browser_restore_version(
+        &mut self,
+        db: &Db,
+        version_id: i64,
+        label: &str,
+    ) -> Result<(), String> {
+        let Some(note_id) = self.browser.history.as_ref().map(|h| h.note.id.clone()) else {
+            return Ok(());
+        };
+        let text = db.note_version_text(&note_id, version_id)?;
+        db.end_history_session(&note_id)?;
+        if note_id == self.active_note.id {
+            let doc_len = self.editor.lines.iter().map(String::len).sum::<usize>()
+                + self.editor.lines.len().saturating_sub(1);
+            self.apply_edit_operation(&crate::editor_core::types::EditOperation {
+                changes: vec![crate::editor_core::types::TextChange {
+                    from: 0,
+                    to: doc_len,
+                    insert: text,
+                }],
+                selection: None,
+            });
+            self.save(db)?;
+        } else {
+            let sources = NoteSourceService::new(db.clone());
+            sources.save_note_revision(
+                &sources.parse_identity(&note_id),
+                &text,
+                SaveOptions {
+                    expected_revision: db.get_note_updated_at(&note_id)?,
+                    force: false,
+                },
+            )?;
+        }
+        let versions = db.list_note_history(&note_id)?;
+        let updated_at = db.get_note_updated_at(&note_id)?.unwrap_or_default();
+        if let Some(history) = self.browser.history.as_mut() {
+            history.versions = versions;
+            history.selected = 0;
+            history.note.updated_at = updated_at;
+        }
+        self.browser_reload(db, Some(note_id))?;
+        self.browser_message(format!(
+            "restored the version from {label} · the text before is now a version"
+        ));
+        Ok(())
+    }
+
     /// Opens full-text search over the open collection (or the hovered one
     /// on the collections list).
     fn open_browser_search(&mut self, db: &Db) {
@@ -942,7 +1183,7 @@ impl TerminalApp {
         let scope = match level {
             Level::Notes => self.browser.scope.clone(),
             Level::Collections => self.browser.hovered_collection().map(|e| e.scope.clone()),
-            Level::Search => return,
+            Level::Search | Level::History => return,
         }
         .unwrap_or(Scope::All);
         self.browser.search = Some(ContentSearch::new(scope, level));
@@ -1122,6 +1363,7 @@ impl TerminalApp {
             Level::Collections => COLLECTIONS_HINTS,
             Level::Notes => NOTES_HINTS,
             Level::Search => SEARCH_HINTS,
+            Level::History => HISTORY_HINTS,
         };
         self.draw_hint_status_bar(
             buf,

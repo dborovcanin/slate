@@ -311,6 +311,7 @@ pub fn execute_command(
         }
         CommandId::Today => result_with_message("today handled by host"),
         CommandId::Browse => result_with_message("browse handled by host"),
+        CommandId::History => result_with_message("history handled by host"),
         CommandId::Remind => result_with_message("remind handled by host"),
         CommandId::RemindToggle => result_with_message("remind toggle handled by host"),
         CommandId::ModuleStatus
@@ -432,6 +433,7 @@ mod tests {
                 "avg doc",
                 "today",
                 "browse",
+                "history",
                 "date",
                 "remind",
                 "remind toggle",

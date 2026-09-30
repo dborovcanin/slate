@@ -113,6 +113,7 @@ Popup with a search bar, the notes (icon, title, age) and key hints; the title s
 | `Ctrl+L` | Toggle working collection / all notes |
 | `Ctrl+N` | New note |
 | `Ctrl+G` | Collection picker |
+| `Ctrl+R` | History of the selected note |
 | `Delete` / `Ctrl+Backspace` | Delete selected note (`y` / `Enter` confirm, `n` / `Esc` cancel) |
 | `Ctrl+W` | Delete last query word |
 | `Esc` / `Ctrl+P` | Close |
@@ -146,8 +147,19 @@ Popup listing collections with note counts; `All notes` clears the working colle
 | `a` / `r` | New note (in the open collection) or collection / rename the hovered one |
 | `s` | Sort notes by modification time or title |
 | `w` | Make the collection the working collection (`All notes` clears it) |
+| `H` | History of the hovered note |
 | `R` | Reload |
 | `q`, `Esc`, `Ctrl+B` | Close |
+
+## Note history (`:history`, `H` in the browser, `Ctrl+R` in the switcher)
+
+| Key | Action |
+| --- | --- |
+| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move between the current text and older versions |
+| `Tab`, `t` | Preview what restoring would change, or the version's full text |
+| `Enter`, `l` | Restore the version (`y` confirms); the text before it is kept as a version |
+| `h`, `-`, `Esc` | Back to the notes |
+| `q`, `Ctrl+B` | Close the browser |
 
 ## Image preview
 

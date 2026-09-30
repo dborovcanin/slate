@@ -1183,6 +1183,13 @@ impl Db {
         history_store::list(&conn, id)
     }
 
+    /// Makes the next save of a note start a new history version, so the
+    /// text before it (for example before a restore) is kept.
+    pub fn end_history_session(&self, id: &str) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        history_store::end_session(&conn, id)
+    }
+
     /// The text of a stored version of a note. Protected notes must be
     /// unlocked.
     pub fn note_version_text(&self, id: &str, version_id: i64) -> Result<String, String> {

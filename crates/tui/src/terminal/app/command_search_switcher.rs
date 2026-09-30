@@ -413,6 +413,13 @@ impl TerminalApp {
             Key::Ctrl('g') => {
                 self.open_collection_switcher(db)?;
             }
+            Key::Ctrl('r') => {
+                if let Some(idx) = self.switcher.matches.get(self.switcher.selected).copied() {
+                    let note_id = self.switcher.items[idx].id.clone();
+                    self.close_switcher();
+                    self.open_browser_history(db, &note_id)?;
+                }
+            }
             Key::CtrlDelete
             | Key::ShiftEnter
             | Key::BackTab
@@ -1587,6 +1594,13 @@ impl TerminalApp {
                 crate::editor_core::engine::HostCommandPlan::Today => {
                     if let Err(error) = self.open_today_note(db) {
                         self.status = format!("today: {error}");
+                    }
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::History => {
+                    let note_id = self.active_note.id.clone();
+                    if let Err(error) = self.open_browser_history(db, &note_id) {
+                        self.status = format!("history: {error}");
                     }
                     return;
                 }

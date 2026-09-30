@@ -4,6 +4,7 @@ use crate::types::{CommandMode, CommandSuggestion};
 pub enum CommandId {
     Today,
     Browse,
+    History,
     Sum,
     SumList,
     SumRow,
@@ -402,7 +403,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 68] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 69] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -485,6 +486,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 68] = [
         value: "browse",
         aliases: &["explore", "files"],
         description: "browse collections and notes",
+        modes: &MODES_BOTH,
+    },
+    CommandDefinition {
+        id: CommandId::History,
+        value: "history",
+        aliases: &["versions"],
+        description: "browse and restore older versions of this note",
         modes: &MODES_BOTH,
     },
     CommandDefinition {

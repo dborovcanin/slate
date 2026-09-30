@@ -112,6 +112,7 @@ pub enum HostCollectionAction {
 pub enum HostCommandPlan {
     Today,
     Browse,
+    History,
     Date,
     Remind,
     RemindToggle,
@@ -219,6 +220,7 @@ impl EditorEngine {
         match command.id {
             CommandId::Today => Some(HostCommandPlan::Today),
             CommandId::Browse => Some(HostCommandPlan::Browse),
+            CommandId::History => Some(HostCommandPlan::History),
             CommandId::Date => Some(HostCommandPlan::Date),
             CommandId::Remind => Some(HostCommandPlan::Remind),
             CommandId::RemindToggle => Some(HostCommandPlan::RemindToggle),

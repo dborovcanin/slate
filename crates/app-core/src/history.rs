@@ -254,6 +254,64 @@ impl Payload {
     }
 }
 
+/// One line of a readable diff.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LineChange {
+    Same(String),
+    Added(String),
+    Removed(String),
+    /// Unchanged lines left out between changes.
+    Skipped(usize),
+}
+
+/// The changes from `from` to `to` as a unified-style listing: changed lines
+/// with up to `context` unchanged lines around each change. Empty when the
+/// texts are equal.
+pub fn line_changes(from: &str, to: &str, context: usize) -> Vec<LineChange> {
+    let delta = diff(from, to);
+    if delta.is_identity() {
+        return Vec::new();
+    }
+    let base = lines(from);
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    let last = delta.ops.len() - 1;
+    for (i, op) in delta.ops.iter().enumerate() {
+        match op {
+            Op::Keep(n) => {
+                let kept = &base[pos..pos + n];
+                let head = if i == 0 { 0 } else { context.min(kept.len()) };
+                let tail = if i == last {
+                    0
+                } else {
+                    context.min(kept.len() - head)
+                };
+                out.extend(kept[..head].iter().map(|l| LineChange::Same(l.to_string())));
+                let skipped = kept.len() - head - tail;
+                if skipped > 0 {
+                    out.push(LineChange::Skipped(skipped));
+                }
+                out.extend(
+                    kept[kept.len() - tail..]
+                        .iter()
+                        .map(|l| LineChange::Same(l.to_string())),
+                );
+                pos += n;
+            }
+            Op::Delete(n) => {
+                out.extend(
+                    base[pos..pos + n]
+                        .iter()
+                        .map(|l| LineChange::Removed(l.to_string())),
+                );
+                pos += n;
+            }
+            Op::Insert(added) => out.extend(added.iter().cloned().map(LineChange::Added)),
+        }
+    }
+    out
+}
+
 /// Whether the next stored row should be a full checkpoint rather than a
 /// delta: after many deltas in a row, or once the deltas since the last
 /// checkpoint weigh more than half the note.
@@ -409,6 +467,27 @@ mod tests {
                 assert_eq!(&rebuild(&current, &rows, index).unwrap(), expected);
             }
         }
+    }
+
+    #[test]
+    fn line_changes_show_context_around_changes() {
+        let from: String = (0..20).map(|i| format!("l{i}\n")).collect();
+        let to = from.replace("l10\n", "ten\n");
+        let changes = line_changes(&from, &to, 2);
+        assert_eq!(
+            changes,
+            vec![
+                LineChange::Skipped(8),
+                LineChange::Same("l8".into()),
+                LineChange::Same("l9".into()),
+                LineChange::Removed("l10".into()),
+                LineChange::Added("ten".into()),
+                LineChange::Same("l11".into()),
+                LineChange::Same("l12".into()),
+                LineChange::Skipped(8),
+            ]
+        );
+        assert!(line_changes("same", "same", 3).is_empty());
     }
 
     #[test]

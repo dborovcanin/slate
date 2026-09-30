@@ -34,6 +34,7 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 | Open a markdown file as a note (saved back to the file) | `slate path/to/file.md` |
 | Collections and a session working collection | `Ctrl+G`, `:collection create/choose/join/leave/update/delete/purge` |
 | Collection browser: collections, notes and a preview side by side; copy, move, rename, create, delete and search note text | `Ctrl+B`, `-` (Normal), `:browse`; `Ctrl+F` / `Ctrl+/` inside |
+| Note history: every editing session is kept as a version (stored as line changes); preview what restoring would change and restore | `:history`, `H` in the browser, `Ctrl+R` in the note switcher |
 
 ### Capture and daily notes
 
