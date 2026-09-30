@@ -52,6 +52,13 @@ pub struct NoteEvaluationOptions {
     /// its own `scan_cross_note_refs` call and uses this directly. Pass the result
     /// of a prior `scan_cross_note_refs` call to avoid rescanning on every eval.
     pub precomputed_refs: Option<Vec<CrossNoteRef>>,
+    /// Lines to evaluate, ascending, instead of `eval_range`.
+    pub eval_lines: Option<Vec<usize>>,
+    /// Known values of table formula cells, keyed by `(line, cell index)`,
+    /// that evaluated lines may read instead of evaluating those cells again;
+    /// an empty value means the cell evaluated to nothing. Seeds on lines
+    /// being evaluated are ignored.
+    pub table_cell_seeds: FxHashMap<(usize, usize), String>,
 }
 
 impl Default for NoteEvaluationOptions {
@@ -63,6 +70,8 @@ impl Default for NoteEvaluationOptions {
             eval_range: None,
             extern_vars: Vec::new(),
             precomputed_refs: None,
+            eval_lines: None,
+            table_cell_seeds: FxHashMap::default(),
         }
     }
 }
@@ -1050,7 +1059,7 @@ fn changed_line_span(old: &[u64], new: &[u64]) -> Option<(usize, usize, usize)> 
 fn evaluate_prepared(
     lines: &[String],
     prepared: &mut PreparedNoteContext,
-    options: NoteEvaluationOptions,
+    mut options: NoteEvaluationOptions,
 ) -> NoteEvaluationResult {
     let mut ctx = new_context();
     let PreparedNoteContext {
@@ -1074,7 +1083,8 @@ fn evaluate_prepared(
     };
     let mut resolver =
         VariableResolver::with_resolved(defs, variable_matcher.clone(), std::mem::take(resolved));
-    let is_full_eval = eval_from == 0 && eval_to == line_count;
+    let listed_lines = options.eval_lines.take();
+    let is_full_eval = listed_lines.is_none() && eval_from == 0 && eval_to == line_count;
     if options.variables_enabled && is_full_eval {
         let mut names: Vec<String> = defs.keys().cloned().collect();
         names.sort();
@@ -1091,7 +1101,12 @@ fn evaluate_prepared(
     // of the same note state; `written` rows are restored at the end.
     let mut written: Vec<usize> = Vec::new();
     // Cache and recursion guard for table-cell formula evaluation by (line, cell).
-    let mut table_formula_cache: FxHashMap<(usize, usize), String> = FxHashMap::default();
+    let mut table_formula_cache = std::mem::take(&mut options.table_cell_seeds);
+    let is_evaluated = |line: usize| match &listed_lines {
+        Some(list) => list.binary_search(&line).is_ok(),
+        None => (eval_from..eval_to).contains(&line),
+    };
+    table_formula_cache.retain(|&(line, _), _| !is_evaluated(line));
     let mut table_formula_stack: Vec<(usize, usize)> = Vec::new();
     let mut table_eval_cache = TableEvalCache::default();
     let mut table_diagnostics: Vec<NoteEvaluationDiagnostic> = Vec::new();
@@ -1114,7 +1129,11 @@ fn evaluate_prepared(
         };
     }
 
-    for idx in eval_from..eval_to {
+    let targets: Box<dyn Iterator<Item = usize> + '_> = match &listed_lines {
+        Some(list) => Box::new(list.iter().copied().filter(|&idx| idx < line_count)),
+        None => Box::new(eval_from..eval_to),
+    };
+    for idx in targets {
         if lines_with_unresolved.contains(&idx) {
             continue;
         }
@@ -3024,6 +3043,45 @@ mod tests {
     }
 
     #[test]
+    fn note_eval_listed_lines_read_seeded_formula_cells() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| a | ab |".to_string(),
+            "| --- | --- |".to_string(),
+            "| 1 | :=(1,1)*2 |".to_string(),
+            "| 3 | :=(2,1)*2 |".to_string(),
+            "| t | :=sum_col() |".to_string(),
+        ];
+        let full = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let mut seeds = FxHashMap::default();
+        seeds.insert((2, 1), "100".to_string());
+        // A seed on an evaluated line is ignored.
+        seeds.insert((3, 1), "999".to_string());
+        let listed = engine.evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                eval_lines: Some(vec![3, 4]),
+                table_cell_seeds: seeds,
+                ..Default::default()
+            },
+        );
+
+        let value = |result: &NoteEvaluationResult, line: usize| {
+            result.table_cell_results[line]
+                .first()
+                .map(|c| c.value.clone())
+        };
+        assert_eq!(value(&full, 4), Some("8".to_string()));
+        assert_eq!(value(&listed, 2), None, "line 2 is not evaluated");
+        assert_eq!(value(&listed, 3), Some("6".to_string()));
+        assert_eq!(
+            value(&listed, 4),
+            Some("106".to_string()),
+            "seeded row 1 counts as 100"
+        );
+    }
+
+    #[test]
     fn note_eval_table_allows_multiple_row_formula_calls_in_same_cell() {
         let engine = CalcEngine::new();
         let lines = vec![
@@ -3715,7 +3773,7 @@ mod tests {
                 var_normalized: "rate".to_string(),
                 value: rate,
             }],
-            precomputed_refs: None,
+            ..Default::default()
         };
         let mut cache = NoteContextCache::default();
         let check = |lines: &[String], cache: &mut NoteContextCache, rate: f64| {
@@ -3770,7 +3828,7 @@ mod tests {
                 var_normalized: "rate".to_string(),
                 value: 0.5,
             }],
-            precomputed_refs: None,
+            ..Default::default()
         };
         let mut seed = 0x9e37_79b9_7f4a_7c15u64;
         let mut next = |bound: usize| {

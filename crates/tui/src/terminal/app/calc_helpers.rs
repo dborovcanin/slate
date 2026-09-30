@@ -62,6 +62,26 @@ pub(super) fn compute_calc_data(
     calc_data_from_result(result)
 }
 
+/// Evaluates only `eval_lines`; table formula cells elsewhere read their
+/// `table_cell_seeds` value instead of being evaluated again.
+pub(super) fn compute_calc_data_for_lines(
+    engine: &CalcEngine,
+    lines: &[String],
+    options: NoteEvaluationOptions,
+    eval_lines: Vec<usize>,
+    table_cell_seeds: rustc_hash::FxHashMap<(usize, usize), String>,
+) -> CalcData {
+    let result = engine.evaluate_note_context(
+        lines,
+        NoteEvaluationOptions {
+            eval_lines: Some(eval_lines),
+            table_cell_seeds,
+            ..options
+        },
+    );
+    calc_data_from_result(result)
+}
+
 /// `compute_calc_data` that reuses whole-note preparation from `cache` while
 /// the note is unchanged, for repeated range evaluations such as scrolling.
 #[allow(clippy::too_many_arguments)]
@@ -150,6 +170,7 @@ pub(super) fn compute_calc_data_for_note(
             eval_range: None,
             extern_vars,
             precomputed_refs,
+            ..Default::default()
         },
     );
 

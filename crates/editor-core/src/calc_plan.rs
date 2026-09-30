@@ -2090,6 +2090,145 @@ fn coordinate_formula_dependency_window_in_block(
     }
 }
 
+/// What to evaluate after lines `[changed_from, changed_to)` of one table
+/// changed in place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFormulaEvalSet {
+    /// The changed lines and every formula line depending on them, directly
+    /// or through other formulas, ascending.
+    pub lines: Vec<usize>,
+    /// `(line, cell index)` of the table's other formula cells: their last
+    /// values still hold.
+    pub resting_cells: Vec<(usize, usize)>,
+}
+
+/// Where lines `[from, to)` sit in their table, to tell whether an edit kept
+/// the table's rows in place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableRowsPlacement {
+    table_start: usize,
+    table_end: usize,
+    row_count: usize,
+    rows: Vec<usize>,
+}
+
+/// The placement of lines `[from, to)`, when all are data rows of one table
+/// the index holds.
+pub fn table_rows_placement(
+    index: Option<&CalcDependencyIndex>,
+    from: usize,
+    to: usize,
+) -> Option<TableRowsPlacement> {
+    table_block_and_placement(index, from, to).map(|(_, placement)| placement)
+}
+
+fn table_block_and_placement(
+    index: Option<&CalcDependencyIndex>,
+    from: usize,
+    to: usize,
+) -> Option<(&TableFormulaDependencyBlock, TableRowsPlacement)> {
+    if from >= to {
+        return None;
+    }
+    let block = index?
+        .table_formula_index
+        .as_ref()?
+        .blocks
+        .iter()
+        .find(|block| block.table_start <= from && to <= block.table_end + 1)?;
+    let rows = (from..to)
+        .map(|line_idx| block.data_rows.row_for_line.get(&line_idx).copied())
+        .collect::<Option<Vec<_>>>()?;
+    let placement = TableRowsPlacement {
+        table_start: block.table_start,
+        table_end: block.table_end,
+        row_count: block.data_rows.rows.len(),
+        rows,
+    };
+    Some((block, placement))
+}
+
+/// The formula lines an in-place edit of table data rows reaches, so only
+/// those are evaluated instead of every line between the edit and the last
+/// dependent. A row depends on the rows its coordinate references name, and
+/// a `sum_col()`/`avg_col()` row on every row above it. `before` is where the
+/// changed lines sat before the edit (see [`table_rows_placement`]). None
+/// when the change is not confined to data rows of one indexed table, or
+/// moved rows around in it (the caller then evaluates a contiguous window).
+pub fn table_formula_eval_set(
+    index: Option<&CalcDependencyIndex>,
+    changed_from: usize,
+    changed_to: usize,
+    before: &TableRowsPlacement,
+) -> Option<TableFormulaEvalSet> {
+    let (block, placement) = table_block_and_placement(index, changed_from, changed_to)?;
+    if placement != *before {
+        return None;
+    }
+    let rows = &block.data_rows;
+
+    let mut affected: FxHashSet<usize> = FxHashSet::default();
+    let mut stack = Vec::new();
+    for &row in &placement.rows {
+        if affected.insert(row) {
+            stack.push(row);
+        }
+    }
+
+    let mut dependents: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+    for (&(row, _), nodes) in &block.reverse_refs {
+        dependents
+            .entry(row)
+            .or_default()
+            .extend(nodes.iter().map(|&(dependent_row, _)| dependent_row));
+    }
+    let column_formula_rows: Vec<usize> = block
+        .formula_lines
+        .iter()
+        .filter(|info| info.has_col_formula)
+        .filter_map(|info| rows.row_for_line.get(&info.line_idx).copied())
+        .collect();
+
+    loop {
+        while let Some(row) = stack.pop() {
+            for &dependent in dependents.get(&row).into_iter().flatten() {
+                if affected.insert(dependent) {
+                    stack.push(dependent);
+                }
+            }
+        }
+        let first_affected = affected.iter().copied().min().unwrap_or(usize::MAX);
+        for &row in &column_formula_rows {
+            if row > first_affected && affected.insert(row) {
+                stack.push(row);
+            }
+        }
+        if stack.is_empty() {
+            break;
+        }
+    }
+
+    let mut lines: Vec<usize> = affected
+        .iter()
+        .filter_map(|row| rows.rows.get(row.checked_sub(1)?))
+        .flatten()
+        .copied()
+        .chain(changed_from..changed_to)
+        .collect();
+    lines.sort_unstable();
+    lines.dedup();
+    let resting_cells = block
+        .formula_nodes
+        .iter()
+        .filter(|((row, _), _)| !affected.contains(row))
+        .map(|(&(_, col), &line_idx)| (line_idx, col - 1))
+        .collect();
+    Some(TableFormulaEvalSet {
+        lines,
+        resting_cells,
+    })
+}
+
 fn table_range_maybe_impacts_formulas(
     lines: &[String],
     from: usize,
@@ -3157,6 +3296,55 @@ mod tests {
         edited[4] = "| b | 5 | :=(2,2)*2 |".to_string();
         let plan = plan_incremental_calc(&prev, &results, &edited);
         assert_eq!((plan.eval_from, plan.eval_to), (4, 5));
+    }
+
+    #[test]
+    fn table_formula_eval_set_follows_references_and_column_formulas() {
+        let lines: Vec<String> = [
+            "| n | a | b |",
+            "| --- | --- | --- |",
+            "| r1 | 1 | :=(1,2)*2 |",
+            "| r2 | 2 | :=(3,2)+1 |",
+            "| r3 | 3 | 4 |",
+            "| r4 | 5 | :=(1,3)+1 |",
+            "| t | :=sum_col() | 7 |",
+            "| r6 | 6 | :=(6,2)*3 |",
+        ]
+        .map(String::from)
+        .to_vec();
+        let index = build_calc_dependency_index(&lines, CalcFeatureMask::default());
+
+        let set_for = |from: usize, to: usize| {
+            let before = table_rows_placement(index.as_ref(), from, to)?;
+            table_formula_eval_set(index.as_ref(), from, to, &before)
+        };
+
+        // r3 feeds r2 (by reference) and the total (by column); r1 and r4
+        // are untouched, and r6 only reads its own row.
+        let set = set_for(4, 5).expect("in-table edit");
+        assert_eq!(set.lines, vec![3, 4, 6]);
+        let mut resting = set.resting_cells;
+        resting.sort_unstable();
+        assert_eq!(resting, vec![(2, 2), (5, 2), (7, 2)]);
+
+        // r1 feeds r4 through its formula cell, then the total.
+        let set = set_for(2, 3).expect("in-table edit");
+        assert_eq!(set.lines, vec![2, 5, 6]);
+
+        // Header edits and edits outside the table fall back to a window.
+        assert_eq!(set_for(0, 1), None);
+        assert_eq!(set_for(8, 9), None);
+
+        // A line that stops being a row splits the table and renumbers the
+        // rows below it, though no line was added or removed.
+        let before = table_rows_placement(index.as_ref(), 4, 5).expect("row");
+        let mut split = lines.clone();
+        split[4] = "not a row".to_string();
+        let split_index = build_calc_dependency_index(&split, CalcFeatureMask::default());
+        assert_eq!(
+            table_formula_eval_set(split_index.as_ref(), 4, 5, &before),
+            None
+        );
     }
 
     #[test]

@@ -143,7 +143,20 @@ fn check_fresh(problems: &mut Vec<String>, tag: &str, app: &mut TerminalApp) {
 #[ignore]
 fn table_formula_edits_stress() {
     set_terminal_size(50, 200);
-    let (db, mut app, path) = app_with_note(&formatted(&stress_note()));
+    let mut problems = 0;
+    // Every row depends on all rows above it through `sum_col()`, then only
+    // row-local formulas and the total row.
+    problems += run_stress("sum_col in every row", &stress_note());
+    problems += run_stress(
+        "row-local formulas",
+        &stress_note().replace("-sum_col()/100", ""),
+    );
+    assert_eq!(problems, 0, "{problems} problems");
+}
+
+fn run_stress(name: &str, note: &str) -> usize {
+    eprintln!("== {name}");
+    let (db, mut app, path) = app_with_note(&formatted(note));
     app.mode = UiMode::Normal;
     app.run_calc_recompute();
     render_screen(&mut app);
@@ -256,7 +269,7 @@ fn table_formula_edits_stress() {
     drop(app);
     drop(db);
     cleanup_db_files(&path);
-    assert!(problems.is_empty(), "{} problems", problems.len());
+    problems.len()
 }
 
 fn first_diff(ours: &[String], expected: &[String]) -> String {

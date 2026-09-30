@@ -1,7 +1,7 @@
 use super::{
     build_variable_suggestions, compute_calc_data, compute_calc_data_cached,
-    compute_calc_data_for_note, compute_calc_trailer_refresh, contains_assignment_operator,
-    cross_note_exports_for_autocomplete, display_cols_for_prefix,
+    compute_calc_data_for_lines, compute_calc_data_for_note, compute_calc_trailer_refresh,
+    contains_assignment_operator, cross_note_exports_for_autocomplete, display_cols_for_prefix,
     extract_cross_note_completion_prefix, extract_variable_completion_prefix,
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
@@ -1834,6 +1834,12 @@ impl TerminalApp {
             .iter()
             .any(|meta| meta.has_builtin_formula);
         let calc_mask = self.calc_feature_mask();
+        // Where the changed lines sat in their table before this edit.
+        let table_rows_before = crate::editor_core::calc_plan::table_rows_placement(
+            self.calc.calc_dependency_index.as_ref(),
+            plan.eval_from,
+            plan.eval_to,
+        );
         crate::editor_core::calc_plan::sync_calc_dependency_index(
             &mut self.calc.calc_dependency_index,
             &self.editor.lines,
@@ -1895,7 +1901,64 @@ impl TerminalApp {
         let same_shape_cache = prev_results.len() == self.editor.lines.len()
             && prev_cell_results.len() == self.editor.lines.len();
 
-        let (mut new_results, mut new_cell_results) = if can_use_partial && same_shape_cache {
+        // An in-place edit of table rows evaluates just the formula lines it
+        // reaches; the table's other formula cells keep their last values.
+        let table_eval_set = match &table_rows_before {
+            Some(before)
+                if can_use_partial
+                    && same_shape_cache
+                    && !force_full_now
+                    && !self.calc_runtime.viewport_only
+                    && !eval_window.touches_any_assignment =>
+            {
+                crate::editor_core::calc_plan::table_formula_eval_set(
+                    self.calc.calc_dependency_index.as_ref(),
+                    plan.eval_from,
+                    plan.eval_to,
+                    before,
+                )
+            }
+            _ => None,
+        };
+
+        let (mut new_results, mut new_cell_results) = if let Some(set) = table_eval_set {
+            let mut merged_results = prev_results;
+            let mut merged_cells = prev_cell_results;
+            let seeds = set
+                .resting_cells
+                .iter()
+                .map(|&(line, cell)| {
+                    let value = merged_cells
+                        .get(line)
+                        .and_then(|cells| cells.iter().find(|entry| entry.cell_index == cell))
+                        .map(|entry| entry.value.clone())
+                        .unwrap_or_default();
+                    ((line, cell), value)
+                })
+                .collect();
+            let calc_data = compute_calc_data_for_lines(
+                &self.calc.engine,
+                &self.editor.lines,
+                app_core::calc::NoteEvaluationOptions {
+                    variables_enabled: calc_variables_enabled,
+                    cross_note_enabled: calc_cross_note_enabled,
+                    table_enabled: calc_table_enabled,
+                    extern_vars: incremental_extern_vars.clone(),
+                    ..Default::default()
+                },
+                set.lines.clone(),
+                seeds,
+            );
+            for idx in set.lines {
+                if let Some(slot) = merged_results.get_mut(idx) {
+                    *slot = calc_data.line_results.get(idx).cloned().unwrap_or(None);
+                }
+                if let Some(slot) = merged_cells.get_mut(idx) {
+                    *slot = calc_data.cell_results.get(idx).cloned().unwrap_or_default();
+                }
+            }
+            (merged_results, merged_cells)
+        } else if can_use_partial && same_shape_cache {
             let mut merged_results = prev_results;
             let mut merged_cells = prev_cell_results;
             if eval_from < eval_to {
