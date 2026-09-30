@@ -9,6 +9,7 @@ This project is a terminal note-taking app with:
 - a terminal UI (`crates/tui`, binary `slate`)
 - a shared core for editing behavior and text logic (`crates/editor-core`)
 - an app core for persistence, calc, config, and note sources (`crates/app-core`)
+- shared markdown table structure (`crates/table-syntax`), used by both cores
 - vim-like editing as a core capability
 - markdown-style formatting and richer structured text behaviors
 - current primary focus on Linux, while keeping architecture portable across platforms
@@ -127,7 +128,8 @@ Implement the smallest complete change that satisfies the current task.
 5. Run relevant tests/checks
 6. Report:
    - what changed
-   - what architectural decisions were made
+   - whether core/terminal separation improved or was preserved
+   - whether performance may still need follow-up
    - any known gaps or follow-up work
 
 ## Refactoring rules
@@ -174,12 +176,3 @@ A task is not done unless:
 - performance is not worsened
 - the change is scoped and reviewable
 - relevant checks pass
-
-<claude-mem-context>
-# Memory Context
-
-# [slate] recent context, 2026-05-19 9:44pm GMT+2
-
-No previous sessions found.
-</claude-mem-context>
-
