@@ -445,7 +445,9 @@ impl TerminalApp {
                 Level::Search | Level::History => {}
             },
             Key::Char('r') => self.browser_request_rename(),
-            Key::Char('H') if level == Level::Notes => return self.browser_open_history(db),
+            Key::Char('H') | Key::Ctrl('r') if level == Level::Notes => {
+                return self.browser_open_history(db);
+            }
             Key::Char(' ') if level == Level::Notes => {
                 self.browser.toggle_mark_hovered();
                 self.browser.move_cursor(1);
@@ -480,35 +482,37 @@ impl TerminalApp {
     fn browser_open_hovered(&mut self, db: &Db) -> Result<(), String> {
         match self.browser.level() {
             Level::Search => return self.browser_open_search_hit(db),
-            Level::History => {
-                self.browser_request_restore();
-                return Ok(());
-            }
+            Level::History => return self.browser_request_restore(db),
             Level::Collections => {
                 if let Some(scope) = self.browser.hovered_collection().map(|e| e.scope.clone()) {
                     self.browser_enter_scope(db, scope, None)?;
                 }
             }
             Level::Notes => {
-                let Some(note) = self.browser.hovered_note().cloned() else {
-                    return Ok(());
-                };
-                if note.is_locked() {
-                    self.browser_open_prompt(
-                        PromptKind::Unlock {
-                            note_id: note.id,
-                            title: note.title,
-                            line: None,
-                        },
-                        "",
-                    );
-                    return Ok(());
+                if let Some(note) = self.browser.hovered_note().cloned() {
+                    return self.browser_open_note(db, note);
                 }
-                self.close_browser();
-                self.open_note_from_switcher(db, &note.id, None, None)?;
             }
         }
         Ok(())
+    }
+
+    /// Closes the browser on `note`, asking for the password first when it
+    /// is locked.
+    fn browser_open_note(&mut self, db: &Db, note: NoteEntry) -> Result<(), String> {
+        if note.is_locked() {
+            self.browser_open_prompt(
+                PromptKind::Unlock {
+                    note_id: note.id,
+                    title: note.title,
+                    line: None,
+                },
+                "",
+            );
+            return Ok(());
+        }
+        self.close_browser();
+        self.open_note_from_switcher(db, &note.id, None, None)
     }
 
     fn handle_browser_prompt_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
@@ -1038,7 +1042,9 @@ impl TerminalApp {
                     history.show_text = !history.show_text;
                 }
             }
-            Key::Enter | Key::Char('l') | Key::ArrowRight => self.browser_request_restore(),
+            Key::Enter | Key::Char('l') | Key::ArrowRight => {
+                return self.browser_request_restore(db)
+            }
             Key::Char('h') | Key::Char('-') | Key::Esc | Key::ArrowLeft | Key::Backspace => {
                 self.close_browser_history(db);
                 return Ok(());
@@ -1115,15 +1121,15 @@ impl TerminalApp {
         };
     }
 
-    fn browser_request_restore(&mut self) {
-        let Some(version) = self
-            .browser
-            .history
-            .as_ref()
-            .and_then(HistoryView::selected_version)
-        else {
-            self.browser_message("this is the current text · pick an older version");
-            return;
+    /// Asks to restore the selected version; on the current text it opens
+    /// the note instead.
+    fn browser_request_restore(&mut self, db: &Db) -> Result<(), String> {
+        let Some(history) = self.browser.history.as_ref() else {
+            return Ok(());
+        };
+        let Some(version) = history.selected_version() else {
+            let note = history.note.clone();
+            return self.browser_open_note(db, note);
         };
         let label = app_core::storage::timestamp_epoch(&version.saved_at)
             .and_then(|epoch| {
@@ -1137,6 +1143,7 @@ impl TerminalApp {
             version_id: version.id,
             label,
         });
+        Ok(())
     }
 
     /// Replaces the note's text with a stored version. The text before the

@@ -488,6 +488,32 @@ fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() 
     let (rows, _) = render_screen(&mut app);
     assert!(rows.join("\n").contains("no older versions yet"));
 
+    // Enter on the current text opens the note.
+    app.handle_key(&db, Key::Enter).expect("open current");
+    assert_eq!(app.mode, UiMode::Normal);
+    assert_eq!(app.active_note.id, "n2");
+
+    // Ctrl+R in the browser's note list opens the hovered note's history.
+    app.handle_key(&db, Key::Ctrl('b')).expect("browser");
+    hover_note(&mut app, &db, "n1");
+    app.handle_key(&db, Key::Ctrl('r')).expect("history");
+    assert_eq!(app.browser.level(), Level::History);
+    assert_eq!(
+        app.browser.history.as_ref().map(|h| h.note.id.as_str()),
+        Some("n1")
+    );
+    app.handle_key(&db, Key::Char('q')).expect("close");
+
+    // Ctrl+R in insert mode opens the open note's history.
+    app.handle_key(&db, Key::Char('i')).expect("insert");
+    assert_eq!(app.mode, UiMode::Editor);
+    app.handle_key(&db, Key::Ctrl('r')).expect("history");
+    assert_eq!(app.browser.level(), Level::History);
+    assert_eq!(
+        app.browser.history.as_ref().map(|h| h.note.id.as_str()),
+        Some("n2")
+    );
+
     drop(app);
     drop(db);
     cleanup_db_files(&path);

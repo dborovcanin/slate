@@ -147,6 +147,12 @@ impl TerminalApp {
                 self.open_browser(db)?;
                 return Ok(());
             }
+            Key::Ctrl('r') => {
+                self.dismiss_variable_autocomplete_popup();
+                let note_id = self.active_note.id.clone();
+                self.open_browser_history(db, &note_id)?;
+                return Ok(());
+            }
             Key::ArrowUp => {
                 if self.wiki_link_autocomplete_popup.visible {
                     self.move_wiki_link_selection(-1);
