@@ -2608,10 +2608,23 @@ pub fn plan_incremental_calc_from_hashes(
         };
     }
 
-    let prefix = shared_prefix_len_hashed(prev_hashes, next_hashes);
-    let suffix = shared_suffix_len_hashed(prev_hashes, next_hashes, prefix);
+    let mut prefix = shared_prefix_len_hashed(prev_hashes, next_hashes);
+    let mut suffix = shared_suffix_len_hashed(prev_hashes, next_hashes, prefix);
     let next_len = next_lines.len();
     let prev_len = prev_hashes.len();
+    if prev_len != next_len {
+        // Rows inserted or removed renumber every row below them, so the
+        // coordinate references, `sum_col()` spans and row mapping of a table
+        // touching the change no longer match its unchanged lines: treat its
+        // whole block as changed.
+        let edge_lines = [prefix.checked_sub(1), Some(next_len - suffix)];
+        for line_idx in edge_lines.into_iter().flatten() {
+            if let Some((start, end)) = table::table_block_bounds(next_lines, line_idx) {
+                prefix = prefix.min(start);
+                suffix = suffix.min(next_len - end - 1);
+            }
+        }
+    }
     let changed_from = prefix;
     let changed_to = next_len.saturating_sub(suffix);
 
@@ -3111,6 +3124,39 @@ mod tests {
         assert_eq!(plan.eval_to, 2);
         assert_eq!(plan.eval_lines, vec!["20+2".to_string()]);
         assert_eq!(plan.base_results.len(), 2);
+    }
+
+    #[test]
+    fn plan_incremental_calc_treats_a_table_with_moved_rows_as_changed() {
+        let prev: Vec<String> = [
+            "intro",
+            "| n | v | d |",
+            "| --- | --- | --- |",
+            "| a | 1 | :=(1,2)*2 |",
+            "| b | 2 | :=(2,2)*2 |",
+            "| t | :=sum_col() | :=sum_col() |",
+            "",
+            "outro",
+        ]
+        .map(String::from)
+        .to_vec();
+        let results = vec![None; prev.len()];
+
+        // Deleting row `a` renumbers `b` and changes the total.
+        let mut deleted = prev.clone();
+        deleted.remove(3);
+        let plan = plan_incremental_calc(&prev, &results, &deleted);
+        assert_eq!((plan.eval_from, plan.eval_to), (1, 5));
+
+        // Pasting a row back does too.
+        let plan = plan_incremental_calc(&deleted, &results[..7], &prev);
+        assert_eq!((plan.eval_from, plan.eval_to), (1, 6));
+
+        // An edit that keeps the line count stays local.
+        let mut edited = prev.clone();
+        edited[4] = "| b | 5 | :=(2,2)*2 |".to_string();
+        let plan = plan_incremental_calc(&prev, &results, &edited);
+        assert_eq!((plan.eval_from, plan.eval_to), (4, 5));
     }
 
     #[test]

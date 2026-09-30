@@ -556,6 +556,10 @@ mod replay;
 mod vim;
 
 #[cfg(test)]
+#[path = "tests/table_formula_edits.rs"]
+mod table_formula_edits;
+
+#[cfg(test)]
 #[path = "tests/wrap.rs"]
 mod wrap;
 

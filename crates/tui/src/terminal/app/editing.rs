@@ -1857,7 +1857,7 @@ impl TerminalApp {
 
         let prev_results = std::mem::take(&mut self.calc.results);
         let prev_results_snapshot = prev_results.clone();
-        let prev_cell_results = std::mem::take(&mut self.calc.cell_results);
+        let mut prev_cell_results = std::mem::take(&mut self.calc.cell_results);
         let same_shape_cache = prev_results.len() == self.editor.lines.len()
             && prev_cell_results.len() == self.editor.lines.len();
 
@@ -1891,13 +1891,27 @@ impl TerminalApp {
                     *slot = Some(entry.result.clone());
                 }
             }
+            // Lines before the change keep their index; lines after it moved
+            // by the change in line count.
+            let line_count = self.editor.lines.len();
             let mut merged_cells: Vec<Vec<app_core::calc::TableCellEvaluation>> =
-                vec![Vec::new(); self.editor.lines.len()];
-            for entry in &plan.base_results {
-                if let Some(slot) = merged_cells.get_mut(entry.line_idx) {
-                    if let Some(cached) = prev_cell_results.get(entry.line_idx) {
-                        *slot = cached.clone();
-                    }
+                vec![Vec::new(); line_count];
+            let suffix_len = line_count.saturating_sub(plan.eval_to);
+            let suffix_len = if prev_cell_results.len() >= suffix_len {
+                suffix_len
+            } else {
+                0
+            };
+            let prev_suffix_start = prev_cell_results.len() - suffix_len;
+            let unchanged = (0..plan.eval_from.min(prev_cell_results.len()))
+                .map(|idx| (idx, idx))
+                .chain((0..suffix_len).map(|i| (plan.eval_to + i, prev_suffix_start + i)));
+            for (idx, prev_idx) in unchanged {
+                if let (Some(slot), Some(cached)) = (
+                    merged_cells.get_mut(idx),
+                    prev_cell_results.get_mut(prev_idx),
+                ) {
+                    *slot = std::mem::take(cached);
                 }
             }
             if eval_from < eval_to {

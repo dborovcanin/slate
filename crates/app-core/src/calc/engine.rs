@@ -1801,13 +1801,20 @@ fn substitute_table_coordinate_references(
     Ok(rewritten)
 }
 
+/// One cell a `sum_*`/`avg_*` formula aggregates: its text and, when it is
+/// a single-line cell, its `(line, col)` so a formula there can be evaluated.
+struct TableFormulaTerm {
+    text: String,
+    cell: Option<(usize, usize)>,
+}
+
 fn collect_table_formula_terms(
     lines: &[String],
     line_idx: usize,
     formula_col: usize,
     spec: FormulaSpec,
     table_eval_cache: &mut TableEvalCache,
-) -> Option<Vec<String>> {
+) -> Option<Vec<TableFormulaTerm>> {
     let current_cells = table_eval_cache.cells_for_line(lines, line_idx)?.clone();
     if table_syntax::is_delimiter_row_at(&current_cells, false) {
         return None;
@@ -1832,21 +1839,32 @@ fn collect_table_formula_terms(
                     if trimmed.is_empty() || table_syntax::delimiter_cell_dashes(&cell).is_some() {
                         continue;
                     }
-                    if !trimmed.chars().any(|c| c.is_ascii_digit()) {
+                    if !trimmed.chars().any(|c| c.is_ascii_digit())
+                        && !is_table_formula_text(trimmed)
+                    {
                         continue;
                     }
-                    terms.push(cell);
+                    let cell_pos = (row_lines.len() == 1).then(|| (row_lines[0], col));
+                    terms.push(TableFormulaTerm {
+                        text: cell,
+                        cell: cell_pos,
+                    });
                 }
             } else {
-                for cell in current_cells.iter().take(formula_col) {
+                for (col, cell) in current_cells.iter().take(formula_col).enumerate() {
                     let trimmed = cell.trim();
                     if trimmed.is_empty() || table_syntax::delimiter_cell_dashes(cell).is_some() {
                         continue;
                     }
-                    if !trimmed.chars().any(|c| c.is_ascii_digit()) {
+                    if !trimmed.chars().any(|c| c.is_ascii_digit())
+                        && !is_table_formula_text(trimmed)
+                    {
                         continue;
                     }
-                    terms.push(cell.clone());
+                    terms.push(TableFormulaTerm {
+                        text: cell.clone(),
+                        cell: Some((line_idx, col)),
+                    });
                 }
             }
         }
@@ -1860,10 +1878,14 @@ fn collect_table_formula_terms(
                 else {
                     continue;
                 };
-                if cell.trim().is_empty() || parse_builtin_formula(&cell).is_some() {
+                if cell.trim().is_empty() {
                     continue;
                 }
-                terms.push(cell);
+                let cell_pos = (row_lines.len() == 1).then(|| (row_lines[0], formula_col));
+                terms.push(TableFormulaTerm {
+                    text: cell,
+                    cell: cell_pos,
+                });
             }
         }
     }
@@ -2023,31 +2045,58 @@ fn find_builtin_formula_calls(expression: &str) -> Vec<FormulaCallSpan> {
     calls
 }
 
+/// Whether a cell holds a table formula (`:=…` or a builtin call) rather
+/// than a value.
+fn is_table_formula_text(text: &str) -> bool {
+    text.trim()
+        .strip_prefix(":=")
+        .is_some_and(|rest| !rest.trim_start().is_empty())
+        || !find_builtin_formula_calls(text).is_empty()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn evaluate_table_formula_call(
     lines: &[String],
     line_idx: usize,
     formula_col: usize,
     spec: FormulaSpec,
     variables_enabled: bool,
-    resolver: Option<&mut VariableResolver<'_>>,
+    mut resolver: Option<&mut VariableResolver<'_>>,
     table_eval_cache: &mut TableEvalCache,
+    table_formula_cache: &mut FxHashMap<(usize, usize), String>,
+    table_formula_stack: &mut Vec<(usize, usize)>,
     ctx: &mut fend_core::Context,
 ) -> Option<String> {
     let terms = collect_table_formula_terms(lines, line_idx, formula_col, spec, table_eval_cache)?;
 
     let mut values = Vec::new();
-    if variables_enabled {
-        let resolver = resolver?;
-        for term in terms {
-            if let Some(value) = evaluate_formula_term_with_variables(&term, resolver, ctx) {
-                values.push(value);
+    for term in terms {
+        // A formula cell counts with its value, whether or not this pass
+        // already wrote that value into its row: a partial evaluation must
+        // agree with a full one.
+        let value = match term.cell {
+            Some((term_line, term_col)) if is_table_formula_text(&term.text) => {
+                evaluate_table_formula(
+                    lines,
+                    term_line,
+                    &term.text,
+                    Some(term_col),
+                    variables_enabled,
+                    resolver.as_deref_mut(),
+                    table_eval_cache,
+                    table_formula_cache,
+                    table_formula_stack,
+                    ctx,
+                )
+                .filter(|value| table_ref_error_code(value).is_none())
             }
-        }
-    } else {
-        for term in terms {
-            if let Some(value) = evaluate_formula_term(&term, ctx) {
-                values.push(value);
+            _ if variables_enabled => {
+                evaluate_formula_term_with_variables(&term.text, resolver.as_deref_mut()?, ctx)
             }
+            _ => evaluate_formula_term(&term.text, ctx),
+        };
+        if let Some(value) = value {
+            values.push(value);
         }
     }
 
@@ -2069,8 +2118,9 @@ fn evaluate_table_formula(
     let formula_col = table_cell_index?;
 
     let key = (line_idx, formula_col);
+    // An empty entry records a cell that evaluated to nothing.
     if let Some(cached) = table_formula_cache.get(&key) {
-        return Some(cached.clone());
+        return (!cached.is_empty()).then(|| cached.clone());
     }
     if table_formula_stack.contains(&key) {
         return Some(TABLE_REF_ERROR_CYCLE.to_string());
@@ -2142,6 +2192,8 @@ fn evaluate_table_formula(
                 variables_enabled,
                 resolver.as_deref_mut(),
                 table_eval_cache,
+                table_formula_cache,
+                table_formula_stack,
                 ctx,
             )?;
             rewritten.push('(');
@@ -2160,9 +2212,7 @@ fn evaluate_table_formula(
     })();
 
     table_formula_stack.pop();
-    if let Some(value) = result.clone() {
-        table_formula_cache.insert(key, value);
-    }
+    table_formula_cache.insert(key, result.clone().unwrap_or_default());
     result
 }
 
@@ -2942,6 +2992,35 @@ mod tests {
 
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(result.line_results[4], Some("5".to_string()));
+    }
+
+    #[test]
+    fn note_eval_partial_range_sums_formula_cells_outside_the_range() {
+        let engine = CalcEngine::new();
+        let lines = vec![
+            "| a | b | ab | all |".to_string(),
+            "| --- | --- | --- | --- |".to_string(),
+            "| 1 | 2 | :=(1,1)+(1,2) | :=sum_row() |".to_string(),
+            "| 3 | 4 | :=(2,1)+(2,2) | :=sum_row() |".to_string(),
+            "| t | | :=sum_col() | :=sum_col() |".to_string(),
+        ];
+        let full = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
+        let partial = engine.evaluate_note_context(
+            &lines,
+            NoteEvaluationOptions {
+                eval_range: Some((4, 5)),
+                ..Default::default()
+            },
+        );
+
+        let values = |cells: &[TableCellEvaluation]| {
+            cells.iter().map(|c| c.value.clone()).collect::<Vec<_>>()
+        };
+        assert_eq!(values(&full.table_cell_results[4]), vec!["10", "20"]);
+        assert_eq!(
+            values(&partial.table_cell_results[4]),
+            values(&full.table_cell_results[4])
+        );
     }
 
     #[test]
