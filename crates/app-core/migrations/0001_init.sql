@@ -1,3 +1,28 @@
+-- Collections come first: notes reference them.
+CREATE TABLE IF NOT EXISTS collections (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_normalized_name
+    ON collections(normalized_name);
+CREATE INDEX IF NOT EXISTS idx_collections_name
+    ON collections(name);
+
+-- Key of an encrypted collection, sealed with a key derived from the
+-- collection's password and key_salt. It wraps the keys of the notes whose
+-- key_collection_id names the collection.
+CREATE TABLE IF NOT EXISTS collection_keys (
+    collection_id TEXT PRIMARY KEY REFERENCES collections(id) ON DELETE CASCADE,
+    key_salt BLOB NOT NULL,
+    wrapped_key BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
     body TEXT NOT NULL DEFAULT '',
@@ -6,9 +31,13 @@ CREATE TABLE IF NOT EXISTS notes (
     title_pinned INTEGER NOT NULL DEFAULT 0,
     modules_json TEXT NOT NULL DEFAULT '{"math":true,"table":true,"variables":true,"style":true,"cross_note":true}',
     access_mode TEXT NOT NULL DEFAULT 'none',
-    password_salt BLOB,
-    password_hash BLOB,
+    -- An encrypted note's text is sealed with its own random key, stored in
+    -- wrapped_key sealed with the key of whatever protects the note: a key
+    -- derived from the note's password and encryption_salt, or the key of
+    -- the encrypted collection in key_collection_id.
     encryption_salt BLOB,
+    wrapped_key BLOB,
+    key_collection_id TEXT REFERENCES collections(id),
     encryption_nonce BLOB,
     encrypted_body BLOB,
     created_at TEXT NOT NULL,
@@ -170,20 +199,6 @@ CREATE TABLE IF NOT EXISTS note_images (
 
 CREATE INDEX IF NOT EXISTS idx_note_images_note_updated
     ON note_images(note_id, updated_at DESC);
-
-CREATE TABLE IF NOT EXISTS collections (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    normalized_name TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_normalized_name
-    ON collections(normalized_name);
-CREATE INDEX IF NOT EXISTS idx_collections_name
-    ON collections(name);
 
 CREATE TABLE IF NOT EXISTS tags (
     id TEXT PRIMARY KEY,

@@ -94,6 +94,8 @@ pub struct Collection {
     pub description: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Its notes are encrypted with its key; see `Db::encrypt_collection`.
+    pub encrypted: bool,
 }
 
 /// Note counts for collection browsing: every note, notes in no collection,
