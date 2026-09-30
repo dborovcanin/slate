@@ -838,14 +838,14 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
         id: CommandId::NoteEncrypt,
         value: "note encrypt",
         aliases: &["note-encrypt", "encrypt-note"],
-        description: "encrypt current note at rest (requires password)",
+        description: "encrypt current note at rest (asks for a password)",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
         id: CommandId::NoteDecrypt,
         value: "note decrypt",
         aliases: &["note-decrypt", "decrypt-note"],
-        description: "decrypt current note to plain text and drop its password",
+        description: "decrypt current note to plain text (asks for its password)",
         modes: &MODES_BOTH,
     },
     CommandDefinition {

@@ -1659,6 +1659,23 @@ impl TerminalApp {
         }
 
         self.draw_picker_popup(buf, rows, cols);
+        if let Some(dialog) = self.note_password_dialog.as_ref() {
+            use crate::editor_core::command_catalog::NoteSecurityAction;
+            let (title, message) = match (dialog.action, dialog.first.is_some()) {
+                (NoteSecurityAction::Encrypt, false) => ("Encrypt note", "New password"),
+                (NoteSecurityAction::Encrypt, true) => ("Encrypt note", "Repeat password"),
+                (NoteSecurityAction::Decrypt, _) => ("Decrypt note", "Password"),
+            };
+            super::switcher::draw_password_dialog(
+                title,
+                message,
+                dialog.password.chars().count(),
+                buf,
+                rows,
+                cols,
+                self.render_palette,
+            );
+        }
 
         if self.mode == UiMode::DatePicker {
             date_picker::draw_date_picker(

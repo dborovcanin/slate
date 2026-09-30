@@ -1,7 +1,7 @@
 use super::{
     line_char_len, load_note_reminder_ghosts, new_note_with_context, trim_trailing_word,
     CollectionEditDialogState, CommandCompletionMenuState, CommandCompletionOption,
-    ContentSearchResponse, DatePickerAction, Db, Key, Note, NoteSearchResult,
+    ContentSearchResponse, DatePickerAction, Db, Key, Note, NotePasswordDialog, NoteSearchResult,
     SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, WebSearchResponse,
     WebSearchState, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
     CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
@@ -389,9 +389,11 @@ impl TerminalApp {
                 {
                     let item = self.switcher.items[idx].clone();
                     if item.access_mode != NoteAccessMode::None && !item.is_unlocked {
+                        let collection = db.note_key_collection_name(&item.id).ok().flatten();
                         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
                             note_id: item.id,
                             note_title: item.title,
+                            collection,
                             access_mode: item.access_mode,
                             password: String::new(),
                             line_number: None,
@@ -815,6 +817,88 @@ impl TerminalApp {
         Ok(())
     }
 
+    pub(super) fn handle_note_password_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        use crate::editor_core::command_catalog::NoteSecurityAction;
+        let Some(mut dialog) = self.note_password_dialog.take() else {
+            return Ok(());
+        };
+        match key {
+            Key::Esc => {
+                self.status = format!("note {} cancelled", dialog.action.as_str());
+                return Ok(());
+            }
+            Key::Ctrl('q') => {
+                self.quit = true;
+                return Ok(());
+            }
+            Key::Enter if dialog.password.is_empty() => {
+                self.status = "password required".to_string();
+            }
+            Key::Enter => match (dialog.action, dialog.first.take()) {
+                (NoteSecurityAction::Encrypt, None) => {
+                    dialog.first = Some(std::mem::take(&mut dialog.password));
+                    self.status = "repeat the password".to_string();
+                }
+                (NoteSecurityAction::Encrypt, Some(first)) if first != dialog.password => {
+                    dialog.password.clear();
+                    self.status = "passwords differ; enter the new password again".to_string();
+                }
+                (action, _) => {
+                    self.apply_note_security(db, action, &dialog.password);
+                    return Ok(());
+                }
+            },
+            Key::Backspace | Key::CtrlBackspace => {
+                dialog.password.pop();
+            }
+            Key::Char(ch) => dialog.password.push(ch),
+            Key::Paste(text) => dialog
+                .password
+                .extend(text.chars().filter(|c| *c != '\n' && *c != '\r')),
+            _ => {}
+        }
+        self.note_password_dialog = Some(dialog);
+        Ok(())
+    }
+
+    /// Encrypts or decrypts the open note with `password`.
+    fn apply_note_security(
+        &mut self,
+        db: &Db,
+        action: crate::editor_core::command_catalog::NoteSecurityAction,
+        password: &str,
+    ) {
+        use crate::editor_core::command_catalog::NoteSecurityAction;
+        let action_label = action.as_str();
+        if self.autosave_enabled && self.dirty {
+            if let Err(error) = self.save(db) {
+                self.status = format!("save failed: {error}");
+                return;
+            }
+        }
+        let result = match action {
+            NoteSecurityAction::Encrypt => db.encrypt_note(&self.active_note.id, password),
+            NoteSecurityAction::Decrypt => db.decrypt_note(&self.active_note.id, password),
+        };
+        let note = match result {
+            Ok(note) => note,
+            Err(error) => {
+                self.status = format!("note {action_label} failed: {error}");
+                return;
+            }
+        };
+        if let Err(error) = self.set_active_note(db, note) {
+            self.status = format!("note {action_label} failed: {error}");
+            return;
+        }
+        self.status = match action {
+            NoteSecurityAction::Encrypt => "note encrypted at rest".to_string(),
+            NoteSecurityAction::Decrypt => {
+                "note decrypted; stored without at-rest encryption".to_string()
+            }
+        };
+    }
+
     /// Unlocks the open note in place. Edits made after its unlock expired
     /// are kept and saved.
     fn unlock_active_note(&mut self, db: &Db, password: &str) -> Result<(), String> {
@@ -931,11 +1015,14 @@ impl TerminalApp {
             if let Some(note) = db.get_most_recent_note()? {
                 self.set_active_note(db, note)?;
             } else {
+                // An empty replacement note goes outside a working collection
+                // that refuses it (encrypted and locked).
                 let note = new_note_with_context(
                     db,
                     &self.note_creation_theme,
                     self.working_collection_id.as_deref(),
-                )?;
+                )
+                .or_else(|_| new_note_with_context(db, &self.note_creation_theme, None))?;
                 self.set_active_note(db, note)?;
             }
         } else {
@@ -1455,7 +1542,8 @@ impl TerminalApp {
                     db,
                     &self.note_creation_theme,
                     self.working_collection_id.as_deref(),
-                )?;
+                )
+                .or_else(|_| new_note_with_context(db, &self.note_creation_theme, None))?;
                 self.set_active_note(db, created)?;
                 self.refresh_switcher_items(db)?;
             }
@@ -1499,12 +1587,9 @@ impl TerminalApp {
                     self.quit = true;
                     return;
                 }
-                crate::editor_core::engine::HostCommandPlan::NoteSecurity { action, password } => {
-                    let action_label = action.as_str();
-                    if password.trim().is_empty() {
-                        self.status = format!("usage: note {action_label} <password>");
-                        return;
-                    }
+                crate::editor_core::engine::HostCommandPlan::NoteSecurity { action, .. } => {
+                    // The password goes into a masked dialog; one typed on
+                    // the command line is ignored.
                     let capabilities =
                         note_sources(db).capabilities_for_note_id(&self.active_note.id);
                     if !capabilities.can_encrypt {
@@ -1513,39 +1598,12 @@ impl TerminalApp {
                                 .to_string();
                         return;
                     }
-                    if self.autosave_enabled && self.dirty {
-                        if let Err(error) = self.save(db) {
-                            self.status = format!("save failed: {error}");
-                            return;
-                        }
-                    }
-                    let result = match action {
-                        crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
-                            db.encrypt_note(&self.active_note.id, &password)
-                        }
-                        crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
-                            db.decrypt_note(&self.active_note.id, &password)
-                        }
-                    };
-                    match result {
-                        Ok(note) => {
-                            if let Err(error) = self.set_active_note(db, note) {
-                                self.status = format!("note {action_label} failed: {error}");
-                                return;
-                            }
-                            self.status = match action {
-                                crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
-                                    "note encrypted at rest".to_string()
-                                }
-                                crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
-                                    "note decrypted; stored without at-rest encryption".to_string()
-                                }
-                            };
-                        }
-                        Err(error) => {
-                            self.status = format!("note {action_label} failed: {error}");
-                        }
-                    }
+                    self.note_password_dialog = Some(NotePasswordDialog {
+                        action,
+                        first: None,
+                        password: String::new(),
+                    });
+                    self.status = format!("note {}: enter the password", action.as_str());
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::Module { command_id } => {
@@ -2065,12 +2123,14 @@ impl TerminalApp {
                     name: item.name.clone(),
                     description: item.description.clone(),
                     count: counts.per_collection.get(id).copied().unwrap_or(0),
+                    encrypted: item.encrypted,
                 },
                 None => crate::terminal::browser::CollectionEntry {
                     scope: crate::terminal::browser::Scope::All,
                     name: "All notes".to_string(),
                     description: "Clear the working collection".to_string(),
                     count: counts.total,
+                    encrypted: false,
                 },
             })
             .collect();
@@ -2659,6 +2719,7 @@ impl TerminalApp {
                         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
                             note_id: result.id.clone(),
                             note_title: result.title.clone(),
+                            collection: db.note_key_collection_name(&result.id).ok().flatten(),
                             access_mode,
                             password: String::new(),
                             line_number: Some(result.line_number),
@@ -2785,6 +2846,11 @@ impl TerminalApp {
     }
 
     pub(super) fn set_active_note(&mut self, db: &Db, note: Note) -> Result<(), String> {
+        self.active_note_key_collection = if note.access_mode == NoteAccessMode::None {
+            None
+        } else {
+            db.note_key_collection_name(&note.id)?
+        };
         self.active_note = note;
         let (render_plain_text_file, render_file_language) =
             super::file_render_syntax_for_note_id(&self.active_note.id);

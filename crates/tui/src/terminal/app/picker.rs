@@ -204,6 +204,7 @@ impl TerminalApp {
         if let Some(confirm) = self.switcher.open_confirm.as_ref() {
             switcher::draw_open_confirm(
                 &confirm.note_title,
+                confirm.collection.as_deref(),
                 confirm.password.chars().count(),
                 buf,
                 rows,

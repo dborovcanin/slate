@@ -274,9 +274,21 @@ struct SwitcherDeleteConfirm {
 struct SwitcherOpenConfirm {
     note_id: String,
     note_title: String,
+    /// Encrypted collection whose password unlocks the note.
+    collection: Option<String>,
     access_mode: NoteAccessMode,
     password: String,
     line_number: Option<usize>,
+}
+
+/// Masked password dialog for `:note encrypt` and `:note decrypt`, so a
+/// password is never typed on the command line. Encrypting asks twice.
+#[derive(Debug, Clone)]
+struct NotePasswordDialog {
+    action: crate::editor_core::command_catalog::NoteSecurityAction,
+    /// The first entry while it is repeated.
+    first: Option<String>,
+    password: String,
 }
 
 #[derive(Debug, Clone)]
@@ -669,6 +681,8 @@ pub(super) struct WebSearchResponse {
 
 struct TerminalApp {
     active_note: Note,
+    /// Encrypted collection whose password unlocks the open note.
+    active_note_key_collection: Option<String>,
     // Editable document model: line buffer + joined-text cache, cursor, viewport
     // scroll, selection anchor, and the markdown-formatting boundary-exit marker.
     editor: EditorModel,
@@ -751,6 +765,7 @@ struct TerminalApp {
     variable_autocomplete_popup: VariableAutocompletePopupState,
     wiki_link_preview: WikiLinkPreviewState,
     image_preview: Option<ImagePreviewState>,
+    note_password_dialog: Option<NotePasswordDialog>,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
     wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
@@ -915,10 +930,14 @@ impl TerminalApp {
         )
     }
 
-    fn require_startup_password_if_needed(&mut self) {
+    fn require_startup_password_if_needed(&mut self, db: &Db) {
         if self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked {
             return;
         }
+        self.active_note_key_collection = db
+            .note_key_collection_name(&self.active_note.id)
+            .ok()
+            .flatten();
         self.prompt_active_note_password();
     }
 
@@ -928,7 +947,12 @@ impl TerminalApp {
         self.switcher.query.clear();
         self.recompute_switcher_matches();
 
-        let mut note_title = self.active_note.id.clone();
+        // The note list may not be loaded yet (at startup).
+        let mut note_title = self
+            .active_note
+            .pinned_title
+            .clone()
+            .unwrap_or_else(|| app_core::storage::ENCRYPTED_NOTE_TITLE.to_string());
         if let Some((match_idx, switcher_idx)) = self
             .switcher
             .matches
@@ -943,6 +967,7 @@ impl TerminalApp {
         self.switcher.open_confirm = Some(SwitcherOpenConfirm {
             note_id: self.active_note.id.clone(),
             note_title,
+            collection: self.active_note_key_collection.clone(),
             access_mode: self.active_note.access_mode,
             password: String::new(),
             line_number: None,
@@ -1098,6 +1123,7 @@ impl TerminalApp {
 
         let mut app = Self {
             active_note,
+            active_note_key_collection: None,
             editor: EditorModel {
                 lines,
                 ..Default::default()
@@ -1199,6 +1225,7 @@ impl TerminalApp {
             variable_autocomplete_popup: VariableAutocompletePopupState::default(),
             wiki_link_preview: WikiLinkPreviewState::default(),
             image_preview: None,
+            note_password_dialog: None,
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
             wiki_link_prefix_index: FxHashMap::default(),
@@ -1239,7 +1266,7 @@ impl TerminalApp {
         app.bootstrap_folding_for_startup();
         app.adjust_cursor();
         app.adjust_scroll();
-        app.require_startup_password_if_needed();
+        app.require_startup_password_if_needed(db);
         if app.calc_runtime.viewport_only && !app.start_viewport_calc_preparation() {
             let editor_height = app.editor_height();
             app.ensure_calc_for_viewport(editor_height, true);

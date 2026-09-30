@@ -36,6 +36,7 @@ pub struct CollectionMeta {
     pub name: String,
     pub description: String,
     pub is_clear: bool,
+    pub encrypted: bool,
 }
 
 pub(crate) fn note_identity_label(note_id: &str) -> String {
@@ -71,6 +72,7 @@ pub fn load_collection_meta(db: &crate::storage::Db) -> Result<Vec<CollectionMet
         name: "All collections".to_string(),
         description: "Clear active session collection".to_string(),
         is_clear: true,
+        encrypted: false,
     }];
     let collections = db.list_collections()?;
     items.extend(collections.into_iter().map(collection_to_meta));
@@ -83,6 +85,7 @@ pub fn collection_to_meta(collection: Collection) -> CollectionMeta {
         name: collection.name,
         description: collection.description,
         is_clear: false,
+        encrypted: collection.encrypted,
     }
 }
 
@@ -632,8 +635,37 @@ pub fn draw_delete_confirm(
     }
 }
 
+/// Password prompt for a locked note; `collection` names the encrypted
+/// collection whose password it needs.
 pub fn draw_open_confirm(
     note_title: &str,
+    collection: Option<&str>,
+    password_len: usize,
+    buf: &mut Buffer,
+    rows: usize,
+    cols: usize,
+    palette: RenderPalette,
+) {
+    let title = match collection {
+        Some(collection) => format!("Unlock {}", truncate_title_for_confirm(collection)),
+        None => "Unlock note".to_string(),
+    };
+    draw_confirm(
+        &title,
+        &format!(" Open \"{}\" ", truncate_title_for_confirm(note_title)),
+        Some(password_len),
+        " Enter confirm, Esc cancel ",
+        buf,
+        rows,
+        cols,
+        palette,
+    );
+}
+
+/// Masked password dialog: `title` on the frame, `message` above the field.
+pub fn draw_password_dialog(
+    title: &str,
+    message: &str,
     password_len: usize,
     buf: &mut Buffer,
     rows: usize,
@@ -641,8 +673,8 @@ pub fn draw_open_confirm(
     palette: RenderPalette,
 ) {
     draw_confirm(
-        "Unlock note",
-        &format!(" Open \"{}\" ", truncate_title_for_confirm(note_title)),
+        title,
+        &format!(" {message} "),
         Some(password_len),
         " Enter confirm, Esc cancel ",
         buf,

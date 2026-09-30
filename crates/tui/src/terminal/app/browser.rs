@@ -33,6 +33,7 @@ const COLLECTIONS_HINTS: &[(&str, &str)] = &[
     ("D", "delete"),
     ("w", "working"),
     ("p", "paste"),
+    ("e", "encrypt"),
     ("/", "filter"),
     ("q", "close"),
 ];
@@ -125,7 +126,7 @@ impl TerminalApp {
         };
     }
 
-    fn browser_message(&mut self, message: impl Into<String>) {
+    pub(super) fn browser_message(&mut self, message: impl Into<String>) {
         self.browser.message = Some(message.into());
     }
 
@@ -137,12 +138,14 @@ impl TerminalApp {
                 name: "All notes".to_string(),
                 description: "Every note".to_string(),
                 count: counts.total,
+                encrypted: false,
             },
             CollectionEntry {
                 scope: Scope::Unsorted,
                 name: "Unsorted".to_string(),
                 description: "Notes in no collection".to_string(),
                 count: counts.unsorted,
+                encrypted: false,
             },
         ];
         entries.extend(db.list_collections()?.into_iter().map(|collection| {
@@ -156,6 +159,7 @@ impl TerminalApp {
                 name: collection.name,
                 description: collection.description,
                 count,
+                encrypted: collection.encrypted,
             }
         }));
         self.browser.collections = entries;
@@ -444,7 +448,10 @@ impl TerminalApp {
                 Level::Notes => self.browser_open_prompt(PromptKind::NewNote, ""),
                 Level::Search | Level::History => {}
             },
-            Key::Char('r') => self.browser_request_rename(),
+            Key::Char('r') => self.browser_request_rename(db),
+            Key::Char('e') if level == Level::Collections => {
+                self.browser_request_collection_encryption();
+            }
             Key::Char('H') | Key::Ctrl('r') if level == Level::Notes => {
                 return self.browser_open_history(db);
             }
@@ -484,8 +491,21 @@ impl TerminalApp {
             Level::Search => return self.browser_open_search_hit(db),
             Level::History => return self.browser_request_restore(db),
             Level::Collections => {
-                if let Some(scope) = self.browser.hovered_collection().map(|e| e.scope.clone()) {
-                    self.browser_enter_scope(db, scope, None)?;
+                let Some(entry) = self.browser.hovered_collection().cloned() else {
+                    return Ok(());
+                };
+                match &entry.scope {
+                    // A locked encrypted collection asks for its password first.
+                    Scope::Collection(id) if entry.encrypted && !db.is_collection_unlocked(id) => {
+                        self.browser_open_prompt(
+                            PromptKind::UnlockCollection {
+                                collection_id: id.clone(),
+                                name: entry.name,
+                            },
+                            "",
+                        );
+                    }
+                    _ => self.browser_enter_scope(db, entry.scope, None)?,
                 }
             }
             Level::Notes => {
@@ -501,11 +521,14 @@ impl TerminalApp {
     /// is locked.
     fn browser_open_note(&mut self, db: &Db, note: NoteEntry) -> Result<(), String> {
         if note.is_locked() {
+            let collection = db.note_key_collection_name(&note.id).ok().flatten();
             self.browser_open_prompt(
                 PromptKind::Unlock {
                     note_id: note.id,
                     title: note.title,
                     line: None,
+                    collection,
+                    rename: false,
                 },
                 "",
             );
@@ -541,7 +564,12 @@ impl TerminalApp {
     }
 
     fn browser_submit_prompt(&mut self, db: &Db, prompt: Prompt) -> Result<(), String> {
-        let text = prompt.text.trim().to_string();
+        // Passwords are used as typed, spaces included.
+        let text = if prompt.kind.is_password() {
+            prompt.text.clone()
+        } else {
+            prompt.text.trim().to_string()
+        };
         // An empty filter clears it; an empty note title unpins it.
         if text.is_empty()
             && !matches!(
@@ -564,19 +592,35 @@ impl TerminalApp {
                 note_id,
                 title,
                 line,
+                collection,
+                rename,
             } => {
-                // The password is used as typed, spaces included.
-                match self.open_note_from_switcher(db, &note_id, Some(&prompt.text), line) {
-                    Ok(()) => {
-                        self.status = format!("unlocked {title}");
-                        Ok(())
-                    }
+                let unlocked = if rename {
+                    db.unlock_note(&note_id, &text).map(|note| {
+                        let title = note.pinned_title.unwrap_or_else(|| {
+                            app_core::note_sources::derive_note_title_from_body(&note.body)
+                        });
+                        self.browser_open_prompt(
+                            PromptKind::RenameNote {
+                                note_id: note_id.clone(),
+                            },
+                            title,
+                        );
+                    })
+                } else {
+                    self.open_note_from_switcher(db, &note_id, Some(&text), line)
+                        .map(|()| self.status = format!("unlocked {title}"))
+                };
+                match unlocked {
+                    Ok(()) => Ok(()),
                     Err(error) => {
                         self.browser_open_prompt(
                             PromptKind::Unlock {
                                 note_id,
                                 title,
                                 line,
+                                collection,
+                                rename,
                             },
                             "",
                         );
@@ -584,6 +628,64 @@ impl TerminalApp {
                     }
                 }
             }
+            PromptKind::UnlockCollection {
+                collection_id,
+                name,
+            } => match db.unlock_collection(&collection_id, &text) {
+                Ok(()) => {
+                    self.browser_enter_scope(db, Scope::Collection(collection_id), None)?;
+                    self.browser_message(format!("unlocked {name}"));
+                    Ok(())
+                }
+                Err(error) => {
+                    self.browser_open_prompt(
+                        PromptKind::UnlockCollection {
+                            collection_id,
+                            name,
+                        },
+                        "",
+                    );
+                    Err(format!("unlock failed: {error}"))
+                }
+            },
+            PromptKind::EncryptCollection {
+                collection_id,
+                name,
+                first: None,
+            } => {
+                self.browser_open_prompt(
+                    PromptKind::EncryptCollection {
+                        collection_id,
+                        name,
+                        first: Some(text),
+                    },
+                    "",
+                );
+                Ok(())
+            }
+            PromptKind::EncryptCollection {
+                collection_id,
+                name,
+                first: Some(first),
+            } => {
+                if text != first {
+                    self.browser_open_prompt(
+                        PromptKind::EncryptCollection {
+                            collection_id,
+                            name,
+                            first: None,
+                        },
+                        "",
+                    );
+                    Err("passwords differ; enter the new password again".to_string())
+                } else {
+                    self.browser_encrypt_collection(db, &collection_id, &name, &text)
+                }
+            }
+            PromptKind::DecryptCollection {
+                collection_id,
+                name,
+            } => self.browser_decrypt_collection(db, &collection_id, &name, &text),
         };
         if let Err(error) = outcome {
             self.browser_message(error);
@@ -626,7 +728,7 @@ impl TerminalApp {
         Ok(())
     }
 
-    fn browser_request_rename(&mut self) {
+    fn browser_request_rename(&mut self, db: &Db) {
         match self.browser.level() {
             Level::Search | Level::History => {}
             Level::Collections => match self.browser.hovered_collection() {
@@ -651,9 +753,97 @@ impl TerminalApp {
                     self.browser_message("file-backed notes are renamed in the editor");
                     return;
                 }
+                // A locked encrypted note asks for its password first.
+                if note.is_locked() {
+                    let collection = db.note_key_collection_name(&note.id).ok().flatten();
+                    self.browser_open_prompt(
+                        PromptKind::Unlock {
+                            note_id: note.id,
+                            title: note.title,
+                            line: None,
+                            collection,
+                            rename: true,
+                        },
+                        "",
+                    );
+                    return;
+                }
                 self.browser_open_prompt(PromptKind::RenameNote { note_id: note.id }, note.title);
             }
         }
+    }
+
+    /// `e` on a collection: encrypt it, or decrypt an encrypted one.
+    fn browser_request_collection_encryption(&mut self) {
+        let Some(CollectionEntry {
+            scope: Scope::Collection(collection_id),
+            name,
+            encrypted,
+            ..
+        }) = self.browser.hovered_collection().cloned()
+        else {
+            self.browser_message("only collections can be encrypted");
+            return;
+        };
+        let kind = if encrypted {
+            PromptKind::DecryptCollection {
+                collection_id,
+                name,
+            }
+        } else {
+            PromptKind::EncryptCollection {
+                collection_id,
+                name,
+                first: None,
+            }
+        };
+        self.browser_open_prompt(kind, "");
+    }
+
+    fn browser_encrypt_collection(
+        &mut self,
+        db: &Db,
+        collection_id: &str,
+        name: &str,
+        password: &str,
+    ) -> Result<(), String> {
+        let (protected, skipped) = db.encrypt_collection(collection_id, password)?;
+        self.refresh_active_note_protection(db)?;
+        self.browser_reload(db, None)?;
+        let mut message = format!("encrypted {name}: {}", plural(protected, "note"));
+        if skipped > 0 {
+            message.push_str(&format!(
+                " · {} kept their own protection (locked or in another encrypted collection)",
+                plural(skipped, "note")
+            ));
+        }
+        self.browser_message(message);
+        Ok(())
+    }
+
+    fn browser_decrypt_collection(
+        &mut self,
+        db: &Db,
+        collection_id: &str,
+        name: &str,
+        password: &str,
+    ) -> Result<(), String> {
+        let decrypted = db.decrypt_collection(collection_id, password)?;
+        self.refresh_active_note_protection(db)?;
+        self.browser_reload(db, None)?;
+        self.browser_message(format!("decrypted {name}: {}", plural(decrypted, "note")));
+        Ok(())
+    }
+
+    /// Picks up a change to the open note's encryption made outside the
+    /// editor (a collection encrypted or decrypted, a note pasted into an
+    /// encrypted collection). The buffer is kept.
+    fn refresh_active_note_protection(&mut self, db: &Db) -> Result<(), String> {
+        if let Some(note) = db.get_note_meta(&self.active_note.id)? {
+            self.active_note.access_mode = note.access_mode;
+            self.active_note.is_unlocked = note.is_unlocked;
+        }
+        Ok(())
     }
 
     /// Pins the note's title like a file name; an empty title makes it
@@ -743,6 +933,7 @@ impl TerminalApp {
             .cloned()
             .collect();
         db.add_notes_to_collection(&target_id, &new_members)?;
+        self.refresh_active_note_protection(db)?;
         let mut undo = MembershipUndo {
             added: vec![(target_id.clone(), new_members)],
             ..Default::default()
@@ -1244,11 +1435,14 @@ impl TerminalApp {
             return Ok(());
         };
         if hit.note.is_locked() {
+            let collection = db.note_key_collection_name(&hit.note.id).ok().flatten();
             self.browser_open_prompt(
                 PromptKind::Unlock {
                     note_id: hit.note.id,
                     title: hit.note.title,
                     line: Some(hit.line_number),
+                    collection,
+                    rename: false,
                 },
                 "",
             );

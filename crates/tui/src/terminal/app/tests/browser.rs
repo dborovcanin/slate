@@ -1,5 +1,5 @@
 use super::*;
-use crate::terminal::browser::{Level, Scope};
+use crate::terminal::browser::{Level, PromptKind, Scope};
 
 fn type_text(app: &mut TerminalApp, db: &Db, text: &str) {
     for ch in text.chars() {
@@ -541,5 +541,136 @@ fn restoring_the_open_note_edits_its_buffer_and_history_opens_from_everywhere() 
 
     drop(app);
     drop(db);
+    cleanup_db_files(&path);
+}
+
+/// Hovers `collection_id` at the collections level.
+fn hover_collection(app: &mut TerminalApp, db: &Db, collection_id: &str) {
+    app.handle_key(db, Key::Char('R')).expect("reload");
+    if app.browser.level() != Level::Collections {
+        app.handle_key(db, Key::Char('h')).expect("up");
+    }
+    app.browser.collection_cursor = app
+        .browser
+        .collection_matches
+        .iter()
+        .position(|idx| {
+            app.browser.collections[*idx].scope == Scope::Collection(collection_id.to_string())
+        })
+        .expect("collection listed");
+}
+
+fn prompt_kind(app: &TerminalApp) -> Option<PromptKind> {
+    app.browser
+        .prompt
+        .as_ref()
+        .map(|prompt| prompt.kind.clone())
+}
+
+fn message(app: &TerminalApp) -> String {
+    app.browser.message.clone().unwrap_or_default()
+}
+
+#[test]
+fn encrypting_a_collection_asks_twice_and_a_locked_one_asks_before_entering() {
+    let (db, mut app, path) = browser_app();
+    let vault = db.create_collection("Vault", "").expect("collection");
+    db.add_notes_to_collection(&vault.id, &["n2".to_string()])
+        .expect("join");
+    hover_collection(&mut app, &db, &vault.id);
+
+    app.handle_key(&db, Key::Char('e')).expect("encrypt");
+    type_text(&mut app, &db, "one");
+    app.handle_key(&db, Key::Enter).expect("first");
+    type_text(&mut app, &db, "two");
+    let (rows, _) = render_screen(&mut app);
+    assert!(!rows.join("\n").contains("two"), "password is masked");
+    app.handle_key(&db, Key::Enter).expect("repeat");
+    assert!(message(&app).contains("passwords differ"));
+    assert!(matches!(
+        prompt_kind(&app),
+        Some(PromptKind::EncryptCollection { first: None, .. })
+    ));
+    type_text(&mut app, &db, "vault pw");
+    app.handle_key(&db, Key::Enter).expect("first");
+    type_text(&mut app, &db, "vault pw");
+    app.handle_key(&db, Key::Enter).expect("repeat");
+    assert_eq!(message(&app), "encrypted Vault: 1 note");
+    assert!(db.get_collection(&vault.id).unwrap().unwrap().encrypted);
+    assert_eq!(
+        db.get_note("n2").unwrap().unwrap().access_mode,
+        NoteAccessMode::Encrypted
+    );
+
+    // A second handle holds no keys: the collection is locked there.
+    let other = Db::open(path.clone()).expect("second handle");
+
+    // Pasting a plain note into it is refused without ending the app.
+    app.browser.collection_cursor = 0;
+    app.handle_key(&other, Key::Enter).expect("all notes");
+    assert_eq!(app.browser.scope, Some(Scope::All));
+    hover_note(&mut app, &other, "n3");
+    app.handle_key(&other, Key::Char('y')).expect("yank");
+    hover_collection(&mut app, &other, &vault.id);
+    app.handle_key(&other, Key::Char('p'))
+        .expect("paste is not fatal");
+    assert!(
+        message(&app).contains("unlock it first"),
+        "{}",
+        message(&app)
+    );
+    assert!(other.get_note_collection_ids("n3").unwrap().is_empty());
+
+    // Entering asks for the password, and a wrong one asks again.
+    app.handle_key(&other, Key::Enter).expect("enter");
+    assert!(matches!(
+        prompt_kind(&app),
+        Some(PromptKind::UnlockCollection { .. })
+    ));
+    type_text(&mut app, &other, "wrong");
+    app.handle_key(&other, Key::Enter).expect("wrong");
+    assert!(message(&app).contains("invalid password"));
+    type_text(&mut app, &other, "vault pw");
+    app.handle_key(&other, Key::Enter).expect("unlock");
+    assert_eq!(app.browser.level(), Level::Notes);
+    assert_eq!(app.browser.scope, Some(Scope::Collection(vault.id.clone())));
+    assert!(other.is_collection_unlocked(&vault.id));
+
+    drop((app, db, other));
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn renaming_a_locked_encrypted_note_asks_for_its_password_first() {
+    let (db, mut app, path) = browser_app();
+    db.encrypt_note("n2", "pw").expect("encrypt");
+    let other = Db::open(path.clone()).expect("second handle");
+    app.handle_key(&other, Key::Char('R')).expect("reload");
+    hover_note(&mut app, &other, "n2");
+
+    app.handle_key(&other, Key::Char('r')).expect("rename");
+    assert!(matches!(
+        prompt_kind(&app),
+        Some(PromptKind::Unlock { rename: true, .. })
+    ));
+    type_text(&mut app, &other, "pw");
+    app.handle_key(&other, Key::Enter).expect("unlock");
+    let prompt = app.browser.prompt.clone().expect("rename prompt");
+    assert!(matches!(prompt.kind, PromptKind::RenameNote { .. }));
+    assert_eq!(prompt.text, "Meeting notes");
+    app.handle_key(&other, Key::Ctrl('u')).expect("clear");
+    type_text(&mut app, &other, "Standup");
+    app.handle_key(&other, Key::Enter).expect("rename");
+    assert_eq!(
+        other
+            .get_note("n2")
+            .unwrap()
+            .unwrap()
+            .pinned_title
+            .as_deref(),
+        Some("Standup")
+    );
+
+    drop((app, db, other));
     cleanup_db_files(&path);
 }

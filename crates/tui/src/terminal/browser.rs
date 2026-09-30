@@ -48,6 +48,8 @@ pub struct CollectionEntry {
     pub name: String,
     pub description: String,
     pub count: usize,
+    /// Its notes are encrypted with its key.
+    pub encrypted: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -133,6 +135,25 @@ pub enum PromptKind {
         title: String,
         /// 1-based line to open the note at (search hits).
         line: Option<usize>,
+        /// Encrypted collection whose password unlocks the note.
+        collection: Option<String>,
+        /// Rename the note once unlocked instead of opening it.
+        rename: bool,
+    },
+    UnlockCollection {
+        collection_id: String,
+        name: String,
+    },
+    /// New password for a collection; asked twice, `first` holds the first
+    /// entry while it is repeated.
+    EncryptCollection {
+        collection_id: String,
+        name: String,
+        first: Option<String>,
+    },
+    DecryptCollection {
+        collection_id: String,
+        name: String,
     },
 }
 
@@ -144,8 +165,22 @@ impl PromptKind {
             PromptKind::NewCollection => "New collection",
             PromptKind::RenameNote { .. } => "Rename note",
             PromptKind::RenameCollection { .. } => "Rename collection",
-            PromptKind::Unlock { .. } => "Password",
+            PromptKind::Unlock { .. } | PromptKind::UnlockCollection { .. } => "Password",
+            PromptKind::EncryptCollection { first: None, .. } => "New password",
+            PromptKind::EncryptCollection { .. } => "Repeat password",
+            PromptKind::DecryptCollection { .. } => "Password to decrypt",
         }
+    }
+
+    /// Typed text is a password: shown masked and used untrimmed.
+    pub fn is_password(&self) -> bool {
+        matches!(
+            self,
+            PromptKind::Unlock { .. }
+                | PromptKind::UnlockCollection { .. }
+                | PromptKind::EncryptCollection { .. }
+                | PromptKind::DecryptCollection { .. }
+        )
     }
 }
 
@@ -806,6 +841,7 @@ pub(crate) fn collection_entry_row(look: &Look, entry: &CollectionEntry, open: b
     let (icon, icon_fg) = match &entry.scope {
         Scope::All => (icons.library, palette.code_type),
         Scope::Unsorted => (icons.inbox, palette.code_number),
+        Scope::Collection(_) if entry.encrypted => (icons.encrypted, palette.code_keyword),
         Scope::Collection(_) if open => (icons.collection_open, palette.code_function),
         Scope::Collection(_) => (icons.collection, palette.code_function),
     };
@@ -1726,8 +1762,18 @@ fn draw_prompt(
     let col = pane.col;
     let row = top;
     let bg = palette.surface_bg();
+    let locked = view.look.icons.locked;
     let title = match &prompt.kind {
-        PromptKind::Unlock { title, .. } => format!("{} {title}", view.look.icons.locked),
+        PromptKind::Unlock {
+            title,
+            collection: Some(collection),
+            ..
+        } => format!("{locked} {collection} · {title}"),
+        PromptKind::Unlock { title, .. } => format!("{locked} {title}"),
+        PromptKind::UnlockCollection { name, .. } => format!("{locked} {name}"),
+        PromptKind::EncryptCollection { name, .. } | PromptKind::DecryptCollection { name, .. } => {
+            format!("{locked} {name} · {}", prompt.kind.title())
+        }
         kind => kind.title().to_string(),
     };
     draw_framed_surface(
@@ -1743,9 +1789,10 @@ fn draw_prompt(
         Some("Enter ok · Esc cancel"),
     );
     let inner = width.saturating_sub(4);
-    let shown: String = match prompt.kind {
-        PromptKind::Unlock { .. } => "•".repeat(prompt.text.chars().count()),
-        _ => prompt.text.clone(),
+    let shown = if prompt.kind.is_password() {
+        "•".repeat(prompt.text.chars().count())
+    } else {
+        prompt.text.clone()
     };
     let (visible, cursor_offset) = scrolled_input(&shown, prompt.cursor, inner);
     let style = TextStyle {

@@ -681,15 +681,47 @@ fn encrypt_elsewhere(path: &std::path::Path, id: &str, password: &str) {
     other.encrypt_note(id, password).expect("encrypt note");
 }
 
+/// Types `password` into the open password dialog and confirms it.
+fn enter_password(app: &mut TerminalApp, db: &Db, password: &str) {
+    run_keys(app, db, &[Key::Paste(password.to_string()), Key::Enter]);
+}
+
 #[test]
-fn note_decrypt_command_removes_at_rest_encryption() {
+fn note_encrypt_and_decrypt_ask_for_the_password_in_a_masked_dialog() {
     let (db, mut app, path) = app_with_note("classified");
 
-    app.execute_terminal_command(&db, "note encrypt enc123");
+    // A password typed on the command line is ignored.
+    app.execute_terminal_command(&db, "note encrypt visible");
+    assert!(app.note_password_dialog.is_some());
+    let (rows, _) = render_screen(&mut app);
+    assert!(rows.join("\n").contains("New password"));
+    enter_password(&mut app, &db, "enc123");
+    let (rows, _) = render_screen(&mut app);
+    let screen = rows.join("\n");
+    assert!(screen.contains("Repeat password"), "{screen}");
+    assert!(!screen.contains("enc123"), "masked");
+    enter_password(&mut app, &db, "different");
+    assert!(app.status.contains("passwords differ"));
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    // A mismatch starts over from the first entry.
+    enter_password(&mut app, &db, "enc123");
+    enter_password(&mut app, &db, "enc123");
+    assert!(app.note_password_dialog.is_none());
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
     assert_eq!(app.status, "note encrypted at rest");
+    assert!(db.unlock_note("n1", "visible").is_err());
 
-    app.execute_terminal_command(&db, "note decrypt enc123");
+    // Decrypting asks once; a wrong password leaves the note encrypted.
+    app.execute_terminal_command(&db, "decrypt-note");
+    enter_password(&mut app, &db, "wrong");
+    assert!(app.status.contains("invalid password"), "{}", app.status);
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
+    app.execute_terminal_command(&db, "note decrypt");
+    run_keys(&mut app, &db, &[Key::Char('x'), Key::Esc]);
+    assert!(app.note_password_dialog.is_none());
+    assert_eq!(app.status, "note decrypt cancelled");
+    app.execute_terminal_command(&db, "note decrypt");
+    enter_password(&mut app, &db, "enc123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
     assert_eq!(app.editor.lines, vec!["classified".to_string()]);
     assert_eq!(
@@ -703,23 +735,27 @@ fn note_decrypt_command_removes_at_rest_encryption() {
 }
 
 #[test]
-fn note_security_aliases_accept_password_arguments() {
-    let (db, mut app, path) = app_with_note("top secret");
+fn new_note_in_a_locked_encrypted_working_collection_is_refused_not_fatal() {
+    let (db, mut app, path) = app_with_note("first note");
+    let vault = db.create_collection("Vault", "").expect("collection");
+    let other = Db::open(path.clone()).expect("second handle");
+    other.encrypt_collection(&vault.id, "pw").expect("encrypt");
+    app.working_collection_id = Some(vault.id.clone());
+    app.mode = UiMode::Editor;
 
-    app.execute_terminal_command(&db, "encrypt-note enc123");
+    app.handle_key(&db, Key::Ctrl('n')).expect("not fatal");
+    assert!(app.status.starts_with("new note failed"), "{}", app.status);
+    assert!(app.status.contains("unlock it first"), "{}", app.status);
+    assert_eq!(app.active_note.id, "n1");
+
+    // Unlocked, the new note is encrypted with the collection's key.
+    db.unlock_collection(&vault.id, "pw").expect("unlock");
+    app.handle_key(&db, Key::Ctrl('n')).expect("new note");
+    assert_ne!(app.active_note.id, "n1");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
-    assert!(app.active_note.is_unlocked);
-    assert_eq!(app.status, "note encrypted at rest");
+    assert_eq!(app.active_note_key_collection.as_deref(), Some("Vault"));
 
-    app.execute_terminal_command(&db, "decrypt-note enc123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
-    assert_eq!(
-        app.status,
-        "note decrypted; stored without at-rest encryption"
-    );
-
-    drop(app);
-    drop(db);
+    drop((app, db, other));
     cleanup_db_files(&path);
 }
 
@@ -1398,6 +1434,8 @@ fn startup_with_locked_recent_note_prompts_for_password() {
         .as_ref()
         .expect("startup should request password");
     assert_eq!(confirm.note_id, "n2");
+    assert_eq!(confirm.note_title, "second note", "not the note id");
+    assert_eq!(confirm.collection, None);
     assert_eq!(confirm.access_mode, NoteAccessMode::Encrypted);
     assert_eq!(confirm.password, "");
 

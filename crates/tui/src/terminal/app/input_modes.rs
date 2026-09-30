@@ -50,6 +50,9 @@ impl TerminalApp {
             }
             return Ok(());
         }
+        if self.note_password_dialog.is_some() {
+            return self.handle_note_password_key(db, key);
+        }
         if self.mode != UiMode::Normal {
             self.folds.pending_prefix_until = None;
         }
@@ -60,7 +63,13 @@ impl TerminalApp {
             UiMode::Visual | UiMode::VisualLine => self.handle_visual_key(db, key)?,
             UiMode::Switcher => self.handle_switcher_key(db, key)?,
             UiMode::CollectionSwitcher => self.handle_collection_switcher_key(db, key)?,
-            UiMode::Browser => self.handle_browser_key(db, key)?,
+            UiMode::Browser => {
+                // A failed browser action (e.g. pasting into a locked
+                // encrypted collection) is reported there, not fatal.
+                if let Err(error) = self.handle_browser_key(db, key) {
+                    self.browser_message(error);
+                }
+            }
             UiMode::ContentSearch => self.handle_content_search_key(db, key)?,
             UiMode::CommandBar => self.handle_command_bar_key(db, key)?,
             UiMode::Search => self.handle_search_key(key)?,
@@ -123,11 +132,18 @@ impl TerminalApp {
                 if self.autosave_enabled {
                     self.save(db)?;
                 }
-                let note = new_note_with_context(
+                // A locked encrypted working collection refuses new notes.
+                let note = match new_note_with_context(
                     db,
                     &self.note_creation_theme,
                     self.working_collection_id.as_deref(),
-                )?;
+                ) {
+                    Ok(note) => note,
+                    Err(error) => {
+                        self.status = format!("new note failed: {error}");
+                        return Ok(());
+                    }
+                };
                 self.set_active_note(db, note)?;
                 self.refresh_switcher_items(db)?;
                 self.status = format!("new note {}", self.active_note.id);
