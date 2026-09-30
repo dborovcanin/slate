@@ -39,7 +39,7 @@ Conventions:
 ## Notes and switching
 
 - Notes live in SQLite (`~/.local/share/slate/notes.db`, WAL mode). The last-open note is restored on start.
-- A note's title is its first non-empty line (heading markers dropped).
+- A note's title is its first non-empty line (heading markers dropped) until you rename it in the browser (`r`); a renamed title stays put like a file name, and an empty name makes it follow the first line again. Encrypting a note keeps its title visible.
 - Markdown files open directly: `slate path/to/file.md` (`.md`, `.markdown`, `.mdown`, `.mkd`); edits are saved back to the file.
 
 The note switcher, its content search and the collection picker are popups styled like the [collection browser](#collection-browser): a search bar over a list with icons, ages (or match lines) and note counts, and key hints at the bottom. The title shows whether the list covers the working collection or all notes.

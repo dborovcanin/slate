@@ -373,7 +373,7 @@ impl Db {
                         .execute(
                             "UPDATE notes
                          SET body = '',
-                             note_title = '',
+                             note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE '' END,
                              encrypted_body = ?2,
                              encryption_salt = ?3,
                              encryption_nonce = ?4,
@@ -405,7 +405,7 @@ impl Db {
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
-                 note_title = excluded.note_title,
+                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE excluded.note_title END,
                  updated_at = excluded.updated_at",
             rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
@@ -439,7 +439,7 @@ impl Db {
                     tx.execute(
                         "UPDATE notes
                          SET body = '',
-                             note_title = '',
+                             note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE '' END,
                              encrypted_body = ?2,
                              encryption_salt = ?3,
                              encryption_nonce = ?4,
@@ -458,6 +458,7 @@ impl Db {
                     return Ok(Note {
                         id: id.to_string(),
                         body: body.to_string(),
+                        pinned_title: persisted.pinned_title,
                         modules: parse_note_modules_json(&persisted.modules_json),
                         access_mode: NoteAccessMode::Encrypted,
                         is_unlocked: true,
@@ -473,7 +474,7 @@ impl Db {
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
-                 note_title = excluded.note_title,
+                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE excluded.note_title END,
                  updated_at = excluded.updated_at",
             rusqlite::params![id, body, note_title, DEFAULT_NOTE_MODULES_JSON, now, now],
         )
@@ -659,6 +660,12 @@ impl Db {
         let body = self
             .load_note_plain_body_for_access(&conn, id, &security)?
             .ok_or_else(|| "Note not found".to_string())?;
+        // The title stays visible: it is pinned, since following the first
+        // line would store encrypted text in the clear.
+        let title = self
+            .load_note_persistence_row(&conn, id)?
+            .and_then(|row| row.pinned_title)
+            .unwrap_or_else(|| derive_note_title_from_body(&body));
         let mut encryption_salt = [0u8; ENCRYPTION_SALT_LEN];
         fill_random_bytes(&mut encryption_salt)?;
         let encryption_key = derive_encryption_key(&password, &encryption_salt);
@@ -676,7 +683,8 @@ impl Db {
         tx.execute(
             "UPDATE notes
              SET body = '',
-                 note_title = '',
+                 note_title = ?8,
+                 title_pinned = 1,
                  access_mode = 'encrypted',
                  password_salt = ?2,
                  password_hash = ?3,
@@ -692,7 +700,8 @@ impl Db {
                 encryption_salt.to_vec(),
                 encrypted.nonce,
                 encrypted.ciphertext,
-                now
+                now,
+                title
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -713,6 +722,36 @@ impl Db {
                 Err(error)
             }
         }
+    }
+
+    /// Pins `title` as the note's title, like a file name: edits to the text
+    /// no longer change it. An empty title unpins it, so it follows the first
+    /// line again. The text is not touched, so a locked encrypted note can be
+    /// renamed, and the revision stays the same for an open editor.
+    pub fn set_note_title(&self, id: &str, title: &str) -> Result<(), String> {
+        let conn = self.conn.lock()?;
+        let security = self
+            .load_note_security(&conn, id)?
+            .ok_or_else(|| "Note not found".to_string())?;
+        let title = title.trim();
+        let (title, pinned) = if !title.is_empty() {
+            (title.to_string(), true)
+        } else if security.access_mode == NoteAccessMode::Encrypted {
+            // Unpinned, an encrypted note's title is only known unlocked.
+            (String::new(), false)
+        } else {
+            let body = self
+                .load_note_row(&conn, id)?
+                .map(|row| row.body)
+                .unwrap_or_default();
+            (derive_note_title_from_body(&body), false)
+        };
+        conn.execute(
+            "UPDATE notes SET note_title = ?2, title_pinned = ?3 WHERE id = ?1",
+            rusqlite::params![id, title, pinned],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     pub fn decrypt_note(&self, id: &str, password: &str) -> Result<Note, String> {
@@ -741,7 +780,7 @@ impl Db {
         tx.execute(
             "UPDATE notes
              SET body = ?2,
-                 note_title = ?3,
+                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE ?3 END,
                  access_mode = 'none',
                  password_salt = NULL,
                  password_hash = NULL,
@@ -792,7 +831,7 @@ impl Db {
                     tx.execute(
                         "UPDATE notes
                          SET body = '',
-                             note_title = '',
+                             note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE '' END,
                              encrypted_body = ?2,
                              encryption_salt = ?3,
                              encryption_nonce = ?4,
@@ -811,6 +850,7 @@ impl Db {
                     return Ok(Note {
                         id: id.to_string(),
                         body: next_body,
+                        pinned_title: persisted.pinned_title,
                         modules: parse_note_modules_json(&persisted.modules_json),
                         access_mode: NoteAccessMode::Encrypted,
                         is_unlocked: true,
@@ -843,7 +883,7 @@ impl Db {
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
-                 note_title = excluded.note_title,
+                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE excluded.note_title END,
                  updated_at = excluded.updated_at",
             rusqlite::params![
                 id,
@@ -953,7 +993,7 @@ impl Db {
             "INSERT INTO notes (id, body, note_title, modules_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
              ON CONFLICT(id) DO UPDATE SET
                  body = excluded.body,
-                 note_title = excluded.note_title,
+                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE excluded.note_title END,
                  updated_at = excluded.updated_at",
             rusqlite::params![
                 note_id,
@@ -1627,7 +1667,7 @@ impl Db {
             let mut stmt = conn
                 .prepare(
                     "SELECT n.id, n.note_title, substr(n.body, 1, 200), n.access_mode, n.updated_at,
-                            n.encryption_salt, n.encryption_nonce, n.encrypted_body
+                            n.encryption_salt, n.encryption_nonce, n.encrypted_body, n.title_pinned
                      FROM notes n
                      WHERE NOT EXISTS (SELECT 1 FROM note_collections nc WHERE nc.note_id = n.id)
                      ORDER BY n.updated_at DESC",
@@ -1707,7 +1747,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
-                        encryption_salt, encryption_nonce, encrypted_body
+                        encryption_salt, encryption_nonce, encrypted_body, title_pinned
                  FROM notes
                  WHERE id LIKE ?1
                  ORDER BY updated_at DESC, id ASC
@@ -1749,7 +1789,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
-                        encryption_salt, encryption_nonce, encrypted_body
+                        encryption_salt, encryption_nonce, encrypted_body, title_pinned
                  FROM notes
                  WHERE id LIKE ?1
                  ORDER BY updated_at DESC, id ASC
@@ -2314,7 +2354,7 @@ impl Db {
     ) -> Result<Option<NotePersistenceRow>, String> {
         let mut stmt = conn
             .prepare(
-                "SELECT modules_json, created_at
+                "SELECT modules_json, created_at, CASE WHEN title_pinned = 1 THEN note_title END
                  FROM notes
                  WHERE id = ?1",
             )
@@ -2324,6 +2364,7 @@ impl Db {
                 Ok(NotePersistenceRow {
                     modules_json: row.get(0)?,
                     created_at: row.get(1)?,
+                    pinned_title: row.get(2)?,
                 })
             })
             .optional()
@@ -2339,7 +2380,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
-                        encryption_salt, encryption_nonce, encrypted_body
+                        encryption_salt, encryption_nonce, encrypted_body, title_pinned
                  FROM notes
                  WHERE id = ?1",
             )
@@ -2355,7 +2396,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
-                        encryption_salt, encryption_nonce, encrypted_body
+                        encryption_salt, encryption_nonce, encrypted_body, title_pinned
                  FROM notes
                  ORDER BY updated_at DESC",
             )
@@ -2376,7 +2417,7 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT n.id, n.note_title, substr(n.body, 1, 200), n.access_mode, n.updated_at,
-                        n.encryption_salt, n.encryption_nonce, n.encrypted_body
+                        n.encryption_salt, n.encryption_nonce, n.encrypted_body, n.title_pinned
                  FROM notes n
                  JOIN note_collections nc ON nc.note_id = n.id
                  WHERE nc.collection_id = ?1
@@ -2399,7 +2440,8 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, body, modules_json, access_mode,
-                        encryption_salt, encryption_nonce, encrypted_body, created_at, updated_at
+                        encryption_salt, encryption_nonce, encrypted_body, created_at, updated_at,
+                        CASE WHEN title_pinned = 1 THEN note_title END
                  FROM notes
                  WHERE id = ?1",
             )
@@ -2416,6 +2458,7 @@ impl Db {
                     encrypted_body: row.get(6)?,
                     created_at: row.get(7)?,
                     updated_at: row.get(8)?,
+                    pinned_title: row.get(9)?,
                 })
             })
             .optional()
@@ -2427,7 +2470,8 @@ impl Db {
         let mut stmt = conn
             .prepare(
                 "SELECT id, body, modules_json, access_mode,
-                        encryption_salt, encryption_nonce, encrypted_body, created_at, updated_at
+                        encryption_salt, encryption_nonce, encrypted_body, created_at, updated_at,
+                        CASE WHEN title_pinned = 1 THEN note_title END
                  FROM notes
                  ORDER BY updated_at DESC",
             )
@@ -2444,6 +2488,7 @@ impl Db {
                     encrypted_body: row.get(6)?,
                     created_at: row.get(7)?,
                     updated_at: row.get(8)?,
+                    pinned_title: row.get(9)?,
                 })
             })
             .map_err(|e| e.to_string())?
@@ -2463,6 +2508,7 @@ impl Db {
         Ok(Note {
             id: row.id.clone(),
             body,
+            pinned_title: row.pinned_title.clone(),
             modules: parse_note_modules_json(&row.modules_json),
             access_mode: row.access_mode,
             is_unlocked,
@@ -2487,15 +2533,17 @@ impl Db {
                 true,
             )),
             NoteAccessMode::Encrypted => {
-                // The title is part of the text, so it is only known unlocked.
+                // A pinned title is stored in the clear; otherwise the title
+                // is part of the text and only known unlocked.
+                let pinned = row.title_pinned.then(|| row.note_title.clone());
                 Ok(match self.decrypt_summary_body(row)? {
                     Some(body) => summary(
-                        derive_note_title_from_body(&body),
+                        pinned.unwrap_or_else(|| derive_note_title_from_body(&body)),
                         body.chars().take(200).collect(),
                         true,
                     ),
                     None => summary(
-                        ENCRYPTED_NOTE_TITLE.to_string(),
+                        pinned.unwrap_or_else(|| ENCRYPTED_NOTE_TITLE.to_string()),
                         "[locked]".to_string(),
                         false,
                     ),
@@ -2663,12 +2711,16 @@ struct NoteRow {
 struct NotePersistenceRow {
     modules_json: String,
     created_at: String,
+    pinned_title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
 struct NoteSummaryRow {
     id: String,
+    /// The shown title: pinned, derived from the text, or empty for an
+    /// encrypted note whose title is not pinned.
     note_title: String,
+    title_pinned: bool,
     body_prefix: String,
     access_mode: NoteAccessMode,
     updated_at: String,
@@ -2688,6 +2740,7 @@ struct NoteAccessRow {
     encrypted_body: Option<Vec<u8>>,
     created_at: String,
     updated_at: String,
+    pinned_title: Option<String>,
 }
 
 /// Stored module flags; unreadable JSON falls back to the defaults.
@@ -2705,6 +2758,7 @@ fn map_note_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<NoteSummary
         encryption_salt: row.get(5)?,
         encryption_nonce: row.get(6)?,
         encrypted_body: row.get(7)?,
+        title_pinned: row.get(8)?,
     })
 }
 
@@ -2857,6 +2911,26 @@ fn migrate(conn: &Connection) -> Result<(), String> {
              PRAGMA user_version = 1;
              COMMIT;",
         )
+        .map_err(|e| format!("Failed to migrate database: {e}"))?;
+    }
+    if version < 2 {
+        // Titles can be pinned by hand. New databases get the column from
+        // the schema, older ones here.
+        let has_column: bool = conn
+            .query_row(
+                "SELECT COUNT(1) FROM pragma_table_info('notes') WHERE name = 'title_pinned'",
+                [],
+                |row| row.get::<_, i64>(0).map(|count| count > 0),
+            )
+            .map_err(|e| e.to_string())?;
+        let add_column = if has_column {
+            ""
+        } else {
+            "ALTER TABLE notes ADD COLUMN title_pinned INTEGER NOT NULL DEFAULT 0;"
+        };
+        conn.execute_batch(&format!(
+            "BEGIN; {add_column} PRAGMA user_version = 2; COMMIT;"
+        ))
         .map_err(|e| format!("Failed to migrate database: {e}"))?;
     }
     Ok(())
@@ -3388,7 +3462,46 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_notes_keep_their_title_out_of_storage() {
+    fn pinned_titles_survive_edits_and_unpin_to_follow_the_first_line() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+
+        db.save_note("n1", "Draft\nbody").expect("seed note");
+        let revision = db.get_note_updated_at("n1").expect("revision");
+        db.set_note_title("n1", "  Budget 2026 ")
+            .expect("pin title");
+        assert_eq!(
+            db.get_note_updated_at("n1").expect("revision"),
+            revision,
+            "an open editor's revision stays valid"
+        );
+        let before = db.get_note("n1").expect("lookup").expect("exists");
+        assert_eq!(before.pinned_title.as_deref(), Some("Budget 2026"));
+        assert_eq!(before.body, "Draft\nbody", "renaming leaves the text alone");
+
+        db.save_note("n1", "Other heading\nbody").expect("edit");
+        db.save_note_revision("n1", "Third\nbody")
+            .expect("autosave");
+        let listed = db.list_notes_meta().expect("list meta");
+        assert_eq!(listed[0].title, "Budget 2026");
+        assert_eq!(
+            db.search_notes_content("budget", 10).expect("search").len(),
+            1
+        );
+
+        db.set_note_title("n1", "").expect("unpin");
+        let note = db.get_note("n1").expect("lookup").expect("exists");
+        assert_eq!(note.pinned_title, None);
+        assert_eq!(db.list_notes_meta().expect("list")[0].title, "Third");
+        db.save_note("n1", "Fourth\nbody").expect("edit");
+        assert_eq!(db.list_notes_meta().expect("list")[0].title, "Fourth");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn encrypting_pins_the_title_and_an_unpinned_one_stays_out_of_storage() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
         let stored_title = || -> String {
@@ -3402,36 +3515,38 @@ mod tests {
 
         db.save_note("n1", "Plan\ntop secret").expect("seed note");
         db.encrypt_note("n1", "pass123").expect("encrypt note");
-        assert_eq!(stored_title(), "");
-        let listed = db.list_notes_meta().expect("list meta");
-        assert_eq!(listed[0].title, "Plan");
-        assert!(listed[0].is_unlocked);
-
-        // Locked again: the title is not known.
+        db.save_note("n1", "Changed\ntop secret")
+            .expect("edit encrypted");
+        assert_eq!(stored_title(), "Plan", "encrypting pins the title");
         db.note_access.clear("n1");
         let listed = db.list_notes_meta().expect("list meta locked");
+        assert_eq!(listed[0].title, "Plan");
+        assert!(!listed[0].is_unlocked);
+
+        // A locked note can be renamed; unpinned, its title is hidden.
+        db.set_note_title("n1", "Bank").expect("rename locked note");
+        assert_eq!(db.list_notes_meta().expect("list")[0].title, "Bank");
+        db.set_note_title("n1", "").expect("unpin");
+        assert_eq!(stored_title(), "");
+        let listed = db.list_notes_meta().expect("list");
         assert_eq!(listed[0].title, ENCRYPTED_NOTE_TITLE);
         assert_eq!(listed[0].body_prefix, "[locked]");
-        assert!(!listed[0].is_unlocked);
         let linked = db.resolve_wiki_link("n1").expect("resolve").expect("found");
         assert_eq!(linked.title, ENCRYPTED_NOTE_TITLE);
         assert!(db
             .save_note("n1", "should fail")
             .expect_err("save should fail while locked")
             .contains("unlock first"));
-        assert!(db
-            .unlock_note("n1", "wrong")
-            .expect_err("wrong password should fail")
-            .contains("invalid password"));
 
         db.unlock_note("n1", "pass123").expect("unlock note");
         db.save_note("n1", "Renamed\ntop secret")
             .expect("save unlocked");
         assert_eq!(stored_title(), "");
-        let listed = db.list_notes_meta().expect("list meta unlocked");
-        assert_eq!(listed[0].title, "Renamed");
-        let linked = db.resolve_wiki_link("n1").expect("resolve").expect("found");
-        assert_eq!(linked.title, "Renamed");
+        assert_eq!(db.list_notes_meta().expect("list")[0].title, "Renamed");
+
+        // Decrypted, an unpinned title follows the first line again.
+        db.decrypt_note("n1", "pass123").expect("decrypt");
+        assert_eq!(stored_title(), "Renamed");
 
         drop(db);
         let _ = fs::remove_file(path);

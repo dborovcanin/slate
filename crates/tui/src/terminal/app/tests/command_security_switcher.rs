@@ -901,13 +901,13 @@ fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
         .expect("switcher items refreshed");
     app.mode = UiMode::Editor;
 
-    // Locked, the note is listed without its title.
+    // Encrypting pinned its title, so it is found while locked.
     run_keys(
         &mut app,
         &db,
         &[
             Key::Ctrl('p'),
-            Key::Paste("encrypted".to_string()),
+            Key::Paste("second".to_string()),
             Key::ArrowDown,
             Key::Enter,
         ],

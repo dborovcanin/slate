@@ -24,7 +24,7 @@ Slate stores notes in SQLite with WAL mode.
 
 - note ids are ULID-like identifiers
 - per-note module state is persisted with each note
-- title is derived from the first non-empty line (denormalized for search/switcher)
+- title is derived from the first non-empty line (denormalized for search/switcher) until it is pinned by a rename (`title_pinned`); encrypting a note pins its title
 
 Markdown file notes are also supported:
 

@@ -46,6 +46,8 @@ pub struct NoteRevision {
 pub struct Note {
     pub id: String,
     pub body: String,
+    /// Title set by hand, which edits to the text no longer change.
+    pub pinned_title: Option<String>,
     pub modules: NoteModules,
     pub access_mode: NoteAccessMode,
     pub is_unlocked: bool,

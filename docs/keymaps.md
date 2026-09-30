@@ -144,7 +144,7 @@ Popup listing collections with note counts; `All notes` clears the working colle
 | `d` | Remove the notes from the open collection (the notes stay) |
 | `u` | Undo the last paste or remove |
 | `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
-| `n` / `r` | New note (in the open collection) or collection / rename the hovered one |
+| `n` / `r` | New note (in the open collection) or collection / rename the hovered one (a note keeps the name; empty follows its first line) |
 | `s` | Sort notes by modification time or title |
 | `w` | Make the collection the working collection (`All notes` clears it) |
 | `H` | History of the hovered note |

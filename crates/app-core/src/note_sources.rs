@@ -181,31 +181,15 @@ impl NoteSourceService {
         }
     }
 
-    /// Renames a stored note by rewriting its title line. File-backed and
-    /// still-locked notes are refused: their text is edited in the editor.
-    pub fn rename_note(&self, note_id: &str, title: &str) -> Result<NoteRevision, String> {
-        if title.trim().is_empty() {
-            return Err("title must not be empty".to_string());
+    /// Pins a stored note's title, or unpins it with an empty title. The
+    /// text is left alone; file-backed notes are titled by their first line.
+    pub fn rename_note(&self, note_id: &str, title: &str) -> Result<(), String> {
+        match self.parse_identity(note_id) {
+            NoteIdentity::DbNote(id) => self.db.set_note_title(&id, title),
+            NoteIdentity::FileNote(_) => {
+                Err("file-backed notes are renamed in the editor".to_string())
+            }
         }
-        let identity = self.parse_identity(note_id);
-        if matches!(identity, NoteIdentity::FileNote(_)) {
-            return Err("file-backed notes are renamed in the editor".to_string());
-        }
-        let note = self
-            .open_note(&identity)?
-            .ok_or_else(|| format!("note missing {note_id}"))?;
-        if note.access_mode != NoteAccessMode::None && !note.is_unlocked {
-            return Err("note is locked; unlock first".to_string());
-        }
-        let body = retitle_body(&note.body, title);
-        self.save_note_revision(
-            &identity,
-            &body,
-            SaveOptions {
-                expected_revision: Some(note.updated_at),
-                force: false,
-            },
-        )
     }
 
     #[cfg(test)]
@@ -1145,57 +1129,6 @@ pub fn derive_note_title_from_body(body: &str) -> String {
     "Untitled".to_string()
 }
 
-/// Index of the line the note title comes from (see
-/// [`derive_note_title_from_body`]), or `None` for an untitled note.
-pub fn title_line_index<'a>(lines: impl IntoIterator<Item = &'a str>) -> Option<usize> {
-    lines
-        .into_iter()
-        .position(|line| !title_text_for_line(line).is_empty())
-}
-
-/// `line` with its title text replaced by `title`, keeping indentation and an
-/// ATX heading marker (`## Old ##` -> `## New`).
-pub fn retitle_line(line: &str, title: &str) -> String {
-    let title = title.trim();
-    let indent_len = line.len() - line.trim_start().len();
-    let (indent, rest) = line.split_at(indent_len);
-    let hashes = rest.chars().take_while(|ch| *ch == '#').count();
-    let is_heading = (1..=6).contains(&hashes)
-        && rest[hashes..]
-            .chars()
-            .next()
-            .is_none_or(char::is_whitespace);
-    if is_heading {
-        format!("{indent}{} {title}", &rest[..hashes])
-    } else {
-        format!("{indent}{title}")
-    }
-}
-
-/// `body` with its title line renamed to `title`. An untitled note gets a
-/// `# title` heading as its first line.
-pub fn retitle_body(body: &str, title: &str) -> String {
-    let lines: Vec<&str> = body.split('\n').collect();
-    match title_line_index(lines.iter().copied()) {
-        Some(idx) => {
-            let mut out = String::with_capacity(body.len() + title.len());
-            for (i, line) in lines.iter().enumerate() {
-                if i > 0 {
-                    out.push('\n');
-                }
-                if i == idx {
-                    out.push_str(&retitle_line(line, title));
-                } else {
-                    out.push_str(line);
-                }
-            }
-            out
-        }
-        None if body.trim().is_empty() => format!("# {}", title.trim()),
-        None => format!("# {}\n{body}", title.trim()),
-    }
-}
-
 fn modules_for_file_path(path: &Path) -> NoteModules {
     if is_supported_markdown_path(path) {
         return NoteModules::default();
@@ -1213,6 +1146,7 @@ fn note_from_markdown_path(path: &Path) -> Result<Note, String> {
     let body = read_markdown_file(path)?;
     let (created_at, updated_at) = markdown_file_timestamps(path)?;
     Ok(Note {
+        pinned_title: None,
         id: note_id_for_markdown_file(path),
         body,
         modules: modules_for_file_path(path),
@@ -1240,27 +1174,6 @@ fn note_summary_from_markdown_path(path: &Path) -> Result<NoteSummary, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn retitle_keeps_heading_marker_and_indent() {
-        assert_eq!(retitle_line("## Old ##", "New"), "## New");
-        assert_eq!(retitle_line("  # Old", " New "), "  # New");
-        assert_eq!(retitle_line("plain old", "New"), "New");
-        assert_eq!(retitle_line("#tag line", "New"), "New");
-    }
-
-    #[test]
-    fn retitle_body_replaces_the_derived_title_line() {
-        assert_eq!(
-            retitle_body("\n#\n# Weekly\nbody\n", "Monthly"),
-            "\n#\n# Monthly\nbody\n"
-        );
-        assert_eq!(retitle_body("", "Fresh"), "# Fresh");
-        assert_eq!(retitle_body("\n\n", "Fresh"), "# Fresh");
-        let body = retitle_body("first\nsecond", "Renamed");
-        assert_eq!(derive_note_title_from_body(&body), "Renamed");
-        assert_eq!(body, "Renamed\nsecond");
-    }
 
     #[test]
     fn title_text_strips_atx_heading_markers_only() {

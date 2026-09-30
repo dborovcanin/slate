@@ -2,6 +2,8 @@ CREATE TABLE IF NOT EXISTS notes (
     id TEXT PRIMARY KEY,
     body TEXT NOT NULL DEFAULT '',
     note_title TEXT NOT NULL DEFAULT '',
+    -- 1 when the title was set by hand and no longer follows the first line.
+    title_pinned INTEGER NOT NULL DEFAULT 0,
     modules_json TEXT NOT NULL DEFAULT '{"math":true,"table":true,"variables":true,"style":true,"cross_note":true}',
     access_mode TEXT NOT NULL DEFAULT 'none',
     password_salt BLOB,

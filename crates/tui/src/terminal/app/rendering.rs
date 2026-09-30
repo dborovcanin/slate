@@ -420,7 +420,10 @@ impl TerminalApp {
             ..Default::default()
         };
         draw_row_at_styled(buf, TITLE_ROW, 1, cols, "", base);
-        let title = derive_title_from_lines(&self.editor.lines);
+        let title = match &self.active_note.pinned_title {
+            Some(title) => title.clone(),
+            None => derive_title_from_lines(&self.editor.lines),
+        };
         let dirty = if self.dirty { " •" } else { "" };
         let mut badges = Vec::new();
         if crate::file_path_from_note_id(&self.active_note.id).is_some() {

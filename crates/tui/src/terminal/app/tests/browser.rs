@@ -144,7 +144,7 @@ fn yank_into_new_collection_then_move_and_undo() {
 }
 
 #[test]
-fn rename_rewrites_other_notes_in_the_db_and_the_open_note_in_its_buffer() {
+fn rename_pins_titles_without_touching_the_text() {
     let (db, mut app, path) = browser_app();
 
     hover_note(&mut app, &db, "n2");
@@ -155,21 +155,40 @@ fn rename_rewrites_other_notes_in_the_db_and_the_open_note_in_its_buffer() {
     type_text(&mut app, &db, "Standup");
     app.handle_key(&db, Key::Enter).expect("submit");
     let n2 = db.get_note("n2").expect("lookup").expect("note");
-    assert_eq!(n2.body, "# Standup\n- agenda");
+    assert_eq!(n2.body, "# Meeting notes\n- agenda");
+    assert_eq!(n2.pinned_title.as_deref(), Some("Standup"));
 
     hover_note(&mut app, &db, "n1");
     app.handle_key(&db, Key::Char('r')).expect("rename");
     app.handle_key(&db, Key::Ctrl('u')).expect("clear");
     type_text(&mut app, &db, "Budget 2027");
     app.handle_key(&db, Key::Enter).expect("submit");
-    assert_eq!(app.editor.lines[0], "# Budget 2027");
-    let n1 = db.get_note("n1").expect("lookup").expect("note");
-    assert!(n1.body.starts_with("# Budget 2027\n"));
+    assert_eq!(app.editor.lines[0], "# Budget");
+    assert!(!app.dirty);
+    assert_eq!(app.active_note.pinned_title.as_deref(), Some("Budget 2027"));
     assert!(app
         .browser
         .notes
         .iter()
         .any(|note| note.id == "n1" && note.title == "Budget 2027"));
+
+    // The open note's title bar shows the pinned title.
+    app.handle_key(&db, Key::Char('q')).expect("close");
+    let (rows, _) = render_screen(&mut app);
+    assert!(rows[0].contains("Budget 2027"), "{}", rows[0]);
+
+    // An empty title follows the first line again.
+    app.handle_key(&db, Key::Ctrl('b')).expect("browser");
+    hover_note(&mut app, &db, "n1");
+    app.handle_key(&db, Key::Char('r')).expect("rename");
+    app.handle_key(&db, Key::Ctrl('u')).expect("clear");
+    app.handle_key(&db, Key::Enter).expect("submit");
+    assert_eq!(app.active_note.pinned_title, None);
+    assert!(app
+        .browser
+        .notes
+        .iter()
+        .any(|note| note.id == "n1" && note.title == "Budget"));
 
     drop(app);
     drop(db);

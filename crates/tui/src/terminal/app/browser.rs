@@ -542,7 +542,13 @@ impl TerminalApp {
 
     fn browser_submit_prompt(&mut self, db: &Db, prompt: Prompt) -> Result<(), String> {
         let text = prompt.text.trim().to_string();
-        if text.is_empty() && !matches!(prompt.kind, PromptKind::Filter) {
+        // An empty filter clears it; an empty note title unpins it.
+        if text.is_empty()
+            && !matches!(
+                prompt.kind,
+                PromptKind::Filter | PromptKind::RenameNote { .. }
+            )
+        {
             self.browser_message("nothing entered");
             return Ok(());
         }
@@ -641,10 +647,6 @@ impl TerminalApp {
                 let Some(note) = self.browser.hovered_note().cloned() else {
                     return;
                 };
-                if note.is_locked() {
-                    self.browser_message("unlock the note before renaming it");
-                    return;
-                }
                 if crate::file_path_from_note_id(&note.id).is_some() {
                     self.browser_message("file-backed notes are renamed in the editor");
                     return;
@@ -654,42 +656,21 @@ impl TerminalApp {
         }
     }
 
+    /// Pins the note's title like a file name; an empty title makes it
+    /// follow the first line again. The text is not changed.
     fn browser_rename_note(&mut self, db: &Db, note_id: &str, title: &str) -> Result<(), String> {
+        NoteSourceService::new(db.clone()).rename_note(note_id, title)?;
+        let title = title.trim();
         if note_id == self.active_note.id {
-            // The open note is renamed in its buffer so the editor and the
-            // next autosave agree on the text.
-            self.rename_active_note_title(title);
-            self.save(db)?;
-        } else {
-            NoteSourceService::new(db.clone()).rename_note(note_id, title)?;
+            self.active_note.pinned_title = (!title.is_empty()).then(|| title.to_string());
         }
         self.browser_reload(db, Some(note_id.to_string()))?;
-        self.browser_message(format!("renamed to {title}"));
-        Ok(())
-    }
-
-    fn rename_active_note_title(&mut self, title: &str) {
-        let lines = &self.editor.lines;
-        let change =
-            match app_core::note_sources::title_line_index(lines.iter().map(String::as_str)) {
-                Some(idx) => {
-                    let from = self.byte_offset_for_line_col(idx, 0);
-                    crate::editor_core::types::TextChange {
-                        from,
-                        to: from + lines[idx].len(),
-                        insert: app_core::note_sources::retitle_line(&lines[idx], title),
-                    }
-                }
-                None => crate::editor_core::types::TextChange {
-                    from: 0,
-                    to: 0,
-                    insert: format!("# {}\n", title.trim()),
-                },
-            };
-        self.apply_edit_operation(&crate::editor_core::types::EditOperation {
-            changes: vec![change],
-            selection: None,
+        self.browser_message(if title.is_empty() {
+            "title follows the first line".to_string()
+        } else {
+            format!("renamed to {title}")
         });
+        Ok(())
     }
 
     fn browser_rename_collection(
