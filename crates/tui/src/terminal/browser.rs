@@ -63,7 +63,11 @@ impl NoteEntry {
         Self {
             is_daily: app_core::daily::is_daily_note_id(daily_prefix, &summary.id),
             id: summary.id,
-            title: summary.title,
+            // Titles stored before headings were stripped still carry `# `.
+            title: match app_core::note_sources::title_text_for_line(&summary.title) {
+                "" => summary.title.clone(),
+                clean => clean.to_string(),
+            },
             access_mode: summary.access_mode,
             is_unlocked: summary.is_unlocked,
             updated_at: summary.updated_at,

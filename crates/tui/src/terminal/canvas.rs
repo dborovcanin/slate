@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
+use unicode_width::UnicodeWidthStr;
 
 /// A fully specified cell style: unset colors mean the terminal default, and
 /// unset attributes are cleared rather than inherited from the cell.
@@ -162,6 +163,34 @@ pub fn put_char(buf: &mut Buffer, row: usize, col: usize, ch: char, style: Style
     }
 }
 
+/// Draws `key label` hint pairs from (`row`, `col`), keys and labels in their
+/// own styles, two cells apart. Pairs that do not fit in `width` are dropped
+/// from the end, so list the important ones first. Returns the column after
+/// the last drawn pair.
+pub fn draw_key_hints(
+    buf: &mut Buffer,
+    row: usize,
+    col: usize,
+    width: usize,
+    hints: &[(&str, &str)],
+    key_style: Style,
+    label_style: Style,
+) -> usize {
+    let end = col + width;
+    let mut at = col;
+    for (idx, (key, label)) in hints.iter().enumerate() {
+        let gap = if idx == 0 { 0 } else { 2 };
+        let pair_width = gap + key.width() + 1 + label.width();
+        if at + pair_width > end {
+            break;
+        }
+        at += gap;
+        at = put_str(buf, row, at, key, key_style);
+        at = put_str(buf, row, at + 1, label, label_style);
+    }
+    at
+}
+
 /// Draws a dialog surface: cleared interior filled with `bg`,
 /// rounded border in `border_fg`, and optional `title` (top border) and
 /// `footer` (bottom border, typically key hints).
@@ -255,6 +284,31 @@ fn cell_x(origin: u16, col: usize) -> Option<u16> {
 
 fn cell_y(origin: u16, row: usize) -> Option<u16> {
     origin.checked_add(u16::try_from(row.checked_sub(1)?).ok()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{row_text, screen};
+    use super::*;
+
+    #[test]
+    fn key_hints_drop_pairs_that_do_not_fit() {
+        let mut buf = screen(1, 20);
+        let style = Style::default();
+        let end = draw_key_hints(
+            &mut buf,
+            1,
+            1,
+            20,
+            &[("y", "copy"), ("x", "cut"), ("p", "paste")],
+            style.add_modifier(Modifier::BOLD),
+            style,
+        );
+        assert_eq!(row_text(&buf, 0).trim_end(), "y copy  x cut");
+        assert_eq!(end, 14);
+        assert!(buf[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert!(!buf[(2, 0)].modifier.contains(Modifier::BOLD));
+    }
 }
 
 #[cfg(test)]

@@ -3,7 +3,9 @@ use crate::terminal::browser::{
     BrowserState, BrowserView, ClipOp, Clipboard, CollectionEntry, Confirm, Level, MembershipUndo,
     NoteEntry, Preview, Prompt, PromptKind, Scope, SortKey, PREVIEW_BODY_CHARS,
 };
-use crate::terminal::canvas::{contrast_fg_for_bg, TextStyle};
+use crate::terminal::canvas::{
+    contrast_fg_for_bg, draw_key_hints, draw_row_at_styled, put_str, put_str_width, TextStyle,
+};
 use crate::terminal::icons::Icons;
 use crate::terminal::input;
 use crate::terminal::session::CursorPlacement;
@@ -12,13 +14,36 @@ use app_core::note_sources::{NoteSourceService, SaveOptions};
 use app_core::storage::NoteAccessMode;
 use ratatui::buffer::Buffer;
 use std::time::{SystemTime, UNIX_EPOCH};
+use unicode_width::UnicodeWidthStr;
 
 /// Preview lines kept for the hovered note; more than any screen shows.
 const PREVIEW_MAX_LINES: usize = 300;
 
-const COLLECTIONS_HINT: &str =
-    "l open  a new  r rename  D delete  w working  p paste  / filter  q close";
-const NOTES_HINT: &str = "l open  space mark  y copy  x cut  p paste  d remove  D delete  a new  r rename  s sort  u undo  / filter  h back";
+const COLLECTIONS_HINTS: &[(&str, &str)] = &[
+    ("l", "open"),
+    ("a", "new"),
+    ("r", "rename"),
+    ("D", "delete"),
+    ("w", "working"),
+    ("p", "paste"),
+    ("/", "filter"),
+    ("q", "close"),
+];
+const NOTES_HINTS: &[(&str, &str)] = &[
+    ("l", "open"),
+    ("space", "mark"),
+    ("y", "copy"),
+    ("x", "cut"),
+    ("p", "paste"),
+    ("d", "remove"),
+    ("D", "delete"),
+    ("a", "new"),
+    ("r", "rename"),
+    ("s", "sort"),
+    ("u", "undo"),
+    ("/", "filter"),
+    ("h", "back"),
+];
 
 // Ownership: the collection browser's key handling and database work. View
 // state and drawing live in `terminal::browser`.
@@ -62,16 +87,6 @@ impl TerminalApp {
         } else {
             format!("editing {}", self.active_note.id)
         };
-    }
-
-    pub(super) fn browser_status_line(&self) -> String {
-        if let Some(message) = self.browser.message.as_ref() {
-            return message.clone();
-        }
-        match self.browser.level() {
-            Level::Collections => COLLECTIONS_HINT.to_string(),
-            Level::Notes => NOTES_HINT.to_string(),
-        }
     }
 
     fn browser_message(&mut self, message: impl Into<String>) {
@@ -866,7 +881,7 @@ impl TerminalApp {
             &BrowserView {
                 state: &self.browser,
                 palette: self.render_palette,
-                icons: Icons::for_style(self.note_creation_theme.icons),
+                icons: self.browser_icons(),
                 working_collection_id: self.working_collection_id.as_deref(),
                 active_note_id: &self.active_note.id,
                 now_epoch,
@@ -875,15 +890,7 @@ impl TerminalApp {
             rows,
             cols,
         );
-        let status_bg = self.render_palette.primary();
-        let status_style = TextStyle {
-            fg: Some(contrast_fg_for_bg(status_bg)),
-            bg: Some(status_bg),
-            ..Default::default()
-        };
-        let status = format!(" {}", self.browser_status_line());
-        let sticky = self.working_collection_status_suffix();
-        self.draw_status_row_with_right_sticky(buf, rows, cols, &status, &sticky, status_style);
+        self.draw_browser_status_bar(buf, rows, cols);
         let (row, col) = cursor.unwrap_or((rows, cols));
         CursorPlacement {
             row: u16::try_from(row.saturating_sub(1)).unwrap_or(u16::MAX),
@@ -891,6 +898,80 @@ impl TerminalApp {
             block: false,
             visible: cursor.is_some(),
         }
+    }
+}
+
+impl TerminalApp {
+    /// Status row styled like the editor's: a mode pill, then either the last
+    /// message or key hints (keys bold in the accent color, labels muted),
+    /// and the working collection on the right.
+    fn draw_browser_status_bar(&self, buf: &mut Buffer, row: usize, cols: usize) {
+        let palette = self.render_palette;
+        let bar_bg = palette.code_block_bg;
+        let text = TextStyle {
+            fg: Some(palette.text_fg()),
+            bg: Some(bar_bg),
+            ..Default::default()
+        };
+        let muted = TextStyle {
+            fg: Some(palette.code_comment),
+            ..text
+        };
+        draw_row_at_styled(buf, row, 1, cols, "", text);
+        let pill_bg = palette.primary();
+        let mut col = put_str(
+            buf,
+            row,
+            1,
+            " BROWSE ",
+            TextStyle {
+                fg: Some(contrast_fg_for_bg(pill_bg)),
+                bg: Some(pill_bg),
+                bold: true,
+                ..Default::default()
+            }
+            .to_style(),
+        ) + 1;
+
+        let right = self
+            .working_collection_name
+            .as_deref()
+            .filter(|name| !name.trim().is_empty())
+            .map(|name| format!("{} {name} ", self.browser_icons().working))
+            .unwrap_or_default();
+        let right_width = right.width();
+        let right_col = (cols + 1).saturating_sub(right_width).max(col);
+        let room = right_col.saturating_sub(col + 1);
+
+        if let Some(message) = self.browser.message.as_deref() {
+            col = put_str_width(buf, row, col, message, room, text.to_style());
+        } else {
+            let hints = match self.browser.level() {
+                Level::Collections => COLLECTIONS_HINTS,
+                Level::Notes => NOTES_HINTS,
+            };
+            col = draw_key_hints(
+                buf,
+                row,
+                col,
+                room,
+                hints,
+                TextStyle {
+                    fg: Some(palette.primary()),
+                    bold: true,
+                    ..text
+                }
+                .to_style(),
+                muted.to_style(),
+            );
+        }
+        if right_width > 0 && right_col >= col {
+            put_str_width(buf, row, right_col, &right, right_width, muted.to_style());
+        }
+    }
+
+    fn browser_icons(&self) -> &'static Icons {
+        Icons::for_style(self.note_creation_theme.icons)
     }
 }
 
