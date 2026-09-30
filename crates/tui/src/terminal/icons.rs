@@ -15,7 +15,6 @@ pub struct Icons {
     pub note: &'static str,
     pub daily_note: &'static str,
     pub locked: &'static str,
-    pub unlocked: &'static str,
     pub encrypted: &'static str,
     /// The note open in the editor.
     pub active: &'static str,
@@ -40,7 +39,6 @@ const NERD: Icons = Icons {
     note: "\u{f15c}",            // nf-fa-file_text
     daily_note: "\u{f073}",      // nf-fa-calendar
     locked: "\u{f023}",          // nf-fa-lock
-    unlocked: "\u{f09c}",        // nf-fa-unlock
     encrypted: "\u{f132}",       // nf-fa-shield
     active: "\u{f040}",          // nf-fa-pencil
     working: "\u{f08d}",         // nf-fa-thumb_tack
@@ -62,7 +60,6 @@ const UNICODE: Icons = Icons {
     note: "≡",
     daily_note: "◷",
     locked: "⊠",
-    unlocked: "□",
     encrypted: "⊗",
     active: "✎",
     working: "★",
@@ -84,7 +81,6 @@ const ASCII: Icons = Icons {
     note: "-",
     daily_note: "d",
     locked: "L",
-    unlocked: "U",
     encrypted: "E",
     active: ">",
     working: "*",
@@ -125,7 +121,6 @@ mod tests {
                 icons.note,
                 icons.daily_note,
                 icons.locked,
-                icons.unlocked,
                 icons.encrypted,
                 icons.active,
                 icons.working,

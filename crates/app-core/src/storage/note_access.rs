@@ -4,13 +4,11 @@ use std::time::{Duration, Instant};
 
 const DEFAULT_UNLOCK_TTL: Duration = Duration::from_secs(15 * 60);
 
+/// The key an unlocked encrypted note is read and written with.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum NoteAccessGrant {
-    Locked,
-    Encrypted {
-        key: [u8; 32],
-        encryption_salt: Vec<u8>,
-    },
+pub(crate) struct NoteAccessGrant {
+    pub(crate) key: [u8; 32],
+    pub(crate) encryption_salt: Vec<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,14 +65,10 @@ impl NoteAccessService {
         Some(entry.grant.clone())
     }
 
-    pub(crate) fn unlock_locked(&self, note_id: &str) {
-        self.set_session(note_id, NoteAccessGrant::Locked);
-    }
-
     pub(crate) fn unlock_encrypted(&self, note_id: &str, key: [u8; 32], encryption_salt: &[u8]) {
         self.set_session(
             note_id,
-            NoteAccessGrant::Encrypted {
+            NoteAccessGrant {
                 key,
                 encryption_salt: encryption_salt.to_vec(),
             },
@@ -105,7 +99,7 @@ mod tests {
     #[test]
     fn expired_sessions_are_relocked() {
         let service = NoteAccessService::with_ttl(Duration::from_millis(5));
-        service.unlock_locked("n1");
+        service.unlock_encrypted("n1", [1u8; 32], &[2u8; 16]);
         assert!(service.is_unlocked("n1"));
         thread::sleep(Duration::from_millis(8));
         assert!(!service.is_unlocked("n1"));
@@ -117,7 +111,7 @@ mod tests {
         let key = [9u8; 32];
         let salt = [4u8; 16];
         service.unlock_encrypted("n1", key, &salt);
-        let Some(NoteAccessGrant::Encrypted {
+        let Some(NoteAccessGrant {
             key: returned_key,
             encryption_salt,
         }) = service.session("n1")

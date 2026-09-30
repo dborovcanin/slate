@@ -102,19 +102,18 @@ mod tests {
 
     #[test]
     fn sanitize_redacts_note_password_arguments() {
-        assert_eq!(sanitize_command(":note lock hunter2"), "note lock");
+        assert_eq!(sanitize_command(":note decrypt hunter2"), "note decrypt");
         assert_eq!(
             sanitize_command("note encrypt super secret"),
             "note encrypt"
         );
-        assert_eq!(sanitize_command("note unprotect pass123"), "note unprotect");
-        assert_eq!(sanitize_command(":lock-note hunter2"), "lock-note");
+        assert_eq!(sanitize_command(":decrypt-note hunter2"), "decrypt-note");
         assert_eq!(
             sanitize_command("encrypt-note super secret"),
             "encrypt-note"
         );
         assert_eq!(sanitize_command("note-encrypt pass123"), "note-encrypt");
-        assert_eq!(sanitize_command("note unlock"), "note unlock");
+        assert_eq!(sanitize_command("note decrypt"), "note decrypt");
         assert_eq!(sanitize_command("sum"), "sum");
     }
 

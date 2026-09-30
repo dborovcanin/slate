@@ -777,13 +777,6 @@ pub(crate) fn note_icon(look: &Look, note: &NoteEntry) -> (&'static str, u8) {
         (icons.active, palette.primary())
     } else if note.access_mode == NoteAccessMode::Encrypted {
         (icons.encrypted, palette.code_keyword)
-    } else if note.access_mode == NoteAccessMode::Locked {
-        let icon = if note.is_unlocked {
-            icons.unlocked
-        } else {
-            icons.locked
-        };
-        (icon, palette.code_keyword)
     } else if note.is_daily {
         (icons.daily_note, palette.code_number)
     } else {

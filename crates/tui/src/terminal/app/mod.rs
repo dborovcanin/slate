@@ -833,27 +833,22 @@ impl TerminalApp {
     fn access_mode_prompt_label(mode: NoteAccessMode) -> &'static str {
         match mode {
             NoteAccessMode::None => "note",
-            NoteAccessMode::Locked => "session-locked note",
             NoteAccessMode::Encrypted => "encrypted-at-rest note",
         }
     }
 
-    fn locked_note_status_message(&self) -> String {
-        match self.active_note.access_mode {
-            NoteAccessMode::Encrypted => {
-                "note is encrypted at rest; unlock session first (:note unlock <password>)"
-                    .to_string()
-            }
-            NoteAccessMode::Locked => {
-                "note is session-locked, not encrypted at rest; unlock first (:note unlock <password>)"
-                    .to_string()
-            }
-            NoteAccessMode::None => "note is read-only until unlocked".to_string(),
-        }
-    }
-
+    /// The open note is encrypted and locked, for example because its unlock
+    /// expired: ask for the password while editing, otherwise say so.
     fn set_locked_note_status(&mut self) {
-        self.status = self.locked_note_status_message();
+        let editing = matches!(
+            self.mode,
+            UiMode::Editor | UiMode::Normal | UiMode::Visual | UiMode::VisualLine
+        );
+        if editing {
+            self.prompt_active_note_password();
+        } else if self.mode != UiMode::Switcher {
+            self.status = "note is encrypted; open it to enter its password".to_string();
+        }
     }
 
     fn is_locked_note_error(error: &str) -> bool {
@@ -924,7 +919,11 @@ impl TerminalApp {
         if self.active_note.access_mode == NoteAccessMode::None || self.active_note.is_unlocked {
             return;
         }
+        self.prompt_active_note_password();
+    }
 
+    /// Opens the password prompt for the open note over the note switcher.
+    fn prompt_active_note_password(&mut self) {
         self.mode = UiMode::Switcher;
         self.switcher.query.clear();
         self.recompute_switcher_matches();

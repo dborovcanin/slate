@@ -27,7 +27,6 @@ pub enum NoteIdentity {
 pub struct NoteSourceCapabilities {
     pub can_save: bool,
     pub can_delete: bool,
-    pub can_lock: bool,
     pub can_encrypt: bool,
     pub can_module_persist: bool,
 }
@@ -73,14 +72,12 @@ impl NoteSourceService {
             NoteIdentity::DbNote(_) => NoteSourceCapabilities {
                 can_save: true,
                 can_delete: true,
-                can_lock: true,
                 can_encrypt: true,
                 can_module_persist: true,
             },
             NoteIdentity::FileNote(_) => NoteSourceCapabilities {
                 can_save: true,
                 can_delete: false,
-                can_lock: false,
                 can_encrypt: false,
                 can_module_persist: false,
             },
@@ -1352,7 +1349,6 @@ mod tests {
 
         let caps = service.capabilities_for_note_id("n1");
         assert!(caps.can_delete);
-        assert!(caps.can_lock);
         assert!(caps.can_encrypt);
         assert!(caps.can_module_persist);
 
@@ -1416,7 +1412,6 @@ mod tests {
         let caps = service.capabilities_for_note_id(&note_id);
         assert!(caps.can_save);
         assert!(!caps.can_delete);
-        assert!(!caps.can_lock);
         assert!(!caps.can_encrypt);
         assert!(!caps.can_module_persist);
 

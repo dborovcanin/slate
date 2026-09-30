@@ -9,25 +9,25 @@
       "expected_note_security": null
     },
     {
-      "name": "note_lock_with_note_prefix",
-      "raw_input": "note lock pass123",
-      "expected_normalized": "note lock pass123",
+      "name": "note_encrypt_with_note_prefix",
+      "raw_input": "note encrypt pass123",
+      "expected_normalized": "note encrypt pass123",
       "mode": "editor",
-      "expected_resolved": "note lock",
+      "expected_resolved": "note encrypt",
       "expected_note_security": {
-        "action": "lock",
+        "action": "encrypt",
         "password": "pass123",
         "used_note_prefix": true
       }
     },
     {
-      "name": "note_unprotect_alias_without_prefix",
-      "raw_input": "unencrypt-note p",
-      "expected_normalized": "unencrypt-note p",
+      "name": "note_decrypt_alias_without_prefix",
+      "raw_input": "decrypt-note p",
+      "expected_normalized": "decrypt-note p",
       "mode": "editor",
-      "expected_resolved": "note unprotect",
+      "expected_resolved": "note decrypt",
       "expected_note_security": {
-        "action": "unprotect",
+        "action": "decrypt",
         "password": "p",
         "used_note_prefix": false
       }

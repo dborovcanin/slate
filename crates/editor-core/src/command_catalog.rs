@@ -57,11 +57,8 @@ pub enum CommandId {
     Fold,
     Unfold,
     FoldToggle,
-    NoteLock,
-    NoteUnlock,
     NoteEncrypt,
     NoteDecrypt,
-    NoteUnprotect,
     ExportPdf,
     ExportMd,
     ExportTxt,
@@ -75,31 +72,22 @@ pub enum CommandId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteSecurityAction {
-    Lock,
-    Unlock,
     Encrypt,
     Decrypt,
-    Unprotect,
 }
 
 impl NoteSecurityAction {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Lock => "lock",
-            Self::Unlock => "unlock",
             Self::Encrypt => "encrypt",
             Self::Decrypt => "decrypt",
-            Self::Unprotect => "unprotect",
         }
     }
 
     pub fn command_id(self) -> CommandId {
         match self {
-            Self::Lock => CommandId::NoteLock,
-            Self::Unlock => CommandId::NoteUnlock,
             Self::Encrypt => CommandId::NoteEncrypt,
             Self::Decrypt => CommandId::NoteDecrypt,
-            Self::Unprotect => CommandId::NoteUnprotect,
         }
     }
 }
@@ -189,12 +177,8 @@ pub struct ParsedCollectionCommand {
 
 pub fn note_security_action_from_token(token: &str) -> Option<NoteSecurityAction> {
     match token.trim().to_ascii_lowercase().as_str() {
-        "lock" | "note-lock" | "lock-note" => Some(NoteSecurityAction::Lock),
-        "unlock" | "note-unlock" | "unlock-note" => Some(NoteSecurityAction::Unlock),
         "encrypt" | "note-encrypt" | "encrypt-note" => Some(NoteSecurityAction::Encrypt),
         "decrypt" | "note-decrypt" | "decrypt-note" => Some(NoteSecurityAction::Decrypt),
-        "unprotect" | "unencrypt" | "note-unprotect" | "unprotect-note" | "note-unencrypt"
-        | "unencrypt-note" => Some(NoteSecurityAction::Unprotect),
         _ => None,
     }
 }
@@ -403,7 +387,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 69] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -851,20 +835,6 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 69] = [
         modes: &MODES_BOTH,
     },
     CommandDefinition {
-        id: CommandId::NoteLock,
-        value: "note lock",
-        aliases: &["note-lock", "lock-note"],
-        description: "lock current note in app only (plaintext at rest; requires password)",
-        modes: &MODES_BOTH,
-    },
-    CommandDefinition {
-        id: CommandId::NoteUnlock,
-        value: "note unlock",
-        aliases: &["note-unlock", "unlock-note"],
-        description: "unlock app-level note lock (requires password)",
-        modes: &MODES_BOTH,
-    },
-    CommandDefinition {
         id: CommandId::NoteEncrypt,
         value: "note encrypt",
         aliases: &["note-encrypt", "encrypt-note"],
@@ -875,21 +845,7 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 69] = [
         id: CommandId::NoteDecrypt,
         value: "note decrypt",
         aliases: &["note-decrypt", "decrypt-note"],
-        description: "decrypt current note to plain text (requires password)",
-        modes: &MODES_BOTH,
-    },
-    CommandDefinition {
-        id: CommandId::NoteUnprotect,
-        value: "note unprotect",
-        aliases: &[
-            "note-unprotect",
-            "unprotect-note",
-            "note unencrypt",
-            "note-unencrypt",
-            "unencrypt-note",
-        ],
-        description:
-            "remove note protection (locked or encrypted) and password (requires password)",
+        description: "decrypt current note to plain text and drop its password",
         modes: &MODES_BOTH,
     },
     CommandDefinition {
@@ -1168,29 +1124,23 @@ mod tests {
             resolve_command(CommandMode::Editor, "modules off variables").map(|cmd| cmd.id),
             Some(CommandId::ModuleOffVariables)
         );
-        assert_eq!(
-            resolve_command(CommandMode::Editor, "note lock").map(|cmd| cmd.id),
-            Some(CommandId::NoteLock)
-        );
-        assert_eq!(
-            resolve_command(CommandMode::Editor, "note lock hunter2").map(|cmd| cmd.id),
-            Some(CommandId::NoteLock)
-        );
+        for removed in [
+            "note lock hunter2",
+            "note unlock hunter2",
+            "note unprotect hunter2",
+        ] {
+            assert_eq!(
+                resolve_command(CommandMode::Editor, removed).map(|cmd| cmd.id),
+                None
+            );
+        }
         assert_eq!(
             resolve_command(CommandMode::Editor, "note decrypt hunter2").map(|cmd| cmd.id),
             Some(CommandId::NoteDecrypt)
         );
         assert_eq!(
-            resolve_command(CommandMode::Editor, "note unencrypt hunter2").map(|cmd| cmd.id),
-            Some(CommandId::NoteUnprotect)
-        );
-        assert_eq!(
-            resolve_command(CommandMode::Editor, "note unprotect hunter2").map(|cmd| cmd.id),
-            Some(CommandId::NoteUnprotect)
-        );
-        assert_eq!(
-            resolve_command(CommandMode::Editor, "lock pass123").map(|cmd| cmd.id),
-            Some(CommandId::NoteLock)
+            resolve_command(CommandMode::Editor, "encrypt pass123").map(|cmd| cmd.id),
+            Some(CommandId::NoteEncrypt)
         );
         assert_eq!(
             resolve_command(CommandMode::Editor, "export pdf /tmp/out.pdf").map(|cmd| cmd.id),
@@ -1262,13 +1212,13 @@ mod tests {
         assert_eq!(note_prefixed.password, "top secret");
         assert!(note_prefixed.used_note_prefix);
 
-        let alias = parse_note_security_command(":unencrypt-note pass123").expect("parse alias");
-        assert_eq!(alias.action, NoteSecurityAction::Unprotect);
+        let alias = parse_note_security_command(":decrypt-note pass123").expect("parse alias");
+        assert_eq!(alias.action, NoteSecurityAction::Decrypt);
         assert_eq!(alias.password, "pass123");
         assert!(!alias.used_note_prefix);
 
-        let no_password = parse_note_security_command("note lock").expect("parse usage form");
-        assert_eq!(no_password.action, NoteSecurityAction::Lock);
+        let no_password = parse_note_security_command("note decrypt").expect("parse usage form");
+        assert_eq!(no_password.action, NoteSecurityAction::Decrypt);
         assert_eq!(no_password.password, "");
         assert!(no_password.used_note_prefix);
     }

@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoteAccessMode {
     None,
-    Locked,
     Encrypted,
 }
 

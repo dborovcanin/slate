@@ -140,7 +140,7 @@ Module state is then persisted per note and can diverge note-by-note.
 Behavior notes:
 
 - if `encrypt_notes = true`, `password_env` must resolve to a non-empty environment variable at runtime
-- note lock/encrypt commands are not supported for file-backed markdown notes (`slate path/to/file.md`)
+- note encrypt/decrypt commands are not supported for file-backed markdown notes (`slate path/to/file.md`)
 
 ## Daily notes
 

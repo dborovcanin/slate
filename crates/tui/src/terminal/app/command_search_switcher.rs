@@ -770,12 +770,17 @@ impl TerminalApp {
                         );
                         return Ok(());
                     }
-                    match self.open_note_from_switcher(
-                        db,
-                        &confirm.note_id,
-                        Some(confirm.password.as_str()),
-                        confirm.line_number,
-                    ) {
+                    let opened = if confirm.note_id == self.active_note.id {
+                        self.unlock_active_note(db, &confirm.password)
+                    } else {
+                        self.open_note_from_switcher(
+                            db,
+                            &confirm.note_id,
+                            Some(confirm.password.as_str()),
+                            confirm.line_number,
+                        )
+                    };
+                    match opened {
                         Ok(()) => {
                             self.switcher.open_confirm = None;
                         }
@@ -807,6 +812,24 @@ impl TerminalApp {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    /// Unlocks the open note in place. Edits made after its unlock expired
+    /// are kept and saved.
+    fn unlock_active_note(&mut self, db: &Db, password: &str) -> Result<(), String> {
+        let note = db.unlock_note(&self.active_note.id, password)?;
+        // Only a buffer that was unlocked before holds the note's real text.
+        if self.dirty && self.active_note.is_unlocked {
+            self.active_note.is_unlocked = true;
+            self.save(db)?;
+        } else {
+            self.set_active_note(db, note)?;
+        }
+        self.close_switcher();
+        self.mode = UiMode::Normal;
+        self.vim_state.mode = crate::editor_core::vim::VimMode::Normal;
+        self.status = "-- NORMAL --".to_string();
         Ok(())
     }
 
@@ -876,10 +899,7 @@ impl TerminalApp {
             self.switcher.delete_confirm = Some(SwitcherDeleteConfirm {
                 note_id: item.id.clone(),
                 note_title: item.title.clone(),
-                requires_password: matches!(
-                    access_mode,
-                    NoteAccessMode::Locked | NoteAccessMode::Encrypted
-                ),
+                requires_password: access_mode == NoteAccessMode::Encrypted,
                 access_mode,
                 password: String::new(),
             });
@@ -1501,18 +1521,7 @@ impl TerminalApp {
                     }
                     let capabilities =
                         note_sources(db).capabilities_for_note_id(&self.active_note.id);
-                    let supported = match action {
-                        crate::editor_core::command_catalog::NoteSecurityAction::Lock
-                        | crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
-                            capabilities.can_lock
-                        }
-                        crate::editor_core::command_catalog::NoteSecurityAction::Encrypt
-                        | crate::editor_core::command_catalog::NoteSecurityAction::Decrypt
-                        | crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
-                            capabilities.can_encrypt
-                        }
-                    };
-                    if !supported {
+                    if !capabilities.can_encrypt {
                         self.status =
                             "note security commands are not supported for file-backed notes"
                                 .to_string();
@@ -1525,19 +1534,10 @@ impl TerminalApp {
                         }
                     }
                     let result = match action {
-                        crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
-                            db.lock_note(&self.active_note.id, &password)
-                        }
-                        crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
-                            db.unlock_note(&self.active_note.id, &password)
-                        }
                         crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
                             db.encrypt_note(&self.active_note.id, &password)
                         }
                         crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
-                            db.decrypt_note(&self.active_note.id, &password)
-                        }
-                        crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
                             db.decrypt_note(&self.active_note.id, &password)
                         }
                     };
@@ -1548,20 +1548,11 @@ impl TerminalApp {
                                 return;
                             }
                             self.status = match action {
-                                crate::editor_core::command_catalog::NoteSecurityAction::Lock => {
-                                    "note session-locked; not encrypted at rest".to_string()
-                                }
-                                crate::editor_core::command_catalog::NoteSecurityAction::Unlock => {
-                                    "note unlocked for this session".to_string()
-                                }
                                 crate::editor_core::command_catalog::NoteSecurityAction::Encrypt => {
                                     "note encrypted at rest".to_string()
                                 }
                                 crate::editor_core::command_catalog::NoteSecurityAction::Decrypt => {
                                     "note decrypted; stored without at-rest encryption".to_string()
-                                }
-                                crate::editor_core::command_catalog::NoteSecurityAction::Unprotect => {
-                                    "note decrypted; at-rest encryption removed".to_string()
                                 }
                             };
                         }

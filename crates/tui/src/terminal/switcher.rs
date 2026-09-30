@@ -97,7 +97,6 @@ pub fn print_note_list(db: &crate::storage::Db) -> Result<(), String> {
         let note_label = note_identity_label(&note.id);
         let badge = match note.access_mode {
             NoteAccessMode::None => "",
-            NoteAccessMode::Locked => "[session lock] ",
             NoteAccessMode::Encrypted => "[encrypted at rest] ",
         };
         println!("{:>3}. {}  {}{}", idx + 1, note_label, badge, note.title);

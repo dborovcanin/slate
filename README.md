@@ -105,7 +105,7 @@ rate := 1.19
 
 | Feature | Keys / commands |
 | --- | --- |
-| App-level lock (plaintext at rest) / encryption at rest | `:note lock <pw>`, `:note encrypt <pw>`, `:note unprotect <pw>` |
+| Note encryption at rest, title included (password asked when opened) | `:note encrypt <pw>`, `:note decrypt <pw>` |
 | Export to PDF, markdown or text (file or clipboard) | `:export pdf <path>`, `:export md [path]`, `:export txt [path]` |
 | Full database backup and restore | `:backup export <path.zip>`, `:backup load <path.zip>` |
 | IMAP mail into daily inbox notes (one-off or background) | `slate imap-sync`, `[imap] auto_sync_on_startup = true` |

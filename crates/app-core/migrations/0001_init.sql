@@ -40,7 +40,7 @@ END;
 -- Retokenizing the body is the most expensive thing a note write does, so the
 -- update trigger is scoped to the columns the index derives from: writes that
 -- touch only modules_json/updated_at do not reindex the note. Every
--- access-mode transition (lock, encrypt, decrypt) sets access_mode, so the
+-- access-mode transition (encrypt, decrypt) sets access_mode, so the
 -- guard fires on all of them and protected content leaves the index.
 CREATE TRIGGER IF NOT EXISTS notes_fts_au
 AFTER UPDATE OF body, note_title, access_mode ON notes

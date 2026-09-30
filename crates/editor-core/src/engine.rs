@@ -473,12 +473,12 @@ mod tests {
 
     #[test]
     fn host_command_plan_parses_note_security_and_q_force() {
-        let note = EditorEngine::plan_host_command(CommandMode::Editor, "note lock pass123")
+        let note = EditorEngine::plan_host_command(CommandMode::Editor, "note encrypt pass123")
             .expect("note plan");
         assert_eq!(
             note,
             HostCommandPlan::NoteSecurity {
-                action: NoteSecurityAction::Lock,
+                action: NoteSecurityAction::Encrypt,
                 password: "pass123".to_string(),
             }
         );

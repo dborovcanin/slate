@@ -336,11 +336,9 @@ pub fn execute_command(
         CommandId::Fold => result_with_message("fold handled by host"),
         CommandId::Unfold => result_with_message("unfold handled by host"),
         CommandId::FoldToggle => result_with_message("fold-toggle handled by host"),
-        CommandId::NoteLock
-        | CommandId::NoteUnlock
-        | CommandId::NoteEncrypt
-        | CommandId::NoteDecrypt
-        | CommandId::NoteUnprotect => result_with_message("note security command handled by host"),
+        CommandId::NoteEncrypt | CommandId::NoteDecrypt => {
+            result_with_message("note security command handled by host")
+        }
         CommandId::ExportPdf | CommandId::ExportMd | CommandId::ExportTxt => {
             result_with_message("export command handled by host")
         }
@@ -477,11 +475,8 @@ mod tests {
                 "format code",
                 "format italic",
                 "format strike",
-                "note lock",
-                "note unlock",
                 "note encrypt",
                 "note decrypt",
-                "note unprotect",
                 "export pdf",
                 "export md",
                 "export txt",

@@ -132,8 +132,8 @@ mod tests {
     fn arrows_move_and_typing_inserts_mid_text() {
         let keys = [Key::ArrowLeft, Key::ArrowLeft, Key::Char('X')];
         assert_eq!(
-            edit("note lock", usize::MAX, &keys),
-            ("note loXck".into(), 8)
+            edit("note sync", usize::MAX, &keys),
+            ("note syXnc".into(), 8)
         );
     }
 
@@ -147,24 +147,24 @@ mod tests {
 
     #[test]
     fn home_end_and_word_jumps() {
-        assert_eq!(edit("note lock now", 6, &[Key::Home]).1, 0);
-        assert_eq!(edit("note lock now", 6, &[Key::Ctrl('e')]).1, 13);
-        assert_eq!(edit("note lock now", 13, &[Key::CtrlArrowLeft]).1, 10);
-        assert_eq!(edit("note lock now", 0, &[Key::CtrlArrowRight]).1, 4);
+        assert_eq!(edit("note sync now", 6, &[Key::Home]).1, 0);
+        assert_eq!(edit("note sync now", 6, &[Key::Ctrl('e')]).1, 13);
+        assert_eq!(edit("note sync now", 13, &[Key::CtrlArrowLeft]).1, 10);
+        assert_eq!(edit("note sync now", 0, &[Key::CtrlArrowRight]).1, 4);
     }
 
     #[test]
     fn word_deletes_respect_the_cursor() {
         assert_eq!(
-            edit("note lock now", 9, &[Key::Ctrl('w')]),
+            edit("note sync now", 9, &[Key::Ctrl('w')]),
             ("note  now".into(), 5)
         );
         assert_eq!(
-            edit("note lock now", 4, &[Key::CtrlDelete]),
+            edit("note sync now", 4, &[Key::CtrlDelete]),
             ("note now".into(), 4)
         );
-        assert_eq!(edit("note lock", 5, &[Key::Ctrl('u')]), ("lock".into(), 0));
-        assert_eq!(edit("note lock", 4, &[Key::Ctrl('k')]), ("note".into(), 4));
+        assert_eq!(edit("note sync", 5, &[Key::Ctrl('u')]), ("sync".into(), 0));
+        assert_eq!(edit("note sync", 4, &[Key::Ctrl('k')]), ("note".into(), 4));
     }
 
     #[test]

@@ -674,36 +674,28 @@ fn module_style_off_keeps_table_ctrl_navigation_when_table_module_is_on() {
     cleanup_db_files(&path);
 }
 
-#[test]
-fn note_unprotect_command_removes_lock() {
-    let (db, mut app, path) = app_with_note("top secret");
-
-    app.execute_terminal_command(&db, "note lock pass123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
-    assert_eq!(app.status, "note session-locked; not encrypted at rest");
-
-    app.execute_terminal_command(&db, "note unprotect pass123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
-    assert_eq!(app.editor.lines, vec!["top secret".to_string()]);
-    assert_eq!(app.status, "note decrypted; at-rest encryption removed");
-
-    drop(app);
-    drop(db);
-    cleanup_db_files(&path);
+/// Encrypts `id` through a second handle, so `path`'s other handles hold no
+/// key and see the note locked.
+fn encrypt_elsewhere(path: &std::path::Path, id: &str, password: &str) {
+    let other = Db::open(path.to_path_buf()).expect("second handle opens");
+    other.encrypt_note(id, password).expect("encrypt note");
 }
 
 #[test]
-fn note_unprotect_command_removes_at_rest_encryption() {
+fn note_decrypt_command_removes_at_rest_encryption() {
     let (db, mut app, path) = app_with_note("classified");
 
     app.execute_terminal_command(&db, "note encrypt enc123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
     assert_eq!(app.status, "note encrypted at rest");
 
-    app.execute_terminal_command(&db, "note unprotect enc123");
+    app.execute_terminal_command(&db, "note decrypt enc123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
     assert_eq!(app.editor.lines, vec!["classified".to_string()]);
-    assert_eq!(app.status, "note decrypted; at-rest encryption removed");
+    assert_eq!(
+        app.status,
+        "note decrypted; stored without at-rest encryption"
+    );
 
     drop(app);
     drop(db);
@@ -714,20 +706,17 @@ fn note_unprotect_command_removes_at_rest_encryption() {
 fn note_security_aliases_accept_password_arguments() {
     let (db, mut app, path) = app_with_note("top secret");
 
-    app.execute_terminal_command(&db, "lock-note pass123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
-    assert!(!app.active_note.is_unlocked);
-    assert_eq!(app.status, "note session-locked; not encrypted at rest");
-
-    app.execute_terminal_command(&db, "unlock-note pass123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
-    assert!(app.active_note.is_unlocked);
-    assert_eq!(app.status, "note unlocked for this session");
-
     app.execute_terminal_command(&db, "encrypt-note enc123");
     assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
     assert!(app.active_note.is_unlocked);
     assert_eq!(app.status, "note encrypted at rest");
+
+    app.execute_terminal_command(&db, "decrypt-note enc123");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::None);
+    assert_eq!(
+        app.status,
+        "note decrypted; stored without at-rest encryption"
+    );
 
     drop(app);
     drop(db);
@@ -735,11 +724,12 @@ fn note_security_aliases_accept_password_arguments() {
 }
 
 #[test]
-fn locked_notes_block_editor_mutations_and_autosave_errors() {
+fn locked_notes_block_edits_and_ask_for_the_password() {
     let (db, mut app, path) = app_with_note("top secret");
-
-    app.execute_terminal_command(&db, "note lock pass123");
-    assert_eq!(app.active_note.access_mode, NoteAccessMode::Locked);
+    encrypt_elsewhere(&path, "n1", "pass123");
+    let note = db.get_note("n1").expect("lookup").expect("exists");
+    app.set_active_note(&db, note).expect("reopen note");
+    assert_eq!(app.active_note.access_mode, NoteAccessMode::Encrypted);
     assert!(!app.active_note.is_unlocked);
     assert_eq!(app.editor.lines, vec![String::new()]);
     assert!(!app.dirty);
@@ -748,14 +738,35 @@ fn locked_notes_block_editor_mutations_and_autosave_errors() {
         .expect("locked edit should not fail");
     assert_eq!(app.editor.lines, vec![String::new()]);
     assert!(!app.dirty);
-    assert!(app.status.contains("unlock first"));
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert_eq!(
+        app.switcher
+            .open_confirm
+            .as_ref()
+            .map(|c| c.note_id.as_str()),
+        Some("n1")
+    );
 
+    // Dismissed, a failing autosave asks again.
+    run_keys(&mut app, &db, &[Key::Esc, Key::Ctrl('p')]);
+    assert_eq!(app.mode, UiMode::Editor);
     app.dirty = true;
     app.last_edit =
         Instant::now() - Duration::from_millis(crate::terminal::app::AUTOSAVE_DEBOUNCE_MS + 5);
     app.maybe_autosave(&db)
         .expect("locked autosave should not terminate loop");
-    assert!(app.status.contains("unlock first"));
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.switcher.open_confirm.is_some());
+
+    // The locked buffer is empty, so unlocking loads the stored text.
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Paste("pass123".to_string()), Key::Enter],
+    );
+    assert_eq!(app.mode, UiMode::Normal);
+    assert!(app.active_note.is_unlocked);
+    assert_eq!(app.editor.lines, vec!["top secret".to_string()]);
 
     drop(app);
     drop(db);
@@ -885,17 +896,18 @@ fn switcher_enter_prompts_password_for_locked_note_and_unlocks_on_confirm() {
     let (db, mut app, path) = app_with_note("first note");
     db.save_note("n2", "second note")
         .expect("second note saved");
-    db.lock_note("n2", "pass123").expect("lock second note");
+    encrypt_elsewhere(&path, "n2", "pass123");
     app.refresh_switcher_items(&db)
         .expect("switcher items refreshed");
     app.mode = UiMode::Editor;
 
+    // Locked, the note is listed without its title.
     run_keys(
         &mut app,
         &db,
         &[
             Key::Ctrl('p'),
-            Key::Paste("second".to_string()),
+            Key::Paste("encrypted".to_string()),
             Key::ArrowDown,
             Key::Enter,
         ],
@@ -1346,7 +1358,7 @@ fn startup_with_locked_recent_note_prompts_for_password() {
     db.save_note("n1", "first note").expect("first note saved");
     db.save_note("n2", "second note")
         .expect("second note saved");
-    db.lock_note("n2", "pass123").expect("lock second note");
+    encrypt_elsewhere(&path, "n2", "pass123");
     let opts = TerminalOptions {
         create_new: false,
         note_id: None,
@@ -1376,14 +1388,17 @@ fn startup_with_locked_recent_note_prompts_for_password() {
 
     assert_eq!(app.active_note.id, "n2");
     assert_eq!(app.mode, UiMode::Switcher);
-    assert_eq!(app.status, "password required to open session-locked note");
+    assert_eq!(
+        app.status,
+        "password required to open encrypted-at-rest note"
+    );
     let confirm = app
         .switcher
         .open_confirm
         .as_ref()
         .expect("startup should request password");
     assert_eq!(confirm.note_id, "n2");
-    assert_eq!(confirm.access_mode, NoteAccessMode::Locked);
+    assert_eq!(confirm.access_mode, NoteAccessMode::Encrypted);
     assert_eq!(confirm.password, "");
 
     drop(app);
