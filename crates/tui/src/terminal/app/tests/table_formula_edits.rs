@@ -155,7 +155,7 @@ fn table_formula_edits_stress() {
         ("dd mid row", "40Gdd"),
         ("p below", "5jp"),
         ("dd first data row", "8Gdd"),
-        ("p above", "20Gkp"),
+        ("P above", "20GP"),
         ("3dd", "100G3dd"),
         ("p 3 rows", "10jp"),
         ("yy p", "60Gyyp"),
@@ -176,7 +176,7 @@ fn table_formula_edits_stress() {
         ("dd total row", "Gkkdd"),
         ("p total back", "kp"),
         ("dd header", "6Gdd"),
-        ("p header back", "kp"),
+        ("P header back", "P"),
     ];
 
     let mut times: Vec<(String, f64, f64, f64, f64)> = Vec::new();
@@ -319,7 +319,8 @@ fn formula_values_follow_deleted_and_pasted_rows_through_undo_and_redo() {
         "x := 2\n\n| n | v | d |\n| --- | --- | --- |\n| a | 1 | :=(1,2)*x |\n\
          | b | 2 | :=(2,2)*x |\n| c | 3 | :=(3,2)*x |\n| t | :=sum_col() | :=sum_col() |",
         &[
-            "5Gdd", "u", "<ctrl-r>", "jp", "u", "u", "<ctrl-r>", "<ctrl-r>", "5G2dd", "u",
+            "5Gdd", "u", "<ctrl-r>", "jp", "u", "u", "<ctrl-r>", "<ctrl-r>", "5G2dd", "u", "5GddP",
+            "u", "<ctrl-r>", "6GyykP",
         ],
     );
 }

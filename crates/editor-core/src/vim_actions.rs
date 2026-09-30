@@ -185,6 +185,7 @@ pub fn execute_vim_action_with_target(
         VimIntent::YankWordForward => Some(execute_yank_word_forward(text, selection, repeats)),
         VimIntent::YankWordBackward => Some(execute_yank_word_backward(text, selection, repeats)),
         VimIntent::PasteAfter => execute_paste_after(text, selection, repeats, register),
+        VimIntent::PasteBefore => execute_paste_before(text, selection, repeats, register),
         VimIntent::DeleteChar => Some(execute_delete_char(text, selection, repeats)),
         VimIntent::DeleteTillChar => Some(execute_delete_till_char(
             text,
@@ -235,6 +236,7 @@ pub fn supports_intent(intent: VimIntent) -> bool {
             | VimIntent::YankWordForward
             | VimIntent::YankWordBackward
             | VimIntent::PasteAfter
+            | VimIntent::PasteBefore
             | VimIntent::DeleteChar
             | VimIntent::DeleteTillChar
     )
@@ -890,6 +892,49 @@ fn execute_paste_after(
             })
         }
     }
+}
+
+/// Vim `P`: linewise text goes above the cursor line with the cursor on its
+/// first line; charwise text goes before the cursor, which ends on its last
+/// character.
+fn execute_paste_before(
+    text: &str,
+    selection: SelectionSnapshot,
+    count: usize,
+    register: Option<&VimRegisterValue>,
+) -> Option<VimActionExecutionResult> {
+    let register = register?;
+    if register.is_empty_charwise() {
+        return None;
+    }
+    let spans = line_spans(text);
+    let cursor = clamp_offset(text, selection.head);
+
+    let (insert_at, insert, anchor) = match register.mode {
+        VimRegisterMode::Linewise => {
+            let normalized = register
+                .text
+                .strip_suffix('\n')
+                .unwrap_or(register.text.as_str());
+            let block = format!("{normalized}\n");
+            let insert_at = spans[line_index_for_offset(&spans, cursor)].0;
+            (insert_at, block.repeat(count), insert_at)
+        }
+        VimRegisterMode::Charwise => {
+            let insert = register.text.repeat(count);
+            let last_char = insert.chars().next_back().map_or(0, char::len_utf8);
+            (cursor, insert.clone(), cursor + insert.len() - last_char)
+        }
+    };
+    Some(VimActionExecutionResult {
+        operations: vec![replace_range(
+            insert_at,
+            insert_at,
+            insert,
+            Some(OperationSelection { anchor, head: None }),
+        )],
+        register: None,
+    })
 }
 
 fn execute_delete_char(
@@ -1583,6 +1628,38 @@ mod tests {
         .expect("handled");
         let next = apply_operations("one\ntwo".to_string(), &result.operations);
         assert_eq!(next, "one\nA\nB\ntwo");
+    }
+
+    #[test]
+    fn paste_before_charwise_inserts_before_cursor_and_lands_on_last_char() {
+        let register = VimRegisterValue {
+            text: "XY".to_string(),
+            mode: VimRegisterMode::Charwise,
+        };
+        let result = execute_vim_action("abc", sel(1), VimIntent::PasteBefore, 2, Some(&register))
+            .expect("handled");
+        let next = apply_operations("abc".to_string(), &result.operations);
+        assert_eq!(next, "aXYXYbc");
+        assert_eq!(result.operations[0].selection.map(|s| s.anchor), Some(4));
+    }
+
+    #[test]
+    fn paste_before_linewise_inserts_lines_above_current_line() {
+        let register = VimRegisterValue {
+            text: "A\nB\n".to_string(),
+            mode: VimRegisterMode::Linewise,
+        };
+        let result = execute_vim_action(
+            "one\ntwo",
+            sel(5),
+            VimIntent::PasteBefore,
+            1,
+            Some(&register),
+        )
+        .expect("handled");
+        let next = apply_operations("one\ntwo".to_string(), &result.operations);
+        assert_eq!(next, "one\nA\nB\ntwo");
+        assert_eq!(result.operations[0].selection.map(|s| s.anchor), Some(4));
     }
 
     #[test]

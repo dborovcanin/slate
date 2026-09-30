@@ -344,11 +344,22 @@ impl TerminalApp {
                 coalesce_undo,
             )
         };
-        if history_changed {
-            let undo_depth_after = self.history.undo_depth();
-            if !coalesce_undo || undo_depth_after > undo_depth_before {
-                self.push_undo_action(UndoAction::Text);
-            }
+        let undo_depth_after = self.history.undo_depth();
+        if history_changed && (!coalesce_undo || undo_depth_after > undo_depth_before) {
+            self.push_undo_action(UndoAction::Text);
+        } else if undo_depth_after < undo_depth_before {
+            // A merged step that undid itself was dropped from the history;
+            // drop its marker too so `u` and `Ctrl-r` stay in step.
+            self.pop_undo_text_action();
+        }
+    }
+
+    fn pop_undo_text_action(&mut self) {
+        if self.undo_action_pos == self.undo_actions.len()
+            && matches!(self.undo_actions.last(), Some(UndoAction::Text))
+        {
+            self.undo_actions.pop();
+            self.undo_action_pos = self.undo_actions.len();
         }
     }
 
@@ -1421,7 +1432,10 @@ impl TerminalApp {
         changed_from_line: usize,
         history_span: Option<(usize, usize, usize)>,
     ) {
-        let coalesce_undo = self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
+        // A vim insert session is one undo step however long it pauses;
+        // without vim, edits merge while typing continues.
+        let coalesce_undo = (self.vim_enabled && self.mode == UiMode::Editor)
+            || self.last_edit.elapsed() < Duration::from_millis(UNDO_DEBOUNCE_MS);
         let line_count_changed = self.editor.lines.len() != self.calc.results.len();
         let viewport_structural = line_count_changed && self.calc_runtime.viewport_only;
         self.invalidate_joined_text_cache();

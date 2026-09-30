@@ -900,6 +900,7 @@ impl TerminalApp {
                 | crate::editor_core::vim::VimIntent::DeleteToLineEnd
                 | crate::editor_core::vim::VimIntent::DeleteChar
                 | crate::editor_core::vim::VimIntent::PasteAfter
+                | crate::editor_core::vim::VimIntent::PasteBefore
                 | crate::editor_core::vim::VimIntent::DeleteInsideWord
                 | crate::editor_core::vim::VimIntent::DeleteAroundWord
                 | crate::editor_core::vim::VimIntent::DeleteInsidePipe

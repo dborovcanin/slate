@@ -104,6 +104,7 @@ pub enum VimIntent {
     YankToLineEnd,
     DeleteChar,
     PasteAfter,
+    PasteBefore,
     Undo,
     Redo,
     OpenCommandBar,
@@ -1158,6 +1159,11 @@ pub fn step(state: &VimState, key: VimKey, ctx: &VimContext) -> VimStep {
         VimKey::Char('p') => {
             let count = consume_count(&mut next);
             actions.push(make_action(VimIntent::PasteAfter, count));
+            handled = true;
+        }
+        VimKey::Char('P') => {
+            let count = consume_count(&mut next);
+            actions.push(make_action(VimIntent::PasteBefore, count));
             handled = true;
         }
         VimKey::Char('u') => {

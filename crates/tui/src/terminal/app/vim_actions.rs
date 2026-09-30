@@ -47,6 +47,7 @@ fn can_scope_shared_vim_intent(intent: crate::editor_core::vim::VimIntent) -> bo
             | crate::editor_core::vim::VimIntent::DeleteAroundTilde
             | crate::editor_core::vim::VimIntent::DeleteAroundUnderscore
             | crate::editor_core::vim::VimIntent::PasteAfter
+            | crate::editor_core::vim::VimIntent::PasteBefore
             | crate::editor_core::vim::VimIntent::DeleteTillChar
     )
 }
@@ -864,6 +865,29 @@ impl TerminalApp {
                         };
                     }
                 }
+                crate::editor_core::vim::VimIntent::PasteBefore => {
+                    // Reached only with an empty register: paste the system
+                    // clipboard, like `p` does.
+                    if let Some(sys_clip_text) = self.read_system_clipboard_text() {
+                        self.clipboard = VimRegister::charwise(sys_clip_text);
+                        if let Some((shared, scope_start_offset)) =
+                            self.try_execute_shared_vim_action(action.intent, count, None)
+                        {
+                            let mapped =
+                                crate::editor_core::vim_actions::VimActionExecutionResult {
+                                    operations: shared
+                                        .operations
+                                        .iter()
+                                        .map(|op| {
+                                            Self::remap_operation_from_scope(op, scope_start_offset)
+                                        })
+                                        .collect(),
+                                    register: None,
+                                };
+                            self.apply_shared_vim_action_result(mapped, false);
+                        }
+                    }
+                }
                 crate::editor_core::vim::VimIntent::Undo => {
                     for _ in 0..count {
                         self.undo(db);
@@ -895,10 +919,10 @@ impl TerminalApp {
                 // unreachable in practice (core always returns an action for them —
                 // see `execute_vim_action_with_target`). They are listed only to
                 // keep this match exhaustive — deliberately no wildcard, so a new
-                // intent forces a compile error here. `PasteAfter` is the one
-                // `supports_intent` exception handled above, because it can fall
-                // through with an empty register and then pull from the system
-                // clipboard.
+                // intent forces a compile error here. `PasteAfter` and
+                // `PasteBefore` are the `supports_intent` exceptions handled
+                // above, because they can fall through with an empty register and
+                // then pull from the system clipboard.
                 crate::editor_core::vim::VimIntent::DeleteLine
                 | crate::editor_core::vim::VimIntent::YankLine
                 | crate::editor_core::vim::VimIntent::DeleteToLineStart
@@ -961,6 +985,7 @@ mod tests {
             VimIntent::MoveDocEnd,
             VimIntent::DeleteLine,
             VimIntent::PasteAfter,
+            VimIntent::PasteBefore,
         ] {
             assert!(!preserves(intent), "{intent:?} should not preserve column");
         }

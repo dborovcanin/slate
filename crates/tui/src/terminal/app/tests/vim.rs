@@ -761,6 +761,49 @@ fn vim_normal_mode_undo_redo_roundtrip() {
 }
 
 #[test]
+fn vim_paste_before_puts_lines_above_and_text_before_the_cursor() {
+    let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+    app.mode = UiMode::Normal;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('j'),
+            Key::Char('d'),
+            Key::Char('d'),
+            Key::Char('P'),
+        ],
+    );
+    assert_eq!(app.editor.lines, vec!["one", "two", "three"]);
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (1, 0));
+
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines, vec!["one", "three"]);
+    run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+    assert_eq!(app.editor.lines, vec!["one", "two", "three"]);
+
+    // Charwise: `yw` then `P` at the start of "three".
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('y'),
+            Key::Char('w'),
+            Key::Char('j'),
+            Key::Char('0'),
+            Key::Char('P'),
+        ],
+    );
+    assert_eq!(app.editor.lines, vec!["one", "two", "twothree"]);
+    assert_eq!((app.editor.cursor_line, app.editor.cursor_col), (2, 2));
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn vim_redo_is_cleared_after_new_edit() {
     let (db, mut app, path) = app_with_note("one\ntwo\nthree");
     app.mode = UiMode::Normal;
@@ -1106,6 +1149,60 @@ fn gd_goes_to_the_variable_definition() {
     run_keys(&mut app, &db, &[Key::Char('g'), Key::Char('d')]);
     assert_eq!(app.editor.cursor_line, 2);
     assert_eq!(app.status, "no link or variable at cursor");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vim_each_normal_command_is_its_own_undo_step() {
+    let (db, mut app, path) = app_with_note("one\ntwo\nthree");
+    app.mode = UiMode::Normal;
+
+    // `dd` then `p` right away: two steps, as in vim.
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('j'),
+            Key::Char('d'),
+            Key::Char('d'),
+            Key::Char('p'),
+        ],
+    );
+    assert_eq!(app.editor.lines, vec!["one", "three", "two"]);
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines, vec!["one", "three"]);
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines, vec!["one", "two", "three"]);
+    run_keys(&mut app, &db, &[Key::Ctrl('r'), Key::Ctrl('r')]);
+    assert_eq!(app.editor.lines, vec!["one", "three", "two"]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn vim_insert_session_is_one_undo_step_across_pauses() {
+    let (db, mut app, path) = app_with_note("one");
+    app.mode = UiMode::Normal;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('A'), Key::Char(' '), Key::Char('a')],
+    );
+    // A pause longer than the typing debounce stays in the same step.
+    app.last_edit = Instant::now() - Duration::from_secs(2);
+    run_keys(&mut app, &db, &[Key::Char('b'), Key::Esc]);
+    assert_eq!(app.editor.lines, vec!["one ab"]);
+
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    assert_eq!(app.editor.lines, vec!["one"]);
+    run_keys(&mut app, &db, &[Key::Ctrl('r')]);
+    assert_eq!(app.editor.lines, vec!["one ab"]);
 
     drop(app);
     drop(db);

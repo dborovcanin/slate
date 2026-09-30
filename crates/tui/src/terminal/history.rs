@@ -95,6 +95,11 @@ impl LineHistory {
         self.coalesce_anchor = None;
     }
 
+    /// Starts a new undo step: the next edit is not merged into the last one.
+    pub fn break_coalescing(&mut self) {
+        self.coalesce_anchor = None;
+    }
+
     pub fn record_edit(
         &mut self,
         lines: &[String],
