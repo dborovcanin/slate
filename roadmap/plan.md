@@ -17,7 +17,7 @@ Slate is a **computational notebook for the terminal**: a fast scratchpad where 
 
 Full knowledge-base apps (for example ZenNotes TUI: vault of Markdown files, panes and tabs, kanban tasks, CSV databases, preview pane, MCP) cover organisation breadth. Slate should not chase that feature list. New work should either strengthen the computational notebook or remove friction from everyday editing.
 
-Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`.
+Already done on this track: ratatui + crossterm port, buffer rendering, soft wrap with screen-row motions, dialog polish, command-line cursor editing, daily notes and `slate capture`, the yazi-style collection browser (`Ctrl+B`, `-`, `:browse`) with configurable icons (`[theme] icons`).
 
 ### Next steps (ordered)
 

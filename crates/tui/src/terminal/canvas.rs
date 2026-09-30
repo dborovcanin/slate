@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, BorderType, Clear, Widget};
+use unicode_width::UnicodeWidthStr;
 
 /// A fully specified cell style: unset colors mean the terminal default, and
 /// unset attributes are cleared rather than inherited from the cell.
@@ -84,16 +85,6 @@ pub fn contrast_fg_for_bg(bg: u8) -> u8 {
     }
 }
 
-/// Truncates or space-pads `text` to exactly `width` chars.
-pub fn pad_right(text: &str, width: usize) -> String {
-    let mut out: String = text.chars().take(width).collect();
-    let current = out.chars().count();
-    if current < width {
-        out.push_str(&" ".repeat(width - current));
-    }
-    out
-}
-
 /// Writes `text` starting at (`row`, `col`), clipped to `max_width` cells and
 /// to the buffer. Returns the column after the last written cell.
 pub fn put_str_width(
@@ -162,6 +153,34 @@ pub fn put_char(buf: &mut Buffer, row: usize, col: usize, ch: char, style: Style
     }
 }
 
+/// Draws `key label` hint pairs from (`row`, `col`), keys and labels in their
+/// own styles, two cells apart. Pairs that do not fit in `width` are dropped
+/// from the end, so list the important ones first. Returns the column after
+/// the last drawn pair.
+pub fn draw_key_hints(
+    buf: &mut Buffer,
+    row: usize,
+    col: usize,
+    width: usize,
+    hints: &[(&str, &str)],
+    key_style: Style,
+    label_style: Style,
+) -> usize {
+    let end = col + width;
+    let mut at = col;
+    for (idx, (key, label)) in hints.iter().enumerate() {
+        let gap = if idx == 0 { 0 } else { 2 };
+        let pair_width = gap + key.width() + 1 + label.width();
+        if at + pair_width > end {
+            break;
+        }
+        at += gap;
+        at = put_str(buf, row, at, key, key_style);
+        at = put_str(buf, row, at + 1, label, label_style);
+    }
+    at
+}
+
 /// Draws a dialog surface: cleared interior filled with `bg`,
 /// rounded border in `border_fg`, and optional `title` (top border) and
 /// `footer` (bottom border, typically key hints).
@@ -209,33 +228,6 @@ pub fn draw_framed_surface(
     block.render(area, buf);
 }
 
-/// Horizontal rule across a framed surface at `row`, joining its side
-/// borders (`├──┤`), with an optional dim label near the left.
-pub fn draw_separator(
-    buf: &mut Buffer,
-    row: usize,
-    col: usize,
-    width: usize,
-    bg: u8,
-    border_fg: u8,
-    label: Option<&str>,
-) {
-    if width < 2 {
-        return;
-    }
-    let line = cell_style(Some(border_fg), Some(bg), Modifier::empty());
-    put_char(buf, row, col, '├', line);
-    for dx in 1..width - 1 {
-        put_char(buf, row, col + dx, '─', line);
-    }
-    put_char(buf, row, col + width - 1, '┤', line);
-    if let Some(label) = label.filter(|label| !label.is_empty()) {
-        let text = format!(" {label} ");
-        let dim = cell_style(Some(border_fg), Some(bg), Modifier::DIM);
-        put_str_width(buf, row, col + 2, &text, width.saturating_sub(4), dim);
-    }
-}
-
 /// Buffer rectangle for a 1-based (`row`, `col`) box, clipped to the buffer.
 fn cell_rect(buf: &Buffer, row: usize, col: usize, width: usize, height: usize) -> Option<Rect> {
     if width == 0 || height == 0 {
@@ -255,6 +247,31 @@ fn cell_x(origin: u16, col: usize) -> Option<u16> {
 
 fn cell_y(origin: u16, row: usize) -> Option<u16> {
     origin.checked_add(u16::try_from(row.checked_sub(1)?).ok()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::{row_text, screen};
+    use super::*;
+
+    #[test]
+    fn key_hints_drop_pairs_that_do_not_fit() {
+        let mut buf = screen(1, 20);
+        let style = Style::default();
+        let end = draw_key_hints(
+            &mut buf,
+            1,
+            1,
+            20,
+            &[("y", "copy"), ("x", "cut"), ("p", "paste")],
+            style.add_modifier(Modifier::BOLD),
+            style,
+        );
+        assert_eq!(row_text(&buf, 0).trim_end(), "y copy  x cut");
+        assert_eq!(end, 14);
+        assert!(buf[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert!(!buf[(2, 0)].modifier.contains(Modifier::BOLD));
+    }
 }
 
 #[cfg(test)]
@@ -304,9 +321,5 @@ pub mod test_support {
                 && cell.fg == Color::Indexed(fg)
                 && cell.bg == Color::Indexed(bg)
         })
-    }
-
-    pub fn has_fg(buf: &Buffer, fg: u8) -> bool {
-        has_cell(buf, |cell| cell.fg == Color::Indexed(fg))
     }
 }

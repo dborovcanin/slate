@@ -561,3 +561,7 @@ mod wrap;
 
 #[path = "tests/large_note_perf.rs"]
 mod large_note_perf;
+
+#[cfg(test)]
+#[path = "tests/browser.rs"]
+mod browser;

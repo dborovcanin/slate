@@ -6,6 +6,7 @@ use time::{Month, OffsetDateTime, UtcOffset};
 
 const DEFAULT_COLOR_SCHEME: &str = "gruvbox-light";
 const DEFAULT_ACCENT: &str = "auto";
+const DEFAULT_ICONS: IconStyle = IconStyle::Nerd;
 const DEFAULT_VIM_MODE: bool = false;
 const DEFAULT_WRAP: bool = true;
 const DEFAULT_DAILY_NOTE_PREFIX: &str = "daily";
@@ -80,6 +81,9 @@ color_scheme = "gruvbox-light"
 #   auto, amber, sage, rose, plum, cobalt, slate
 #   custom hex also works, e.g. #4f7bd9
 accent = "auto"
+# Icon glyphs in lists and the browser.
+#   nerd (needs a Nerd Font), unicode, ascii
+icons = "nerd"
 
 [editor]
 # Enable markdown helpers while typing (list continuation, table alignment).
@@ -224,10 +228,35 @@ impl Default for EditorModulesConfig {
     }
 }
 
+/// Which glyph set the terminal UI draws icons with.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum IconStyle {
+    /// Nerd Font private-use glyphs.
+    #[default]
+    Nerd,
+    /// Symbols from standard Unicode blocks.
+    Unicode,
+    /// Plain ASCII markers.
+    Ascii,
+}
+
+impl IconStyle {
+    fn parse(value: Option<&str>) -> Self {
+        match value.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
+            Some("unicode") => Self::Unicode,
+            Some("ascii" | "none" | "plain") => Self::Ascii,
+            Some("nerd" | "nerd-font" | "nerdfont") => Self::Nerd,
+            _ => DEFAULT_ICONS,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ThemeConfig {
     pub color_scheme: String,
     pub accent: String,
+    pub icons: IconStyle,
     pub markdown_autoformat: bool,
     pub checklist_auto_reorder: bool,
     pub autosave: bool,
@@ -438,6 +467,7 @@ impl Default for ThemeConfig {
         Self {
             color_scheme: DEFAULT_COLOR_SCHEME.to_string(),
             accent: DEFAULT_ACCENT.to_string(),
+            icons: DEFAULT_ICONS,
             markdown_autoformat: DEFAULT_MARKDOWN_AUTOFORMAT,
             checklist_auto_reorder: DEFAULT_CHECKLIST_AUTO_REORDER,
             autosave: DEFAULT_AUTOSAVE,
@@ -495,6 +525,7 @@ struct WebSearchSection {
 struct ThemeSection {
     color_scheme: Option<String>,
     accent: Option<String>,
+    icons: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -785,6 +816,7 @@ fn parse_theme_config(text: &str) -> Result<ThemeConfig, String> {
     Ok(ThemeConfig {
         color_scheme: normalize_name(raw.theme.color_scheme, DEFAULT_COLOR_SCHEME),
         accent: normalize_name(raw.theme.accent, DEFAULT_ACCENT),
+        icons: IconStyle::parse(raw.theme.icons.as_deref()),
         markdown_autoformat: raw
             .editor
             .markdown_autoformat
@@ -1168,6 +1200,18 @@ mod tests {
     fn normalize_name_uses_fallback_on_empty() {
         assert_eq!(normalize_name(Some("   ".to_string()), "dark"), "dark");
         assert_eq!(normalize_name(None, "plain"), "plain");
+    }
+
+    #[test]
+    fn parses_icon_style_with_nerd_default() {
+        let cfg = parse_theme_config("[theme]\nicons = 'Unicode'").expect("config parsed");
+        assert_eq!(cfg.icons, IconStyle::Unicode);
+        let cfg = parse_theme_config("[theme]\nicons = 'ascii'").expect("config parsed");
+        assert_eq!(cfg.icons, IconStyle::Ascii);
+        let cfg = parse_theme_config("[theme]\nicons = 'bogus'").expect("config parsed");
+        assert_eq!(cfg.icons, IconStyle::Nerd);
+        let cfg = parse_theme_config("").expect("config parsed");
+        assert_eq!(cfg.icons, IconStyle::Nerd);
     }
 
     #[test]

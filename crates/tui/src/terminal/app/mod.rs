@@ -86,6 +86,7 @@ const LARGE_NOTE_FULL_FEATURE_LINE_LIMIT: usize = 30_000;
 const LARGE_NOTE_REDUCED_UNDO_LINES: usize = LARGE_NOTE_FULL_FEATURE_LINE_LIMIT + 1;
 
 type ContentSearchResponse = (String, Result<Vec<NoteSearchResult>, String>);
+type BrowserSearchResponse = (String, Result<Vec<super::browser::SearchHit>, String>);
 
 fn decimal_digit_count(mut value: usize) -> usize {
     let mut digits = 1usize;
@@ -160,6 +161,7 @@ enum UiMode {
     VisualLine,
     Switcher,
     CollectionSwitcher,
+    Browser,
     ContentSearch,
     CommandBar,
     Search,
@@ -605,6 +607,8 @@ struct SwitcherState {
 struct CollectionSwitcherState {
     query: String,
     items: Vec<CollectionMeta>,
+    /// `items` with note counts, for drawing.
+    entries: Vec<super::browser::CollectionEntry>,
     matches: Vec<usize>,
     selected: usize,
     edit_dialog: Option<CollectionEditDialogState>,
@@ -672,6 +676,12 @@ struct TerminalApp {
     switcher: SwitcherState,
     // Collection switcher overlay
     collection_switcher: CollectionSwitcherState,
+    // Collection browser (full screen) and the mode it returns to
+    browser: super::browser::BrowserState,
+    browser_return_mode: UiMode,
+    /// Running browser content search: the query and its hits.
+    browser_search_rx: Option<mpsc::Receiver<BrowserSearchResponse>>,
+    browser_search_due: Option<Instant>,
     // Content-search overlay (cross-note full-text search)
     content_search: ContentSearchState,
     working_collection_id: Option<String>,
@@ -765,10 +775,12 @@ struct TerminalApp {
     open_image_temp_paths: Vec<std::path::PathBuf>,
 }
 
+mod browser;
 mod calc_helpers;
 mod command_search_switcher;
 mod editing;
 mod input_modes;
+mod picker;
 mod reminder_helpers;
 mod rendering;
 mod table_helpers;
@@ -1099,6 +1111,10 @@ impl TerminalApp {
                 ..Default::default()
             },
             collection_switcher: CollectionSwitcherState::default(),
+            browser: super::browser::BrowserState::default(),
+            browser_return_mode: UiMode::Normal,
+            browser_search_rx: None,
+            browser_search_due: None,
             content_search: ContentSearchState::default(),
             working_collection_id: None,
             working_collection_name: None,
@@ -1314,6 +1330,7 @@ impl TerminalApp {
             self.poll_web_search();
             self.maybe_clipboard_watch();
             self.maybe_collect_search_results(db);
+            self.poll_browser_search(db);
             self.sync_reminder_ghosts_if_dirty(db)?;
             self.maybe_dispatch_due_reminders(db);
         }

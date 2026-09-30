@@ -11,44 +11,7 @@ use crate::terminal::{notifications, switcher, text_input};
 use app_core::storage::{NoteAccessMode, NoteModules};
 use std::time::{Duration, Instant};
 
-/// Char ranges in `line` of non-overlapping matches of `query_lower` (an
-/// already lowercased query), compared case-insensitively.
-pub(super) fn case_insensitive_matches(line: &str, query_lower: &str) -> Vec<(usize, usize)> {
-    let mut matches = Vec::new();
-    if query_lower.is_empty() {
-        return matches;
-    }
-    if line.is_ascii() && query_lower.is_ascii() {
-        // ASCII lowercasing keeps byte offsets, which are char offsets here.
-        let lower = line.to_ascii_lowercase();
-        let mut start = 0;
-        while let Some(pos) = lower[start..].find(query_lower) {
-            let from = start + pos;
-            matches.push((from, from + query_lower.len()));
-            start = from + query_lower.len();
-        }
-        return matches;
-    }
-    // Lowercasing can change a char's length (`İ` becomes two chars), so
-    // keep, for every lowered char, the index of the char it came from.
-    let query: Vec<char> = query_lower.chars().collect();
-    let lowered: Vec<(char, usize)> = line
-        .chars()
-        .enumerate()
-        .flat_map(|(idx, ch)| ch.to_lowercase().map(move |lower| (lower, idx)))
-        .collect();
-    let mut start = 0;
-    while start + query.len() <= lowered.len() {
-        let window = &lowered[start..start + query.len()];
-        if window.iter().map(|(ch, _)| *ch).eq(query.iter().copied()) {
-            matches.push((window[0].1, window[query.len() - 1].1 + 1));
-            start += query.len();
-        } else {
-            start += 1;
-        }
-    }
-    matches
-}
+pub(super) use crate::terminal::text_utils::case_insensitive_matches;
 
 fn note_sources(db: &Db) -> app_core::note_sources::NoteSourceService {
     app_core::note_sources::NoteSourceService::new(db.clone())
@@ -336,32 +299,14 @@ impl TerminalApp {
         }
     }
 
-    fn switcher_collection_filter_label(&self) -> &str {
-        self.switcher
-            .collection_filter_name
-            .as_deref()
-            .unwrap_or("All")
-    }
-
-    fn content_search_collection_filter_label(&self) -> &str {
-        self.content_search
-            .collection_filter_name
-            .as_deref()
-            .unwrap_or("All")
-    }
-
+    // The pickers show their keys and scope themselves; the status row is
+    // kept for messages.
     fn update_switcher_status_hint(&mut self) {
-        self.status = format!(
-            "Switcher: type to filter, Enter open, Tab content search, Ctrl+G collections, Ctrl+L toggle collection ({}), Delete/Ctrl+Backspace delete, Esc close",
-            self.switcher_collection_filter_label()
-        );
+        self.status.clear();
     }
 
     fn update_content_search_status_hint(&mut self) {
-        self.status = format!(
-            "Content search: type to search, Ctrl+L toggle collection ({}), Enter open, Tab title search, Esc close",
-            self.content_search_collection_filter_label()
-        );
+        self.status.clear();
     }
 
     fn refresh_switcher_items_for_filter(&mut self, db: &Db) -> Result<(), String> {
@@ -1645,6 +1590,12 @@ impl TerminalApp {
                     }
                     return;
                 }
+                crate::editor_core::engine::HostCommandPlan::Browse => {
+                    if let Err(error) = self.open_browser(db) {
+                        self.status = format!("browse: {error}");
+                    }
+                    return;
+                }
                 crate::editor_core::engine::HostCommandPlan::Date => {
                     self.open_date_picker(DatePickerAction::InsertDate, false);
                     return;
@@ -2098,6 +2049,26 @@ impl TerminalApp {
 
     pub(super) fn refresh_collection_switcher_items(&mut self, db: &Db) -> Result<(), String> {
         self.collection_switcher.items = switcher::load_collection_meta(db)?;
+        let counts = db.collection_note_counts()?;
+        self.collection_switcher.entries = self
+            .collection_switcher
+            .items
+            .iter()
+            .map(|item| match item.id.as_ref().filter(|_| !item.is_clear) {
+                Some(id) => crate::terminal::browser::CollectionEntry {
+                    scope: crate::terminal::browser::Scope::Collection(id.clone()),
+                    name: item.name.clone(),
+                    description: item.description.clone(),
+                    count: counts.per_collection.get(id).copied().unwrap_or(0),
+                },
+                None => crate::terminal::browser::CollectionEntry {
+                    scope: crate::terminal::browser::Scope::All,
+                    name: "All notes".to_string(),
+                    description: "Clear the working collection".to_string(),
+                    count: counts.total,
+                },
+            })
+            .collect();
         self.recompute_collection_switcher_matches();
         Ok(())
     }
@@ -2136,8 +2107,7 @@ impl TerminalApp {
         self.collection_switcher.query.clear();
         self.recompute_collection_switcher_matches();
         self.collection_switcher.edit_dialog = None;
-        self.status =
-            "Collections: type to filter, Enter choose, Ctrl+E edit, Esc close".to_string();
+        self.status.clear();
         Ok(())
     }
 

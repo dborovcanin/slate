@@ -13,6 +13,7 @@ The file is auto-generated on first run.
 [theme]
 color_scheme = "gruvbox-light"
 accent = "auto"
+icons = "nerd"
 
 [editor]
 markdown_autoformat = true
@@ -59,6 +60,7 @@ max_body_bytes = 524288
 
 - `color_scheme`
 - `accent`
+- `icons`
 
 ### color_scheme values
 
@@ -88,6 +90,12 @@ max_body_bytes = 524288
 - `slate`
 - custom hex like `#4f7bd9`
 
+### icons values
+
+- `nerd` (default): Nerd Font glyphs, as in yazi or lsd. Needs a [Nerd Font](https://www.nerdfonts.com/) in the terminal.
+- `unicode`: symbols from standard Unicode blocks, for any font.
+- `ascii`: plain ASCII markers.
+
 ## Editor settings
 
 `[editor]` keys:
@@ -98,8 +106,8 @@ max_body_bytes = 524288
 - `format_on_save`
 - `vim_mode`
 - `wrap`
-- `date_format`
-- `date_time_format`
+- `date_format`: inserted dates (`:date`), daily note titles, and the dates of notes older than a week in the browser and switcher
+- `date_time_format`: inserted dates with time, reminders, and a note's modified and added times in the browser preview
 - `variable_autocomplete_min_chars`
 
 Behavior notes:

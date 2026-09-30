@@ -63,12 +63,23 @@ pub fn day_of_week(year: i32, month: u32, day: u32) -> u32 {
 }
 
 pub fn current_local_datetime_parts() -> Option<(i32, u32, u32, u32, u32)> {
-    let epoch_seconds: libc::time_t = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs()
-        .try_into()
-        .ok()?;
+    let epoch_seconds = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
+    local_datetime_parts_at(i64::try_from(epoch_seconds).ok()?)
+}
+
+/// `epoch_seconds` in local time formatted with a `[editor]` date pattern.
+pub fn format_epoch_local(epoch_seconds: i64, pattern: &str) -> Option<String> {
+    let (year, month, day, hour, minute) = local_datetime_parts_at(epoch_seconds)?;
+    Some(format_datetime_with_pattern(
+        year, month, day, hour, minute, pattern,
+    ))
+}
+
+/// Local (year, month, day, hour, minute) of a Unix timestamp.
+pub fn local_datetime_parts_at(epoch_seconds: i64) -> Option<(i32, u32, u32, u32, u32)> {
+    // `time_t` is 32-bit on some targets.
+    #[allow(clippy::useless_conversion)]
+    let epoch_seconds: libc::time_t = epoch_seconds.try_into().ok()?;
     let mut local_tm = unsafe { std::mem::zeroed::<libc::tm>() };
     let ptr = unsafe { libc::localtime_r(&epoch_seconds, &mut local_tm as *mut libc::tm) };
     if ptr.is_null() {

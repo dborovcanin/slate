@@ -20,6 +20,8 @@ pub struct CursorPlacement {
     pub row: u16,
     pub col: u16,
     pub block: bool,
+    /// False hides the cursor for the frame (list views without a prompt).
+    pub visible: bool,
 }
 
 /// Owns the terminal for the lifetime of an interactive session: raw mode,
@@ -87,7 +89,7 @@ impl TerminalSession {
                 let area = frame.area();
                 input::set_terminal_size(area.height, area.width);
                 outcome = render(frame);
-                if let Ok(cursor) = &outcome {
+                if let Some(cursor) = outcome.as_ref().ok().filter(|cursor| cursor.visible) {
                     frame.set_cursor_position((cursor.col, cursor.row));
                 }
             })
