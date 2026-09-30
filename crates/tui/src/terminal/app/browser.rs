@@ -27,8 +27,8 @@ const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(12
 const SEARCH_MAX_HITS: usize = 100;
 
 const COLLECTIONS_HINTS: &[(&str, &str)] = &[
-    ("l", "open"),
-    ("a", "new"),
+    ("o", "open"),
+    ("n", "new"),
     ("r", "rename"),
     ("D", "delete"),
     ("w", "working"),
@@ -49,14 +49,14 @@ const SEARCH_HINTS: &[(&str, &str)] = &[
     ("Esc", "back"),
 ];
 const NOTES_HINTS: &[(&str, &str)] = &[
-    ("l", "open"),
+    ("o", "open"),
     ("space", "mark"),
     ("y", "copy"),
     ("x", "cut"),
     ("p", "paste"),
     ("d", "remove"),
     ("D", "delete"),
-    ("a", "new"),
+    ("n", "new"),
     ("r", "rename"),
     ("s", "sort"),
     ("H", "history"),
@@ -423,7 +423,7 @@ impl TerminalApp {
                 };
                 self.browser_open_prompt(PromptKind::Filter, text);
             }
-            Key::Char('a') => match level {
+            Key::Char('n') => match level {
                 Level::Collections => self.browser_open_prompt(PromptKind::NewCollection, ""),
                 Level::Notes => self.browser_open_prompt(PromptKind::NewNote, ""),
                 Level::Search | Level::History => {}

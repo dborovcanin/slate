@@ -1073,12 +1073,9 @@ fn normalize_email_rotation(value: Option<String>) -> String {
     }
 }
 
-pub fn resolve_email_note_id(special: &SpecialNotesConfig, now_utc: OffsetDateTime) -> String {
-    let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
-    resolve_email_note_id_with_offset(special, now_utc, offset)
-}
-
-fn resolve_email_note_id_with_offset(
+/// Note id of the email note for the local day of `now_utc`; the host passes
+/// the local `offset`.
+pub fn resolve_email_note_id(
     special: &SpecialNotesConfig,
     now_utc: OffsetDateTime,
     offset: UtcOffset,
@@ -1419,7 +1416,7 @@ mod tests {
         };
         let now = OffsetDateTime::from_unix_timestamp(1_714_516_200).expect("fixed ts");
         let offset = UtcOffset::from_hms(2, 0, 0).expect("offset");
-        let note_id = resolve_email_note_id_with_offset(&special, now, offset);
+        let note_id = resolve_email_note_id(&special, now, offset);
         assert_eq!(note_id, "inbox-email-2024-05-01");
     }
 

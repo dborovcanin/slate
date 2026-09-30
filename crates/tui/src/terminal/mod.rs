@@ -28,6 +28,15 @@ pub use app::{run_terminal_session, TerminalOptions};
 #[cfg(feature = "imap")]
 pub(crate) use notifications::send_system_notification;
 
+/// Local UTC offset in effect at `now` (UTC if it cannot be determined).
+/// Timestamps are stored in UTC; this shifts them for display. `time`'s own
+/// `current_local_offset` refuses to run once the process has several threads.
+pub(crate) fn local_offset_at(now: time::OffsetDateTime) -> time::UtcOffset {
+    date_picker::local_utc_offset_secs_at(now.unix_timestamp())
+        .and_then(|secs| time::UtcOffset::from_whole_seconds(secs).ok())
+        .unwrap_or(time::UtcOffset::UTC)
+}
+
 /// Current local date and time for daily notes (UTC if the local time
 /// cannot be determined).
 pub(crate) fn local_stamp() -> app_core::daily::LocalStamp {

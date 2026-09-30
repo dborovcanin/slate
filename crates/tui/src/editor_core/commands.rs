@@ -302,7 +302,8 @@ pub fn execute_command(
                 .unwrap_or_else(|| result_with_message(format!("unknown command: {normalized}")))
         }
         CommandId::Date => {
-            let date_str = time::OffsetDateTime::now_utc().date().to_string();
+            let stamp = crate::terminal::local_stamp();
+            let date_str = format!("{:04}-{:02}-{:02}", stamp.year, stamp.month, stamp.day);
             let mut result = result_with_message("Date inserted");
             result
                 .operations

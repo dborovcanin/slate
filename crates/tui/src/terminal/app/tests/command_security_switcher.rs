@@ -788,7 +788,7 @@ fn switcher_delete_cancel_keeps_note() {
 }
 
 #[test]
-fn switcher_ctrl_backspace_delete_removes_active_after_confirmation() {
+fn switcher_delete_removes_active_after_confirmation() {
     let (db, mut app, path) = app_with_note("first note");
     db.save_note("n2", "second note")
         .expect("second note saved");
@@ -798,11 +798,7 @@ fn switcher_ctrl_backspace_delete_removes_active_after_confirmation() {
     run_keys(
         &mut app,
         &db,
-        &[
-            Key::Ctrl('p'),
-            Key::Paste("first".to_string()),
-            Key::CtrlBackspace,
-        ],
+        &[Key::Ctrl('p'), Key::Paste("first".to_string()), Key::Delete],
     );
     assert_eq!(app.mode, UiMode::Switcher);
     let pending = app
@@ -820,6 +816,31 @@ fn switcher_ctrl_backspace_delete_removes_active_after_confirmation() {
         .get_note(&app.active_note.id)
         .expect("active note lookup")
         .is_some());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn switcher_ctrl_backspace_trims_query_word_without_deleting() {
+    // Legacy terminals send ^H for both Ctrl+H and Ctrl+Backspace.
+    let (db, mut app, path) = app_with_note("first note");
+    app.refresh_switcher_items(&db)
+        .expect("switcher items refreshed");
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Ctrl('p'),
+            Key::Paste("first note".to_string()),
+            Key::CtrlBackspace,
+        ],
+    );
+    assert_eq!(app.mode, UiMode::Switcher);
+    assert!(app.switcher.delete_confirm.is_none());
+    assert_eq!(app.switcher.query, "first ");
 
     drop(app);
     drop(db);

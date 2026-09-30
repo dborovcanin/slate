@@ -310,7 +310,8 @@ fn notify_imap_new_mail(
     if appended == 0 {
         return;
     }
-    let note_id = config::resolve_email_note_id(special, time::OffsetDateTime::now_utc());
+    let now = time::OffsetDateTime::now_utc();
+    let note_id = config::resolve_email_note_id(special, now, terminal::local_offset_at(now));
     let title = if appended == 1 {
         "New email in Slate"
     } else {

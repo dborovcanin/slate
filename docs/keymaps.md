@@ -114,8 +114,8 @@ Popup with a search bar, the notes (icon, title, age) and key hints; the title s
 | `Ctrl+N` | New note |
 | `Ctrl+G` | Collection picker |
 | `Ctrl+R` | History of the selected note |
-| `Delete` / `Ctrl+Backspace` | Delete selected note (`y` / `Enter` confirm, `n` / `Esc` cancel) |
-| `Ctrl+W` | Delete last query word |
+| `Delete` | Delete selected note (`y` / `Enter` confirm, `n` / `Esc` cancel) |
+| `Ctrl+W`, `Ctrl+Backspace` | Delete last query word |
 | `Esc` / `Ctrl+P` | Close |
 
 ## Collection picker (`Ctrl+G`)
@@ -134,7 +134,7 @@ Popup listing collections with note counts; `All notes` clears the working colle
 | Key | Action |
 | --- | --- |
 | `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move |
-| `l`, `Enter`, `o` | Open the collection or note (asks for the password of a locked note) |
+| `o`, `l`, `Enter` | Open the collection or note (asks for the password of a locked note) |
 | `h`, `-`, `Backspace` | Back to the collections list |
 | `/` | Filter the list (fuzzy); `Esc` clears it |
 | `Ctrl+F`, `Ctrl+/` | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
@@ -144,7 +144,7 @@ Popup listing collections with note counts; `All notes` clears the working colle
 | `d` | Remove the notes from the open collection (the notes stay) |
 | `u` | Undo the last paste or remove |
 | `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
-| `a` / `r` | New note (in the open collection) or collection / rename the hovered one |
+| `n` / `r` | New note (in the open collection) or collection / rename the hovered one |
 | `s` | Sort notes by modification time or title |
 | `w` | Make the collection the working collection (`All notes` clears it) |
 | `H` | History of the hovered note |

@@ -356,7 +356,7 @@ impl TerminalApp {
                     self.toggle_switcher_collection_filter_and_refresh(db)?;
                 }
             }
-            Key::Ctrl('w') => {
+            Key::Ctrl('w') | Key::CtrlBackspace => {
                 trim_trailing_word(&mut self.switcher.query);
                 self.recompute_switcher_matches();
             }
@@ -378,7 +378,7 @@ impl TerminalApp {
                 self.switcher.query.pop();
                 self.recompute_switcher_matches();
             }
-            Key::Delete | Key::CtrlBackspace => {
+            Key::Delete => {
                 self.request_switcher_delete_confirmation(db);
             }
             Key::Enter => {

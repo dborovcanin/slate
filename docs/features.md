@@ -52,8 +52,8 @@ The note switcher, its content search and the collection picker are popups style
 | `Enter` in the switcher / content search | Open the note (content search jumps to the matching line) |
 | `Ctrl+L` in the switcher / content search | Toggle between the working collection and all notes |
 | `Ctrl+R` in the switcher | [History](#note-history) of the selected note |
-| `Delete` / `Ctrl+Backspace` in the switcher | Delete the selected note (confirm with `y`/`Enter`; protected notes ask for the password) |
-| `Ctrl+W` in the switcher | Delete the last word of the query |
+| `Delete` in the switcher | Delete the selected note (confirm with `y`/`Enter`; protected notes ask for the password) |
+| `Ctrl+W`, `Ctrl+Backspace` in the switcher | Delete the last word of the query |
 | `Esc` / `Ctrl+P` in the switcher | Close it |
 | `Ctrl+Q` | Quit (from any mode) |
 
@@ -387,7 +387,7 @@ A note can belong to several collections, so notes are copied into collections r
 | Key | Action |
 | --- | --- |
 | `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move |
-| `l`, `Enter`, `o` | Open the collection or note (asks for the password of a locked note) |
+| `o`, `l`, `Enter` | Open the collection or note (asks for the password of a locked note) |
 | `h`, `-`, `Backspace` | Back to the collections list |
 | `/` | Filter the list (fuzzy); `Esc` clears it |
 | `Ctrl+F`, `Ctrl+/` | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
@@ -397,7 +397,7 @@ A note can belong to several collections, so notes are copied into collections r
 | `d` | Remove the notes from the open collection (the notes stay) |
 | `u` | Undo the last paste or remove |
 | `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
-| `a` / `r` | New note (in the open collection) or collection / rename the hovered one |
+| `n` / `r` | New note (in the open collection) or collection / rename the hovered one |
 | `s` | Sort notes by modification time or title |
 | `w` | Make the collection the working collection (`All notes` clears it) |
 | `R` | Reload |

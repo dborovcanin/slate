@@ -67,7 +67,7 @@ fn copy_into_new_collection_then_move_and_undo() {
     // New collection from the collections level.
     app.handle_key(&db, Key::Char('h')).expect("up");
     assert_eq!(app.browser.level(), Level::Collections);
-    app.handle_key(&db, Key::Char('a')).expect("new collection");
+    app.handle_key(&db, Key::Char('n')).expect("new collection");
     type_text(&mut app, &db, "Work");
     app.handle_key(&db, Key::Enter).expect("create");
     let work = db
@@ -177,7 +177,7 @@ fn new_note_lands_in_the_open_collection_and_opens_on_enter() {
         .position(|idx| app.browser.collections[*idx].scope == Scope::Collection(work.id.clone()))
         .expect("listed");
     app.handle_key(&db, Key::Char('l')).expect("enter");
-    app.handle_key(&db, Key::Char('a')).expect("new note");
+    app.handle_key(&db, Key::Char('n')).expect("new note");
     type_text(&mut app, &db, "Roadmap");
     app.handle_key(&db, Key::Enter).expect("create");
 

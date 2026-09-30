@@ -271,7 +271,8 @@ fn ingest_message(
         &body,
     );
 
-    let note_id = resolve_email_note_id(special, OffsetDateTime::now_utc());
+    let now = OffsetDateTime::now_utc();
+    let note_id = resolve_email_note_id(special, now, crate::terminal::local_offset_at(now));
     let appended = db.prepend_note_with_ingest_event(
         source_key,
         message_id.as_deref(),

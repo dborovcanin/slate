@@ -94,6 +94,18 @@ pub fn local_datetime_parts_at(epoch_seconds: i64) -> Option<(i32, u32, u32, u32
     ))
 }
 
+/// Local UTC offset, in seconds east of UTC, in effect at a Unix timestamp.
+pub fn local_utc_offset_secs_at(epoch_seconds: i64) -> Option<i32> {
+    #[allow(clippy::useless_conversion)]
+    let epoch_seconds: libc::time_t = epoch_seconds.try_into().ok()?;
+    let mut local_tm = unsafe { std::mem::zeroed::<libc::tm>() };
+    let ptr = unsafe { libc::localtime_r(&epoch_seconds, &mut local_tm as *mut libc::tm) };
+    if ptr.is_null() {
+        return None;
+    }
+    i32::try_from(local_tm.tm_gmtoff).ok()
+}
+
 pub fn local_datetime_to_epoch_ms(
     year: i32,
     month: u32,
