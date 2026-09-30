@@ -361,6 +361,8 @@ Collections group notes; the working collection is session-scoped and applies to
 
 `Ctrl+B`, `-` in Normal mode, or `:browse` (`:explore`, `:files`) opens a full-screen browser in three columns, like the yazi file manager: collections on the left, the notes of the open collection in the middle and a preview of the hovered note (title, age, collections, tags and the start of the body) on the right. `All notes` and `Unsorted` (notes in no collection) sit above the collections. It opens on the working collection with the current note hovered.
 
+`Ctrl+F` (or `Ctrl+/`) searches note text inside the open collection. Hits show the line they matched on, the preview scrolls to that line with the search terms highlighted, and `Enter` opens the note there.
+
 A note can belong to several collections, so notes are copied into collections rather than moved like files: `y` then `p` adds a note to another collection, `x` then `p` moves it out of the collection it was cut from, and `d` removes it from the open collection without deleting it. `u` undoes the last of these.
 
 | Key | Action |
@@ -369,6 +371,7 @@ A note can belong to several collections, so notes are copied into collections r
 | `l`, `Enter`, `o` | Open the collection or note (asks for the password of a locked note) |
 | `h`, `-`, `Backspace` | Back to the collections list |
 | `/` | Filter the list (fuzzy); `Esc` clears it |
+| `Ctrl+F`, `Ctrl+/` | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
 | `Space` / `Ctrl+A` | Mark the note and move down / mark all |
 | `y` / `x` | Copy / cut the marked (or hovered) notes |
 | `p` | Paste into the open or hovered collection: copy adds the notes to it, cut moves them |

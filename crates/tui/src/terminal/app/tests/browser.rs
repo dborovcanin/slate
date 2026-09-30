@@ -254,3 +254,93 @@ fn print_browser_screen() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+/// Runs the pending browser search now and waits for its hits.
+fn finish_search(app: &mut TerminalApp, db: &Db) {
+    app.browser_search_due = None;
+    app.poll_browser_search(db);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while app.browser_search_rx.is_some() {
+        assert!(Instant::now() < deadline, "search timed out");
+        std::thread::sleep(Duration::from_millis(5));
+        app.poll_browser_search(db);
+    }
+}
+
+#[test]
+fn content_search_lists_hits_previews_the_line_and_opens_there() {
+    let (db, mut app, path) = browser_app();
+    app.handle_key(&db, Key::Ctrl('f')).expect("search");
+    assert_eq!(app.browser.level(), Level::Search);
+    let (rows, cursor) = render_screen(&mut app);
+    assert!(rows.iter().any(|row| row.contains("search note text")));
+    assert!(cursor.visible);
+
+    type_text(&mut app, &db, "agenda");
+    finish_search(&mut app, &db);
+    let search = app.browser.search.as_ref().expect("search open");
+    assert_eq!(search.hits.len(), 1);
+    assert_eq!(search.hits[0].note.id, "n2");
+    assert_eq!(search.hits[0].line_number, 2);
+    let (rows, _) = render_screen(&mut app);
+    let screen = rows.join("\n");
+    assert!(screen.contains(":2"), "{screen}");
+    assert!(screen.contains("- agenda") || screen.contains("agenda"));
+    assert!(rows.last().unwrap().contains("open at match"));
+
+    // `j` is typed into the query, not a motion.
+    app.handle_key(&db, Key::Char('j')).expect("type j");
+    assert_eq!(app.browser.search.as_ref().unwrap().query, "agendaj");
+    app.handle_key(&db, Key::Backspace).expect("erase");
+    finish_search(&mut app, &db);
+
+    app.handle_key(&db, Key::Enter).expect("open hit");
+    assert_eq!(app.active_note.id, "n2");
+    assert_eq!(app.editor.cursor_line, 1);
+    assert_eq!(app.mode, UiMode::Normal);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn content_search_stays_in_the_open_collection_and_esc_returns() {
+    let (db, mut app, path) = browser_app();
+    let work = db.create_collection("Work", "").expect("collection");
+    db.add_notes_to_collection(&work.id, &["n1".to_string()])
+        .expect("added");
+    app.handle_key(&db, Key::Char('R')).expect("reload");
+    app.handle_key(&db, Key::Char('h')).expect("up");
+    app.browser.collection_cursor = app
+        .browser
+        .collection_matches
+        .iter()
+        .position(|idx| app.browser.collections[*idx].scope == Scope::Collection(work.id.clone()))
+        .expect("listed");
+    app.handle_key(&db, Key::Enter).expect("enter work");
+
+    // Ctrl+/ as legacy terminals send it (0x1F, Ctrl+_).
+    app.handle_key(&db, Key::Ctrl('_')).expect("search");
+    type_text(&mut app, &db, "agenda");
+    finish_search(&mut app, &db);
+    assert!(app.browser.search.as_ref().unwrap().hits.is_empty());
+    let (rows, _) = render_screen(&mut app);
+    assert!(rows.iter().any(|row| row.contains("no matches")));
+
+    app.handle_key(&db, Key::Ctrl('u')).expect("clear");
+    type_text(&mut app, &db, "rent");
+    finish_search(&mut app, &db);
+    let hits = &app.browser.search.as_ref().unwrap().hits;
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].note.id, "n1");
+
+    app.handle_key(&db, Key::Esc).expect("back");
+    assert_eq!(app.browser.level(), Level::Notes);
+    assert_eq!(app.browser.scope, Some(Scope::Collection(work.id.clone())));
+    assert!(app.browser.search.is_none());
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}

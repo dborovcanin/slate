@@ -132,6 +132,7 @@ Key tables by mode. The [Feature Guide](./features.md) lists the same keys group
 | `l`, `Enter`, `o` | Open the collection or note (asks for the password of a locked note) |
 | `h`, `-`, `Backspace` | Back to the collections list |
 | `/` | Filter the list (fuzzy); `Esc` clears it |
+| `Ctrl+F`, `Ctrl+/` | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
 | `Space` / `Ctrl+A` | Mark the note and move down / mark all |
 | `y` / `x` | Copy / cut the marked (or hovered) notes |
 | `p` | Paste into the open or hovered collection: copy adds the notes to it, cut moves them |

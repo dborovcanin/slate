@@ -1,7 +1,8 @@
 use super::{new_note_with_context, Db, Key, TerminalApp, UiMode};
 use crate::terminal::browser::{
-    BrowserState, BrowserView, ClipOp, Clipboard, CollectionEntry, Confirm, Level, MembershipUndo,
-    NoteEntry, Preview, Prompt, PromptKind, Scope, SortKey, PREVIEW_BODY_CHARS,
+    BrowserState, BrowserView, ClipOp, Clipboard, CollectionEntry, Confirm, ContentSearch, Level,
+    MembershipUndo, NoteEntry, Preview, Prompt, PromptKind, Scope, SearchHit, SortKey,
+    PREVIEW_BODY_CHARS,
 };
 use crate::terminal::canvas::{
     contrast_fg_for_bg, draw_key_hints, draw_row_at_styled, put_str, put_str_width, TextStyle,
@@ -18,6 +19,12 @@ use unicode_width::UnicodeWidthStr;
 
 /// Preview lines kept for the hovered note; more than any screen shows.
 const PREVIEW_MAX_LINES: usize = 300;
+/// Body characters loaded to preview a search hit further down a note.
+const SEARCH_PREVIEW_BODY_CHARS: usize = 512 * 1024;
+/// Pause after typing before a content search runs.
+const SEARCH_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(120);
+/// Most hits a content search returns.
+const SEARCH_MAX_HITS: usize = 100;
 
 const COLLECTIONS_HINTS: &[(&str, &str)] = &[
     ("l", "open"),
@@ -28,6 +35,12 @@ const COLLECTIONS_HINTS: &[(&str, &str)] = &[
     ("p", "paste"),
     ("/", "filter"),
     ("q", "close"),
+];
+const SEARCH_HINTS: &[(&str, &str)] = &[
+    ("type", "search"),
+    ("↑↓", "move"),
+    ("Enter", "open at match"),
+    ("Esc", "back"),
 ];
 const NOTES_HINTS: &[(&str, &str)] = &[
     ("l", "open"),
@@ -243,38 +256,43 @@ impl TerminalApp {
                     notes,
                 };
             }
-            Level::Notes => {
-                let Some(note) = self.browser.hovered_note().cloned() else {
+            Level::Notes | Level::Search => {
+                let Some(note) = self.browser.focused_note().cloned() else {
                     self.browser.preview = Preview::Empty;
                     return;
                 };
-                if matches!(&self.browser.preview, Preview::Note { note_id, .. } if *note_id == note.id)
-                {
+                let focus = self
+                    .browser
+                    .search
+                    .as_ref()
+                    .filter(|_| self.browser.level() == Level::Search)
+                    .and_then(|search| search.hovered())
+                    .map(|hit| hit.line_number.saturating_sub(1));
+                if matches!(
+                    &self.browser.preview,
+                    Preview::Note { note_id, focus_line, .. }
+                        if *note_id == note.id && *focus_line == focus
+                ) {
                     return;
                 }
+                // A search hit may sit deep in the note: load up to it.
+                let (max_lines, max_chars) = match focus {
+                    Some(line) => (line + PREVIEW_MAX_LINES, SEARCH_PREVIEW_BODY_CHARS),
+                    None => (PREVIEW_MAX_LINES, PREVIEW_BODY_CHARS),
+                };
                 let (lines, locked) = if note.id == self.active_note.id {
-                    let lines = self
-                        .editor
-                        .lines
-                        .iter()
-                        .take(PREVIEW_MAX_LINES)
-                        .cloned()
-                        .collect();
+                    let lines = self.editor.lines.iter().take(max_lines).cloned().collect();
                     (lines, !self.active_note_is_editable())
                 } else {
                     let body = db
-                        .get_note_body_head(&note.id, PREVIEW_BODY_CHARS)
+                        .get_note_body_head(&note.id, max_chars)
                         .ok()
                         .flatten()
                         .unwrap_or_default();
                     if body == "[locked]" {
                         (Vec::new(), true)
                     } else {
-                        let lines = body
-                            .lines()
-                            .take(PREVIEW_MAX_LINES)
-                            .map(str::to_string)
-                            .collect();
+                        let lines = body.lines().take(max_lines).map(str::to_string).collect();
                         (lines, false)
                     }
                 };
@@ -288,6 +306,7 @@ impl TerminalApp {
                 self.browser.preview = Preview::Note {
                     note_id: note.id,
                     lines,
+                    focus_line: focus,
                     collections,
                     tags,
                     locked,
@@ -307,6 +326,9 @@ impl TerminalApp {
         }
         if self.browser.prompt.is_some() {
             return self.handle_browser_prompt_key(db, key);
+        }
+        if self.browser.level() == Level::Search {
+            return self.handle_browser_search_key(db, key);
         }
         let pending_g = std::mem::take(&mut self.browser.pending_g);
         let page = (input::terminal_size().0.saturating_sub(2) / 2).max(1) as isize;
@@ -348,16 +370,21 @@ impl TerminalApp {
                 self.close_browser();
                 return self.open_collection_switcher(db);
             }
+            Key::Ctrl('f') | Key::Ctrl('/') | Key::Ctrl('_') => {
+                self.open_browser_search(db);
+                return Ok(());
+            }
             Key::Char('/') => {
                 let text = match level {
-                    Level::Collections => self.browser.collection_filter.clone(),
                     Level::Notes => self.browser.note_filter.clone(),
+                    Level::Collections | Level::Search => self.browser.collection_filter.clone(),
                 };
                 self.browser_open_prompt(PromptKind::Filter, text);
             }
             Key::Char('a') => match level {
                 Level::Collections => self.browser_open_prompt(PromptKind::NewCollection, ""),
                 Level::Notes => self.browser_open_prompt(PromptKind::NewNote, ""),
+                Level::Search => {}
             },
             Key::Char('r') => self.browser_request_rename(),
             Key::Char(' ') if level == Level::Notes => {
@@ -393,6 +420,7 @@ impl TerminalApp {
 
     fn browser_open_hovered(&mut self, db: &Db) -> Result<(), String> {
         match self.browser.level() {
+            Level::Search => return self.browser_open_search_hit(db),
             Level::Collections => {
                 if let Some(scope) = self.browser.hovered_collection().map(|e| e.scope.clone()) {
                     self.browser_enter_scope(db, scope, None)?;
@@ -407,6 +435,7 @@ impl TerminalApp {
                         PromptKind::Unlock {
                             note_id: note.id,
                             title: note.title,
+                            line: None,
                         },
                         "",
                     );
@@ -458,15 +487,26 @@ impl TerminalApp {
             PromptKind::RenameCollection { collection_id } => {
                 self.browser_rename_collection(db, &collection_id, &text)
             }
-            PromptKind::Unlock { note_id, title } => {
+            PromptKind::Unlock {
+                note_id,
+                title,
+                line,
+            } => {
                 // The password is used as typed, spaces included.
-                match self.open_note_from_switcher(db, &note_id, Some(&prompt.text), None) {
+                match self.open_note_from_switcher(db, &note_id, Some(&prompt.text), line) {
                     Ok(()) => {
                         self.status = format!("unlocked {title}");
                         Ok(())
                     }
                     Err(error) => {
-                        self.browser_open_prompt(PromptKind::Unlock { note_id, title }, "");
+                        self.browser_open_prompt(
+                            PromptKind::Unlock {
+                                note_id,
+                                title,
+                                line,
+                            },
+                            "",
+                        );
                         Err(format!("unlock failed: {error}"))
                     }
                 }
@@ -515,6 +555,7 @@ impl TerminalApp {
 
     fn browser_request_rename(&mut self) {
         match self.browser.level() {
+            Level::Search => {}
             Level::Collections => match self.browser.hovered_collection() {
                 Some(CollectionEntry {
                     scope: Scope::Collection(id),
@@ -635,6 +676,7 @@ impl TerminalApp {
         let target = match self.browser.level() {
             Level::Notes => self.browser.scope.clone(),
             Level::Collections => self.browser.hovered_collection().map(|e| e.scope.clone()),
+            Level::Search => None,
         };
         let Some(Scope::Collection(target_id)) = target else {
             self.browser_message("paste into a collection");
@@ -731,6 +773,7 @@ impl TerminalApp {
 
     fn browser_request_delete(&mut self) {
         match self.browser.level() {
+            Level::Search => {}
             Level::Collections => match self.browser.hovered_collection() {
                 Some(CollectionEntry {
                     scope: Scope::Collection(id),
@@ -849,6 +892,7 @@ impl TerminalApp {
         let scope = match self.browser.level() {
             Level::Collections => self.browser.hovered_collection().map(|e| e.scope.clone()),
             Level::Notes => self.browser.scope.clone(),
+            Level::Search => None,
         };
         match scope {
             Some(Scope::Collection(id)) => {
@@ -864,6 +908,159 @@ impl TerminalApp {
             }
             _ => self.browser_message("pick a collection to work in"),
         }
+    }
+
+    /// Opens full-text search over the open collection (or the hovered one
+    /// on the collections list).
+    fn open_browser_search(&mut self, db: &Db) {
+        let level = self.browser.level();
+        let scope = match level {
+            Level::Notes => self.browser.scope.clone(),
+            Level::Collections => self.browser.hovered_collection().map(|e| e.scope.clone()),
+            Level::Search => return,
+        }
+        .unwrap_or(Scope::All);
+        self.browser.search = Some(ContentSearch::new(scope, level));
+        self.browser.level = Some(Level::Search);
+        self.browser_search_rx = None;
+        self.browser.preview = Preview::Empty;
+        self.browser_refresh_preview(db);
+    }
+
+    fn close_browser_search(&mut self, db: &Db) {
+        if let Some(search) = self.browser.search.take() {
+            self.browser.level = Some(search.return_level);
+        }
+        self.browser_search_rx = None;
+        self.browser.preview = Preview::Empty;
+        self.browser_refresh_preview(db);
+    }
+
+    fn handle_browser_search_key(&mut self, db: &Db, key: Key) -> Result<(), String> {
+        let page = (input::terminal_size().0.saturating_sub(4) / 2).max(1) as isize;
+        match key {
+            Key::Esc => {
+                self.close_browser_search(db);
+                return Ok(());
+            }
+            Key::Enter => return self.browser_open_search_hit(db),
+            Key::ArrowDown | Key::Ctrl('n') | Key::Ctrl('j') => self.browser.move_cursor(1),
+            Key::ArrowUp | Key::Ctrl('p') | Key::Ctrl('k') => self.browser.move_cursor(-1),
+            Key::PageDown | Key::Ctrl('d') => self.browser.move_cursor(page),
+            Key::PageUp => self.browser.move_cursor(-page),
+            Key::Ctrl('f') | Key::Ctrl('/') | Key::Ctrl('_') => {}
+            other => {
+                let Some(search) = self.browser.search.as_mut() else {
+                    return Ok(());
+                };
+                let before = search.query.clone();
+                text_input::apply_key(&mut search.query, &mut search.cursor, &other);
+                if search.query.trim() != before.trim() {
+                    search.pending = true;
+                    self.browser_search_due = Some(std::time::Instant::now() + SEARCH_DEBOUNCE);
+                }
+            }
+        }
+        self.browser_refresh_preview(db);
+        Ok(())
+    }
+
+    fn browser_open_search_hit(&mut self, db: &Db) -> Result<(), String> {
+        let Some(hit) = self
+            .browser
+            .search
+            .as_ref()
+            .and_then(|search| search.hovered())
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if hit.note.is_locked() {
+            self.browser_open_prompt(
+                PromptKind::Unlock {
+                    note_id: hit.note.id,
+                    title: hit.note.title,
+                    line: Some(hit.line_number),
+                },
+                "",
+            );
+            return Ok(());
+        }
+        self.close_browser();
+        self.open_note_from_switcher(db, &hit.note.id, None, Some(hit.line_number))
+    }
+
+    /// Runs a debounced content search on a worker thread and collects its
+    /// result; called from the event loop.
+    pub(super) fn poll_browser_search(&mut self, db: &Db) {
+        if self.mode != UiMode::Browser || self.browser.search.is_none() {
+            self.browser_search_rx = None;
+            return;
+        }
+        if let Some(rx) = self.browser_search_rx.as_ref() {
+            let received = match rx.try_recv() {
+                Ok(received) => Some(received),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+            };
+            self.browser_search_rx = None;
+            if let Some(search) = self.browser.search.as_mut() {
+                search.running = false;
+                if let Some((query, result)) = received {
+                    // Results of a query the user has typed past are dropped.
+                    if search.query.trim() == query {
+                        match result {
+                            Ok(hits) => {
+                                search.hits = hits;
+                                search.error = None;
+                            }
+                            Err(error) => {
+                                search.hits.clear();
+                                search.error = Some(format!("search failed: {error}"));
+                            }
+                        }
+                        search.selected = 0;
+                        search.searched = query;
+                    }
+                }
+            }
+            self.browser.preview = Preview::Empty;
+            self.browser_refresh_preview(db);
+            self.render_state.dirty = true;
+        }
+
+        let Some(search) = self.browser.search.as_mut() else {
+            return;
+        };
+        if !search.pending
+            || self
+                .browser_search_due
+                .is_some_and(|due| std::time::Instant::now() < due)
+        {
+            return;
+        }
+        search.pending = false;
+        self.browser_search_due = None;
+        let query = search.query.trim().to_string();
+        if query.is_empty() {
+            search.hits.clear();
+            search.searched.clear();
+            search.error = None;
+            self.browser.preview = Preview::Empty;
+            self.render_state.dirty = true;
+            return;
+        }
+        search.running = true;
+        let scope = search.scope.clone();
+        let prefix = self.daily_config.note_prefix.clone();
+        let search_db = db.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = search_hits(&search_db, &query, &scope, &prefix);
+            tx.send((query, result)).ok();
+        });
+        self.browser_search_rx = Some(rx);
+        self.render_state.dirty = true;
     }
 
     /// Paints the browser screen and its status row.
@@ -949,6 +1146,7 @@ impl TerminalApp {
             let hints = match self.browser.level() {
                 Level::Collections => COLLECTIONS_HINTS,
                 Level::Notes => NOTES_HINTS,
+                Level::Search => SEARCH_HINTS,
             };
             col = draw_key_hints(
                 buf,
@@ -973,6 +1171,31 @@ impl TerminalApp {
     fn browser_icons(&self) -> &'static Icons {
         Icons::for_style(self.note_creation_theme.icons)
     }
+}
+
+/// Content search hits in `scope`, with note metadata for icons and ages.
+fn search_hits(
+    db: &Db,
+    query: &str,
+    scope: &Scope,
+    daily_prefix: &str,
+) -> Result<Vec<SearchHit>, String> {
+    let results =
+        db.search_notes_content_filtered(query, SEARCH_MAX_HITS, scope.collection_id())?;
+    let mut hits = Vec::with_capacity(results.len());
+    for result in results {
+        if *scope == Scope::Unsorted && !db.get_note_collection_ids(&result.id)?.is_empty() {
+            continue;
+        }
+        let Some(summary) = db.get_note_meta(&result.id)? else {
+            continue;
+        };
+        hits.push(SearchHit {
+            note: NoteEntry::from_summary(summary, daily_prefix),
+            line_number: result.line_number.max(1),
+        });
+    }
+    Ok(hits)
 }
 
 fn plural(count: usize, noun: &str) -> String {

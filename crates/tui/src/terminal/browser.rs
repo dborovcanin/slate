@@ -17,6 +17,7 @@ use super::canvas::{
 use super::icons::Icons;
 use super::render::{LineDecorations, RenderContext, RenderPalette};
 use super::switcher::fuzzy_score;
+use super::text_utils::case_insensitive_matches;
 use ratatui::style::Modifier;
 
 /// Characters of a note body loaded for its preview.
@@ -83,6 +84,8 @@ impl NoteEntry {
 pub enum Level {
     Collections,
     Notes,
+    /// Full-text search over the notes of one scope.
+    Search,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -120,9 +123,18 @@ pub enum PromptKind {
     Filter,
     NewNote,
     NewCollection,
-    RenameNote { note_id: String },
-    RenameCollection { collection_id: String },
-    Unlock { note_id: String, title: String },
+    RenameNote {
+        note_id: String,
+    },
+    RenameCollection {
+        collection_id: String,
+    },
+    Unlock {
+        note_id: String,
+        title: String,
+        /// 1-based line to open the note at (search hits).
+        line: Option<usize>,
+    },
 }
 
 impl PromptKind {
@@ -166,6 +178,72 @@ pub struct MembershipUndo {
     pub label: String,
 }
 
+/// A note whose text matches the search, at its first matching line.
+#[derive(Debug, Clone)]
+pub struct SearchHit {
+    pub note: NoteEntry,
+    /// 1-based line of the match.
+    pub line_number: usize,
+}
+
+/// Content search state while the search level is open.
+#[derive(Debug, Clone)]
+pub struct ContentSearch {
+    pub scope: Scope,
+    /// Level to return to on `Esc`.
+    pub return_level: Level,
+    pub query: String,
+    /// Char index; `usize::MAX` means at the end.
+    pub cursor: usize,
+    pub hits: Vec<SearchHit>,
+    pub selected: usize,
+    /// Query the current hits belong to.
+    pub searched: String,
+    /// The query changed and waits for the debounce before it runs.
+    pub pending: bool,
+    pub running: bool,
+    pub error: Option<String>,
+}
+
+impl ContentSearch {
+    pub fn new(scope: Scope, return_level: Level) -> Self {
+        Self {
+            scope,
+            return_level,
+            query: String::new(),
+            cursor: usize::MAX,
+            hits: Vec::new(),
+            selected: 0,
+            searched: String::new(),
+            pending: false,
+            running: false,
+            error: None,
+        }
+    }
+
+    pub fn hovered(&self) -> Option<&SearchHit> {
+        self.hits.get(self.selected)
+    }
+}
+
+/// Lowercased words and quoted phrases of a search query, for highlighting.
+pub fn search_terms(query: &str) -> Vec<String> {
+    let mut terms = Vec::new();
+    for (idx, part) in query.split('"').enumerate() {
+        if idx % 2 == 1 {
+            let phrase = part.trim().to_lowercase();
+            if !phrase.is_empty() {
+                terms.push(phrase);
+            }
+        } else {
+            terms.extend(part.split_whitespace().map(str::to_lowercase));
+        }
+    }
+    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
+    terms.dedup();
+    terms
+}
+
 #[derive(Debug, Clone, Default)]
 pub enum Preview {
     #[default]
@@ -178,7 +256,10 @@ pub enum Preview {
     /// Body and metadata of the hovered note.
     Note {
         note_id: String,
+        /// The first lines of the body.
         lines: Vec<String>,
+        /// 0-based line to scroll to and highlight (search hits).
+        focus_line: Option<usize>,
         collections: Vec<String>,
         tags: Vec<String>,
         locked: bool,
@@ -209,6 +290,7 @@ pub struct BrowserState {
     pub scope_cache: HashMap<Scope, Arc<Vec<NoteEntry>>>,
     pub message: Option<String>,
     pub pending_g: bool,
+    pub search: Option<ContentSearch>,
 }
 
 impl BrowserState {
@@ -226,6 +308,15 @@ impl BrowserState {
         self.note_matches
             .get(self.note_cursor)
             .and_then(|idx| self.notes.get(*idx))
+    }
+
+    /// The note the preview shows: the hovered note or search hit.
+    pub fn focused_note(&self) -> Option<&NoteEntry> {
+        match self.level() {
+            Level::Collections => None,
+            Level::Notes => self.hovered_note(),
+            Level::Search => self.search.as_ref()?.hovered().map(|hit| &hit.note),
+        }
     }
 
     pub fn scope_name(&self, scope: &Scope) -> String {
@@ -247,6 +338,7 @@ impl BrowserState {
         match self.level() {
             Level::Collections => &self.collection_filter,
             Level::Notes => &self.note_filter,
+            Level::Search => "",
         }
     }
 
@@ -260,6 +352,7 @@ impl BrowserState {
                 self.note_filter = filter;
                 self.recompute_note_matches();
             }
+            Level::Search => {}
         }
     }
 
@@ -303,13 +396,15 @@ impl BrowserState {
         match self.level() {
             Level::Collections => self.collection_matches.len(),
             Level::Notes => self.note_matches.len(),
+            Level::Search => self.search.as_ref().map_or(0, |search| search.hits.len()),
         }
     }
 
     fn cursor_mut(&mut self) -> &mut usize {
-        match self.level() {
-            Level::Collections => &mut self.collection_cursor,
-            Level::Notes => &mut self.note_cursor,
+        match (self.level(), self.search.as_mut()) {
+            (Level::Search, Some(search)) => &mut search.selected,
+            (Level::Notes, _) => &mut self.note_cursor,
+            _ => &mut self.collection_cursor,
         }
     }
 
@@ -774,11 +869,17 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
     let dim = cell_style(Some(palette.code_comment), Some(bg), Modifier::empty());
     let text = cell_style(Some(palette.text_fg()), Some(bg), Modifier::BOLD);
 
-    let (position, total) = match state.level() {
-        Level::Collections => (state.collection_cursor, state.collection_matches.len()),
-        Level::Notes => (state.note_cursor, state.note_matches.len()),
+    let (position, total) = match (state.level(), state.search.as_ref()) {
+        (Level::Search, Some(search)) => (search.selected, search.hits.len()),
+        (Level::Notes, _) => (state.note_cursor, state.note_matches.len()),
+        _ => (state.collection_cursor, state.collection_matches.len()),
     };
     let mut right = String::new();
+    if let Some(search) = state.search.as_ref() {
+        if search.running || search.pending {
+            right.push_str("searching…  ");
+        }
+    }
     if state.has_filter() {
         right.push_str(&format!(
             "{} {}  ",
@@ -812,8 +913,14 @@ fn draw_header(view: &BrowserView, buf: &mut Buffer, cols: usize) {
         left_room.saturating_sub(col - 1),
         accent,
     );
-    let crumb = match (state.level(), state.scope.as_ref()) {
-        (Level::Notes, Some(scope)) => state.scope_name(scope),
+    let crumb = match (state.level(), state.scope.as_ref(), state.search.as_ref()) {
+        (Level::Search, _, Some(search)) => format!(
+            "{} {} {} search",
+            state.scope_name(&search.scope),
+            icons.separator,
+            icons.filter
+        ),
+        (Level::Notes, Some(scope), _) => state.scope_name(scope),
         _ => "Collections".to_string(),
     };
     col = put_str_width(
@@ -837,6 +944,7 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
     let Preview::Note {
         note_id,
         lines,
+        focus_line,
         collections,
         tags,
         locked,
@@ -844,7 +952,7 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
     else {
         return;
     };
-    let Some(note) = view.state.hovered_note().filter(|note| &note.id == note_id) else {
+    let Some(note) = view.state.focused_note().filter(|note| &note.id == note_id) else {
         return;
     };
     let inner = pane.width.saturating_sub(2);
@@ -922,24 +1030,45 @@ fn draw_note_preview(view: &BrowserView, buf: &mut Buffer, pane: Pane, top: usiz
         return;
     }
     let mut ctx = RenderContext::with_syntax_mode(false, None, false, None, palette);
-    let deco = LineDecorations {
-        calc_ghost: None,
-        reminder_ghost: None,
-        reminder_strikethrough: false,
-        search_ranges: &[],
-        current_search_ranges: &[],
-        variable_names: None,
-        dim_ranges: &[],
-        selection_ranges: &[],
-        accent_ranges: &[],
-        underline_ranges: &[],
-        active_cursor_col: None,
+    // A search hit scrolls its line to about a third of the way down.
+    let skip = focus_line.map_or(0, |focus| {
+        focus
+            .saturating_sub(bottom.saturating_sub(row) / 3)
+            .min(lines.len().saturating_sub(1))
+    });
+    ctx.advance_lines(&lines[..skip]);
+    let terms = match (&view.state.search, view.state.level()) {
+        (Some(search), Level::Search) => search_terms(&search.searched),
+        _ => Vec::new(),
     };
     let area = buf.area;
-    for line in lines {
+    for (line_idx, line) in lines.iter().enumerate().skip(skip) {
         if row >= bottom {
             break;
         }
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        for term in &terms {
+            for range in case_insensitive_matches(line, term) {
+                if !ranges.iter().any(|r| r.0 < range.1 && range.0 < r.1) {
+                    ranges.push(range);
+                }
+            }
+        }
+        ranges.sort_unstable();
+        let is_focus = *focus_line == Some(line_idx);
+        let deco = LineDecorations {
+            calc_ghost: None,
+            reminder_ghost: None,
+            reminder_strikethrough: false,
+            search_ranges: if is_focus { &[] } else { &ranges },
+            current_search_ranges: if is_focus { &ranges } else { &[] },
+            variable_names: None,
+            dim_ranges: &[],
+            selection_ranges: &[],
+            accent_ranges: &[],
+            underline_ranges: &[],
+            active_cursor_col: None,
+        };
         let (Ok(x), Ok(y)) = (u16::try_from(col - 1), u16::try_from(row - 1)) else {
             break;
         };
@@ -981,6 +1110,7 @@ pub fn draw_browser(
         draw_separator_column(buf, palette, preview.col - 1, top, height);
     }
 
+    let mut search_cursor = None;
     match state.level() {
         Level::Collections => {
             if let Some(parent) = parent {
@@ -1091,16 +1221,141 @@ pub fn draw_browser(
                 draw_note_preview(view, buf, pane, top, height);
             }
         }
+        Level::Search => {
+            let search = state.search.as_ref()?;
+            if let Some(parent) = parent {
+                let open = state
+                    .collection_matches
+                    .iter()
+                    .position(|idx| state.collections[*idx].scope == search.scope);
+                draw_rows(
+                    buf,
+                    palette,
+                    parent,
+                    top,
+                    height,
+                    state.collection_matches.len(),
+                    |pos| collection_row(view, pos, Some(&search.scope)),
+                    open.map(|open| (open, Hover::Dim)),
+                );
+            }
+            search_cursor = draw_search_bar(view, buf, current, top, search);
+            let list_top = top + 2;
+            let list_height = height.saturating_sub(2);
+            draw_rows(
+                buf,
+                palette,
+                current,
+                list_top,
+                list_height,
+                search.hits.len(),
+                |pos| {
+                    let hit = &search.hits[pos];
+                    let mut row = note_row(view, &hit.note, false);
+                    row.right = format!(":{}", hit.line_number);
+                    row
+                },
+                Some((search.selected, Hover::Focused)),
+            );
+            if search.hits.is_empty() {
+                let hint = if let Some(error) = search.error.as_deref() {
+                    error.to_string()
+                } else if search.query.trim().is_empty() {
+                    "type to search note text".to_string()
+                } else if search.pending || search.running {
+                    "searching…".to_string()
+                } else {
+                    "no matches".to_string()
+                };
+                draw_centered_hint(buf, palette, current, list_top + 1, &hint);
+            }
+            if let Some(pane) = preview {
+                draw_note_preview(view, buf, pane, top, height);
+            }
+        }
     }
 
     if let Some(confirm) = state.confirm.as_ref() {
         draw_confirm(view, buf, rows, cols, confirm);
         return None;
     }
-    state
-        .prompt
-        .as_ref()
-        .and_then(|prompt| draw_prompt(view, buf, current, top, prompt))
+    match state.prompt.as_ref() {
+        Some(prompt) => draw_prompt(view, buf, current, top, prompt),
+        None => search_cursor,
+    }
+}
+
+/// Query line at the top of the middle pane with a rule under it. Returns
+/// the cursor cell.
+fn draw_search_bar(
+    view: &BrowserView,
+    buf: &mut Buffer,
+    pane: Pane,
+    top: usize,
+    search: &ContentSearch,
+) -> Option<(usize, usize)> {
+    let palette = view.palette;
+    let bg = palette.surface_bg();
+    let inner = pane.width.saturating_sub(4);
+    let col = pane.col + 1;
+    put_str_width(
+        buf,
+        top,
+        col,
+        view.icons.filter,
+        1,
+        cell_style(Some(palette.primary()), Some(bg), Modifier::BOLD),
+    );
+    let text_col = col + 2;
+    let (visible, cursor_offset) = scrolled_input(&search.query, search.cursor, inner);
+    if search.query.is_empty() {
+        put_str_width(
+            buf,
+            top,
+            text_col,
+            "search note text",
+            inner,
+            cell_style(Some(palette.code_comment), Some(bg), Modifier::empty()),
+        );
+    } else {
+        put_str_width(
+            buf,
+            top,
+            text_col,
+            &visible,
+            inner,
+            cell_style(Some(palette.text_fg()), Some(bg), Modifier::BOLD),
+        );
+    }
+    let rule = cell_style(Some(palette.primary()), Some(bg), Modifier::empty());
+    put_str_width(
+        buf,
+        top + 1,
+        pane.col,
+        &"─".repeat(pane.width),
+        pane.width,
+        rule,
+    );
+    Some((top, text_col + cursor_offset))
+}
+
+/// The part of `text` shown in a `width`-cell input with the cursor at char
+/// `cursor`, and the cursor's cell offset in it.
+fn scrolled_input(text: &str, cursor: usize, width: usize) -> (String, usize) {
+    let at = super::text_input::cursor(text, cursor);
+    let before_width: usize = text.chars().take(at).map(|c| c.width().unwrap_or(0)).sum();
+    // Keep the cursor visible in long input by scrolling the text left.
+    let skip_width = before_width.saturating_sub(width.saturating_sub(1));
+    let mut skipped = 0;
+    let visible: String = text
+        .chars()
+        .skip_while(|c| {
+            let skip = skipped < skip_width;
+            skipped += c.width().unwrap_or(0);
+            skip
+        })
+        .collect();
+    (visible, before_width - skip_width.min(before_width))
 }
 
 fn draw_prompt(
@@ -1136,19 +1391,7 @@ fn draw_prompt(
         PromptKind::Unlock { .. } => "•".repeat(prompt.text.chars().count()),
         _ => prompt.text.clone(),
     };
-    let at = super::text_input::cursor(&shown, prompt.cursor);
-    let before_width: usize = shown.chars().take(at).map(|c| c.width().unwrap_or(0)).sum();
-    // Keep the cursor visible in long input by scrolling the text left.
-    let skip_width = before_width.saturating_sub(inner.saturating_sub(1));
-    let mut skipped = 0;
-    let visible: String = shown
-        .chars()
-        .skip_while(|c| {
-            let skip = skipped < skip_width;
-            skipped += c.width().unwrap_or(0);
-            skip
-        })
-        .collect();
+    let (visible, cursor_offset) = scrolled_input(&shown, prompt.cursor, inner);
     let style = TextStyle {
         fg: Some(palette.text_fg()),
         bg: Some(bg),
@@ -1156,10 +1399,7 @@ fn draw_prompt(
     }
     .to_style();
     put_str_width(buf, row + 1, col + 2, &visible, inner, style);
-    Some((
-        row + 1,
-        col + 2 + before_width - skip_width.min(before_width),
-    ))
+    Some((row + 1, col + 2 + cursor_offset))
 }
 
 fn draw_confirm(view: &BrowserView, buf: &mut Buffer, rows: usize, cols: usize, confirm: &Confirm) {
@@ -1300,6 +1540,15 @@ mod tests {
         notes[0].updated_at = "2026-09-01T10:00:00Z".to_string();
         BrowserState::sort_notes(&mut notes, SortKey::Modified);
         assert_eq!(notes[0].id, "a");
+    }
+
+    #[test]
+    fn search_terms_split_words_keep_phrases_longest_first() {
+        assert_eq!(
+            search_terms(r#"Rent "food budget" rent x"#),
+            vec!["food budget", "rent", "x"]
+        );
+        assert!(search_terms("  ").is_empty());
     }
 
     #[test]
