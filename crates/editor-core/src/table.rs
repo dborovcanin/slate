@@ -507,17 +507,20 @@ impl TableBlockLayout {
 
     /// Builds the layout of block `start..=end` (see [`table_block_bounds`]).
     /// `cell_width` measures a trimmed cell.
-    pub fn build(
-        lines: &[String],
+    pub fn build<S: AsRef<str>>(
+        lines: &[S],
         start: usize,
         end: usize,
         cell_width: impl Fn(&str) -> usize,
     ) -> Self {
         let block = &lines[start..=end];
-        let rows: Vec<Vec<String>> = block.iter().map(|line| split_table_cells(line)).collect();
+        let rows: Vec<Vec<String>> = block
+            .iter()
+            .map(|line| split_table_cells(line.as_ref()))
+            .collect();
         let continuation: Vec<bool> = block
             .iter()
-            .map(|line| is_table_continuation_line(line))
+            .map(|line| is_table_continuation_line(line.as_ref()))
             .collect();
         let delimiter_row = table_block_delimiter_row(&rows, &continuation);
         let mut col_widths: Vec<usize> = Vec::new();
@@ -554,21 +557,36 @@ pub struct TableLayoutCache {
 
 impl TableLayoutCache {
     /// Layout of block `start..=end` of `lines`; see [`TableBlockLayout::build`].
-    pub fn layout(
+    pub fn layout<S: AsRef<str>>(
         &mut self,
-        lines: &[String],
+        lines: &[S],
         start: usize,
         end: usize,
         cell_width: impl Fn(&str) -> usize,
     ) -> &TableBlockLayout {
-        let block = &lines[start..=end];
+        self.layout_block(&lines[start..=end], start, cell_width)
+    }
+
+    /// Like [`Self::layout`], for a block given on its own; `start` is the
+    /// block's first line index in the document.
+    pub fn layout_block<S: AsRef<str>>(
+        &mut self,
+        block: &[S],
+        start: usize,
+        cell_width: impl Fn(&str) -> usize,
+    ) -> &TableBlockLayout {
         if !self.update(block, start, &cell_width) {
             self.rebuild(block, start, &cell_width);
         }
         self.layout.as_ref().expect("layout built")
     }
 
-    fn rebuild(&mut self, block: &[String], start: usize, cell_width: &impl Fn(&str) -> usize) {
+    fn rebuild<S: AsRef<str>>(
+        &mut self,
+        block: &[S],
+        start: usize,
+        cell_width: &impl Fn(&str) -> usize,
+    ) {
         let layout = TableBlockLayout::build(block, 0, block.len() - 1, cell_width);
         let delimiter = layout.delimiter_row;
         self.row_widths = block
@@ -578,7 +596,7 @@ impl TableLayoutCache {
                 if Some(idx) == delimiter {
                     Vec::new()
                 } else {
-                    split_table_cells(line)
+                    split_table_cells(line.as_ref())
                         .iter()
                         .map(|cell| cell_width(cell))
                         .collect()
@@ -589,7 +607,7 @@ impl TableLayoutCache {
         for widths in &self.row_widths {
             self.counts.add(widths);
         }
-        self.lines = block.to_vec();
+        self.lines = block.iter().map(|line| line.as_ref().to_owned()).collect();
         self.layout = Some(TableBlockLayout {
             start,
             end: start + block.len() - 1,
@@ -601,9 +619,9 @@ impl TableLayoutCache {
     /// Re-measures only changed rows. False when the block's shape may have
     /// changed (row count, a row's cell count, the header or delimiter rows)
     /// and a rebuild is needed.
-    fn update(
+    fn update<S: AsRef<str>>(
         &mut self,
-        block: &[String],
+        block: &[S],
         start: usize,
         cell_width: &impl Fn(&str) -> usize,
     ) -> bool {
@@ -619,7 +637,8 @@ impl TableLayoutCache {
             .map_or(block.len(), |row| row - layout.start + 1);
         let mut changed = Vec::new();
         for (idx, line) in block.iter().enumerate() {
-            if *line == self.lines[idx] {
+            let line = line.as_ref();
+            if line == self.lines[idx] {
                 continue;
             }
             if idx < structural_rows
@@ -641,7 +660,8 @@ impl TableLayoutCache {
             self.counts.remove(&self.row_widths[idx]);
             self.counts.add(&widths);
             self.row_widths[idx] = widths;
-            self.lines[idx].clone_from(&block[idx]);
+            self.lines[idx].clear();
+            self.lines[idx].push_str(block[idx].as_ref());
         }
         let column_count = layout.col_widths.len();
         layout.col_widths = self.counts.widths(column_count, true);

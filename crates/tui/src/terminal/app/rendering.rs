@@ -3,10 +3,11 @@ use super::{
     display_cell_pipe_positions, display_cols_prefix_and_total, draw_framed_surface,
     draw_row_at_styled, find_table_formula_segments, format_formula_display_value,
     formula_marker_token, is_markdown_table_line, line_display_cols, min,
-    reformat_table_cursor_row_raw, reformat_table_row_for_display, table_cell_info_at_char,
-    table_cursor_cell_index, viewport_col_for_display_col, DatePickerAction, SelectionStatsKey,
-    TableFormulaSegment, TerminalApp, TextStyle, UiMode, EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER,
-    OVERFLOW_RIGHT_MARKER, TITLE_ROW, WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
+    reformat_table_cursor_row_raw, reformat_table_row_for_display, table_cell_content_start_char,
+    table_cell_info_at_char, table_cursor_cell_index, viewport_col_for_display_col,
+    DatePickerAction, SelectionStatsKey, TableFormulaSegment, TerminalApp, TextStyle, UiMode,
+    EDITOR_TOP_ROW, OVERFLOW_LEFT_MARKER, OVERFLOW_RIGHT_MARKER, TITLE_ROW,
+    WIKI_LINK_AUTOCOMPLETE_MAX_VISIBLE,
 };
 use crate::editor_core::{markdown_tokens, sum};
 use crate::terminal::canvas::{
@@ -70,35 +71,25 @@ impl TerminalApp {
         }
     }
 
-    fn fit_formula_marker_replacement(
-        value: &str,
-        marker: &str,
-        target_chars: usize,
-        is_error: bool,
-    ) -> String {
-        if target_chars == 0 {
-            return String::new();
-        }
-        let marker_chars = marker.chars().count();
-        if marker_chars >= target_chars {
-            return marker.chars().take(target_chars).collect();
-        }
+    /// Value shown for a formula cell: its formatted result, or `…` while it
+    /// is still being computed.
+    fn formula_cell_value(eval: Option<&app_core::calc::TableCellEvaluation>) -> String {
+        eval.map(|entry| format_formula_display_value(&entry.value))
+            .unwrap_or_else(|| String::from("…"))
+    }
 
-        let value_budget = target_chars - marker_chars;
-        let masked_value = Self::masked_formula_value(value, is_error);
-        let value_chars = masked_value.chars().count();
-        let mut out = String::with_capacity(target_chars);
-        if value_chars > value_budget && value_budget >= 2 {
-            out.extend(masked_value.chars().take(value_budget - 1));
-            out.push('…');
-        } else {
-            out.extend(masked_value.chars().take(value_budget));
-        }
+    /// Text a formula cell shows while not focused: its value followed by its
+    /// `*` marker.
+    fn resting_formula_cell_text(
+        eval: Option<&app_core::calc::TableCellEvaluation>,
+        marker: &str,
+    ) -> String {
+        let value = Self::formula_cell_value(eval);
+        let has_error = eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
+        let masked = Self::masked_formula_value(&value, has_error);
+        let mut out = String::with_capacity(masked.len() + marker.len());
+        out.push_str(&masked);
         out.push_str(marker);
-        let out_chars = out.chars().count();
-        if out_chars < target_chars {
-            out.push_str(&" ".repeat(target_chars - out_chars));
-        }
         out
     }
 
@@ -311,8 +302,56 @@ impl TerminalApp {
         segments
     }
 
+    /// Rows of table block `start..=end` as the table displays them, for the
+    /// rows whose formula cells render differently from their source: a
+    /// resting formula cell shows `value*`, so its column is sized by that
+    /// instead of the formula text. The focused cell keeps its source, which
+    /// widens the column while its formula is revealed.
+    fn table_formula_display_rows(&mut self, start: usize, end: usize) -> Vec<(usize, String)> {
+        let mut rows = Vec::new();
+        for idx in start..=end {
+            let line = &self.editor.lines[idx];
+            // Every formula has `:=` or a builtin call; skip the rest cheaply.
+            if !line.contains(":=") && !line.contains('(') {
+                continue;
+            }
+            let line = line.clone();
+            let segments = self.table_formula_segments_cached(&line);
+            if segments.is_empty() {
+                continue;
+            }
+            let cursor_col = (idx == self.editor.cursor_line).then_some(self.editor.cursor_col);
+            let evals = self
+                .calc
+                .cell_results
+                .get(idx)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut out = String::with_capacity(line.len());
+            let mut last_byte = 0usize;
+            for (fi, seg) in segments.iter().enumerate() {
+                if cursor_col.is_some_and(|col| col >= seg.cell_from_char && col < seg.cell_to_char)
+                {
+                    continue;
+                }
+                let eval = evals
+                    .iter()
+                    .find(|entry| entry.cell_index == seg.cell_index);
+                out.push_str(&line[last_byte..seg.from_byte]);
+                out.push_str(&Self::resting_formula_cell_text(
+                    eval,
+                    &formula_marker_token(fi),
+                ));
+                last_byte = seg.to_byte;
+            }
+            out.push_str(&line[last_byte..]);
+            rows.push((idx, out));
+        }
+        rows
+    }
+
     /// Layout of the table block containing `line_idx`, measured with visible
-    /// (marker-collapsed) cell widths.
+    /// (marker-collapsed) cell widths, formula cells as they display.
     fn table_layout_for_line(
         &mut self,
         line_idx: usize,
@@ -326,6 +365,14 @@ impl TerminalApp {
             }
         }
         let (start, end) = table_block_bounds(&self.editor.lines, line_idx)?;
+        let formula_rows = self.table_formula_display_rows(start, end);
+        let mut formula_rows = formula_rows.iter().peekable();
+        let block: Vec<&str> = (start..=end)
+            .map(|idx| match formula_rows.next_if(|(row, _)| *row == idx) {
+                Some((_, text)) => text.as_str(),
+                None => self.editor.lines[idx].as_str(),
+            })
+            .collect();
         let caches = &mut self.render_caches.table_layout_cache;
         if caches.len() >= TABLE_LAYOUT_CACHE_CAP && !caches.contains_key(&start) {
             caches.clear();
@@ -333,7 +380,7 @@ impl TerminalApp {
         let mut layout = caches
             .entry(start)
             .or_default()
-            .layout(&self.editor.lines, start, end, cell_visible_width)
+            .layout_block(&block, start, cell_visible_width)
             .clone();
         // Spaces being typed at the end of the cursor cell widen its column
         // for this frame, so the other rows stay aligned with it.
@@ -1894,6 +1941,9 @@ impl TerminalApp {
         let mut wiki_link_underline_ranges: Vec<(usize, usize)> = Vec::new();
         let mut formula_segments: Vec<TableFormulaSegment> = Vec::new();
         let mut formula_segment_char_delta_prefix: Vec<isize> = Vec::new();
+        // `(cell_index, value_chars, marker_chars)` of each resting formula
+        // cell, to place its dimmed marker again after table reflow.
+        let mut resting_formula_markers: Vec<(usize, usize, usize)> = Vec::new();
         // Set by table reflow when cursor line is reformatted; holds
         // output char positions of (left_pipe, right_pipe) for the
         // cursor cell in the reformatted string.
@@ -1965,9 +2015,7 @@ impl TerminalApp {
                 for (fi, seg) in formula_segments.iter().enumerate() {
                     let marker = formula_marker_token(fi);
                     let eval = value_for_cell(seg.cell_index);
-                    let value = eval
-                        .map(|entry| format_formula_display_value(&entry.value))
-                        .unwrap_or_else(|| String::from("…"));
+                    let value = Self::formula_cell_value(eval);
                     let has_error = eval.and_then(|entry| entry.error_kind.as_ref()).is_some();
                     let source_text = line_text[seg.from_byte..seg.to_byte].trim().to_string();
 
@@ -2001,14 +2049,13 @@ impl TerminalApp {
                         formula_segment_char_delta_prefix.push(char_delta);
                     } else {
                         let old_chars = seg.to_char.saturating_sub(seg.from_char);
-                        let replacement = Self::fit_formula_marker_replacement(
-                            &value, &marker, old_chars, has_error,
-                        );
+                        let replacement = Self::resting_formula_cell_text(eval, &marker);
                         let rendered_chars = replacement.chars().count();
-                        let marker_char = ((seg.from_char as isize) + char_delta) as usize
-                            + rendered_chars.saturating_sub(marker.chars().count());
-                        let marker_end = marker_char + marker.chars().count();
-                        ghost_dim_ranges.push((marker_char, marker_end));
+                        let value_chars = rendered_chars - marker.len();
+                        let marker_char =
+                            ((seg.from_char as isize) + char_delta) as usize + value_chars;
+                        ghost_dim_ranges.push((marker_char, marker_char + marker.len()));
+                        resting_formula_markers.push((seg.cell_index, value_chars, marker.len()));
                         char_delta += rendered_chars as isize - old_chars as isize;
                         formula_segment_char_delta_prefix.push(char_delta);
                         out.push_str(&replacement);
@@ -2043,17 +2090,14 @@ impl TerminalApp {
         }
 
         // Table display reflow: collapse inline markers per cell and
-        // align columns to visible widths. Skipped for formula rows
-        // (already transformed above) and fold placeholders.
-        if !is_fold_placeholder
-            && formula_segments.is_empty()
-            && is_markdown_table_line(rendered_line.as_ref())
-        {
+        // align columns to visible widths. Formula rows reflow their
+        // masked text from above. Skipped for fold placeholders.
+        if !is_fold_placeholder && is_markdown_table_line(rendered_line.as_ref()) {
             let layout = self.table_layout_for_line(line_idx);
             let delimiter = layout.as_ref().is_some_and(|l| l.is_delimiter(line_idx));
             let col_widths = layout.map(|l| l.col_widths).unwrap_or_default();
             if !col_widths.is_empty() {
-                if is_cursor_line && cursor_line_override.is_none() {
+                if is_cursor_line {
                     // Cursor row: render from a RAW-marker reflow so
                     // `render_line` still applies inline styles (bold,
                     // italic, code) and reveals markers near the cursor —
@@ -2075,8 +2119,7 @@ impl TerminalApp {
                         Some(cursor),
                     );
                     // Focused-cell pipe highlight in RAW display coords.
-                    let cell_idx =
-                        table_cursor_cell_index(rendered_line.as_ref(), self.editor.cursor_col);
+                    let cell_idx = table_cursor_cell_index(rendered_line.as_ref(), cursor);
                     table_reflow_cell_pipes =
                         cell_idx.and_then(|idx| display_cell_pipe_positions(&raw_display, idx));
                     let mc = mapped_col.unwrap_or(line_cursor_col.unwrap_or(0));
@@ -2091,6 +2134,17 @@ impl TerminalApp {
                         None,
                     );
                     rendered_line = Cow::Owned(display_line);
+                }
+                if !resting_formula_markers.is_empty() {
+                    ghost_dim_ranges.clear();
+                    for &(cell, value_chars, marker_chars) in &resting_formula_markers {
+                        if let Some(content) =
+                            table_cell_content_start_char(rendered_line.as_ref(), cell)
+                        {
+                            let marker = content + value_chars;
+                            ghost_dim_ranges.push((marker, marker + marker_chars));
+                        }
+                    }
                 }
             }
         }
@@ -2401,14 +2455,14 @@ pub(super) struct DisplayLine {
     reminder_strikethrough: bool,
     search_ranges: Vec<(usize, usize)>,
     current_search_ranges: Vec<(usize, usize)>,
-    dim_ranges: Vec<(usize, usize)>,
+    pub(super) dim_ranges: Vec<(usize, usize)>,
     selection_ranges: Vec<(usize, usize)>,
     accent_ranges: Vec<(usize, usize)>,
     underline_ranges: Vec<(usize, usize)>,
     cursor_col: Option<usize>,
     /// Displayed cursor-line text and cursor char index into it, when the
     /// display differs from the source line.
-    cursor_override: Option<(String, usize)>,
+    pub(super) cursor_override: Option<(String, usize)>,
 }
 
 impl DisplayLine {

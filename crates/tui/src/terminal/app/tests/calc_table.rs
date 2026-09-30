@@ -132,6 +132,53 @@ fn formula_cell_stays_masked_and_updates_after_dependent_cell_edit() {
 }
 
 #[test]
+fn formula_column_width_follows_value_and_widens_when_formula_is_revealed() {
+    let (_db, mut app, path) =
+        app_with_note("| value | calc |\n| --- | --- |\n| 2 | :=(1,1) * 10 |\n| 3 | x |");
+
+    app.editor.cursor_line = 0;
+    app.editor.cursor_col = 0;
+    app.run_calc_recompute();
+
+    // Resting: the column is as wide as its header, not the formula text.
+    let formula_row = app.prepare_display_line(2, 0);
+    assert_eq!(formula_row.text, "| 2     | 20*  |");
+    assert_eq!(
+        formula_row.dim_ranges,
+        vec![(12, 13)],
+        "marker stays dimmed"
+    );
+    assert_eq!(app.prepare_display_line(3, 0).text, "| 3     | x    |");
+
+    // Focused: the formula shows and its column widens to fit it.
+    app.editor.cursor_line = 2;
+    app.editor.cursor_col = app.editor.lines[2].find(":=").expect("formula");
+    let focused = app.prepare_display_line(2, 0);
+    assert_eq!(focused.text, "| 2     | :=(1,1) * 10 |");
+    assert_eq!(
+        focused.cursor_override,
+        Some(("| 2     | :=(1,1) * 10 |".to_string(), 10))
+    );
+    assert_eq!(
+        app.prepare_display_line(3, 0).text,
+        "| 3     | x            |"
+    );
+
+    // Cursor in a sibling cell: the formula rests and the caret maps through
+    // the reflowed row.
+    app.editor.cursor_col = 2;
+    let sibling = app.prepare_display_line(2, 0);
+    assert_eq!(sibling.text, "| 2     | 20*  |");
+    assert_eq!(
+        sibling.cursor_override,
+        Some(("| 2     | 20*  |".to_string(), 2))
+    );
+
+    drop(app);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn table_cell_navigation_anchor_uses_padding_for_empty_and_word_end_for_non_empty() {
     let line = "| aaa |     | bb  |";
     let lines = vec![line.to_string()];

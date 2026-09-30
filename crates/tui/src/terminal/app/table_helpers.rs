@@ -45,6 +45,22 @@ pub(super) fn display_cell_pipe_positions(
     None
 }
 
+/// Char index where the trimmed content of cell `cell_idx` starts in a table
+/// row. None if the index is out of range.
+pub(super) fn table_cell_content_start_char(line: &str, cell_idx: usize) -> Option<usize> {
+    use crate::editor_core::table::{is_table_continuation_line, table_pipe_positions};
+    let lead = line.len() - line.trim_start().len();
+    let trimmed = &line[lead..];
+    let pipes = table_pipe_positions(trimmed);
+    let (left, right) = (*pipes.get(cell_idx)?, *pipes.get(cell_idx + 1)?);
+    let mut raw = &trimmed[left + 1..right];
+    if cell_idx == 0 && is_table_continuation_line(trimmed) {
+        raw = raw.strip_prefix('>').unwrap_or(raw);
+    }
+    let content_byte = lead + right - raw.trim_start().len();
+    Some(line[..content_byte].chars().count())
+}
+
 /// Forwards to the canonical `editor_core::table::is_table_line` so the
 /// table-line predicate has a single source of truth shared with the rest of
 /// the editor core (it previously held a byte-identical copy of that logic).
