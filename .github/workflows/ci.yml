@@ -21,11 +21,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js (perf scripts)
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -41,7 +36,7 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Run unified perf check
-        run: node scripts/perf-check.mjs
+        run: cargo run --release --locked -p slate --bin perf-check
 
   build-linux-binary:
     name: Build Linux Binary

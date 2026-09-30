@@ -180,7 +180,7 @@ crates/
       terminal/      # editor runtime, rendering, input, overlays
       commands/      # export (md/txt/pdf) and backup
       imap.rs        # IMAP sync (feature `imap`)
-      bin/           # perf probes (note-startup, table-perf, perf-config)
+      bin/           # perf probes (note-startup, table-perf) and the perf-check gate
 ```
 
 Editing semantics live in `editor-core`; the terminal app is an input/rendering layer. See [docs/architecture.md](docs/architecture.md).

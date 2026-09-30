@@ -24,7 +24,7 @@ test:
 	cargo test --workspace
 
 perf:
-	node scripts/perf-check.mjs
+	cargo run --release -p slate --bin perf-check
 
 install: build
 	mkdir -p "$(BIN_DIR)"

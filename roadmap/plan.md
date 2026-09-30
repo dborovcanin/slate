@@ -42,7 +42,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 
 Also on the list:
 - ~~**Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready).~~ Done 2026-09-29 without moving it: viewport evaluation reuses a cached whole-note preparation and costs ~2 ms at 30k lines and ~5 ms at 100k (see "Performance Backlog"). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
-- **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; replace the Node perf scripts with a Rust or shell runner; sticky goal column for screen-row motions.
+- **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; sticky goal column for screen-row motions.
 - **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, per-note history and diff view.
 
 ## Product Intent
@@ -174,7 +174,7 @@ Table cells support full arithmetic expressions using the `:=` prefix:
 ## Performance Backlog
 
 - [ ] Adaptive large-note mode (follow-up to the 30,000-line full-feature cutoff): ~~viewport-first calc~~, ~~lazy fold/indexing~~, bounded caches, memory-bounded undo spans. Viewport calc, deferred fold rescans and background index builds are done; bounded caches and undo memory remain.
-- [ ] Large-note regression gates: ~~30k and 100k latency gates~~ (`large_note_perf`, limits in `perf/baselines/large_note.json`, run by `scripts/perf-check.mjs`). Remaining: 200k/400k sizes and memory budgets.
+- [ ] Large-note regression gates: ~~30k and 100k latency gates~~ (`large_note_perf`, limits in `perf/baselines/large_note.json`, run by the `perf-check` binary). Remaining: 200k/400k sizes and memory budgets.
 
 Done 2026-09-29 (30k / 100k lines, p50 before -> after, from `large_note_perf`):
 
