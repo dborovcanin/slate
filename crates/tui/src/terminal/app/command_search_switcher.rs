@@ -1187,27 +1187,13 @@ impl TerminalApp {
             Key::ArrowRight if self.command_completion.visible => {
                 self.move_command_completion_selection(1);
             }
+            // Only Esc leaves the bar; Backspace on an empty line does nothing.
+            Key::Backspace if self.command_input.is_empty() => {}
             Key::Backspace => {
                 self.command_history_index = None;
                 self.dismiss_command_completion_menu();
                 text_input::apply_key(&mut self.command_input, &mut self.command_cursor, &key);
-                if self.command_input.is_empty() {
-                    self.mode = if self.command_bar_from_normal {
-                        UiMode::Normal
-                    } else {
-                        UiMode::Editor
-                    };
-                    self.dismiss_command_completion_menu();
-                    self.command_selection = None;
-                    self.command_selection_linewise = false;
-                    self.status = if self.command_bar_from_normal {
-                        "-- NORMAL --".to_string()
-                    } else {
-                        format!("editing {}", self.active_note.id)
-                    };
-                } else {
-                    self.update_command_status();
-                }
+                self.update_command_status();
             }
             Key::ArrowUp => {
                 self.cycle_command_history_prev();

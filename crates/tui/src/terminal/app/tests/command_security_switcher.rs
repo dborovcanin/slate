@@ -1434,6 +1434,36 @@ fn fold_commands_toggle_terminal_folds_and_aliases() {
 }
 
 #[test]
+fn command_bar_lists_commands_as_soon_as_it_opens() {
+    let (db, mut app, path) = app_with_note("alpha");
+    app.mode = UiMode::Normal;
+    run_keys(&mut app, &db, &[Key::Char(':')]);
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert!(app.status.starts_with(":  ["), "{}", app.status);
+    for command in ["export", "note", "today", "web"] {
+        assert!(app.status.contains(command), "{}", app.status);
+    }
+
+    // Backspace never leaves the bar, even with nothing left to erase.
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('n'), Key::Backspace, Key::Backspace],
+    );
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert!(app.status.starts_with(":  ["), "{}", app.status);
+
+    // Editor mode opens it with Ctrl+E.
+    run_keys(&mut app, &db, &[Key::Esc, Key::Char('i'), Key::Ctrl('e')]);
+    assert_eq!(app.mode, UiMode::CommandBar);
+    assert!(app.status.starts_with(":  ["), "{}", app.status);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
 fn command_bar_arrow_history_cycles_latest_commands() {
     let (db, mut app, path) = app_with_note("alpha");
     app.mode = UiMode::Normal;

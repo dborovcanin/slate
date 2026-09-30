@@ -444,7 +444,7 @@ impl TerminalApp {
         self.command_history_index = None;
         self.command_bar_from_normal = true;
         self.mode = UiMode::CommandBar;
-        self.status = ":".to_string();
+        self.update_command_status();
     }
 
     pub(super) fn apply_vim_actions(

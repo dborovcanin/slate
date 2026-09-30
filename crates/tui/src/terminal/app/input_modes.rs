@@ -332,7 +332,7 @@ impl TerminalApp {
                 self.command_selection = None;
                 self.command_selection_linewise = false;
                 self.mode = UiMode::CommandBar;
-                self.status = ":".to_string();
+                self.update_command_status();
                 self.dismiss_variable_autocomplete_popup();
                 return Ok(());
             }
