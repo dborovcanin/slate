@@ -674,3 +674,31 @@ fn renaming_a_locked_encrypted_note_asks_for_its_password_first() {
     drop((app, db, other));
     cleanup_db_files(&path);
 }
+
+#[test]
+fn deleting_a_protected_note_asks_for_its_password() {
+    let (db, mut app, path) = browser_app();
+    db.encrypt_note("n2", "pw").expect("encrypt");
+    let other = Db::open(path.clone()).expect("second handle");
+    app.handle_key(&other, Key::Char('R')).expect("reload");
+    hover_note(&mut app, &other, "n2");
+
+    app.handle_key(&other, Key::Char('D')).expect("delete");
+    assert!(matches!(
+        prompt_kind(&app),
+        Some(PromptKind::DeleteNote { .. })
+    ));
+    type_text(&mut app, &other, "wrong");
+    app.handle_key(&other, Key::Enter).expect("wrong password");
+    assert!(message(&app).contains("delete failed"));
+    assert!(other.get_note("n2").expect("lookup").is_some());
+
+    type_text(&mut app, &other, "pw");
+    app.handle_key(&other, Key::Enter).expect("delete");
+    assert!(app.browser.prompt.is_none());
+    assert!(other.get_note("n2").expect("lookup").is_none());
+    assert!(message(&app).contains("deleted"));
+
+    drop((app, db, other));
+    cleanup_db_files(&path);
+}

@@ -156,6 +156,11 @@ pub enum PromptKind {
         collection_id: String,
         name: String,
     },
+    /// Password of a protected note; entering it confirms deleting the note.
+    DeleteNote {
+        note_id: String,
+        title: String,
+    },
 }
 
 impl PromptKind {
@@ -170,6 +175,7 @@ impl PromptKind {
             PromptKind::EncryptCollection { first: None, .. } => "New password",
             PromptKind::EncryptCollection { .. } => "Repeat password",
             PromptKind::DecryptCollection { .. } => "Password to decrypt",
+            PromptKind::DeleteNote { .. } => "Password to delete",
         }
     }
 
@@ -181,6 +187,7 @@ impl PromptKind {
                 | PromptKind::UnlockCollection { .. }
                 | PromptKind::EncryptCollection { .. }
                 | PromptKind::DecryptCollection { .. }
+                | PromptKind::DeleteNote { .. }
         )
     }
 }
@@ -1754,6 +1761,9 @@ fn draw_prompt(
         PromptKind::UnlockCollection { name, .. } => format!("{locked} {name}"),
         PromptKind::EncryptCollection { name, .. } | PromptKind::DecryptCollection { name, .. } => {
             format!("{locked} {name} · {}", prompt.kind.title())
+        }
+        PromptKind::DeleteNote { title, .. } => {
+            format!("{locked} {title} · {}", prompt.kind.title())
         }
         kind => kind.title().to_string(),
     };

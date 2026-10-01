@@ -10,31 +10,35 @@ Conventions:
 
 ## Contents
 
-1. [Notes and switching](#notes-and-switching)
-2. [Saving](#saving) and [note history](#note-history)
-3. [Command line entry points](#command-line-entry-points)
-4. [Daily notes, capture and pipe append](#daily-notes-capture-and-pipe-append)
-5. [Editing and markdown helpers](#editing-and-markdown-helpers)
-6. [Inline formatting and list commands](#inline-formatting-and-list-commands)
-7. [Vim mode](#vim-mode)
-8. [Macros](#macros)
-9. [Search](#search)
-10. [Wiki links](#wiki-links)
-11. [Images and image preview](#images-and-image-preview)
-12. [Inline calculations](#inline-calculations)
-13. [Variables and cross-note variables](#variables-and-cross-note-variables)
-14. [Tables](#tables)
-15. [Folding](#folding)
-16. [Dates and reminders](#dates-and-reminders)
-17. [Web search](#web-search)
-18. [Clipboard and clip-watch](#clipboard-and-clip-watch)
-19. [Collections](#collections)
-20. [Per-note modules](#per-note-modules)
-21. [Note security](#note-security)
-22. [Export and backup](#export-and-backup)
-23. [IMAP email sync](#imap-email-sync)
-24. [Themes, wrap and other settings](#themes-wrap-and-other-settings)
-25. [Diagnostics](#diagnostics)
+- [Feature Guide](#feature-guide)
+  - [Contents](#contents)
+  - [Notes and switching](#notes-and-switching)
+  - [Saving](#saving)
+    - [Note history](#note-history)
+  - [Command line entry points](#command-line-entry-points)
+  - [Daily notes, capture and pipe append](#daily-notes-capture-and-pipe-append)
+  - [Editing and markdown helpers](#editing-and-markdown-helpers)
+  - [Inline formatting and list commands](#inline-formatting-and-list-commands)
+  - [Vim mode](#vim-mode)
+  - [Macros](#macros)
+  - [Search](#search)
+  - [Wiki links](#wiki-links)
+  - [Images and image preview](#images-and-image-preview)
+  - [Inline calculations](#inline-calculations)
+  - [Variables and cross-note variables](#variables-and-cross-note-variables)
+  - [Tables](#tables)
+  - [Folding](#folding)
+  - [Dates and reminders](#dates-and-reminders)
+  - [Web search](#web-search)
+  - [Clipboard and clip-watch](#clipboard-and-clip-watch)
+  - [Collections](#collections)
+    - [Collection browser](#collection-browser)
+  - [Per-note modules](#per-note-modules)
+  - [Note security](#note-security)
+  - [Export and backup](#export-and-backup)
+  - [IMAP email sync](#imap-email-sync)
+  - [Themes, wrap and other settings](#themes-wrap-and-other-settings)
+  - [Diagnostics](#diagnostics)
 
 ## Notes and switching
 
@@ -44,30 +48,30 @@ Conventions:
 
 The note switcher, its content search and the collection picker are popups styled like the [collection browser](#collection-browser): a search bar over a list with icons, ages (or match lines) and note counts, and key hints at the bottom. The title shows whether the list covers the working collection or all notes.
 
-| Key / command | Action |
-| --- | --- |
-| `Ctrl+N` (Insert, switcher) | New note (in the working collection, if one is set) |
-| `Ctrl+P` | Fuzzy note switcher (type to filter by title) |
-| `Tab` in the switcher | Switch to full-text content search; `Tab` again goes back to title search |
-| `Enter` in the switcher / content search | Open the note (content search jumps to the matching line) |
-| `Ctrl+L` in the switcher / content search | Toggle between the working collection and all notes |
-| `Ctrl+R` in the switcher | [History](#note-history) of the selected note |
-| `Delete` in the switcher | Delete the selected note (confirm with `y`/`Enter`; protected notes ask for the password) |
-| `Ctrl+W`, `Ctrl+Backspace` in the switcher | Delete the last word of the query |
-| `Esc` / `Ctrl+P` in the switcher | Close it |
-| `Ctrl+Q` | Quit (from any mode) |
+| Key / command                              | Action                                                                                    |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `Ctrl+N` (Insert, switcher)                | New note (in the working collection, if one is set)                                       |
+| `Ctrl+P`                                   | Fuzzy note switcher (type to filter by title)                                             |
+| `Tab` in the switcher                      | Switch to full-text content search; `Tab` again goes back to title search                 |
+| `Enter` in the switcher / content search   | Open the note (content search jumps to the matching line)                                 |
+| `Ctrl+L` in the switcher / content search  | Toggle between the working collection and all notes                                       |
+| `Ctrl+R` in the switcher                   | [History](#note-history) of the selected note                                             |
+| `Delete` in the switcher                   | Delete the selected note (confirm with `y`/`Enter`; protected notes ask for the password) |
+| `Ctrl+W`, `Ctrl+Backspace` in the switcher | Delete the last word of the query                                                         |
+| `Esc` / `Ctrl+P` in the switcher           | Close it                                                                                  |
+| `Ctrl+Q`                                   | Quit (from any mode)                                                                      |
 
 Encrypted notes ask for their password (or their collection's) before opening. Content search only indexes unprotected notes.
 
 ## Saving
 
-| Key / command | Action |
-| --- | --- |
+| Key / command                                  | Action                                                                                        |
+| ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | autosave (`[editor] autosave = true`, default) | Saves after a short idle pause on a background thread, and before switching notes or quitting |
-| `Ctrl+S` | Save now (in Insert only while autosave is on; otherwise use `:w`) |
-| `:w` / `:w!` | Write / force write (overwrites a newer revision on disk) |
-| `:wq` / `:wq!` | Write and quit |
-| `:q` / `:q!` | Quit / quit without saving |
+| `Ctrl+S`                                       | Save now (in Insert only while autosave is on; otherwise use `:w`)                            |
+| `:w` / `:w!`                                   | Write / force write (overwrites a newer revision on disk)                                     |
+| `:wq` / `:wq!`                                 | Write and quit                                                                                |
+| `:q` / `:q!`                                   | Quit / quit without saving                                                                    |
 
 `[editor] format_on_save = true` runs `:format` before every save. If the note changed elsewhere since it was loaded, a save stops with `note changed since last load; use :w! to force save`.
 
@@ -79,13 +83,13 @@ Old versions are thinned out when a new one is added: every version of the last 
 
 `:history` (or `:versions`), `H` on a note in the browser, or `Ctrl+R` in the note switcher opens the history in the browser: the current text first, then each version with its time and the lines its session added and removed. The preview shows what restoring would change (`-` current lines, `+` lines of the version), or the version's text.
 
-| Key | Action |
-| --- | --- |
-| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move between the current text and older versions |
-| `Tab`, `t` | Preview what restoring would change, or the version's full text |
-| `Enter`, `l` | Restore the version (`y` confirms); the text before it is kept as a version |
-| `h`, `-`, `Esc` | Back to the notes |
-| `q`, `Ctrl+B` | Close the browser |
+| Key                                                | Action                                                                      |
+| -------------------------------------------------- | --------------------------------------------------------------------------- |
+| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move between the current text and older versions                            |
+| `Tab`, `t`                                         | Preview what restoring would change, or the version's full text             |
+| `Enter`, `l`                                       | Restore the version (`y` confirms); the text before it is kept as a version |
+| `h`, `-`, `Esc`                                    | Back to the notes                                                           |
+| `q`, `Ctrl+B`                                      | Close the browser                                                           |
 
 ## Command line entry points
 
@@ -131,64 +135,64 @@ Markdown stays raw text; styling is drawn in place (no preview pane).
 - soft wrap for prose (`[editor] wrap = true`); tables and code keep horizontal scrolling
 - undo/redo with cursor restore
 
-| Key | Action (Insert) |
-| --- | --- |
-| `Enter` | New line / continue list / accept popup selection |
-| `Tab` / `Shift+Tab` | Accept completion, else apply calc result, else next/previous table cell, else indent/outdent list item, else insert two spaces |
-| `Ctrl+W`, `Ctrl+Backspace` | Delete word before the cursor (table-aware) |
-| `Ctrl+Delete` | Delete forward (table-aware) |
-| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight` | Previous / next word (previous / next cell in tables) |
-| `Home` / `End`, `PageUp` / `PageDown` | Line start / end, page up / down |
-| `ArrowUp` / `ArrowDown` | Move by screen row on wrapped lines; move popup selection when a popup is open |
-| `Esc` | Close popup, else switch to Normal mode |
+| Key                                   | Action (Insert)                                                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `Enter`                               | New line / continue list / accept popup selection                                                                               |
+| `Tab` / `Shift+Tab`                   | Accept completion, else apply calc result, else next/previous table cell, else indent/outdent list item, else insert two spaces |
+| `Ctrl+W`, `Ctrl+Backspace`            | Delete word before the cursor (table-aware)                                                                                     |
+| `Ctrl+Delete`                         | Delete forward (table-aware)                                                                                                    |
+| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight`  | Previous / next word (previous / next cell in tables)                                                                           |
+| `Home` / `End`, `PageUp` / `PageDown` | Line start / end, page up / down                                                                                                |
+| `ArrowUp` / `ArrowDown`               | Move by screen row on wrapped lines; move popup selection when a popup is open                                                  |
+| `Esc`                                 | Close popup, else switch to Normal mode                                                                                         |
 
 ## Inline formatting and list commands
 
 Select text first (`v` / `V`, then `:`); the command applies to the selection.
 
-| Command | Aliases | Action |
-| --- | --- | --- |
-| `format bold` | `bold` | Toggle `**bold**` |
-| `format italic` | `italic` | Toggle `*italic*` |
-| `format strike` | `strike`, `strikethrough` | Toggle `~~strike~~` |
-| `format code` | `icode`, `inline-code` | Toggle `` `code` `` |
-| `format clear` | `clear-format`, `unformat`, `plain` | Strip inline formatting |
-| `paragraph title` | `title`, `paragraph heading` | Turn lines into a heading |
-| `paragraph clist` | `clist`, `checklist`, `todo`, ... | Turn lines into a checklist |
-| `paragraph ulist` | `ulist`, `unordered-list`, `unordered` | Turn lines into a bullet list |
-| `paragraph olist` | `olist`, `ordered-list`, `ordered` | Turn lines into a numbered list |
-| `format` | `fmt` | Format the whole markdown document |
+| Command           | Aliases                                | Action                             |
+| ----------------- | -------------------------------------- | ---------------------------------- |
+| `format bold`     | `bold`                                 | Toggle `**bold**`                  |
+| `format italic`   | `italic`                               | Toggle `*italic*`                  |
+| `format strike`   | `strike`, `strikethrough`              | Toggle `~~strike~~`                |
+| `format code`     | `icode`, `inline-code`                 | Toggle `` `code` ``                |
+| `format clear`    | `clear-format`, `unformat`, `plain`    | Strip inline formatting            |
+| `paragraph title` | `title`, `paragraph heading`           | Turn lines into a heading          |
+| `paragraph clist` | `clist`, `checklist`, `todo`, ...      | Turn lines into a checklist        |
+| `paragraph ulist` | `ulist`, `unordered-list`, `unordered` | Turn lines into a bullet list      |
+| `paragraph olist` | `olist`, `ordered-list`, `ordered`     | Turn lines into a numbered list    |
+| `format`          | `fmt`                                  | Format the whole markdown document |
 
 ## Vim mode
 
 Slate is modal: `Esc` leaves Insert for Normal mode. `[editor] vim_mode = true` starts in Normal mode instead of Insert.
 
-| Keys | Action |
-| --- | --- |
-| `h` `j` `k` `l`, arrows | Move (with counts) |
-| `w` / `b` | Next / previous word |
-| `0` / `$` (`Home` / `End`) | Line start / end |
-| `gg` / `G`, `{n}G` / `{n}gg` | First / last line, line `n` |
-| `gj` / `gk` | Down / up one screen row on wrapped lines |
-| `i` `a` `I` `A` `o` `O` | Enter Insert (before, after, line start, line end, new line below/above) |
-| `x` | Delete character |
-| `dd` `yy` `cc` | Delete / yank / change line (`3dd`, `2yy`) |
-| `d` `y` `c` + `w` `b` `0` `$` | Operator + motion (`d2w`, `y$`); `de` / `ce` to word end |
-| `dt{c}` / `ct{c}` | Delete / change up to character `c` |
-| `diw` `daw` `yiw` `yaw` `ciw` `caw` | Word text objects |
-| `di\|` `da\|` `yi\|` `ya\|` `ci\|` | Table cell text objects |
-| `di(` `di[` `di{` `di"` ``di` `` `di*` `di~` `di_` (and `da`, `ci`, `ca`) | Delimiter text objects |
-| `C` | Change to line end |
-| `p` | Paste after |
-| `u` / `Ctrl+R` | Undo / redo |
-| `v` / `V` | Visual / visual-line mode; then `y` yank, `d`/`x` delete, `:` run a command on the selection |
-| `/`, `Ctrl+F` | Search in note (see [Search](#search)) |
-| `:` / `Ctrl+E` | Command bar |
-| `za` | Toggle fold |
-| `gd`, `Ctrl+]` | Follow wiki link; `gd` on a variable goes to its definition |
-| `K` | Preview linked note |
-| `gx` | Preview image at cursor |
-| `?` | Web search |
+| Keys                                                                      | Action                                                                                       |
+| ------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `h` `j` `k` `l`, arrows                                                   | Move (with counts)                                                                           |
+| `w` / `b`                                                                 | Next / previous word                                                                         |
+| `0` / `$` (`Home` / `End`)                                                | Line start / end                                                                             |
+| `gg` / `G`, `{n}G` / `{n}gg`                                              | First / last line, line `n`                                                                  |
+| `gj` / `gk`                                                               | Down / up one screen row on wrapped lines                                                    |
+| `i` `a` `I` `A` `o` `O`                                                   | Enter Insert (before, after, line start, line end, new line below/above)                     |
+| `x`                                                                       | Delete character                                                                             |
+| `dd` `yy` `cc`                                                            | Delete / yank / change line (`3dd`, `2yy`)                                                   |
+| `d` `y` `c` + `w` `b` `0` `$`                                             | Operator + motion (`d2w`, `y$`); `de` / `ce` to word end                                     |
+| `dt{c}` / `ct{c}`                                                         | Delete / change up to character `c`                                                          |
+| `diw` `daw` `yiw` `yaw` `ciw` `caw`                                       | Word text objects                                                                            |
+| `di\|` `da\|` `yi\|` `ya\|` `ci\|`                                        | Table cell text objects                                                                      |
+| `di(` `di[` `di{` `di"` ``di` `` `di*` `di~` `di_` (and `da`, `ci`, `ca`) | Delimiter text objects                                                                       |
+| `C`                                                                       | Change to line end                                                                           |
+| `p`                                                                       | Paste after                                                                                  |
+| `u` / `Ctrl+R`                                                            | Undo / redo                                                                                  |
+| `v` / `V`                                                                 | Visual / visual-line mode; then `y` yank, `d`/`x` delete, `:` run a command on the selection |
+| `/`, `Ctrl+F`                                                             | Search in note (see [Search](#search))                                                       |
+| `:` / `Ctrl+E`                                                            | Command bar                                                                                  |
+| `za`                                                                      | Toggle fold                                                                                  |
+| `gd`, `Ctrl+]`                                                            | Follow wiki link; `gd` on a variable goes to its definition                                  |
+| `K`                                                                       | Preview linked note                                                                          |
+| `gx`                                                                      | Preview image at cursor                                                                      |
+| `?`                                                                       | Web search                                                                                   |
 
 Yanks are copied to the system clipboard as well as the register.
 
@@ -196,13 +200,13 @@ Yanks are copied to the system clipboard as well as the register.
 
 Macros record Normal-mode actions and Insert-mode typing, and replay them.
 
-| Keys | Action |
-| --- | --- |
-| `q{r}` | Start recording into register `r` (`a`-`z`, `0`-`9`; case-insensitive) |
-| `q` | Stop recording (status shows `recorded @r (N steps)`) |
-| `@{r}` | Replay register `r` |
-| `{n}@{r}` | Replay `n` times (`3@a`) |
-| `Esc` | Cancel a pending `q` / `@` before the register key |
+| Keys      | Action                                                                 |
+| --------- | ---------------------------------------------------------------------- |
+| `q{r}`    | Start recording into register `r` (`a`-`z`, `0`-`9`; case-insensitive) |
+| `q`       | Stop recording (status shows `recorded @r (N steps)`)                  |
+| `@{r}`    | Replay register `r`                                                    |
+| `{n}@{r}` | Replay `n` times (`3@a`)                                               |
+| `Esc`     | Cancel a pending `q` / `@` before the register key                     |
 
 Replays are capped at 10,000 steps; a longer replay stops with `replay aborted: step budget exceeded`.
 
@@ -210,14 +214,14 @@ Replays are capped at 10,000 steps; a longer replay stops with `replay aborted: 
 
 In-note search (`/` or `Ctrl+F`) is case-insensitive and highlights every match.
 
-| Key | Action |
-| --- | --- |
-| type | Jump to the nearest match below the start position |
-| `Tab` / `ArrowDown` / `Ctrl+N` | Next match |
-| `Shift+Tab` / `ArrowUp` / `Ctrl+P` | Previous match |
-| `Enter` | Keep the position (status shows `/query (i/n)`) |
-| `Esc` | Cancel and restore the original cursor and scroll |
-| `n` / `N` (Normal) | Next / previous match after `Enter` |
+| Key                                | Action                                             |
+| ---------------------------------- | -------------------------------------------------- |
+| type                               | Jump to the nearest match below the start position |
+| `Tab` / `ArrowDown` / `Ctrl+N`     | Next match                                         |
+| `Shift+Tab` / `ArrowUp` / `Ctrl+P` | Previous match                                     |
+| `Enter`                            | Keep the position (status shows `/query (i/n)`)    |
+| `Esc`                              | Cancel and restore the original cursor and scroll  |
+| `n` / `N` (Normal)                 | Next / previous match after `Enter`                |
 
 Across notes: `Ctrl+P` then `Tab` opens content search (SQLite FTS), see [Notes and switching](#notes-and-switching).
 
@@ -228,12 +232,12 @@ Syntax: `[[SHORTID]]`, `[[SHORTID#Heading]]`, `[[SHORTID|Title]]`, `[[SHORTID#He
 - Links render collapsed (title only) until the cursor enters them; broken links render distinctly and resolve when the note appears.
 - Typing `[[` auto-closes to `[[]]` and opens a note picker; typing `#` inside a link suggests the target note's headings.
 
-| Key | Action |
-| --- | --- |
-| `[[` | Insert link and open note autocomplete |
-| `ArrowUp` / `ArrowDown`, `Enter` / `Tab`, `Esc` | Pick, accept, cancel a suggestion |
-| `Ctrl+]` (any editing mode), `gd` (Normal) | Open the linked note |
-| `K` (Normal) | Toggle a preview popup of the linked note; moving the cursor closes it |
+| Key                                             | Action                                                                 |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `[[`                                            | Insert link and open note autocomplete                                 |
+| `ArrowUp` / `ArrowDown`, `Enter` / `Tab`, `Esc` | Pick, accept, cancel a suggestion                                      |
+| `Ctrl+]` (any editing mode), `gd` (Normal)      | Open the linked note                                                   |
+| `K` (Normal)                                    | Toggle a preview popup of the linked note; moving the cursor closes it |
 
 Markdown links `[text](url)` are styled in place.
 
@@ -245,11 +249,11 @@ Syntax: `![alt](./assets/image.png)`. In the editor an image shows as a compact 
 - The preview opens in a bounded dialog using sixel, kitty or iTerm2 graphics (half-blocks as fallback); decoding happens off the input thread and is cached. Inside tmux, passthrough is used when `allow-passthrough` is on.
 - Remote (`http://...`) images are never fetched.
 
-| Key | Action |
-| --- | --- |
-| `gx` (Normal), `Ctrl+O` (Insert, vim mode off) | Preview the image at the cursor |
-| `o` in the preview | Open the image in the system viewer |
-| `Esc` in the preview | Close it |
+| Key                                            | Action                              |
+| ---------------------------------------------- | ----------------------------------- |
+| `gx` (Normal), `Ctrl+O` (Insert, vim mode off) | Preview the image at the cursor     |
+| `o` in the preview                             | Open the image in the system viewer |
+| `Esc` in the preview                           | Close it                            |
 
 Config (`[terminal]`): `images = "auto" | "sixel" | "kitty" | "iterm2" | "halfblocks" | "off"` (`off` opens the external viewer directly) and `image_max_rows` (1-100, default 15).
 
@@ -268,14 +272,14 @@ sqrt(144) + 3^2         → 21
 - Date-like lines (`2026-09-29`, `29.09.2026`, `09/29/2026`) are ignored.
 - Large notes compute only the visible region and fill values in off the input thread.
 
-| Key / command | Action |
-| --- | --- |
-| `Tab` (Insert) | Replace the expression with its result (after any open completion popup) |
-| `:sum` / `:avg` | Sum / average the paragraph at the cursor |
-| `:sum list` / `:avg list` | ... the list at the cursor |
-| `:sum row` / `:avg row` | ... the table row |
-| `:sum column` / `:avg column` | ... the table column |
-| `:sum doc` / `:avg doc` | ... the whole note |
+| Key / command                 | Action                                                                   |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `Tab` (Insert)                | Replace the expression with its result (after any open completion popup) |
+| `:sum` / `:avg`               | Sum / average the paragraph at the cursor                                |
+| `:sum list` / `:avg list`     | ... the list at the cursor                                               |
+| `:sum row` / `:avg row`       | ... the table row                                                        |
+| `:sum column` / `:avg column` | ... the table column                                                     |
+| `:sum doc` / `:avg doc`       | ... the whole note                                                       |
 
 ## Variables and cross-note variables
 
@@ -285,11 +289,11 @@ sqrt(144) + 3^2         → 21
 - Variable names are highlighted; an autocomplete popup appears after `[editor] variable_autocomplete_min_chars` (default 3) characters.
 - Another note's variable: `[[SHORTID]].name` (needs the `cross_note` module); typing `[[SHORTID]].` suggests that note's variables.
 
-| Key | Action |
-| --- | --- |
+| Key                     | Action                     |
+| ----------------------- | -------------------------- |
 | `ArrowUp` / `ArrowDown` | Move in the variable popup |
-| `Tab` / `Enter` | Accept the suggestion |
-| `Esc` | Close the popup |
+| `Tab` / `Enter`         | Accept the suggestion      |
+| `Esc`                   | Close the popup            |
 
 Full rules: [Variables Specification](./variables.md).
 
@@ -302,15 +306,15 @@ Markdown tables align as you type, and the cursor moves by cell.
 - Reference errors render as `!ERROR#out_of_bounds`, `!ERROR#non_numeric`, `!ERROR#self_reference`, `!ERROR#cycle`.
 - Multiline cells use continuation rows starting with `|>`.
 
-| Key (Insert) | Action |
-| --- | --- |
-| `\|` | Start a row / add a column where applicable |
-| `Tab` / `Shift+Tab` | Next / previous cell |
-| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight` | Previous / next cell |
-| `ArrowLeft` / `ArrowRight` | Move within the cell, then cross into the next |
-| `ArrowUp` / `ArrowDown` | Same column, previous / next row |
-| `Shift+Enter` | Split the cell into a `\|>` continuation row |
-| `Backspace` / `Delete` | Cell-aware delete at cell boundaries |
+| Key (Insert)                                | Action                                                          |
+| ------------------------------------------- | --------------------------------------------------------------- |
+| `\|`                                        | Start a row / add a column where applicable                     |
+| `Tab` / `Shift+Tab`                         | Next / previous cell                                            |
+| `Ctrl+ArrowLeft` / `Ctrl+ArrowRight`        | Previous / next cell                                            |
+| `ArrowLeft` / `ArrowRight`                  | Move within the cell, then cross into the next                  |
+| `ArrowUp` / `ArrowDown`                     | Same column, previous / next row                                |
+| `Shift+Enter`                               | Split the cell into a `\|>` continuation row                    |
+| `Backspace` / `Delete`                      | Cell-aware delete at cell boundaries                            |
 | `Ctrl+Backspace` / `Ctrl+Delete` / `Ctrl+W` | Structural edit: merge cells or delete a column from the header |
 
 Vim: `di|`, `ci|`, `yi|`, `da|` work on cells. `:sum row`, `:avg column`, etc. aggregate tables.
@@ -319,21 +323,21 @@ Vim: `di|`, `ci|`, `yi|`, `da|` work on cells. `:sum row`, `:avg column`, etc. a
 
 Fold and unfold the block at the cursor.
 
-| Key / command | Action |
-| --- | --- |
-| `za` (Normal) | Toggle fold at cursor |
-| `:fold` (`:zc`, `:closefold`) | Fold |
-| `:unfold` (`:zo`, `:openfold`) | Unfold |
-| `:fold-toggle` (`:za`) | Toggle |
+| Key / command                  | Action                |
+| ------------------------------ | --------------------- |
+| `za` (Normal)                  | Toggle fold at cursor |
+| `:fold` (`:zc`, `:closefold`)  | Fold                  |
+| `:unfold` (`:zo`, `:openfold`) | Unfold                |
+| `:fold-toggle` (`:za`)         | Toggle                |
 
 ## Dates and reminders
 
-| Command | Action |
-| --- | --- |
-| `:date` | Pick a date and insert it (`[editor] date_format`; `date_time_format` with time) |
-| `:remind` (`:alarm`) | Set a reminder on the current line (date + time) |
-| `:remind toggle` | Remove the line's reminder, or set one if there is none |
-| `:today` (`:daily`) | Open today's daily note |
+| Command              | Action                                                                           |
+| -------------------- | -------------------------------------------------------------------------------- |
+| `:date`              | Pick a date and insert it (`[editor] date_format`; `date_time_format` with time) |
+| `:remind` (`:alarm`) | Set a reminder on the current line (date + time)                                 |
+| `:remind toggle`     | Remove the line's reminder, or set one if there is none                          |
+| `:today` (`:daily`)  | Open today's daily note                                                          |
 
 Date picker keys: arrows move by day/week, `Ctrl+ArrowLeft`/`Ctrl+ArrowRight` by month, `h`/`l` (`Home`/`End`) hour, `j`/`k` (`PageUp`/`PageDown`) minute, `Tab`/`t` toggle time, `Enter` confirm, `Esc` cancel.
 
@@ -341,14 +345,14 @@ Reminders show as a ghost on their line and fire a desktop notification (`notify
 
 ## Web search
 
-| Key / command | Action |
-| --- | --- |
+| Key / command                                           | Action                                                |
+| ------------------------------------------------------- | ----------------------------------------------------- |
 | `?` (Normal), `:web [query]` (`:search-web`, `:lookup`) | Open the web search overlay (runs the query if given) |
-| type, `Enter` | Run the search |
-| `ArrowUp` / `ArrowDown` | Select a result |
-| `Enter` on a result | Open it in the browser (HTTP(S) only) |
-| `Shift+Enter` on a result | Insert it as a markdown link at the cursor |
-| `Esc` | Close |
+| type, `Enter`                                           | Run the search                                        |
+| `ArrowUp` / `ArrowDown`                                 | Select a result                                       |
+| `Enter` on a result                                     | Open it in the browser (HTTP(S) only)                 |
+| `Shift+Enter` on a result                               | Insert it as a markdown link at the cursor            |
+| `Esc`                                                   | Close                                                 |
 
 Config `[web_search]`: `provider = "auto" | "brave" | "google" | "duckduckgo"`, `api_key`, `search_engine_id`, `max_results` (1-10). Keyed providers fall back to DuckDuckGo on failure.
 
@@ -357,24 +361,24 @@ Config `[web_search]`: `provider = "auto" | "brave" | "google" | "duckduckgo"`, 
 - Vim yanks and `:export md` / `:export txt` without a path go to the system clipboard (status shows the backend used).
 - Pasted text is inserted as-is (no autoformat pass).
 
-| Command | Action |
-| --- | --- |
+| Command                    | Action                                                    |
+| -------------------------- | --------------------------------------------------------- |
 | `:clip-watch on` (`start`) | Watch the clipboard and paste each new text at the cursor |
-| `:clip-watch off` (`stop`) | Stop watching |
+| `:clip-watch off` (`stop`) | Stop watching                                             |
 
 ## Collections
 
 Collections group notes; the working collection is session-scoped and applies to new notes, the switcher and content search.
 
-| Key / command | Action |
-| --- | --- |
-| `Ctrl+G` | Collection picker (type to filter, `Enter` set working collection, `Ctrl+E` edit, `Esc` close) |
-| `:collection create <name>` | Create |
-| `:collection choose <name>` / `choose none` / `clear` | Set / clear the working collection |
-| `:collection join <name>` / `leave <name>` | Add / remove the current note |
-| `:collection update <name>` | Edit name, description and default tags (`Tab` between fields, `Enter` save) |
-| `:collection delete <name>` | Delete the collection only |
-| `:collection purge <name>` | Delete the collection and its notes |
+| Key / command                                         | Action                                                                                         |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `Ctrl+G`                                              | Collection picker (type to filter, `Enter` set working collection, `Ctrl+E` edit, `Esc` close) |
+| `:collection create <name>`                           | Create                                                                                         |
+| `:collection choose <name>` / `choose none` / `clear` | Set / clear the working collection                                                             |
+| `:collection join <name>` / `leave <name>`            | Add / remove the current note                                                                  |
+| `:collection update <name>`                           | Edit name, description and default tags (`Tab` between fields, `Enter` save)                   |
+| `:collection delete <name>`                           | Delete the collection only                                                                     |
+| `:collection purge <name>`                            | Delete the collection and its notes                                                            |
 
 ### Collection browser
 
@@ -384,25 +388,25 @@ Collections group notes; the working collection is session-scoped and applies to
 
 A note can belong to several collections, so notes are copied into collections rather than moved like files: `y` then `p` adds a note to another collection, `x` then `p` moves it out of the collection it was cut from, and `d` removes it from the open collection without deleting it. `u` undoes the last of these.
 
-| Key | Action |
-| --- | --- |
-| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move |
-| `o`, `l`, `Enter` | Open the collection or note (asks for the password of a locked note or encrypted collection) |
-| `h`, `-`, `Backspace` | Back to the collections list |
-| `/` | Filter the list (fuzzy); `Esc` clears it |
-| `Ctrl+F`, `Ctrl+/` | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
-| `Space` / `Ctrl+A` | Mark the note and move down / mark all |
-| `y` / `x` | Yank / cut the marked (or hovered) notes |
-| `p` | Paste into the open or hovered collection: copy adds the notes to it, cut moves them |
-| `d` | Leave: take the notes out of the open collection (the notes stay) |
-| `u` | Undo the last paste or remove |
-| `D` | Delete the notes, or the hovered collection (its notes stay); `y` confirms |
-| `n` / `r` | New note (in the open collection) or collection / rename the hovered one (a note keeps the name; empty follows its first line) |
-| `e` | Encrypt the hovered collection, or decrypt an encrypted one |
-| `s` | Sort notes by modification time or title |
-| `w` | Make the collection the working collection (`All notes` clears it) |
-| `R` | Reload |
-| `q`, `Esc`, `Ctrl+B` | Close |
+| Key                                                | Action                                                                                                                                                               |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `j` / `k`, arrows, `gg` / `G`, `Ctrl+D` / `Ctrl+U` | Move                                                                                                                                                                 |
+| `o`, `l`, `Enter`                                  | Open the collection or note (asks for the password of a locked note or encrypted collection)                                                                         |
+| `h`, `-`, `Backspace`                              | Back to the collections list                                                                                                                                         |
+| `/`                                                | Filter the list (fuzzy); `Esc` clears it                                                                                                                             |
+| `Ctrl+F`, `Ctrl+/`                                 | Search note text in the open collection (or the hovered one): type to search, `↑` `↓` / `Ctrl+N` `Ctrl+P` move, `Enter` opens the note at the match, `Esc` goes back |
+| `Space` / `Ctrl+A`                                 | Mark the note and move down / mark all                                                                                                                               |
+| `y` / `x`                                          | Yank / cut the marked (or hovered) notes                                                                                                                             |
+| `p`                                                | Paste into the open or hovered collection: copy adds the notes to it, cut moves them                                                                                 |
+| `d`                                                | Leave: take the notes out of the open collection (the notes stay)                                                                                                    |
+| `u`                                                | Undo the last paste or remove                                                                                                                                        |
+| `D`                                                | Delete the notes, or the hovered collection (its notes stay); `y` confirms, and a protected note asks for its password instead                                       |
+| `n` / `r`                                          | New note (in the open collection) or collection / rename the hovered one (a note keeps the name; empty follows its first line)                                       |
+| `e`                                                | Encrypt the hovered collection, or decrypt an encrypted one                                                                                                          |
+| `s`                                                | Sort notes by modification time or title                                                                                                                             |
+| `w`                                                | Make the collection the working collection (`All notes` clears it)                                                                                                   |
+| `R`                                                | Reload                                                                                                                                                               |
+| `q`, `Esc`, `Ctrl+B`                               | Close                                                                                                                                                                |
 
 Icons use Nerd Font glyphs by default; set `[theme] icons = "unicode"` or `"ascii"` for other fonts.
 
@@ -410,22 +414,22 @@ Icons use Nerd Font glyphs by default; set `[theme] icons = "unicode"` or `"asci
 
 Each note stores its own module switches; `[editor.modules]` sets defaults for new notes.
 
-| Module | Controls |
-| --- | --- |
-| `math` | Master calc switch |
-| `table` | Table formulas |
-| `variables` | Variable assignments, references, autocomplete |
-| `style` | Markdown styling helpers |
-| `cross_note` | `[[SHORTID]].name` references |
+| Module       | Controls                                       |
+| ------------ | ---------------------------------------------- |
+| `math`       | Master calc switch                             |
+| `table`      | Table formulas                                 |
+| `variables`  | Variable assignments, references, autocomplete |
+| `style`      | Markdown styling helpers                       |
+| `cross_note` | `[[SHORTID]].name` references                  |
 
 Commands: `:module status` (`:modules`), `:module <name> on|off|toggle` (also `:module on <name>`).
 
 ## Note security
 
-| Command | Action |
-| --- | --- |
+| Command         | Action                                                                                     |
+| --------------- | ------------------------------------------------------------------------------------------ |
 | `:note encrypt` | Encrypt the note with its own password; on an unlocked encrypted note, change its password |
-| `:note decrypt` | Store it unencrypted again |
+| `:note decrypt` | Store it unencrypted again                                                                 |
 
 Both ask for the password in a masked dialog, and encrypting asks for it twice.
 
@@ -439,13 +443,13 @@ Reminder text and images attached to encrypted notes are still stored unencrypte
 
 ## Export and backup
 
-| Command | Action |
-| --- | --- |
-| `:export pdf <path>` | Markdown-aware PDF (headings, lists, code, tables, images, checklists) |
-| `:export md [path]` | Markdown to a file, or the clipboard without a path |
-| `:export txt [path]` | Plain text to a file, or the clipboard |
-| `:backup export <path.zip>` | Back up the whole notes database (runs in the background) |
-| `:backup load <path.zip>` | Stage a restore; Slate quits and applies it on the next start |
+| Command                     | Action                                                                 |
+| --------------------------- | ---------------------------------------------------------------------- |
+| `:export pdf <path>`        | Markdown-aware PDF (headings, lists, code, tables, images, checklists) |
+| `:export md [path]`         | Markdown to a file, or the clipboard without a path                    |
+| `:export txt [path]`        | Plain text to a file, or the clipboard                                 |
+| `:backup export <path.zip>` | Back up the whole notes database (runs in the background)              |
+| `:backup load <path.zip>`   | Stage a restore; Slate quits and applies it on the next start          |
 
 Details: [Export Reference](./export.md).
 
@@ -465,12 +469,12 @@ All keys: [Configuration](./configuration.md).
 
 ## Diagnostics
 
-| Command | Action |
-| --- | --- |
-| `:perf status` | Show perf tracing state |
-| `:perf toggle` / `on` / `off` | Toggle tracing |
-| `:perf dump [top]` | Write the slowest buckets to the perf log |
-| `:perf where` | Show the log path |
-| `:perf cap <n>` | Samples kept per bucket |
+| Command                       | Action                                    |
+| ----------------------------- | ----------------------------------------- |
+| `:perf status`                | Show perf tracing state                   |
+| `:perf toggle` / `on` / `off` | Toggle tracing                            |
+| `:perf dump [top]`            | Write the slowest buckets to the perf log |
+| `:perf where`                 | Show the log path                         |
+| `:perf cap <n>`               | Samples kept per bucket                   |
 
 Planned features: [`roadmap/features.md`](../roadmap/features.md).

@@ -686,6 +686,24 @@ impl TerminalApp {
                 collection_id,
                 name,
             } => self.browser_decrypt_collection(db, &collection_id, &name, &text),
+            PromptKind::DeleteNote { note_id, title } => {
+                match self.delete_note_from_switcher(db, &note_id, &title, Some(&text)) {
+                    Ok(()) => {
+                        if let Some(clip) = self.browser.clipboard.as_mut() {
+                            clip.note_ids.retain(|id| *id != note_id);
+                        }
+                        self.browser.undo = None;
+                        self.browser.marked.clear();
+                        self.browser_reload(db, None)?;
+                        self.browser_message(format!("deleted {title}"));
+                        Ok(())
+                    }
+                    Err(error) => {
+                        self.browser_open_prompt(PromptKind::DeleteNote { note_id, title }, "");
+                        Err(format!("delete failed: {error}"))
+                    }
+                }
+            }
         };
         if let Err(error) = outcome {
             self.browser_message(error);
@@ -1025,13 +1043,21 @@ impl TerminalApp {
             },
             Level::Notes => {
                 let note_ids = self.browser.selected_note_ids();
-                let protected = self.browser.notes.iter().any(|note| {
+                let protected = self.browser.notes.iter().find(|note| {
                     note_ids.contains(&note.id) && note.access_mode != NoteAccessMode::None
                 });
-                if protected {
-                    self.browser_message(
-                        "protected notes need a password: delete them from Ctrl+P",
-                    );
+                if let Some(note) = protected {
+                    // Each protected note has its own password, which also
+                    // confirms the delete.
+                    if note_ids.len() > 1 {
+                        self.browser_message("protected notes are deleted one at a time");
+                        return;
+                    }
+                    let kind = PromptKind::DeleteNote {
+                        note_id: note.id.clone(),
+                        title: note.title.clone(),
+                    };
+                    self.browser_open_prompt(kind, "");
                     return;
                 }
                 let Some(first) = note_ids.first() else {
