@@ -1,10 +1,10 @@
 use super::{
-    line_char_len, load_note_reminder_ghosts, new_note_with_context, trim_trailing_word,
-    CollectionEditDialogState, CommandCompletionMenuState, CommandCompletionOption,
-    ContentSearchResponse, DatePickerAction, Db, Key, Note, NotePasswordDialog, NoteSearchResult,
-    SwitcherDeleteConfirm, SwitcherOpenConfirm, TerminalApp, UiMode, WebSearchResponse,
-    WebSearchState, CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS,
-    CONTENT_SEARCH_DEBOUNCE_MS, CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
+    line_char_len, new_note_with_context, trim_trailing_word, CollectionEditDialogState,
+    CommandCompletionMenuState, CommandCompletionOption, ContentSearchResponse, DatePickerAction,
+    Db, Key, Note, NotePasswordDialog, NoteSearchResult, SwitcherDeleteConfirm,
+    SwitcherOpenConfirm, TerminalApp, UiMode, WebSearchResponse, WebSearchState,
+    CALC_VIEWPORT_ONLY_MIN_LINES, COMMAND_COMPLETION_MAX_OPTIONS, CONTENT_SEARCH_DEBOUNCE_MS,
+    CONTENT_SEARCH_MAX_DETACHED_WORKERS, MAX_COMMAND_HISTORY_ENTRIES,
 };
 use crate::terminal::browser::step_selection;
 use crate::terminal::text_utils::{byte_index, join_lines, split_lines};
@@ -2557,8 +2557,7 @@ impl TerminalApp {
         if !self.reminders_dirty {
             return Ok(());
         }
-        self.reminder_ghosts =
-            load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines)?;
+        self.reminder_ghosts = self.reconcile_reminder_ghosts(db)?;
         self.render_state.dirty = true;
         self.reminders_dirty = false;
         Ok(())
@@ -2905,8 +2904,10 @@ impl TerminalApp {
         self.invalidate_joined_text_cache();
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
-        self.reminder_ghosts =
-            load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines)?;
+        // Another note's reminders: nothing tracked applies.
+        self.reminder_ghosts.clear();
+        self.reminder_tracked_len = None;
+        self.reminder_ghosts = self.reconcile_reminder_ghosts(db)?;
         self.reminders_dirty = false;
         self.last_reminder_check = Instant::now();
         self.editor.cursor_line = 0;

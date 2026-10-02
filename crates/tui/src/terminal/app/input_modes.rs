@@ -825,6 +825,7 @@ impl TerminalApp {
                         display_at: display_at.clone(),
                         line_text: line_text.clone(),
                         reminded_at_ms: None,
+                        stored_line: line_number,
                     };
                     self.reminder_ghosts.insert(line_idx, entry.clone());
                     self.push_reminder_undo_entry(line_idx, before_reminder, Some(entry));

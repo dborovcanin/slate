@@ -7,6 +7,11 @@
 use crate::storage::Reminder;
 use rustc_hash::{FxHashMap, FxHashSet};
 
+/// Where an editor saw reminders go, keyed by their stored line number:
+/// the 1-based line they moved to, or `None` when their line was deleted.
+/// Edits know this; text alone cannot tell a deleted line from an edited one.
+pub type ReminderHints = FxHashMap<i64, Option<usize>>;
+
 /// The 1-based line each reminder belongs on in `lines`, in the order of
 /// `reminders`, or `None` when its line is gone.
 ///
@@ -16,14 +21,42 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// share at least half of the shorter one as a common prefix or suffix).
 /// Anything else means the line was deleted: the reminder is not moved onto
 /// whatever text took its place.
-pub fn place_reminders(reminders: &[Reminder], lines: &[String]) -> Vec<Option<usize>> {
+///
+/// `hints` take precedence: a deleted line leaves its reminder unplaced, and
+/// a reported position is taken when the text there is the reminder's line
+/// or an edit of it (a guard against hints that no longer fit the text).
+pub fn place_reminders(
+    reminders: &[Reminder],
+    lines: &[String],
+    hints: &ReminderHints,
+) -> Vec<Option<usize>> {
     let mut placed: Vec<Option<usize>> = vec![None; reminders.len()];
+    let mut settled = vec![false; reminders.len()];
     let mut used: FxHashSet<usize> = FxHashSet::default();
     let line_at = |line: usize| line.checked_sub(1).and_then(|idx| lines.get(idx));
     let stored_line = |reminder: &Reminder| usize::try_from(reminder.line_number).ok();
 
+    for (idx, reminder) in reminders.iter().enumerate() {
+        match hints.get(&reminder.line_number) {
+            Some(None) => settled[idx] = true,
+            Some(Some(line)) => {
+                let fits = line_at(*line).is_some_and(|text| {
+                    *text == reminder.line_text || is_same_line_edited(&reminder.line_text, text)
+                });
+                if fits && used.insert(*line) {
+                    placed[idx] = Some(*line);
+                    settled[idx] = true;
+                }
+            }
+            None => {}
+        }
+    }
+
     // Unchanged lines first, so a moved reminder never takes their place.
-    for (slot, reminder) in placed.iter_mut().zip(reminders) {
+    for ((slot, reminder), settled) in placed.iter_mut().zip(reminders).zip(&settled) {
+        if *settled {
+            continue;
+        }
         let Some(line) = stored_line(reminder) else {
             continue;
         };
@@ -34,8 +67,8 @@ pub fn place_reminders(reminders: &[Reminder], lines: &[String]) -> Vec<Option<u
 
     // Lines that moved: the same text elsewhere, nearest first.
     let mut by_text: Option<FxHashMap<&str, Vec<usize>>> = None;
-    for (slot, reminder) in placed.iter_mut().zip(reminders) {
-        if slot.is_some() {
+    for ((slot, reminder), settled) in placed.iter_mut().zip(reminders).zip(&settled) {
+        if slot.is_some() || *settled {
             continue;
         }
         let by_text = by_text.get_or_insert_with(|| {
@@ -60,8 +93,8 @@ pub fn place_reminders(reminders: &[Reminder], lines: &[String]) -> Vec<Option<u
     }
 
     // Lines edited in place.
-    for (slot, reminder) in placed.iter_mut().zip(reminders) {
-        if slot.is_some() {
+    for ((slot, reminder), settled) in placed.iter_mut().zip(reminders).zip(&settled) {
+        if slot.is_some() || *settled {
             continue;
         }
         let Some(line) = stored_line(reminder) else {
@@ -128,6 +161,7 @@ mod tests {
         let placed = place_reminders(
             &[reminder(1, "a"), reminder(3, "c")],
             &lines(&["a", "b", "c"]),
+            &ReminderHints::default(),
         );
         assert_eq!(placed, vec![Some(1), Some(3)]);
     }
@@ -138,6 +172,7 @@ mod tests {
         let placed = place_reminders(
             &[reminder(1, "buy milk"), reminder(2, "call Ana")],
             &lines(&["new", "buy milk", "call Ana"]),
+            &ReminderHints::default(),
         );
         assert_eq!(placed, vec![Some(2), Some(3)]);
     }
@@ -147,6 +182,7 @@ mod tests {
         let placed = place_reminders(
             &[reminder(1, "buy milk"), reminder(3, "pay rent")],
             &lines(&["call Ana", "x", "pay rent"]),
+            &ReminderHints::default(),
         );
         assert_eq!(placed, vec![None, Some(3)]);
     }
@@ -160,13 +196,41 @@ mod tests {
                 reminder(3, "- [ ] pay rent"),
             ],
             &lines(&["buy milk and eggs", "call Anna", "- [x] pay rent"]),
+            &ReminderHints::default(),
         );
         assert_eq!(placed, vec![Some(1), Some(2), Some(3)]);
     }
 
     #[test]
+    fn a_deleted_line_reported_by_the_editor_keeps_its_reminder_off_the_next_task() {
+        let lines = lines(&["- [ ] buy eggs"]);
+        let reminders = [reminder(1, "- [ ] buy milk")];
+        // Text alone reads the change as an edit of line 1.
+        assert_eq!(
+            place_reminders(&reminders, &lines, &ReminderHints::default()),
+            vec![Some(1)]
+        );
+        let deleted: ReminderHints = [(1, None)].into_iter().collect();
+        assert_eq!(place_reminders(&reminders, &lines, &deleted), vec![None]);
+    }
+
+    #[test]
+    fn a_hint_that_does_not_fit_the_text_is_ignored() {
+        let lines = lines(&["other", "buy milk"]);
+        let stale: ReminderHints = [(1, Some(1))].into_iter().collect();
+        assert_eq!(
+            place_reminders(&[reminder(1, "buy milk")], &lines, &stale),
+            vec![Some(2)]
+        );
+    }
+
+    #[test]
     fn empty_buffer_places_nothing() {
-        let placed = place_reminders(&[reminder(2, "buy milk")], &lines(&[""]));
+        let placed = place_reminders(
+            &[reminder(2, "buy milk")],
+            &lines(&[""]),
+            &ReminderHints::default(),
+        );
         assert_eq!(placed, vec![None]);
     }
 
@@ -175,6 +239,7 @@ mod tests {
         let placed = place_reminders(
             &[reminder(2, "todo"), reminder(5, "todo")],
             &lines(&["x", "y", "todo", "z", "w", "todo"]),
+            &ReminderHints::default(),
         );
         assert_eq!(placed, vec![Some(3), Some(6)]);
     }

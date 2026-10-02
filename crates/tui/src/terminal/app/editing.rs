@@ -476,6 +476,7 @@ impl TerminalApp {
         old_line_span: usize,
         new_line_span: usize,
     ) {
+        self.track_reminder_splice(start_line, old_line_span, new_line_span);
         if self.calc.line_metadata.is_empty() && self.editor.lines.is_empty() {
             return;
         }
@@ -1581,7 +1582,13 @@ impl TerminalApp {
                         reminded_at_ms,
                     );
                 }
-                self.reminder_ghosts.insert(line_idx, reminder);
+                self.reminder_ghosts.insert(
+                    line_idx,
+                    LineReminderGhost {
+                        stored_line: line_number,
+                        ..reminder
+                    },
+                );
             }
             None => {
                 db.delete_reminder(&self.active_note.id, line_number)?;
@@ -1608,9 +1615,11 @@ impl TerminalApp {
             }
             self.dirty = true;
             self.last_edit = Instant::now();
-            if !self.reminder_ghosts.is_empty() {
-                self.reminders_dirty = true;
-            }
+            // History swaps whole lines: no line-by-line moves to report.
+            // Always re-place reminders: undo may bring back the line of
+            // one that is stored but not shown.
+            self.reminders_dirty = true;
+            self.reminder_tracked_len = None;
             // Full lines replacement: invalidate all caches.
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
@@ -1645,9 +1654,11 @@ impl TerminalApp {
             self.editor.cursor_col = cursor.col;
             self.dirty = true;
             self.last_edit = Instant::now();
-            if !self.reminder_ghosts.is_empty() {
-                self.reminders_dirty = true;
-            }
+            // History swaps whole lines: no line-by-line moves to report.
+            // Always re-place reminders: undo may bring back the line of
+            // one that is stored but not shown.
+            self.reminders_dirty = true;
+            self.reminder_tracked_len = None;
             self.render_state.fence_checkpoints.truncate(1);
             self.render_state.fence_checkpoints_valid_through = 0;
             if self.calc_runtime.viewport_only {

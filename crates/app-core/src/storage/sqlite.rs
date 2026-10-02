@@ -1750,7 +1750,7 @@ impl Db {
     }
 
     /// Moves the note's reminders to where [`crate::reminders::place_reminders`]
-    /// puts them in `lines`, in one transaction, and returns the placed ones
+    /// puts them in `lines` (with the editor's `hints`), in one transaction, and returns the placed ones
     /// as stored now. A reminder whose line is gone stays stored as it was,
     /// so undoing the deletion brings it back, until a placed reminder needs
     /// its line number. Writes nothing when no reminder moved.
@@ -1758,13 +1758,14 @@ impl Db {
         &self,
         note_id: &str,
         lines: &[String],
+        hints: &crate::reminders::ReminderHints,
     ) -> Result<Vec<Reminder>, String> {
         let mut conn = self.conn.lock()?;
         let reminders = query_reminders(&conn, note_id)?;
         if reminders.is_empty() {
             return Ok(Vec::new());
         }
-        let placed = crate::reminders::place_reminders(&reminders, lines);
+        let placed = crate::reminders::place_reminders(&reminders, lines, hints);
         let moves: Vec<(usize, usize)> = placed
             .iter()
             .enumerate()
@@ -3281,7 +3282,7 @@ mod tests {
         db.upsert_reminder("n1", 2, 2, "d", "b").expect("b");
 
         let placed = db
-            .reconcile_reminders("n1", &owned(&["b", "a"]))
+            .reconcile_reminders("n1", &owned(&["b", "a"]), &Default::default())
             .expect("reconcile");
         assert_eq!(placed.len(), 2);
         assert_eq!(
@@ -3310,7 +3311,7 @@ mod tests {
         // "buy milk" replaced by another line: its reminder stays stored,
         // unplaced, so an undo can bring it back.
         let placed = db
-            .reconcile_reminders("n1", &owned(&["call Ana", "pay rent"]))
+            .reconcile_reminders("n1", &owned(&["call Ana", "pay rent"]), &Default::default())
             .expect("reconcile");
         assert_eq!(placed.len(), 1);
         assert_eq!(placed[0].line_text, "pay rent");
@@ -3321,7 +3322,7 @@ mod tests {
 
         // Once "pay rent" moves onto line 1, the unplaced reminder gives way.
         let placed = db
-            .reconcile_reminders("n1", &owned(&["pay rent"]))
+            .reconcile_reminders("n1", &owned(&["pay rent"]), &Default::default())
             .expect("reconcile");
         assert_eq!(placed.len(), 1);
         assert_eq!(reminder_lines(&db, "n1"), vec![(1, "pay rent".to_string())]);

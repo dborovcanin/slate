@@ -246,6 +246,9 @@ struct LineReminderGhost {
     display_at: String,
     line_text: String,
     reminded_at_ms: Option<i64>,
+    /// The reminder's line number in the database, which keys it until the
+    /// next reconcile moves it to where the ghost now is.
+    stored_line: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -764,6 +767,12 @@ struct TerminalApp {
     calc_runtime: CalcRuntime,
     reminder_ghosts: FxHashMap<usize, LineReminderGhost>, // 0-based line index
     reminders_dirty: bool,
+    /// Stored line numbers of reminders whose lines edits deleted since the
+    /// last reconcile.
+    reminder_deleted_lines: Vec<i64>,
+    /// The line count the ghosts' tracked positions describe; `None` after
+    /// an edit that was not tracked line by line (undo, redo).
+    reminder_tracked_len: Option<usize>,
     last_reminder_check: Instant,
     // In-note search overlay
     search: SearchState,
@@ -1027,7 +1036,7 @@ impl TerminalApp {
         let reminder_ghosts = if background_tasks_enabled {
             FxHashMap::default()
         } else {
-            load_note_reminder_ghosts(db, &active_note, &lines)?
+            load_note_reminder_ghosts(db, &active_note, &lines, &Default::default())?
         };
 
         // Keep startup memory lean: load switcher/wiki metadata lazily on
@@ -1233,6 +1242,8 @@ impl TerminalApp {
             },
             reminder_ghosts,
             reminders_dirty: false,
+            reminder_deleted_lines: Vec::new(),
+            reminder_tracked_len: None,
             last_reminder_check: Instant::now(),
             search: SearchState::default(),
             web_search: WebSearchState::default(),
@@ -1525,7 +1536,7 @@ impl TerminalApp {
                 }
             }
             let started = Instant::now();
-            match load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines) {
+            match self.reconcile_reminder_ghosts(db) {
                 Ok(ghosts) => {
                     self.reminder_ghosts = ghosts;
                     self.reminders_dirty = false;

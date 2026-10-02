@@ -1286,3 +1286,67 @@ fn counted_word_end_delete_over_blank_lines_on_a_large_note_matches_the_full_tex
     drop(db);
     cleanup_db_files(&path);
 }
+
+/// `body` open in normal mode with a reminder on 0-based line `line`.
+fn app_with_reminder(body: &str, line: usize) -> (Db, TerminalApp, std::path::PathBuf) {
+    let (db, mut app, path) = app_with_note(body);
+    let text = body.lines().nth(line).expect("line").to_string();
+    db.upsert_reminder(
+        "n1",
+        line as i64 + 1,
+        1_900_000_000_000,
+        "2030-03-10 09:00",
+        &text,
+    )
+    .expect("reminder");
+    app.reminder_ghosts = app.reconcile_reminder_ghosts(&db).expect("ghosts");
+    app.mode = UiMode::Normal;
+    (db, app, path)
+}
+
+fn reminder_lines(app: &TerminalApp) -> Vec<usize> {
+    let mut lines: Vec<usize> = app.reminder_ghosts.keys().copied().collect();
+    lines.sort_unstable();
+    lines
+}
+
+#[test]
+fn deleting_a_reminded_task_does_not_pass_the_reminder_to_the_next() {
+    let (db, mut app, path) = app_with_reminder("- [ ] buy milk\n- [ ] buy eggs", 0);
+    app.editor.cursor_line = 0;
+    run_keys(&mut app, &db, &[Key::Char('d'), Key::Char('d')]);
+    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
+    assert_eq!(app.editor.lines, vec!["- [ ] buy eggs".to_string()]);
+    assert!(app.reminder_ghosts.is_empty(), "buy eggs gets no reminder");
+
+    // Undo brings the line and its reminder back.
+    run_keys(&mut app, &db, &[Key::Char('u')]);
+    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
+    assert_eq!(reminder_lines(&app), vec![0]);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn reminders_follow_lines_opened_above_and_edits_in_place() {
+    let (db, mut app, path) = app_with_reminder("intro\n- [ ] buy milk\nend", 1);
+    app.editor.cursor_line = 1;
+    run_keys(&mut app, &db, &[Key::Char('O'), Key::Char('x'), Key::Esc]);
+    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
+    assert_eq!(reminder_lines(&app), vec![2]);
+
+    // Editing the reminded line keeps its reminder there.
+    app.editor.cursor_line = 2;
+    run_keys(&mut app, &db, &[Key::Char('A'), Key::Char('!'), Key::Esc]);
+    app.sync_reminder_ghosts_if_dirty(&db).expect("sync");
+    assert_eq!(reminder_lines(&app), vec![2]);
+    let stored = db.list_reminders("n1").expect("list");
+    assert_eq!(stored[0].line_number, 3);
+    assert_eq!(stored[0].line_text, "- [ ] buy milk!");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
