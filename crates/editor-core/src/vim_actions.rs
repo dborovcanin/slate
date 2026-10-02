@@ -242,6 +242,60 @@ pub fn supports_intent(intent: VimIntent) -> bool {
     )
 }
 
+/// The lines, `(first, last)` inclusive, that `intent` repeated `count` times
+/// from `cursor_line` can read or change, so a host may run it on just those
+/// lines of a large document and get the same edit. `None` for intents this
+/// module does not run.
+pub fn scoped_line_range(
+    intent: VimIntent,
+    count: usize,
+    lines: &[String],
+    cursor_line: usize,
+) -> Option<(usize, usize)> {
+    if !supports_intent(intent) || lines.is_empty() {
+        return None;
+    }
+    let last = lines.len() - 1;
+    let cursor = cursor_line.min(last);
+    let count = count.max(1);
+    let above = cursor.saturating_sub(1);
+    // Words only start on lines with text, so `count` words lie within the
+    // next `count` such lines; one more covers the motion's lookahead.
+    let text_lines_after = |from: usize, step_down: bool| {
+        let mut line = from;
+        let mut found = 0;
+        while found <= count {
+            let next = if step_down {
+                (line < last).then(|| line + 1)
+            } else {
+                line.checked_sub(1)
+            };
+            let Some(next) = next else { break };
+            line = next;
+            if !lines[line].trim().is_empty() {
+                found += 1;
+            }
+        }
+        line
+    };
+    Some(match intent {
+        // Deleting the last lines also takes the line break above them; `x`
+        // past a line's end joins the next line, once per repeat.
+        VimIntent::DeleteLine | VimIntent::YankLine | VimIntent::DeleteChar => {
+            (above, cursor.saturating_add(count).min(last))
+        }
+        VimIntent::DeleteWordForward | VimIntent::DeleteWordEnd | VimIntent::YankWordForward => {
+            (above, text_lines_after(cursor, true))
+        }
+        VimIntent::DeleteWordBackward | VimIntent::YankWordBackward => {
+            (text_lines_after(cursor, false), (cursor + 1).min(last))
+        }
+        // Pastes, line-end ranges, characters and text objects stay on the
+        // cursor line or next to it.
+        _ => (above, (cursor + 1).min(last)),
+    })
+}
+
 fn execute_delete_line(
     text: &str,
     selection: SelectionSnapshot,
@@ -1493,6 +1547,83 @@ fn delimiter_run_bounds(chars: &[char], idx: usize) -> (usize, usize) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn scoped_line_range_gives_the_same_edit_as_the_whole_text() {
+        let texts: Vec<Vec<String>> = vec![(0..400).map(|i| format!("line {i} word")).collect(), {
+            // Long runs of blank and whitespace-only lines between words.
+            let mut lines = vec!["alpha beta".to_string(); 50];
+            lines.extend(std::iter::repeat_n(String::new(), 150));
+            lines.push("gamma".to_string());
+            lines.extend(std::iter::repeat_n("   ".to_string(), 150));
+            lines.extend(std::iter::repeat_n("delta (x) \"q\" |a|".to_string(), 50));
+            lines
+        }];
+        let intents = [
+            VimIntent::DeleteLine,
+            VimIntent::YankLine,
+            VimIntent::DeleteWordForward,
+            VimIntent::DeleteWordEnd,
+            VimIntent::DeleteWordBackward,
+            VimIntent::YankWordForward,
+            VimIntent::YankWordBackward,
+            VimIntent::DeleteChar,
+            VimIntent::DeleteToLineEnd,
+            VimIntent::DeleteInsideWord,
+            VimIntent::DeleteInsideParen,
+            VimIntent::DeleteInsideDoubleQuote,
+            VimIntent::DeleteInsidePipe,
+            VimIntent::PasteAfter,
+            VimIntent::PasteBefore,
+        ];
+        let register = VimRegisterValue {
+            text: "pasted\n".to_string(),
+            mode: VimRegisterMode::Linewise,
+        };
+        for lines in &texts {
+            let full = lines.join("\n");
+            let line_start =
+                |line: usize| -> usize { lines[..line].iter().map(|text| text.len() + 1).sum() };
+            for cursor_line in [0, 1, 49, 50, 120, 199, 200, 201, 350, lines.len() - 1] {
+                for intent in intents {
+                    for count in [1, 2, 3, 7, 60, 200] {
+                        let (first, last) =
+                            scoped_line_range(intent, count, lines, cursor_line).expect("range");
+                        let offset = line_start(first);
+                        let scoped = lines[first..=last].join("\n");
+                        let cursor = line_start(cursor_line);
+                        let on_full =
+                            execute_vim_action(&full, sel(cursor), intent, count, Some(&register));
+                        let on_scope = execute_vim_action(
+                            &scoped,
+                            sel(cursor - offset),
+                            intent,
+                            count,
+                            Some(&register),
+                        );
+                        let normalize = |result: Option<VimActionExecutionResult>, shift: usize| {
+                            result.map(|result| {
+                                (
+                                    result
+                                        .operations
+                                        .iter()
+                                        .flat_map(|op| op.changes.iter())
+                                        .map(|c| (c.from + shift, c.to + shift, c.insert.clone()))
+                                        .collect::<Vec<_>>(),
+                                    result.register.map(|r| r.text),
+                                )
+                            })
+                        };
+                        assert_eq!(
+                            normalize(on_full, 0),
+                            normalize(on_scope, offset),
+                            "{intent:?} x{count} at line {cursor_line}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     use super::*;
     use crate::types::SelectionSnapshot;
     use crate::vim::{self, VimIntent, VimMode, VimState};

@@ -1208,3 +1208,81 @@ fn vim_insert_session_is_one_undo_step_across_pauses() {
     drop(db);
     cleanup_db_files(&path);
 }
+
+#[test]
+fn counted_line_delete_on_a_large_note_reaches_past_the_old_scope() {
+    let body = (0..3000)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (db, mut app, path) = app_with_note(&body);
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 1000;
+    app.editor.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[
+            Key::Char('2'),
+            Key::Char('0'),
+            Key::Char('0'),
+            Key::Char('d'),
+            Key::Char('d'),
+        ],
+    );
+
+    assert_eq!(app.editor.lines.len(), 2800);
+    assert_eq!(app.editor.lines[999], "line 999");
+    assert_eq!(app.editor.lines[1000], "line 1200");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn counted_word_end_delete_over_blank_lines_on_a_large_note_matches_the_full_text() {
+    // 150 whitespace-only lines between two words: `2de` reaches across
+    // them, further than a fixed window around the cursor.
+    let mut lines = vec!["start".to_string(); 1000];
+    lines.push("alpha".to_string());
+    lines.extend(std::iter::repeat_n("   ".to_string(), 150));
+    lines.push("beta gamma".to_string());
+    lines.extend(std::iter::repeat_n("tail".to_string(), 1000));
+    let full = lines.join("\n");
+    let (db, mut app, path) = app_with_note(&full);
+    app.mode = UiMode::Normal;
+    app.editor.cursor_line = 1000;
+    app.editor.cursor_col = 0;
+
+    run_keys(
+        &mut app,
+        &db,
+        &[Key::Char('2'), Key::Char('d'), Key::Char('e')],
+    );
+
+    let cursor = lines[..1000].iter().map(|line| line.len() + 1).sum();
+    let expected = crate::editor_core::vim_actions::execute_vim_action_with_target(
+        &full,
+        crate::editor_core::types::SelectionSnapshot {
+            anchor: cursor,
+            head: cursor,
+        },
+        crate::editor_core::vim::VimIntent::DeleteWordEnd,
+        2,
+        None,
+        None,
+    )
+    .expect("full-text result");
+    let mut expected_text = full.clone();
+    for change in expected.operations.iter().flat_map(|op| op.changes.iter()) {
+        expected_text.replace_range(change.from..change.to, &change.insert);
+    }
+    assert_ne!(expected_text, full, "the motion deletes something");
+    assert_eq!(app.editor.lines.join("\n"), expected_text);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
