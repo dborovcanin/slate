@@ -113,7 +113,8 @@ max_body_bytes = 524288
 Behavior notes:
 
 - `autosave = true` enables implicit save flows (idle flush + save on exit/switch).
-- with `autosave = false`, explicit writes persist body changes.
+- with `autosave = false`, explicit writes persist body changes. Switching notes or quitting with unsaved changes is refused once (vim's E37); repeating it, `:q!` or `:e!` discards them.
+- a failed save (for example a note changed elsewhere) keeps the editor open with the changes; autosave waits for the next edit. `:w!` overwrites, `:e!` reloads.
 - `format_on_save = true` runs format before save.
 - `vim_mode = true` starts the editor in vim normal mode.
 - `wrap = true` (default) soft-wraps long lines at word boundaries. Tables, code fences, code blocks, and code files keep horizontal scrolling so columns stay aligned. With `wrap = false` every line scrolls horizontally.

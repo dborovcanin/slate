@@ -68,6 +68,7 @@ pub enum CommandId {
     Write,
     WriteQuit,
     Quit,
+    Reload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -354,7 +355,7 @@ pub struct CommandDefinition {
 const MODES_BOTH: [CommandMode; 2] = [CommandMode::Vim, CommandMode::Editor];
 const MODES_VIM: [CommandMode; 1] = [CommandMode::Vim];
 
-const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
+const COMMAND_DEFINITIONS: [CommandDefinition; 67] = [
     CommandDefinition {
         id: CommandId::Sum,
         value: "sum",
@@ -877,6 +878,13 @@ const COMMAND_DEFINITIONS: [CommandDefinition; 66] = [
         aliases: &["writequit", "wq!"],
         description: "write and quit",
         modes: &MODES_VIM,
+    },
+    CommandDefinition {
+        id: CommandId::Reload,
+        value: "reload",
+        aliases: &["e!", "edit!"],
+        description: "reload the note, discarding unsaved changes",
+        modes: &MODES_BOTH,
     },
 ];
 

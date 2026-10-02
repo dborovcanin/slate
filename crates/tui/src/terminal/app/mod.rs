@@ -728,6 +728,12 @@ struct TerminalApp {
     command_history_index: Option<usize>,
     quit: bool,
     force_quit: bool,
+    /// Edit mark of a buffer whose autosave failed; autosave waits for the
+    /// next edit (or an explicit save) instead of retrying in a loop.
+    autosave_paused_at: Option<Instant>,
+    /// Edit mark of a buffer `can_leave_note` refused to leave; leaving
+    /// again without editing in between discards its unsaved changes.
+    leave_refused_at: Option<Instant>,
     backup: BackupState,
     /// Autosave writing on a background thread, if one is in flight.
     background_save: Option<BackgroundSave>,
@@ -1170,6 +1176,8 @@ impl TerminalApp {
             command_history_index: None,
             quit: false,
             force_quit: false,
+            autosave_paused_at: None,
+            leave_refused_at: None,
             backup: BackupState::default(),
             background_save: None,
             date_picker: DatePickerState {
@@ -1304,13 +1312,21 @@ impl TerminalApp {
                 self.record_perf_duration("tui.render.frame", "draw", draw_start.elapsed());
             }
             if self.quit {
-                break;
+                if self.force_quit || self.can_leave_note(db) {
+                    break;
+                }
+                self.quit = false;
+                self.render_state.dirty = true;
             }
 
             match input::read_key()? {
                 Some(key) => {
                     let handle_start = Instant::now();
-                    self.handle_key(db, key)?;
+                    // A failed action is reported; it never closes the editor
+                    // with unsaved text.
+                    if let Err(error) = self.handle_key(db, key) {
+                        self.status = format!("error: {error}");
+                    }
                     self.render_state.dirty = true;
                     self.record_perf_duration("tui.key.dispatch", "input", handle_start.elapsed());
                 }
@@ -1322,7 +1338,9 @@ impl TerminalApp {
                         self.render_state.dirty = true;
                     }
                     let idle_start = Instant::now();
-                    self.maybe_autosave(db)?;
+                    if let Err(error) = self.maybe_autosave(db) {
+                        self.status = format!("error: {error}");
+                    }
                     self.record_perf_duration(
                         "tui.idle.dispatch",
                         "autosave_tick",
@@ -1353,7 +1371,7 @@ impl TerminalApp {
             // Poll for backup thread completion on every iteration so the result
             // is applied promptly whether or not the user is pressing keys.
             self.maybe_finish_backup_op(db);
-            self.poll_background_save(db, false)?;
+            self.poll_background_save(db, false);
             self.poll_viewport_calc_preparation();
 
             if self.image_renderer.poll() {
@@ -1364,16 +1382,10 @@ impl TerminalApp {
             self.maybe_clipboard_watch();
             self.maybe_collect_search_results(db);
             self.poll_browser_search(db);
-            self.sync_reminder_ghosts_if_dirty(db)?;
-            self.maybe_dispatch_due_reminders(db);
-        }
-
-        if !self.force_quit && self.autosave_enabled {
-            if let Err(error) = self.save(db) {
-                if !Self::is_locked_note_error(&error) {
-                    return Err(error);
-                }
+            if let Err(error) = self.sync_reminder_ghosts_if_dirty(db) {
+                self.status = format!("error: {error}");
             }
+            self.maybe_dispatch_due_reminders(db);
         }
         Ok(())
     }
@@ -1420,7 +1432,7 @@ impl TerminalApp {
     /// replaced database. Edits made while the backup was staging are saved
     /// first, so they stay in the database the restore sets aside.
     fn apply_staged_restore(&mut self, db: &Db) -> Result<String, String> {
-        self.poll_background_save(db, true)?;
+        self.poll_background_save(db, true);
         if self.dirty {
             self.save(db)?;
         }
@@ -1467,8 +1479,8 @@ impl TerminalApp {
         }
         self.maybe_dispatch_content_search(db);
         self.maybe_prewarm_search_surfaces(db);
-        self.poll_background_save(db, false)?;
-        if !self.autosave_enabled {
+        self.poll_background_save(db, false);
+        if !self.autosave_enabled || self.autosave_paused_at == Some(self.last_edit) {
             return Ok(());
         }
         if self.dirty && self.last_edit.elapsed() >= Duration::from_millis(AUTOSAVE_DEBOUNCE_MS) {

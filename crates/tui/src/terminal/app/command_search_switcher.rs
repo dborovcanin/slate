@@ -858,11 +858,9 @@ impl TerminalApp {
     ) {
         use crate::editor_core::command_catalog::NoteSecurityAction;
         let action_label = action.as_str();
-        if self.autosave_enabled && self.dirty {
-            if let Err(error) = self.save(db) {
-                self.status = format!("save failed: {error}");
-                return;
-            }
+        // The note is re-read from the store, so unsaved edits must land first.
+        if self.dirty && !self.can_leave_note(db) {
+            return;
         }
         let result = match action {
             NoteSecurityAction::Encrypt => db.encrypt_note(&self.active_note.id, password),
@@ -912,8 +910,8 @@ impl TerminalApp {
         password: Option<&str>,
         line_number: Option<usize>,
     ) -> Result<(), String> {
-        if self.autosave_enabled {
-            self.save(db)?;
+        if !self.can_leave_note(db) {
+            return Ok(());
         }
         let note = if let Some(password) = password {
             db.unlock_note(note_id, password)?
@@ -1325,10 +1323,7 @@ impl TerminalApp {
 
         // The module write moves the note's revision; land any in-flight
         // autosave first so the two don't race on it.
-        if let Err(error) = self.poll_background_save(db, true) {
-            self.status = format!("save failed: {error}");
-            return true;
-        }
+        self.poll_background_save(db, true);
         let previous_modules = self.active_note.modules;
         match db.set_note_modules(&self.active_note.id, next_modules) {
             Ok(saved_note) => {
@@ -1573,6 +1568,13 @@ impl TerminalApp {
                 crate::editor_core::engine::HostCommandPlan::Quit { force } => {
                     self.force_quit = force;
                     self.quit = true;
+                    return;
+                }
+                crate::editor_core::engine::HostCommandPlan::Reload => {
+                    self.status = match self.reload_active_note(db) {
+                        Ok(()) => format!("reloaded {}", self.active_note.id),
+                        Err(error) => format!("reload failed: {error}"),
+                    };
                     return;
                 }
                 crate::editor_core::engine::HostCommandPlan::NoteSecurity { action } => {
@@ -2334,7 +2336,7 @@ impl TerminalApp {
 
     pub(super) fn save_with_options(&mut self, db: &Db, force: bool) -> Result<(), String> {
         // Never race an in-flight autosave on the note's revision.
-        self.poll_background_save(db, true)?;
+        self.poll_background_save(db, true);
         let started = Instant::now();
         if self.format_on_save {
             self.execute_terminal_command(db, "format");
@@ -2430,11 +2432,11 @@ impl TerminalApp {
     }
 
     /// Applies a finished background autosave; with `wait`, blocks until the
-    /// in-flight one finishes. Errors other than a locked note propagate,
-    /// as they did when autosave ran inline.
-    pub(super) fn poll_background_save(&mut self, db: &Db, wait: bool) -> Result<(), String> {
+    /// in-flight one finishes. A failed autosave keeps the buffer dirty,
+    /// reports why and pauses autosave until the next edit.
+    pub(super) fn poll_background_save(&mut self, db: &Db, wait: bool) {
         let Some(job) = self.background_save.as_ref() else {
-            return Ok(());
+            return;
         };
         let result = if wait {
             job.rx
@@ -2443,7 +2445,7 @@ impl TerminalApp {
         } else {
             match job.rx.try_recv() {
                 Ok(result) => result,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return Ok(()),
+                Err(std::sync::mpsc::TryRecvError::Empty) => return,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     Err("autosave stopped unexpectedly".to_string())
                 }
@@ -2454,12 +2456,21 @@ impl TerminalApp {
             Ok(saved) => saved,
             Err(error) if Self::is_locked_note_error(&error) => {
                 self.set_locked_note_status();
-                return Ok(());
+                return;
             }
-            Err(error) => return Err(error),
+            Err(error) => {
+                if job.note_id == self.active_note.id {
+                    self.autosave_paused_at = Some(job.edit_mark);
+                }
+                self.status = format!(
+                    "autosave failed: {error} (:w! overwrites, :e! reloads; edits are kept)"
+                );
+                self.render_state.dirty = true;
+                return;
+            }
         };
         if job.note_id != self.active_note.id {
-            return Ok(());
+            return;
         }
         if self.active_note.updated_at == job.expected_revision {
             self.active_note.id = saved.id;
@@ -2476,10 +2487,53 @@ impl TerminalApp {
         self.status = format!("autosaved {}", self.active_note.id);
         self.render_state.dirty = true;
         if self.switcher.needs_title_refresh {
-            self.refresh_switcher_items(db)?;
+            if let Err(error) = self.refresh_switcher_items(db) {
+                self.status = format!("autosaved; note list not refreshed: {error}");
+            }
         } else {
             self.update_switcher_item_after_body_save();
         }
+    }
+
+    /// Whether the open note may be replaced or the app closed. With autosave
+    /// the buffer is saved first; without it, unsaved changes block, like
+    /// vim's E37. Asking again without editing in between discards them.
+    /// Sets the status when it refuses.
+    pub(super) fn can_leave_note(&mut self, db: &Db) -> bool {
+        let problem = if self.autosave_enabled {
+            match self.save(db) {
+                Ok(()) => return true,
+                Err(error) => format!("save failed: {error}"),
+            }
+        } else if self.dirty {
+            "no write since last change".to_string()
+        } else {
+            return true;
+        };
+        if self.leave_refused_at == Some(self.last_edit) {
+            self.leave_refused_at = None;
+            return true;
+        }
+        self.leave_refused_at = Some(self.last_edit);
+        self.status = format!("{problem} (:w saves, :e! reloads, repeat to leave without saving)");
+        false
+    }
+
+    /// Replaces the buffer with the stored note, dropping unsaved changes;
+    /// the cursor stays where it was.
+    pub(super) fn reload_active_note(&mut self, db: &Db) -> Result<(), String> {
+        self.poll_background_save(db, true);
+        let note = note_sources(db)
+            .open_note_by_id(&self.active_note.id)?
+            .ok_or_else(|| "the note no longer exists".to_string())?;
+        let (line, col) = (self.editor.cursor_line, self.editor.cursor_col);
+        self.set_active_note(db, note)?;
+        self.editor.cursor_line = line.min(self.editor.lines.len().saturating_sub(1));
+        self.editor.cursor_col = col;
+        self.adjust_cursor();
+        self.adjust_scroll();
+        self.autosave_paused_at = None;
+        self.leave_refused_at = None;
         Ok(())
     }
 
@@ -2817,8 +2871,8 @@ impl TerminalApp {
     /// Opens today's daily note (creating it from the `[daily]` template)
     /// with the cursor at the end, ready to type.
     pub(super) fn open_today_note(&mut self, db: &Db) -> Result<(), String> {
-        if self.autosave_enabled {
-            self.save(db)?;
+        if !self.can_leave_note(db) {
+            return Ok(());
         }
         let stamp = crate::terminal::local_stamp();
         let label = crate::terminal::daily_date_label(stamp, &self.note_creation_theme.date_format);

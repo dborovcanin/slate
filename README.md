@@ -30,7 +30,8 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 | New note, fuzzy switcher, full-text content search | `Ctrl+N`, `Ctrl+P`, `Tab` inside the switcher |
 | Delete a note | `Delete` in the switcher |
 | Autosave (background, idle + on switch/quit), manual save | automatic, `Ctrl+S`, `:w`, `:w!` |
-| Quit | `Ctrl+Q`, `:q`, `:wq` |
+| Quit | `Ctrl+Q`, `:q`, `:wq`; unsaved changes ask once (repeat or `:q!` to discard) |
+| Reload the note, dropping unsaved changes | `:e!`, `:reload` |
 | Open a markdown file as a note (saved back to the file) | `slate path/to/file.md` |
 | Collections and a session working collection | `Ctrl+G`, `:collection create/choose/join/leave/update/delete/purge` |
 | Collection browser: collections, notes and a preview side by side; copy, move, rename, create, delete and search note text | `Ctrl+B`, `-` (Normal), `:browse`; `Ctrl+F` / `Ctrl+/` inside |

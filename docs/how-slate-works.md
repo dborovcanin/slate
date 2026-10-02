@@ -48,7 +48,8 @@ At a high level:
 Save behavior:
 
 - `autosave = true`: idle debounce + flush on transitions
-- `autosave = false`: explicit write commands persist (`:w`, `:wq`, or `Ctrl+S`)
+- `autosave = false`: explicit write commands persist (`:w`, `:wq`, or `Ctrl+S`); leaving a note with unsaved changes is refused once (`can_leave_note`)
+- save errors never close the session: they are shown in the status line and the buffer stays dirty
 
 ## Command lifecycle
 

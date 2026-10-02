@@ -152,6 +152,8 @@ pub enum HostCommandPlan {
     Quit {
         force: bool,
     },
+    /// Replace the buffer with the stored note, dropping unsaved changes.
+    Reload,
 }
 
 impl EditorEngine {
@@ -266,6 +268,7 @@ impl EditorEngine {
             CommandId::Quit => Some(HostCommandPlan::Quit {
                 force: normalized == "q!",
             }),
+            CommandId::Reload => Some(HostCommandPlan::Reload),
             _ => None,
         }
     }
@@ -485,6 +488,18 @@ mod tests {
         let quit_normal =
             EditorEngine::plan_host_command(CommandMode::Vim, "q").expect("quit normal");
         assert_eq!(quit_normal, HostCommandPlan::Quit { force: false });
+
+        for input in ["e!", "edit!", "reload"] {
+            assert_eq!(
+                EditorEngine::plan_host_command(CommandMode::Vim, input),
+                Some(HostCommandPlan::Reload),
+                "{input}"
+            );
+        }
+        assert_eq!(
+            EditorEngine::plan_host_command(CommandMode::Editor, "reload"),
+            Some(HostCommandPlan::Reload)
+        );
 
         let write = EditorEngine::plan_host_command(CommandMode::Vim, "w").expect("write");
         assert_eq!(

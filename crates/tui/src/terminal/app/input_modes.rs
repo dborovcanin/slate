@@ -149,8 +149,8 @@ impl TerminalApp {
                 return Ok(());
             }
             Key::Ctrl('n') => {
-                if self.autosave_enabled {
-                    self.save(db)?;
+                if !self.can_leave_note(db) {
+                    return Ok(());
                 }
                 // A locked encrypted working collection refuses new notes.
                 let note = match new_note_with_context(

@@ -2682,7 +2682,7 @@ fn autosave_writes_on_a_background_thread() {
 
     app.maybe_autosave(&db).expect("idle tick");
     assert!(app.background_save.is_some(), "save runs in the background");
-    app.poll_background_save(&db, true).expect("save lands");
+    app.poll_background_save(&db, true);
 
     assert!(!app.dirty);
     assert!(app.status.starts_with("autosaved"));
@@ -2706,14 +2706,12 @@ fn edits_during_a_background_autosave_are_saved_next() {
     app.editor.lines = vec!["three".to_string()];
     app.editor.joined_text_cache = None;
     app.last_edit = Instant::now();
-    app.poll_background_save(&db, true)
-        .expect("first save lands");
+    app.poll_background_save(&db, true);
     assert!(app.dirty, "the newer text is still unsaved");
 
     app.last_edit = past_autosave_debounce();
     app.maybe_autosave(&db).expect("second autosave starts");
-    app.poll_background_save(&db, true)
-        .expect("second save lands without a conflict");
+    app.poll_background_save(&db, true);
     assert!(!app.dirty);
     let persisted = db.get_note("n1").expect("lookup").expect("note");
     assert_eq!(persisted.body, "three");
@@ -2748,7 +2746,7 @@ fn module_command_after_an_unpolled_autosave_keeps_the_newer_revision() {
     app.mode = UiMode::Normal;
     app.command_bar_from_normal = true;
     app.execute_terminal_command(&db, "modules variables off");
-    app.poll_background_save(&db, false).expect("poll");
+    app.poll_background_save(&db, false);
     let persisted = db.get_note("n1").expect("lookup").expect("note");
     assert_eq!(app.active_note.updated_at, persisted.updated_at);
 
@@ -2781,7 +2779,7 @@ fn finished_autosave_does_not_roll_back_a_newer_revision() {
     };
     let saved = db.set_note_modules("n1", modules).expect("module write");
     app.active_note.updated_at = saved.updated_at.clone();
-    app.poll_background_save(&db, false).expect("poll");
+    app.poll_background_save(&db, false);
     assert_eq!(app.active_note.updated_at, saved.updated_at);
 
     drop(app);
@@ -2833,5 +2831,112 @@ fn search_matches_map_to_original_chars_when_lowercasing_changes_length() {
     app.search.query = "X".to_string();
     app.recompute_search();
     assert_eq!(app.search.matches, vec![(0, 2, 3), (1, 6, 7)]);
+    cleanup_db_files(&path);
+}
+
+/// Edits `n1` in the buffer after the stored note changed underneath it.
+fn app_with_conflicting_edit() -> (Db, TerminalApp, PathBuf) {
+    let (db, mut app, path) = app_with_note("one");
+    std::thread::sleep(Duration::from_millis(2));
+    db.save_note("n1", "changed elsewhere")
+        .expect("external edit");
+    app.editor.lines = vec!["mine".to_string()];
+    app.editor.joined_text_cache = None;
+    app.dirty = true;
+    app.last_edit = past_autosave_debounce();
+    (db, app, path)
+}
+
+#[test]
+fn failed_autosave_keeps_edits_and_waits_for_the_next_edit() {
+    let (db, mut app, path) = app_with_conflicting_edit();
+    app.autosave_enabled = true;
+
+    app.maybe_autosave(&db).expect("idle tick");
+    app.poll_background_save(&db, true);
+    assert!(app.dirty, "the buffer stays unsaved");
+    assert_eq!(app.editor.lines, vec!["mine".to_string()]);
+    assert!(app.status.starts_with("autosave failed"), "{}", app.status);
+
+    // No retry loop until something changes.
+    app.maybe_autosave(&db).expect("idle tick");
+    assert!(app.background_save.is_none());
+
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+    app.execute_terminal_command(&db, "w!");
+    assert!(!app.dirty, "{}", app.status);
+    let persisted = db.get_note("n1").expect("lookup").expect("note");
+    assert_eq!(persisted.body, "mine");
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn reload_discards_unsaved_changes() {
+    let (db, mut app, path) = app_with_conflicting_edit();
+    app.mode = UiMode::Normal;
+    app.command_bar_from_normal = true;
+
+    app.execute_terminal_command(&db, "e!");
+    assert_eq!(app.editor.lines, vec!["changed elsewhere".to_string()]);
+    assert!(!app.dirty);
+    assert!(app.status.starts_with("reloaded"), "{}", app.status);
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn leaving_an_unsaved_note_needs_a_second_request_without_autosave() {
+    let (db, mut app, path) = app_with_note("one");
+    db.save_note("n2", "other").expect("second note");
+    app.autosave_enabled = false;
+    app.editor.lines = vec!["unsaved".to_string()];
+    app.dirty = true;
+    app.last_edit = Instant::now();
+
+    app.open_note_from_switcher(&db, "n2", None, None)
+        .expect("switch handled");
+    assert_eq!(app.active_note.id, "n1");
+    assert_eq!(app.editor.lines, vec!["unsaved".to_string()]);
+    assert!(
+        app.status.starts_with("no write since last change"),
+        "{}",
+        app.status
+    );
+
+    // An edit in between makes the next attempt ask again.
+    app.last_edit = Instant::now() + Duration::from_millis(1);
+    assert!(!app.can_leave_note(&db));
+    assert!(
+        app.can_leave_note(&db),
+        "asking again leaves without saving"
+    );
+    assert_eq!(
+        db.get_note("n1").expect("lookup").expect("note").body,
+        "one"
+    );
+
+    drop(app);
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn leaving_after_a_failed_save_needs_a_second_request() {
+    let (db, mut app, path) = app_with_conflicting_edit();
+    app.autosave_enabled = true;
+
+    assert!(!app.can_leave_note(&db));
+    assert!(app.status.starts_with("save failed"), "{}", app.status);
+    assert!(app.dirty);
+    assert!(app.can_leave_note(&db));
+
+    drop(app);
+    drop(db);
     cleanup_db_files(&path);
 }

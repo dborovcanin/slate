@@ -4722,6 +4722,7 @@ impl TerminalApp {
         };
         match db.get_note_meta(&link.note_id) {
             Ok(Some(summary)) => match db.get_note(&summary.id) {
+                Ok(Some(_)) if !self.can_leave_note(db) => {}
                 Ok(Some(note)) => {
                     let heading_text = link.heading.clone();
                     if let Err(e) = self.set_active_note(db, note) {

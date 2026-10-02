@@ -359,6 +359,7 @@ pub fn execute_command(
         CommandId::Write | CommandId::WriteQuit => {
             result_with_message("write command handled by host")
         }
+        CommandId::Reload => result_with_message("reload command handled by host"),
         CommandId::Format => {
             let mut formatted = format_markdown(&snapshot.text);
             if snapshot.text.ends_with('\n') && !formatted.ends_with('\n') {
@@ -483,6 +484,7 @@ mod tests {
                 "backup export",
                 "backup load",
                 "web",
+                "reload",
             ]
         );
 
@@ -493,6 +495,7 @@ mod tests {
         assert!(vim_values.contains(&"q".to_string()));
         assert!(vim_values.contains(&"w".to_string()));
         assert!(vim_values.contains(&"wq".to_string()));
+        assert!(vim_values.contains(&"reload".to_string()));
     }
 
     #[test]
