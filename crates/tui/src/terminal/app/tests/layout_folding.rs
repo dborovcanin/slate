@@ -5,7 +5,7 @@ fn load_note_reminder_ghosts_reconciles_shift_without_dropping_adjacent_reminder
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
     let note_id = "n1";
-    db.save_note(note_id, "a\nb\nc").expect("note saved");
+    let note = db.save_note(note_id, "a\nb\nc").expect("note saved");
     db.upsert_reminder(note_id, 1, 1_900_000_000_000, "2030-03-10 09:00", "a")
         .expect("reminder a");
     db.upsert_reminder(note_id, 2, 1_900_000_100_000, "2030-03-10 09:05", "b")
@@ -18,7 +18,7 @@ fn load_note_reminder_ghosts_reconciles_shift_without_dropping_adjacent_reminder
         "c".to_string(),
     ];
     let ghosts =
-        crate::terminal::app::load_note_reminder_ghosts(&db, note_id, &lines).expect("load ghosts");
+        crate::terminal::app::load_note_reminder_ghosts(&db, &note, &lines).expect("load ghosts");
     assert!(ghosts.contains_key(&1));
     assert!(ghosts.contains_key(&2));
 
@@ -38,13 +38,13 @@ fn load_note_reminder_ghosts_updates_line_text_when_line_changes_in_place() {
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
     let note_id = "n1";
-    db.save_note(note_id, "alpha").expect("note saved");
+    let note = db.save_note(note_id, "alpha").expect("note saved");
     db.upsert_reminder(note_id, 1, 1_900_000_000_000, "2030-03-10 09:00", "alpha")
         .expect("reminder");
 
     let lines = vec!["alpha updated".to_string()];
     let ghosts =
-        crate::terminal::app::load_note_reminder_ghosts(&db, note_id, &lines).expect("load ghosts");
+        crate::terminal::app::load_note_reminder_ghosts(&db, &note, &lines).expect("load ghosts");
     let ghost = ghosts.get(&0).expect("ghost on first line");
     assert_eq!(ghost.line_text, "alpha updated");
 
@@ -61,13 +61,78 @@ fn load_note_reminder_ghosts_is_empty_when_note_has_no_reminders() {
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
     let note_id = "n1";
-    db.save_note(note_id, "alpha\nbeta\ngamma")
+    let note = db
+        .save_note(note_id, "alpha\nbeta\ngamma")
         .expect("note saved");
 
     let lines = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
     let ghosts =
-        crate::terminal::app::load_note_reminder_ghosts(&db, note_id, &lines).expect("load ghosts");
+        crate::terminal::app::load_note_reminder_ghosts(&db, &note, &lines).expect("load ghosts");
     assert!(ghosts.is_empty());
+
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn load_note_reminder_ghosts_leaves_a_locked_notes_reminders_alone() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db opens");
+    let note_id = "n1";
+    let mut note = db.save_note(note_id, "Plan\nbuy milk").expect("note saved");
+    db.upsert_reminder(
+        note_id,
+        2,
+        1_900_000_000_000,
+        "2030-03-10 09:00",
+        "buy milk",
+    )
+    .expect("reminder");
+    note.access_mode = app_core::storage::NoteAccessMode::Encrypted;
+    note.is_unlocked = false;
+
+    // The locked buffer shows a placeholder, not the note's text.
+    let ghosts = crate::terminal::app::load_note_reminder_ghosts(&db, &note, &["".to_string()])
+        .expect("load ghosts");
+    assert!(ghosts.is_empty());
+    let persisted = db.list_reminders(note_id).expect("list reminders");
+    assert_eq!(persisted[0].line_number, 2);
+    assert_eq!(persisted[0].line_text, "buy milk");
+
+    drop(db);
+    cleanup_db_files(&path);
+}
+
+#[test]
+fn load_note_reminder_ghosts_does_not_move_a_deleted_lines_reminder() {
+    let path = temp_db_path();
+    let db = Db::open(path.clone()).expect("db opens");
+    let note_id = "n1";
+    let note = db
+        .save_note(note_id, "buy milk\ncall Ana")
+        .expect("note saved");
+    db.upsert_reminder(
+        note_id,
+        1,
+        1_900_000_000_000,
+        "2030-03-10 09:00",
+        "buy milk",
+    )
+    .expect("reminder");
+
+    let lines = vec!["call Ana".to_string()];
+    let ghosts =
+        crate::terminal::app::load_note_reminder_ghosts(&db, &note, &lines).expect("load ghosts");
+    assert!(ghosts.is_empty(), "call Ana gets no reminder");
+
+    // Undoing the deletion brings the reminder back.
+    let lines = vec!["buy milk".to_string(), "call Ana".to_string()];
+    let ghosts =
+        crate::terminal::app::load_note_reminder_ghosts(&db, &note, &lines).expect("load ghosts");
+    assert_eq!(
+        ghosts.get(&0).map(|g| g.line_text.as_str()),
+        Some("buy milk")
+    );
 
     drop(db);
     cleanup_db_files(&path);

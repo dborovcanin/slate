@@ -2559,7 +2559,7 @@ impl TerminalApp {
             return Ok(());
         }
         self.reminder_ghosts =
-            load_note_reminder_ghosts(db, &self.active_note.id, &self.editor.lines)?;
+            load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines)?;
         self.render_state.dirty = true;
         self.reminders_dirty = false;
         Ok(())
@@ -2907,7 +2907,7 @@ impl TerminalApp {
         self.active_note.body = String::new();
         self.dismiss_variable_autocomplete_popup();
         self.reminder_ghosts =
-            load_note_reminder_ghosts(db, &self.active_note.id, &self.editor.lines)?;
+            load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines)?;
         self.reminders_dirty = false;
         self.last_reminder_check = Instant::now();
         self.editor.cursor_line = 0;

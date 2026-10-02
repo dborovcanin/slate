@@ -1696,33 +1696,90 @@ impl Db {
 
     pub fn list_reminders(&self, note_id: &str) -> Result<Vec<Reminder>, String> {
         let conn = self.conn.lock()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
-                 FROM reminders
-                 WHERE note_id = ?1
-                 ORDER BY line_number ASC",
-            )
-            .map_err(|e| e.to_string())?;
+        query_reminders(&conn, note_id)
+    }
 
-        let reminders = stmt
-            .query_map([note_id], |row| {
-                Ok(Reminder {
-                    note_id: row.get(0)?,
-                    line_number: row.get(1)?,
-                    remind_at_ms: row.get(2)?,
-                    display_at: row.get(3)?,
-                    line_text: row.get(4)?,
-                    reminded_at_ms: row.get(5)?,
-                    created_at: row.get(6)?,
-                    updated_at: row.get(7)?,
-                })
+    /// Moves the note's reminders to where [`crate::reminders::place_reminders`]
+    /// puts them in `lines`, in one transaction, and returns the placed ones
+    /// as stored now. A reminder whose line is gone stays stored as it was,
+    /// so undoing the deletion brings it back, until a placed reminder needs
+    /// its line number. Writes nothing when no reminder moved.
+    pub fn reconcile_reminders(
+        &self,
+        note_id: &str,
+        lines: &[String],
+    ) -> Result<Vec<Reminder>, String> {
+        let mut conn = self.conn.lock()?;
+        let reminders = query_reminders(&conn, note_id)?;
+        if reminders.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placed = crate::reminders::place_reminders(&reminders, lines);
+        let moves: Vec<(usize, usize)> = placed
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, line)| line.map(|line| (idx, line)))
+            .filter(|&(idx, line)| {
+                let reminder = &reminders[idx];
+                reminder.line_number != line as i64 || lines[line - 1] != reminder.line_text
             })
-            .map_err(|e| e.to_string())?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|e| e.to_string())?;
+            .collect();
 
-        Ok(reminders)
+        if !moves.is_empty() {
+            let tx = conn.transaction().map_err(|e| e.to_string())?;
+            let now = now_iso();
+            // Park every moving reminder past all used line numbers first,
+            // so moves can swap or chain without colliding.
+            let highest = reminders
+                .iter()
+                .map(|reminder| reminder.line_number)
+                .max()
+                .unwrap_or(0)
+                .max(lines.len() as i64);
+            for (offset, &(idx, _)) in moves.iter().enumerate() {
+                tx.execute(
+                    "UPDATE reminders SET line_number = ?3 WHERE note_id = ?1 AND line_number = ?2",
+                    rusqlite::params![
+                        note_id,
+                        reminders[idx].line_number,
+                        highest + 1 + offset as i64
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            for (offset, &(_, line)) in moves.iter().enumerate() {
+                // Only an unplaced reminder can still hold this line number.
+                tx.execute(
+                    "DELETE FROM reminders WHERE note_id = ?1 AND line_number = ?2",
+                    rusqlite::params![note_id, line as i64],
+                )
+                .map_err(|e| e.to_string())?;
+                tx.execute(
+                    "UPDATE reminders SET line_number = ?3, line_text = ?4, updated_at = ?5
+                     WHERE note_id = ?1 AND line_number = ?2",
+                    rusqlite::params![
+                        note_id,
+                        highest + 1 + offset as i64,
+                        line as i64,
+                        lines[line - 1],
+                        now
+                    ],
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            tx.commit().map_err(|e| e.to_string())?;
+        }
+
+        Ok(reminders
+            .into_iter()
+            .zip(placed)
+            .filter_map(|(mut reminder, line)| {
+                let line = line?;
+                reminder.line_number = line as i64;
+                reminder.line_text = lines[line - 1].clone();
+                Some(reminder)
+            })
+            .collect())
     }
 
     pub fn upsert_reminder(
@@ -2819,6 +2876,34 @@ fn is_note_protected(mode: NoteAccessMode) -> bool {
     !matches!(mode, NoteAccessMode::None)
 }
 
+fn query_reminders(conn: &Connection, note_id: &str) -> Result<Vec<Reminder>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT note_id, line_number, remind_at_ms, display_at, line_text, reminded_at_ms, created_at, updated_at
+             FROM reminders
+             WHERE note_id = ?1
+             ORDER BY line_number ASC",
+        )
+        .map_err(|e| e.to_string())?;
+    let reminders = stmt
+        .query_map([note_id], |row| {
+            Ok(Reminder {
+                note_id: row.get(0)?,
+                line_number: row.get(1)?,
+                remind_at_ms: row.get(2)?,
+                display_at: row.get(3)?,
+                line_text: row.get(4)?,
+                reminded_at_ms: row.get(5)?,
+                created_at: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(reminders)
+}
+
 fn load_reminder(
     conn: &Connection,
     note_id: &str,
@@ -3058,6 +3143,76 @@ mod tests {
         for suffix in ["", "-wal", "-shm", ".before-restore"] {
             let _ = fs::remove_file(sidecar_path(path, suffix));
         }
+    }
+
+    fn reminder_lines(db: &Db, note_id: &str) -> Vec<(i64, String)> {
+        db.list_reminders(note_id)
+            .expect("list reminders")
+            .into_iter()
+            .map(|r| (r.line_number, r.line_text))
+            .collect()
+    }
+
+    fn owned(lines: &[&str]) -> Vec<String> {
+        lines.iter().map(|line| line.to_string()).collect()
+    }
+
+    #[test]
+    fn reconcile_reminders_swaps_lines_in_one_pass() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "a\nb").expect("note");
+        db.upsert_reminder("n1", 1, 1, "d", "a").expect("a");
+        db.upsert_reminder("n1", 2, 2, "d", "b").expect("b");
+
+        let placed = db
+            .reconcile_reminders("n1", &owned(&["b", "a"]))
+            .expect("reconcile");
+        assert_eq!(placed.len(), 2);
+        assert_eq!(
+            reminder_lines(&db, "n1"),
+            vec![(1, "b".to_string()), (2, "a".to_string())]
+        );
+        // The remind times travelled with their lines.
+        let by_line = db.list_reminders("n1").expect("list");
+        assert_eq!(by_line[0].remind_at_ms, 2);
+        assert_eq!(by_line[1].remind_at_ms, 1);
+
+        drop(db);
+        remove_db_files(&path);
+    }
+
+    #[test]
+    fn reconcile_reminders_keeps_unplaced_reminders_until_their_line_is_needed() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "buy milk\npay rent").expect("note");
+        db.upsert_reminder("n1", 1, 1, "d", "buy milk")
+            .expect("milk");
+        db.upsert_reminder("n1", 2, 2, "d", "pay rent")
+            .expect("rent");
+
+        // "buy milk" replaced by another line: its reminder stays stored,
+        // unplaced, so an undo can bring it back.
+        let placed = db
+            .reconcile_reminders("n1", &owned(&["call Ana", "pay rent"]))
+            .expect("reconcile");
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0].line_text, "pay rent");
+        assert_eq!(
+            reminder_lines(&db, "n1"),
+            vec![(1, "buy milk".to_string()), (2, "pay rent".to_string())]
+        );
+
+        // Once "pay rent" moves onto line 1, the unplaced reminder gives way.
+        let placed = db
+            .reconcile_reminders("n1", &owned(&["pay rent"]))
+            .expect("reconcile");
+        assert_eq!(placed.len(), 1);
+        assert_eq!(reminder_lines(&db, "n1"), vec![(1, "pay rent".to_string())]);
+
+        drop(db);
+        remove_db_files(&path);
     }
 
     #[test]

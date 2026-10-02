@@ -1023,7 +1023,7 @@ impl TerminalApp {
         let reminder_ghosts = if background_tasks_enabled {
             FxHashMap::default()
         } else {
-            load_note_reminder_ghosts(db, &active_note.id, &lines)?
+            load_note_reminder_ghosts(db, &active_note, &lines)?
         };
 
         // Keep startup memory lean: load switcher/wiki metadata lazily on
@@ -1519,7 +1519,7 @@ impl TerminalApp {
                 }
             }
             let started = Instant::now();
-            match load_note_reminder_ghosts(db, &self.active_note.id, &self.editor.lines) {
+            match load_note_reminder_ghosts(db, &self.active_note, &self.editor.lines) {
                 Ok(ghosts) => {
                     self.reminder_ghosts = ghosts;
                     self.reminders_dirty = false;
