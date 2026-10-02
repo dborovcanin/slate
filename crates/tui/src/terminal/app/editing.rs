@@ -4126,6 +4126,7 @@ impl TerminalApp {
         let cross_note_enabled = self.calc_cross_note_enabled();
         let table_enabled = self.note_table_module_enabled();
         let index = std::sync::Arc::clone(&self.cross_note_var_index);
+        let index_epoch = index.lock().map(|index| index.epoch()).unwrap_or_default();
         let db = self.cross_note_db.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -4138,11 +4139,13 @@ impl TerminalApp {
                     preload_cross_note_dep_value(dep_id, &index, &engine, &db);
                 }
                 let extern_vars = match index.lock() {
-                    Ok(mut index) => {
+                    // Not after a restore reset the index: these lines are
+                    // from the replaced database.
+                    Ok(mut index) if index.epoch() == index_epoch => {
                         index.update_deps(&note_id, &refs);
                         index.extern_vars_for(&note_id)
                     }
-                    Err(_) => Vec::new(),
+                    _ => Vec::new(),
                 };
                 let hashes = crate::editor_core::calc_plan::hash_lines(&lines);
                 (extern_vars, Some((hashes, refs)))

@@ -1448,7 +1448,7 @@ impl TerminalApp {
 
         // Nothing read from the old database stays valid.
         if let Ok(mut index) = self.cross_note_var_index.lock() {
-            *index = CrossNoteVarIndex::default();
+            index.reset();
         }
         self.clear_content_search_session();
         self.working_collection_id = None;

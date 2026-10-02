@@ -33,9 +33,24 @@ pub struct CrossNoteVarIndex {
     /// Notes currently being evaluated on a background thread.
     /// Guards against concurrent duplicate evals when multiple notes share a dep.
     eval_in_flight_ids: FxHashSet<String>,
+    /// Bumped by [`Self::reset`]; a load started before it publishes nothing.
+    epoch: u64,
 }
 
 impl CrossNoteVarIndex {
+    /// Forgets everything, as after the database was replaced. Loads still
+    /// running from before cannot write their now stale values back.
+    pub fn reset(&mut self) {
+        *self = Self {
+            epoch: self.epoch.wrapping_add(1),
+            ..Self::default()
+        };
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
+
     /// Update exported variable values for a note after evaluation.
     /// Returns `true` if any exported value changed (used to gate dependent re-eval).
     /// Notes depending on `note_id`, directly or not, are evaluated again
@@ -217,8 +232,30 @@ pub fn load_note_exports(
     index: &Mutex<CrossNoteVarIndex>,
     note_id: &str,
 ) {
+    let Ok(epoch) = index.lock().map(|index| index.epoch) else {
+        return;
+    };
+    load_from_epoch(db, engine, index, note_id, epoch);
+}
+
+/// [`load_note_exports`] for a load that began at `epoch`.
+fn load_from_epoch(
+    db: &Db,
+    engine: &CalcEngine,
+    index: &Mutex<CrossNoteVarIndex>,
+    note_id: &str,
+    epoch: u64,
+) {
     let mut visiting = Vec::new();
-    load_with_dependencies(db, engine, index, note_id, &mut visiting);
+    load_with_dependencies(db, engine, index, note_id, epoch, &mut visiting);
+}
+
+/// The index, unless it was reset since `epoch`.
+fn index_at<'a>(
+    index: &'a Mutex<CrossNoteVarIndex>,
+    epoch: u64,
+) -> Option<std::sync::MutexGuard<'a, CrossNoteVarIndex>> {
+    index.lock().ok().filter(|index| index.epoch == epoch)
 }
 
 fn load_with_dependencies(
@@ -226,10 +263,10 @@ fn load_with_dependencies(
     engine: &CalcEngine,
     index: &Mutex<CrossNoteVarIndex>,
     note_id: &str,
+    epoch: u64,
     visiting: &mut Vec<String>,
 ) {
-    let evaluated = index
-        .lock()
+    let evaluated = index_at(index, epoch)
         .map(|index| index.was_full_eval_attempted(note_id))
         .unwrap_or(true);
     if evaluated
@@ -241,14 +278,14 @@ fn load_with_dependencies(
     let note = match db.get_note(note_id) {
         Ok(Some(note)) => note,
         Ok(None) => {
-            if let Ok(mut index) = index.lock() {
+            if let Some(mut index) = index_at(index, epoch) {
                 index.forget_missing_note(note_id);
             }
             return;
         }
         // A failed read is not an answer: leave the note to be tried again.
         Err(_) => {
-            if let Ok(mut index) = index.lock() {
+            if let Some(mut index) = index_at(index, epoch) {
                 index.release_claim(note_id);
             }
             return;
@@ -261,16 +298,16 @@ fn load_with_dependencies(
     dep_ids.sort_unstable();
     dep_ids.dedup();
     for dep_id in dep_ids {
-        load_with_dependencies(db, engine, index, dep_id, visiting);
+        load_with_dependencies(db, engine, index, dep_id, epoch, visiting);
     }
     visiting.pop();
 
-    let extern_vars = match index.lock() {
-        Ok(mut index) => {
+    let extern_vars = match index_at(index, epoch) {
+        Some(mut index) => {
             index.update_deps(note_id, &refs);
             index.extern_vars_for(note_id)
         }
-        Err(_) => return,
+        None => return,
     };
     let result = engine.evaluate_note_context(
         &lines,
@@ -282,7 +319,7 @@ fn load_with_dependencies(
             ..Default::default()
         },
     );
-    if let Ok(mut index) = index.lock() {
+    if let Some(mut index) = index_at(index, epoch) {
         index.update_exports(note_id, &result.variables, &result.variable_values);
         index.mark_name_scan_attempted(note_id);
         index.mark_evaluated(note_id, Some(note.updated_at));
@@ -408,6 +445,28 @@ mod tests {
         load_note_exports(&db, &engine, &index, "note-b");
         assert_eq!(export(&index, "note-a", "x"), None);
         assert_eq!(export(&index, "note-b", "y"), None);
+
+        drop(db);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_load_from_before_a_reset_publishes_nothing() {
+        let (db, path) = temp_db();
+        db.save_note("note-a", "x := 5").expect("a");
+        let index = Mutex::new(CrossNoteVarIndex::default());
+        let started = index.lock().expect("index").epoch();
+        // The database is replaced while the load runs.
+        index.lock().expect("index").reset();
+        load_from_epoch(&db, &CalcEngine::new(), &index, "note-a", started);
+        assert_eq!(export(&index, "note-a", "x"), None);
+        assert!(!index
+            .lock()
+            .expect("index")
+            .was_full_eval_attempted("note-a"));
+
+        load_note_exports(&db, &CalcEngine::new(), &index, "note-a");
+        assert_eq!(export(&index, "note-a", "x"), Some(5.0));
 
         drop(db);
         cleanup(&path);
