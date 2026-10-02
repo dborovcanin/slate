@@ -1,10 +1,10 @@
-use super::command_catalog::CommandId;
-use super::context::ResolvedContext;
-use super::engine::EditorEngine;
-use super::format::format_markdown;
-use super::operations::replace_range;
-use super::text_rules::{convert_line_to_list, convert_line_to_title, ListKind};
-use super::types::{
+use crate::command_catalog::CommandId;
+use crate::context::ResolvedContext;
+use crate::engine::EditorEngine;
+use crate::format::format_markdown;
+use crate::operations::replace_range;
+use crate::text_rules::{convert_line_to_list, convert_line_to_title, ListKind};
+use crate::types::{
     CommandExecutionResult, CommandMode, CommandSuggestion, EditOperation, EditorContextSnapshot,
     OperationSelection, TextChange,
 };
@@ -263,9 +263,7 @@ pub fn execute_command(
     raw_input: &str,
     mode: CommandMode,
 ) -> CommandExecutionResult {
-    if let Some(result) =
-        crate::editor_core::substitute::try_execute_vim_substitute(snapshot, raw_input, mode)
-    {
+    if let Some(result) = crate::substitute::try_execute_vim_substitute(snapshot, raw_input, mode) {
         return result;
     }
 
@@ -289,27 +287,15 @@ pub fn execute_command(
         | CommandId::SumList
         | CommandId::SumRow
         | CommandId::SumColumn
-        | CommandId::SumDoc => {
-            crate::editor_core::math_commands::execute_math_command(snapshot, command.id)
-                .unwrap_or_else(|| result_with_message(format!("unknown command: {normalized}")))
-        }
+        | CommandId::SumDoc => crate::math_commands::execute_math_command(snapshot, command.id)
+            .unwrap_or_else(|| result_with_message(format!("unknown command: {normalized}"))),
         CommandId::Avg
         | CommandId::AvgList
         | CommandId::AvgRow
         | CommandId::AvgColumn
-        | CommandId::AvgDoc => {
-            crate::editor_core::math_commands::execute_math_command(snapshot, command.id)
-                .unwrap_or_else(|| result_with_message(format!("unknown command: {normalized}")))
-        }
-        CommandId::Date => {
-            let stamp = crate::terminal::local_stamp();
-            let date_str = format!("{:04}-{:02}-{:02}", stamp.year, stamp.month, stamp.day);
-            let mut result = result_with_message("Date inserted");
-            result
-                .operations
-                .push(insert_value_at_selection(snapshot, &date_str));
-            result
-        }
+        | CommandId::AvgDoc => crate::math_commands::execute_math_command(snapshot, command.id)
+            .unwrap_or_else(|| result_with_message(format!("unknown command: {normalized}"))),
+        CommandId::Date => result_with_message("date handled by host"),
         CommandId::Today => result_with_message("today handled by host"),
         CommandId::Browse => result_with_message("browse handled by host"),
         CommandId::History => result_with_message("history handled by host"),
@@ -402,7 +388,7 @@ pub fn execute_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::editor_core::types::SelectionSnapshot;
+    use crate::types::SelectionSnapshot;
 
     fn snapshot(text: &str, head: usize, anchor: usize) -> EditorContextSnapshot {
         EditorContextSnapshot {
@@ -496,6 +482,14 @@ mod tests {
         assert!(vim_values.contains(&"w".to_string()));
         assert!(vim_values.contains(&"wq".to_string()));
         assert!(vim_values.contains(&"e".to_string()));
+    }
+
+    #[test]
+    fn date_is_left_to_the_host() {
+        // The host opens a date picker; the core never reads the clock.
+        let result = execute_command(&snapshot("abc", 1, 1), "date", CommandMode::Editor);
+        assert!(result.operations.is_empty());
+        assert_eq!(result.message, "date handled by host");
     }
 
     #[test]

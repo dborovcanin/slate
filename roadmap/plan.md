@@ -42,7 +42,7 @@ Already done on this track: ratatui + crossterm port, buffer rendering, soft wra
 
 Also on the list:
 - ~~**Performance:** scrolling into a new region spends about 3.8 ms in `ensure_calc_for_viewport`; move that evaluation off the draw path (show stale ghosts, refresh when ready).~~ Done 2026-09-29 without moving it: viewport evaluation reuses a cached whole-note preparation and costs ~2 ms at 30k lines and ~5 ms at 100k (see "Performance Backlog"). Frame painting itself is about 0.3 ms at 200x60, so render caching is not needed.
-- **Cleanup:** move pure command execution (`crates/tui/src/editor_core/commands.rs`) into `editor-core`; sticky goal column for screen-row motions.
+- **Cleanup:** ~~move pure command execution into `editor-core`~~ (done 2026-10-03: `editor_core::commands`); sticky goal column for screen-row motions.
 - **Other candidates** (see `roadmap/features.md`): templates beyond the daily note, tags and ghost notes, runnable code blocks with captured output, fuzzy switcher via `nucleo`, restoring part of a note from its history.
 
 ## Product Intent
@@ -203,7 +203,7 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 | Action | Status | Description | Impact | Difficulty |
 | --- | --- | --- | ---: | ---: |
 | Move remaining table delete semantics into `editor-core` | Done | Boundary edits, structural merges, header deletion, cursor movement, word motions and operators, in-cell Backspace/Delete, empty continuation-row detection, multiline paste, and hand-typed rows are planned in `editor_core::table`. | 10 | 8 |
-| Consolidate pure command execution | Backlog | Move inline format, list conversion, format clear, and date insertion execution from `crates/tui/src/editor_core/commands.rs` into `editor-core`; keep only side effects in the terminal layer. | 9 | 7 |
+| Consolidate pure command execution | Done | Command execution lives in `editor_core::commands`; the terminal re-exports it and keeps only side effects (date picker, notes, files). | 9 | 7 |
 | Command catalog conformance check | Backlog | Test that every `CommandId` in `command_catalog.rs` has a core executor, a terminal host handler, or an explicit unsupported state. | 9 | 5 |
 | Versioned SQLite migrations | Partial | `migrate()` in `storage/sqlite.rs` runs ordered steps recorded in `PRAGMA user_version`, with tests, also on a restored backup. Remaining: backup guidance before a schema change. | 10 | 6 |
 | Backup restore validation | Done | A staged backup passes `quick_check`, a schema check and its migrations before the swap; in-session restore drains in-flight database work, keeps the replaced database as `notes.db.before-restore`, and reloads the open note. | 8 | 5 |

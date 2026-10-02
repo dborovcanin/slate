@@ -1,8 +1,9 @@
 // Pure logic lives in the editor-core crate. Re-export so terminal code can use
-// `crate::editor_core::*` paths alongside the host-only `commands` module.
+// `crate::editor_core::*` paths.
 pub use editor_core::calc_plan;
 pub use editor_core::command_catalog;
 pub use editor_core::command_history;
+pub use editor_core::commands;
 pub use editor_core::context;
 pub use editor_core::engine;
 pub use editor_core::folding;
@@ -17,9 +18,6 @@ pub use editor_core::text_rules;
 pub use editor_core::types;
 pub use editor_core::vim;
 pub use editor_core::vim_actions;
-
-// Command execution; pure, so a candidate to move into editor-core.
-pub mod commands;
 
 #[cfg(test)]
 mod tests {

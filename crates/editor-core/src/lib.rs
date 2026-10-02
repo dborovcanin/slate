@@ -1,6 +1,7 @@
 pub mod calc_plan;
 pub mod command_catalog;
 pub mod command_history;
+pub mod commands;
 pub mod context;
 pub mod engine;
 pub mod folding;
