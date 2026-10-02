@@ -155,6 +155,27 @@ impl CrossNoteVarIndex {
 
     // --- Full-eval tracking (fast path for ghost-eval preload) ---
 
+    /// Records that `note_id` no longer exists: its values are dropped and
+    /// the notes reading them are evaluated again without them.
+    pub fn forget_missing_note(&mut self, note_id: &str) {
+        let had_values = self
+            .exports
+            .remove(note_id)
+            .is_some_and(|values| !values.is_empty());
+        self.export_entries.remove(note_id);
+        self.deps.remove(note_id);
+        if had_values {
+            self.invalidate_dependents(note_id);
+        }
+        self.mark_evaluated(note_id, None);
+    }
+
+    /// Gives up an in-flight claim without recording an evaluation, so the
+    /// note is tried again next time (after a failed read).
+    pub fn release_claim(&mut self, note_id: &str) {
+        self.eval_in_flight_ids.remove(note_id);
+    }
+
     /// Records that `note_id` was evaluated from its stored text at
     /// `revision` (`None` when it does not exist).
     pub fn mark_evaluated(&mut self, note_id: &str, revision: Option<String>) {
@@ -219,9 +240,16 @@ fn load_with_dependencies(
     }
     let note = match db.get_note(note_id) {
         Ok(Some(note)) => note,
-        _ => {
+        Ok(None) => {
             if let Ok(mut index) = index.lock() {
-                index.mark_evaluated(note_id, None);
+                index.forget_missing_note(note_id);
+            }
+            return;
+        }
+        // A failed read is not an answer: leave the note to be tried again.
+        Err(_) => {
+            if let Ok(mut index) = index.lock() {
+                index.release_claim(note_id);
             }
             return;
         }
@@ -360,6 +388,26 @@ mod tests {
         refresh_referenced_notes(&db, &index, &["[[note-b]].y".to_string()]);
         load_note_exports(&db, &engine, &index, "note-b");
         assert_eq!(export(&index, "note-b", "y"), Some(21.0));
+
+        drop(db);
+        cleanup(&path);
+    }
+
+    #[test]
+    fn a_deleted_dependency_stops_contributing() {
+        let (db, path) = temp_db();
+        db.save_note("note-a", "x := 5").expect("a");
+        db.save_note("note-b", "y := [[note-a]].x + 1").expect("b");
+        let index = Mutex::new(CrossNoteVarIndex::default());
+        let engine = CalcEngine::new();
+        load_note_exports(&db, &engine, &index, "note-b");
+        assert_eq!(export(&index, "note-b", "y"), Some(6.0));
+
+        db.delete_note("note-a", None).expect("delete a");
+        refresh_referenced_notes(&db, &index, &["[[note-b]].y".to_string()]);
+        load_note_exports(&db, &engine, &index, "note-b");
+        assert_eq!(export(&index, "note-a", "x"), None);
+        assert_eq!(export(&index, "note-b", "y"), None);
 
         drop(db);
         cleanup(&path);
