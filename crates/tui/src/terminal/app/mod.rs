@@ -568,7 +568,7 @@ struct RenderState {
     /// Fence state checkpoints for draw(). Entry k = fence state BEFORE line
     /// k * FENCE_CHECKPOINT_INTERVAL. `fence_checkpoints_valid_through` is the
     /// highest index whose entry is current; all higher indices are stale.
-    fence_checkpoints: Vec<(bool, Option<String>)>,
+    fence_checkpoints: Vec<crate::editor_core::markdown_tokens::FenceState>,
     fence_checkpoints_valid_through: usize,
     dirty: bool,
 }
@@ -1256,7 +1256,7 @@ impl TerminalApp {
             render_state: RenderState {
                 plain_text_file: render_plain_text_file,
                 file_language: render_file_language,
-                fence_checkpoints: vec![(false, None)],
+                fence_checkpoints: vec![Default::default()],
                 fence_checkpoints_valid_through: 0,
                 wrap_lines: false,
                 editor_cursor_cell: None,

@@ -136,19 +136,15 @@ pub struct CodeToken {
     pub kind: CodeTokenType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+pub use table_syntax::CodeFence;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FenceState {
     pub in_code_block: bool,
     pub code_fence_lang: Option<String>,
-}
-
-impl Default for FenceState {
-    fn default() -> Self {
-        Self {
-            in_code_block: false,
-            code_fence_lang: None,
-        }
-    }
+    /// The fence that opened the current block; a state with no fence
+    /// recorded closes on ```` ``` ````.
+    pub fence: Option<CodeFence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -432,11 +428,9 @@ pub fn normalize_fence_lang(raw: &str) -> Option<String> {
 }
 
 pub fn parse_fence_language(text: &str) -> Option<String> {
+    let fence = table_syntax::code_fence_opening(text)?;
     let trimmed = text.trim_start();
-    if !trimmed.starts_with("```") {
-        return None;
-    }
-    let rest = trimmed[3..].trim_start();
+    let rest = trimmed[fence.len * fence.ch.len_utf8()..].trim_start();
     if rest.is_empty() {
         return None;
     }
@@ -450,17 +444,25 @@ pub fn parse_fence_language(text: &str) -> Option<String> {
     normalize_fence_lang(&lang)
 }
 
-pub fn advance_fence_state(state: &mut FenceState, text: &str) {
-    if !is_code_fence(text) {
-        return;
-    }
-
+/// Whether `text` is a fence line after `state`: it opens a block, or
+/// closes the open one. Inside a longer fence, a shorter one is code.
+pub fn is_fence_line(state: &FenceState, text: &str) -> bool {
     if state.in_code_block {
-        state.in_code_block = false;
-        state.code_fence_lang = None;
+        table_syntax::closes_code_fence(text, state.fence.unwrap_or_default())
     } else {
+        is_code_fence(text)
+    }
+}
+
+pub fn advance_fence_state(state: &mut FenceState, text: &str) {
+    if state.in_code_block {
+        if table_syntax::closes_code_fence(text, state.fence.unwrap_or_default()) {
+            *state = FenceState::default();
+        }
+    } else if let Some(fence) = table_syntax::code_fence_opening(text) {
         state.in_code_block = true;
         state.code_fence_lang = parse_fence_language(text);
+        state.fence = Some(fence);
     }
 }
 
@@ -1468,11 +1470,13 @@ pub fn analyze_lines(
     let mut state = FenceState {
         in_code_block: start_in_code_block,
         code_fence_lang: start_code_fence_lang.and_then(normalize_fence_lang),
+        fence: None,
     };
 
     let mut analyzed = Vec::with_capacity(lines.len());
     for line in lines {
-        let info = classify_markdown_line(line);
+        let mut info = classify_markdown_line(line);
+        info.is_code_fence = is_fence_line(&state, line);
         let in_code_block = state.in_code_block;
         let code_fence_lang = state.code_fence_lang.clone();
 
@@ -1681,6 +1685,25 @@ mod tests {
         let sh_kinds: Vec<&str> = sh.iter().map(|t| t.kind.as_str()).collect();
         assert!(sh_kinds.contains(&"keyword"));
         assert!(sh_kinds.contains(&"comment"));
+    }
+
+    #[test]
+    fn analyze_lines_keeps_a_longer_fence_open_over_shorter_ones() {
+        let lines: Vec<String> = ["````md", "```rust", "fn x() {}", "```", "````", "after"]
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        let analyzed = analyze_lines(&lines, false, None);
+        assert!(analyzed.lines[0].info.is_code_fence);
+        assert!(!analyzed.lines[1].info.is_code_fence, "inner fence is code");
+        assert!(analyzed.lines[3].in_code_block);
+        assert!(analyzed.lines[4].info.is_code_fence);
+        assert!(!analyzed.lines[5].in_code_block);
+        assert_eq!(analyzed.lines[1].code_fence_lang.as_deref(), Some("md"));
+        assert_eq!(
+            parse_fence_language("~~~ python"),
+            Some("python".to_string())
+        );
     }
 
     #[test]

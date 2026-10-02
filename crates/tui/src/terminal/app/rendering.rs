@@ -1812,10 +1812,9 @@ impl TerminalApp {
     /// Render context positioned before `line_idx` (fenced-code state and
     /// syntax mode applied).
     pub(super) fn render_context_at(&mut self, line_idx: usize) -> render::RenderContext {
-        let (in_code_block, fence_lang) = self.fence_state_before_line(line_idx);
+        let fence = self.fence_state_before_line(line_idx);
         render::RenderContext::with_syntax_mode(
-            in_code_block,
-            fence_lang,
+            fence,
             self.render_state.plain_text_file || self.large_note_reduced_features(),
             self.render_state.file_language.clone(),
             self.render_palette,

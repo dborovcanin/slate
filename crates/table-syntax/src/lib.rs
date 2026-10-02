@@ -3,26 +3,73 @@
 //! plus the code-fence rule both need to leave code examples alone.
 //! Pure functions over line text; no editing or formatting policy.
 
-/// Whether `text` opens or closes a fenced code block (```` ``` ````). The
-/// editor and the calc engine both read fences this way, so neither treats
-/// a code example as notebook text.
+/// The opening fence of a fenced code block: its character and length.
+/// The editor and the calc engine both read fences with these rules, so
+/// neither treats a code example as notebook text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CodeFence {
+    pub ch: char,
+    pub len: usize,
+}
+
+impl Default for CodeFence {
+    /// ```` ``` ````, the fence an editor state without one assumes.
+    fn default() -> Self {
+        Self { ch: '`', len: 3 }
+    }
+}
+
+/// The fence `text` opens: three or more backticks or tildes after any
+/// indentation. A backtick fence's info string cannot hold backticks.
+pub fn code_fence_opening(text: &str) -> Option<CodeFence> {
+    let trimmed = text.trim_start();
+    let ch = trimmed
+        .chars()
+        .next()
+        .filter(|ch| matches!(ch, '`' | '~'))?;
+    let len = trimmed.chars().take_while(|c| *c == ch).count();
+    if len < 3 {
+        return None;
+    }
+    if ch == '`' && trimmed[len..].contains('`') {
+        return None;
+    }
+    Some(CodeFence { ch, len })
+}
+
+/// Whether `text` closes a block opened by `open`: the same character, at
+/// least as many, and nothing else on the line.
+pub fn closes_code_fence(text: &str, open: CodeFence) -> bool {
+    let trimmed = text.trim();
+    let len = trimmed.chars().take_while(|c| *c == open.ch).count();
+    len >= open.len && len == trimmed.chars().count()
+}
+
+/// Whether `text` could open a fenced code block. Inside a block, only a
+/// matching [`closes_code_fence`] line ends it.
 pub fn is_code_fence(text: &str) -> bool {
-    text.trim_start().starts_with("```")
+    code_fence_opening(text).is_some()
+}
+
+/// The open block after `text`, given the one open before it.
+pub fn next_code_fence(open: Option<CodeFence>, text: &str) -> Option<CodeFence> {
+    match open {
+        Some(fence) if closes_code_fence(text, fence) => None,
+        Some(fence) => Some(fence),
+        None => code_fence_opening(text),
+    }
 }
 
 /// For each line, whether it is a fence line or inside a fenced code block.
 /// An unclosed fence runs to the end.
 pub fn code_block_lines<S: AsRef<str>>(lines: &[S]) -> Vec<bool> {
-    let mut open = false;
+    let mut open: Option<CodeFence> = None;
     lines
         .iter()
         .map(|line| {
-            if is_code_fence(line.as_ref()) {
-                open = !open;
-                true
-            } else {
-                open
-            }
+            let was_open = open.is_some();
+            open = next_code_fence(open, line.as_ref());
+            was_open || open.is_some()
         })
         .collect()
 }
@@ -220,6 +267,29 @@ pub fn table_block_bounds(lines: &[String], line_idx: usize) -> Option<(usize, u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn longer_and_tilde_fences_close_only_on_a_match() {
+        let lines = [
+            "x := 1",
+            "````markdown",
+            "```sh",
+            "#!/bin/sh",
+            "```",
+            "````",
+            "~~~",
+            "```",
+            "~~~~",
+            "x + 1",
+        ];
+        assert_eq!(
+            code_block_lines(&lines),
+            vec![false, true, true, true, true, true, true, true, true, false]
+        );
+        assert!(!is_code_fence("``"));
+        assert!(!is_code_fence("``` a`b"));
+        assert!(!closes_code_fence("```rust", CodeFence::default()));
+    }
 
     fn owned(lines: &[&str]) -> Vec<String> {
         lines.iter().map(|line| line.to_string()).collect()

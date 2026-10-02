@@ -211,7 +211,7 @@ fn insert_newline_invalidates_fence_checkpoints_from_original_line() {
     assert_eq!(app.editor.cursor_line, interval);
     assert_eq!(app.render_state.fence_checkpoints_valid_through, 0);
 
-    let (in_code_block, _) = app.fence_state_before_line(interval);
+    let in_code_block = app.fence_state_before_line(interval).in_code_block;
     assert!(!in_code_block);
 
     drop(app);
@@ -239,7 +239,7 @@ fn insert_paste_multiline_invalidates_fence_checkpoints_from_original_line() {
     assert_eq!(app.editor.cursor_line, interval);
     assert_eq!(app.render_state.fence_checkpoints_valid_through, 0);
 
-    let (in_code_block, _) = app.fence_state_before_line(interval);
+    let in_code_block = app.fence_state_before_line(interval).in_code_block;
     assert!(!in_code_block);
 
     drop(app);

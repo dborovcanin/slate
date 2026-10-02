@@ -125,6 +125,15 @@ mod tests {
     }
 
     #[test]
+    fn a_shorter_fence_inside_a_longer_one_stays_code() {
+        let text = "````markdown\n```sh\n#!/bin/sh\n```\n* still code\n````\n* item\n~~~\n#x\n~~~";
+        assert_eq!(
+            format_markdown(text),
+            "````markdown\n```sh\n#!/bin/sh\n```\n* still code\n````\n- item\n~~~\n#x\n~~~"
+        );
+    }
+
+    #[test]
     fn unclosed_fence_protects_the_rest() {
         assert_eq!(format_markdown("*  a\n```\n#x"), "- a\n```\n#x");
     }

@@ -1220,16 +1220,19 @@ fn parse_heading(line: &str) -> Option<(usize, String)> {
 }
 
 fn is_fence_start(trimmed: &str) -> bool {
-    trimmed.starts_with("```")
+    markdown_tokens::is_code_fence(trimmed)
 }
 
 fn collect_code_fence(lines: &[&str], start: usize) -> (Vec<String>, Option<String>, usize) {
     let code_lang = markdown_tokens::parse_fence_language(lines[start]);
+    // Closes only on a fence matching the opener, as the editor reads it.
+    let mut state = markdown_tokens::FenceState::default();
+    markdown_tokens::advance_fence_state(&mut state, lines[start]);
     let mut out = Vec::new();
     let mut i = start + 1;
     while i < lines.len() {
         let line = lines[i];
-        if line.trim_start().starts_with("```") {
+        if markdown_tokens::is_fence_line(&state, line) {
             return (out, code_lang, i + 1);
         }
         out.push(line.to_string());

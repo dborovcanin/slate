@@ -351,21 +351,21 @@ struct PreparedNoteContext {
 /// updates it without rescanning the note.
 #[derive(Default)]
 struct FenceMap {
-    /// The line is a fence (```` ``` ````).
+    /// The line opens or closes a code block.
     fence: Vec<bool>,
-    /// A code block is open after the line.
-    open_after: Vec<bool>,
+    /// The code block open after the line, by its opening fence.
+    open_after: Vec<Option<table_syntax::CodeFence>>,
 }
 
 impl FenceMap {
     fn build(lines: &[String]) -> Self {
-        let mut open = false;
+        let mut open = None;
         let mut map = Self::default();
         for line in lines {
-            let fence = table_syntax::is_code_fence(line);
-            open ^= fence;
-            map.fence.push(fence);
-            map.open_after.push(open);
+            let next = table_syntax::next_code_fence(open, line);
+            map.fence.push(open.is_some() != next.is_some());
+            map.open_after.push(next);
+            open = next;
         }
         map
     }
@@ -376,8 +376,7 @@ impl FenceMap {
             || idx
                 .checked_sub(1)
                 .and_then(|prev| self.open_after.get(prev))
-                .copied()
-                .unwrap_or(false)
+                .is_some_and(Option::is_some)
     }
 
     fn has_fence_in(&self, from: usize, to: usize) -> bool {
@@ -385,12 +384,9 @@ impl FenceMap {
     }
 
     /// Replaces lines `[from, old_to)`, none of them fences, by `new_len`
-    /// lines without fences: they all share the state before `from`.
+    /// lines that cannot be fences: they all share the state before `from`.
     fn splice_without_fences(&mut self, from: usize, old_to: usize, new_len: usize) {
-        let open = from
-            .checked_sub(1)
-            .map(|prev| self.open_after[prev])
-            .unwrap_or(false);
+        let open = from.checked_sub(1).and_then(|prev| self.open_after[prev]);
         self.fence
             .splice(from..old_to, std::iter::repeat_n(false, new_len));
         self.open_after
@@ -1043,7 +1039,8 @@ fn update_prepared_note_context(
         prepared.line_hashes = line_hashes;
         return;
     };
-    // Opening or closing a code block changes every line after it.
+    // Opening or closing a code block changes every line after it. Any line
+    // shaped like a fence counts, even inside a block, to stay simple.
     if prepared.fences.has_fence_in(from, old_to)
         || lines[from..new_to]
             .iter()
@@ -3054,6 +3051,24 @@ mod tests {
             .map(|entry| entry.normalized)
             .collect();
         assert_eq!(names, vec!["x".to_string()]);
+    }
+
+    #[test]
+    fn longer_and_tilde_fences_hold_shorter_examples() {
+        let lines = note(&[
+            "x := 1",
+            "````markdown",
+            "```go",
+            "x := 100",
+            "```",
+            "````",
+            "~~~",
+            "x := 200",
+            "~~~",
+            "x + 1",
+        ]);
+        let result = CalcEngine::new().evaluate_note_context(&lines, variables_on());
+        assert_eq!(result.line_results[9].as_deref(), Some("2"));
     }
 
     #[test]

@@ -58,8 +58,7 @@ fn cached_inline_tokens(text: &str) -> Arc<Vec<markdown_tokens::InlineToken>> {
 
 #[derive(Clone)]
 pub struct RenderContext {
-    in_code_block: bool,
-    code_fence_lang: Option<String>,
+    fence: markdown_tokens::FenceState,
     render_as_plain_code: bool,
     forced_code_lang: Option<String>,
     palette: RenderPalette,
@@ -69,8 +68,7 @@ impl RenderContext {
     #[cfg(test)]
     pub fn new() -> Self {
         Self {
-            in_code_block: false,
-            code_fence_lang: None,
+            fence: markdown_tokens::FenceState::default(),
             render_as_plain_code: false,
             forced_code_lang: None,
             palette: RenderPalette::default(),
@@ -80,8 +78,7 @@ impl RenderContext {
     #[cfg(test)]
     pub fn new_with_palette(palette: RenderPalette) -> Self {
         Self {
-            in_code_block: false,
-            code_fence_lang: None,
+            fence: markdown_tokens::FenceState::default(),
             render_as_plain_code: false,
             forced_code_lang: None,
             palette,
@@ -89,15 +86,13 @@ impl RenderContext {
     }
 
     pub fn with_syntax_mode(
-        in_code_block: bool,
-        code_fence_lang: Option<String>,
+        fence: markdown_tokens::FenceState,
         render_as_plain_code: bool,
         forced_code_lang: Option<String>,
         palette: RenderPalette,
     ) -> Self {
         Self {
-            in_code_block,
-            code_fence_lang,
+            fence,
             render_as_plain_code,
             forced_code_lang,
             palette,
@@ -107,7 +102,7 @@ impl RenderContext {
     /// Skip ahead through `lines` without rendering — just track code fence state.
     /// Whether the next rendered line sits inside a fenced code block.
     pub fn in_code_block(&self) -> bool {
-        self.in_code_block
+        self.fence.in_code_block
     }
 
     /// Whether every line renders as plain code (code files, large notes).
@@ -119,15 +114,9 @@ impl RenderContext {
         if self.render_as_plain_code {
             return;
         }
-        let mut state = markdown_tokens::FenceState {
-            in_code_block: self.in_code_block,
-            code_fence_lang: self.code_fence_lang.clone(),
-        };
         for line in lines {
-            markdown_tokens::advance_fence_state(&mut state, line);
+            markdown_tokens::advance_fence_state(&mut self.fence, line);
         }
-        self.in_code_block = state.in_code_block;
-        self.code_fence_lang = state.code_fence_lang;
     }
 
     #[cfg(test)]
@@ -135,13 +124,7 @@ impl RenderContext {
         if self.render_as_plain_code {
             return;
         }
-        let mut state = markdown_tokens::FenceState {
-            in_code_block: self.in_code_block,
-            code_fence_lang: self.code_fence_lang.clone(),
-        };
-        markdown_tokens::advance_fence_state(&mut state, text);
-        self.in_code_block = state.in_code_block;
-        self.code_fence_lang = state.code_fence_lang;
+        markdown_tokens::advance_fence_state(&mut self.fence, text);
     }
 
     /// Renders one line into exactly `width` cells of `buf` starting at
@@ -290,8 +273,10 @@ impl RenderContext {
         } else {
             Some(markdown_tokens::classify_markdown_line(text))
         };
-        let is_code_block_line = !self.render_as_plain_code
-            && (self.in_code_block || info.as_ref().is_some_and(|i| i.is_code_fence));
+        // A fence line here is one that opens a block or closes the open one.
+        let is_fence_line = info.is_some() && markdown_tokens::is_fence_line(&self.fence, text);
+        let is_code_block_line =
+            !self.render_as_plain_code && (self.fence.in_code_block || is_fence_line);
         let base_style = CharStyle {
             fg: Some(self.palette.text_fg()),
             bg: Some(if is_code_block_line {
@@ -327,20 +312,14 @@ impl RenderContext {
 
         if self.render_as_plain_code {
             // Skip markdown semantic styling when a file has a fixed syntax mode.
-        } else if info.as_ref().is_some_and(|line| line.is_code_fence) {
+        } else if is_fence_line {
             for s in &mut styles {
                 s.dim = true;
             }
-            let mut state = markdown_tokens::FenceState {
-                in_code_block: self.in_code_block,
-                code_fence_lang: self.code_fence_lang.clone(),
-            };
-            markdown_tokens::advance_fence_state(&mut state, text);
-            self.in_code_block = state.in_code_block;
-            self.code_fence_lang = state.code_fence_lang;
-        } else if self.in_code_block {
+            markdown_tokens::advance_fence_state(&mut self.fence, text);
+        } else if self.fence.in_code_block {
             let code_tokens =
-                markdown_tokens::tokenize_code_line(text, self.code_fence_lang.as_deref());
+                markdown_tokens::tokenize_code_line(text, self.fence.code_fence_lang.as_deref());
             apply_code_token_styles(&code_tokens, &mut styles, self.palette);
         } else {
             let info = info.as_ref().expect("markdown info present");
@@ -1098,15 +1077,22 @@ mod tests {
     fn render_context_tracks_fences() {
         let mut ctx = RenderContext::new();
         ctx.advance_line("normal line");
-        assert!(!ctx.in_code_block);
+        assert!(!ctx.in_code_block());
         ctx.advance_line("```rust");
-        assert!(ctx.in_code_block);
-        assert_eq!(ctx.code_fence_lang.as_deref(), Some("rust"));
+        assert!(ctx.in_code_block());
+        assert_eq!(ctx.fence.code_fence_lang.as_deref(), Some("rust"));
         ctx.advance_line("code line");
-        assert!(ctx.in_code_block);
+        assert!(ctx.in_code_block());
         ctx.advance_line("```");
-        assert!(!ctx.in_code_block);
-        assert_eq!(ctx.code_fence_lang, None);
+        assert!(!ctx.in_code_block());
+        assert_eq!(ctx.fence.code_fence_lang, None);
+
+        // A shorter fence inside a longer one is code.
+        ctx.advance_line("````md");
+        ctx.advance_line("```");
+        assert!(ctx.in_code_block());
+        ctx.advance_line("````");
+        assert!(!ctx.in_code_block());
     }
 
     struct Rendered {

@@ -1206,7 +1206,7 @@ pub(crate) fn draw_note_preview(
         }
         return;
     }
-    let mut ctx = RenderContext::with_syntax_mode(false, None, false, None, palette);
+    let mut ctx = RenderContext::with_syntax_mode(Default::default(), false, None, palette);
     // A search hit scrolls its line to about a third of the way down.
     let skip = focus_line.map_or(0, |focus| {
         focus
@@ -1496,7 +1496,7 @@ fn draw_version_preview(
             }
         }
         VersionPreview::Text(lines) => {
-            let mut ctx = RenderContext::with_syntax_mode(false, None, false, None, palette);
+            let mut ctx = RenderContext::with_syntax_mode(Default::default(), false, None, palette);
             let deco = LineDecorations {
                 calc_ghost: None,
                 reminder_ghost: None,

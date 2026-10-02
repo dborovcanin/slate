@@ -1234,23 +1234,27 @@ impl TerminalApp {
     // Returns the code-fence parse state that applies BEFORE line `target_line`
     // (0-based). Uses a sparse checkpoint array so the worst-case scan is at
     // most FENCE_CHECKPOINT_INTERVAL line advances regardless of doc size.
-    pub(super) fn fence_state_before_line(&mut self, target_line: usize) -> (bool, Option<String>) {
+    pub(super) fn fence_state_before_line(
+        &mut self,
+        target_line: usize,
+    ) -> crate::editor_core::markdown_tokens::FenceState {
+        use crate::editor_core::markdown_tokens::{advance_fence_state, FenceState};
         if target_line == 0 {
-            return (false, None);
+            return FenceState::default();
         }
         let target = target_line.min(self.editor.lines.len());
         let target_ck = target / FENCE_CHECKPOINT_INTERVAL;
         let start_ck = target_ck.min(self.render_state.fence_checkpoints_valid_through);
         let start_line = start_ck * FENCE_CHECKPOINT_INTERVAL;
 
-        let (mut in_code_block, mut code_fence_lang) = if start_ck == 0 {
-            (false, None)
+        let mut state = if start_ck == 0 {
+            FenceState::default()
         } else {
             self.render_state
                 .fence_checkpoints
                 .get(start_ck)
                 .cloned()
-                .unwrap_or((false, None))
+                .unwrap_or_default()
         };
 
         let mut line_idx = start_line;
@@ -1260,25 +1264,20 @@ impl TerminalApp {
                 let ck = line_idx / FENCE_CHECKPOINT_INTERVAL;
                 if ck > self.render_state.fence_checkpoints_valid_through {
                     while self.render_state.fence_checkpoints.len() <= ck {
-                        self.render_state.fence_checkpoints.push((false, None));
+                        self.render_state
+                            .fence_checkpoints
+                            .push(FenceState::default());
                     }
-                    self.render_state.fence_checkpoints[ck] =
-                        (in_code_block, code_fence_lang.clone());
+                    self.render_state.fence_checkpoints[ck] = state.clone();
                     self.render_state.fence_checkpoints_valid_through = ck;
                 }
             }
             if let Some(line_text) = self.editor.lines.get(line_idx) {
-                let mut state = crate::editor_core::markdown_tokens::FenceState {
-                    in_code_block,
-                    code_fence_lang,
-                };
-                crate::editor_core::markdown_tokens::advance_fence_state(&mut state, line_text);
-                in_code_block = state.in_code_block;
-                code_fence_lang = state.code_fence_lang;
+                advance_fence_state(&mut state, line_text);
             }
             line_idx += 1;
         }
-        (in_code_block, code_fence_lang)
+        state
     }
 
     // Invalidate all fence checkpoints that depend on content at or after
