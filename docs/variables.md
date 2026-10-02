@@ -83,22 +83,22 @@ len + 2
 
 ## Cross-note variables
 
-Values exported by one note can be referenced in another using the wiki-link short ID:
+Values exported by one note can be referenced in another using its note ID, as in wiki-links:
 
 ```
-[[SHORTID]].var_name
+[[ID]].var_name
 ```
 
-`SHORTID` is the 8-character prefix of the note's ULID (the same ID used in wiki-links). Variable name rules are identical to note-local variables (case-insensitive, spaces normalized).
+`ID` is the note's full ID: its ULID, or `daily-YYYY-MM-DD` for a daily note. IDs are case-sensitive; the autocomplete inserts them. Variable name rules are identical to note-local variables (case-insensitive, spaces normalized).
 
 Example:
 
 ```
-# Budget note  (short ID: A1B2C3D4)
+# Budget note  (ID: 01KP0YD099X9TQENYJQ1SE9X8V)
 monthly_income := 5000
 
 # Goals note
-[[A1B2C3D4]].monthly_income * 12
+[[01KP0YD099X9TQENYJQ1SE9X8V]].monthly_income * 12
 ```
 
 ### Evaluation
@@ -115,9 +115,9 @@ monthly_income := 5000
 
 ### Autocomplete
 
-Typing `[[SHORTID]].` (with or without a partial name) triggers cross-note variable suggestions drawn from the shared index. Suggestions appear as soon as the source note has been evaluated at least once.
+Typing `[[ID]].` (with or without a partial name) triggers cross-note variable suggestions drawn from the shared index. Suggestions appear as soon as the source note has been evaluated at least once.
 
-The cross-note completion source is always active regardless of the local `variables_autocomplete_min_chars` threshold — it activates the moment the `[[SHORTID]].` pattern is detected.
+The cross-note completion source is always active regardless of the local `variables_autocomplete_min_chars` threshold — it activates the moment the `[[ID]].` pattern is detected.
 
 ## Autocomplete
 

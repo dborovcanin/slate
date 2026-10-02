@@ -52,15 +52,9 @@ impl Drop for Fixture {
     }
 }
 
-/// Links address notes by the first 8 ULID chars, which only change every
-/// ~17 minutes, so ids made together would share one short id.
 fn note_id(days_ago: u64) -> String {
     let now = Ulid::new();
     Ulid::from_parts(now.timestamp_ms() - days_ago * 86_400_000, now.random()).to_string()
-}
-
-fn short_id(id: &str) -> &str {
-    &id[..8]
 }
 
 fn rates_note() -> String {
@@ -192,7 +186,7 @@ fn build_fixture(lines: usize) -> Fixture {
             image_id
         })
         .collect::<Vec<_>>();
-    let body = main_note(lines, short_id(&rates_id), short_id(&reference_id), &images);
+    let body = main_note(lines, &rates_id, &reference_id, &images);
     db.save_note(&main_id, &body).expect("main note body");
     Fixture {
         db,

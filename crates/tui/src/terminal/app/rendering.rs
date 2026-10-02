@@ -121,15 +121,15 @@ impl TerminalApp {
         text
     }
 
-    fn wiki_link_cache_entry(&mut self, short_id: &str) -> (String, bool) {
-        if let Some(entry) = self.render_caches.wiki_link_render_cache.get(short_id) {
+    fn wiki_link_cache_entry(&mut self, note_id: &str) -> (String, bool) {
+        if let Some(entry) = self.render_caches.wiki_link_render_cache.get(note_id) {
             if entry.cached_at.elapsed().as_millis() as u64 <= super::WIKI_LINK_RENDER_CACHE_TTL_MS
             {
                 return (entry.display.clone(), entry.broken);
             }
-            self.render_caches.wiki_link_render_cache.remove(short_id);
+            self.render_caches.wiki_link_render_cache.remove(note_id);
         }
-        let (display, broken) = if let Some(entry) = self.wiki_link_prefix_index.get(short_id) {
+        let (display, broken) = if let Some(entry) = self.wiki_link_index.get(note_id) {
             let title = if entry.title.trim().is_empty() {
                 "Untitled"
             } else {
@@ -143,9 +143,9 @@ impl TerminalApp {
         let is_new = !self
             .render_caches
             .wiki_link_render_cache
-            .contains_key(short_id);
+            .contains_key(note_id);
         self.render_caches.wiki_link_render_cache.insert(
-            short_id.to_string(),
+            note_id.to_string(),
             super::WikiLinkRenderCacheEntry {
                 display: display.clone(),
                 broken,
@@ -155,7 +155,7 @@ impl TerminalApp {
         if is_new {
             self.render_caches
                 .wiki_link_render_cache_order
-                .push_back(short_id.to_string());
+                .push_back(note_id.to_string());
         }
         while self.render_caches.wiki_link_render_cache.len()
             > super::WIKI_LINK_RENDER_CACHE_MAX_ENTRIES
@@ -191,15 +191,15 @@ impl TerminalApp {
         None
     }
 
-    pub(super) fn invalidate_wiki_link_render_cache_for_short_id(&mut self, short_id: &str) {
-        if short_id.is_empty() {
+    pub(super) fn invalidate_wiki_link_render_cache_for_note(&mut self, note_id: &str) {
+        if note_id.is_empty() {
             return;
         }
-        self.render_caches.wiki_link_render_cache.remove(short_id);
+        self.render_caches.wiki_link_render_cache.remove(note_id);
         // The line-level cache keys are full line text strings; scanning them
-        // for the changed short_id would be O(entries). Clearing the whole
+        // for the changed note_id would be O(entries). Clearing the whole
         // cache is O(1) and correct — entries are cheap to rebuild on the
-        // next draw using the still-warm short_id cache above.
+        // next draw using the still-warm note_id cache above.
         self.render_caches.wiki_link_line_render_cache.clear();
         self.render_caches.wiki_link_line_render_cache_order.clear();
     }
@@ -426,7 +426,7 @@ impl TerminalApp {
                 link.from,
                 &mut out_char_count,
             );
-            let (base, broken) = self.wiki_link_cache_entry(&link.short_id);
+            let (base, broken) = self.wiki_link_cache_entry(&link.note_id);
             let display = if broken {
                 Self::append_link_display_text("?", link.heading.as_deref())
             } else {

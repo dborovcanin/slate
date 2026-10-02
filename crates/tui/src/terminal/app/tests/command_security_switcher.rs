@@ -1832,8 +1832,8 @@ fn command_bar_ctrl_w_deletes_word_and_stays_in_command_mode() {
 
 #[test]
 fn wiki_link_heading_autocomplete_loads_headings_beyond_first_32() {
-    let (db, mut app, path) = app_with_note("[[01HX4VHR]]");
     let note_id = "01HX4VHR9ABCDEFGHJKMNPQRS";
+    let (db, mut app, path) = app_with_note(&format!("[[{note_id}]]"));
     let mut body_lines = Vec::new();
     for idx in 1..=500 {
         body_lines.push(format!("## Section {idx}: ABCD"));
@@ -1842,11 +1842,14 @@ fn wiki_link_heading_autocomplete_loads_headings_beyond_first_32() {
         .expect("target note saved");
 
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = 10; // [[ + 8-char short id
+    app.editor.cursor_col = 2 + note_id.len(); // after [[ and the id
     run_keys(&mut app, &db, &[Key::Char('#')]);
 
     assert!(app.wiki_link_autocomplete_popup.visible);
-    assert_eq!(app.wiki_link_autocomplete_popup.query, "01HX4VHR#");
+    assert_eq!(
+        app.wiki_link_autocomplete_popup.query,
+        format!("{note_id}#")
+    );
     assert!(
         app.wiki_link_autocomplete_popup
             .suggestions
@@ -1862,13 +1865,13 @@ fn wiki_link_heading_autocomplete_loads_headings_beyond_first_32() {
 
 #[test]
 fn wiki_link_heading_autocomplete_reopens_when_hash_is_typed_again() {
-    let (db, mut app, path) = app_with_note("[[01HX4VHR]]");
     let note_id = "01HX4VHR9ABCDEFGHJKMNPQRS";
+    let (db, mut app, path) = app_with_note(&format!("[[{note_id}]]"));
     db.save_note(note_id, "# Intro\n## Deep Dive")
         .expect("target note saved");
 
     app.editor.cursor_line = 0;
-    app.editor.cursor_col = 10; // [[ + 8-char short id
+    app.editor.cursor_col = 2 + note_id.len(); // after [[ and the id
     run_keys(&mut app, &db, &[Key::Char('#')]);
     assert!(app.wiki_link_autocomplete_popup.visible);
 
@@ -1877,7 +1880,10 @@ fn wiki_link_heading_autocomplete_reopens_when_hash_is_typed_again() {
         app.wiki_link_autocomplete_popup.visible,
         "typing # inside an existing wiki-link should reopen heading suggestions"
     );
-    assert_eq!(app.wiki_link_autocomplete_popup.query, "01HX4VHR#");
+    assert_eq!(
+        app.wiki_link_autocomplete_popup.query,
+        format!("{note_id}#")
+    );
 
     drop(app);
     drop(db);
@@ -1948,10 +1954,10 @@ fn wiki_link_autocomplete_selection_can_move_and_apply_beyond_first_sixteen_resu
 
     let suggestions: Vec<WikiLinkSuggestion> = (0..25)
         .map(|idx| {
-            let short_id = format!("A{idx:07}");
+            let note_id = format!("A{idx:07}");
             let title = format!("Note {idx:02}");
             WikiLinkSuggestion {
-                short_id,
+                note_id,
                 title: title.clone(),
                 title_lower: title.to_lowercase(),
                 heading: None,
@@ -1986,7 +1992,7 @@ fn wiki_link_heading_autocomplete_cancel_removes_auto_hash() {
     assert!(app.wiki_link_autocomplete_popup.visible);
 
     app.wiki_link_autocomplete_popup.suggestions = vec![WikiLinkSuggestion {
-        short_id: "01HX4VHR".to_string(),
+        note_id: "01HX4VHR9ABCDEFGHJKMNPQRS".to_string(),
         title: "Target".to_string(),
         title_lower: "target".to_string(),
         heading: None,
@@ -1995,11 +2001,11 @@ fn wiki_link_heading_autocomplete_cancel_removes_auto_hash() {
         app.wiki_link_autocomplete_popup.suggestions.clone();
 
     run_keys(&mut app, &db, &[Key::Tab]);
-    assert_eq!(app.current_line(), "[[01HX4VHR#]]");
+    assert_eq!(app.current_line(), "[[01HX4VHR9ABCDEFGHJKMNPQRS#]]");
     assert!(app.wiki_link_autocomplete_popup.visible);
 
     run_keys(&mut app, &db, &[Key::Esc]);
-    assert_eq!(app.current_line(), "[[01HX4VHR]]");
+    assert_eq!(app.current_line(), "[[01HX4VHR9ABCDEFGHJKMNPQRS]]");
     assert!(!app.wiki_link_autocomplete_popup.visible);
 
     drop(app);
@@ -2011,7 +2017,7 @@ fn wiki_link_heading_autocomplete_cancel_removes_auto_hash() {
 fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
     let path = temp_db_path();
     let db = Db::open(path.clone()).expect("db opens");
-    db.save_note("n-active", "[[01HX4VHR]]")
+    db.save_note("n-active", "[[01HX4VHR9ABCDEFGHJKMNPQRS]]")
         .expect("active note saved");
     db.save_note("01HX4VHR9ABCDEFGHJKMNPQRS", "Destination Title\nBody")
         .expect("target note saved");
@@ -2042,7 +2048,7 @@ fn startup_with_wiki_links_keeps_switcher_metadata_lazy() {
     .expect("terminal app");
 
     assert!(app.switcher.items.is_empty());
-    assert!(app.wiki_link_prefix_index.is_empty());
+    assert!(app.wiki_link_index.is_empty());
 
     drop(app);
     drop(db);

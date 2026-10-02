@@ -1519,88 +1519,6 @@ impl Db {
         Ok(removed)
     }
 
-    pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
-        let conn = self.conn.lock()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
-                        wrapped_key, encryption_nonce, encrypted_body, title_pinned
-                 FROM notes
-                 WHERE id LIKE ?1
-                 ORDER BY updated_at DESC, id ASC
-                 LIMIT 1",
-            )
-            .map_err(|e| e.to_string())?;
-        self.resolve_wiki_link_with_stmt(&mut stmt, short_id)
-    }
-
-    pub fn resolve_wiki_link_note(&self, short_id: &str) -> Result<Option<Note>, String> {
-        let conn = self.conn.lock()?;
-        let pattern = format!("{}%", short_id);
-        let note_id: Option<String> = conn
-            .query_row(
-                "SELECT id
-                 FROM notes
-                 WHERE id LIKE ?1
-                 ORDER BY updated_at DESC, id ASC
-                 LIMIT 1",
-                [&pattern],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|e| e.to_string())?;
-        let Some(note_id) = note_id else {
-            return Ok(None);
-        };
-        self.load_note_with_access(&conn, &note_id)
-    }
-
-    pub fn resolve_wiki_links(
-        &self,
-        short_ids: &[String],
-    ) -> Result<Vec<(String, Option<NoteSummary>)>, String> {
-        if short_ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.conn.lock()?;
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, note_title, substr(body, 1, 200), access_mode, updated_at,
-                        wrapped_key, encryption_nonce, encrypted_body, title_pinned
-                 FROM notes
-                 WHERE id LIKE ?1
-                 ORDER BY updated_at DESC, id ASC
-                 LIMIT 1",
-            )
-            .map_err(|e| e.to_string())?;
-
-        let mut memo: FxHashMap<String, Option<NoteSummary>> = FxHashMap::default();
-        let mut out = Vec::with_capacity(short_ids.len());
-        for short_id in short_ids {
-            if let Some(cached) = memo.get(short_id) {
-                out.push((short_id.clone(), cached.clone()));
-                continue;
-            }
-            let resolved = self.resolve_wiki_link_with_stmt(&mut stmt, short_id)?;
-            memo.insert(short_id.clone(), resolved.clone());
-            out.push((short_id.clone(), resolved));
-        }
-        Ok(out)
-    }
-
-    fn resolve_wiki_link_with_stmt(
-        &self,
-        stmt: &mut rusqlite::Statement<'_>,
-        short_id: &str,
-    ) -> Result<Option<NoteSummary>, String> {
-        let pattern = format!("{}%", short_id);
-        let row = stmt
-            .query_row([&pattern], map_note_summary_row)
-            .optional()
-            .map_err(|e| e.to_string())?;
-        row.map(|row| self.note_summary_from_row(&row)).transpose()
-    }
-
     pub fn get_note_updated_at(&self, id: &str) -> Result<Option<String>, String> {
         let conn = self.conn.lock()?;
         let mut stmt = conn
@@ -2690,7 +2608,82 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         ))
         .map_err(|e| format!("Failed to migrate database: {e}"))?;
     }
+    if version < 4 {
+        // Wiki links name the whole note id instead of its first 8 characters.
+        rewrite_short_wiki_links(conn).map_err(|e| format!("Failed to migrate database: {e}"))?;
+    }
     Ok(())
+}
+
+/// Rewrites links that name the first 8 characters of a note id
+/// (`[[01KP0YD0]]`, `[[01KP0YD0#Heading]]`, `[[01KP0YD0]].var`) to the whole
+/// id. A prefix several notes share goes to the most recently updated one,
+/// the note such a link opened before. Encrypted bodies stay as they are.
+fn rewrite_short_wiki_links(conn: &Connection) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut by_prefix: FxHashMap<String, String> = FxHashMap::default();
+    {
+        let mut stmt = tx
+            .prepare("SELECT id FROM notes ORDER BY updated_at DESC, id ASC")
+            .map_err(|e| e.to_string())?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| e.to_string())?;
+        for id in ids {
+            let id = id.map_err(|e| e.to_string())?;
+            if let Some(prefix) = id.get(..8) {
+                // A note whose whole id is the prefix keeps its own links.
+                let exact = id.len() == 8;
+                let key = prefix.to_ascii_lowercase();
+                if exact || !by_prefix.contains_key(&key) {
+                    by_prefix.insert(key, id);
+                }
+            }
+        }
+    }
+
+    let short_link =
+        regex::Regex::new(r"\[\[([A-Za-z0-9]{8})([\]#|])").map_err(|e| e.to_string())?;
+    let rewrites = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT id, body FROM notes
+                 WHERE access_mode = 'none' AND instr(body, '[[') > 0",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| e.to_string())?;
+        let mut rewrites = Vec::new();
+        for row in rows {
+            let (id, body) = row.map_err(|e| e.to_string())?;
+            let rewritten = short_link.replace_all(&body, |caps: &regex::Captures<'_>| {
+                match by_prefix.get(&caps[1].to_ascii_lowercase()) {
+                    Some(full_id) => format!("[[{full_id}{}", &caps[2]),
+                    None => caps[0].to_string(),
+                }
+            });
+            if rewritten != body {
+                rewrites.push((id, rewritten.into_owned()));
+            }
+        }
+        rewrites
+    };
+    for (id, body) in rewrites {
+        tx.execute(
+            "UPDATE notes
+             SET body = ?2,
+                 note_title = CASE WHEN title_pinned = 1 THEN note_title ELSE ?3 END
+             WHERE id = ?1",
+            rusqlite::params![id, body, derive_note_title_from_body(&body)],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.execute_batch("PRAGMA user_version = 4;")
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
@@ -3191,7 +3184,7 @@ mod tests {
         let listed = db.list_notes_meta().expect("list");
         assert_eq!(listed[0].title, ENCRYPTED_NOTE_TITLE);
         assert_eq!(listed[0].body_prefix, "[locked]");
-        let linked = db.resolve_wiki_link("n1").expect("resolve").expect("found");
+        let linked = db.get_note_meta("n1").expect("resolve").expect("found");
         assert_eq!(linked.title, ENCRYPTED_NOTE_TITLE);
         assert!(db
             .save_note("n1", "should fail")
@@ -3229,6 +3222,48 @@ mod tests {
     }
 
     #[test]
+    fn migration_rewrites_short_wiki_links_to_full_ids() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("01KP0YD099X9TQENYJQ1SE9X8V", "Older")
+            .expect("seed older");
+        db.save_note("01KP0YD0PZ75YKEFBJ162G23AV", "Newer")
+            .expect("seed newer");
+        db.save_note("01KP0YD1GJJDZA09429K2NYF7M", "Plan\n# Goals")
+            .expect("seed plan");
+        db.save_note(
+            "src",
+            "[[01kp0yd1]] and [[01KP0YD1#Goals|goals]]\n\
+             total := [[01KP0YD0]].rate + 1\n\
+             [[ZZZZZZZZ]] [[01KP0YD1GJJDZA09429K2NYF7M]] `[[01KP0YD1]]x`",
+        )
+        .expect("seed links");
+        drop(db);
+        let conn = Connection::open(&path).expect("raw connection");
+        conn.execute_batch(
+            "UPDATE notes SET updated_at = '2026-01-01T00:00:00Z'
+             WHERE id = '01KP0YD099X9TQENYJQ1SE9X8V';
+             UPDATE notes SET updated_at = '2026-02-01T00:00:00Z'
+             WHERE id = '01KP0YD0PZ75YKEFBJ162G23AV';
+             PRAGMA user_version = 3;",
+        )
+        .expect("downgrade");
+        drop(conn);
+
+        let db = Db::open(path.clone()).expect("db reopens");
+        let body = db.get_note("src").expect("lookup").expect("exists").body;
+        assert_eq!(
+            body,
+            "[[01KP0YD1GJJDZA09429K2NYF7M]] and [[01KP0YD1GJJDZA09429K2NYF7M#Goals|goals]]\n\
+             total := [[01KP0YD0PZ75YKEFBJ162G23AV]].rate + 1\n\
+             [[ZZZZZZZZ]] [[01KP0YD1GJJDZA09429K2NYF7M]] `[[01KP0YD1GJJDZA09429K2NYF7M]]x`"
+        );
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn migrations_turn_app_locks_into_plain_notes_and_wrap_keys() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");
@@ -3256,7 +3291,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert!(has_column(&conn, "notes", "wrapped_key").unwrap());
         assert!(!has_column(&conn, "notes", "password_hash").unwrap());
 
@@ -4820,93 +4855,6 @@ mod tests {
             db.get_ingest_offset("imap:example:user:inbox")
                 .expect("lookup"),
             Some(77)
-        );
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn resolve_wiki_link_finds_note_by_short_id() {
-        let path = temp_db_path();
-        let db = Db::open(path.clone()).expect("db opens");
-
-        let id = ulid::Ulid::new().to_string();
-        let note = db
-            .create_note_with_defaults(&id, NoteModules::default(), None)
-            .expect("note created");
-        let short_id = &note.id[..8];
-
-        let resolved = db.resolve_wiki_link(short_id).expect("query succeeds");
-        assert!(resolved.is_some());
-        assert_eq!(resolved.unwrap().id, note.id);
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn resolve_wiki_link_returns_none_for_unknown_short_id() {
-        let path = temp_db_path();
-        let db = Db::open(path.clone()).expect("db opens");
-
-        let resolved = db.resolve_wiki_link("00000000").expect("query succeeds");
-        assert!(resolved.is_none());
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn resolve_wiki_link_prefers_most_recent_when_prefix_collides() {
-        let path = temp_db_path();
-        let db = Db::open(path.clone()).expect("db opens");
-
-        db.save_note("01HX4VHR_OLD", "old").expect("seed old note");
-        db.save_note("01HX4VHR_NEW", "new").expect("seed new note");
-        db.save_note("01HX4VHR_OLD", "old again")
-            .expect("bump old note to newest");
-
-        let resolved = db
-            .resolve_wiki_link("01HX4VHR")
-            .expect("query succeeds")
-            .expect("match expected");
-        assert_eq!(resolved.id, "01HX4VHR_OLD");
-
-        drop(db);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn resolve_wiki_links_returns_entries_in_input_order() {
-        let path = temp_db_path();
-        let db = Db::open(path.clone()).expect("db opens");
-
-        db.save_note("01HX4VHR_AAA", "first")
-            .expect("seed first note");
-        db.save_note("01HX4VHS_BBB", "second")
-            .expect("seed second note");
-
-        let resolved = db
-            .resolve_wiki_links(&[
-                "01HX4VHS".to_string(),
-                "MISSING00".to_string(),
-                "01HX4VHR".to_string(),
-            ])
-            .expect("batch resolve succeeds");
-
-        assert_eq!(resolved.len(), 3);
-        assert_eq!(resolved[0].0, "01HX4VHS");
-        assert_eq!(
-            resolved[0].1.as_ref().map(|n| n.id.as_str()),
-            Some("01HX4VHS_BBB")
-        );
-        assert_eq!(resolved[1].0, "MISSING00");
-        assert!(resolved[1].1.is_none());
-        assert_eq!(resolved[2].0, "01HX4VHR");
-        assert_eq!(
-            resolved[2].1.as_ref().map(|n| n.id.as_str()),
-            Some("01HX4VHR_AAA")
         );
 
         drop(db);

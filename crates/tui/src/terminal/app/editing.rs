@@ -6,10 +6,10 @@ use super::{
     find_calc_segment_range, find_table_formula_segments, gutter_width_for_visible_lines,
     is_markdown_table_line, line_char_len, line_display_cols, preload_cross_note_dep_value,
     table_cell_edit_start, table_cell_info_at_char, table_cell_is_empty,
-    table_cell_navigation_anchor, tui_note_short_id, variable_completion_candidates, Db, FoldKind,
-    LineReminderGhost, ReminderUndoEntry, TerminalApp, UiMode, UndoAction,
-    VariableAutocompletePopupState, VariableAutocompleteState, WikiLinkAutocompletePopupState,
-    WikiLinkSuggestion, CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
+    table_cell_navigation_anchor, variable_completion_candidates, Db, FoldKind, LineReminderGhost,
+    ReminderUndoEntry, TerminalApp, UiMode, UndoAction, VariableAutocompletePopupState,
+    VariableAutocompleteState, WikiLinkAutocompletePopupState, WikiLinkSuggestion,
+    CALC_ASYNC_MIN_LINES, CALC_IDLE_EVAL_BUDGET_MS, CALC_RECOMPUTE_DEBOUNCE_MS,
     CALC_RECOMPUTE_PENDING_RETRY_MS, CALC_VIEWPORT_PREFETCH_MULTIPLIER, EDITOR_TOP_ROW,
     FENCE_CHECKPOINT_INTERVAL, HORIZONTAL_SCROLL_LEFT_CONTEXT, LARGE_DOC_CALC_DEFER_LINES,
     UNDO_DEBOUNCE_MS, VARIABLE_AUTOCOMPLETE_MAX_SUGGESTIONS,
@@ -1745,7 +1745,6 @@ impl TerminalApp {
 
         if self.calc.stale {
             let note_id = self.active_note.id.clone();
-            let short_id = tui_note_short_id(&note_id).to_string();
             let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
                 &self.editor.lines,
@@ -1753,7 +1752,6 @@ impl TerminalApp {
                 calc_cross_note_enabled,
                 calc_table_enabled,
                 &note_id,
-                &short_id,
                 &self.cross_note_var_index,
             );
             let calc_mask = self.calc_feature_mask();
@@ -2033,7 +2031,6 @@ impl TerminalApp {
             (merged_results, merged_cells)
         } else {
             let note_id = self.active_note.id.clone();
-            let short_id = tui_note_short_id(&note_id).to_string();
             let calc_data = compute_calc_data_for_note(
                 &self.calc.engine,
                 &self.editor.lines,
@@ -2041,7 +2038,6 @@ impl TerminalApp {
                 calc_cross_note_enabled,
                 calc_table_enabled,
                 &note_id,
-                &short_id,
                 &self.cross_note_var_index,
             );
             (calc_data.line_results, calc_data.cell_results)
@@ -2621,13 +2617,13 @@ impl TerminalApp {
             return None;
         }
 
-        // Cross-note prefix takes priority: [[SHORTID]].partial
+        // Cross-note prefix takes priority: [[ID]].partial
         let line = self.current_line();
-        if let Some((short_id, bracket_col, from_col, partial)) =
+        if let Some((dep_id, bracket_col, from_col, partial)) =
             extract_cross_note_completion_prefix(line, self.editor.cursor_col)
         {
             let exports = cross_note_exports_for_autocomplete(
-                &short_id,
+                &dep_id,
                 &self.cross_note_var_index,
                 &self.calc.engine,
                 &self.cross_note_db,
@@ -2639,16 +2635,16 @@ impl TerminalApp {
                 .cross_note_var_index
                 .lock()
                 .ok()
-                .map(|mut idx| idx.try_claim_eval(&short_id))
+                .map(|mut idx| idx.try_claim_eval(&dep_id))
                 .unwrap_or(false);
             if needs_preload {
-                let bg_short_id = short_id.clone();
+                let bg_dep_id = dep_id.clone();
                 let bg_var_index = std::sync::Arc::clone(&self.cross_note_var_index);
                 let bg_condvar = std::sync::Arc::clone(&self.cross_note_eval_condvar);
                 let bg_db = self.cross_note_db.clone();
                 std::thread::spawn(move || {
                     let engine = app_core::calc::CalcEngine::new();
-                    preload_cross_note_dep_value(&bg_short_id, &bg_var_index, &engine, &bg_db);
+                    preload_cross_note_dep_value(&bg_dep_id, &bg_var_index, &engine, &bg_db);
                     bg_condvar.notify_all();
                 });
             }
@@ -3979,13 +3975,13 @@ impl TerminalApp {
         // so the recompute following a Tab press can still get correct values when
         // the autocomplete background thread is nearly done.
         let (missing, in_flight): (Vec<String>, Vec<String>) = {
-            let short_ids: rustc_hash::FxHashSet<String> =
-                refs.iter().map(|r| r.note_short_id.clone()).collect();
+            let dep_ids: rustc_hash::FxHashSet<String> =
+                refs.iter().map(|r| r.note_id.clone()).collect();
             match self.cross_note_var_index.lock() {
                 Ok(index) => {
                     let mut missing = Vec::new();
                     let mut in_flight = Vec::new();
-                    for sid in short_ids {
+                    for sid in dep_ids {
                         if index.was_full_eval_attempted(&sid) {
                             // already done
                         } else if index.is_eval_done_or_in_flight(&sid) {
@@ -4019,9 +4015,9 @@ impl TerminalApp {
         }
 
         // Sync-load any deps that have no background thread covering them.
-        for short_id in missing {
+        for dep_id in missing {
             preload_cross_note_dep_value(
-                &short_id,
+                &dep_id,
                 &self.cross_note_var_index,
                 &self.calc.engine,
                 &self.cross_note_db,
@@ -4129,10 +4125,10 @@ impl TerminalApp {
             let engine = app_core::calc::CalcEngine::new();
             let (extern_vars, refs_scan) = if cross_note_enabled {
                 let refs = app_core::calc::scan_cross_note_refs(&lines);
-                let short_ids: rustc_hash::FxHashSet<&str> =
-                    refs.iter().map(|r| r.note_short_id.as_str()).collect();
-                for short_id in short_ids {
-                    preload_cross_note_dep_value(short_id, &index, &engine, &db);
+                let dep_ids: rustc_hash::FxHashSet<&str> =
+                    refs.iter().map(|r| r.note_id.as_str()).collect();
+                for dep_id in dep_ids {
+                    preload_cross_note_dep_value(dep_id, &index, &engine, &db);
                 }
                 let extern_vars = match index.lock() {
                     Ok(mut index) => {
@@ -4319,27 +4315,26 @@ impl TerminalApp {
             return None;
         }
         if let Some(hash_idx) = query.find('#') {
-            let short_id = &query[..hash_idx];
-            if short_id.len() != 8 || !short_id.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            let note_id = &query[..hash_idx];
+            if !crate::editor_core::markdown_tokens::is_note_link_id(note_id) {
                 return None;
             }
-            return Some((short_id, Some(&query[hash_idx + 1..])));
+            return Some((note_id, Some(&query[hash_idx + 1..])));
         }
         Some((query, None))
     }
 
     fn load_wiki_link_heading_suggestions(
         db: &crate::storage::Db,
-        short_id: &str,
+        note_id: &str,
     ) -> Vec<WikiLinkSuggestion> {
-        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
-        let Ok(Some(note)) = note_sources.resolve_wiki_link_note(short_id) else {
+        let Ok(Some(note)) = db.get_note(note_id) else {
             return Vec::new();
         };
         crate::editor_core::markdown_tokens::extract_markdown_headings(&note.body)
             .into_iter()
             .map(|heading| WikiLinkSuggestion {
-                short_id: short_id.to_string(),
+                note_id: note_id.to_string(),
                 title: heading.clone(),
                 title_lower: heading.to_lowercase(),
                 heading: Some(heading),
@@ -4362,7 +4357,7 @@ impl TerminalApp {
                 };
                 let title_lower = title.to_lowercase();
                 WikiLinkSuggestion {
-                    short_id: n.id[..8.min(n.id.len())].to_string(),
+                    note_id: n.id,
                     title,
                     title_lower,
                     heading: None,
@@ -4381,7 +4376,7 @@ impl TerminalApp {
             self.working_collection_id.as_deref(),
         ) {
             self.switcher.items = items;
-            self.rebuild_wiki_link_prefix_index();
+            self.rebuild_wiki_link_index();
             self.rebuild_wiki_link_note_suggestions_cache();
         }
     }
@@ -4391,9 +4386,9 @@ impl TerminalApp {
     }
 
     fn cleanup_pending_wiki_link_heading_prompt(&mut self) {
-        let Some(short_id) = self
+        let Some(note_id) = self
             .wiki_link_autocomplete_popup
-            .pending_heading_short_id
+            .pending_heading_note_id
             .clone()
         else {
             return;
@@ -4405,7 +4400,7 @@ impl TerminalApp {
         let from_col = self.wiki_link_autocomplete_popup.from_col;
         let line = self.editor.lines[line_idx].clone();
         let chars: Vec<char> = line.chars().collect();
-        let hash_col = from_col + 2 + short_id.chars().count();
+        let hash_col = from_col + 2 + note_id.chars().count();
         if hash_col >= chars.len() || chars[hash_col] != '#' {
             return;
         }
@@ -4455,7 +4450,7 @@ impl TerminalApp {
             anchor_col,
             from_col,
             query: String::new(),
-            pending_heading_short_id: None,
+            pending_heading_note_id: None,
             note_suggestions,
             heading_cache: rustc_hash::FxHashMap::default(),
             suggestions,
@@ -4506,7 +4501,7 @@ impl TerminalApp {
             anchor_col,
             from_col,
             query,
-            pending_heading_short_id: None,
+            pending_heading_note_id: None,
             note_suggestions,
             heading_cache: rustc_hash::FxHashMap::default(),
             suggestions,
@@ -4546,7 +4541,7 @@ impl TerminalApp {
             self.wiki_link_autocomplete_popup.anchor_row = anchor_row;
             self.wiki_link_autocomplete_popup.anchor_col = anchor_col;
         }
-        if let Some((short_id, heading_query)) =
+        if let Some((target, heading_query)) =
             Self::parse_wiki_link_query(self.wiki_link_autocomplete_popup.query.as_str())
         {
             self.wiki_link_autocomplete_popup.suggestions = match heading_query {
@@ -4554,17 +4549,15 @@ impl TerminalApp {
                     if !self
                         .wiki_link_autocomplete_popup
                         .heading_cache
-                        .contains_key(short_id)
+                        .contains_key(target)
                     {
-                        let loaded = Self::load_wiki_link_heading_suggestions(db, short_id);
+                        let loaded = Self::load_wiki_link_heading_suggestions(db, target);
                         self.wiki_link_autocomplete_popup
                             .heading_cache
-                            .insert(short_id.to_string(), loaded);
+                            .insert(target.to_string(), loaded);
                     }
-                    if let Some(cached) = self
-                        .wiki_link_autocomplete_popup
-                        .heading_cache
-                        .get(short_id)
+                    if let Some(cached) =
+                        self.wiki_link_autocomplete_popup.heading_cache.get(target)
                     {
                         if value.is_empty() {
                             cached.clone()
@@ -4581,10 +4574,10 @@ impl TerminalApp {
                     }
                 }
                 None => {
-                    if short_id.is_empty() {
+                    if target.is_empty() {
                         self.wiki_link_autocomplete_popup.note_suggestions.clone()
                     } else {
-                        let query = short_id.to_lowercase();
+                        let query = target.to_lowercase();
                         self.wiki_link_autocomplete_popup
                             .note_suggestions
                             .iter()
@@ -4666,14 +4659,14 @@ impl TerminalApp {
             self.dismiss_wiki_link_autocomplete();
             return false;
         };
-        let short_id = pick.short_id;
+        let note_id = pick.note_id;
         let title = pick.title;
         let heading = pick.heading;
         let from_col = self.wiki_link_autocomplete_popup.from_col;
         let replacement = if let Some(heading) = heading.as_deref() {
-            format!("[[{}#{}]]", short_id, heading)
+            format!("[[{}#{}]]", note_id, heading)
         } else {
-            format!("[[{}#]]", short_id)
+            format!("[[{}#]]", note_id)
         };
 
         // Find end of [[...]] span: scan forward from from_col for ]]
@@ -4695,17 +4688,17 @@ impl TerminalApp {
             self.editor.cursor_col = from_col + replacement.chars().count();
         } else {
             // Keep caret right after the auto-added # to filter heading picks.
-            self.editor.cursor_col = from_col + 2 + short_id.chars().count() + 1;
+            self.editor.cursor_col = from_col + 2 + note_id.chars().count() + 1;
         }
         self.refresh_calc_line_metadata_at(self.editor.cursor_line);
         self.mark_edited();
         if heading.is_some() {
-            self.wiki_link_autocomplete_popup.pending_heading_short_id = None;
+            self.wiki_link_autocomplete_popup.pending_heading_note_id = None;
             self.dismiss_wiki_link_autocomplete();
             self.status = format!("link heading: {title}");
         } else {
-            self.wiki_link_autocomplete_popup.query = format!("{short_id}#");
-            self.wiki_link_autocomplete_popup.pending_heading_short_id = Some(short_id);
+            self.wiki_link_autocomplete_popup.query = format!("{note_id}#");
+            self.wiki_link_autocomplete_popup.pending_heading_note_id = Some(note_id);
             self.wiki_link_autocomplete_popup.selected_index = 0;
             self.wiki_link_autocomplete_popup.cursor_line = self.editor.cursor_line;
             if let Some((anchor_row, anchor_col)) =
@@ -4727,8 +4720,7 @@ impl TerminalApp {
         else {
             return false;
         };
-        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
-        match note_sources.resolve_wiki_link(&link.short_id) {
+        match db.get_note_meta(&link.note_id) {
             Ok(Some(summary)) => match db.get_note(&summary.id) {
                 Ok(Some(note)) => {
                     let heading_text = link.heading.clone();
@@ -4791,8 +4783,7 @@ impl TerminalApp {
             self.status = "no wiki-link at cursor".to_string();
             return;
         };
-        let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
-        match note_sources.resolve_wiki_link(&link.short_id) {
+        match db.get_note_meta(&link.note_id) {
             Ok(Some(summary)) => {
                 let body = db
                     .get_note_body_preview(&summary.id, link.heading.as_deref())

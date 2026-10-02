@@ -210,7 +210,7 @@ Merged from the former `todo.md` (verified against the code on 2026-09-26; done 
 | Reduce undo memory spikes | Partial | Span-based history paths exist; extend them so remaining large-note edits avoid full line-vector snapshots. | 8 | 7 |
 | Performance budgets in CI | Partial | CI runs the startup, table and large-note checks; the large-note check budgets open, scrolling, typing, structural edits, undo/redo, search and idle ticks at 30k and 100k lines. Remaining: memory budgets and 200k/400k sizes. | 8 | 6 |
 | Large-note degradation | Backlog | See "Performance Backlog": replace the all-or-nothing 30,000-line cutoff with per-feature budgets and visible degraded-state indicators. | 8 | 7 |
-| Unambiguous wiki-link resolution | Backlog | Resolve exact ids, aliases, or ask to disambiguate instead of taking the most recent note matching an 8-char prefix. | 6 | 5 |
+| Unambiguous wiki-link resolution | Done | Links name the full note id (ULID or `daily-YYYY-MM-DD`) and resolve by exact match; migration 4 rewrote stored 8-char links. | 6 | 5 |
 | File-note trust boundary | Partial | Asset access is constrained in `app-core`; the terminal should make clear that a file-backed note is an external file saved directly to its path (e.g. a title-bar badge). | 7 | 4 |
 | Terminal-layer semantics guardrail | Backlog | A check that flags new table/list/vim semantic helpers added under `crates/tui` unless allowlisted. | 7 | 5 |
 | Host capability contract | Backlog | A small typed contract for host capabilities used by command planning: save, quit, export, backup, note security, collections, reminders, clipboard. | 6 | 4 |

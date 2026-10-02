@@ -204,21 +204,6 @@ impl NoteSourceService {
         }
     }
 
-    pub fn resolve_wiki_link(&self, short_id: &str) -> Result<Option<NoteSummary>, String> {
-        self.db.resolve_wiki_link(short_id)
-    }
-
-    pub fn resolve_wiki_links(
-        &self,
-        short_ids: &[String],
-    ) -> Result<Vec<(String, Option<NoteSummary>)>, String> {
-        self.db.resolve_wiki_links(short_ids)
-    }
-
-    pub fn resolve_wiki_link_note(&self, short_id: &str) -> Result<Option<Note>, String> {
-        self.db.resolve_wiki_link_note(short_id)
-    }
-
     #[cfg(test)]
     pub fn get_note_revision_by_id(&self, note_id: &str) -> Result<Option<String>, String> {
         self.get_note_revision(&self.parse_identity(note_id))

@@ -15,8 +15,8 @@ pub struct CalcEngine;
 /// A variable value imported from another note for cross-note calc evaluation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExternVar {
-    /// 8-char lowercase alphanumeric short ID of the source note.
-    pub note_short_id: String,
+    /// Id of the source note, as written in `[[id]].var`.
+    pub note_id: String,
     /// Normalized (lowercased, spaces collapsed) variable name.
     pub var_normalized: String,
     pub value: f64,
@@ -25,8 +25,8 @@ pub struct ExternVar {
 /// A cross-note variable reference found while scanning a note's lines.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CrossNoteRef {
-    /// 8-char lowercase alphanumeric short ID of the referenced note.
-    pub note_short_id: String,
+    /// Id of the referenced note, as written in `[[id]].var`.
+    pub note_id: String,
     /// Normalized variable name referenced from the other note.
     pub var_normalized: String,
     /// 1-based line number where the reference appears.
@@ -37,7 +37,7 @@ pub struct CrossNoteRef {
 pub struct NoteEvaluationOptions {
     pub variables_enabled: bool,
     pub table_enabled: bool,
-    /// Controls whether `[[SHORTID]].var_name` cross-note references are scanned
+    /// Controls whether `[[ID]].var_name` cross-note references are scanned
     /// and substituted. When `false`, cross-note refs are left as-is (no ghost output).
     pub cross_note_enabled: bool,
     /// Optional half-open range `[from, to)` of line indices (0-based) to evaluate.
@@ -45,7 +45,7 @@ pub struct NoteEvaluationOptions {
     /// full document so that a restricted evaluation still sees vars defined elsewhere.
     /// Positions outside the range are returned as `None` in `line_results`.
     pub eval_range: Option<(usize, usize)>,
-    /// Values from other notes to substitute for `[[SHORTID]].var_name` references.
+    /// Values from other notes to substitute for `[[ID]].var_name` references.
     /// Only used when `cross_note_enabled` is true.
     pub extern_vars: Vec<ExternVar>,
     /// Pre-scanned cross-note refs for this note. When `Some`, the engine skips
@@ -797,7 +797,7 @@ fn note_options_key(options: &NoteEvaluationOptions) -> u64 {
     let mut externs = 0u64;
     for var in &options.extern_vars {
         let mut entry = FxHasher::default();
-        (&var.note_short_id, &var.var_normalized, var.value.to_bits()).hash(&mut entry);
+        (&var.note_id, &var.var_normalized, var.value.to_bits()).hash(&mut entry);
         externs = externs.wrapping_add(entry.finish());
     }
     externs.hash(&mut hasher);
@@ -814,12 +814,7 @@ fn extern_value_map(options: &NoteEvaluationOptions) -> FxHashMap<(String, Strin
     options
         .extern_vars
         .iter()
-        .map(|ev| {
-            (
-                (ev.note_short_id.clone(), ev.var_normalized.clone()),
-                ev.value,
-            )
-        })
+        .map(|ev| ((ev.note_id.clone(), ev.var_normalized.clone()), ev.value))
         .collect()
 }
 
@@ -2437,14 +2432,17 @@ fn variable_index_from_definitions(
 
 fn cross_note_ref_regex() -> &'static Regex {
     CROSS_NOTE_REF_RE.get_or_init(|| {
-        // Matches [[SHORTID]].var_name where SHORTID is 8 alphanumeric chars.
+        // Matches [[ID]].var_name where ID is a full note id: the same ids
+        // `editor_core::markdown_tokens::is_note_link_id` accepts.
         // Var name: starts and ends with [A-Za-z0-9_], allows internal spaces.
-        Regex::new(r"\[\[([A-Za-z0-9]{8})\]\]\.([A-Za-z0-9_](?:[A-Za-z0-9_ ]*[A-Za-z0-9_])?)")
+        Regex::new(
+            r"\[\[([A-Za-z0-9][A-Za-z0-9_-]{0,63})\]\]\.([A-Za-z0-9_](?:[A-Za-z0-9_ ]*[A-Za-z0-9_])?)",
+        )
             .expect("cross-note ref regex is valid")
     })
 }
 
-/// Scan lines for all `[[SHORTID]].var_name` references (1-based line numbers).
+/// Scan lines for all `[[ID]].var_name` references (1-based line numbers).
 /// Fast variable-assignment scan: finds `name :=` lines without evaluating
 /// expressions. Returns one `VariableIndexEntry` per unique normalized name
 /// (last definition wins, matching runtime precedence). Much cheaper than a
@@ -2472,7 +2470,7 @@ pub fn scan_cross_note_refs(lines: &[String]) -> Vec<CrossNoteRef> {
     let mut refs = Vec::new();
     for (line_idx, line) in lines.iter().enumerate() {
         for cap in re.captures_iter(line) {
-            let short_id = cap[1].to_ascii_lowercase();
+            let note_id = cap[1].to_string();
             let raw_name = cap[2].trim();
             let var_normalized = raw_name
                 .split_whitespace()
@@ -2483,7 +2481,7 @@ pub fn scan_cross_note_refs(lines: &[String]) -> Vec<CrossNoteRef> {
                 continue;
             }
             refs.push(CrossNoteRef {
-                note_short_id: short_id,
+                note_id,
                 var_normalized,
                 line: line_idx + 1,
             });
@@ -2492,7 +2490,7 @@ pub fn scan_cross_note_refs(lines: &[String]) -> Vec<CrossNoteRef> {
     refs
 }
 
-/// Replace `[[SHORTID]].var_name` tokens in a line with their resolved numeric values.
+/// Replace `[[ID]].var_name` tokens in a line with their resolved numeric values.
 /// Returns (preprocessed_line, has_unresolved) where has_unresolved is true if any
 /// ref in the line could not be resolved from extern_vars.
 fn preprocess_line_cross_note<'a>(
@@ -2513,7 +2511,7 @@ fn preprocess_line_cross_note<'a>(
 
     for cap in re.captures_iter(line) {
         let full = cap.get(0).unwrap();
-        let short_id = cap[1].to_ascii_lowercase();
+        let note_id = cap[1].to_string();
         let raw_name = cap[2].trim();
         let var_normalized = raw_name
             .split_whitespace()
@@ -2521,7 +2519,7 @@ fn preprocess_line_cross_note<'a>(
             .join(" ")
             .to_ascii_lowercase();
 
-        let key = (short_id, var_normalized);
+        let key = (note_id, var_normalized);
         let Some(&value) = extern_map.get(&key) else {
             // Unresolved refs are left verbatim, so they cost no rewrite.
             has_unresolved = true;
@@ -3783,7 +3781,7 @@ mod tests {
             cross_note_enabled: true,
             eval_range: range,
             extern_vars: vec![ExternVar {
-                note_short_id: "abcd1234".to_string(),
+                note_id: "abcd1234".to_string(),
                 var_normalized: "rate".to_string(),
                 value: rate,
             }],
@@ -3838,7 +3836,7 @@ mod tests {
             cross_note_enabled: true,
             eval_range: Some(range),
             extern_vars: vec![ExternVar {
-                note_short_id: "abcd1234".to_string(),
+                note_id: "abcd1234".to_string(),
                 var_normalized: "rate".to_string(),
                 value: 0.5,
             }],
@@ -4021,20 +4019,20 @@ mod tests {
     #[test]
     fn scan_cross_note_refs_basic() {
         let lines = vec![
-            "see [[ABCD1234]].monthly_income + 100".to_string(),
+            "see [[01KP0YD099X9TQENYJQ1SE9X8V]].monthly_income + 100".to_string(),
             "plain line".to_string(),
-            "[[ABCD1234]].total cost + [[ZZZZZZZZ]].rate".to_string(),
+            "[[01KP0YD099X9TQENYJQ1SE9X8V]].total cost + [[daily-2026-10-02]].rate".to_string(),
         ];
         let refs = scan_cross_note_refs(&lines);
         assert_eq!(refs.len(), 3);
-        assert_eq!(refs[0].note_short_id, "abcd1234");
+        assert_eq!(refs[0].note_id, "01KP0YD099X9TQENYJQ1SE9X8V");
         assert_eq!(refs[0].var_normalized, "monthly_income");
         assert_eq!(refs[0].line, 1);
-        // refs[1] = [[ABCD1234]].total cost, refs[2] = [[ZZZZZZZZ]].rate (both on line 3)
-        assert_eq!(refs[1].note_short_id, "abcd1234");
+        // refs[1] = total cost, refs[2] = the daily note's rate (both on line 3)
+        assert_eq!(refs[1].note_id, "01KP0YD099X9TQENYJQ1SE9X8V");
         assert_eq!(refs[1].var_normalized, "total cost");
         assert_eq!(refs[1].line, 3);
-        assert_eq!(refs[2].note_short_id, "zzzzzzzz");
+        assert_eq!(refs[2].note_id, "daily-2026-10-02");
         assert_eq!(refs[2].var_normalized, "rate");
         assert_eq!(refs[2].line, 3);
     }
@@ -4042,10 +4040,10 @@ mod tests {
     #[test]
     fn cross_note_ref_substituted_and_evaluated() {
         let engine = CalcEngine::new();
-        let lines = vec!["[[ABCD1234]].budget + 500".to_string()];
+        let lines = vec!["[[abcd1234]].budget + 500".to_string()];
         let options = NoteEvaluationOptions {
             extern_vars: vec![ExternVar {
-                note_short_id: "abcd1234".to_string(),
+                note_id: "abcd1234".to_string(),
                 var_normalized: "budget".to_string(),
                 value: 1000.0,
             }],
@@ -4060,7 +4058,7 @@ mod tests {
     #[test]
     fn cross_note_ref_unresolved_produces_no_output() {
         let engine = CalcEngine::new();
-        let lines = vec!["[[ABCD1234]].missing + 500".to_string()];
+        let lines = vec!["[[abcd1234]].missing + 500".to_string()];
         let result = engine.evaluate_note_context(&lines, NoteEvaluationOptions::default());
         assert_eq!(result.line_results[0], None);
         assert_eq!(result.cross_note_refs.len(), 1);
@@ -4078,14 +4076,14 @@ mod tests {
 
         // A ref that cannot be resolved is left verbatim, so still no rewrite.
         let (missing, unresolved) =
-            preprocess_line_cross_note("[[ABCD1234]].nope + 1", &extern_map);
+            preprocess_line_cross_note("[[abcd1234]].nope + 1", &extern_map);
         assert!(matches!(missing, Cow::Borrowed(_)));
         assert!(unresolved);
-        assert_eq!(missing, "[[ABCD1234]].nope + 1");
+        assert_eq!(missing, "[[abcd1234]].nope + 1");
 
         // A resolvable ref is substituted, which does require an owned line.
         let (rewritten, unresolved) =
-            preprocess_line_cross_note("[[ABCD1234]].budget + 1", &extern_map);
+            preprocess_line_cross_note("[[abcd1234]].budget + 1", &extern_map);
         assert!(matches!(rewritten, Cow::Owned(_)));
         assert!(!unresolved);
         assert!(rewritten.contains("90"), "got: {rewritten}");
@@ -4095,10 +4093,10 @@ mod tests {
     #[test]
     fn cross_note_ref_mixed_with_local_variable() {
         let engine = CalcEngine::new();
-        let lines = vec!["x := 10".to_string(), "[[ABCD1234]].budget + x".to_string()];
+        let lines = vec!["x := 10".to_string(), "[[abcd1234]].budget + x".to_string()];
         let options = NoteEvaluationOptions {
             extern_vars: vec![ExternVar {
-                note_short_id: "abcd1234".to_string(),
+                note_id: "abcd1234".to_string(),
                 var_normalized: "budget".to_string(),
                 value: 90.0,
             }],

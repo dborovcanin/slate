@@ -139,18 +139,18 @@ pub(super) fn compute_calc_data_for_note(
     cross_note_enabled: bool,
     table_enabled: bool,
     note_id: &str,
-    short_id: &str,
     cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
 ) -> CalcData {
-    let has_cross_note_syntax =
-        cross_note_enabled && !short_id.is_empty() && lines.iter().any(|l| l.contains("[["));
+    // File notes cannot be linked, so they neither import nor export.
+    let linkable =
+        cross_note_enabled && crate::editor_core::markdown_tokens::is_note_link_id(note_id);
+    let has_cross_note_syntax = linkable && lines.iter().any(|l| l.contains("[["));
 
     let (extern_vars, precomputed_refs) = if has_cross_note_syntax {
         // Scan outside the lock: TUI runs on a single event-loop thread so
         // no concurrent eval can race update_deps for the same note_id.
         let refs = app_core::calc::scan_cross_note_refs(lines);
         let extern_vars = if let Ok(mut index) = cross_note_var_index.lock() {
-            index.register_note(note_id, short_id);
             index.update_deps(note_id, &refs);
             index.extern_vars_for(note_id)
         } else {
@@ -174,9 +174,9 @@ pub(super) fn compute_calc_data_for_note(
         },
     );
 
-    if cross_note_enabled && !short_id.is_empty() {
+    if linkable {
         if let Ok(mut index) = cross_note_var_index.lock() {
-            index.update_exports(short_id, &result.variables, &result.variable_values);
+            index.update_exports(note_id, &result.variables, &result.variable_values);
             index.update_deps(note_id, &result.cross_note_refs);
         }
     }
@@ -329,38 +329,29 @@ pub(super) fn contains_assignment_operator(text: &str) -> bool {
     crate::editor_core::calc_plan::contains_assignment_operator(text)
 }
 
-/// Returns the 8-char wiki-link short ID for a DB note, or `""` for file notes.
-pub(super) fn tui_note_short_id(note_id: &str) -> &str {
-    if note_id.starts_with("mdfile:") || note_id.len() < 8 {
-        return "";
-    }
-    &note_id[..8]
-}
-
-/// Returns variable name entries for `short_id` for autocomplete suggestions.
+/// Returns variable name entries for `note_id` for autocomplete suggestions.
 /// Uses a fast text scan (no expression evaluation) so the first call is cheap.
 /// Values are NOT populated by this function — use `preload_cross_note_dep_value`
 /// for ghost-eval correctness.
 pub(super) fn cross_note_exports_for_autocomplete(
-    short_id: &str,
+    note_id: &str,
     cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
     _engine: &CalcEngine,
     db: &Db,
 ) -> Vec<VariableIndexEntry> {
-    // Fast path: name scan already done for this short_id.
+    // Fast path: name scan already done for this note.
     if let Ok(index) = cross_note_var_index.lock() {
-        if index.was_name_scan_attempted(short_id) {
-            return index.exports_for_short_id(short_id).to_vec();
+        if index.was_name_scan_attempted(note_id) {
+            return index.exports_for_note(note_id).to_vec();
         }
     }
 
     // Slow path: load the note body and do a name-only scan (no eval).
-    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
-    let note = match note_sources.resolve_wiki_link_note(short_id) {
+    let note = match db.get_note(note_id) {
         Ok(Some(n)) => n,
         _ => {
             if let Ok(mut index) = cross_note_var_index.lock() {
-                index.mark_name_scan_attempted(short_id);
+                index.mark_name_scan_attempted(note_id);
             }
             return Vec::new();
         }
@@ -368,34 +359,32 @@ pub(super) fn cross_note_exports_for_autocomplete(
     let lines: Vec<String> = note.body.split('\n').map(|l| l.to_string()).collect();
     let entries = app_core::calc::scan_variable_assignments(&lines);
     if let Ok(mut index) = cross_note_var_index.lock() {
-        index.register_note(&note.id, short_id);
-        index.update_entries_only(short_id, &entries);
-        index.mark_name_scan_attempted(short_id);
+        index.update_entries_only(note_id, &entries);
+        index.mark_name_scan_attempted(note_id);
     }
     entries
 }
 
-/// Ensures the f64 export values for `short_id` are in the index by running a
+/// Ensures the f64 export values for `note_id` are in the index by running a
 /// full CalcEngine eval if not already done this session. Called from
 /// `preload_cross_note_deps` before each recompute so ghost eval has values.
 pub(super) fn preload_cross_note_dep_value(
-    short_id: &str,
+    note_id: &str,
     cross_note_var_index: &Arc<Mutex<CrossNoteVarIndex>>,
     engine: &CalcEngine,
     db: &Db,
 ) {
     if let Ok(index) = cross_note_var_index.lock() {
-        if index.was_full_eval_attempted(short_id) {
+        if index.was_full_eval_attempted(note_id) {
             return;
         }
     }
 
-    let note_sources = app_core::note_sources::NoteSourceService::new(db.clone());
-    let note = match note_sources.resolve_wiki_link_note(short_id) {
+    let note = match db.get_note(note_id) {
         Ok(Some(n)) => n,
         _ => {
             if let Ok(mut index) = cross_note_var_index.lock() {
-                index.mark_full_eval_attempted(short_id);
+                index.mark_full_eval_attempted(note_id);
             }
             return;
         }
@@ -410,14 +399,13 @@ pub(super) fn preload_cross_note_dep_value(
         },
     );
     if let Ok(mut index) = cross_note_var_index.lock() {
-        index.register_note(&note.id, short_id);
-        index.update_exports(short_id, &result.variables, &result.variable_values);
-        index.mark_name_scan_attempted(short_id); // name scan implied by full eval
-        index.mark_full_eval_attempted(short_id);
+        index.update_exports(note_id, &result.variables, &result.variable_values);
+        index.mark_name_scan_attempted(note_id); // name scan implied by full eval
+        index.mark_full_eval_attempted(note_id);
     }
 }
 
-/// Values for the `[[SHORTID]].var` references in `lines`, loading each
+/// Values for the `[[ID]].var` references in `lines`, loading each
 /// linked note on first use, so the first calc pass after opening a note
 /// already shows cross-note results.
 pub(super) fn startup_cross_note_extern_vars(
@@ -431,10 +419,9 @@ pub(super) fn startup_cross_note_extern_vars(
     if refs.is_empty() {
         return Vec::new();
     }
-    let short_ids: rustc_hash::FxHashSet<&str> =
-        refs.iter().map(|r| r.note_short_id.as_str()).collect();
-    for short_id in short_ids {
-        preload_cross_note_dep_value(short_id, cross_note_var_index, engine, db);
+    let dep_ids: rustc_hash::FxHashSet<&str> = refs.iter().map(|r| r.note_id.as_str()).collect();
+    for dep_id in dep_ids {
+        preload_cross_note_dep_value(dep_id, cross_note_var_index, engine, db);
     }
     match cross_note_var_index.lock() {
         Ok(mut index) => {
@@ -445,10 +432,8 @@ pub(super) fn startup_cross_note_extern_vars(
     }
 }
 
-/// If the text before `cursor_col` ends with `[[SHORTID]].partial`, return
-/// `(short_id, from_col_of_partial, partial_query)`.
-/// `from_col_of_partial` is the char index right after the dot.
-/// Returns `(short_id, bracket_col, from_col, partial)`.
+/// If the text before `cursor_col` ends with `[[ID]].partial`, return
+/// `(note_id, bracket_col, from_col, partial)`.
 /// `bracket_col` is the char column of the opening `[[` — used to anchor the
 /// autocomplete popup visually under the full `[[id]].` expression.
 /// `from_col` is the start of the partial var name — used for text replacement.
@@ -460,7 +445,9 @@ pub(super) fn extract_cross_note_completion_prefix(
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r"\[\[([A-Za-z0-9]{8})\]\]\.([A-Za-z0-9_][A-Za-z0-9_ ]*)?$").unwrap()
+        // Note ids as `markdown_tokens::is_note_link_id` accepts them.
+        Regex::new(r"\[\[([A-Za-z0-9][A-Za-z0-9_-]{0,63})\]\]\.([A-Za-z0-9_][A-Za-z0-9_ ]*)?$")
+            .unwrap()
     });
 
     let chars: Vec<char> = line_text.chars().collect();
@@ -470,12 +457,12 @@ pub(super) fn extract_cross_note_completion_prefix(
     let full_match_start_byte = m.get(0)?.start();
     let bracket_col = text_before[..full_match_start_byte].chars().count();
 
-    let short_id = m.get(1)?.as_str().to_string();
+    let note_id = m.get(1)?.as_str().to_string();
     let partial_raw = m.get(2).map(|g| g.as_str()).unwrap_or("");
     let partial = partial_raw.trim().to_lowercase();
 
     let partial_chars = partial_raw.chars().count();
     let from_col = col.saturating_sub(partial_chars);
 
-    Some((short_id, bracket_col, from_col, partial))
+    Some((note_id, bracket_col, from_col, partial))
 }

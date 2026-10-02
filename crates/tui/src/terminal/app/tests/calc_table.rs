@@ -1928,7 +1928,7 @@ const RATES_NOTE_BODY: &str = "vat := 0.2";
 
 #[test]
 fn cross_note_values_show_right_after_opening_a_note() {
-    let body = "cost := 10\ncost * [[01ABCDEF]].vat";
+    let body = "cost := 10\ncost * [[01ABCDEFGHJKMNPQRSTVWXYZ00]].vat";
     let (db, app, path) = app_with_linked_notes(body, &[(RATES_NOTE_ID, RATES_NOTE_BODY)]);
 
     assert_eq!(app.calc.results[1].as_deref(), Some("2"));
@@ -1942,7 +1942,7 @@ fn cross_note_values_show_right_after_opening_a_note() {
 fn cross_note_values_show_in_viewport_evaluated_large_notes() {
     let mut lines = vec![
         "cost := 10".to_string(),
-        "cost * [[01ABCDEF]].vat".to_string(),
+        "cost * [[01ABCDEFGHJKMNPQRSTVWXYZ00]].vat".to_string(),
     ];
     lines.extend((0..super::super::CALC_VIEWPORT_ONLY_MIN_LINES).map(|i| format!("x{i} := {i}")));
     let (db, mut app, path) =

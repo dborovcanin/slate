@@ -100,16 +100,16 @@ impl AppCore {
         &self.calc_engine
     }
 
-    /// Return exported variable entries for a given note short_id.
+    /// Return exported variable entries for a given note id.
     /// Used to populate cross-note variable autocomplete suggestions.
     pub fn cross_note_exports_for_autocomplete(
         &self,
-        short_id: &str,
+        note_id: &str,
     ) -> Vec<calc::VariableIndexEntry> {
         self.cross_note_var_index
             .lock()
             .ok()
-            .map(|index| index.exports_for_short_id(short_id).to_vec())
+            .map(|index| index.exports_for_note(note_id).to_vec())
             .unwrap_or_default()
     }
 }

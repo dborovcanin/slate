@@ -334,7 +334,7 @@ struct VariableAutocompletePopupState {
 
 #[derive(Debug, Clone)]
 pub(super) struct WikiLinkSuggestion {
-    pub short_id: String,
+    pub note_id: String,
     pub title: String,
     pub title_lower: String,
     pub heading: Option<String>,
@@ -360,7 +360,7 @@ struct WikiLinkAutocompletePopupState {
     anchor_col: usize,
     from_col: usize,
     query: String,
-    pending_heading_short_id: Option<String>,
+    pending_heading_note_id: Option<String>,
     note_suggestions: Vec<WikiLinkSuggestion>,
     heading_cache: FxHashMap<String, Vec<WikiLinkSuggestion>>,
     suggestions: Vec<WikiLinkSuggestion>,
@@ -389,10 +389,9 @@ struct TableFormulaSegmentCacheEntry {
 }
 
 #[derive(Debug, Clone)]
-struct WikiLinkPrefixIndexEntry {
+struct WikiLinkIndexEntry {
     title: String,
     updated_at: String,
-    note_id: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -773,7 +772,7 @@ struct TerminalApp {
     note_password_dialog: Option<NotePasswordDialog>,
     wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState,
     wiki_link_note_suggestions_cache: Vec<WikiLinkSuggestion>,
-    wiki_link_prefix_index: FxHashMap<String, WikiLinkPrefixIndexEntry>,
+    wiki_link_index: FxHashMap<String, WikiLinkIndexEntry>,
     render_caches: RenderCaches,
     table_format_cache: crate::editor_core::table::TableFormatCache,
     render_palette: render::RenderPalette,
@@ -1236,7 +1235,7 @@ impl TerminalApp {
             note_password_dialog: None,
             wiki_link_autocomplete_popup: WikiLinkAutocompletePopupState::default(),
             wiki_link_note_suggestions_cache: Vec::new(),
-            wiki_link_prefix_index: FxHashMap::default(),
+            wiki_link_index: FxHashMap::default(),
             render_caches: RenderCaches::default(),
             table_format_cache: crate::editor_core::table::TableFormatCache::default(),
             render_palette,

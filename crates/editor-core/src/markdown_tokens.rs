@@ -70,11 +70,28 @@ pub struct InlineMarkerComponentRange {
     pub to: usize,
 }
 
+/// Longest note id a wiki link accepts.
+pub const NOTE_LINK_ID_MAX_LEN: usize = 64;
+
+/// Whether `id` can be the target of a `[[id]]` link: a full note id made of
+/// ASCII letters, digits, `-` and `_`, starting with a letter or digit. This
+/// covers ULIDs and daily-note ids (`daily-2026-10-02`). The calc engine's
+/// cross-note pattern (`app-core`) accepts the same ids.
+pub fn is_note_link_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= NOTE_LINK_ID_MAX_LEN
+        && bytes[0].is_ascii_alphanumeric()
+        && bytes
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || *b == b'-' || *b == b'_')
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WikiLinkMatch {
     pub from: usize,
     pub to: usize,
-    pub short_id: String,
+    pub note_id: String,
     pub heading: Option<String>,
     pub title: Option<String>,
 }
@@ -638,8 +655,8 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
         }
     }
 
-    // [[shortid]] | [[shortid#heading]] | [[shortid|alt-text]] | [[shortid#heading|alt-text]]
-    // short ID must be exactly 8 alphanumeric chars (ULID prefix); inserted only via autocomplete picker.
+    // [[id]] | [[id#heading]] | [[id|alt-text]] | [[id#heading|alt-text]]
+    // `id` is a full note id (see `is_note_link_id`); inserted via the autocomplete picker.
     // The #heading and |alt-text parts are both optional.
     i = 0;
     while i + 5 < len {
@@ -667,20 +684,22 @@ pub fn tokenize_inline_markdown(text: &str) -> Vec<InlineToken> {
             &inner[..]
         };
 
-        // Split id_part on optional '#' to separate short_id from heading anchor.
-        let (short_id_chars, has_anchor) =
-            if let Some(hash_rel) = id_part.iter().position(|&c| c == '#') {
-                (&id_part[..hash_rel], true)
-            } else {
-                (id_part, false)
-            };
+        // Split id_part on optional '#' to separate the note id from heading anchor.
+        let (id_chars, has_anchor) = if let Some(hash_rel) = id_part.iter().position(|&c| c == '#')
+        {
+            (&id_part[..hash_rel], true)
+        } else {
+            (id_part, false)
+        };
 
-        if short_id_chars.len() != 8 || !short_id_chars.iter().all(|c| c.is_ascii_alphanumeric()) {
+        let id_is_valid = id_chars.len() <= NOTE_LINK_ID_MAX_LEN
+            && is_note_link_id(&id_chars.iter().collect::<String>());
+        if !id_is_valid {
             i += 1;
             continue;
         }
 
-        let id_end = i + 2 + short_id_chars.len();
+        let id_end = i + 2 + id_chars.len();
         let anchor_end = i + 2 + id_part.len();
 
         push_inline_token(
@@ -950,7 +969,7 @@ pub fn wiki_link_matches_from_tokens(text: &str, tokens: &[InlineToken]) -> Vec<
     let chars: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut open_idx: Option<usize> = None;
-    let mut short_id: Option<String> = None;
+    let mut note_id: Option<String> = None;
     let mut heading: Option<String> = None;
     let mut title: Option<String> = None;
 
@@ -959,7 +978,7 @@ pub fn wiki_link_matches_from_tokens(text: &str, tokens: &[InlineToken]) -> Vec<
             InlineTokenType::WikiLinkMarker => {
                 if open_idx.is_none() {
                     open_idx = Some(idx);
-                    short_id = None;
+                    note_id = None;
                     heading = None;
                     title = None;
                     continue;
@@ -968,19 +987,19 @@ pub fn wiki_link_matches_from_tokens(text: &str, tokens: &[InlineToken]) -> Vec<
                     continue;
                 };
                 let start_token = &tokens[start_token_idx];
-                let Some(id) = short_id.take() else {
+                let Some(id) = note_id.take() else {
                     continue;
                 };
                 out.push(WikiLinkMatch {
                     from: start_token.from,
                     to: token.to,
-                    short_id: id,
+                    note_id: id,
                     heading: heading.take(),
                     title: title.take(),
                 });
             }
             InlineTokenType::WikiLinkId => {
-                short_id = Some(chars[token.from..token.to].iter().collect());
+                note_id = Some(chars[token.from..token.to].iter().collect());
             }
             InlineTokenType::WikiLinkAnchor => {
                 let anchor: String = chars[token.from..token.to].iter().collect();
@@ -1722,15 +1741,27 @@ mod tests {
 
     #[test]
     fn wiki_link_invalid_id_not_parsed() {
-        // ID with spaces (not alphanumeric)
+        // ID with spaces
         let tokens = tokenize_inline_markdown("[[not vali|Title]]");
         assert!(!tokens.iter().any(|t| t.kind.as_str() == "wiki-link-id"));
-        // wrong length (too short)
-        let tokens = tokenize_inline_markdown("[[ABC|Title]]");
+        // starts with a separator
+        let tokens = tokenize_inline_markdown("[[-daily|Title]]");
         assert!(!tokens.iter().any(|t| t.kind.as_str() == "wiki-link-id"));
-        // wrong length (too long)
-        let tokens = tokenize_inline_markdown("[[01HX4VHRXX|Title]]");
+        // too long
+        let long = format!("[[{}]]", "a".repeat(NOTE_LINK_ID_MAX_LEN + 1));
+        let tokens = tokenize_inline_markdown(&long);
         assert!(!tokens.iter().any(|t| t.kind.as_str() == "wiki-link-id"));
+    }
+
+    #[test]
+    fn wiki_link_accepts_full_and_daily_ids() {
+        for id in ["01KP0YD099X9TQENYJQ1SE9X8V", "daily-2026-10-02", "n_1"] {
+            let text = format!("see [[{id}#Plan|x]]");
+            let links = find_wiki_link_matches(&text);
+            assert_eq!(links.len(), 1, "{id}");
+            assert_eq!(links[0].note_id, id);
+            assert_eq!(links[0].heading.as_deref(), Some("Plan"));
+        }
     }
 
     #[test]
@@ -1794,10 +1825,10 @@ mod tests {
         let text = "A [[01HX4VHR#Intro|Alt]] and [[01HX4VHS]]";
         let links = find_wiki_link_matches(text);
         assert_eq!(links.len(), 2);
-        assert_eq!(links[0].short_id, "01HX4VHR");
+        assert_eq!(links[0].note_id, "01HX4VHR");
         assert_eq!(links[0].heading.as_deref(), Some("Intro"));
         assert_eq!(links[0].title.as_deref(), Some("Alt"));
-        assert_eq!(links[1].short_id, "01HX4VHS");
+        assert_eq!(links[1].note_id, "01HX4VHS");
         assert_eq!(links[1].heading, None);
         assert_eq!(links[1].title, None);
     }

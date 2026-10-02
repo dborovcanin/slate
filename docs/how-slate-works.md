@@ -90,7 +90,7 @@ When math modules are enabled, Slate evaluates expressions from note content and
 
 Wiki-link syntax is parsed in the editor core and resolved through note-source services.
 
-- syntax supports `[[shortid]]`, `[[shortid#heading]]`, `[[shortid|title]]`, `[[shortid#heading|title]]`
+- syntax supports `[[id]]`, `[[id#heading]]`, `[[id|title]]`, `[[id#heading|title]]`, where `id` is the target note's full ID (`markdown_tokens::is_note_link_id`)
 - parser/tokenization and cursor-hit detection are editor-core owned
 - note/headings lookup is performed through note-source services
 - links render collapsed when the cursor is outside and show full raw source while editing inside the link

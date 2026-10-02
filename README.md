@@ -74,7 +74,7 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 
 | Feature | Keys / commands |
 | --- | --- |
-| Wiki links `[[SHORTID]]`, `[[SHORTID#Heading\|Title]]` with note and heading autocomplete | type `[[`, then `#` for headings |
+| Wiki links `[[ID]]`, `[[ID#Heading\|Title]]` with note and heading autocomplete | type `[[`, then `#` for headings |
 | Follow a link | `Ctrl+]`, `gd` |
 | Preview the linked note | `K` |
 | Images `![alt](./assets/x.png)`, imported by pasting an image path | paste |
@@ -87,7 +87,7 @@ Grouped by area, with the keys and commands for each. Commands run in the comman
 | --- | --- |
 | Ghost results for math lines (units, percentages, [fend](https://github.com/printfn/fend)) | automatic; `Tab` applies the result |
 | Note-local variables with autocomplete | `name := expression` |
-| Variables from other notes | `[[SHORTID]].name` |
+| Variables from other notes | `[[ID]].name` |
 | Sum / average a paragraph, list, table row/column, or the note | `:sum`, `:avg`, `:sum list`, `:avg row`, `:sum column`, `:sum doc` |
 | Tables that align as you type, with cell navigation | `\|`, `Tab` / `Shift+Tab`, `Ctrl+Arrow`, `Shift+Enter` for multiline cells |
 | Table formulas and cell references | `:=sum_col()`, `:=avg_row() * 2`, `:=(1,2) + (2,2)` |

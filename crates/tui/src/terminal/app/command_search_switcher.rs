@@ -127,31 +127,19 @@ fn remove_char_at_char_col(target: &mut String, char_col: usize) -> bool {
 
 // Ownership: switcher, command bar execution, and search workflows.
 impl TerminalApp {
-    pub(super) fn rebuild_wiki_link_prefix_index(&mut self) {
-        self.wiki_link_prefix_index.clear();
+    pub(super) fn rebuild_wiki_link_index(&mut self) {
+        self.wiki_link_index.clear();
         for note in &self.switcher.items {
-            let short_id: String = note.id.chars().take(8).collect();
-            if short_id.len() != 8 || !short_id.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+            if !crate::editor_core::markdown_tokens::is_note_link_id(&note.id) {
                 continue;
             }
-            let replace = self
-                .wiki_link_prefix_index
-                .get(&short_id)
-                .map(|existing| {
-                    note.updated_at > existing.updated_at
-                        || (note.updated_at == existing.updated_at && note.id < existing.note_id)
-                })
-                .unwrap_or(true);
-            if replace {
-                self.wiki_link_prefix_index.insert(
-                    short_id,
-                    super::WikiLinkPrefixIndexEntry {
-                        title: note.title.clone(),
-                        updated_at: note.updated_at.clone(),
-                        note_id: note.id.clone(),
-                    },
-                );
-            }
+            self.wiki_link_index.insert(
+                note.id.clone(),
+                super::WikiLinkIndexEntry {
+                    title: note.title.clone(),
+                    updated_at: note.updated_at.clone(),
+                },
+            );
         }
     }
 
@@ -2785,7 +2773,7 @@ impl TerminalApp {
                 }
             }
         }
-        let previous_prefix_index = self.wiki_link_prefix_index.clone();
+        let previous_index = self.wiki_link_index.clone();
         let switcher_collection_filter = match self.mode {
             UiMode::Switcher => self.switcher.collection_filter_id.as_deref(),
             UiMode::ContentSearch => self.content_search.collection_filter_id.as_deref(),
@@ -2796,27 +2784,27 @@ impl TerminalApp {
             Some(&self.active_note.id),
             switcher_collection_filter,
         )?;
-        self.rebuild_wiki_link_prefix_index();
+        self.rebuild_wiki_link_index();
         self.rebuild_wiki_link_note_suggestions_cache();
-        let mut changed_short_ids: Vec<String> = Vec::new();
-        for (short_id, next) in self.wiki_link_prefix_index.iter() {
-            let changed = match previous_prefix_index.get(short_id) {
-                Some(prev) => prev.note_id != next.note_id || prev.updated_at != next.updated_at,
+        let mut changed_note_ids: Vec<String> = Vec::new();
+        for (note_id, next) in self.wiki_link_index.iter() {
+            let changed = match previous_index.get(note_id) {
+                Some(prev) => prev.updated_at != next.updated_at,
                 None => true,
             };
             if changed {
-                changed_short_ids.push(short_id.clone());
+                changed_note_ids.push(note_id.clone());
             }
         }
-        for short_id in previous_prefix_index.keys() {
-            if !self.wiki_link_prefix_index.contains_key(short_id) {
-                changed_short_ids.push(short_id.clone());
+        for note_id in previous_index.keys() {
+            if !self.wiki_link_index.contains_key(note_id) {
+                changed_note_ids.push(note_id.clone());
             }
         }
-        changed_short_ids.sort();
-        changed_short_ids.dedup();
-        for short_id in changed_short_ids {
-            self.invalidate_wiki_link_render_cache_for_short_id(&short_id);
+        changed_note_ids.sort();
+        changed_note_ids.dedup();
+        for note_id in changed_note_ids {
+            self.invalidate_wiki_link_render_cache_for_note(&note_id);
         }
         if self.mode == UiMode::Switcher {
             self.recompute_switcher_matches();
@@ -2872,7 +2860,7 @@ impl TerminalApp {
         self.last_edit = Instant::now();
         self.search.query.clear();
         self.search.matches.clear();
-        self.rebuild_wiki_link_prefix_index();
+        self.rebuild_wiki_link_index();
         self.rebuild_wiki_link_note_suggestions_cache();
         self.render_caches.wiki_link_render_cache.clear();
         self.render_caches.wiki_link_line_render_cache.clear();
