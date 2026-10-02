@@ -124,24 +124,11 @@ impl NoteSourceService {
     ) -> Result<NoteRevision, String> {
         match identity {
             NoteIdentity::DbNote(id) => {
-                let current_revision = self.db.get_note_updated_at(id)?;
-                ensure_revision_matches(
-                    current_revision.as_deref(),
-                    options.expected_revision.as_deref(),
-                    options.force,
-                    "note changed since last load",
-                )?;
-                self.db.save_note_revision(id, body)
+                self.db
+                    .save_note_revision_if(id, body, db_expected_revision(&options))
             }
             NoteIdentity::FileNote(path) => {
-                let current_revision = revision_from_markdown_path(path)?;
-                ensure_revision_matches(
-                    current_revision.as_deref(),
-                    options.expected_revision.as_deref(),
-                    options.force,
-                    "file changed on disk",
-                )?;
-                write_markdown_file_atomically(path, body)?;
+                save_markdown_file(path, body, &options)?;
                 Ok(NoteRevision {
                     id: note_id_for_markdown_file(path),
                     updated_at: revision_from_markdown_path(path)?.unwrap_or_default(),
@@ -158,24 +145,11 @@ impl NoteSourceService {
     ) -> Result<Note, String> {
         match identity {
             NoteIdentity::DbNote(id) => {
-                let current_revision = self.db.get_note_updated_at(id)?;
-                ensure_revision_matches(
-                    current_revision.as_deref(),
-                    options.expected_revision.as_deref(),
-                    options.force,
-                    "note changed since last load",
-                )?;
-                self.db.save_note(id, body)
+                self.db
+                    .save_note_if(id, body, db_expected_revision(&options))
             }
             NoteIdentity::FileNote(path) => {
-                let current_revision = revision_from_markdown_path(path)?;
-                ensure_revision_matches(
-                    current_revision.as_deref(),
-                    options.expected_revision.as_deref(),
-                    options.force,
-                    "file changed on disk",
-                )?;
-                write_markdown_file_atomically(path, body)?;
+                save_markdown_file(path, body, &options)?;
                 Ok(note_from_markdown_path(path)?)
             }
         }
@@ -774,6 +748,15 @@ pub fn syntax_language_for_note_id(note_id: &str) -> Option<String> {
     syntax_language_for_path(&path)
 }
 
+/// The revision a database save must still find, or `None` to write anyway.
+fn db_expected_revision(options: &SaveOptions) -> Option<&str> {
+    if options.force {
+        None
+    } else {
+        options.expected_revision.as_deref()
+    }
+}
+
 fn ensure_revision_matches(
     current_revision: Option<&str>,
     expected_revision: Option<&str>,
@@ -985,7 +968,30 @@ fn read_markdown_file(path: &Path) -> Result<String, String> {
     }
 }
 
-fn write_markdown_file_atomically(path: &Path, body: &str) -> Result<(), String> {
+/// Writes a file note unless it changed on disk since `options`' revision.
+/// The revision is checked again just before the new file replaces the old
+/// one, leaving a concurrent writer only the rename itself to slip into;
+/// plain files offer no transaction to close that fully.
+fn save_markdown_file(path: &Path, body: &str, options: &SaveOptions) -> Result<(), String> {
+    let check = || {
+        ensure_revision_matches(
+            revision_from_markdown_path(path)?.as_deref(),
+            options.expected_revision.as_deref(),
+            options.force,
+            "file changed on disk",
+        )
+    };
+    check()?;
+    write_markdown_file_atomically(path, body, &check)
+}
+
+/// Writes `body` to a temporary file and renames it over `path`, after
+/// `before_replace` agrees.
+fn write_markdown_file_atomically(
+    path: &Path,
+    body: &str,
+    before_replace: &dyn Fn() -> Result<(), String>,
+) -> Result<(), String> {
     // Replace a symlink's target rather than the link itself.
     let resolved;
     let path = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
@@ -1045,6 +1051,7 @@ fn write_markdown_file_atomically(path: &Path, body: &str) -> Result<(), String>
                 tmp_path.display()
             )
         })?;
+        before_replace()?;
         fs::rename(&tmp_path, path).map_err(|e| {
             format!(
                 "Failed to replace markdown file '{}' with '{}': {e}",
@@ -1347,7 +1354,7 @@ mod tests {
             let path = dir.join(format!("note-{mode:o}.md"));
             fs::write(&path, "old").expect("seed file");
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)).expect("chmod");
-            write_markdown_file_atomically(&path, "new").expect("write");
+            write_markdown_file_atomically(&path, "new", &|| Ok(())).expect("write");
             let meta = fs::metadata(&path).expect("metadata");
             assert_eq!(meta.permissions().mode() & 0o777, mode);
             assert_eq!(fs::read_to_string(&path).expect("read"), "new");
@@ -1357,7 +1364,7 @@ mod tests {
         let link = dir.join("link.md");
         fs::write(&target, "old").expect("seed target");
         symlink(&target, &link).expect("symlink");
-        write_markdown_file_atomically(&link, "through link").expect("write");
+        write_markdown_file_atomically(&link, "through link", &|| Ok(())).expect("write");
         assert!(fs::symlink_metadata(&link)
             .expect("link metadata")
             .file_type()
@@ -1405,6 +1412,67 @@ mod tests {
         .expect_err("directory should not resolve");
         assert!(err.contains("Cannot open directory"));
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn concurrent_saves_with_the_same_revision_cannot_both_win() {
+        let db_path = temp_db_path();
+        let db = Db::open(db_path.clone()).expect("db opens");
+        let service = NoteSourceService::new(db.clone());
+        service
+            .save_note_by_id("n1", "start", SaveOptions::default())
+            .expect("seed");
+        for round in 0..40 {
+            let expected = service
+                .get_note_revision_by_id("n1")
+                .expect("revision")
+                .expect("exists");
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            let writers: Vec<_> = (0..2)
+                .map(|writer| {
+                    let service = NoteSourceService::new(db.clone());
+                    let expected = expected.clone();
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        service.save_note_revision_by_id(
+                            "n1",
+                            &format!("round {round} writer {writer}"),
+                            SaveOptions {
+                                expected_revision: Some(expected),
+                                force: false,
+                            },
+                        )
+                    })
+                })
+                .collect();
+            let wins = writers
+                .into_iter()
+                .map(|writer| writer.join().expect("writer thread"))
+                .filter(Result::is_ok)
+                .count();
+            assert_eq!(wins, 1, "round {round}");
+        }
+        drop(service);
+        drop(db);
+        cleanup_db_files(&db_path);
+    }
+
+    #[test]
+    fn file_write_is_abandoned_when_the_last_check_fails() {
+        let dir = std::env::temp_dir().join(format!("note-source-check-{}", Ulid::new()));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("note.md");
+        fs::write(&path, "theirs").expect("seed");
+        let error = write_markdown_file_atomically(&path, "mine", &|| {
+            Err("file changed on disk".to_string())
+        })
+        .expect_err("refused");
+        assert!(error.contains("changed on disk"));
+        assert_eq!(fs::read_to_string(&path).expect("read"), "theirs");
+        let leftovers = fs::read_dir(&dir).expect("dir").count();
+        assert_eq!(leftovers, 1, "the temporary file is removed");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

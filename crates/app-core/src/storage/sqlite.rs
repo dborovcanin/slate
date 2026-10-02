@@ -373,8 +373,22 @@ impl Db {
     /// concurrency, so this skips the read-back that `save_note` performs to
     /// assemble a full `Note`.
     pub fn save_note_revision(&self, id: &str, body: &str) -> Result<NoteRevision, String> {
-        let conn = self.conn.lock()?;
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        self.save_note_revision_if(id, body, None)
+    }
+
+    /// [`Self::save_note_revision`] that only writes while the stored
+    /// revision is still `expected_revision` (`None` writes unconditionally).
+    /// The check and the write share one write transaction, so two writers
+    /// holding the same revision cannot both succeed.
+    pub fn save_note_revision_if(
+        &self,
+        id: &str,
+        body: &str,
+        expected_revision: Option<&str>,
+    ) -> Result<NoteRevision, String> {
+        let mut conn = self.conn.lock()?;
+        let tx = begin_write(&mut conn)?;
+        ensure_note_revision(&tx, id, expected_revision)?;
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
@@ -415,8 +429,20 @@ impl Db {
     }
 
     pub fn save_note(&self, id: &str, body: &str) -> Result<Note, String> {
-        let conn = self.conn.lock()?;
-        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        self.save_note_if(id, body, None)
+    }
+
+    /// [`Self::save_note`] with the revision check of
+    /// [`Self::save_note_revision_if`].
+    pub fn save_note_if(
+        &self,
+        id: &str,
+        body: &str,
+        expected_revision: Option<&str>,
+    ) -> Result<Note, String> {
+        let mut conn = self.conn.lock()?;
+        let tx = begin_write(&mut conn)?;
+        ensure_note_revision(&tx, id, expected_revision)?;
         let now = now_iso();
         let note_title = derive_note_title_from_body(body);
 
@@ -2768,6 +2794,35 @@ fn rewrite_short_wiki_links(conn: &Connection) -> Result<(), String> {
     tx.execute_batch("PRAGMA user_version = 4;")
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Error for a save whose expected revision is no longer the stored one.
+const NOTE_REVISION_CONFLICT: &str = "note changed since last load; use :w! to force save";
+
+/// Starts a transaction that holds the write lock from its first statement,
+/// so what it reads cannot change before it writes.
+fn begin_write(conn: &mut Connection) -> Result<rusqlite::Transaction<'_>, String> {
+    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())
+}
+
+/// Fails with [`NOTE_REVISION_CONFLICT`] unless the note's stored revision is
+/// `expected` (a missing note has none); `None` accepts any revision.
+fn ensure_note_revision(conn: &Connection, id: &str, expected: Option<&str>) -> Result<(), String> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let current: Option<String> = conn
+        .query_row("SELECT updated_at FROM notes WHERE id = ?1", [id], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if current.as_deref() == Some(expected) {
+        Ok(())
+    } else {
+        Err(NOTE_REVISION_CONFLICT.to_string())
+    }
 }
 
 /// Path of a file SQLite keeps next to `db` (`-wal`, `-shm`).
