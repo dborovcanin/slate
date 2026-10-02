@@ -4669,6 +4669,43 @@ mod tests {
     }
 
     #[test]
+    fn members_of_an_encrypted_collection_cannot_drop_its_protection() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let vault = db.create_collection("Vault", "").expect("collection");
+        db.save_note("a", "Alpha\nsecret").expect("a");
+        db.add_notes_to_collection(&vault.id, &["a".to_string()])
+            .expect("join");
+        db.encrypt_collection(&vault.id, "vault-pass")
+            .expect("encrypt");
+
+        let error = db.decrypt_note("a", "vault-pass").expect_err("member");
+        assert!(error.contains("encrypted collection \"Vault\""), "{error}");
+        let error = db.encrypt_note("a", "own-pass").expect_err("member");
+        assert!(error.contains("encrypted collection \"Vault\""), "{error}");
+        let note = db.get_note("a").unwrap().unwrap();
+        assert_eq!(note.access_mode, NoteAccessMode::Encrypted);
+
+        // A note joining later is sealed under the collection, and held too.
+        db.save_note("b", "Beta").expect("b");
+        db.add_notes_to_collection(&vault.id, &["b".to_string()])
+            .expect("join");
+        assert!(db.decrypt_note("b", "vault-pass").is_err());
+
+        // Out of the collection, its password still opens it, and it can be
+        // decrypted or given its own password.
+        db.remove_notes_from_collection(&vault.id, &["a".to_string()])
+            .expect("leave");
+        db.encrypt_note("a", "own-pass").expect("own password");
+        let note = db.decrypt_note("a", "own-pass").expect("decrypt");
+        assert_eq!(note.access_mode, NoteAccessMode::None);
+        assert_eq!(note.body, "Alpha\nsecret");
+
+        drop(db);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
     fn notes_leaving_an_encrypted_collection_stay_protected_until_it_is_decrypted() {
         let path = temp_db_path();
         let db = Db::open(path.clone()).expect("db opens");

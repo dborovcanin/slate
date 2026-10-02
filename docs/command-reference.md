@@ -90,9 +90,11 @@ Every command-bar command with its aliases. For what each feature does and its k
 | Command | Aliases | Purpose |
 | --- | --- | --- |
 | `note encrypt` | `note-encrypt`, `encrypt-note` | Encrypt the note with its own password; on an unlocked encrypted note, change its password |
-| `note decrypt` | `note-decrypt`, `decrypt-note` | Store the note unencrypted (a note in an encrypted collection takes the collection's password) |
+| `note decrypt` | `note-decrypt`, `decrypt-note` | Store the note unencrypted (a note that left an encrypted collection takes the collection's password) |
 
 Both ask for the password in a masked dialog (encrypting asks twice); a password typed on the command line is ignored. Collections are encrypted from the browser (`e`).
+
+A note in an encrypted collection stays encrypted with the collection's password while it belongs to it: `note decrypt` is refused, and so is `note encrypt` for a note the collection's password protects. Remove the note from the collection (`:collection leave`) or decrypt the whole collection (`e` in the browser) first.
 
 ## Export and backup
 

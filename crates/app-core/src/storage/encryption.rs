@@ -201,6 +201,28 @@ fn is_collection_encrypted(conn: &Connection, collection_id: &str) -> Result<boo
     .map_err(|e| e.to_string())
 }
 
+/// Name of an encrypted collection `note_id` belongs to, preferring
+/// `collection_id` when given. Members of an encrypted collection stay
+/// encrypted, under its password, while they belong to it.
+fn encrypted_collection_of(
+    conn: &Connection,
+    note_id: &str,
+    only: Option<&str>,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT c.name FROM note_collections nc
+         JOIN collection_keys k ON k.collection_id = nc.collection_id
+         JOIN collections c ON c.id = nc.collection_id
+         WHERE nc.note_id = ?1 AND (?2 IS NULL OR nc.collection_id = ?2)
+         ORDER BY c.name COLLATE NOCASE
+         LIMIT 1",
+        rusqlite::params![note_id, only],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
 /// Notes whose keys the collection's key wraps, with their wrapped keys.
 fn protected_notes(
     conn: &Connection,
@@ -527,6 +549,14 @@ impl Db {
         let security = self
             .load_note_security(&conn, id)?
             .ok_or_else(|| "Note not found".to_string())?;
+        if let Some(collection_id) = security.key_collection_id.as_deref() {
+            if let Some(name) = encrypted_collection_of(&conn, id, Some(collection_id))? {
+                return Err(format!(
+                    "the note is protected by the encrypted collection \"{name}\"; \
+                     remove it from the collection to give it its own password"
+                ));
+            }
+        }
         let protector = Protector::password(&password)?;
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let grant = match security.access_mode {
@@ -563,6 +593,12 @@ impl Db {
             .load_note_security(&conn, id)?
             .ok_or_else(|| "Note not found".to_string())?;
         if security.access_mode == NoteAccessMode::Encrypted {
+            if let Some(name) = encrypted_collection_of(&conn, id, None)? {
+                return Err(format!(
+                    "the note is in the encrypted collection \"{name}\"; \
+                     remove it from the collection or decrypt the collection first"
+                ));
+            }
             let key = self.note_key_with_password(&conn, &security, &password)?;
             let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
             self.unseal_note(&tx, id, &security, &key)?;
