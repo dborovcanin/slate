@@ -6,6 +6,7 @@ use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 use time::OffsetDateTime;
 
 use super::models::{
@@ -50,6 +51,10 @@ struct NoteSecurityRow {
 }
 
 const SQLITE_POOL_SIZE: usize = 4;
+/// The `user_version` the last step of `migrate` records.
+const SCHEMA_VERSION: i64 = 4;
+/// How long a restore waits for in-flight database work before giving up.
+const RESTORE_DRAIN_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DbOpenMetrics {
@@ -62,6 +67,9 @@ pub struct DbOpenMetrics {
 struct SqlitePoolState {
     connections: Vec<Connection>,
     created: usize,
+    /// Set while a restore replaces the database file: no connection is
+    /// handed out until it finishes.
+    restoring: bool,
 }
 
 struct SqlitePool {
@@ -122,6 +130,7 @@ impl SqlitePool {
                 state: Mutex::new(SqlitePoolState {
                     connections,
                     created: 1,
+                    restoring: false,
                 }),
                 available: Condvar::new(),
                 db_path: path.to_path_buf(),
@@ -142,6 +151,13 @@ impl SqlitePool {
             .lock()
             .map_err(|_| "db pool lock poisoned".to_string())?;
         loop {
+            if guard.restoring {
+                guard = self
+                    .available
+                    .wait(guard)
+                    .map_err(|_| "db pool lock poisoned".to_string())?;
+                continue;
+            }
             if let Some(connection) = guard.connections.pop() {
                 return Ok(SqlitePoolGuard {
                     pool: self,
@@ -203,7 +219,8 @@ impl Drop for SqlitePoolGuard<'_> {
         if let Some(connection) = self.connection.take() {
             if let Ok(mut guard) = self.pool.state.lock() {
                 guard.connections.push(connection);
-                self.pool.available.notify_one();
+                // A restore waiting for the pool to drain shares this condvar.
+                self.pool.available.notify_all();
             }
         }
     }
@@ -268,55 +285,65 @@ impl Db {
         Ok(())
     }
 
-    /// Replace the live database in-place with a staged SQLite file.
+    /// Replace the live database with a staged SQLite file, without
+    /// restarting.
     ///
-    /// Closes all pooled connections, atomically renames `staged_file` over the
-    /// current database path, removes any orphaned WAL/SHM files that belonged to
-    /// the old database, then reopens the pool against the new file.
-    ///
-    /// Must only be called when no `SqlitePoolGuard`s are active (i.e. no db
-    /// operations are in flight). In practice this is safe to call from the TUI
-    /// event loop between key dispatches.
+    /// The staged file is checked and migrated before anything else, as
+    /// [`replace_database_file`] does. New database work then waits while work
+    /// already in flight finishes, every connection is closed, the files are
+    /// swapped and the pool reopens on the restored database. If in-flight
+    /// work does not finish within `RESTORE_DRAIN_TIMEOUT`, or any step
+    /// fails, the live database stays as it was. Unlocked note keys are
+    /// forgotten: they belonged to the replaced notes.
     pub fn restore_from_sqlite_file(&self, staged_file: &Path) -> Result<(), String> {
-        let mut state = self
-            .conn
+        prepare_restore_file(staged_file).inspect_err(|_| {
+            let _ = std::fs::remove_file(staged_file);
+        })?;
+
+        let pool = &self.conn;
+        let mut state = pool
             .state
             .lock()
             .map_err(|_| "db pool mutex poisoned".to_string())?;
-
-        // Drop all existing connections so the file handle is released.
-        state.connections.clear();
-        state.created = 0;
-
-        // Atomically replace the live db file with the staged restore.
-        std::fs::rename(staged_file, &self.conn.db_path)
-            .map_err(|e| format!("failed to swap database file during restore: {e}"))?;
-
-        // Remove stale WAL/SHM files from the previous database.  SQLite uses
-        // the same base path so the old files would be misinterpreted on open.
-        let wal = self.conn.db_path.with_extension("db-wal");
-        let shm = self.conn.db_path.with_extension("db-shm");
-        let _ = std::fs::remove_file(&wal);
-        let _ = std::fs::remove_file(&shm);
-
-        // Reopen connections against the new file, bringing an older backup
-        // up to the current schema.
-        for idx in 0..self.conn.max_size {
-            let conn = SqlitePool::open_configured_connection(&self.conn.db_path)
-                .map_err(|e| format!("failed to reopen db after restore: {e}"))?;
-            if idx == 0 {
-                initialize_schema(&conn)?;
+        state.restoring = true;
+        let deadline = Instant::now() + RESTORE_DRAIN_TIMEOUT;
+        while state.connections.len() < state.created {
+            let now = Instant::now();
+            if now >= deadline {
+                state.restoring = false;
+                pool.available.notify_all();
+                let _ = std::fs::remove_file(staged_file);
+                return Err("database is busy; restore cancelled".to_string());
             }
-            state.connections.push(conn);
-            state.created += 1;
+            state = pool
+                .available
+                .wait_timeout(state, deadline - now)
+                .map_err(|_| "db pool mutex poisoned".to_string())?
+                .0;
         }
 
-        // Reset search-index-checked flag so the new db is validated on first use.
+        // Closing the last connection checkpoints the WAL into the file.
+        state.connections.clear();
+        state.created = 0;
+        let swapped = swap_in_database_file(&pool.db_path, staged_file);
+        // Reopen whichever database is now live: the restored one, or the
+        // original after a failed swap.
+        let reopened = SqlitePool::open_configured_connection(&pool.db_path).and_then(|conn| {
+            initialize_schema(&conn)?;
+            state.connections.push(conn);
+            state.created = 1;
+            Ok(())
+        });
+        state.restoring = false;
+        pool.available.notify_all();
+        drop(state);
+
+        swapped?;
+        reopened.map_err(|e| format!("failed to reopen db after restore: {e}"))?;
         if let Ok(mut checked) = self.search_index_checked.lock() {
             *checked = false;
         }
-
-        self.conn.available.notify_all();
+        self.note_access.clear_all();
         Ok(())
     }
 
@@ -2686,6 +2713,99 @@ fn rewrite_short_wiki_links(conn: &Connection) -> Result<(), String> {
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// Path of a file SQLite keeps next to `db` (`-wal`, `-shm`).
+fn sidecar_path(db: &Path, suffix: &str) -> PathBuf {
+    let mut path = db.as_os_str().to_owned();
+    path.push(suffix);
+    PathBuf::from(path)
+}
+
+/// Where a restore keeps the database it replaced.
+pub fn database_before_restore_path(db: &Path) -> PathBuf {
+    sidecar_path(db, ".before-restore")
+}
+
+/// Checks that `path` is an intact Slate database this version can open and
+/// brings it up to the current schema, so a restore never swaps in a file the
+/// app would then fail on.
+fn prepare_restore_file(path: &Path) -> Result<(), String> {
+    let invalid = |detail: String| format!("not a valid Slate backup: {detail}");
+    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        .map_err(|e| invalid(e.to_string()))?;
+    let check: String = conn
+        .query_row("PRAGMA quick_check", [], |row| row.get(0))
+        .map_err(|e| invalid(e.to_string()))?;
+    if check != "ok" {
+        return Err(invalid(check));
+    }
+    let has_notes: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| invalid(e.to_string()))?;
+    if !has_notes {
+        return Err(invalid("it has no notes table".to_string()));
+    }
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|e| invalid(e.to_string()))?;
+    if version > SCHEMA_VERSION {
+        return Err("backup was made by a newer Slate version".to_string());
+    }
+    initialize_schema(&conn).map_err(invalid)?;
+    conn.close().map_err(|(_, e)| invalid(e.to_string()))
+}
+
+/// Renames the database at `from`, with its WAL, to `to`, replacing what
+/// was there. A leftover shared-memory file is dropped; SQLite rebuilds it.
+fn move_database_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    for suffix in ["", "-wal", "-shm"] {
+        let target = sidecar_path(to, suffix);
+        if target.exists() {
+            std::fs::remove_file(target)?;
+        }
+    }
+    if from.exists() {
+        std::fs::rename(from, to)?;
+    }
+    let wal = sidecar_path(from, "-wal");
+    if wal.exists() {
+        std::fs::rename(wal, sidecar_path(to, "-wal"))?;
+    }
+    let _ = std::fs::remove_file(sidecar_path(from, "-shm"));
+    Ok(())
+}
+
+/// Replaces the database at `live` with the backup at `staged`, keeping the
+/// replaced one at [`database_before_restore_path`]. The backup is checked
+/// and migrated first; when that or the swap fails, `live` is left as it was.
+/// `staged` is consumed either way. No connection to `live` may be open.
+pub fn replace_database_file(live: &Path, staged: &Path) -> Result<(), String> {
+    if let Err(error) = prepare_restore_file(staged) {
+        let _ = std::fs::remove_file(staged);
+        return Err(error);
+    }
+    swap_in_database_file(live, staged)
+}
+
+/// The swap step of [`replace_database_file`], for a backup already prepared.
+fn swap_in_database_file(live: &Path, staged: &Path) -> Result<(), String> {
+    let result = (|| {
+        let previous = database_before_restore_path(live);
+        move_database_file(live, &previous)
+            .map_err(|e| format!("failed to set the current database aside: {e}"))?;
+        if let Err(e) = std::fs::rename(staged, live) {
+            let _ = move_database_file(&previous, live);
+            return Err(format!("failed to swap database file during restore: {e}"));
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_file(staged);
+    result
+}
+
 fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, String> {
     conn.query_row(
         "SELECT COUNT(1) FROM pragma_table_info(?1) WHERE name = ?2",
@@ -2932,6 +3052,159 @@ mod tests {
 
     fn temp_db_path() -> PathBuf {
         std::env::temp_dir().join(format!("note-test-{}.db", ulid::Ulid::new()))
+    }
+
+    fn remove_db_files(path: &Path) {
+        for suffix in ["", "-wal", "-shm", ".before-restore"] {
+            let _ = fs::remove_file(sidecar_path(path, suffix));
+        }
+    }
+
+    #[test]
+    fn fresh_database_records_the_latest_schema_version() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        let version: i64 = db
+            .conn
+            .lock()
+            .expect("conn")
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("version");
+        assert_eq!(version, SCHEMA_VERSION);
+        drop(db);
+        remove_db_files(&path);
+    }
+
+    #[test]
+    fn restore_rejects_invalid_backup_and_keeps_live_database() {
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("n1", "keep me").expect("seed");
+
+        let staged = temp_db_path();
+        fs::write(&staged, b"definitely not sqlite").expect("garbage");
+        let error = db.restore_from_sqlite_file(&staged).expect_err("rejected");
+        assert!(error.contains("not a valid Slate backup"), "{error}");
+        assert!(!staged.exists(), "a rejected backup is discarded");
+        assert_eq!(
+            db.get_note("n1").expect("read").expect("note").body,
+            "keep me"
+        );
+
+        // A database without Slate's tables is rejected too.
+        Connection::open(&staged)
+            .expect("other db")
+            .execute_batch("CREATE TABLE other (x);")
+            .expect("other table");
+        let error = db.restore_from_sqlite_file(&staged).expect_err("rejected");
+        assert!(error.contains("no notes table"), "{error}");
+
+        // So is a backup from a newer schema.
+        let newer = Db::open(staged.clone()).expect("newer db");
+        newer.save_note("n2", "future").expect("seed newer");
+        drop(newer);
+        Connection::open(&staged)
+            .expect("raw")
+            .execute_batch(&format!("PRAGMA user_version = {};", SCHEMA_VERSION + 1))
+            .expect("bump version");
+        let error = db.restore_from_sqlite_file(&staged).expect_err("rejected");
+        assert!(error.contains("newer Slate"), "{error}");
+        assert_eq!(
+            db.get_note("n1").expect("read").expect("note").body,
+            "keep me"
+        );
+
+        drop(db);
+        remove_db_files(&path);
+        remove_db_files(&staged);
+    }
+
+    #[test]
+    fn restore_swaps_in_backup_and_keeps_replaced_database() {
+        let source_path = temp_db_path();
+        let source = Db::open(source_path.clone()).expect("source opens");
+        source
+            .save_note("backup-note", "from backup")
+            .expect("seed");
+        let staged = temp_db_path();
+        source.backup_to_sqlite_file(&staged).expect("snapshot");
+        drop(source);
+
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("live-note", "replaced").expect("seed live");
+        db.save_note("secret", "plan").expect("seed secret");
+        db.encrypt_note("secret", "pass").expect("encrypt");
+        assert!(db.note_access.is_unlocked("secret"));
+
+        db.restore_from_sqlite_file(&staged).expect("restore");
+        assert!(!staged.exists());
+        assert_eq!(
+            db.get_note("backup-note")
+                .expect("read")
+                .expect("note")
+                .body,
+            "from backup"
+        );
+        assert!(db.get_note("live-note").expect("read").is_none());
+        assert!(!db.note_access.is_unlocked("secret"));
+        db.save_note("after", "writes land in the restored db")
+            .expect("write after restore");
+
+        let previous = Db::open(database_before_restore_path(&path)).expect("previous opens");
+        assert_eq!(
+            previous
+                .get_note("live-note")
+                .expect("read")
+                .expect("note")
+                .body,
+            "replaced"
+        );
+        drop(previous);
+
+        drop(db);
+        remove_db_files(&path);
+        remove_db_files(&source_path);
+    }
+
+    #[test]
+    fn restore_waits_for_connections_in_use() {
+        let source_path = temp_db_path();
+        let source = Db::open(source_path.clone()).expect("source opens");
+        source
+            .save_note("backup-note", "from backup")
+            .expect("seed");
+        let staged = temp_db_path();
+        source.backup_to_sqlite_file(&staged).expect("snapshot");
+        drop(source);
+
+        let path = temp_db_path();
+        let db = Db::open(path.clone()).expect("db opens");
+        db.save_note("live-note", "replaced").expect("seed live");
+
+        let in_use = db.conn.lock().expect("checkout");
+        let restore = {
+            let db = db.clone();
+            let staged = staged.clone();
+            std::thread::spawn(move || db.restore_from_sqlite_file(&staged))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !restore.is_finished(),
+            "restore waits for the checked-out connection"
+        );
+        drop(in_use);
+        restore.join().expect("restore thread").expect("restore");
+
+        assert!(db.get_note("live-note").expect("read").is_none());
+        let state = db.conn.state.lock().expect("pool state");
+        assert_eq!(state.connections.len(), state.created);
+        assert!(state.created <= db.conn.max_size);
+        drop(state);
+
+        drop(db);
+        remove_db_files(&path);
+        remove_db_files(&source_path);
     }
 
     #[test]

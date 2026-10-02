@@ -336,8 +336,8 @@ fn write_u32<W: Write>(writer: &mut W, value: u32) -> Result<(), String> {
 
 /// Extract `notes.db` from a Slate backup ZIP and stage it for restore.
 /// The staged file is written to `<data_dir>/notes.db.staged-restore`.
-/// The actual swap is deferred to `apply_staged_restore_if_pending`, which must
-/// be called after all Db connections are closed (i.e. after the TUI session exits).
+/// `apply_restore_in_session` swaps it in; `apply_staged_restore_if_pending`
+/// applies one a crashed session left behind.
 pub fn stage_restore_from_zip(zip_path: &str) -> Result<String, String> {
     let resolved = resolve_backup_path(zip_path)?;
     let data_dir = app_core::data_dir()?;
@@ -378,7 +378,16 @@ pub fn apply_restore_in_session(db: &Db) -> Result<bool, String> {
     Ok(true)
 }
 
-/// If a staged restore file exists, atomically swap it in as the live `notes.db`.
+/// Drops a staged restore that will not be applied, so a later start does
+/// not apply it either.
+pub fn discard_staged_restore() {
+    if let Ok(data_dir) = app_core::data_dir() {
+        let _ = fs::remove_file(data_dir.join(STAGED_RESTORE_FILENAME));
+    }
+}
+
+/// If a staged restore file exists, checks it and swaps it in as the live
+/// `notes.db` (see `app_core::storage::replace_database_file`).
 /// Returns `true` if a restore was applied, `false` if nothing was pending.
 /// Must be called after all Db connections are closed.
 pub fn apply_staged_restore_if_pending() -> Result<bool, String> {
@@ -387,17 +396,7 @@ pub fn apply_staged_restore_if_pending() -> Result<bool, String> {
     if !staged.exists() {
         return Ok(false);
     }
-    let live = data_dir.join("notes.db");
-    let old = data_dir.join(format!(".slate-notes-prerestore-{}.db", Ulid::new()));
-    if live.exists() {
-        fs::rename(&live, &old)
-            .map_err(|e| format!("failed to move existing notes.db aside: {e}"))?;
-    }
-    if let Err(e) = fs::rename(&staged, &live) {
-        let _ = fs::rename(&old, &live);
-        return Err(format!("failed to apply staged restore: {e}"));
-    }
-    let _ = fs::remove_file(&old);
+    app_core::storage::replace_database_file(&data_dir.join("notes.db"), &staged)?;
     Ok(true)
 }
 
@@ -444,6 +443,7 @@ fn extract_notes_db_from_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
         // header[22..24] = file name length
         // header[24..26] = extra field length
         let method = u16::from_le_bytes([header[4], header[5]]);
+        let crc = u32::from_le_bytes([header[10], header[11], header[12], header[13]]);
         let compressed_size = u32::from_le_bytes([header[14], header[15], header[16], header[17]]);
         let name_len = u16::from_le_bytes([header[22], header[23]]) as usize;
         let extra_len = u16::from_le_bytes([header[24], header[25]]) as usize;
@@ -464,6 +464,9 @@ fn extract_notes_db_from_zip(zip_path: &Path) -> Result<Vec<u8>, String> {
             let mut data = vec![0u8; compressed_size as usize];
             file.read_exact(&mut data)
                 .map_err(|e| format!("failed to read notes.db from backup: {e}"))?;
+            if crc32(&data) != crc {
+                return Err("notes.db in backup is damaged (checksum mismatch)".to_string());
+            }
             return Ok(data);
         }
 
@@ -601,6 +604,14 @@ mod tests {
         let extracted = extract_notes_db_from_zip(&zip_path).expect("extract succeeds");
         // SQLite files start with the header string
         assert!(extracted.starts_with(b"SQLite format 3\0"));
+
+        // A flipped byte inside the stored database fails the checksum.
+        let mut bytes = fs::read(&zip_path).expect("zip reads");
+        let data_start = 30 + "notes.db".len();
+        bytes[data_start + 200] ^= 0xff;
+        fs::write(&zip_path, bytes).expect("zip writes");
+        let error = extract_notes_db_from_zip(&zip_path).expect_err("damaged");
+        assert!(error.contains("checksum"), "{error}");
 
         let _ = fs::remove_file(db_path);
         let _ = fs::remove_file(zip_path);

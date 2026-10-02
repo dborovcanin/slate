@@ -203,7 +203,7 @@ impl TerminalApp {
             .collect()
     }
 
-    fn clear_content_search_session(&mut self) {
+    pub(super) fn clear_content_search_session(&mut self) {
         // Move any in-flight receiver into the detached pool so the stale worker
         // can drain without blocking the next dialog session.
         if let Some(rx) = self.content_search.rx.take() {

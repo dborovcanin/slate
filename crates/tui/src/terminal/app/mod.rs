@@ -1401,28 +1401,49 @@ impl TerminalApp {
                 self.status = format!("backup failed: {e}");
             }
             BackupThreadResult::LoadStageDone(Ok(())) => {
-                match crate::commands::backup::apply_restore_in_session(db) {
-                    Ok(true) => {
-                        self.dirty = false;
-                        self.editor.joined_text_cache = None;
-                        match self.open_switcher(db) {
-                            Ok(()) => self.status = "backup loaded — select a note".to_string(),
-                            Err(e) => self.status = format!("backup loaded (open notes: {e})"),
-                        }
-                    }
-                    Ok(false) => {
-                        self.status = "backup load failed: staged file missing".to_string();
-                    }
+                self.status = match self.apply_staged_restore(db) {
+                    Ok(status) => status,
                     Err(e) => {
-                        self.status = format!("backup load failed: {e}");
+                        crate::commands::backup::discard_staged_restore();
+                        format!("backup load failed: {e}")
                     }
-                }
+                };
             }
             BackupThreadResult::LoadStageDone(Err(e)) => {
                 self.status = format!("backup load failed: {e}");
             }
         }
         self.render_state.dirty = true;
+    }
+
+    /// Swaps the staged backup in and reloads everything read from the
+    /// replaced database. Edits made while the backup was staging are saved
+    /// first, so they stay in the database the restore sets aside.
+    fn apply_staged_restore(&mut self, db: &Db) -> Result<String, String> {
+        self.poll_background_save(db, true)?;
+        if self.dirty {
+            self.save(db)?;
+        }
+        if !crate::commands::backup::apply_restore_in_session(db)? {
+            return Err("staged file missing".to_string());
+        }
+
+        // Nothing read from the old database stays valid.
+        if let Ok(mut index) = self.cross_note_var_index.lock() {
+            *index = CrossNoteVarIndex::default();
+        }
+        self.clear_content_search_session();
+        self.working_collection_id = None;
+        let note = match db.get_note(&self.active_note.id)? {
+            Some(note) => note,
+            None => new_note_with_context(db, &self.note_creation_theme, None)?,
+        };
+        self.set_active_note(db, note)?;
+        self.open_switcher(db)?;
+        Ok(
+            "backup loaded — select a note (previous notes kept as notes.db.before-restore)"
+                .to_string(),
+        )
     }
 
     fn maybe_autosave(&mut self, db: &Db) -> Result<(), String> {

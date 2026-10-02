@@ -86,6 +86,12 @@ impl NoteAccessService {
         self.set(&self.collections, collection_id, key);
     }
 
+    /// Forgets every unlocked note and collection.
+    pub(crate) fn clear_all(&self) {
+        locked(&self.notes).clear();
+        locked(&self.collections).clear();
+    }
+
     pub(crate) fn clear_collection(&self, collection_id: &str) {
         locked(&self.collections).remove(collection_id);
     }
